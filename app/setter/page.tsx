@@ -611,7 +611,7 @@ function SetterContent() {
             ) : filtered.map(t => {
               const loadPct = t.maxWeeklyLoad > 0 ? Math.round((t.weeklyLoad / t.maxWeeklyLoad) * 100) : 0;
               const loadColor = loadPct >= 90 ? '#ef4444' : loadPct >= 65 ? '#f59e0b' : '#22c55e';
-              const isAssignable = t.status === 'available' || t.status === 'almost_full';
+              const isAssignable = true; // Allow setter to view any teacher's calendar
               return (
                 <div key={t.id} style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '14px 18px', display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: '1 1 150px' }}>
@@ -633,7 +633,7 @@ function SetterContent() {
                     </div>
                   </div>
                   <button onClick={() => setCalendarTeacher(t)} disabled={!isAssignable} style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: isAssignable ? 'var(--accent-blue)' : 'var(--bg-surface-3)', color: isAssignable ? 'white' : 'var(--text-muted)', fontWeight: 700, fontSize: 13, cursor: isAssignable ? 'pointer' : 'not-allowed', flexShrink: 0 }}>
-                    {isAssignable ? '📅 Ver calendario' : 'Sin cupos'}
+                    {'📅 Ver calendario'}
                   </button>
                 </div>
               );
