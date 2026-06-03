@@ -1,0 +1,55 @@
+@import "tailwindcss";
+
+:root {
+  --bg-base: #0f1117;
+  --bg-surface: #161b27;
+  --bg-surface-2: #1e2535;
+  --bg-surface-3: #252d3d;
+  --border: #2a3347;
+  --border-light: #35405a;
+  --text-primary: #e8edf5;
+  --text-secondary: #8b97b0;
+  --text-muted: #5a6580;
+  --accent-blue: #3b82f6;
+  --accent-blue-dim: rgba(29, 78, 216, 0.25);
+  --status-available: #22c55e;
+  --status-available-bg: rgba(20, 83, 45, 0.3);
+  --status-almost: #f59e0b;
+  --status-almost-bg: rgba(120, 53, 15, 0.3);
+  --status-busy: #ef4444;
+  --status-busy-bg: rgba(127, 29, 29, 0.3);
+  --status-vacation: #a78bfa;
+  --status-vacation-bg: rgba(76, 29, 149, 0.3);
+  --status-none: #6b7280;
+  --status-none-bg: rgba(17, 24, 39, 0.5);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  background-color: var(--bg-base);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  margin: 0;
+}
+
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: var(--bg-base); }
+::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 3px; }
+
+input, select, textarea {
+  background: var(--bg-surface-3);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-primary);
+  padding: 10px 14px;
+  font-size: 14px;
+  outline: none;
+  width: 100%;
+  transition: border-color 0.15s;
+  font-family: inherit;
+}
+input:focus, select:focus, textarea:focus { border-color: var(--accent-blue); }
+input::placeholder { color: var(--text-muted); }
+select option { background: var(--bg-surface-2); }
