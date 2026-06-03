@@ -1,5 +1,5 @@
 'use client';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { NavBar } from '@/components/NavBar';
 import { StatusBadge } from '@/components/StatusBadge';
 import { AuthGuard } from '@/components/AuthGuard';
@@ -392,9 +392,17 @@ function TeacherCalendarModal({
   onClose: () => void;
   onAssigned: (a: Assignment, s: Student) => void;
 }) {
-  const { teacherGrids, updateTeacherGrid } = useTeachers();
+  const { updateTeacherGrid, getTeacherGrid } = useTeachers();
   const baseGrid = useMemo(() => buildGridFromTeacher(teacher.timeSlots, teacher.upcomingClasses), [teacher]);
-  const [grid, setGrid] = useState<Grid>(teacherGrids[teacher.id] ?? baseGrid);
+  const [grid, setGrid] = useState<Grid>(baseGrid);
+  const [loadingGrid, setLoadingGrid] = useState(true);
+
+  useEffect(() => {
+    getTeacherGrid(teacher.id).then(g => {
+      setGrid(Object.keys(g).length > 0 ? g : baseGrid);
+      setLoadingGrid(false);
+    });
+  }, [teacher.id]);
   const [assignCell, setAssignCell] = useState<AssignedSlot | null>(null);
 
   function handleGridChange(g: Grid) {
@@ -423,12 +431,16 @@ function TeacherCalendarModal({
           </div>
         )}
 
-        <VisualCalendar
-          mode="setter"
-          grid={grid}
-          onCellClick={(day, hour) => setAssignCell({ day, hour })}
-          highlightSlots={highlightSlots}
-        />
+        {loadingGrid ? (
+          <div style={{ textAlign: 'center', padding: '48px 0', color: 'var(--text-muted)' }}>Cargando calendario...</div>
+        ) : (
+          <VisualCalendar
+            mode="setter"
+            grid={grid}
+            onCellClick={(day, hour) => setAssignCell({ day, hour })}
+            highlightSlots={highlightSlots}
+          />
+        )}
       </div>
 
       {assignCell && (
