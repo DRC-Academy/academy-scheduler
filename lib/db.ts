@@ -113,6 +113,8 @@ export async function dbGetTeachers(): Promise<Teacher[]> {
       blockedSlots:   [],
       vacations:      [],
       upcomingClasses,
+      internalRating: row.internal_rating ?? 0,
+      createdAt:      row.created_at ?? undefined,
     };
   });
 }
@@ -220,6 +222,7 @@ export async function dbGetAssignments(): Promise<Assignment[]> {
     weeklyHours:   row.weekly_hours,
     availability:  row.availability ?? '',
     notes:         row.notes ?? '',
+    startDate:     row.start_date ?? undefined,
     createdAt:     row.created_at,
   }));
 }
@@ -240,7 +243,12 @@ export async function dbAddAssignment(a: Assignment): Promise<void> {
     weekly_hours:  a.weeklyHours,
     availability:  a.availability,
     notes:         a.notes,
+    start_date:    a.startDate ?? null,
   });
+}
+
+export async function dbUpdateTeacherRating(teacherId: string, rating: number): Promise<void> {
+  await supabase.from('teachers').update({ internal_rating: rating }).eq('id', teacherId);
 }
 
 export async function dbDeleteStudent(studentId: string, studentName: string): Promise<void> {

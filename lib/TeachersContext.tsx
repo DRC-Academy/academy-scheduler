@@ -5,7 +5,7 @@ import {
   dbGetTeachers, dbAddTeacher,
   dbGetStudents, dbUpsertStudent, dbDeleteStudent, dbUpdateStudent,
   dbGetAssignments, dbAddAssignment,
-  dbGetTeacherGrid, dbSaveTeacherGrid,
+  dbGetTeacherGrid, dbSaveTeacherGrid, dbUpdateTeacherRating,
 } from '@/lib/db';
 
 interface TeachersContextType {
@@ -21,6 +21,7 @@ interface TeachersContextType {
   addAssignment: (a: Assignment) => Promise<void>;
   getTeacherGrid: (teacherId: string) => Promise<Grid>;
   updateTeacherGrid: (teacherId: string, grid: Grid) => Promise<void>;
+  updateTeacherRating: (teacherId: string, rating: number) => Promise<void>;
 }
 
 const TeachersContext = createContext<TeachersContextType>({
@@ -33,6 +34,7 @@ const TeachersContext = createContext<TeachersContextType>({
   addAssignment: async () => {},
   getTeacherGrid: async () => ({}),
   updateTeacherGrid: async () => {},
+  updateTeacherRating: async () => {},
 });
 
 export function TeachersProvider({ children }: { children: ReactNode }) {
@@ -100,10 +102,15 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     await dbSaveTeacherGrid(teacherId, grid);
   }
 
+  async function updateTeacherRating(teacherId: string, rating: number) {
+    await dbUpdateTeacherRating(teacherId, rating);
+    setTeachers(prev => prev.map(t => t.id === teacherId ? { ...t, internalRating: rating } : t));
+  }
+
   return (
     <TeachersContext.Provider value={{
       teachers, students, assignments, teacherGrids, loadingTeachers,
-      addTeacher, addStudent, deleteStudent, updateStudent, addAssignment, getTeacherGrid, updateTeacherGrid,
+      addTeacher, addStudent, deleteStudent, updateStudent, addAssignment, getTeacherGrid, updateTeacherGrid, updateTeacherRating,
     }}>
       {children}
     </TeachersContext.Provider>

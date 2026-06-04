@@ -46,6 +46,8 @@ export interface Teacher {
   vacations: Vacation[];
   upcomingClasses: UpcomingClass[];
   specialties: string[];
+  internalRating?: number;
+  createdAt?: string;
 }
 
 export interface Student {
@@ -81,6 +83,7 @@ export interface Assignment {
   weeklyHours: number;
   availability: string;          // free text: "Lunes a Viernes 16:00hs"
   notes: string;
+  startDate?: string;
   createdAt: string;
 }
 

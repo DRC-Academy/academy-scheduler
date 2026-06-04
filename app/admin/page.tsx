@@ -6,7 +6,7 @@ import { AuthGuard } from '@/components/AuthGuard';
 import { DAYS, HOURS_ES, stateColor, VisualCalendar, buildGridFromTeacher } from '@/components/VisualCalendar';
 import { useTeachers } from '@/lib/TeachersContext';
 import { mockAlerts } from '@/lib/mock-data';
-import { Teacher, Grid } from '@/types';
+import { Teacher, Grid, Assignment } from '@/types';
 
 // ─── New teacher modal ────────────────────────────────────────────────────────
 function NewTeacherModal({ onClose, onSave }: { onClose: () => void; onSave: (t: Teacher, username: string) => void }) {
@@ -240,12 +240,151 @@ function EditCalendarModal({ teacher, onClose, getTeacherGrid, updateTeacherGrid
   );
 }
 
+// ─── Star Rating ─────────────────────────────────────────────────────────────
+function StarRating({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+  const [hover, setHover] = useState(0);
+  return (
+    <div style={{ display: 'flex', gap: 1 }}>
+      {[1, 2, 3, 4, 5].map(i => (
+        <button
+          key={i}
+          onMouseEnter={() => setHover(i)}
+          onMouseLeave={() => setHover(0)}
+          onClick={() => onChange(i === value ? 0 : i)}
+          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 1px', fontSize: 17, color: i <= (hover || value) ? '#FFC400' : 'var(--text-muted)', transition: 'color 0.1s', lineHeight: 1 }}>
+          ★
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ─── Scoring Tab ──────────────────────────────────────────────────────────────
+function ScoringTab({ teachers, assignments, onRatingChange }: {
+  teachers: Teacher[];
+  assignments: Assignment[];
+  onRatingChange: (teacherId: string, rating: number) => Promise<void>;
+}) {
+  const MAX_SCORE = 300;
+  const MEDALS = ['🥇', '🥈', '🥉'];
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+  const scored = teachers.map(t => {
+    const ta = assignments.filter(a => a.teacherId === t.id);
+    const alumnosActivos = ta.length;
+    const horasSem = t.weeklyLoad;
+    const retenidos = ta.filter(a => new Date(a.createdAt) < thirtyDaysAgo).length;
+    const retencionPct = alumnosActivos > 0 ? (retenidos / alumnosActivos) * 100 : 0;
+    const totalSpots = t.freeSpots + t.weeklyLoad;
+    const ocupacionPct = totalSpots > 0 ? (t.weeklyLoad / totalSpots) * 100 : 0;
+    const rating = t.internalRating ?? 0;
+    const score = Math.round(
+      alumnosActivos * 10 +
+      horasSem * 2 +
+      retencionPct * 0.5 +
+      ocupacionPct * 0.3 +
+      rating * 20
+    );
+    return { t, alumnosActivos, horasSem, retencionPct, ocupacionPct, rating, score };
+  }).sort((a, b) => b.score - a.score);
+
+  function scoreColor(s: number) {
+    if (s > 150) return '#1E9E3A';
+    if (s >= 80) return '#FFC400';
+    return '#ef4444';
+  }
+
+  return (
+    <div>
+      <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', marginBottom: 16 }}>
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)' }}>Ranking de profesores</div>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+              Score = alumnos×10 + horas×2 + retención×0.5 + ocupación×0.3 + nota×20
+            </div>
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', background: 'var(--bg-surface-2)', padding: '4px 10px', borderRadius: 6, border: '1px solid var(--border)' }}>
+            Máx estimado: {MAX_SCORE} pts
+          </div>
+        </div>
+
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface-2)' }}>
+                {['Pos.', 'Nombre', 'Alumnos', 'Horas/sem', 'Retención', 'Ocupación', 'Nota interna', 'Score'].map(h => (
+                  <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {scored.map(({ t, alumnosActivos, horasSem, retencionPct, ocupacionPct, rating, score }, idx) => (
+                <tr key={t.id} style={{ borderBottom: '1px solid var(--border)', background: idx === 0 ? 'rgba(30,158,58,0.04)' : 'transparent' }}>
+                  <td style={{ padding: '13px 14px', fontSize: idx < 3 ? 22 : 13, fontWeight: idx >= 3 ? 600 : 400, color: 'var(--text-muted)' }}>
+                    {idx < 3 ? MEDALS[idx] : `#${idx + 1}`}
+                  </td>
+                  <td style={{ padding: '13px 14px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'var(--bg-surface-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', flexShrink: 0 }}>{t.avatar}</div>
+                      <div>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{t.name}</div>
+                        {t.createdAt && (
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+                            Desde {new Date(t.createdAt).toLocaleDateString('es-ES', { month: 'short', year: 'numeric' })}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </td>
+                  <td style={{ padding: '13px 14px' }}>
+                    <span style={{ fontSize: 15, fontWeight: 700, color: '#1E9E3A' }}>{alumnosActivos}</span>
+                  </td>
+                  <td style={{ padding: '13px 14px', fontSize: 13, color: 'var(--text-secondary)' }}>{horasSem}h</td>
+                  <td style={{ padding: '13px 14px', fontSize: 13, color: 'var(--text-secondary)' }}>{Math.round(retencionPct)}%</td>
+                  <td style={{ padding: '13px 14px', fontSize: 13, color: 'var(--text-secondary)' }}>{Math.round(ocupacionPct)}%</td>
+                  <td style={{ padding: '13px 14px' }}>
+                    <StarRating value={rating} onChange={v => onRatingChange(t.id, v)} />
+                  </td>
+                  <td style={{ padding: '13px 14px', minWidth: 150 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <div style={{ flex: 1, height: 7, borderRadius: 4, background: 'var(--bg-surface-3)', overflow: 'hidden' }}>
+                        <div style={{ width: `${Math.min((score / MAX_SCORE) * 100, 100)}%`, height: '100%', borderRadius: 4, background: scoreColor(score), transition: 'width 0.4s' }} />
+                      </div>
+                      <span style={{ fontSize: 14, fontWeight: 700, color: scoreColor(score), minWidth: 36, textAlign: 'right' }}>{score}</span>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Leyenda */}
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12 }}>
+        {[
+          { color: '#1E9E3A', label: 'Score alto (> 150)' },
+          { color: '#FFC400', label: 'Score medio (80–150)' },
+          { color: '#ef4444', label: 'Score bajo (< 80)' },
+        ].map(l => (
+          <div key={l.label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <div style={{ width: 10, height: 10, borderRadius: '50%', background: l.color }} />
+            <span style={{ color: 'var(--text-secondary)' }}>{l.label}</span>
+          </div>
+        ))}
+        <span style={{ color: 'var(--text-muted)', marginLeft: 'auto' }}>★ Nota interna: clic para cambiar · clic en estrella activa para quitar</span>
+      </div>
+    </div>
+  );
+}
+
 // ─── Admin Content ────────────────────────────────────────────────────────────
 function AdminContent() {
-  const { teachers, assignments, students, addTeacher, loadingTeachers, getTeacherGrid, updateTeacherGrid } = useTeachers();
+  const { teachers, assignments, students, addTeacher, loadingTeachers, getTeacherGrid, updateTeacherGrid, updateTeacherRating } = useTeachers();
   const [selectedTeacher, setSelectedTeacher] = useState<string | null>(null);
   const [showNewTeacher, setShowNewTeacher] = useState(false);
-  const [activeTab, setActiveTab] = useState<'overview' | 'teachers' | 'weekly'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'teachers' | 'weekly' | 'scoring'>('overview');
   const [editCalendarTeacher, setEditCalendarTeacher] = useState<Teacher | null>(null);
 
   const activeTeachers  = teachers.filter(t => t.status !== 'vacation').length;
@@ -264,6 +403,7 @@ function AdminContent() {
     { id: 'overview', label: '📊 Resumen' },
     { id: 'teachers', label: '👨‍🏫 Profesores' },
     { id: 'weekly',   label: '📅 Vista semanal' },
+    { id: 'scoring',  label: '⭐ Scoring' },
   ] as const;
 
   return (
@@ -487,6 +627,15 @@ function AdminContent() {
             </div>
             <WeeklyOverview teachers={teachers} />
           </div>
+        )}
+
+        {/* SCORING TAB */}
+        {activeTab === 'scoring' && (
+          <ScoringTab
+            teachers={teachers}
+            assignments={assignments}
+            onRatingChange={updateTeacherRating}
+          />
         )}
       </div>
 

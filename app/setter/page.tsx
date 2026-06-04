@@ -38,7 +38,18 @@ const OBJETIVOS = [
   'Inglés para viajes',
 ];
 
-// ─── Email Modal (replaces WhatsApp) ─────────────────────────────────────────
+// ─── Helpers de fecha ────────────────────────────────────────────────────────
+function fmtDate(iso: string): string {
+  const [y, m, d] = iso.split('-');
+  return `${d}/${m}/${y}`;
+}
+function addDays(iso: string, days: number): string {
+  const d = new Date(iso);
+  d.setDate(d.getDate() + days);
+  return d.toISOString().split('T')[0];
+}
+
+// ─── Email Modal ──────────────────────────────────────────────────────────────
 function EmailModal({ assignment, onClose }: { assignment: Assignment; onClose: () => void }) {
   const [sent, setSent] = useState(false);
 
@@ -46,7 +57,6 @@ function EmailModal({ assignment, onClose }: { assignment: Assignment; onClose: 
     ? `${assignment.slots[0].day} · ${assignment.slots[0].hour}h - ${String(parseInt(assignment.slots[0].hour) + 1).padStart(2,'0')}:00h (Hora España)`
     : assignment.slots.map(s => `${s.day} ${s.hour}h`).join(' y ') + ' (Hora España)';
 
-  // Build email body matching DRC Academy template
   const now = new Date();
   const dateStr = now.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' });
   const greeting = now.getHours() < 13 ? 'Buenos días' : now.getHours() < 20 ? 'Buenas tardes' : 'Buenas noches';
@@ -55,6 +65,9 @@ function EmailModal({ assignment, onClose }: { assignment: Assignment; onClose: 
   const firstSlotLabel = firstSlot
     ? `${firstSlot.day} ${now.toLocaleDateString('es-ES', { day: 'numeric', month: 'long' })}`
     : '—';
+
+  const renewalStr = assignment.startDate ? fmtDate(addDays(assignment.startDate, 30)) : null;
+  const firstName = assignment.studentName.split(' ')[0];
 
   const emailSubject = `Info ${assignment.studentName}`;
 
@@ -68,12 +81,12 @@ ${assignment.slots.map(s =>
   `Cita: ${s.day} ${dateStr.split(',')[1]?.trim() ?? ''}\nHora: ${s.hour}h - ${String(parseInt(s.hour)+1).padStart(2,'0')}:00  (Hora España).`
 ).join('\n')}
 Email de contacto: ${assignment.studentEmail}
-Objetivo: ${assignment.studentName.split(' ')[0]} ${assignment.objetivo ? `necesita ${assignment.objetivo.toLowerCase()}` : 'quiere mejorar su nivel'}
+Objetivo: ${firstName} ${assignment.objetivo ? `necesita ${assignment.objetivo.toLowerCase()}` : 'quiere mejorar su nivel'}
 Nivel: ${assignment.studentLevel}
 Disponibilidad siguientes sesiones: ${slotsText}
 Recuerda pedir que te confirmen que han recibido el email.
 
-${assignment.studentName.split(' ')[0]} ya ha comprado su plan de ${assignment.weeklyHours}h semanal de ${assignment.plan}.`;
+${firstName} ha comprado su plan ${assignment.plan} de ${assignment.weeklyHours}h semanal${renewalStr ? ` y renueva el ${renewalStr}` : ''}.`;
 
   const mailtoLink = `mailto:${assignment.teacherEmail}?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
 
@@ -176,8 +189,11 @@ function AssignModal({
   const [objetivo, setObjetivo] = useState('');
   const [plan, setPlan] = useState('');
   const [notes, setNotes] = useState('');
+  const [startDate, setStartDate] = useState('');
   const [success, setSuccess] = useState(false);
   const [resultAssignment, setResultAssignment] = useState<Assignment | null>(null);
+
+  const todayISO = new Date().toISOString().split('T')[0];
 
   // When weeklyHours decreases, trim excess slots
   useEffect(() => {
@@ -205,7 +221,7 @@ function AssignModal({
 
   const hasStudent = tab === 'existing' ? !!selectedExisting : (!!newStudent.name && !!newStudent.email);
   const slotsComplete = slots.length === weeklyHours;
-  const canConfirm = hasStudent && slotsComplete && availableSlots.length > 0;
+  const canConfirm = hasStudent && slotsComplete && availableSlots.length > 0 && !!startDate;
 
   function handleConfirm() {
     if (!canConfirm) return;
@@ -228,6 +244,7 @@ function AssignModal({
       weeklyHours,
       availability: '',
       notes,
+      startDate,
       createdAt: new Date().toISOString(),
     };
     setResultAssignment(assignment);
@@ -405,6 +422,18 @@ function AssignModal({
             <label>Notas internas</label>
             <textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="Info adicional sobre el alumno..." rows={2} style={{ resize: 'vertical' }} />
           </div>
+
+          {/* Start date */}
+          <div>
+            <label>Fecha de inicio *</label>
+            <input
+              type="date"
+              value={startDate}
+              min={todayISO}
+              onChange={e => setStartDate(e.target.value)}
+              style={{ maxWidth: 200 }}
+            />
+          </div>
         </div>
 
         {/* Summary */}
@@ -414,12 +443,15 @@ function AssignModal({
           {slots.length > 0 && <div>📅 {slots.map(s => `${s.day} ${s.hour}`).join(' · ')} 🇪🇸</div>}
           <div>⏱ {weeklyHours}h/semana {plan && `· ${plan}`}</div>
           {objetivo && <div>🎯 {objetivo}</div>}
+          {startDate && (
+            <div>📆 Inicio: {fmtDate(startDate)} · Renovación: {fmtDate(addDays(startDate, 30))}</div>
+          )}
         </div>
 
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={onClose} style={{ flex: 1, padding: '11px', borderRadius: 9, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 14 }}>Cancelar</button>
           <button onClick={handleConfirm} disabled={!canConfirm} style={{ flex: 2, padding: '11px', borderRadius: 9, border: 'none', background: canConfirm ? '#22c55e' : 'var(--bg-surface-3)', color: canConfirm ? 'white' : 'var(--text-muted)', cursor: canConfirm ? 'pointer' : 'not-allowed', fontSize: 14, fontWeight: 700 }}>
-            {!hasStudent ? 'Elegí un alumno primero' : !slotsComplete ? `Faltan ${weeklyHours - slots.length} horario${weeklyHours - slots.length !== 1 ? 's' : ''}` : 'Confirmar asignación ✓'}
+            {!hasStudent ? 'Elegí un alumno primero' : !slotsComplete ? `Faltan ${weeklyHours - slots.length} horario${weeklyHours - slots.length !== 1 ? 's' : ''}` : !startDate ? 'Ingresá la fecha de inicio' : 'Confirmar asignación ✓'}
           </button>
         </div>
       </div>
