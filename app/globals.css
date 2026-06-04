@@ -1,27 +1,44 @@
+@import url('https://fonts.googleapis.com/css2?family=Radio+Canada:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&display=swap');
 @import "tailwindcss";
 
 :root {
-  --bg-base: #0f1117;
-  --bg-surface: #161b27;
-  --bg-surface-2: #1e2535;
-  --bg-surface-3: #252d3d;
-  --border: #2a3347;
-  --border-light: #35405a;
-  --text-primary: #e8edf5;
-  --text-secondary: #8b97b0;
-  --text-muted: #5a6580;
-  --accent-blue: #3b82f6;
-  --accent-blue-dim: rgba(29, 78, 216, 0.25);
-  --status-available: #22c55e;
-  --status-available-bg: rgba(20, 83, 45, 0.3);
-  --status-almost: #f59e0b;
-  --status-almost-bg: rgba(120, 53, 15, 0.3);
-  --status-busy: #ef4444;
-  --status-busy-bg: rgba(127, 29, 29, 0.3);
-  --status-vacation: #a78bfa;
-  --status-vacation-bg: rgba(76, 29, 149, 0.3);
-  --status-none: #6b7280;
-  --status-none-bg: rgba(17, 24, 39, 0.5);
+  /* DRC Academy Brand Colors */
+  --green:          #1E9E3A;
+  --green-dark:     #167a2d;
+  --green-light:    rgba(30, 158, 58, 0.1);
+  --yellow:         #FFC400;
+  --yellow-dark:    #e6b000;
+
+  /* Backgrounds */
+  --bg-base:        #F7F7F5;
+  --bg-surface:     #FFFFFF;
+  --bg-surface-2:   #F0F0ED;
+  --bg-surface-3:   #E8E8E4;
+
+  /* Borders */
+  --border:         #E0E0DA;
+  --border-light:   #D0D0CA;
+
+  /* Text */
+  --text-primary:   #1A1A1A;
+  --text-secondary: #4A4A4A;
+  --text-muted:     #888880;
+
+  /* Accent (use green as primary) */
+  --accent-blue:    #1E9E3A;
+  --accent-blue-dim: rgba(30, 158, 58, 0.15);
+
+  /* Status colors */
+  --status-available:    #1E9E3A;
+  --status-available-bg: rgba(30, 158, 58, 0.12);
+  --status-almost:       #FFC400;
+  --status-almost-bg:    rgba(255, 196, 0, 0.15);
+  --status-busy:         #ef4444;
+  --status-busy-bg:      rgba(239, 68, 68, 0.1);
+  --status-vacation:     #8b5cf6;
+  --status-vacation-bg:  rgba(139, 92, 246, 0.1);
+  --status-none:         #9ca3af;
+  --status-none-bg:      rgba(156, 163, 175, 0.1);
 }
 
 * { box-sizing: border-box; }
@@ -29,7 +46,7 @@
 body {
   background-color: var(--bg-base);
   color: var(--text-primary);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: 'Radio Canada', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   -webkit-font-smoothing: antialiased;
   margin: 0;
 }
@@ -39,8 +56,8 @@ body {
 ::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 3px; }
 
 input, select, textarea {
-  background: var(--bg-surface-3);
-  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  border: 1.5px solid var(--border);
   border-radius: 8px;
   color: var(--text-primary);
   padding: 10px 14px;
@@ -48,8 +65,18 @@ input, select, textarea {
   outline: none;
   width: 100%;
   transition: border-color 0.15s;
-  font-family: inherit;
+  font-family: 'Radio Canada', sans-serif;
 }
-input:focus, select:focus, textarea:focus { border-color: var(--accent-blue); }
+input:focus, select:focus, textarea:focus { border-color: var(--green); }
 input::placeholder { color: var(--text-muted); }
-select option { background: var(--bg-surface-2); }
+select option { background: var(--bg-surface); color: var(--text-primary); }
+
+label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+}

@@ -20,10 +20,10 @@ export type { Grid, Cell, CellState };
 
 export function stateColor(state: CellState) {
   switch (state) {
-    case 'libre':     return { bg: 'rgba(34,197,94,0.15)',  border: 'rgba(34,197,94,0.45)',  text: '#4ade80' };
-    case 'ocupado':   return { bg: 'rgba(59,130,246,0.18)', border: 'rgba(59,130,246,0.5)',  text: '#93c5fd' };
-    case 'bloqueado': return { bg: 'rgba(245,158,11,0.15)', border: 'rgba(245,158,11,0.45)', text: '#fbbf24' };
-    case 'no_work':   return { bg: 'transparent',           border: 'rgba(42,51,71,0.4)',    text: 'var(--text-muted)' };
+    case 'libre':     return { bg: 'rgba(30,158,58,0.12)',  border: 'rgba(30,158,58,0.4)',   text: '#167a2d' };
+    case 'ocupado':   return { bg: 'rgba(30,158,58,0.25)',  border: 'rgba(30,158,58,0.6)',   text: '#0f5a20' };
+    case 'bloqueado': return { bg: 'rgba(255,196,0,0.15)',  border: 'rgba(255,196,0,0.5)',   text: '#b38600' };
+    case 'no_work':   return { bg: 'transparent',           border: 'rgba(200,200,195,0.6)', text: 'var(--text-muted)' };
   }
 }
 

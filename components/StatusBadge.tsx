@@ -1,27 +1,24 @@
 'use client';
 import { TeacherStatus } from '@/types';
 
-const statusConfig: Record<TeacherStatus, { label: string; dot: string; className: string }> = {
-  available: { label: 'Disponible', dot: '#22c55e', className: 'status-available' },
-  almost_full: { label: 'Casi lleno', dot: '#f59e0b', className: 'status-almost' },
-  busy: { label: 'Ocupado', dot: '#ef4444', className: 'status-busy' },
-  vacation: { label: 'Vacaciones', dot: '#a78bfa', className: 'status-vacation' },
-  no_availability: { label: 'Sin disponibilidad', dot: '#6b7280', className: 'status-none' },
+const statusConfig: Record<TeacherStatus, { label: string; dot: string; bg: string; color: string }> = {
+  available:       { label: 'Disponible',       dot: '#1E9E3A', bg: 'rgba(30,158,58,0.1)',   color: '#167a2d' },
+  almost_full:     { label: 'Casi lleno',        dot: '#FFC400', bg: 'rgba(255,196,0,0.15)',  color: '#b38600' },
+  busy:            { label: 'Completo',           dot: '#ef4444', bg: 'rgba(239,68,68,0.1)',   color: '#dc2626' },
+  vacation:        { label: 'Vacaciones',         dot: '#8b5cf6', bg: 'rgba(139,92,246,0.1)', color: '#7c3aed' },
+  no_availability: { label: 'Sin disponibilidad', dot: '#9ca3af', bg: 'rgba(156,163,175,0.1)',color: '#6b7280' },
 };
 
 export function StatusBadge({ status }: { status: TeacherStatus }) {
   const cfg = statusConfig[status];
   return (
-    <span className={cfg.className} style={{
+    <span style={{
       display: 'inline-flex', alignItems: 'center', gap: 5,
-      padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 500,
-      background: status === 'available' ? 'rgba(20,83,45,0.3)' :
-        status === 'almost_full' ? 'rgba(120,53,15,0.3)' :
-        status === 'busy' ? 'rgba(127,29,29,0.3)' :
-        status === 'vacation' ? 'rgba(76,29,149,0.3)' : 'rgba(17,24,39,0.5)',
-      color: cfg.dot,
+      padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600,
+      background: cfg.bg, color: cfg.color,
+      border: `1px solid ${cfg.dot}33`,
     }}>
-      <span style={{ width: 6, height: 6, borderRadius: '50%', background: cfg.dot, display: 'inline-block' }} />
+      <span style={{ width: 6, height: 6, borderRadius: '50%', background: cfg.dot, display: 'inline-block', flexShrink: 0 }} />
       {cfg.label}
     </span>
   );
