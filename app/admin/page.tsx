@@ -1,12 +1,12 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { NavBar } from '@/components/NavBar';
 import { StatusBadge } from '@/components/StatusBadge';
 import { AuthGuard } from '@/components/AuthGuard';
-import { DAYS, HOURS_ES, stateColor } from '@/components/VisualCalendar';
+import { DAYS, HOURS_ES, stateColor, VisualCalendar, buildGridFromTeacher } from '@/components/VisualCalendar';
 import { useTeachers } from '@/lib/TeachersContext';
 import { mockAlerts } from '@/lib/mock-data';
-import { Teacher } from '@/types';
+import { Teacher, Grid } from '@/types';
 
 // ─── New teacher modal ────────────────────────────────────────────────────────
 function NewTeacherModal({ onClose, onSave }: { onClose: () => void; onSave: (t: Teacher, username: string) => void }) {
@@ -189,12 +189,64 @@ function WeeklyOverview({ teachers }: { teachers: Teacher[] }) {
   );
 }
 
+// ─── Edit Calendar Modal (Admin) ─────────────────────────────────────────────
+function EditCalendarModal({ teacher, onClose, getTeacherGrid, updateTeacherGrid }: {
+  teacher: Teacher;
+  onClose: () => void;
+  getTeacherGrid: (id: string) => Promise<Grid>;
+  updateTeacherGrid: (id: string, grid: Grid) => Promise<void>;
+}) {
+  const [grid, setGrid] = useState<Grid>(buildGridFromTeacher(teacher.timeSlots, teacher.upcomingClasses));
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    getTeacherGrid(teacher.id).then(g => {
+      setGrid(Object.keys(g).length > 0 ? g : buildGridFromTeacher(teacher.timeSlots, teacher.upcomingClasses));
+      setLoading(false);
+    });
+  }, [teacher.id]);
+
+  async function handleGridChange(g: Grid) {
+    setGrid(g);
+    setSaving(true);
+    await updateTeacherGrid(teacher.id, g);
+    setSaving(false);
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(6px)', zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12 }}
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div style={{ background: 'var(--bg-surface)', border: '1px solid #35405a', borderRadius: 18, width: '100%', maxWidth: 940, maxHeight: '94vh', overflowY: 'auto', padding: 26 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{ width: 42, height: 42, borderRadius: '50%', background: 'var(--bg-surface-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 15, color: 'var(--text-secondary)' }}>{teacher.avatar}</div>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 17, color: 'var(--text-primary)' }}>Disponibilidad de {teacher.name}</div>
+              <div style={{ fontSize: 12, color: saving ? '#fbbf24' : 'var(--text-secondary)' }}>
+                {saving ? '💾 Guardando...' : '✏️ Clic en cualquier celda para cambiar estado · Guarda automáticamente'}
+              </div>
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 22, cursor: 'pointer' }}>✕</button>
+        </div>
+        {loading ? (
+          <div style={{ textAlign: 'center', padding: '48px 0', color: 'var(--text-muted)' }}>Cargando calendario...</div>
+        ) : (
+          <VisualCalendar mode="teacher" grid={grid} onGridChange={handleGridChange} />
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Admin Content ────────────────────────────────────────────────────────────
 function AdminContent() {
-  const { teachers, assignments, students, addTeacher, loadingTeachers } = useTeachers();
+  const { teachers, assignments, students, addTeacher, loadingTeachers, getTeacherGrid, updateTeacherGrid } = useTeachers();
   const [selectedTeacher, setSelectedTeacher] = useState<string | null>(null);
   const [showNewTeacher, setShowNewTeacher] = useState(false);
   const [activeTab, setActiveTab] = useState<'overview' | 'teachers' | 'weekly'>('overview');
+  const [editCalendarTeacher, setEditCalendarTeacher] = useState<Teacher | null>(null);
 
   const activeTeachers  = teachers.filter(t => t.status !== 'vacation').length;
   const totalClasses    = teachers.reduce((a, t) => a + t.upcomingClasses.length, 0);
@@ -361,7 +413,14 @@ function AdminContent() {
                       <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{teacher.email}</div>
                     </div>
                   </div>
-                  <StatusBadge status={teacher.status} />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <button
+                      onClick={() => setEditCalendarTeacher(teacher)}
+                      style={{ padding: '7px 14px', borderRadius: 8, border: '1px solid rgba(59,130,246,0.35)', background: 'rgba(59,130,246,0.1)', color: '#93c5fd', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
+                      📅 Editar disponibilidad
+                    </button>
+                    <StatusBadge status={teacher.status} />
+                  </div>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 14 }}>
                   <div>
@@ -396,6 +455,21 @@ function AdminContent() {
                     </div>
                     <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Cupos libres: <b style={{ color: teacher.freeSpots > 0 ? '#22c55e' : '#ef4444' }}>{teacher.freeSpots}</b></div>
                   </div>
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Alumnos asignados</div>
+                    {(() => {
+                      const teacherAssignments = assignments.filter(a => a.teacherId === teacher.id);
+                      if (teacherAssignments.length === 0) {
+                        return <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Sin alumnos asignados.</div>;
+                      }
+                      return teacherAssignments.map(a => (
+                        <div key={a.id} style={{ marginBottom: 6, paddingBottom: 6, borderBottom: '1px solid rgba(42,51,71,0.4)' }}>
+                          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>👤 {a.studentName}</div>
+                          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>{a.studentLevel} · {a.slots.map(sl => `${sl.day} ${sl.hour}`).join(', ')}</div>
+                        </div>
+                      ));
+                    })()}
+                  </div>
                 </div>
               </div>
             )}
@@ -420,6 +494,15 @@ function AdminContent() {
         <NewTeacherModal
           onClose={() => setShowNewTeacher(false)}
           onSave={async (t, username) => { await addTeacher(t, username); setShowNewTeacher(false); }}
+        />
+      )}
+
+      {editCalendarTeacher && (
+        <EditCalendarModal
+          teacher={editCalendarTeacher}
+          onClose={() => setEditCalendarTeacher(null)}
+          getTeacherGrid={getTeacherGrid}
+          updateTeacherGrid={updateTeacherGrid}
         />
       )}
     </div>

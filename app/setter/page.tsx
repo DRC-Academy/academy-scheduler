@@ -70,7 +70,7 @@ ${assignment.slots.map(s =>
 Email de contacto: ${assignment.studentEmail}
 Objetivo: ${assignment.studentName.split(' ')[0]} ${assignment.objetivo ? `necesita ${assignment.objetivo.toLowerCase()}` : 'quiere mejorar su nivel'}
 Nivel: ${assignment.studentLevel}
-Disponibilidad siguientes sesiones: ${assignment.availability || slotsText}
+Disponibilidad siguientes sesiones: ${slotsText}
 Recuerda pedir que te confirmen que han recibido el email.
 
 ${assignment.studentName.split(' ')[0]} ya ha comprado su plan de ${assignment.weeklyHours}h semanal de ${assignment.plan}.`;
@@ -169,7 +169,6 @@ function AssignModal({
   const [weeklyHours, setWeeklyHours] = useState(2);
   const [objetivo, setObjetivo] = useState('');
   const [plan, setPlan] = useState('');
-  const [availability, setAvailability] = useState('');
   const [notes, setNotes] = useState('');
   const [success, setSuccess] = useState(false);
   const [resultAssignment, setResultAssignment] = useState<Assignment | null>(null);
@@ -202,7 +201,7 @@ function AssignModal({
       objetivo,
       plan,
       weeklyHours,
-      availability,
+      availability: '',
       notes,
       createdAt: new Date().toISOString(),
     };
@@ -349,12 +348,6 @@ function AssignModal({
             </select>
           </div>
 
-          {/* Availability free text */}
-          <div>
-            <label>Disponibilidad futura (para el email)</label>
-            <input value={availability} onChange={e => setAvailability(e.target.value)} placeholder="Ej: Lunes a Viernes 16:00hs" />
-          </div>
-
           {/* Notes */}
           <div>
             <label>Notas internas</label>
@@ -396,6 +389,7 @@ function TeacherCalendarModal({
   const baseGrid = useMemo(() => buildGridFromTeacher(teacher.timeSlots, teacher.upcomingClasses), [teacher]);
   const [grid, setGrid] = useState<Grid>(baseGrid);
   const [loadingGrid, setLoadingGrid] = useState(true);
+  const [editMode, setEditMode] = useState(false);
 
   useEffect(() => {
     getTeacherGrid(teacher.id).then(g => {
@@ -419,10 +413,19 @@ function TeacherCalendarModal({
             <div style={{ width: 42, height: 42, borderRadius: '50%', background: 'rgba(34,197,94,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 15, color: '#4ade80' }}>{teacher.avatar}</div>
             <div>
               <div style={{ fontWeight: 700, fontSize: 17, color: 'var(--text-primary)' }}>Calendario de {teacher.name}</div>
-              <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Clic en 🟢 Libre → se abre el formulario de asignación</div>
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                {editMode ? '✏️ Modo edición: clic en cualquier celda para cambiar estado' : 'Clic en 🟢 Libre → se abre el formulario de asignación'}
+              </div>
             </div>
           </div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 22, cursor: 'pointer' }}>✕</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <button
+              onClick={() => setEditMode(m => !m)}
+              style={{ padding: '7px 14px', borderRadius: 8, border: `1px solid ${editMode ? 'rgba(245,158,11,0.5)' : 'var(--border)'}`, background: editMode ? 'rgba(245,158,11,0.12)' : 'transparent', color: editMode ? '#fbbf24' : 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
+              {editMode ? '✏️ Editando' : '✏️ Modo edición'}
+            </button>
+            <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 22, cursor: 'pointer' }}>✕</button>
+          </div>
         </div>
 
         {highlightSlots.length > 0 && (
@@ -433,6 +436,13 @@ function TeacherCalendarModal({
 
         {loadingGrid ? (
           <div style={{ textAlign: 'center', padding: '48px 0', color: 'var(--text-muted)' }}>Cargando calendario...</div>
+        ) : editMode ? (
+          <VisualCalendar
+            mode="teacher"
+            grid={grid}
+            onGridChange={handleGridChange}
+            highlightSlots={highlightSlots}
+          />
         ) : (
           <VisualCalendar
             mode="setter"

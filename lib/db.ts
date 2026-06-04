@@ -242,3 +242,19 @@ export async function dbAddAssignment(a: Assignment): Promise<void> {
     notes:         a.notes,
   });
 }
+
+export async function dbDeleteStudent(studentId: string): Promise<void> {
+  await supabase.from('assignments').delete().eq('student_id', studentId);
+  await supabase.from('students').delete().eq('id', studentId);
+}
+
+export async function dbUpdateStudent(student: Student): Promise<void> {
+  await supabase.from('students').update({
+    name:  student.name,
+    email: student.email,
+    level: student.level,
+    plan:  student.plan ?? 'Plan Individual',
+    phone: student.phone ?? null,
+    notes: student.notes ?? null,
+  }).eq('id', student.id);
+}

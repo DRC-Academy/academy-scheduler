@@ -3,7 +3,7 @@ import { createContext, useContext, useState, useEffect, ReactNode } from 'react
 import { Teacher, Student, Assignment, Grid } from '@/types';
 import {
   dbGetTeachers, dbAddTeacher,
-  dbGetStudents, dbUpsertStudent,
+  dbGetStudents, dbUpsertStudent, dbDeleteStudent, dbUpdateStudent,
   dbGetAssignments, dbAddAssignment,
   dbGetTeacherGrid, dbSaveTeacherGrid,
 } from '@/lib/db';
@@ -16,6 +16,8 @@ interface TeachersContextType {
   loadingTeachers: boolean;
   addTeacher: (t: Teacher, username: string) => Promise<void>;
   addStudent: (s: Student) => Promise<void>;
+  deleteStudent: (studentId: string) => Promise<void>;
+  updateStudent: (student: Student) => Promise<void>;
   addAssignment: (a: Assignment) => Promise<void>;
   getTeacherGrid: (teacherId: string) => Promise<Grid>;
   updateTeacherGrid: (teacherId: string, grid: Grid) => Promise<void>;
@@ -26,6 +28,8 @@ const TeachersContext = createContext<TeachersContextType>({
   loadingTeachers: true,
   addTeacher: async () => {},
   addStudent: async () => {},
+  deleteStudent: async () => {},
+  updateStudent: async () => {},
   addAssignment: async () => {},
   getTeacherGrid: async () => ({}),
   updateTeacherGrid: async () => {},
@@ -68,6 +72,17 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     });
   }
 
+  async function deleteStudent(studentId: string) {
+    await dbDeleteStudent(studentId);
+    setStudents(prev => prev.filter(s => s.id !== studentId));
+    setAssignments(prev => prev.filter(a => a.studentId !== studentId));
+  }
+
+  async function updateStudent(student: Student) {
+    await dbUpdateStudent(student);
+    setStudents(prev => prev.map(s => s.id === student.id ? student : s));
+  }
+
   async function addAssignment(a: Assignment) {
     await dbAddAssignment(a);
     setAssignments(prev => [a, ...prev]);
@@ -88,7 +103,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   return (
     <TeachersContext.Provider value={{
       teachers, students, assignments, teacherGrids, loadingTeachers,
-      addTeacher, addStudent, addAssignment, getTeacherGrid, updateTeacherGrid,
+      addTeacher, addStudent, deleteStudent, updateStudent, addAssignment, getTeacherGrid, updateTeacherGrid,
     }}>
       {children}
     </TeachersContext.Provider>
