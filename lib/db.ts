@@ -252,30 +252,68 @@ export async function dbUpdateTeacherRating(teacherId: string, rating: number): 
 }
 
 export async function dbDeleteStudent(studentId: string, studentName: string): Promise<void> {
+  const firstName = studentName.split(' ')[0];
+
   // 1. Fetch all assignments for this student (by id OR name)
   const [byId, byName] = await Promise.all([
     supabase.from('assignments').select('teacher_id').eq('student_id', studentId),
     supabase.from('assignments').select('teacher_id').eq('student_name', studentName),
   ]);
 
-  // Collect unique teacher IDs that have this student assigned
   const teacherIds = new Set<string>();
   for (const row of [...(byId.data ?? []), ...(byName.data ?? [])]) {
     teacherIds.add(row.teacher_id);
   }
 
-  // 2. For each teacher: load their grid, free the student's cells, save
+  console.log(
+    `[dbDeleteStudent] "${studentName}" (id: ${studentId}) — ` +
+    `assignments: ${byId.data?.length ?? 0} por id + ${byName.data?.length ?? 0} por nombre → ` +
+    `profesores afectados: [${[...teacherIds].join(', ')}]`
+  );
+
+  // 2. For each teacher: load grid, clear student's occupied cells, save
   for (const teacherId of teacherIds) {
     const grid = await dbGetTeacherGrid(teacherId);
+    console.log(`[dbDeleteStudent] Grid del profesor ${teacherId} antes:`, JSON.stringify(grid));
+
     const updated: Grid = { ...grid };
-    let changed = false;
+    let cleaned = 0;
+
     for (const key of Object.keys(updated)) {
-      if (updated[key].state === 'ocupado' && updated[key].student === studentName) {
+      const cell = updated[key];
+      if (cell.state !== 'ocupado') continue;
+
+      // Grids may store only the first name (entered by teacher) while
+      // assignments store the full name — match both forms.
+      const cellStudent = cell.student ?? '';
+      const matches =
+        cellStudent === studentName ||               // exact full name
+        cellStudent === firstName ||                 // cell has only first name
+        studentName.startsWith(cellStudent) ||       // full name starts with cell value
+        cellStudent.startsWith(firstName);           // cell value starts with first name
+
+      if (matches) {
         updated[key] = { state: 'libre', student: undefined };
-        changed = true;
+        cleaned++;
       }
     }
-    if (changed) await dbSaveTeacherGrid(teacherId, updated);
+
+    console.log(`[dbDeleteStudent] Profesor ${teacherId}: ${cleaned} celda(s) limpiada(s)`);
+
+    if (cleaned > 0) {
+      const { error } = await supabase
+        .from('teacher_calendars')
+        .upsert(
+          { teacher_id: teacherId, grid: updated, updated_at: new Date().toISOString() },
+          { onConflict: 'teacher_id' }
+        );
+
+      if (error) {
+        console.error(`[dbDeleteStudent] Error al guardar grid del profesor ${teacherId}:`, error);
+      } else {
+        console.log(`[dbDeleteStudent] Grid del profesor ${teacherId} guardado OK`);
+      }
+    }
   }
 
   // 3. Delete all assignments for this student
@@ -284,6 +322,8 @@ export async function dbDeleteStudent(studentId: string, studentName: string): P
 
   // 4. Delete the student record
   await supabase.from('students').delete().eq('id', studentId);
+
+  console.log(`[dbDeleteStudent] Alumno "${studentName}" eliminado correctamente`);
 }
 
 export async function dbUpdateStudent(student: Student): Promise<void> {

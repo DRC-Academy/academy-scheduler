@@ -280,12 +280,13 @@ export function VisualCalendar(props: Props) {
                       }}>
                       {cell.state !== 'no_work' && (
                         <div style={{
-                          fontSize: 10, fontWeight: 600, color: colors.text,
+                          fontSize: 9, fontWeight: 600, color: colors.text,
                           lineHeight: 1.2, overflow: 'hidden', textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap', maxWidth: 78, margin: '0 auto',
-                        }}>
+                          whiteSpace: 'nowrap', maxWidth: 82, margin: '0 auto',
+                        }}
+                          title={cell.state === 'ocupado' && cell.student ? cell.student : undefined}>
                           {cell.state === 'ocupado'
-                            ? (cell.student ? cell.student.split(' ')[0] : 'Ocupado')
+                            ? (cell.student || 'Ocupado')
                             : cell.state === 'libre'
                               ? (props.mode === 'setter' ? '+ Asignar' : 'Libre')
                               : 'Bloqueado'}
