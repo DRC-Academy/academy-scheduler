@@ -76,8 +76,16 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
 
   async function deleteStudent(studentId: string, studentName: string) {
     await dbDeleteStudent(studentId, studentName);
-    setStudents(prev => prev.filter(s => s.id !== studentId));
-    setAssignments(prev => prev.filter(a => a.studentId !== studentId && a.studentName !== studentName));
+    // Reload everything from Supabase so grids, teachers and assignments reflect the change
+    const [t, s, a] = await Promise.all([
+      dbGetTeachers(),
+      dbGetStudents(),
+      dbGetAssignments(),
+    ]);
+    setTeachers(t);
+    setStudents(s);
+    setAssignments(a);
+    setTeacherGrids({}); // clear cached grids; they will be re-fetched on next open
   }
 
   async function updateStudent(student: Student) {
