@@ -1,6 +1,6 @@
 'use client';
 import Link from 'next/link';
-import Image from 'next/image';
+
 import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/AuthContext';
 
@@ -43,7 +43,7 @@ export function NavBar() {
     }}>
       {/* Logo */}
       <Link href="/" style={{ display: 'flex', alignItems: 'center', gap: 10, marginRight: 20, textDecoration: 'none', flexShrink: 0 }}>
-        <Image src="/drc-logo.png" alt="DRC Academy" width={130} height={36} style={{ objectFit: 'contain' }} />
+        <img src="/drc-logo.png" alt="DRC Academy" style={{ height: 36, width: 'auto', objectFit: 'contain' }} />
       </Link>
 
       {/* Nav links */}
