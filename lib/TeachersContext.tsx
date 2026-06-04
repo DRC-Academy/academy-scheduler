@@ -16,7 +16,7 @@ interface TeachersContextType {
   loadingTeachers: boolean;
   addTeacher: (t: Teacher, username: string) => Promise<void>;
   addStudent: (s: Student) => Promise<void>;
-  deleteStudent: (studentId: string) => Promise<void>;
+  deleteStudent: (studentId: string, studentName: string) => Promise<void>;
   updateStudent: (student: Student) => Promise<void>;
   addAssignment: (a: Assignment) => Promise<void>;
   getTeacherGrid: (teacherId: string) => Promise<Grid>;
@@ -72,10 +72,10 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     });
   }
 
-  async function deleteStudent(studentId: string) {
-    await dbDeleteStudent(studentId);
+  async function deleteStudent(studentId: string, studentName: string) {
+    await dbDeleteStudent(studentId, studentName);
     setStudents(prev => prev.filter(s => s.id !== studentId));
-    setAssignments(prev => prev.filter(a => a.studentId !== studentId));
+    setAssignments(prev => prev.filter(a => a.studentId !== studentId && a.studentName !== studentName));
   }
 
   async function updateStudent(student: Student) {

@@ -140,11 +140,14 @@ function EmailTrigger({ assignment }: { assignment: Assignment }) {
 }
 
 // ─── Assign Modal ─────────────────────────────────────────────────────────────
+const DAY_ORDER = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+
 function AssignModal({
-  teacher, initialSlots, existingStudents, onClose, onConfirm,
+  teacher, initialSlots, teacherGrid, existingStudents, onClose, onConfirm,
 }: {
   teacher: Teacher;
-  initialSlots: AssignedSlot[];  // pre-filled from the calendar cell clicked
+  initialSlots: AssignedSlot[];
+  teacherGrid: Grid;
   existingStudents: Student[];
   onClose: () => void;
   onConfirm: (a: Assignment, s: Student) => void;
@@ -153,34 +156,56 @@ function AssignModal({
   const [selectedExisting, setSelectedExisting] = useState('');
   const [newStudent, setNewStudent] = useState({ name: '', email: '', level: 'B1' });
 
-  // Multi-slot assignment
-  const [slots, setSlots] = useState<AssignedSlot[]>(initialSlots);
+  // Libre slots from the teacher's grid, sorted day→hour
+  const availableSlots = useMemo<AssignedSlot[]>(() => {
+    return Object.entries(teacherGrid)
+      .filter(([, cell]) => cell.state === 'libre')
+      .map(([key]) => { const [day, hour] = key.split('_'); return { day, hour }; })
+      .sort((a, b) => {
+        const d = DAY_ORDER.indexOf(a.day) - DAY_ORDER.indexOf(b.day);
+        return d !== 0 ? d : a.hour.localeCompare(b.hour);
+      });
+  }, [teacherGrid]);
 
-  function addSlot() {
-    setSlots(prev => [...prev, { day: 'Lunes', hour: '14:00' }]);
-  }
-  function removeSlot(i: number) {
-    setSlots(prev => prev.filter((_, idx) => idx !== i));
-  }
-  function updateSlot(i: number, field: 'day' | 'hour', value: string) {
-    setSlots(prev => prev.map((s, idx) => idx === i ? { ...s, [field]: value } : s));
-  }
+  // Pre-fill with clicked cell, only if it's actually libre
+  const [slots, setSlots] = useState<AssignedSlot[]>(() =>
+    initialSlots.filter(s => availableSlots.some(as => as.day === s.day && as.hour === s.hour))
+  );
 
-  const [weeklyHours, setWeeklyHours] = useState(2);
+  const [weeklyHours, setWeeklyHours] = useState(initialSlots.length > 0 ? Math.max(initialSlots.length, 1) : 1);
   const [objetivo, setObjetivo] = useState('');
   const [plan, setPlan] = useState('');
   const [notes, setNotes] = useState('');
   const [success, setSuccess] = useState(false);
   const [resultAssignment, setResultAssignment] = useState<Assignment | null>(null);
 
+  // When weeklyHours decreases, trim excess slots
+  useEffect(() => {
+    setSlots(prev => prev.length > weeklyHours ? prev.slice(0, weeklyHours) : prev);
+  }, [weeklyHours]);
+
+  function addSlot() {
+    const used = new Set(slots.map(s => `${s.day}_${s.hour}`));
+    const next = availableSlots.find(as => !used.has(`${as.day}_${as.hour}`));
+    if (next) setSlots(prev => [...prev, next]);
+  }
+
+  function removeSlot(i: number) {
+    setSlots(prev => prev.filter((_, idx) => idx !== i));
+  }
+
+  function updateSlotValue(i: number, key: string) {
+    const [day, hour] = key.split('_');
+    setSlots(prev => prev.map((s, idx) => idx === i ? { day, hour } : s));
+  }
+
   const selectedStudent = tab === 'existing' ? existingStudents.find(s => s.id === selectedExisting) : null;
   const studentName  = tab === 'existing' ? (selectedStudent?.name  ?? '') : newStudent.name;
-  const studentEmail = tab === 'existing' ? (selectedStudent?.email ?? '') : newStudent.email;
   const studentLevel = tab === 'existing' ? (selectedStudent?.level ?? '') : newStudent.level;
 
-  const canConfirm = slots.length > 0 && (
-    tab === 'existing' ? !!selectedExisting : (!!newStudent.name && !!newStudent.email)
-  );
+  const hasStudent = tab === 'existing' ? !!selectedExisting : (!!newStudent.name && !!newStudent.email);
+  const slotsComplete = slots.length === weeklyHours;
+  const canConfirm = hasStudent && slotsComplete && availableSlots.length > 0;
 
   function handleConfirm() {
     if (!canConfirm) return;
@@ -279,57 +304,84 @@ function AssignModal({
           </div>
         )}
 
-        {/* ── Multi-slot selector ── */}
-        <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16, marginBottom: 16 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Horarios asignados</div>
-            <button onClick={addSlot} style={{ padding: '4px 12px', borderRadius: 8, border: '1px solid rgba(59,130,246,0.35)', background: 'rgba(59,130,246,0.1)', color: '#93c5fd', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>+ Agregar horario</button>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {slots.length === 0 && (
-              <div style={{ fontSize: 13, color: 'var(--text-muted)', padding: '10px 0', textAlign: 'center' }}>
-                Sin horarios — el horario del calendario ya está incluido o podés agregar más.
-              </div>
-            )}
-            {slots.map((slot, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--bg-surface-2)', borderRadius: 9, padding: '8px 12px', border: '1px solid var(--border)', flexWrap: 'wrap' }}>
-                <span style={{ fontSize: 11, color: 'var(--text-muted)', minWidth: 50 }}>#{i + 1}</span>
-                <select value={slot.day} onChange={e => updateSlot(i, 'day', e.target.value)} style={{ flex: '1 1 100px', minWidth: 90 }}>
-                  {daysOfWeek.map(d => <option key={d}>{d}</option>)}
-                </select>
-                <select value={slot.hour} onChange={e => updateSlot(i, 'hour', e.target.value)} style={{ flex: '1 1 80px', minWidth: 76 }}>
-                  {HOURS_ES.map(h => <option key={h} value={h}>{h} 🇪🇸</option>)}
-                </select>
-                <button onClick={() => removeSlot(i)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 18, padding: '0 4px', flexShrink: 0 }}>✕</button>
-              </div>
+        {/* ── Weekly hours (moved up so slot count target is visible) ── */}
+        <div style={{ marginBottom: 16 }}>
+          <label>Horas semanales</label>
+          <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+            {WEEKLY_HOURS.map(h => (
+              <button key={h} onClick={() => setWeeklyHours(h)} style={{
+                flex: 1, padding: '9px 0', borderRadius: 9,
+                border: `1.5px solid ${weeklyHours === h ? '#a78bfa' : 'var(--border)'}`,
+                background: weeklyHours === h ? 'rgba(167,139,250,0.15)' : 'var(--bg-surface-2)',
+                color: weeklyHours === h ? '#a78bfa' : 'var(--text-secondary)',
+                fontWeight: weeklyHours === h ? 700 : 400,
+                fontSize: 15, cursor: 'pointer',
+                display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1,
+              }}>
+                <span style={{ fontSize: 17 }}>{h}</span>
+                <span style={{ fontSize: 9 }}>h/sem</span>
+              </button>
             ))}
           </div>
         </div>
 
-        {/* ── Class details ── */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginBottom: 16 }}>
-
-          {/* Weekly hours */}
-          <div>
-            <label>Horas semanales</label>
-            <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-              {WEEKLY_HOURS.map(h => (
-                <button key={h} onClick={() => setWeeklyHours(h)} style={{
-                  flex: 1, padding: '9px 0', borderRadius: 9,
-                  border: `1.5px solid ${weeklyHours === h ? '#a78bfa' : 'var(--border)'}`,
-                  background: weeklyHours === h ? 'rgba(167,139,250,0.15)' : 'var(--bg-surface-2)',
-                  color: weeklyHours === h ? '#a78bfa' : 'var(--text-secondary)',
-                  fontWeight: weeklyHours === h ? 700 : 400,
-                  fontSize: 15, cursor: 'pointer',
-                  display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1,
-                }}>
-                  <span style={{ fontSize: 17 }}>{h}</span>
-                  <span style={{ fontSize: 9 }}>h/sem</span>
+        {/* ── Slot selector filtered to libre cells ── */}
+        <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16, marginBottom: 16 }}>
+          {/* Progress header */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Horarios asignados</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: slotsComplete ? '#22c55e' : slots.length > 0 ? '#f59e0b' : 'var(--text-muted)' }}>
+                {slots.length} de {weeklyHours} horario{weeklyHours !== 1 ? 's' : ''}
+              </span>
+              {slots.length < weeklyHours && availableSlots.length > slots.length && (
+                <button onClick={addSlot} style={{ padding: '4px 10px', borderRadius: 8, border: '1px solid rgba(59,130,246,0.35)', background: 'rgba(59,130,246,0.1)', color: '#93c5fd', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                  + Agregar
                 </button>
-              ))}
+              )}
             </div>
           </div>
 
+          {availableSlots.length === 0 ? (
+            <div style={{ padding: '14px', background: 'rgba(239,68,68,0.07)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 9, fontSize: 13, color: '#ef4444', textAlign: 'center' }}>
+              Este profesor no tiene horarios disponibles (libres) en su calendario.
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {slots.length === 0 && (
+                <div style={{ fontSize: 13, color: 'var(--text-muted)', padding: '10px 0', textAlign: 'center' }}>
+                  Seleccioná {weeklyHours} horario{weeklyHours !== 1 ? 's' : ''} libre{weeklyHours !== 1 ? 's' : ''} del profesor.
+                </div>
+              )}
+              {slots.map((slot, i) => {
+                const currentKey = `${slot.day}_${slot.hour}`;
+                const usedKeys = new Set(slots.filter((_, idx) => idx !== i).map(s => `${s.day}_${s.hour}`));
+                const options = availableSlots.filter(as => {
+                  const k = `${as.day}_${as.hour}`;
+                  return k === currentKey || !usedKeys.has(k);
+                });
+                return (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--bg-surface-2)', borderRadius: 9, padding: '8px 12px', border: '1px solid var(--border)' }}>
+                    <span style={{ fontSize: 11, color: 'var(--text-muted)', minWidth: 22, flexShrink: 0 }}>#{i + 1}</span>
+                    <select
+                      value={currentKey}
+                      onChange={e => updateSlotValue(i, e.target.value)}
+                      style={{ flex: 1 }}>
+                      {options.map(as => {
+                        const k = `${as.day}_${as.hour}`;
+                        return <option key={k} value={k}>{as.day} {as.hour} 🇪🇸</option>;
+                      })}
+                    </select>
+                    <button onClick={() => removeSlot(i)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 18, padding: '0 4px', flexShrink: 0 }}>✕</button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* ── Class details ── */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginBottom: 16 }}>
           {/* Plan */}
           <div>
             <label>Plan</label>
@@ -367,7 +419,7 @@ function AssignModal({
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={onClose} style={{ flex: 1, padding: '11px', borderRadius: 9, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 14 }}>Cancelar</button>
           <button onClick={handleConfirm} disabled={!canConfirm} style={{ flex: 2, padding: '11px', borderRadius: 9, border: 'none', background: canConfirm ? '#22c55e' : 'var(--bg-surface-3)', color: canConfirm ? 'white' : 'var(--text-muted)', cursor: canConfirm ? 'pointer' : 'not-allowed', fontSize: 14, fontWeight: 700 }}>
-            Confirmar asignación ✓
+            {!hasStudent ? 'Elegí un alumno primero' : !slotsComplete ? `Faltan ${weeklyHours - slots.length} horario${weeklyHours - slots.length !== 1 ? 's' : ''}` : 'Confirmar asignación ✓'}
           </button>
         </div>
       </div>
@@ -457,6 +509,7 @@ function TeacherCalendarModal({
         <AssignModal
           teacher={teacher}
           initialSlots={[assignCell]}
+          teacherGrid={grid}
           existingStudents={existingStudents}
           onClose={() => setAssignCell(null)}
           onConfirm={(a, s) => {

@@ -243,9 +243,38 @@ export async function dbAddAssignment(a: Assignment): Promise<void> {
   });
 }
 
-export async function dbDeleteStudent(studentId: string): Promise<void> {
-  await supabase.from('assignments').delete().eq('student_id', studentId);
-  await supabase.from('students').delete().eq('id', studentId);
+export async function dbDeleteStudent(studentId: string, studentName: string): Promise<void> {
+  // Find all teachers with assignments for this student (by id or name)
+  const [byId, byName] = await Promise.all([
+    supabase.from('assignments').select('teacher_id').eq('student_id', studentId),
+    supabase.from('assignments').select('teacher_id').eq('student_name', studentName),
+  ]);
+
+  const teacherIds = new Set<string>();
+  for (const a of [...(byId.data ?? []), ...(byName.data ?? [])]) {
+    teacherIds.add(a.teacher_id);
+  }
+
+  // For each teacher, clear this student's occupied cells → libre
+  await Promise.all([...teacherIds].map(async teacherId => {
+    const grid = await dbGetTeacherGrid(teacherId);
+    const updated = { ...grid };
+    let changed = false;
+    for (const key of Object.keys(updated)) {
+      if (updated[key].state === 'ocupado' && updated[key].student === studentName) {
+        updated[key] = { state: 'libre' };
+        changed = true;
+      }
+    }
+    if (changed) await dbSaveTeacherGrid(teacherId, updated);
+  }));
+
+  // Delete assignments and student record in parallel
+  await Promise.all([
+    supabase.from('assignments').delete().eq('student_id', studentId),
+    supabase.from('assignments').delete().eq('student_name', studentName),
+    supabase.from('students').delete().eq('id', studentId),
+  ]);
 }
 
 export async function dbUpdateStudent(student: Student): Promise<void> {
