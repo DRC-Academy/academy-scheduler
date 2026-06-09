@@ -48,6 +48,9 @@ export interface Teacher {
   specialties: string[];
   internalRating?: number;
   createdAt?: string;
+  currentLevel?: number;
+  totalScore?: number;
+  totalEuros?: number;
 }
 
 export interface Student {
@@ -120,4 +123,24 @@ export interface SlotFilter {
   id: string;
   day: string;
   hour: string;
+}
+
+// Scoring
+export type ScoringEventType =
+  | 'falta' | 'atraso' | 'queja' | 'cancelacion_tardia'
+  | 'upsell' | 'bonus_retencion' | 'bonus_puntualidad'
+  | 'review_trustpilot' | 'bonus_feedback';
+
+export interface ScoringEvent {
+  id: string;
+  teacherId: string;
+  teacherName: string;
+  eventType: ScoringEventType;
+  points: number;
+  euros: number;
+  note: string;
+  createdAt: string;
+  createdBy: string;
+  studentRef?: string;
+  quantity?: number;
 }

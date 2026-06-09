@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import { Teacher, Student, Assignment, AppUser, Grid, TeacherStatus } from '@/types';
+import { Teacher, Student, Assignment, AppUser, Grid, TeacherStatus, ScoringEvent } from '@/types';
 
 // ── AUTH ─────────────────────────────────────────────────────────────────────
 
@@ -115,6 +115,9 @@ export async function dbGetTeachers(): Promise<Teacher[]> {
       upcomingClasses,
       internalRating: row.internal_rating ?? 0,
       createdAt:      row.created_at ?? undefined,
+      currentLevel:   row.current_level ?? undefined,
+      totalScore:     row.total_score ?? undefined,
+      totalEuros:     row.total_euros ?? undefined,
     };
   });
 }
@@ -335,4 +338,105 @@ export async function dbUpdateStudent(student: Student): Promise<void> {
     phone: student.phone ?? null,
     notes: student.notes ?? null,
   }).eq('id', student.id);
+}
+
+// ── SCORING ───────────────────────────────────────────────────────────────────
+
+export const EVENT_POINTS: Record<string, number> = {
+  falta:              -15,
+  atraso:              -8,
+  queja:              -20,
+  cancelacion_tardia: -10,
+  upsell:              25,
+  bonus_retencion:     30,
+  bonus_puntualidad:   20,
+  review_trustpilot:   15,
+  bonus_feedback:      10,
+};
+
+export const EVENT_EUROS: Record<string, number> = {
+  upsell:          20,
+  bonus_retencion: 30,
+};
+
+async function dbRecalculateTeacherScore(teacherId: string): Promise<void> {
+  const [evRes, asRes, calRes] = await Promise.all([
+    supabase.from('scoring_events').select('points, euros').eq('teacher_id', teacherId),
+    supabase.from('assignments').select('created_at').eq('teacher_id', teacherId),
+    supabase.from('teacher_calendars').select('grid').eq('teacher_id', teacherId).single(),
+  ]);
+
+  const manualPoints = (evRes.data ?? []).reduce((s: number, e: any) => s + (e.points ?? 0), 0);
+  const manualEuros  = (evRes.data ?? []).reduce((s: number, e: any) => s + (e.euros ?? 0), 0);
+
+  const as = asRes.data ?? [];
+  const activeStudents = as.length;
+  const grid = ((calRes.data?.grid ?? {}) as Grid);
+  const ocupado = Object.values(grid).filter(c => c.state === 'ocupado').length;
+  const monthlyHours = ocupado * 4;
+
+  const ago30 = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const retained = as.filter((a: any) => new Date(a.created_at) < ago30).length;
+  const ret = activeStudents > 0 ? (retained / activeStudents) * 100 : 0;
+
+  let auto = activeStudents * 10 + monthlyHours * 2;
+  if (ret > 85)                       auto += 50;
+  else if (ret >= 70)                 auto += 25;
+  else if (ret < 50 && activeStudents > 0) auto -= 20;
+
+  const totalScore   = Math.max(0, manualPoints + auto);
+  const totalEuros   = Math.max(0, manualEuros);
+  const currentLevel = totalScore >= 300 ? 3 : totalScore >= 150 ? 2 : 1;
+
+  await supabase.from('teachers')
+    .update({ total_score: totalScore, total_euros: totalEuros, current_level: currentLevel })
+    .eq('id', teacherId);
+}
+
+export async function dbAddScoringEvent(event: Omit<ScoringEvent, 'id' | 'createdAt'>): Promise<ScoringEvent> {
+  const id        = `se_${Date.now()}`;
+  const createdAt = new Date().toISOString();
+
+  await supabase.from('scoring_events').insert({
+    id,
+    teacher_id:   event.teacherId,
+    teacher_name: event.teacherName,
+    event_type:   event.eventType,
+    points:       event.points,
+    euros:        event.euros,
+    note:         event.note,
+    created_by:   event.createdBy,
+    student_ref:  event.studentRef ?? null,
+    quantity:     event.quantity ?? null,
+    created_at:   createdAt,
+  });
+
+  await dbRecalculateTeacherScore(event.teacherId);
+  return { ...event, id, createdAt };
+}
+
+export async function dbGetScoringEvents(teacherId?: string): Promise<ScoringEvent[]> {
+  let q = supabase.from('scoring_events').select('*').order('created_at', { ascending: false });
+  if (teacherId) q = (q as any).eq('teacher_id', teacherId);
+  const { data } = await q;
+  if (!data) return [];
+  return (data as any[]).map(r => ({
+    id:          r.id,
+    teacherId:   r.teacher_id,
+    teacherName: r.teacher_name,
+    eventType:   r.event_type,
+    points:      r.points,
+    euros:       r.euros,
+    note:        r.note,
+    createdAt:   r.created_at,
+    createdBy:   r.created_by,
+    studentRef:  r.student_ref ?? undefined,
+    quantity:    r.quantity ?? undefined,
+  }));
+}
+
+export async function dbRecalculateAllScores(): Promise<void> {
+  const { data } = await supabase.from('teachers').select('id');
+  if (!data) return;
+  await Promise.all((data as any[]).map(t => dbRecalculateTeacherScore(t.id)));
 }

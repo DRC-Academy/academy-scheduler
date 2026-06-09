@@ -1,11 +1,12 @@
 'use client';
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { Teacher, Student, Assignment, Grid } from '@/types';
+import { Teacher, Student, Assignment, Grid, ScoringEvent } from '@/types';
 import {
   dbGetTeachers, dbAddTeacher,
   dbGetStudents, dbUpsertStudent, dbDeleteStudent, dbUpdateStudent,
   dbGetAssignments, dbAddAssignment,
   dbGetTeacherGrid, dbSaveTeacherGrid, dbUpdateTeacherRating,
+  dbAddScoringEvent, dbGetScoringEvents,
 } from '@/lib/db';
 
 interface TeachersContextType {
@@ -14,6 +15,7 @@ interface TeachersContextType {
   assignments: Assignment[];
   teacherGrids: Record<string, Grid>;
   loadingTeachers: boolean;
+  scoringEvents: ScoringEvent[];
   addTeacher: (t: Teacher, username: string) => Promise<void>;
   addStudent: (s: Student) => Promise<void>;
   deleteStudent: (studentId: string, studentName: string) => Promise<void>;
@@ -22,11 +24,12 @@ interface TeachersContextType {
   getTeacherGrid: (teacherId: string) => Promise<Grid>;
   updateTeacherGrid: (teacherId: string, grid: Grid) => Promise<void>;
   updateTeacherRating: (teacherId: string, rating: number) => Promise<void>;
+  addScoringEvent: (event: Omit<ScoringEvent, 'id' | 'createdAt'>) => Promise<void>;
 }
 
 const TeachersContext = createContext<TeachersContextType>({
   teachers: [], students: [], assignments: [], teacherGrids: {},
-  loadingTeachers: true,
+  loadingTeachers: true, scoringEvents: [],
   addTeacher: async () => {},
   addStudent: async () => {},
   deleteStudent: async () => {},
@@ -35,6 +38,7 @@ const TeachersContext = createContext<TeachersContextType>({
   getTeacherGrid: async () => ({}),
   updateTeacherGrid: async () => {},
   updateTeacherRating: async () => {},
+  addScoringEvent: async () => {},
 });
 
 export function TeachersProvider({ children }: { children: ReactNode }) {
@@ -43,19 +47,21 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   const [assignments, setAssignments]   = useState<Assignment[]>([]);
   const [teacherGrids, setTeacherGrids] = useState<Record<string, Grid>>({});
   const [loadingTeachers, setLoadingTeachers] = useState(true);
+  const [scoringEvents, setScoringEvents] = useState<ScoringEvent[]>([]);
 
-  // Load everything on mount
   useEffect(() => {
     async function load() {
       setLoadingTeachers(true);
-      const [t, s, a] = await Promise.all([
+      const [t, s, a, ev] = await Promise.all([
         dbGetTeachers(),
         dbGetStudents(),
         dbGetAssignments(),
+        dbGetScoringEvents(),
       ]);
       setTeachers(t);
       setStudents(s);
       setAssignments(a);
+      setScoringEvents(ev);
       setLoadingTeachers(false);
     }
     load();
@@ -76,7 +82,6 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
 
   async function deleteStudent(studentId: string, studentName: string) {
     await dbDeleteStudent(studentId, studentName);
-    // Reload everything from Supabase so grids, teachers and assignments reflect the change
     const [t, s, a] = await Promise.all([
       dbGetTeachers(),
       dbGetStudents(),
@@ -85,7 +90,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     setTeachers(t);
     setStudents(s);
     setAssignments(a);
-    setTeacherGrids({}); // clear cached grids; they will be re-fetched on next open
+    setTeacherGrids({});
   }
 
   async function updateStudent(student: Student) {
@@ -115,10 +120,16 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     setTeachers(prev => prev.map(t => t.id === teacherId ? { ...t, internalRating: rating } : t));
   }
 
+  async function addScoringEvent(event: Omit<ScoringEvent, 'id' | 'createdAt'>) {
+    const newEvent = await dbAddScoringEvent(event);
+    setScoringEvents(prev => [newEvent, ...prev]);
+  }
+
   return (
     <TeachersContext.Provider value={{
-      teachers, students, assignments, teacherGrids, loadingTeachers,
-      addTeacher, addStudent, deleteStudent, updateStudent, addAssignment, getTeacherGrid, updateTeacherGrid, updateTeacherRating,
+      teachers, students, assignments, teacherGrids, loadingTeachers, scoringEvents,
+      addTeacher, addStudent, deleteStudent, updateStudent, addAssignment,
+      getTeacherGrid, updateTeacherGrid, updateTeacherRating, addScoringEvent,
     }}>
       {children}
     </TeachersContext.Provider>
