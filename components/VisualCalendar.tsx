@@ -5,6 +5,9 @@ import { Grid, Cell, CellState } from '@/types';
 export const DAYS = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 export const HOURS_ES = Array.from({ length: 14 }, (_, i) => `${(i + 9).toString().padStart(2, '0')}:00`);
 
+const MONTH_NAMES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+const MONTH_NAMES_SHORT = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+
 export function toAR(hourES: string): string {
   const h = parseInt(hourES);
   let ar = h - 4;
@@ -46,10 +49,31 @@ export function buildGridFromTeacher(
   return grid;
 }
 
+// ── Week date helpers ─────────────────────────────────────────────────────────
+
+export function getWeekDates(offset: number = 0): Date[] {
+  const today = new Date();
+  const dow = today.getDay();
+  const diffToMonday = dow === 0 ? -6 : 1 - dow;
+  const monday = new Date(today);
+  monday.setDate(today.getDate() + diffToMonday + offset * 7);
+  return Array.from({ length: 6 }, (_, i) => {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + i);
+    return d;
+  });
+}
+
+export function formatWeekRange(dates: Date[]): string {
+  const first = dates[0];
+  const last  = dates[dates.length - 1];
+  if (first.getMonth() === last.getMonth()) {
+    return `Semana del ${first.getDate()} al ${last.getDate()} de ${MONTH_NAMES[first.getMonth()].charAt(0).toUpperCase() + MONTH_NAMES[first.getMonth()].slice(1)} ${first.getFullYear()}`;
+  }
+  return `${first.getDate()} ${MONTH_NAMES_SHORT[first.getMonth()]} — ${last.getDate()} ${MONTH_NAMES_SHORT[last.getMonth()]} ${last.getFullYear()}`;
+}
+
 // ── MODES ────────────────────────────────────────────────────────────────────
-// 'teacher' : profe edita su propio calendario (clic → ciclo de estados, con modal para nombre alumno)
-// 'setter'  : setter ve calendario de profe, clic en libre → callback para asignar
-// 'readonly': solo lectura (admin viendo)
 
 type Mode = 'teacher' | 'setter' | 'readonly';
 
@@ -57,6 +81,8 @@ interface BaseProps {
   grid: Grid;
   mode: Mode;
   highlightSlots?: Array<{ day: string; hour: string }>;
+  weekOffset?: number;
+  onWeekChange?: (offset: number) => void;
 }
 
 interface TeacherProps extends BaseProps {
@@ -93,7 +119,7 @@ function StudentNameModal({ onConfirm, onCancel }: { onConfirm: (name: string) =
         <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
           <button onClick={onCancel} style={{ flex: 1, padding: '9px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13 }}>Cancelar</button>
           <button onClick={() => name.trim() && onConfirm(name.trim())} disabled={!name.trim()}
-            style={{ flex: 2, padding: '9px', borderRadius: 8, border: 'none', background: name.trim() ? '#3b82f6' : 'var(--bg-surface-3)', color: name.trim() ? 'white' : 'var(--text-muted)', cursor: name.trim() ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 700 }}>
+            style={{ flex: 2, padding: '9px', borderRadius: 8, border: 'none', background: name.trim() ? '#1E9E3A' : 'var(--bg-surface-3)', color: name.trim() ? 'white' : 'var(--text-muted)', cursor: name.trim() ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 700 }}>
             Marcar como Ocupado
           </button>
         </div>
@@ -121,8 +147,8 @@ function CellMenu({
 
   const options: Array<{ state: CellState; label: string; color: string; icon: string }> = [
     { state: 'libre',     label: 'Libre',     color: '#4ade80', icon: '🟢' },
-    { state: 'ocupado',   label: 'Ocupado',   color: '#93c5fd', icon: '🔵' },
-    { state: 'bloqueado', label: 'Bloqueado', color: '#fbbf24', icon: '🟡' },
+    { state: 'ocupado',   label: 'Ocupado',   color: '#1E9E3A', icon: '🔵' },
+    { state: 'bloqueado', label: 'Bloqueado', color: '#FFC400', icon: '🟡' },
     { state: 'no_work',   label: 'No work',   color: 'var(--text-muted)', icon: '⬜' },
   ];
 
@@ -159,6 +185,19 @@ function CellMenu({
 
 export function VisualCalendar(props: Props) {
   const [menu, setMenu] = useState<{ day: string; hour: string } | null>(null);
+  const [internalOffset, setInternalOffset] = useState(props.weekOffset ?? 0);
+
+  const offset = props.weekOffset ?? internalOffset;
+  const weekDates = getWeekDates(offset);
+  const weekLabel = formatWeekRange(weekDates);
+
+  function handleOffsetChange(newOffset: number) {
+    if (props.onWeekChange) {
+      props.onWeekChange(newOffset);
+    } else {
+      setInternalOffset(newOffset);
+    }
+  }
 
   function getCell(day: string, hour: string): Cell {
     return props.grid[cellKey(day, hour)] ?? { state: 'no_work' };
@@ -180,7 +219,6 @@ export function VisualCalendar(props: Props) {
     props.onGridChange(updated);
   }
 
-  // Stats
   const cells = Object.values(props.grid);
   const libre    = cells.filter(c => c.state === 'libre').length;
   const ocupado  = cells.filter(c => c.state === 'ocupado').length;
@@ -194,12 +232,35 @@ export function VisualCalendar(props: Props) {
 
   return (
     <div style={{ userSelect: 'none' }}>
+      {/* Week navigation header */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, background: 'var(--bg-surface-2)', border: '1px solid var(--border)', borderRadius: 10, padding: '8px 14px' }}>
+        <button
+          onClick={() => handleOffsetChange(offset - 1)}
+          style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 7, padding: '4px 12px', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: 16, lineHeight: 1 }}>
+          ‹
+        </button>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{weekLabel}</div>
+          {offset === 0 && <div style={{ fontSize: 10, color: '#1E9E3A', fontWeight: 600, marginTop: 1 }}>Semana actual</div>}
+          {offset !== 0 && (
+            <button onClick={() => handleOffsetChange(0)} style={{ background: 'none', border: 'none', fontSize: 10, color: 'var(--text-muted)', cursor: 'pointer', padding: 0, marginTop: 1 }}>
+              Volver a hoy
+            </button>
+          )}
+        </div>
+        <button
+          onClick={() => handleOffsetChange(offset + 1)}
+          style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 7, padding: '4px 12px', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: 16, lineHeight: 1 }}>
+          ›
+        </button>
+      </div>
+
       {/* Stats */}
       <div style={{ display: 'flex', gap: 14, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
         {[
           { label: 'Libre',     count: libre,     color: '#4ade80' },
-          { label: 'Ocupado',   count: ocupado,   color: '#93c5fd' },
-          { label: 'Bloqueado', count: bloqueado, color: '#fbbf24' },
+          { label: 'Ocupado',   count: ocupado,   color: '#1E9E3A' },
+          { label: 'Bloqueado', count: bloqueado, color: '#FFC400' },
           { label: 'No work',   count: noWork,    color: 'var(--text-muted)' },
         ].map(s => (
           <div key={s.label} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
@@ -210,8 +271,8 @@ export function VisualCalendar(props: Props) {
           </div>
         ))}
         <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 'auto' }}>
-          {props.mode === 'teacher' && '✏️ Hacé clic en una celda para cambiar su estado'}
-          {props.mode === 'setter'  && '🟢 Hacé clic en una celda libre para asignar'}
+          {props.mode === 'teacher' && '✏️ Clic en una celda para cambiar estado'}
+          {props.mode === 'setter'  && '🟢 Clic en una celda libre para asignar · Horario recurrente'}
           {props.mode === 'readonly'&& '👁 Solo lectura'}
         </span>
       </div>
@@ -226,23 +287,32 @@ export function VisualCalendar(props: Props) {
                 background: 'var(--bg-surface-2)', borderBottom: '1px solid var(--border)',
                 textAlign: 'left', position: 'sticky', left: 0, zIndex: 2, minWidth: 84,
               }}>🇪🇸 / 🇦🇷</th>
-              {DAYS.map(day => {
+              {DAYS.map((day, i) => {
+                const date = weekDates[i];
+                const dayNum = date.getDate();
+                const monthShort = MONTH_NAMES_SHORT[date.getMonth()];
                 const hl = highlightDays.includes(day);
+                const isToday = date.toDateString() === new Date().toDateString();
                 return (
                   <th key={day} style={{
-                    padding: '8px 6px', fontSize: 12, fontWeight: 700,
-                    color: hl ? '#93c5fd' : 'var(--text-primary)',
-                    background: hl ? 'rgba(59,130,246,0.1)' : 'var(--bg-surface-2)',
-                    borderBottom: `2px solid ${hl ? 'rgba(59,130,246,0.5)' : 'var(--border)'}`,
+                    padding: '6px 6px', fontSize: 12, fontWeight: 700,
+                    color: hl ? '#1E9E3A' : isToday ? '#1E9E3A' : 'var(--text-primary)',
+                    background: hl ? 'rgba(30,158,58,0.08)' : isToday ? 'rgba(30,158,58,0.05)' : 'var(--bg-surface-2)',
+                    borderBottom: `2px solid ${hl ? '#1E9E3A' : isToday ? 'rgba(30,158,58,0.4)' : 'var(--border)'}`,
                     textAlign: 'center', minWidth: 86,
-                  }}>{day}</th>
+                  }}>
+                    <div>{day}</div>
+                    <div style={{ fontSize: 10, fontWeight: isToday ? 700 : 500, color: isToday ? '#1E9E3A' : 'var(--text-muted)', marginTop: 1 }}>
+                      {dayNum} {monthShort}
+                    </div>
+                  </th>
                 );
               })}
             </tr>
           </thead>
           <tbody>
             {HOURS_ES.map(hour => (
-              <tr key={hour} style={{ borderBottom: '1px solid rgba(42,51,71,0.4)' }}>
+              <tr key={hour} style={{ borderBottom: '1px solid rgba(200,200,195,0.4)' }}>
                 <td style={{
                   padding: '4px 10px', fontSize: 11, lineHeight: 1.4,
                   background: 'var(--bg-surface-2)', position: 'sticky', left: 0, zIndex: 1,
@@ -264,14 +334,14 @@ export function VisualCalendar(props: Props) {
                   let bg = colors.bg;
                   let border = `1px solid ${colors.border}`;
                   if (hlCell) {
-                    bg = 'rgba(59,130,246,0.3)';
-                    border = '2px solid rgba(59,130,246,0.8)';
+                    bg = 'rgba(30,158,58,0.2)';
+                    border = '2px solid rgba(30,158,58,0.7)';
                   }
 
                   return (
                     <td key={day}
                       onClick={() => handleCellClick(day, hour)}
-                      title={cell.state === 'ocupado' && cell.student ? cell.student : cell.state}
+                      title={cell.state === 'ocupado' && cell.student ? `${cell.student} · Recurrente` : cell.state}
                       style={{
                         height: 40, padding: '2px 3px',
                         background: bg, border, cursor,
@@ -283,10 +353,14 @@ export function VisualCalendar(props: Props) {
                           fontSize: 9, fontWeight: 600, color: colors.text,
                           lineHeight: 1.2, overflow: 'hidden', textOverflow: 'ellipsis',
                           whiteSpace: 'nowrap', maxWidth: 82, margin: '0 auto',
-                        }}
-                          title={cell.state === 'ocupado' && cell.student ? cell.student : undefined}>
+                        }}>
                           {cell.state === 'ocupado'
-                            ? (cell.student || 'Ocupado')
+                            ? <>
+                                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {cell.student || 'Ocupado'}
+                                </div>
+                                <div style={{ fontSize: 8, color: '#1E9E3A', opacity: 0.8, fontWeight: 400 }}>· Semanal</div>
+                              </>
                             : cell.state === 'libre'
                               ? (props.mode === 'setter' ? '+ Asignar' : 'Libre')
                               : 'Bloqueado'}
@@ -304,14 +378,17 @@ export function VisualCalendar(props: Props) {
         </table>
       </div>
 
-      {/* Teacher mode legend */}
       {props.mode === 'teacher' && (
         <div style={{ marginTop: 10, fontSize: 11, color: 'var(--text-muted)' }}>
           ✏️ Clic en cualquier celda para elegir: Libre · Ocupado · Bloqueado · No work
         </div>
       )}
+      {props.mode === 'setter' && (
+        <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-muted)' }}>
+          📌 El horario asignado se repetirá <strong>todas las semanas</strong> de forma automática.
+        </div>
+      )}
 
-      {/* Menus */}
       {menu && props.mode === 'teacher' && (
         <CellMenu
           day={menu.day}

@@ -42,10 +42,24 @@ function calcStatusFromGrid(grid: Grid): { status: TeacherStatus; freeSpots: num
   return { status, freeSpots, ocupadoSpots, weeklyLoad: ocupadoSpots };
 }
 
+// ── WEEK DATES ────────────────────────────────────────────────────────────────
+
+export function dbGetWeekDates(offset: number = 0): Date[] {
+  const today = new Date();
+  const dow = today.getDay(); // 0=Sun, 1=Mon, ...
+  const diffToMonday = dow === 0 ? -6 : 1 - dow;
+  const monday = new Date(today);
+  monday.setDate(today.getDate() + diffToMonday + offset * 7);
+  return Array.from({ length: 6 }, (_, i) => {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + i);
+    return d;
+  });
+}
+
 // ── TEACHERS ─────────────────────────────────────────────────────────────────
 
 export async function dbGetTeachers(): Promise<Teacher[]> {
-  // Fetch teachers and their calendars in parallel
   const [teachersRes, calendarsRes] = await Promise.all([
     supabase.from('teachers').select('*').order('name'),
     supabase.from('teacher_calendars').select('teacher_id, grid'),
@@ -53,7 +67,6 @@ export async function dbGetTeachers(): Promise<Teacher[]> {
 
   if (teachersRes.error || !teachersRes.data) return [];
 
-  // Build a map of grids by teacher_id
   const gridMap: Record<string, Grid> = {};
   if (calendarsRes.data) {
     for (const row of calendarsRes.data) {
@@ -65,22 +78,13 @@ export async function dbGetTeachers(): Promise<Teacher[]> {
     const grid = gridMap[row.id] ?? {};
     const { status, freeSpots, ocupadoSpots, weeklyLoad } = calcStatusFromGrid(grid);
 
-    // Build upcomingClasses from occupied grid cells
     const upcomingClasses = Object.entries(grid)
       .filter(([, cell]) => cell.state === 'ocupado')
       .map(([key, cell]) => {
         const [day, time] = key.split('_');
-        return {
-          id: key,
-          studentName: cell.student ?? '—',
-          day,
-          time,
-          duration: 1,
-          type: 'Clase',
-        };
+        return { id: key, studentName: cell.student ?? '—', day, time, duration: 1, type: 'Clase' };
       });
 
-    // Build timeSlots from libre cells (for weekly overview in admin)
     const liberDays: Record<string, number[]> = {};
     Object.entries(grid)
       .filter(([, cell]) => cell.state === 'libre')
@@ -99,25 +103,32 @@ export async function dbGetTeachers(): Promise<Teacher[]> {
     }));
 
     return {
-      id:             row.id,
-      name:           row.name,
-      email:          row.email,
-      avatar:         row.avatar,
+      id:                  row.id,
+      name:                row.name,
+      email:               row.email,
+      avatar:              row.avatar,
       status,
       weeklyLoad,
-      maxWeeklyLoad:  20,
+      maxWeeklyLoad:       20,
       freeSpots,
-      totalSpots:     freeSpots + ocupadoSpots,
-      specialties:    row.specialties ?? ['Inglés'],
+      totalSpots:          freeSpots + ocupadoSpots,
+      specialties:         row.specialties ?? ['Inglés'],
       timeSlots,
-      blockedSlots:   [],
-      vacations:      [],
+      blockedSlots:        [],
+      vacations:           [],
       upcomingClasses,
-      internalRating: row.internal_rating ?? 0,
-      createdAt:      row.created_at ?? undefined,
-      currentLevel:   row.current_level ?? undefined,
-      totalScore:     row.total_score ?? undefined,
-      totalEuros:     row.total_euros ?? undefined,
+      internalRating:      row.internal_rating ?? 0,
+      createdAt:           row.created_at ?? undefined,
+      currentLevel:        row.current_level ?? 1,
+      totalScore:          row.total_score ?? 0,
+      totalEuros:          row.total_euros ?? 0,
+      retentionRate:       row.retention_rate ?? undefined,
+      isBlocked:           row.is_blocked ?? false,
+      isTeacherOfMonth:    row.is_teacher_of_month ?? false,
+      isTeacherOfQuarter:  row.is_teacher_of_quarter ?? false,
+      teacherOfMonthDate:  row.teacher_of_month_date ?? undefined,
+      lastMonthlyReset:    row.last_monthly_reset ?? undefined,
+      lastQuarterlyReset:  row.last_quarterly_reset ?? undefined,
     };
   });
 }
@@ -257,7 +268,6 @@ export async function dbUpdateTeacherRating(teacherId: string, rating: number): 
 export async function dbDeleteStudent(studentId: string, studentName: string): Promise<void> {
   const firstName = studentName.split(' ')[0];
 
-  // 1. Fetch all assignments for this student (by id OR name)
   const [byId, byName] = await Promise.all([
     supabase.from('assignments').select('teacher_id').eq('student_id', studentId),
     supabase.from('assignments').select('teacher_id').eq('student_name', studentName),
@@ -274,11 +284,8 @@ export async function dbDeleteStudent(studentId: string, studentName: string): P
     `profesores afectados: [${[...teacherIds].join(', ')}]`
   );
 
-  // 2. For each teacher: load grid, clear student's occupied cells, save
   for (const teacherId of teacherIds) {
     const grid = await dbGetTeacherGrid(teacherId);
-    console.log(`[dbDeleteStudent] Grid del profesor ${teacherId} antes:`, JSON.stringify(grid));
-
     const updated: Grid = { ...grid };
     let cleaned = 0;
 
@@ -286,14 +293,12 @@ export async function dbDeleteStudent(studentId: string, studentName: string): P
       const cell = updated[key];
       if (cell.state !== 'ocupado') continue;
 
-      // Grids may store only the first name (entered by teacher) while
-      // assignments store the full name — match both forms.
       const cellStudent = cell.student ?? '';
       const matches =
-        cellStudent === studentName ||               // exact full name
-        cellStudent === firstName ||                 // cell has only first name
-        studentName.startsWith(cellStudent) ||       // full name starts with cell value
-        cellStudent.startsWith(firstName);           // cell value starts with first name
+        cellStudent === studentName ||
+        cellStudent === firstName ||
+        studentName.startsWith(cellStudent) ||
+        cellStudent.startsWith(firstName);
 
       if (matches) {
         updated[key] = { state: 'libre', student: undefined };
@@ -310,7 +315,6 @@ export async function dbDeleteStudent(studentId: string, studentName: string): P
           { teacher_id: teacherId, grid: updated, updated_at: new Date().toISOString() },
           { onConflict: 'teacher_id' }
         );
-
       if (error) {
         console.error(`[dbDeleteStudent] Error al guardar grid del profesor ${teacherId}:`, error);
       } else {
@@ -319,11 +323,8 @@ export async function dbDeleteStudent(studentId: string, studentName: string): P
     }
   }
 
-  // 3. Delete all assignments for this student
   await supabase.from('assignments').delete().eq('student_id', studentId);
   await supabase.from('assignments').delete().eq('student_name', studentName);
-
-  // 4. Delete the student record
   await supabase.from('students').delete().eq('id', studentId);
 
   console.log(`[dbDeleteStudent] Alumno "${studentName}" eliminado correctamente`);
@@ -340,18 +341,23 @@ export async function dbUpdateStudent(student: Student): Promise<void> {
   }).eq('id', student.id);
 }
 
-// ── SCORING ───────────────────────────────────────────────────────────────────
+// ── SCORING CONSTANTS ─────────────────────────────────────────────────────────
 
 export const EVENT_POINTS: Record<string, number> = {
-  falta:              -15,
-  atraso:              -8,
-  queja:              -20,
-  cancelacion_tardia: -10,
-  upsell:              25,
-  bonus_retencion:     30,
-  bonus_puntualidad:   20,
-  review_trustpilot:   15,
-  bonus_feedback:      10,
+  falta_injustificada: -15,
+  falta_justificada:    -5,
+  atraso:               -8,
+  queja:               -20,
+  cancelacion_tardia:  -10,
+  upsell:               25,
+  bonus_retencion:      30,
+  bonus_puntualidad:    20,
+  review_trustpilot:    15,
+  bonus_feedback:       10,
+  cambio_por_alumno:   -10,
+  cambio_por_profesor: -20,
+  profe_del_mes:        50,
+  profe_del_trimestre: 100,
 };
 
 export const EVENT_EUROS: Record<string, number> = {
@@ -359,10 +365,33 @@ export const EVENT_EUROS: Record<string, number> = {
   bonus_retencion: 30,
 };
 
+// ── RETENTION RATE ────────────────────────────────────────────────────────────
+
+export async function calcRetentionRate(teacherId: string): Promise<number> {
+  const { data } = await supabase
+    .from('assignments')
+    .select('created_at, start_date')
+    .eq('teacher_id', teacherId);
+
+  const assignments = data ?? [];
+  const activeStudents = assignments.length;
+  if (activeStudents === 0) return 100;
+
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const retained = assignments.filter((a: any) => {
+    const date = a.start_date ? new Date(a.start_date) : new Date(a.created_at);
+    return date < thirtyDaysAgo;
+  }).length;
+
+  return (retained / activeStudents) * 100;
+}
+
+// ── SCORE RECALCULATION ───────────────────────────────────────────────────────
+
 async function dbRecalculateTeacherScore(teacherId: string): Promise<void> {
   const [evRes, asRes, calRes] = await Promise.all([
     supabase.from('scoring_events').select('points, euros').eq('teacher_id', teacherId),
-    supabase.from('assignments').select('created_at').eq('teacher_id', teacherId),
+    supabase.from('assignments').select('created_at, start_date').eq('teacher_id', teacherId),
     supabase.from('teacher_calendars').select('grid').eq('teacher_id', teacherId).single(),
   ]);
 
@@ -375,21 +404,31 @@ async function dbRecalculateTeacherScore(teacherId: string): Promise<void> {
   const ocupado = Object.values(grid).filter(c => c.state === 'ocupado').length;
   const monthlyHours = ocupado * 4;
 
-  const ago30 = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-  const retained = as.filter((a: any) => new Date(a.created_at) < ago30).length;
-  const ret = activeStudents > 0 ? (retained / activeStudents) * 100 : 0;
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const retained = as.filter((a: any) => {
+    const date = a.start_date ? new Date(a.start_date) : new Date(a.created_at);
+    return date < thirtyDaysAgo;
+  }).length;
+  const ret = activeStudents > 0 ? (retained / activeStudents) * 100 : 100;
 
   let auto = activeStudents * 10 + monthlyHours * 2;
-  if (ret > 85)                       auto += 50;
-  else if (ret >= 70)                 auto += 25;
-  else if (ret < 50 && activeStudents > 0) auto -= 20;
+  if (ret >= 85)                              auto += 50;
+  else if (ret >= 80)                         auto += 25;
+  else if (ret < 65 && activeStudents > 0)    auto -= 30;
 
   const totalScore   = Math.max(0, manualPoints + auto);
   const totalEuros   = Math.max(0, manualEuros);
   const currentLevel = totalScore >= 300 ? 3 : totalScore >= 150 ? 2 : 1;
+  const isBlocked    = activeStudents > 0 && ret < 65;
 
   await supabase.from('teachers')
-    .update({ total_score: totalScore, total_euros: totalEuros, current_level: currentLevel })
+    .update({
+      total_score:    totalScore,
+      total_euros:    totalEuros,
+      current_level:  currentLevel,
+      is_blocked:     isBlocked,
+      retention_rate: Math.round(ret),
+    })
     .eq('id', teacherId);
 }
 
@@ -439,4 +478,159 @@ export async function dbRecalculateAllScores(): Promise<void> {
   const { data } = await supabase.from('teachers').select('id');
   if (!data) return;
   await Promise.all((data as any[]).map(t => dbRecalculateTeacherScore(t.id)));
+}
+
+// ── TEACHER OF MONTH / QUARTER ────────────────────────────────────────────────
+
+export async function dbAssignTeacherOfMonth(teacherId: string, euros: number): Promise<void> {
+  const now = new Date();
+  const monthLabel = now.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
+
+  // Get teacher name
+  const { data: tData } = await supabase.from('teachers').select('name').eq('id', teacherId).single();
+  const teacherName = tData?.name ?? '';
+
+  // Clear previous teacher of month
+  await supabase.from('teachers')
+    .update({ is_teacher_of_month: false, teacher_of_month_date: null })
+    .neq('id', 'none_placeholder');
+
+  // Set new teacher of month
+  await supabase.from('teachers')
+    .update({ is_teacher_of_month: true, teacher_of_month_date: now.toISOString() })
+    .eq('id', teacherId);
+
+  // Add scoring event
+  await supabase.from('scoring_events').insert({
+    id:           `tom_${teacherId}_${Date.now()}`,
+    teacher_id:   teacherId,
+    teacher_name: teacherName,
+    event_type:   'profe_del_mes',
+    points:       EVENT_POINTS.profe_del_mes,
+    euros,
+    note:         `🏆 Profe del Mes — ${monthLabel} — Bonus: €${euros}`,
+    created_by:   'Admin',
+    created_at:   now.toISOString(),
+  });
+
+  await dbRecalculateTeacherScore(teacherId);
+}
+
+export async function dbAssignTeacherOfQuarter(teacherId: string, euros: number): Promise<void> {
+  const now = new Date();
+  const quarter = Math.floor(now.getMonth() / 3) + 1;
+  const quarterLabel = `Q${quarter} ${now.getFullYear()}`;
+
+  const { data: tData } = await supabase.from('teachers').select('name').eq('id', teacherId).single();
+  const teacherName = tData?.name ?? '';
+
+  await supabase.from('teachers')
+    .update({ is_teacher_of_quarter: false })
+    .neq('id', 'none_placeholder');
+
+  await supabase.from('teachers')
+    .update({ is_teacher_of_quarter: true })
+    .eq('id', teacherId);
+
+  await supabase.from('scoring_events').insert({
+    id:           `toq_${teacherId}_${Date.now()}`,
+    teacher_id:   teacherId,
+    teacher_name: teacherName,
+    event_type:   'profe_del_trimestre',
+    points:       EVENT_POINTS.profe_del_trimestre,
+    euros,
+    note:         `🏆 Profe del Trimestre — ${quarterLabel} — Bonus: €${euros}`,
+    created_by:   'Admin',
+    created_at:   now.toISOString(),
+  });
+
+  await dbRecalculateTeacherScore(teacherId);
+}
+
+// ── RESETS ────────────────────────────────────────────────────────────────────
+
+export async function dbCheckAndResetMonthly(): Promise<{ needed: boolean; performed: boolean }> {
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+
+  const { data: teachers } = await supabase
+    .from('teachers')
+    .select('id, last_monthly_reset');
+
+  if (!teachers || teachers.length === 0) return { needed: false, performed: false };
+
+  const needReset = teachers.filter((t: any) =>
+    !t.last_monthly_reset || t.last_monthly_reset < monthStart
+  );
+
+  if (needReset.length === 0) return { needed: false, performed: false };
+
+  const ids = needReset.map((t: any) => t.id);
+  await supabase.from('teachers').update({ last_monthly_reset: now.toISOString() }).in('id', ids);
+  await Promise.all(ids.map((id: string) => dbRecalculateTeacherScore(id)));
+
+  return { needed: true, performed: true };
+}
+
+export async function dbForceMonthlyReset(): Promise<void> {
+  const now = new Date();
+  const { data: teachers } = await supabase.from('teachers').select('id');
+  if (!teachers) return;
+
+  const ids = teachers.map((t: any) => t.id);
+  await supabase.from('teachers').update({ last_monthly_reset: now.toISOString() }).in('id', ids);
+  await Promise.all(ids.map((id: string) => dbRecalculateTeacherScore(id)));
+}
+
+export async function dbCheckAndResetQuarterly(): Promise<{ needed: boolean; performed: boolean }> {
+  const now = new Date();
+  const month = now.getMonth();
+  const lastQuarterStart = new Date(now.getFullYear(), Math.floor(month / 3) * 3, 1).toISOString();
+
+  const { data: teachers } = await supabase
+    .from('teachers')
+    .select('id, last_quarterly_reset, total_score, name');
+
+  if (!teachers || teachers.length === 0) return { needed: false, performed: false };
+
+  const needReset = teachers.filter((t: any) =>
+    !t.last_quarterly_reset || t.last_quarterly_reset < lastQuarterStart
+  );
+
+  if (needReset.length === 0) return { needed: false, performed: false };
+
+  // Log reset events before clearing scores
+  const insertEvents = needReset
+    .filter((t: any) => (t.total_score ?? 0) > 0)
+    .map((t: any) => ({
+      id:           `qreset_${t.id}_${Date.now()}`,
+      teacher_id:   t.id,
+      teacher_name: t.name,
+      event_type:   'quarterly_reset',
+      points:       -(t.total_score ?? 0),
+      euros:        0,
+      note:         `Reset trimestral — Score anterior: ${t.total_score ?? 0} pts`,
+      created_by:   'Sistema',
+      created_at:   now.toISOString(),
+    }));
+
+  if (insertEvents.length > 0) {
+    await supabase.from('scoring_events').insert(insertEvents);
+  }
+
+  const ids = needReset.map((t: any) => t.id);
+  await supabase.from('teachers')
+    .update({ last_quarterly_reset: now.toISOString(), total_score: 0, current_level: 1 })
+    .in('id', ids);
+
+  return { needed: true, performed: true };
+}
+
+export async function dbForceQuarterlyReset(): Promise<void> {
+  await dbCheckAndResetQuarterly();
+  const now = new Date();
+  const { data: teachers } = await supabase.from('teachers').select('id');
+  if (!teachers) return;
+  const ids = teachers.map((t: any) => t.id);
+  await supabase.from('teachers').update({ last_quarterly_reset: now.toISOString(), total_score: 0, current_level: 1 }).in('id', ids);
 }

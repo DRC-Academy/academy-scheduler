@@ -51,6 +51,14 @@ export interface Teacher {
   currentLevel?: number;
   totalScore?: number;
   totalEuros?: number;
+  // New fields
+  retentionRate?: number;
+  isBlocked?: boolean;
+  isTeacherOfMonth?: boolean;
+  isTeacherOfQuarter?: boolean;
+  teacherOfMonthDate?: string;
+  lastMonthlyReset?: string;
+  lastQuarterlyReset?: string;
 }
 
 export interface Student {
@@ -127,9 +135,12 @@ export interface SlotFilter {
 
 // Scoring
 export type ScoringEventType =
-  | 'falta' | 'atraso' | 'queja' | 'cancelacion_tardia'
+  | 'falta_injustificada' | 'falta_justificada'
+  | 'atraso' | 'queja' | 'cancelacion_tardia'
   | 'upsell' | 'bonus_retencion' | 'bonus_puntualidad'
-  | 'review_trustpilot' | 'bonus_feedback';
+  | 'review_trustpilot' | 'bonus_feedback'
+  | 'cambio_por_alumno' | 'cambio_por_profesor'
+  | 'profe_del_mes' | 'profe_del_trimestre';
 
 export interface ScoringEvent {
   id: string;

@@ -140,9 +140,35 @@ insert into app_users (id, username, password, role, teacher_id, display_name) v
   ('u_t30', 'daiana',     'profe123', 'teacher', 't30', 'Daiana')
 on conflict (username) do nothing;
 
+-- ── SCORING EVENTS ──────────────────────────────────────────
+create table if not exists scoring_events (
+  id          text primary key,
+  teacher_id  text not null references teachers(id) on delete cascade,
+  event_type  text not null,
+  points      int not null default 0,
+  note        text,
+  created_at  timestamptz default now()
+);
+
+-- ── MIGRATIONS: new columns for teachers ────────────────────
+-- Run these if the teachers table already exists in your DB
+alter table teachers add column if not exists internal_rating  int default 3;
+alter table teachers add column if not exists score            int default 0;
+alter table teachers add column if not exists is_blocked       boolean default false;
+alter table teachers add column if not exists is_teacher_of_month    boolean default false;
+alter table teachers add column if not exists is_teacher_of_quarter  boolean default false;
+alter table teachers add column if not exists teacher_of_month_date  timestamptz;
+alter table teachers add column if not exists last_monthly_reset     timestamptz;
+alter table teachers add column if not exists last_quarterly_reset   timestamptz;
+alter table teachers add column if not exists retention_rate         numeric default 0;
+
+-- ── MIGRATIONS: new columns for assignments ──────────────────
+alter table assignments add column if not exists start_date text;
+
 -- ── DISABLE Row Level Security for now (internal tool) ──────
 alter table teachers          disable row level security;
 alter table teacher_calendars disable row level security;
 alter table students          disable row level security;
 alter table assignments       disable row level security;
 alter table app_users         disable row level security;
+alter table scoring_events    disable row level security;

@@ -12,22 +12,85 @@ import { EVENT_POINTS, EVENT_EUROS } from '@/lib/db';
 
 // ─── Scoring constants ────────────────────────────────────────────────────────
 const LEVEL_INFO = {
-  1: { name: 'Profesor Junior', color: '#6b7280', bg: 'rgba(107,114,128,0.12)', border: 'rgba(107,114,128,0.35)' },
-  2: { name: 'Profesor Senior', color: '#1E9E3A', bg: 'rgba(30,158,58,0.12)',   border: 'rgba(30,158,58,0.4)' },
-  3: { name: 'Profesor Elite',  color: '#b8860b', bg: 'rgba(255,196,0,0.15)',   border: '#FFC400' },
+  1: { name: 'Junior',  stars: 1, color: '#6b7280', bg: 'rgba(107,114,128,0.1)',   border: 'rgba(107,114,128,0.3)' },
+  2: { name: 'Senior',  stars: 2, color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)',     border: 'rgba(30,158,58,0.35)' },
+  3: { name: 'Elite',   stars: 3, color: '#b8860b', bg: 'rgba(255,196,0,0.12)',    border: '#FFC400' },
 } as const;
 
 const EVENT_LABELS: Record<string, string> = {
-  falta:              'Falta a clase',
-  atraso:             'Atraso',
-  queja:              'Queja de alumno',
-  cancelacion_tardia: 'Cancelación tardía',
-  upsell:             'Upsell',
-  bonus_retencion:    'Bonus retención',
-  bonus_puntualidad:  'Bonus puntualidad',
-  review_trustpilot:  'Reseña Trustpilot',
-  bonus_feedback:     'Bonus feedback',
+  falta_injustificada: 'Falta injustificada',
+  falta_justificada:   'Falta justificada',
+  atraso:              'Atraso',
+  queja:               'Queja de alumno',
+  cancelacion_tardia:  'Cancelación tardía',
+  upsell:              'Upsell',
+  bonus_retencion:     'Bonus retención',
+  bonus_puntualidad:   'Bonus puntualidad',
+  review_trustpilot:   'Reseña Trustpilot',
+  bonus_feedback:      'Bonus feedback',
+  cambio_por_alumno:   'Cambio por alumno',
+  cambio_por_profesor: 'Profesor abandonó alumno',
+  profe_del_mes:       '🏆 Profe del Mes',
+  profe_del_trimestre: '🏆 Profe del Trimestre',
 };
+
+const EVENT_ICONS: Record<string, string> = {
+  falta_injustificada: '🚫',
+  falta_justificada:   '📋',
+  atraso:              '⏰',
+  queja:               '😤',
+  cancelacion_tardia:  '❌',
+  upsell:              '📈',
+  bonus_retencion:     '🏅',
+  bonus_puntualidad:   '⭐',
+  review_trustpilot:   '⭐',
+  bonus_feedback:      '💬',
+  cambio_por_alumno:   '👤',
+  cambio_por_profesor: '⚠️',
+  profe_del_mes:       '🏆',
+  profe_del_trimestre: '🏆',
+};
+
+// ─── Stars display ────────────────────────────────────────────────────────────
+function Stars({ level, size = 14 }: { level: number; size?: number }) {
+  return (
+    <span style={{ fontSize: size, lineHeight: 1 }}>
+      {[1, 2, 3].map(i => (
+        <span key={i} style={{ color: i <= level ? '#FFC400' : '#d1d5db' }}>★</span>
+      ))}
+    </span>
+  );
+}
+
+// ─── Level Badge ──────────────────────────────────────────────────────────────
+function LevelBadge({ level, blocked }: { level: number; blocked?: boolean }) {
+  if (blocked) {
+    return (
+      <span style={{
+        display: 'inline-flex', alignItems: 'center', gap: 4,
+        padding: '3px 10px', borderRadius: 20,
+        background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.4)',
+        color: '#ef4444', fontSize: 11, fontWeight: 700,
+      }}>
+        🔴 Bloqueado
+      </span>
+    );
+  }
+  const info = LEVEL_INFO[(level as 1 | 2 | 3)] ?? LEVEL_INFO[1];
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 5,
+      padding: '3px 10px', borderRadius: 20,
+      background: info.bg, border: `1px solid ${info.border}`,
+      color: info.color, fontSize: 11, fontWeight: 700,
+      boxShadow: level === 3 ? '0 0 8px rgba(255,196,0,0.3)' : 'none',
+      whiteSpace: 'nowrap',
+    }}>
+      <Stars level={level} size={11} />
+      {info.name}
+    </span>
+  );
+}
 
 // ─── New teacher modal ────────────────────────────────────────────────────────
 function NewTeacherModal({ onClose, onSave }: { onClose: () => void; onSave: (t: Teacher, username: string) => void }) {
@@ -51,7 +114,7 @@ function NewTeacherModal({ onClose, onSave }: { onClose: () => void; onSave: (t:
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(6px)', zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
       onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={{ background: 'var(--bg-surface)', border: '1px solid #35405a', borderRadius: 16, width: '100%', maxWidth: 440, padding: 28 }}>
+      <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 16, width: '100%', maxWidth: 440, padding: 28 }}>
         {saved ? (
           <div style={{ textAlign: 'center', padding: '32px 0' }}>
             <div style={{ fontSize: 44, marginBottom: 12 }}>✅</div>
@@ -67,12 +130,12 @@ function NewTeacherModal({ onClose, onSave }: { onClose: () => void; onSave: (t:
               <div><label>Nombre completo</label><input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="Ej: María López" autoFocus /></div>
               <div><label>Email</label><input type="email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} placeholder="maria@drcacademy.com" /></div>
               <div><label>Usuario para login</label><input value={form.username} onChange={e => setForm(f => ({ ...f, username: e.target.value }))} placeholder="Ej: maria (sin espacios, sin acentos)" /></div>
-              <div style={{ background: 'rgba(59,130,246,0.07)', border: '1px solid rgba(59,130,246,0.2)', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: 'var(--text-secondary)' }}>
-                💡 Usuario para login: nombre en minúsculas · Contraseña: <code style={{ color: '#93c5fd' }}>profe123</code>
+              <div style={{ background: 'rgba(30,158,58,0.06)', border: '1px solid rgba(30,158,58,0.2)', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: 'var(--text-secondary)' }}>
+                💡 Contraseña inicial: <code style={{ color: '#1E9E3A' }}>profe123</code>
               </div>
               <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
                 <button onClick={onClose} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 14 }}>Cancelar</button>
-                <button onClick={handleSave} disabled={!form.name || !form.email} style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: form.name && form.email ? 'var(--accent-blue)' : 'var(--bg-surface-3)', color: form.name && form.email ? 'white' : 'var(--text-muted)', cursor: form.name && form.email ? 'pointer' : 'not-allowed', fontSize: 14, fontWeight: 600 }}>
+                <button onClick={handleSave} disabled={!form.name || !form.email} style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: form.name && form.email ? '#1E9E3A' : 'var(--bg-surface-3)', color: form.name && form.email ? 'white' : 'var(--text-muted)', cursor: form.name && form.email ? 'pointer' : 'not-allowed', fontSize: 14, fontWeight: 600 }}>
                   Agregar profesor
                 </button>
               </div>
@@ -106,18 +169,16 @@ function WeeklyOverview({ teachers }: { teachers: Teacher[] }) {
     if (count === 0) return 'transparent';
     if (count === 1) return 'rgba(239,68,68,0.25)';
     if (count === 2) return 'rgba(245,158,11,0.25)';
-    if (count <= 4)  return 'rgba(34,197,94,0.2)';
-    return 'rgba(34,197,94,0.4)';
+    if (count <= 4)  return 'rgba(30,158,58,0.2)';
+    return 'rgba(30,158,58,0.4)';
   }
 
   function coverageBorder(count: number): string {
-    if (count === 0) return 'rgba(42,51,71,0.3)';
+    if (count === 0) return 'rgba(200,200,195,0.3)';
     if (count === 1) return 'rgba(239,68,68,0.4)';
     if (count === 2) return 'rgba(245,158,11,0.4)';
-    return 'rgba(34,197,94,0.4)';
+    return 'rgba(30,158,58,0.4)';
   }
-
-  const hours = HOURS_ES;
 
   return (
     <div>
@@ -126,11 +187,11 @@ function WeeklyOverview({ teachers }: { teachers: Teacher[] }) {
           { label: 'Sin cobertura', color: 'rgba(239,68,68,0.4)' },
           { label: '1 profe', color: 'rgba(239,68,68,0.25)' },
           { label: '2 profes', color: 'rgba(245,158,11,0.25)' },
-          { label: '3–4 profes', color: 'rgba(34,197,94,0.2)' },
-          { label: '5+ profes', color: 'rgba(34,197,94,0.4)' },
+          { label: '3–4 profes', color: 'rgba(30,158,58,0.2)' },
+          { label: '5+ profes', color: 'rgba(30,158,58,0.4)' },
         ].map(l => (
           <div key={l.label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <div style={{ width: 14, height: 14, borderRadius: 3, background: l.color, border: '1px solid rgba(255,255,255,0.1)' }} />
+            <div style={{ width: 14, height: 14, borderRadius: 3, background: l.color, border: '1px solid rgba(0,0,0,0.05)' }} />
             <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{l.label}</span>
           </div>
         ))}
@@ -148,8 +209,8 @@ function WeeklyOverview({ teachers }: { teachers: Teacher[] }) {
             </tr>
           </thead>
           <tbody>
-            {hours.map(hour => (
-              <tr key={hour} style={{ borderBottom: '1px solid rgba(42,51,71,0.4)' }}>
+            {HOURS_ES.map(hour => (
+              <tr key={hour} style={{ borderBottom: '1px solid rgba(200,200,195,0.4)' }}>
                 <td style={{ padding: '4px 10px', fontSize: 11, color: 'var(--text-secondary)', background: 'var(--bg-surface-2)', position: 'sticky', left: 0, zIndex: 1, borderRight: '1px solid var(--border)', fontWeight: 600 }}>{hour}</td>
                 {DAYS.map(day => {
                   const key = `${day}_${hour}`;
@@ -160,12 +221,12 @@ function WeeklyOverview({ teachers }: { teachers: Teacher[] }) {
                     <td key={day}
                       onMouseEnter={() => setHoveredCell(key)}
                       onMouseLeave={() => setHoveredCell(null)}
-                      style={{ height: 36, padding: '2px 4px', background: isHovered && count > 0 ? 'rgba(59,130,246,0.2)' : coverageColor(count), border: `1px solid ${coverageBorder(count)}`, textAlign: 'center', verticalAlign: 'middle', cursor: count > 0 ? 'pointer' : 'default', transition: 'background 0.1s', position: 'relative' }}>
+                      style={{ height: 36, padding: '2px 4px', background: isHovered && count > 0 ? 'rgba(30,158,58,0.15)' : coverageColor(count), border: `1px solid ${coverageBorder(count)}`, textAlign: 'center', verticalAlign: 'middle', cursor: count > 0 ? 'pointer' : 'default', transition: 'background 0.1s', position: 'relative' }}>
                       {count > 0 && (
-                        <span style={{ fontSize: 11, fontWeight: 700, color: count === 1 ? '#ef4444' : count === 2 ? '#f59e0b' : '#4ade80' }}>{count}</span>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: count === 1 ? '#ef4444' : count === 2 ? '#f59e0b' : '#1E9E3A' }}>{count}</span>
                       )}
                       {isHovered && count > 0 && (
-                        <div style={{ position: 'absolute', bottom: '110%', left: '50%', transform: 'translateX(-50%)', background: 'var(--bg-surface)', border: '1px solid var(--border-light, #35405a)', borderRadius: 8, padding: '8px 12px', zIndex: 10, minWidth: 140, maxWidth: 200, boxShadow: '0 8px 24px rgba(0,0,0,0.4)', whiteSpace: 'nowrap' }}>
+                        <div style={{ position: 'absolute', bottom: '110%', left: '50%', transform: 'translateX(-50%)', background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', zIndex: 10, minWidth: 140, maxWidth: 200, boxShadow: '0 8px 24px rgba(0,0,0,0.15)', whiteSpace: 'nowrap' }}>
                           <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', marginBottom: 5, textTransform: 'uppercase' }}>{day} {hour}</div>
                           {names.map(n => <div key={n} style={{ fontSize: 11, color: 'var(--text-primary)', padding: '1px 0' }}>• {n}</div>)}
                         </div>
@@ -210,13 +271,13 @@ function EditCalendarModal({ teacher, onClose, getTeacherGrid, updateTeacherGrid
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(6px)', zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12 }}
       onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={{ background: 'var(--bg-surface)', border: '1px solid #35405a', borderRadius: 18, width: '100%', maxWidth: 940, maxHeight: '94vh', overflowY: 'auto', padding: 26 }}>
+      <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 18, width: '100%', maxWidth: 940, maxHeight: '94vh', overflowY: 'auto', padding: 26 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <div style={{ width: 42, height: 42, borderRadius: '50%', background: 'var(--bg-surface-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 15, color: 'var(--text-secondary)' }}>{teacher.avatar}</div>
             <div>
               <div style={{ fontWeight: 700, fontSize: 17, color: 'var(--text-primary)' }}>Disponibilidad de {teacher.name}</div>
-              <div style={{ fontSize: 12, color: saving ? '#fbbf24' : 'var(--text-secondary)' }}>
+              <div style={{ fontSize: 12, color: saving ? '#FFC400' : 'var(--text-secondary)' }}>
                 {saving ? '💾 Guardando...' : '✏️ Clic en cualquier celda para cambiar estado · Guarda automáticamente'}
               </div>
             </div>
@@ -230,39 +291,6 @@ function EditCalendarModal({ teacher, onClose, getTeacherGrid, updateTeacherGrid
         )}
       </div>
     </div>
-  );
-}
-
-// ─── Star Rating ──────────────────────────────────────────────────────────────
-function StarRating({ value, onChange }: { value: number; onChange: (v: number) => void }) {
-  const [hover, setHover] = useState(0);
-  return (
-    <div style={{ display: 'flex', gap: 1 }}>
-      {[1, 2, 3, 4, 5].map(i => (
-        <button key={i} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(0)} onClick={() => onChange(i === value ? 0 : i)}
-          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 1px', fontSize: 17, color: i <= (hover || value) ? '#FFC400' : 'var(--text-muted)', transition: 'color 0.1s', lineHeight: 1 }}>
-          ★
-        </button>
-      ))}
-    </div>
-  );
-}
-
-// ─── Level Badge ──────────────────────────────────────────────────────────────
-function LevelBadge({ level }: { level: number }) {
-  const info = LEVEL_INFO[(level as 1 | 2 | 3)] ?? LEVEL_INFO[1];
-  const isElite = level === 3;
-  return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center', gap: 4,
-      padding: '3px 10px', borderRadius: 20,
-      background: info.bg, border: `1px solid ${info.border}`,
-      color: info.color, fontSize: 11, fontWeight: 700,
-      boxShadow: isElite ? '0 0 8px rgba(255,196,0,0.35)' : 'none',
-      whiteSpace: 'nowrap',
-    }}>
-      {isElite ? '⭐ ' : ''}{info.name}
-    </span>
   );
 }
 
@@ -284,6 +312,18 @@ function EventModal({ teacher, students, createdBy, onClose, onSave }: {
   const baseEuros  = EVENT_EUROS[eventType] ?? 0;
   const totalEuros = eventType === 'upsell' ? baseEuros * quantity : baseEuros;
   const isPositive = basePoints > 0;
+  const isNegative = basePoints < 0;
+
+  const isFalta = eventType === 'falta_injustificada' || eventType === 'falta_justificada';
+  const isCambio = eventType === 'cambio_por_alumno' || eventType === 'cambio_por_profesor';
+
+  const inputStyle = {
+    width: '100%', padding: '10px 12px', borderRadius: 8,
+    border: '1.5px solid var(--border)', fontSize: 13,
+    background: 'white', color: '#111827',
+    boxSizing: 'border-box' as const,
+    fontFamily: "'Radio Canada', sans-serif",
+  };
 
   async function handleSave() {
     if (!note.trim()) return;
@@ -303,17 +343,10 @@ function EventModal({ teacher, students, createdBy, onClose, onSave }: {
     onClose();
   }
 
-  const inputStyle = {
-    width: '100%', padding: '10px 12px', borderRadius: 8,
-    border: '1px solid #d1d5db', fontSize: 13,
-    background: 'white', color: '#111827',
-    boxSizing: 'border-box' as const,
-  };
-
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(6px)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
       onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={{ background: '#F7F7F5', border: '1px solid #e5e7eb', borderRadius: 16, width: '100%', maxWidth: 480, padding: 28, boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+      <div style={{ background: '#F7F7F5', border: '1px solid var(--border)', borderRadius: 16, width: '100%', maxWidth: 480, padding: 28, boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
           <div>
             <div style={{ fontWeight: 700, fontSize: 17, color: '#111827' }}>➕ Cargar evento</div>
@@ -326,29 +359,67 @@ function EventModal({ teacher, students, createdBy, onClose, onSave }: {
           <div>
             <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>Tipo de evento</label>
             <select value={eventType} onChange={e => setEventType(e.target.value as ScoringEventType)} style={inputStyle}>
-              <optgroup label="Eventos negativos">
-                <option value="falta">Falta a clase (−15 pts)</option>
-                <option value="atraso">Atraso (−8 pts)</option>
-                <option value="queja">Queja de alumno (−20 pts)</option>
-                <option value="cancelacion_tardia">Cancelación tardía &lt;24hs (−10 pts)</option>
+              <optgroup label="Faltas">
+                <option value="falta_injustificada">🚫 Falta injustificada (−15 pts · baja nivel)</option>
+                <option value="falta_justificada">📋 Falta justificada (−5 pts)</option>
               </optgroup>
-              <optgroup label="Eventos positivos">
-                <option value="upsell">Upsell (+25 pts + €20/upsell)</option>
-                <option value="bonus_retencion">Bonus retención 6 meses (+30 pts + €30)</option>
-                <option value="bonus_puntualidad">Bonus puntualidad del mes (+20 pts)</option>
-                <option value="review_trustpilot">Reseña Trustpilot (+15 pts)</option>
-                <option value="bonus_feedback">Bonus feedback mensual (+10 pts)</option>
+              <optgroup label="Desempeño negativo">
+                <option value="atraso">⏰ Atraso (−8 pts)</option>
+                <option value="queja">😤 Queja de alumno (−20 pts)</option>
+                <option value="cancelacion_tardia">❌ Cancelación tardía &lt;24hs (−10 pts)</option>
+              </optgroup>
+              <optgroup label="Cambio de profesor">
+                <option value="cambio_por_alumno">👤 Cambio solicitado por alumno (−10 pts)</option>
+                <option value="cambio_por_profesor">⚠️ Profesor abandonó al alumno (−20 pts)</option>
+              </optgroup>
+              <optgroup label="Logros positivos">
+                <option value="upsell">📈 Upsell (+25 pts + €20/upsell)</option>
+                <option value="bonus_retencion">🏅 Bonus retención 6 meses (+30 pts + €30)</option>
+                <option value="bonus_puntualidad">⭐ Bonus puntualidad del mes (+20 pts)</option>
+                <option value="review_trustpilot">⭐ Reseña Trustpilot (+15 pts)</option>
+                <option value="bonus_feedback">💬 Bonus feedback mensual (+10 pts)</option>
               </optgroup>
             </select>
           </div>
 
-          {eventType === 'upsell' && (
-            <div>
-              <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>Cantidad de upsells</label>
-              <input type="number" min={1} value={quantity} onChange={e => setQuantity(Math.max(1, parseInt(e.target.value) || 1))} style={inputStyle} />
+          {/* Falta warnings */}
+          {eventType === 'falta_injustificada' && (
+            <div style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, padding: '10px 14px', fontSize: 12 }}>
+              <div style={{ color: '#ef4444', fontWeight: 700, marginBottom: 3 }}>⚠️ Falta injustificada</div>
+              <div style={{ color: '#6b7280' }}>−15 puntos · Baja de nivel automático · 0 faltas injustificadas permitidas en cualquier nivel</div>
+            </div>
+          )}
+          {eventType === 'falta_justificada' && (
+            <div style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 8, padding: '10px 14px', fontSize: 12 }}>
+              <div style={{ color: '#f59e0b', fontWeight: 700, marginBottom: 3 }}>📋 Falta justificada</div>
+              <div style={{ color: '#6b7280' }}>−5 puntos · No baja de nivel · Máximo 1 falta justificada por mes</div>
             </div>
           )}
 
+          {/* Cambio warnings */}
+          {isCambio && (
+            <div style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 8, padding: '10px 14px', fontSize: 12 }}>
+              <div style={{ color: '#ef4444', fontWeight: 700, marginBottom: 2 }}>
+                {eventType === 'cambio_por_profesor' ? '⚠️ Causa directa' : '👤 Causa externa'}
+              </div>
+              <div style={{ color: '#6b7280' }}>{basePoints} puntos</div>
+            </div>
+          )}
+
+          {/* Alumno reference for falta/cambio */}
+          {(isFalta || isCambio || eventType === 'review_trustpilot') && (
+            <div>
+              <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>
+                Alumno involucrado {isFalta || isCambio ? '' : '(opcional)'}
+              </label>
+              <select value={studentRef} onChange={e => setStudentRef(e.target.value)} style={inputStyle}>
+                <option value="">— Seleccionar alumno —</option>
+                {students.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+              </select>
+            </div>
+          )}
+
+          {/* Retention bonus student */}
           {eventType === 'bonus_retencion' && (
             <div>
               <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>Alumno que cumplió 6 meses</label>
@@ -359,10 +430,11 @@ function EventModal({ teacher, students, createdBy, onClose, onSave }: {
             </div>
           )}
 
-          {eventType === 'review_trustpilot' && (
+          {/* Upsell quantity */}
+          {eventType === 'upsell' && (
             <div>
-              <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>Alumno que dejó la reseña</label>
-              <input value={studentRef} onChange={e => setStudentRef(e.target.value)} placeholder="Nombre del alumno" style={inputStyle} />
+              <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>Cantidad de upsells</label>
+              <input type="number" min={1} value={quantity} onChange={e => setQuantity(Math.max(1, parseInt(e.target.value) || 1))} style={inputStyle} />
             </div>
           )}
 
@@ -371,7 +443,7 @@ function EventModal({ teacher, students, createdBy, onClose, onSave }: {
               Nota <span style={{ color: '#ef4444' }}>*</span>
             </label>
             <textarea value={note} onChange={e => setNote(e.target.value)} placeholder="Descripción del evento..." rows={3}
-              style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }} />
+              style={{ ...inputStyle, resize: 'vertical', fontFamily: "'Radio Canada', sans-serif" }} />
           </div>
 
           <div style={{ background: isPositive ? 'rgba(30,158,58,0.08)' : 'rgba(239,68,68,0.08)', border: `1px solid ${isPositive ? 'rgba(30,158,58,0.3)' : 'rgba(239,68,68,0.3)'}`, borderRadius: 8, padding: '10px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -384,7 +456,7 @@ function EventModal({ teacher, students, createdBy, onClose, onSave }: {
           </div>
 
           <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
-            <button onClick={onClose} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid #d1d5db', background: 'transparent', color: '#6b7280', cursor: 'pointer', fontSize: 14 }}>Cancelar</button>
+            <button onClick={onClose} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#6b7280', cursor: 'pointer', fontSize: 14 }}>Cancelar</button>
             <button onClick={handleSave} disabled={!note.trim() || saving}
               style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: note.trim() && !saving ? '#1E9E3A' : '#d1d5db', color: 'white', cursor: note.trim() && !saving ? 'pointer' : 'not-allowed', fontSize: 14, fontWeight: 600 }}>
               {saving ? 'Guardando...' : 'Confirmar evento'}
@@ -397,38 +469,160 @@ function EventModal({ teacher, students, createdBy, onClose, onSave }: {
 }
 
 // ─── Level Requirements helper ────────────────────────────────────────────────
-function checkLevelReqs(activeStudents: number, retentionPct: number, faltasThisMonth: number, quejasActive: number, upsellsTotal: number, monthsOnPlatform: number, level: number) {
+function checkLevelReqs(
+  activeStudents: number,
+  retentionPct: number,
+  faltasInjust: number,
+  faltasJust: number,
+  upsellsTotal: number,
+  monthsOnPlatform: number,
+  level: number,
+) {
   if (level === 1) return [
-    { label: `Retención ≥50% (actual: ${Math.round(retentionPct)}%)`, met: retentionPct >= 50 },
-    { label: `Faltas ≤3 este mes (actual: ${faltasThisMonth})`, met: faltasThisMonth <= 3 },
-    { label: `Sin quejas activas (actual: ${quejasActive})`, met: quejasActive === 0 },
+    { label: `Retención ≥65% (actual: ${Math.round(retentionPct)}%)`, met: retentionPct >= 65 },
+    { label: `0 faltas injustificadas (actual: ${faltasInjust})`, met: faltasInjust === 0 },
+    { label: `Máx. 1 falta justificada al mes (actual: ${faltasJust})`, met: faltasJust <= 1 },
   ];
   if (level === 2) return [
-    { label: `Retención ≥70% (actual: ${Math.round(retentionPct)}%)`, met: retentionPct >= 70 },
-    { label: `Faltas ≤1 este mes (actual: ${faltasThisMonth})`, met: faltasThisMonth <= 1 },
+    { label: `Retención ≥80% (actual: ${Math.round(retentionPct)}%)`, met: retentionPct >= 80 },
+    { label: `0 faltas injustificadas (actual: ${faltasInjust})`, met: faltasInjust === 0 },
     { label: `≥5 alumnos activos (actual: ${activeStudents})`, met: activeStudents >= 5 },
     { label: `≥1 upsell realizado (actual: ${upsellsTotal})`, met: upsellsTotal >= 1 },
   ];
   return [
     { label: `Retención ≥85% (actual: ${Math.round(retentionPct)}%)`, met: retentionPct >= 85 },
-    { label: `Cero faltas este mes (actual: ${faltasThisMonth})`, met: faltasThisMonth === 0 },
+    { label: `0 faltas absolutas (actual: ${faltasInjust + faltasJust})`, met: faltasInjust === 0 && faltasJust === 0 },
     { label: `≥10 alumnos activos (actual: ${activeStudents})`, met: activeStudents >= 10 },
     { label: `≥3 upsells realizados (actual: ${upsellsTotal})`, met: upsellsTotal >= 3 },
     { label: `>6 meses en la plataforma (actual: ${monthsOnPlatform})`, met: monthsOnPlatform >= 6 },
   ];
 }
 
+// ─── Profe del Mes Modal ──────────────────────────────────────────────────────
+function ProfeDelMesModal({ scored, isQuarter, onClose, onConfirm }: {
+  scored: Array<{ t: Teacher; totalScore: number; currentLevel: number }>;
+  isQuarter: boolean;
+  onClose: () => void;
+  onConfirm: (teacherId: string, euros: number) => Promise<void>;
+}) {
+  const [selectedId, setSelectedId] = useState(scored[0]?.t.id ?? '');
+  const [euros, setEuros] = useState(isQuarter ? 150 : 75);
+  const [saving, setSaving] = useState(false);
+
+  const min = isQuarter ? 100 : 50;
+  const max = isQuarter ? 300 : 150;
+
+  async function handleConfirm() {
+    if (!selectedId) return;
+    setSaving(true);
+    await onConfirm(selectedId, euros);
+    setSaving(false);
+    onClose();
+  }
+
+  const selectedTeacher = scored.find(s => s.t.id === selectedId)?.t;
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(6px)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div style={{ background: '#F7F7F5', border: '1px solid var(--border)', borderRadius: 16, width: '100%', maxWidth: 440, padding: 28 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 17, color: '#111827' }}>
+              🏆 {isQuarter ? 'Profe del Trimestre' : 'Profe del Mes'}
+            </div>
+            <div style={{ fontSize: 13, color: '#6b7280', marginTop: 2 }}>
+              {isQuarter ? '+100 pts · Bonus €100–300' : '+50 pts · Bonus €50–150'}
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: '#6b7280' }}>✕</button>
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>
+              Seleccionar profesor ganador
+            </label>
+            <select value={selectedId} onChange={e => setSelectedId(e.target.value)} style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1.5px solid var(--border)', fontSize: 13, background: 'white', color: '#111827', fontFamily: "'Radio Canada', sans-serif" }}>
+              {scored.slice(0, 10).map((s, i) => (
+                <option key={s.t.id} value={s.t.id}>
+                  {i === 0 ? '⭐ ' : `#${i + 1} `}{s.t.name} — {s.totalScore} pts
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {selectedTeacher && (
+            <div style={{ background: 'rgba(255,196,0,0.1)', border: '1px solid rgba(255,196,0,0.4)', borderRadius: 10, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div style={{ width: 44, height: 44, borderRadius: '50%', background: 'rgba(255,196,0,0.2)', border: '2px solid #FFC400', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 16, color: '#b8860b' }}>{selectedTeacher.avatar}</div>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 15, color: '#111827' }}>{selectedTeacher.name}</div>
+                <div style={{ fontSize: 12, color: '#b8860b' }}>{scored.find(s => s.t.id === selectedId)?.totalScore ?? 0} pts · Nivel {scored.find(s => s.t.id === selectedId)?.currentLevel}</div>
+              </div>
+              <div style={{ marginLeft: 'auto', fontSize: 28 }}>🏆</div>
+            </div>
+          )}
+
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>
+              Bonus en euros (€{min} – €{max})
+            </label>
+            <input
+              type="number"
+              min={min} max={max} step={5}
+              value={euros}
+              onChange={e => setEuros(Math.min(max, Math.max(min, parseInt(e.target.value) || min)))}
+              style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1.5px solid var(--border)', fontSize: 13, background: 'white', color: '#111827', fontFamily: "'Radio Canada', sans-serif" }}
+            />
+          </div>
+
+          <div style={{ background: 'rgba(255,196,0,0.1)', border: '1px solid rgba(255,196,0,0.3)', borderRadius: 8, padding: '10px 14px', display: 'flex', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: 14, color: '#1E9E3A', fontWeight: 700 }}>
+              +{isQuarter ? 100 : 50} puntos
+            </span>
+            <span style={{ fontSize: 14, color: '#b8860b', fontWeight: 700 }}>+€{euros}</span>
+          </div>
+
+          <div style={{ display: 'flex', gap: 10 }}>
+            <button onClick={onClose} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#6b7280', cursor: 'pointer', fontSize: 14 }}>Cancelar</button>
+            <button onClick={handleConfirm} disabled={!selectedId || saving}
+              style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: selectedId && !saving ? '#FFC400' : '#d1d5db', color: selectedId ? '#111827' : '#6b7280', cursor: selectedId && !saving ? 'pointer' : 'not-allowed', fontSize: 14, fontWeight: 700 }}>
+              {saving ? 'Guardando...' : '🏆 Confirmar ganador'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Scoring Tab ──────────────────────────────────────────────────────────────
 function ScoringTab() {
-  const { teachers, assignments, students, scoringEvents, addScoringEvent, updateTeacherRating } = useTeachers();
+  const {
+    teachers, assignments, students, scoringEvents,
+    addScoringEvent, assignTeacherOfMonth, assignTeacherOfQuarter,
+    forceMonthlyReset, forceQuarterlyReset, reloadAll,
+  } = useTeachers();
   const { user } = useAuth();
-  const [eventModalTeacher, setEventModalTeacher] = useState<Teacher | null>(null);
-  const [selectedTeacherId, setSelectedTeacherId] = useState<string | null>(null);
-  const [showLevelReqs, setShowLevelReqs] = useState(false);
+  const [eventModalTeacher, setEventModalTeacher]   = useState<Teacher | null>(null);
+  const [selectedTeacherId, setSelectedTeacherId]   = useState<string | null>(null);
+  const [showLevelReqs, setShowLevelReqs]           = useState(false);
+  const [showProfeDelMes, setShowProfeDelMes]       = useState(false);
+  const [showProfeDelTrimestre, setShowProfeDelTrimestre] = useState(false);
+  const [resetting, setResetting]                   = useState<'monthly' | 'quarterly' | null>(null);
 
   const MEDALS = ['🥇', '🥈', '🥉'];
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
   const monthStart    = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+
+  // Next reset dates
+  const now = new Date();
+  const nextMonthStart = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  const daysToMonthly = Math.ceil((nextMonthStart.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+  const nextQtrMonth = Math.ceil((now.getMonth() + 1) / 3) * 3;
+  const nextQtrYear = nextQtrMonth > 11 ? now.getFullYear() + 1 : now.getFullYear();
+  const nextQtrStart = new Date(nextQtrYear, nextQtrMonth % 12, 1);
+  const daysToQuarterly = Math.ceil((nextQtrStart.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
 
   const scored = teachers.map(t => {
     const ta = assignments.filter(a => a.teacherId === t.id);
@@ -439,38 +633,159 @@ function ScoringTab() {
     const manualEuros    = te.reduce((s, e) => s + e.euros, 0);
     const activeStudents = ta.length;
     const monthlyHours   = t.weeklyLoad * 4;
-    const retained       = ta.filter(a => new Date(a.createdAt) < thirtyDaysAgo).length;
-    const retentionPct   = activeStudents > 0 ? (retained / activeStudents) * 100 : 0;
+    const retained       = ta.filter(a => {
+      const date = a.startDate ? new Date(a.startDate) : new Date(a.createdAt);
+      return date < thirtyDaysAgo;
+    }).length;
+    const retentionPct   = activeStudents > 0 ? (retained / activeStudents) * 100 : 100;
 
     let autoPoints = activeStudents * 10 + monthlyHours * 2;
-    if (retentionPct > 85)                           autoPoints += 50;
-    else if (retentionPct >= 70)                     autoPoints += 25;
-    else if (retentionPct < 50 && activeStudents > 0) autoPoints -= 20;
+    if (retentionPct >= 85)                               autoPoints += 50;
+    else if (retentionPct >= 80)                          autoPoints += 25;
+    else if (retentionPct < 65 && activeStudents > 0)     autoPoints -= 30;
 
     const totalScore   = Math.max(0, manualPoints + autoPoints);
     const currentLevel = totalScore >= 300 ? 3 : totalScore >= 150 ? 2 : 1;
     const monthlyEuros = monthEvents.reduce((s, e) => s + e.euros, 0);
+    const isBlocked    = (t.isBlocked ?? false) || (activeStudents > 0 && retentionPct < 65);
 
-    const faltasThisMonth  = monthEvents.filter(e => e.eventType === 'falta').length;
-    const quejasActive     = monthEvents.filter(e => e.eventType === 'queja').length;
-    const upsellsTotal     = te.filter(e => e.eventType === 'upsell').reduce((s, e) => s + (e.quantity ?? 1), 0);
+    const faltasInjust  = monthEvents.filter(e => e.eventType === 'falta_injustificada').length;
+    const faltasJust    = monthEvents.filter(e => e.eventType === 'falta_justificada').length;
+    const upsellsTotal  = te.filter(e => e.eventType === 'upsell').reduce((s, e) => s + (e.quantity ?? 1), 0);
     const monthsOnPlatform = t.createdAt
       ? Math.floor((Date.now() - new Date(t.createdAt).getTime()) / (30 * 24 * 60 * 60 * 1000))
       : 0;
 
-    return { t, totalScore, totalEuros: manualEuros, currentLevel, activeStudents, retentionPct, monthlyEuros, faltasThisMonth, quejasActive, upsellsTotal, monthsOnPlatform };
+    return { t, totalScore, totalEuros: manualEuros, currentLevel, activeStudents, retentionPct, monthlyEuros, faltasInjust, faltasJust, upsellsTotal, monthsOnPlatform, isBlocked };
   }).sort((a, b) => b.totalScore - a.totalScore);
 
   const selectedData   = selectedTeacherId ? scored.find(s => s.t.id === selectedTeacherId) : null;
   const selectedEvents = selectedTeacherId ? scoringEvents.filter(e => e.teacherId === selectedTeacherId) : [];
 
-  // Teacher students (assignments for the teacher, for event modal)
   const eventModalStudents = eventModalTeacher
     ? assignments.filter(a => a.teacherId === eventModalTeacher.id).map(a => ({ id: a.studentId, name: a.studentName }))
     : [];
 
+  const teacherOfMonth = teachers.find(t => t.isTeacherOfMonth);
+  const teacherOfQuarter = teachers.find(t => t.isTeacherOfQuarter);
+  const monthLabel = now.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
+  const quarter = Math.floor(now.getMonth() / 3) + 1;
+
+  async function handleForceReset(type: 'monthly' | 'quarterly') {
+    setResetting(type);
+    if (type === 'monthly') await forceMonthlyReset();
+    else await forceQuarterlyReset();
+    setResetting(null);
+  }
+
   return (
     <div>
+
+      {/* ── Profe del Mes section ── */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 20 }}>
+
+        {/* Profe del Mes */}
+        <div style={{
+          background: teacherOfMonth
+            ? 'linear-gradient(135deg, rgba(255,196,0,0.12) 0%, rgba(255,220,80,0.06) 100%)'
+            : 'var(--bg-surface)',
+          border: `1px solid ${teacherOfMonth ? '#FFC400' : 'var(--border)'}`,
+          borderRadius: 12, padding: '18px 20px',
+          boxShadow: teacherOfMonth ? '0 0 20px rgba(255,196,0,0.15)' : 'none',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>
+                🏆 Profe del Mes
+              </div>
+              <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{monthLabel}</div>
+            </div>
+            <button onClick={() => setShowProfeDelMes(true)}
+              style={{ padding: '5px 12px', borderRadius: 8, border: '1px solid rgba(255,196,0,0.4)', background: 'rgba(255,196,0,0.1)', color: '#b8860b', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+              {teacherOfMonth ? 'Cambiar' : 'Asignar'}
+            </button>
+          </div>
+          {teacherOfMonth ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{ width: 42, height: 42, borderRadius: '50%', background: 'rgba(255,196,0,0.2)', border: '2px solid #FFC400', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 15, color: '#b8860b' }}>{teacherOfMonth.avatar}</div>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--text-primary)' }}>{teacherOfMonth.name}</div>
+                <div style={{ fontSize: 12, color: '#b8860b' }}>
+                  Badge: 🏆 Profe del Mes — {monthLabel}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div style={{ fontSize: 13, color: 'var(--text-muted)', fontStyle: 'italic' }}>
+              Sin asignar — top del ranking este mes: {scored[0]?.t.name ?? '—'}
+            </div>
+          )}
+        </div>
+
+        {/* Profe del Trimestre */}
+        <div style={{
+          background: teacherOfQuarter
+            ? 'linear-gradient(135deg, rgba(255,196,0,0.12) 0%, rgba(255,220,80,0.06) 100%)'
+            : 'var(--bg-surface)',
+          border: `1px solid ${teacherOfQuarter ? '#FFC400' : 'var(--border)'}`,
+          borderRadius: 12, padding: '18px 20px',
+          boxShadow: teacherOfQuarter ? '0 0 20px rgba(255,196,0,0.15)' : 'none',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>
+                🏆 Profe del Trimestre
+              </div>
+              <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Q{quarter} {now.getFullYear()} · Bonus €150 + 100 pts</div>
+            </div>
+            <button onClick={() => setShowProfeDelTrimestre(true)}
+              style={{ padding: '5px 12px', borderRadius: 8, border: '1px solid rgba(255,196,0,0.4)', background: 'rgba(255,196,0,0.1)', color: '#b8860b', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+              {teacherOfQuarter ? 'Cambiar' : 'Asignar'}
+            </button>
+          </div>
+          {teacherOfQuarter ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{ width: 42, height: 42, borderRadius: '50%', background: 'rgba(255,196,0,0.2)', border: '2px solid #FFC400', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 15, color: '#b8860b' }}>{teacherOfQuarter.avatar}</div>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--text-primary)' }}>{teacherOfQuarter.name}</div>
+                <div style={{ fontSize: 12, color: '#b8860b' }}>Q{quarter} {now.getFullYear()}</div>
+              </div>
+            </div>
+          ) : (
+            <div style={{ fontSize: 13, color: 'var(--text-muted)', fontStyle: 'italic' }}>
+              Sin asignar este trimestre
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── Reset management ── */}
+      <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '16px 20px', marginBottom: 20 }}>
+        <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)', marginBottom: 12 }}>🔄 Ciclos de reset</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <div style={{ background: 'var(--bg-surface-2)', borderRadius: 9, padding: '12px 14px' }}>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>Próximo reset mensual</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 8 }}>{daysToMonthly} días</div>
+            <button
+              onClick={() => handleForceReset('monthly')}
+              disabled={resetting !== null}
+              style={{ padding: '6px 14px', borderRadius: 7, border: '1px solid rgba(30,158,58,0.4)', background: 'rgba(30,158,58,0.08)', color: '#1E9E3A', fontSize: 12, fontWeight: 600, cursor: resetting ? 'wait' : 'pointer' }}>
+              {resetting === 'monthly' ? '⏳ Reseteando...' : 'Forzar reset mensual'}
+            </button>
+          </div>
+          <div style={{ background: 'var(--bg-surface-2)', borderRadius: 9, padding: '12px 14px' }}>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>Próximo reset trimestral</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 8 }}>{daysToQuarterly} días</div>
+            <button
+              onClick={() => handleForceReset('quarterly')}
+              disabled={resetting !== null}
+              style={{ padding: '6px 14px', borderRadius: 7, border: '1px solid rgba(245,158,11,0.4)', background: 'rgba(245,158,11,0.08)', color: '#f59e0b', fontSize: 12, fontWeight: 600, cursor: resetting ? 'wait' : 'pointer' }}>
+              {resetting === 'quarterly' ? '⏳ Reseteando...' : 'Forzar reset trimestral'}
+            </button>
+          </div>
+        </div>
+      </div>
+
       {/* ── Ranking table ── */}
       <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', marginBottom: 16 }}>
         <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
@@ -482,9 +797,10 @@ function ScoringTab() {
           </div>
           <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
             {[
-              { color: '#6b7280', label: 'Junior (0–149)' },
-              { color: '#1E9E3A', label: 'Senior (150–299)' },
-              { color: '#FFC400', label: 'Elite (300+)' },
+              { color: '#6b7280', label: '⭐ Junior (0–149)' },
+              { color: '#1E9E3A', label: '⭐⭐ Senior (150–299)' },
+              { color: '#FFC400', label: '⭐⭐⭐ Elite (300+)' },
+              { color: '#ef4444', label: '🔴 Bloqueado' },
             ].map(l => (
               <div key={l.label} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                 <div style={{ width: 9, height: 9, borderRadius: '50%', background: l.color }} />
@@ -498,13 +814,13 @@ function ScoringTab() {
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface-2)' }}>
-                {['Pos.', 'Nombre', 'Nivel', 'Score', 'Alumnos', 'Retención', '€ mes', 'Nota', ''].map(h => (
+                {['Pos.', 'Nombre', 'Nivel', 'Score', 'Alumnos', 'Retención', '€ mes', ''].map(h => (
                   <th key={h} style={{ padding: '10px 12px', textAlign: 'left', fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {scored.map(({ t, totalScore, currentLevel, activeStudents, retentionPct, monthlyEuros }, idx) => {
+              {scored.map(({ t, totalScore, currentLevel, activeStudents, retentionPct, monthlyEuros, isBlocked }, idx) => {
                 const info = LEVEL_INFO[(currentLevel as 1|2|3)];
                 const isSelected = selectedTeacherId === t.id;
                 const nextThreshold = currentLevel === 1 ? 150 : currentLevel === 2 ? 300 : 300;
@@ -512,43 +828,65 @@ function ScoringTab() {
                 const scorePct = currentLevel < 3
                   ? Math.min(100, ((totalScore - prevThreshold) / (nextThreshold - prevThreshold)) * 100)
                   : 100;
+                const retColor = retentionPct >= 85 ? '#1E9E3A' : retentionPct >= 65 ? '#f59e0b' : '#ef4444';
+                const isToM = t.isTeacherOfMonth;
+                const isToQ = t.isTeacherOfQuarter;
+
                 return (
                   <tr key={t.id} onClick={() => setSelectedTeacherId(isSelected ? null : t.id)}
-                    style={{ borderBottom: '1px solid var(--border)', background: isSelected ? 'rgba(30,158,58,0.05)' : idx === 0 ? 'rgba(255,196,0,0.03)' : 'transparent', cursor: 'pointer', transition: 'background 0.1s' }}>
+                    style={{
+                      borderBottom: '1px solid var(--border)',
+                      background: isBlocked ? 'rgba(239,68,68,0.03)'
+                        : isSelected ? 'rgba(30,158,58,0.04)'
+                        : idx === 0 ? 'rgba(255,196,0,0.03)' : 'transparent',
+                      cursor: 'pointer', transition: 'background 0.1s',
+                    }}>
                     <td style={{ padding: '12px 12px', fontSize: idx < 3 ? 22 : 13, fontWeight: idx >= 3 ? 600 : 400, color: 'var(--text-muted)' }}>
                       {idx < 3 ? MEDALS[idx] : `#${idx + 1}`}
                     </td>
                     <td style={{ padding: '12px 12px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <div style={{ width: 34, height: 34, borderRadius: '50%', background: info.bg, border: `1px solid ${info.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: info.color, flexShrink: 0 }}>{t.avatar}</div>
+                        <div style={{
+                          width: 34, height: 34, borderRadius: '50%',
+                          background: isBlocked ? 'rgba(239,68,68,0.1)' : info.bg,
+                          border: `2px solid ${isBlocked ? 'rgba(239,68,68,0.4)' : info.border}`,
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          fontSize: 12, fontWeight: 700,
+                          color: isBlocked ? '#ef4444' : info.color, flexShrink: 0,
+                        }}>{t.avatar}</div>
                         <div>
-                          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{t.name}</div>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                            {t.name}
+                            {isToM && <span title="Profe del Mes" style={{ fontSize: 14 }}>🏆</span>}
+                            {isToQ && <span title="Profe del Trimestre" style={{ fontSize: 12 }}>🏅</span>}
+                          </div>
                           {t.createdAt && <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>desde {new Date(t.createdAt).toLocaleDateString('es-ES', { month: 'short', year: 'numeric' })}</div>}
                         </div>
                       </div>
                     </td>
-                    <td style={{ padding: '12px 12px' }}><LevelBadge level={currentLevel} /></td>
+                    <td style={{ padding: '12px 12px' }}><LevelBadge level={currentLevel} blocked={isBlocked} /></td>
                     <td style={{ padding: '12px 12px', minWidth: 130 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <div style={{ flex: 1, height: 6, borderRadius: 3, background: 'var(--bg-surface-3)', overflow: 'hidden' }}>
-                          <div style={{ width: `${scorePct}%`, height: '100%', borderRadius: 3, background: info.color, transition: 'width 0.4s' }} />
+                          <div style={{ width: `${scorePct}%`, height: '100%', borderRadius: 3, background: isBlocked ? '#ef4444' : info.color, transition: 'width 0.4s' }} />
                         </div>
-                        <span style={{ fontSize: 14, fontWeight: 700, color: info.color, minWidth: 36, textAlign: 'right' }}>{totalScore}</span>
+                        <span style={{ fontSize: 14, fontWeight: 700, color: isBlocked ? '#ef4444' : info.color, minWidth: 36, textAlign: 'right' }}>{totalScore}</span>
                       </div>
                     </td>
                     <td style={{ padding: '12px 12px', fontSize: 15, fontWeight: 700, color: '#1E9E3A' }}>{activeStudents}</td>
-                    <td style={{ padding: '12px 12px', fontSize: 13, color: retentionPct >= 85 ? '#1E9E3A' : retentionPct >= 70 ? '#f59e0b' : 'var(--text-secondary)' }}>
-                      {Math.round(retentionPct)}%
+                    <td style={{ padding: '12px 12px' }}>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: retColor }}>
+                        {Math.round(retentionPct)}%
+                        {retentionPct < 65 && activeStudents > 0 && <span style={{ marginLeft: 4, fontSize: 11 }}>🔴</span>}
+                        {retentionPct >= 65 && retentionPct < 80 && <span style={{ marginLeft: 4, fontSize: 11 }}>⚠️</span>}
+                      </span>
                     </td>
                     <td style={{ padding: '12px 12px', fontSize: 13, fontWeight: 600, color: monthlyEuros > 0 ? '#1E9E3A' : 'var(--text-muted)' }}>
                       {monthlyEuros > 0 ? `€${monthlyEuros}` : '—'}
                     </td>
-                    <td style={{ padding: '12px 12px' }} onClick={e => e.stopPropagation()}>
-                      <StarRating value={t.internalRating ?? 0} onChange={v => updateTeacherRating(t.id, v)} />
-                    </td>
                     <td style={{ padding: '12px 8px' }} onClick={e => e.stopPropagation()}>
                       <button onClick={() => setEventModalTeacher(t)}
-                        style={{ padding: '5px 10px', borderRadius: 7, border: '1px solid #1E9E3A', background: 'rgba(30,158,58,0.1)', color: '#1E9E3A', cursor: 'pointer', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>
+                        style={{ padding: '5px 10px', borderRadius: 7, border: '1px solid #1E9E3A', background: 'rgba(30,158,58,0.08)', color: '#1E9E3A', cursor: 'pointer', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>
                         ➕ Evento
                       </button>
                     </td>
@@ -566,7 +904,12 @@ function ScoringTab() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--text-primary)' }}>📋 {selectedData.t.name}</div>
-              <LevelBadge level={selectedData.currentLevel} />
+              <LevelBadge level={selectedData.currentLevel} blocked={selectedData.isBlocked} />
+              {selectedData.isBlocked && (
+                <span style={{ fontSize: 12, color: '#ef4444', background: 'rgba(239,68,68,0.08)', padding: '3px 8px', borderRadius: 6, border: '1px solid rgba(239,68,68,0.2)' }}>
+                  ⚠️ Retención baja ({Math.round(selectedData.retentionPct)}%) — no puede recibir nuevos alumnos
+                </span>
+              )}
             </div>
             <button onClick={() => setSelectedTeacherId(null)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 18 }}>✕</button>
           </div>
@@ -576,12 +919,14 @@ function ScoringTab() {
             <div>
               <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 10 }}>Requisitos de nivel</div>
               {[1, 2, 3].map(lvl => {
-                const reqs = checkLevelReqs(selectedData.activeStudents, selectedData.retentionPct, selectedData.faltasThisMonth, selectedData.quejasActive, selectedData.upsellsTotal, selectedData.monthsOnPlatform, lvl);
+                const reqs = checkLevelReqs(selectedData.activeStudents, selectedData.retentionPct, selectedData.faltasInjust, selectedData.faltasJust, selectedData.upsellsTotal, selectedData.monthsOnPlatform, lvl);
                 const info = LEVEL_INFO[(lvl as 1|2|3)];
                 const allMet = reqs.every(r => r.met);
                 return (
                   <div key={lvl} style={{ border: `1px solid ${allMet ? info.border : 'var(--border)'}`, borderRadius: 8, padding: '10px 12px', marginBottom: 8, background: allMet ? info.bg : 'transparent' }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: info.color, marginBottom: 6 }}>{info.name}</div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: info.color, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <Stars level={lvl} size={11} /> {info.name}
+                    </div>
                     {reqs.map(r => (
                       <div key={r.label} style={{ fontSize: 11, color: r.met ? '#1E9E3A' : 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5, marginBottom: 2 }}>
                         <span>{r.met ? '✅' : '❌'}</span> {r.label}
@@ -601,10 +946,14 @@ function ScoringTab() {
                 <div style={{ fontSize: 13, color: 'var(--text-muted)', textAlign: 'center', padding: '24px 0' }}>Sin eventos registrados</div>
               ) : selectedEvents.slice(0, 12).map(ev => {
                 const isPos = ev.points > 0;
+                const icon = EVENT_ICONS[ev.eventType] ?? '📌';
                 return (
-                  <div key={ev.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '8px 10px', borderRadius: 7, background: isPos ? 'rgba(30,158,58,0.07)' : 'rgba(239,68,68,0.07)', border: `1px solid ${isPos ? 'rgba(30,158,58,0.2)' : 'rgba(239,68,68,0.2)'}`, marginBottom: 6 }}>
+                  <div key={ev.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '8px 10px', borderRadius: 7, background: isPos ? 'rgba(30,158,58,0.06)' : 'rgba(239,68,68,0.06)', border: `1px solid ${isPos ? 'rgba(30,158,58,0.15)' : 'rgba(239,68,68,0.15)'}`, marginBottom: 6 }}>
                     <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: isPos ? '#1E9E3A' : '#ef4444' }}>{EVENT_LABELS[ev.eventType] ?? ev.eventType}</div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: isPos ? '#1E9E3A' : '#ef4444', display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <span>{icon}</span>
+                        {EVENT_LABELS[ev.eventType] ?? ev.eventType}
+                      </div>
                       <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{ev.note}</div>
                       {ev.studentRef && <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>Alumno: {ev.studentRef}</div>}
                       <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{new Date(ev.createdAt).toLocaleDateString('es-ES')} · por {ev.createdBy}</div>
@@ -625,23 +974,35 @@ function ScoringTab() {
       <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
         <button onClick={() => setShowLevelReqs(v => !v)}
           style={{ width: '100%', padding: '14px 20px', background: 'none', border: 'none', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)' }}>📋 Ver requisitos por nivel</span>
+          <span style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)' }}>📋 Requisitos por nivel</span>
           <span style={{ color: 'var(--text-muted)', fontSize: 16 }}>{showLevelReqs ? '▲' : '▼'}</span>
         </button>
         {showLevelReqs && (
           <div style={{ padding: '0 20px 20px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14 }}>
             {([
-              { level: 1, reqs: ['Retención mínima 50%', 'Máx. 3 faltas al mes', 'Sin quejas activas'] },
-              { level: 2, reqs: ['Retención mínima 70%', 'Máx. 1 falta al mes', 'Mínimo 5 alumnos activos', 'Al menos 1 upsell'] },
-              { level: 3, reqs: ['Retención mínima 85%', 'Cero faltas al mes', 'Mínimo 10 alumnos activos', 'Al menos 3 upsells', 'Más de 6 meses en la plataforma'] },
-            ] as const).map(({ level, reqs }) => {
+              {
+                level: 1,
+                reqs: ['Retención mínima 65%', '0 faltas injustificadas', 'Máx. 1 falta justificada al mes'],
+                score: '0–149 pts',
+              },
+              {
+                level: 2,
+                reqs: ['Retención mínima 80%', '0 faltas injustificadas', 'Mínimo 5 alumnos activos', 'Al menos 1 upsell'],
+                score: '150–299 pts',
+              },
+              {
+                level: 3,
+                reqs: ['Retención mínima 85%', '0 faltas absolutas', 'Mínimo 10 alumnos activos', 'Al menos 3 upsells', 'Más de 6 meses'],
+                score: '300+ pts',
+              },
+            ] as const).map(({ level, reqs, score }) => {
               const info = LEVEL_INFO[(level as 1|2|3)];
               return (
                 <div key={level} style={{ border: `1px solid ${info.border}`, borderRadius: 10, padding: '14px 16px', background: info.bg }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: info.color, marginBottom: 8 }}>{level === 3 ? '⭐ ' : ''}{info.name}</div>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8 }}>
-                    Score: {level === 1 ? '0–149' : level === 2 ? '150–299' : '300+'} pts
+                  <div style={{ fontSize: 13, fontWeight: 700, color: info.color, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <Stars level={level} size={13} /> {info.name}
                   </div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8 }}>Score: {score}</div>
                   {reqs.map(r => (
                     <div key={r} style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'flex', alignItems: 'flex-start', gap: 5, marginBottom: 4 }}>
                       <span style={{ color: info.color }}>•</span> {r}
@@ -654,7 +1015,7 @@ function ScoringTab() {
         )}
       </div>
 
-      {/* ── Event modal ── */}
+      {/* Modals */}
       {eventModalTeacher && (
         <EventModal
           teacher={eventModalTeacher}
@@ -664,22 +1025,46 @@ function ScoringTab() {
           onSave={addScoringEvent}
         />
       )}
+
+      {showProfeDelMes && (
+        <ProfeDelMesModal
+          scored={scored}
+          isQuarter={false}
+          onClose={() => setShowProfeDelMes(false)}
+          onConfirm={assignTeacherOfMonth}
+        />
+      )}
+
+      {showProfeDelTrimestre && (
+        <ProfeDelMesModal
+          scored={scored}
+          isQuarter={true}
+          onClose={() => setShowProfeDelTrimestre(false)}
+          onConfirm={assignTeacherOfQuarter}
+        />
+      )}
     </div>
   );
 }
 
 // ─── Admin Content ────────────────────────────────────────────────────────────
 function AdminContent() {
-  const { teachers, assignments, students, addTeacher, loadingTeachers, getTeacherGrid, updateTeacherGrid } = useTeachers();
+  const { teachers, assignments, students, addTeacher, loadingTeachers, getTeacherGrid, updateTeacherGrid, checkAndRunResets } = useTeachers();
   const [selectedTeacher, setSelectedTeacher] = useState<string | null>(null);
   const [showNewTeacher, setShowNewTeacher] = useState(false);
   const [activeTab, setActiveTab] = useState<'overview' | 'teachers' | 'weekly' | 'scoring'>('overview');
   const [editCalendarTeacher, setEditCalendarTeacher] = useState<Teacher | null>(null);
 
+  // Check for resets on load
+  useEffect(() => {
+    checkAndRunResets();
+  }, []);
+
   const activeTeachers  = teachers.filter(t => t.status !== 'vacation').length;
   const totalClasses    = teachers.reduce((a, t) => a + t.upcomingClasses.length, 0);
   const totalFreeSpots  = teachers.reduce((a, t) => a + t.freeSpots, 0);
   const conflicts       = mockAlerts.filter(a => a.type === 'conflict').length;
+  const blockedCount    = teachers.filter(t => t.isBlocked).length;
 
   const alertColors  = { high: '#ef4444', medium: '#f59e0b', low: '#6b7280' };
   const alertBgs     = { high: 'rgba(239,68,68,0.07)', medium: 'rgba(245,158,11,0.07)', low: 'rgba(107,114,128,0.07)' };
@@ -691,7 +1076,7 @@ function AdminContent() {
   const tabs = [
     { id: 'overview', label: '📊 Resumen' },
     { id: 'teachers', label: '👨‍🏫 Profesores' },
-    { id: 'weekly',   label: '📅 Vista semanal' },
+    { id: 'weekly',   label: '📅 Cobertura' },
     { id: 'scoring',  label: '⭐ Scoring' },
   ] as const;
 
@@ -703,16 +1088,19 @@ function AdminContent() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24, flexWrap: 'wrap', gap: 12 }}>
           <div>
             <h1 style={{ fontSize: 24, fontWeight: 700, color: 'var(--text-primary)', margin: '0 0 4px' }}>Admin</h1>
-            <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0 }}>{teachers.length} profesores · {students.length} alumnos · {assignments.length} asignaciones</p>
+            <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0 }}>
+              {teachers.length} profesores · {students.length} alumnos · {assignments.length} asignaciones
+              {blockedCount > 0 && <span style={{ color: '#ef4444', fontWeight: 700 }}> · {blockedCount} bloqueado{blockedCount !== 1 ? 's' : ''}</span>}
+            </p>
           </div>
-          <button onClick={() => setShowNewTeacher(true)} style={{ padding: '9px 18px', borderRadius: 9, border: 'none', background: 'var(--accent-blue)', color: 'white', fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>
+          <button onClick={() => setShowNewTeacher(true)} style={{ padding: '9px 18px', borderRadius: 9, border: 'none', background: '#1E9E3A', color: 'white', fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>
             ＋ Nuevo profesor
           </button>
         </div>
 
         <div style={{ display: 'flex', gap: 4, marginBottom: 22, background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 4 }}>
           {tabs.map(tab => (
-            <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ flex: 1, padding: '8px 12px', borderRadius: 7, border: 'none', background: activeTab === tab.id ? 'var(--bg-surface-3)' : 'transparent', color: activeTab === tab.id ? 'var(--text-primary)' : 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontWeight: 500, transition: 'all 0.12s' }}>
+            <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ flex: 1, padding: '8px 12px', borderRadius: 7, border: 'none', background: activeTab === tab.id ? '#1E9E3A' : 'transparent', color: activeTab === tab.id ? 'white' : 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontWeight: activeTab === tab.id ? 700 : 500, transition: 'all 0.12s' }}>
               {tab.label}
             </button>
           ))}
@@ -722,12 +1110,12 @@ function AdminContent() {
         {activeTab === 'overview' && (<>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 14, marginBottom: 22 }}>
             {[
-              { icon: '👨‍🏫', label: 'Activos',       value: activeTeachers,   sub: `de ${teachers.length}`,  color: '#3b82f6' },
-              { icon: '📚', label: 'Clases semana', value: totalClasses,     sub: 'confirmadas',            color: '#22c55e' },
-              { icon: '🪑', label: 'Cupos libres',  value: totalFreeSpots,   sub: 'disponibles',            color: '#a78bfa' },
-              { icon: '⚠️', label: 'Conflictos',    value: conflicts,        sub: conflicts > 0 ? 'atención' : 'ok', color: conflicts > 0 ? '#ef4444' : '#22c55e' },
-              { icon: '👤', label: 'Alumnos',       value: students.length,  sub: 'registrados',            color: '#f59e0b' },
-              { icon: '✅', label: 'Asignaciones',  value: assignments.length, sub: 'esta sesión',           color: '#22c55e' },
+              { icon: '👨‍🏫', label: 'Activos',       value: activeTeachers,    sub: `de ${teachers.length}`,   color: '#1E9E3A' },
+              { icon: '📚', label: 'Clases semana', value: totalClasses,      sub: 'confirmadas',             color: '#1E9E3A' },
+              { icon: '🪑', label: 'Cupos libres',  value: totalFreeSpots,    sub: 'disponibles',             color: '#a78bfa' },
+              { icon: '⚠️', label: 'Conflictos',    value: conflicts,         sub: conflicts > 0 ? 'atención' : 'ok', color: conflicts > 0 ? '#ef4444' : '#1E9E3A' },
+              { icon: '👤', label: 'Alumnos',       value: students.length,   sub: 'registrados',             color: '#f59e0b' },
+              { icon: '🔴', label: 'Bloqueados',    value: blockedCount,      sub: 'baja retención',          color: blockedCount > 0 ? '#ef4444' : '#1E9E3A' },
             ].map(s => (
               <div key={s.label} style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px' }}>
                 <div style={{ fontSize: 22, marginBottom: 10 }}>{s.icon}</div>
@@ -744,6 +1132,14 @@ function AdminContent() {
                 <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>Alertas</span>
               </div>
               <div style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {blockedCount > 0 && (
+                  <div style={{ background: 'rgba(239,68,68,0.07)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 8, padding: '10px 12px', display: 'flex', gap: 8 }}>
+                    <span>🔴</span>
+                    <span style={{ fontSize: 12, color: '#ef4444', lineHeight: 1.4 }}>
+                      {blockedCount} profesor{blockedCount !== 1 ? 'es' : ''} bloqueado{blockedCount !== 1 ? 's' : ''} por baja retención — no pueden recibir nuevos alumnos
+                    </span>
+                  </div>
+                )}
                 {mockAlerts.map(alert => (
                   <div key={alert.id} style={{ background: alertBgs[alert.severity], border: `1px solid ${alertBorders[alert.severity]}`, borderRadius: 8, padding: '10px 12px', display: 'flex', gap: 8 }}>
                     <span>{alertIcons[alert.type]}</span>
@@ -761,7 +1157,7 @@ function AdminContent() {
                 {assignments.length === 0 ? (
                   <div style={{ textAlign: 'center', padding: '20px 0', color: 'var(--text-muted)', fontSize: 13 }}>Sin asignaciones todavía.</div>
                 ) : assignments.slice(0, 6).map(a => (
-                  <div key={a.id} style={{ padding: '8px 0', borderBottom: '1px solid rgba(42,51,71,0.4)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div key={a.id} style={{ padding: '8px 0', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                     <div>
                       <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{a.studentName}</div>
                       <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{a.teacherName} · {a.slots.map(s => `${s.day} ${s.hour}`).join(' · ')} · {a.weeklyHours}h/sem</div>
@@ -784,7 +1180,7 @@ function AdminContent() {
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}>
                     <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)' }}>
-                      {['Nombre', 'Estado', 'Carga', 'Cupos', 'Próxima clase', ''].map(h => (
+                      {['Nombre', 'Estado', 'Nivel', 'Carga', 'Cupos', ''].map(h => (
                         <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{h}</th>
                       ))}
                     </tr>
@@ -792,16 +1188,25 @@ function AdminContent() {
                   <tbody>
                     {teachers.map(t => {
                       const loadPct = t.maxWeeklyLoad > 0 ? Math.round((t.weeklyLoad / t.maxWeeklyLoad) * 100) : 0;
-                      const loadColor = loadPct >= 90 ? '#ef4444' : loadPct >= 70 ? '#f59e0b' : '#22c55e';
+                      const loadColor = loadPct >= 90 ? '#ef4444' : loadPct >= 70 ? '#f59e0b' : '#1E9E3A';
+                      const isBlocked = t.isBlocked ?? false;
                       return (
-                        <tr key={t.id} style={{ borderBottom: '1px solid var(--border)', background: selectedTeacher === t.id ? 'var(--bg-surface-2)' : 'transparent' }}>
+                        <tr key={t.id} style={{ borderBottom: '1px solid var(--border)', background: isBlocked ? 'rgba(239,68,68,0.02)' : selectedTeacher === t.id ? 'var(--bg-surface-2)' : 'transparent' }}>
                           <td style={{ padding: '11px 14px' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                              <div style={{ width: 30, height: 30, borderRadius: '50%', background: 'var(--bg-surface-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', flexShrink: 0 }}>{t.avatar}</div>
-                              <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{t.name}</span>
+                              <div style={{ width: 30, height: 30, borderRadius: '50%', background: isBlocked ? 'rgba(239,68,68,0.1)' : 'var(--bg-surface-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: isBlocked ? '#ef4444' : 'var(--text-secondary)', flexShrink: 0 }}>{t.avatar}</div>
+                              <div>
+                                <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{t.name}</span>
+                                {isBlocked && <span style={{ marginLeft: 6, fontSize: 10, color: '#ef4444', fontWeight: 700 }}>🔴 BLOQUEADO</span>}
+                              </div>
                             </div>
                           </td>
                           <td style={{ padding: '11px 14px' }}><StatusBadge status={t.status} /></td>
+                          <td style={{ padding: '11px 14px' }}>
+                            {isBlocked
+                              ? <LevelBadge level={t.currentLevel ?? 1} blocked />
+                              : <LevelBadge level={t.currentLevel ?? 1} />}
+                          </td>
                           <td style={{ padding: '11px 14px', minWidth: 100 }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                               <div style={{ flex: 1, height: 4, borderRadius: 2, background: 'var(--bg-surface-3)' }}>
@@ -811,9 +1216,8 @@ function AdminContent() {
                             </div>
                           </td>
                           <td style={{ padding: '11px 14px' }}>
-                            <span style={{ fontSize: 13, color: t.freeSpots > 0 ? '#22c55e' : 'var(--text-muted)', fontWeight: 600 }}>{t.freeSpots}</span>
+                            <span style={{ fontSize: 13, color: t.freeSpots > 0 ? '#1E9E3A' : 'var(--text-muted)', fontWeight: 600 }}>{t.freeSpots}</span>
                           </td>
-                          <td style={{ padding: '11px 14px', fontSize: 12, color: 'var(--text-secondary)' }}>{t.nextClass ?? '—'}</td>
                           <td style={{ padding: '11px 14px' }}>
                             <button onClick={() => setSelectedTeacher(t.id === selectedTeacher ? null : t.id)} style={{ padding: '5px 12px', borderRadius: 7, border: '1px solid var(--border)', background: selectedTeacher === t.id ? 'var(--bg-surface-3)' : 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 12 }}>
                               {selectedTeacher === t.id ? 'Cerrar' : 'Ver'}
@@ -839,7 +1243,7 @@ function AdminContent() {
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                     <button onClick={() => setEditCalendarTeacher(teacher)}
-                      style={{ padding: '7px 14px', borderRadius: 8, border: '1px solid rgba(59,130,246,0.35)', background: 'rgba(59,130,246,0.1)', color: '#93c5fd', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
+                      style={{ padding: '7px 14px', borderRadius: 8, border: '1px solid rgba(30,158,58,0.35)', background: 'rgba(30,158,58,0.08)', color: '#1E9E3A', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
                       📅 Editar disponibilidad
                     </button>
                     <StatusBadge status={teacher.status} />
@@ -869,10 +1273,10 @@ function AdminContent() {
                         <span>Semanal</span><span>{teacher.weeklyLoad}h / {teacher.maxWeeklyLoad}h</span>
                       </div>
                       <div style={{ height: 6, borderRadius: 3, background: 'var(--bg-surface-3)' }}>
-                        <div style={{ width: `${teacher.maxWeeklyLoad > 0 ? Math.round((teacher.weeklyLoad / teacher.maxWeeklyLoad) * 100) : 0}%`, height: '100%', borderRadius: 3, background: '#22c55e' }} />
+                        <div style={{ width: `${teacher.maxWeeklyLoad > 0 ? Math.round((teacher.weeklyLoad / teacher.maxWeeklyLoad) * 100) : 0}%`, height: '100%', borderRadius: 3, background: '#1E9E3A' }} />
                       </div>
                     </div>
-                    <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Cupos libres: <b style={{ color: teacher.freeSpots > 0 ? '#22c55e' : '#ef4444' }}>{teacher.freeSpots}</b></div>
+                    <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Cupos libres: <b style={{ color: teacher.freeSpots > 0 ? '#1E9E3A' : '#ef4444' }}>{teacher.freeSpots}</b></div>
                   </div>
                   <div>
                     <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Alumnos asignados</div>
@@ -880,7 +1284,7 @@ function AdminContent() {
                       const ta = assignments.filter(a => a.teacherId === teacher.id);
                       if (ta.length === 0) return <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Sin alumnos asignados.</div>;
                       return ta.map(a => (
-                        <div key={a.id} style={{ marginBottom: 6, paddingBottom: 6, borderBottom: '1px solid rgba(42,51,71,0.4)' }}>
+                        <div key={a.id} style={{ marginBottom: 6, paddingBottom: 6, borderBottom: '1px solid var(--border)' }}>
                           <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>👤 {a.studentName}</div>
                           <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>{a.studentLevel} · {a.slots.map(sl => `${sl.day} ${sl.hour}`).join(', ')}</div>
                         </div>
@@ -898,7 +1302,7 @@ function AdminContent() {
           <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '20px' }}>
             <div style={{ marginBottom: 16 }}>
               <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)' }}>Cobertura semanal</div>
-              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3 }}>Cantidad de profesores disponibles por cada horario.</div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3 }}>Cantidad de profesores disponibles por horario.</div>
             </div>
             <WeeklyOverview teachers={teachers} />
           </div>
