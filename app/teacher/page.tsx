@@ -77,7 +77,7 @@ function TeacherScoringTab({ teacher, myAssignments, myEvents }: {
   const retentionCount     = myMonthEvents.filter(e => e.eventType === 'bonus_retencion').length;
 
   // Level requirements
-  const faltasThisMonth  = myMonthEvents.filter(e => e.eventType === 'falta_injustificada' || e.eventType === 'falta_justificada').length;
+  const faltasThisMonth  = myMonthEvents.filter(e => e.eventType === 'falta').length;
   const quejasActive     = myMonthEvents.filter(e => e.eventType === 'queja').length;
   const upsellsTotal     = myEvents.filter(e => e.eventType === 'upsell').reduce((s, e) => s + (e.quantity ?? 1), 0);
   const monthsOnPlatform = teacher.createdAt
