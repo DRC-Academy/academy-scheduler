@@ -1,6 +1,6 @@
 'use client';
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { Teacher, Student, Assignment, Grid, ScoringEvent } from '@/types';
+import { Teacher, Student, Assignment, Grid, ScoringEvent, ClassCount } from '@/types';
 import {
   dbGetTeachers, dbAddTeacher,
   dbGetStudents, dbUpsertStudent, dbDeleteStudent, dbUpdateStudent,
@@ -10,6 +10,7 @@ import {
   dbAssignTeacherOfMonth, dbAssignTeacherOfQuarter,
   dbCheckAndResetMonthly, dbCheckAndResetQuarterly,
   dbForceMonthlyReset, dbForceQuarterlyReset,
+  dbGetClassCounts, dbIncrementClassCount,
 } from '@/lib/db';
 
 interface TeachersContextType {
@@ -19,6 +20,7 @@ interface TeachersContextType {
   teacherGrids: Record<string, Grid>;
   loadingTeachers: boolean;
   scoringEvents: ScoringEvent[];
+  classCounts: ClassCount[];
   addTeacher: (t: Teacher, username: string) => Promise<void>;
   addStudent: (s: Student) => Promise<void>;
   deleteStudent: (studentId: string, studentName: string) => Promise<void>;
@@ -35,11 +37,13 @@ interface TeachersContextType {
   forceMonthlyReset: () => Promise<void>;
   forceQuarterlyReset: () => Promise<void>;
   reloadAll: () => Promise<void>;
+  loadClassCounts: (teacherId: string) => Promise<void>;
+  incrementClassCount: (teacherId: string, studentName: string, studentEmail?: string) => Promise<ClassCount>;
 }
 
 const TeachersContext = createContext<TeachersContextType>({
   teachers: [], students: [], assignments: [], teacherGrids: {},
-  loadingTeachers: true, scoringEvents: [],
+  loadingTeachers: true, scoringEvents: [], classCounts: [],
   addTeacher:           async () => {},
   addStudent:           async () => {},
   deleteStudent:        async () => {},
@@ -56,6 +60,8 @@ const TeachersContext = createContext<TeachersContextType>({
   forceMonthlyReset:    async () => {},
   forceQuarterlyReset:  async () => {},
   reloadAll:            async () => {},
+  loadClassCounts:      async () => {},
+  incrementClassCount:  async () => ({ id: '', teacherId: '', studentName: '', classNumber: 0, lastUpdated: '' }),
 });
 
 export function TeachersProvider({ children }: { children: ReactNode }) {
@@ -65,6 +71,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   const [teacherGrids, setTeacherGrids] = useState<Record<string, Grid>>({});
   const [loadingTeachers, setLoadingTeachers] = useState(true);
   const [scoringEvents, setScoringEvents] = useState<ScoringEvent[]>([]);
+  const [classCounts, setClassCounts]   = useState<ClassCount[]>([]);
 
   async function reloadAll() {
     setLoadingTeachers(true);
@@ -182,15 +189,34 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     await reloadAll();
   }
 
+  async function loadClassCounts(teacherId: string) {
+    const counts = await dbGetClassCounts(teacherId);
+    setClassCounts(counts);
+  }
+
+  async function incrementClassCount(teacherId: string, studentName: string, studentEmail?: string): Promise<ClassCount> {
+    const result = await dbIncrementClassCount(teacherId, studentName, studentEmail);
+    setClassCounts(prev => {
+      const idx = prev.findIndex(c => c.id === result.id);
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = result;
+        return next;
+      }
+      return [...prev, result];
+    });
+    return result;
+  }
+
   return (
     <TeachersContext.Provider value={{
-      teachers, students, assignments, teacherGrids, loadingTeachers, scoringEvents,
+      teachers, students, assignments, teacherGrids, loadingTeachers, scoringEvents, classCounts,
       addTeacher, addStudent, deleteStudent, updateStudent, addAssignment,
       getTeacherGrid, updateTeacherGrid, updateTeacherRating, addScoringEvent,
       loadScoringEvents, checkAndRunResets,
       assignTeacherOfMonth, assignTeacherOfQuarter,
       forceMonthlyReset, forceQuarterlyReset,
-      reloadAll,
+      reloadAll, loadClassCounts, incrementClassCount,
     }}>
       {children}
     </TeachersContext.Provider>

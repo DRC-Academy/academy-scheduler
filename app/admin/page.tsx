@@ -7,8 +7,8 @@ import { DAYS, HOURS_ES, stateColor, VisualCalendar, buildGridFromTeacher } from
 import { useTeachers } from '@/lib/TeachersContext';
 import { useAuth } from '@/lib/AuthContext';
 import { mockAlerts } from '@/lib/mock-data';
-import { Teacher, Grid, Assignment, ScoringEvent, ScoringEventType } from '@/types';
-import { EVENT_POINTS, EVENT_EUROS } from '@/lib/db';
+import { Teacher, Grid, Assignment, ScoringEvent, ScoringEventType, ClassCount } from '@/types';
+import { EVENT_POINTS, EVENT_EUROS, dbGetClassCounts } from '@/lib/db';
 
 // ─── Scoring constants ────────────────────────────────────────────────────────
 const LEVEL_INFO = {
@@ -1054,11 +1054,21 @@ function AdminContent() {
   const [showNewTeacher, setShowNewTeacher] = useState(false);
   const [activeTab, setActiveTab] = useState<'overview' | 'teachers' | 'weekly' | 'scoring'>('overview');
   const [editCalendarTeacher, setEditCalendarTeacher] = useState<Teacher | null>(null);
+  const [teacherClassCounts, setTeacherClassCounts] = useState<ClassCount[]>([]);
 
   // Check for resets on load
   useEffect(() => {
     checkAndRunResets();
   }, []);
+
+  // Load class counts when a teacher is selected
+  useEffect(() => {
+    if (selectedTeacher) {
+      dbGetClassCounts(selectedTeacher).then(setTeacherClassCounts);
+    } else {
+      setTeacherClassCounts([]);
+    }
+  }, [selectedTeacher]);
 
   const activeTeachers  = teachers.filter(t => t.status !== 'vacation').length;
   const totalClasses    = teachers.reduce((a, t) => a + t.upcomingClasses.length, 0);
@@ -1283,12 +1293,29 @@ function AdminContent() {
                     {(() => {
                       const ta = assignments.filter(a => a.teacherId === teacher.id);
                       if (ta.length === 0) return <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Sin alumnos asignados.</div>;
-                      return ta.map(a => (
-                        <div key={a.id} style={{ marginBottom: 6, paddingBottom: 6, borderBottom: '1px solid var(--border)' }}>
-                          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>👤 {a.studentName}</div>
-                          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>{a.studentLevel} · {a.slots.map(sl => `${sl.day} ${sl.hour}`).join(', ')}</div>
-                        </div>
-                      ));
+                      const sorted = [...ta].sort((a, b) => {
+                        const ca = teacherClassCounts.find(c => c.studentName === a.studentName)?.classNumber ?? 0;
+                        const cb = teacherClassCounts.find(c => c.studentName === b.studentName)?.classNumber ?? 0;
+                        return cb - ca;
+                      });
+                      return sorted.map(a => {
+                        const count = teacherClassCounts.find(c => c.studentName === a.studentName);
+                        const classNum = count?.classNumber ?? 0;
+                        const isMilestone = classNum === 15 || classNum === 30;
+                        return (
+                          <div key={a.id} style={{ marginBottom: 6, paddingBottom: 6, borderBottom: '1px solid var(--border)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>👤 {a.studentName}</div>
+                              {classNum > 0 && (
+                                <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 10, background: isMilestone ? 'rgba(255,196,0,0.2)' : 'rgba(30,158,58,0.1)', border: `1px solid ${isMilestone ? '#FFC400' : 'rgba(30,158,58,0.3)'}`, color: isMilestone ? '#b8860b' : '#1E9E3A', fontWeight: 700 }}>
+                                  {isMilestone ? (classNum === 15 ? '🎯 ' : '🏆 ') : ''}Clase {classNum}
+                                </span>
+                              )}
+                            </div>
+                            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>{a.studentLevel} · {a.slots.map(sl => `${sl.day} ${sl.hour}`).join(', ')}</div>
+                          </div>
+                        );
+                      });
                     })()}
                   </div>
                 </div>

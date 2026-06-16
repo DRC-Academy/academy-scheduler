@@ -155,3 +155,12 @@ export interface ScoringEvent {
   studentRef?: string;
   quantity?: number;
 }
+
+export interface ClassCount {
+  id: string;
+  teacherId: string;
+  studentName: string;
+  studentEmail?: string;
+  classNumber: number;
+  lastUpdated: string;
+}

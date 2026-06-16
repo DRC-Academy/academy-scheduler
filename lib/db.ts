@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import { Teacher, Student, Assignment, AppUser, Grid, TeacherStatus, ScoringEvent } from '@/types';
+import { Teacher, Student, Assignment, AppUser, Grid, TeacherStatus, ScoringEvent, ClassCount } from '@/types';
 
 // ── AUTH ─────────────────────────────────────────────────────────────────────
 
@@ -633,4 +633,82 @@ export async function dbForceQuarterlyReset(): Promise<void> {
   if (!teachers) return;
   const ids = teachers.map((t: any) => t.id);
   await supabase.from('teachers').update({ last_quarterly_reset: now.toISOString(), total_score: 0, current_level: 1 }).in('id', ids);
+}
+
+// ── CLASS COUNT ───────────────────────────────────────────────────────────────
+
+export async function dbGetClassCounts(teacherId: string): Promise<ClassCount[]> {
+  const { data, error } = await supabase
+    .from('class_count')
+    .select('*')
+    .eq('teacher_id', teacherId)
+    .order('class_number', { ascending: false });
+
+  if (error || !data) return [];
+
+  return data.map((row: any) => ({
+    id:           row.id,
+    teacherId:    row.teacher_id,
+    studentName:  row.student_name,
+    studentEmail: row.student_email ?? undefined,
+    classNumber:  row.class_number,
+    lastUpdated:  row.last_updated,
+  }));
+}
+
+export async function dbIncrementClassCount(
+  teacherId: string,
+  studentName: string,
+  studentEmail?: string,
+): Promise<ClassCount> {
+  const id  = `cc_${teacherId}_${studentName.replace(/\s+/g, '_').toLowerCase()}`;
+  const now = new Date().toISOString();
+
+  const { data: existing } = await supabase
+    .from('class_count')
+    .select('*')
+    .eq('id', id)
+    .single();
+
+  if (existing) {
+    const newNumber = (existing.class_number as number) + 1;
+    await supabase.from('class_count').update({ class_number: newNumber, last_updated: now }).eq('id', id);
+    return {
+      id,
+      teacherId,
+      studentName,
+      studentEmail: studentEmail ?? existing.student_email ?? undefined,
+      classNumber:  newNumber,
+      lastUpdated:  now,
+    };
+  }
+
+  await supabase.from('class_count').insert({
+    id,
+    teacher_id:    teacherId,
+    student_name:  studentName,
+    student_email: studentEmail ?? null,
+    class_number:  1,
+    last_updated:  now,
+  });
+
+  return { id, teacherId, studentName, studentEmail, classNumber: 1, lastUpdated: now };
+}
+
+export async function dbGetAllClassCounts(): Promise<ClassCount[]> {
+  const { data, error } = await supabase
+    .from('class_count')
+    .select('*')
+    .order('class_number', { ascending: false });
+
+  if (error || !data) return [];
+
+  return data.map((row: any) => ({
+    id:           row.id,
+    teacherId:    row.teacher_id,
+    studentName:  row.student_name,
+    studentEmail: row.student_email ?? undefined,
+    classNumber:  row.class_number,
+    lastUpdated:  row.last_updated,
+  }));
 }

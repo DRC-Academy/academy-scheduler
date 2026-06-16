@@ -5,7 +5,7 @@ import { AuthGuard } from '@/components/AuthGuard';
 import { VisualCalendar } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
-import { Grid, Teacher, Assignment, ScoringEvent } from '@/types';
+import { Grid, Teacher, Assignment, ScoringEvent, ClassCount } from '@/types';
 
 // ─── Level constants ──────────────────────────────────────────────────────────
 const LEVEL_INFO = {
@@ -77,7 +77,7 @@ function TeacherScoringTab({ teacher, myAssignments, myEvents }: {
   const retentionCount     = myMonthEvents.filter(e => e.eventType === 'bonus_retencion').length;
 
   // Level requirements
-  const faltasThisMonth  = myMonthEvents.filter(e => e.eventType === 'falta').length;
+  const faltasThisMonth  = myMonthEvents.filter(e => e.eventType === 'falta_injustificada' || e.eventType === 'falta_justificada').length;
   const quejasActive     = myMonthEvents.filter(e => e.eventType === 'queja').length;
   const upsellsTotal     = myEvents.filter(e => e.eventType === 'upsell').reduce((s, e) => s + (e.quantity ?? 1), 0);
   const monthsOnPlatform = teacher.createdAt
@@ -303,11 +303,12 @@ function TeacherScoringTab({ teacher, myAssignments, myEvents }: {
 // ─── Teacher Content ──────────────────────────────────────────────────────────
 function TeacherContent() {
   const { user } = useAuth();
-  const { teachers, assignments, scoringEvents, getTeacherGrid, updateTeacherGrid } = useTeachers();
+  const { teachers, assignments, scoringEvents, getTeacherGrid, updateTeacherGrid, classCounts, loadClassCounts, incrementClassCount } = useTeachers();
   const [activeTab, setActiveTab] = useState<'calendar' | 'classes' | 'scoring'>('calendar');
   const [grid, setGrid]           = useState<Grid>({});
   const [gridLoading, setGridLoading]   = useState(true);
   const [saveStatus, setSaveStatus]     = useState<'idle' | 'saving' | 'saved'>('idle');
+  const [dismissedBanners, setDismissedBanners] = useState<Set<string>>(new Set());
 
   const teacher = teachers.find(t => t.id === user?.teacherId) ?? teachers[0];
 
@@ -318,6 +319,7 @@ function TeacherContent() {
       setGrid(g);
       setGridLoading(false);
     });
+    loadClassCounts(teacher.id);
   }, [teacher?.id]);
 
   async function handleGridChange(g: Grid) {
@@ -339,6 +341,32 @@ function TeacherContent() {
     .map(([key, cell]) => { const [day, hour] = key.split('_'); return { day, hour, student: cell.student ?? '—' }; })
     .sort((a, b) => a.day.localeCompare(b.day) || a.hour.localeCompare(b.hour));
 
+  // Group grid entries by unique student name
+  const studentMap = new Map<string, { student: string; slots: {day: string; hour: string}[]; email?: string }>();
+  for (const cls of classes) {
+    if (!studentMap.has(cls.student)) {
+      const assignment = assignments.find(a => a.teacherId === teacher.id && a.studentName === cls.student);
+      studentMap.set(cls.student, { student: cls.student, slots: [], email: assignment?.studentEmail });
+    }
+    studentMap.get(cls.student)!.slots.push({ day: cls.day, hour: cls.hour });
+  }
+  const studentList = Array.from(studentMap.values());
+
+  // Banners: students exactly at class 15 or 30 that haven't been dismissed
+  const visibleBanners = classCounts.filter(
+    c => (c.classNumber === 15 || c.classNumber === 30) &&
+         !dismissedBanners.has(`${c.studentName}_${c.classNumber}`)
+  );
+
+  async function handleIncrementClass(studentName: string, email?: string) {
+    if (!teacher) return;
+    await incrementClassCount(teacher.id, studentName, email);
+  }
+
+  function dismissBanner(studentName: string, classNumber: number) {
+    setDismissedBanners(prev => new Set([...prev, `${studentName}_${classNumber}`]));
+  }
+
   const myAssignments = assignments.filter(a => a.teacherId === teacher.id);
   const myEvents      = scoringEvents.filter(e => e.teacherId === teacher.id);
 
@@ -352,6 +380,34 @@ function TeacherContent() {
     <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }}>
       <NavBar />
       <div style={{ maxWidth: 980, margin: '0 auto', padding: '24px 16px 48px' }}>
+
+        {/* Milestone banners */}
+        {visibleBanners.map(banner => (
+          <div key={`${banner.studentName}_${banner.classNumber}`} style={{
+            background: banner.classNumber === 15 ? '#FFC400' : '#1E9E3A',
+            color: banner.classNumber === 15 ? '#1a0f00' : 'white',
+            borderRadius: 12,
+            padding: '14px 20px',
+            marginBottom: 14,
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: 12,
+          }}>
+            <div style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.5 }}>
+              {banner.classNumber === 15
+                ? `🎉 ¡Clase 15 con ${banner.studentName}! Es un buen momento para pedir una reseña en Trustpilot y consultar si quiere continuar con el plan.`
+                : `🏆 ¡Clase 30 con ${banner.studentName}! Este alumno es un ejemplo de retención. Recordá que podés solicitar el bono de retención al admin.`
+              }
+            </div>
+            <button
+              onClick={() => dismissBanner(banner.studentName, banner.classNumber)}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 20, color: 'inherit', flexShrink: 0, opacity: 0.75, fontFamily: 'inherit', lineHeight: 1 }}
+            >
+              ✕
+            </button>
+          </div>
+        ))}
 
         {/* Profile */}
         <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 14, padding: '18px 22px', marginBottom: 18, display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
@@ -424,20 +480,76 @@ function TeacherContent() {
         {activeTab === 'classes' && (
           <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '20px' }}>
             <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)', marginBottom: 16 }}>Clases asignadas</div>
-            {classes.length === 0 ? (
+            {studentList.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)', fontSize: 14 }}>
                 No hay clases marcadas en tu calendario.<br />
                 <span style={{ fontSize: 12 }}>Marcá celdas como "Ocupado" para verlas acá.</span>
               </div>
-            ) : classes.map((cls, i) => (
-              <div key={i} style={{ background: 'var(--bg-surface-2)', border: '1px solid var(--border)', borderRadius: 8, padding: '12px 16px', marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--text-primary)' }}>{cls.student}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>{cls.day} · {cls.hour}</div>
-                </div>
-                <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 20, background: 'rgba(59,130,246,0.15)', color: '#93c5fd' }}>Confirmada</span>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                {studentList.map(s => {
+                  const count    = classCounts.find(c => c.studentName === s.student);
+                  const classNum = count?.classNumber ?? 0;
+                  const barPct   = Math.min(100, (classNum / 30) * 100);
+                  const isMilestone = classNum === 15 || classNum === 30;
+
+                  return (
+                    <div key={s.student} style={{ background: 'var(--bg-surface-2)', border: `1px solid ${isMilestone ? '#FFC400' : 'var(--border)'}`, borderRadius: 12, padding: '16px 20px' }}>
+                      {/* Header row */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
+                        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                          <div style={{ width: 42, height: 42, borderRadius: '50%', background: 'rgba(30,158,58,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 17, fontWeight: 700, color: '#1E9E3A', flexShrink: 0 }}>
+                            {s.student.charAt(0).toUpperCase()}
+                          </div>
+                          <div>
+                            <div style={{ fontWeight: 600, fontSize: 15, color: 'var(--text-primary)' }}>{s.student}</div>
+                            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3 }}>
+                              {s.slots.map(sl => `${sl.day} ${sl.hour}`).join(' · ')}
+                            </div>
+                          </div>
+                        </div>
+                        <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                          <div style={{ fontSize: 15, fontWeight: 700, color: isMilestone ? (classNum === 15 ? '#b45309' : '#1E9E3A') : 'var(--text-primary)' }}>
+                            Clase {classNum} de ∞
+                          </div>
+                          {isMilestone && (
+                            <div style={{ fontSize: 11, color: classNum === 15 ? '#b45309' : '#1E9E3A', fontWeight: 600, marginTop: 2 }}>
+                              {classNum === 15 ? '🎯 Milestone' : '🏆 Milestone'}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Progress bar */}
+                      <div style={{ position: 'relative', marginBottom: 6 }}>
+                        <div style={{ height: 12, borderRadius: 6, background: '#e5e7eb', overflow: 'hidden' }}>
+                          <div style={{ width: `${barPct}%`, height: '100%', background: '#1E9E3A', borderRadius: 6, transition: 'width 0.4s ease' }} />
+                        </div>
+                        {/* Marker at clase 15 (50%) */}
+                        <div style={{ position: 'absolute', left: '50%', top: 0, width: 2, height: 12, background: '#FFC400', transform: 'translateX(-50%)', zIndex: 2, pointerEvents: 'none' }} />
+                      </div>
+
+                      {/* Labels */}
+                      <div style={{ position: 'relative', height: 16, fontSize: 10, color: 'var(--text-muted)', marginBottom: 14 }}>
+                        <span style={{ position: 'absolute', left: 0 }}>Clase 1</span>
+                        <span style={{ position: 'absolute', left: '50%', transform: 'translateX(-50%)' }}>Clase 15</span>
+                        <span style={{ position: 'absolute', right: 0 }}>Clase 30</span>
+                      </div>
+
+                      {/* Action */}
+                      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                        <button
+                          onClick={() => handleIncrementClass(s.student, s.email)}
+                          style={{ padding: '8px 18px', borderRadius: 8, border: 'none', background: '#1E9E3A', color: 'white', fontWeight: 600, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit', transition: 'opacity 0.15s' }}
+                        >
+                          + Registrar clase
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-            ))}
+            )}
           </div>
         )}
 

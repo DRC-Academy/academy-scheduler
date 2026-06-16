@@ -45,9 +45,9 @@ export default function LoginPage() {
       <div style={{ width: '100%', maxWidth: 400 }}>
 
         {/* Logo */}
-        <div style={{ textAlign: 'center', marginBottom: 36 }}>
-          <img src="/drc-logo.png" alt="DRC Academy" style={{ height: 50, width: 'auto', objectFit: 'contain' }} />
-          <p style={{ fontSize: 14, color: 'var(--text-muted)', margin: '10px 0 0' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', marginBottom: 36 }}>
+          <img src="/drc-logo.png" alt="DRC Academy" style={{ display: 'block', margin: '0 auto', height: 50, width: 'auto', objectFit: 'contain' }} />
+          <p style={{ fontSize: 14, color: 'var(--text-muted)', margin: '8px 0 0' }}>
             Plataforma interna de gestión
           </p>
         </div>
@@ -91,13 +91,6 @@ export default function LoginPage() {
           </form>
         </div>
 
-        {/* Hint */}
-        <div style={{ marginTop: 18, background: 'var(--bg-surface)', border: '1.5px solid var(--border)', borderRadius: 10, padding: '12px 16px', fontSize: 12, color: 'var(--text-muted)' }}>
-          <div style={{ fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 6 }}>💡 Accesos de prueba</div>
-          <div>Admin: <code style={{ color: 'var(--green)', fontWeight: 600 }}>admin</code> / <code style={{ color: 'var(--green)', fontWeight: 600 }}>admin123</code></div>
-          <div>Setter: <code style={{ color: 'var(--green)', fontWeight: 600 }}>setter</code> / <code style={{ color: 'var(--green)', fontWeight: 600 }}>setter123</code></div>
-          <div>Profe: <code style={{ color: 'var(--green)', fontWeight: 600 }}>sebastian</code> / <code style={{ color: 'var(--green)', fontWeight: 600 }}>profe123</code></div>
-        </div>
       </div>
     </div>
   );
