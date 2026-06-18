@@ -88,6 +88,7 @@ interface BaseProps {
 interface TeacherProps extends BaseProps {
   mode: 'teacher';
   onGridChange: (grid: Grid) => void;
+  onOcupadoNeed?: (day: string, hour: string, resolve: (name: string) => void, cancel: () => void) => void;
 }
 
 interface SetterProps extends BaseProps {
@@ -130,11 +131,12 @@ function StudentNameModal({ onConfirm, onCancel }: { onConfirm: (name: string) =
 
 // Context menu for teacher clicking a cell
 function CellMenu({
-  day, hour, current, onSelect, onClose
+  day, hour, current, onSelect, onClose, onOcupadoNeed,
 }: {
   day: string; hour: string; current: CellState;
   onSelect: (state: CellState, student?: string) => void;
   onClose: () => void;
+  onOcupadoNeed?: (day: string, hour: string, resolve: (name: string) => void, cancel: () => void) => void;
 }) {
   const [askStudent, setAskStudent] = useState(false);
 
@@ -145,11 +147,11 @@ function CellMenu({
     />;
   }
 
-  const options: Array<{ state: CellState; label: string; color: string; icon: string }> = [
-    { state: 'libre',     label: 'Libre',     color: '#4ade80', icon: '🟢' },
-    { state: 'ocupado',   label: 'Ocupado',   color: '#1E9E3A', icon: '🔵' },
-    { state: 'bloqueado', label: 'Bloqueado', color: '#FFC400', icon: '🟡' },
-    { state: 'no_work',   label: 'No work',   color: 'var(--text-muted)', icon: '⬜' },
+  const options: Array<{ state: CellState; label: string; sub?: string; color: string; icon: string }> = [
+    { state: 'libre',     label: 'Libre',            color: '#4ade80',          icon: '🟢' },
+    { state: 'ocupado',   label: 'Ocupado',          color: '#1E9E3A',          icon: '🔵' },
+    { state: 'bloqueado', label: 'En recuperación',  sub: 'Clase de recuperación o ajuste', color: '#FFC400', icon: '🩹' },
+    { state: 'no_work',   label: 'No work',          color: 'var(--text-muted)', icon: '⬜' },
   ];
 
   return (
@@ -162,7 +164,15 @@ function CellMenu({
         </div>
         {options.map(opt => (
           <button key={opt.state} onClick={() => {
-            if (opt.state === 'ocupado') { setAskStudent(true); return; }
+            if (opt.state === 'ocupado') {
+              if (onOcupadoNeed) {
+                onClose();
+                onOcupadoNeed(day, hour, name => { onSelect('ocupado', name); }, onClose);
+              } else {
+                setAskStudent(true);
+              }
+              return;
+            }
             onSelect(opt.state);
             onClose();
           }} style={{
@@ -174,7 +184,10 @@ function CellMenu({
             textAlign: 'left',
           }}>
             <span>{opt.icon}</span>
-            <span>{opt.label}</span>
+            <div>
+              <div>{opt.label}</div>
+              {opt.sub && <div style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 400 }}>{opt.sub}</div>}
+            </div>
             {current === opt.state && <span style={{ marginLeft: 'auto', fontSize: 11, color: opt.color }}>actual</span>}
           </button>
         ))}
@@ -260,7 +273,7 @@ export function VisualCalendar(props: Props) {
         {[
           { label: 'Libre',     count: libre,     color: '#4ade80' },
           { label: 'Ocupado',   count: ocupado,   color: '#1E9E3A' },
-          { label: 'Bloqueado', count: bloqueado, color: '#FFC400' },
+          { label: 'En recuperación', count: bloqueado, color: '#FFC400' },
           { label: 'No work',   count: noWork,    color: 'var(--text-muted)' },
         ].map(s => (
           <div key={s.label} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
@@ -363,7 +376,7 @@ export function VisualCalendar(props: Props) {
                               </>
                             : cell.state === 'libre'
                               ? (props.mode === 'setter' ? '+ Asignar' : 'Libre')
-                              : 'Bloqueado'}
+                              : 'En recuperación'}
                         </div>
                       )}
                       {cell.state === 'no_work' && props.mode === 'teacher' && (
@@ -380,7 +393,7 @@ export function VisualCalendar(props: Props) {
 
       {props.mode === 'teacher' && (
         <div style={{ marginTop: 10, fontSize: 11, color: 'var(--text-muted)' }}>
-          ✏️ Clic en cualquier celda para elegir: Libre · Ocupado · Bloqueado · No work
+          ✏️ Clic en cualquier celda para elegir: Libre · Ocupado · En recuperación · No work
         </div>
       )}
       {props.mode === 'setter' && (
@@ -396,6 +409,7 @@ export function VisualCalendar(props: Props) {
           current={getCell(menu.day, menu.hour).state}
           onSelect={(state, student) => handleMenuSelect(menu.day, menu.hour, state, student)}
           onClose={() => setMenu(null)}
+          onOcupadoNeed={props.onOcupadoNeed}
         />
       )}
     </div>

@@ -5,7 +5,133 @@ import { AuthGuard } from '@/components/AuthGuard';
 import { VisualCalendar } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
-import { Grid, Teacher, Assignment, ScoringEvent, ClassCount } from '@/types';
+import { calcCurrentClassNumber } from '@/lib/db';
+import { Grid, Teacher, Assignment, ScoringEvent, Student } from '@/types';
+
+// ── localStorage helpers for milestone alert persistence ─────────────────────
+function hasSeenAlert(teacherId: string, studentName: string, milestone: number): boolean {
+  try { return localStorage.getItem(`alert_seen_${teacherId}_${studentName}_${milestone}`) === '1'; }
+  catch { return false; }
+}
+function markAlertSeen(teacherId: string, studentName: string, milestone: number): void {
+  try { localStorage.setItem(`alert_seen_${teacherId}_${studentName}_${milestone}`, '1'); }
+  catch {}
+}
+
+// ── Milestone date estimator ──────────────────────────────────────────────────
+function estimateMilestoneDate(startDate: string, milestone: number, slotsPerWeek: number): string {
+  const weeksNeeded = Math.ceil(milestone / slotsPerWeek);
+  const [sy, sm, sd] = startDate.split('-').map(Number);
+  const start  = new Date(sy, sm - 1, sd);
+  const target = new Date(start.getTime() + weeksNeeded * 7 * 24 * 60 * 60 * 1000);
+  return target.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' });
+}
+
+// ── Assign Student Modal ──────────────────────────────────────────────────────
+function AssignStudentModal({
+  day, hour, myAssignments, onConfirm, onCancel,
+}: {
+  day: string;
+  hour: string;
+  myAssignments: Assignment[];
+  onConfirm: (studentName: string, isNew: boolean, newData?: { name: string; email: string; level: string; plan: string }) => void;
+  onCancel: () => void;
+}) {
+  const [tab, setTab]       = useState<'existing' | 'new'>('existing');
+  const [search, setSearch] = useState('');
+  const [newName, setNewName]   = useState('');
+  const [newEmail, setNewEmail] = useState('');
+  const [newLevel, setNewLevel] = useState('B1');
+  const [newPlan, setNewPlan]   = useState('Inglés general');
+
+  const uniqueStudents = Array.from(new Map(myAssignments.map(a => [a.studentName, a])).values());
+  const filtered = uniqueStudents.filter(a => a.studentName.toLowerCase().includes(search.toLowerCase()));
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+      onClick={e => { if (e.target === e.currentTarget) onCancel(); }}>
+      <div style={{ background: 'var(--bg-surface)', border: '1px solid #35405a', borderRadius: 16, width: '100%', maxWidth: 440, overflow: 'hidden' }}>
+
+        {/* Header */}
+        <div style={{ padding: '18px 22px 0' }}>
+          <div style={{ fontWeight: 700, fontSize: 17, color: 'var(--text-primary)', marginBottom: 3 }}>Asignar alumno</div>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 14 }}>
+            {day} · {hour} — ¿quién ocupa este horario?
+          </div>
+          <div style={{ display: 'flex', borderBottom: '1px solid var(--border)' }}>
+            {(['existing', 'new'] as const).map(id => (
+              <button key={id} onClick={() => setTab(id)} style={{
+                flex: 1, padding: '8px 12px', border: 'none',
+                borderBottom: `2px solid ${tab === id ? '#1E9E3A' : 'transparent'}`,
+                background: 'transparent', color: tab === id ? '#1E9E3A' : 'var(--text-muted)',
+                cursor: 'pointer', fontSize: 13, fontWeight: tab === id ? 700 : 400,
+              }}>
+                {id === 'existing' ? 'Mis alumnos' : 'Nuevo alumno'}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Content */}
+        <div style={{ padding: '16px 22px 22px' }}>
+          {tab === 'existing' ? (
+            <>
+              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar alumno..." autoFocus style={{ marginBottom: 12 }} />
+              <div style={{ maxHeight: 260, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {filtered.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '24px 0', color: 'var(--text-muted)', fontSize: 13 }}>
+                    {myAssignments.length === 0 ? 'No tenés alumnos asignados aún.' : 'Sin resultados.'}
+                  </div>
+                ) : filtered.map(a => (
+                  <button key={a.id} onClick={() => onConfirm(a.studentName, false)} style={{
+                    display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderRadius: 9,
+                    border: '1px solid var(--border)', background: 'var(--bg-surface-2)', cursor: 'pointer', textAlign: 'left',
+                  }}>
+                    <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(30,158,58,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, color: '#1E9E3A', flexShrink: 0 }}>
+                      {a.studentName.charAt(0).toUpperCase()}
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{a.studentName}</div>
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{a.studentLevel} · {a.studentEmail}</div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div><label>Nombre *</label><input value={newName} onChange={e => setNewName(e.target.value)} placeholder="Nombre completo" autoFocus /></div>
+              <div><label>Email</label><input value={newEmail} onChange={e => setNewEmail(e.target.value)} placeholder="email@ejemplo.com" type="email" /></div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div>
+                  <label>Nivel</label>
+                  <select value={newLevel} onChange={e => setNewLevel(e.target.value)}>
+                    {['A1','A2','B1','B2','C1','C2'].map(l => <option key={l}>{l}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label>Plan</label>
+                  <select value={newPlan} onChange={e => setNewPlan(e.target.value)}>
+                    {['Inglés general','B1 Exámenes','B2 Exámenes','C1 Exámenes','Intensivo'].map(p => <option key={p}>{p}</option>)}
+                  </select>
+                </div>
+              </div>
+              <button
+                onClick={() => newName.trim() && onConfirm(newName.trim(), true, { name: newName.trim(), email: newEmail, level: newLevel, plan: newPlan })}
+                disabled={!newName.trim()}
+                style={{ marginTop: 4, padding: '11px', borderRadius: 9, border: 'none', background: newName.trim() ? '#1E9E3A' : 'var(--bg-surface-3)', color: newName.trim() ? 'white' : 'var(--text-muted)', cursor: newName.trim() ? 'pointer' : 'not-allowed', fontSize: 14, fontWeight: 700, fontFamily: 'inherit' }}>
+                Crear y asignar
+              </button>
+            </div>
+          )}
+          <button onClick={onCancel} style={{ marginTop: 10, width: '100%', padding: '9px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
+            Cancelar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ─── Level constants ──────────────────────────────────────────────────────────
 const LEVEL_INFO = {
@@ -303,12 +429,13 @@ function TeacherScoringTab({ teacher, myAssignments, myEvents }: {
 // ─── Teacher Content ──────────────────────────────────────────────────────────
 function TeacherContent() {
   const { user } = useAuth();
-  const { teachers, assignments, scoringEvents, getTeacherGrid, updateTeacherGrid, classCounts, loadClassCounts, incrementClassCount } = useTeachers();
+  const { teachers, assignments, scoringEvents, getTeacherGrid, updateTeacherGrid, addStudent, addAssignment } = useTeachers();
   const [activeTab, setActiveTab] = useState<'calendar' | 'classes' | 'scoring'>('calendar');
   const [grid, setGrid]           = useState<Grid>({});
   const [gridLoading, setGridLoading]   = useState(true);
   const [saveStatus, setSaveStatus]     = useState<'idle' | 'saving' | 'saved'>('idle');
-  const [dismissedBanners, setDismissedBanners] = useState<Set<string>>(new Set());
+  const [dismissedInSession, setDismissedInSession] = useState<Set<string>>(new Set());
+  const [pendingOcupado, setPendingOcupado] = useState<{ day: string; hour: string; resolve: (name: string) => void } | null>(null);
 
   const teacher = teachers.find(t => t.id === user?.teacherId) ?? teachers[0];
 
@@ -319,7 +446,6 @@ function TeacherContent() {
       setGrid(g);
       setGridLoading(false);
     });
-    loadClassCounts(teacher.id);
   }, [teacher?.id]);
 
   async function handleGridChange(g: Grid) {
@@ -330,45 +456,96 @@ function TeacherContent() {
     setTimeout(() => setSaveStatus('idle'), 2000);
   }
 
+  function handleOcupadoNeed(day: string, hour: string, resolve: (name: string) => void, cancel: () => void) {
+    setPendingOcupado({ day, hour, resolve });
+  }
+
+  async function handleAssignStudent(studentName: string, isNew: boolean, newData?: { name: string; email: string; level: string; plan: string }) {
+    if (!teacher || !pendingOcupado) return;
+    const { day, hour, resolve } = pendingOcupado;
+    let finalName = studentName;
+
+    if (isNew && newData) {
+      const newStudent: Student = {
+        id: crypto.randomUUID(),
+        name: newData.name,
+        email: newData.email,
+        level: newData.level,
+        plan: newData.plan,
+        createdAt: new Date().toISOString(),
+      };
+      await addStudent(newStudent);
+
+      const today = new Date().toISOString().split('T')[0];
+      const newAssignment: Assignment = {
+        id: crypto.randomUUID(),
+        teacherId: teacher.id,
+        teacherName: teacher.name,
+        teacherEmail: teacher.email,
+        studentId: newStudent.id,
+        studentName: newStudent.name,
+        studentEmail: newStudent.email,
+        studentLevel: newStudent.level,
+        slots: [{ day, hour }],
+        objetivo: newData.plan,
+        plan: newData.plan,
+        weeklyHours: 1,
+        availability: `${day} ${hour}`,
+        notes: '',
+        startDate: today,
+        createdAt: new Date().toISOString(),
+      };
+      await addAssignment(newAssignment);
+      finalName = newStudent.name;
+    }
+
+    resolve(finalName);
+    setPendingOcupado(null);
+  }
+
+  function handleAssignCancel() {
+    setPendingOcupado(null);
+  }
+
+  function dismissBanner(teacherId: string, studentName: string, milestone: number) {
+    markAlertSeen(teacherId, studentName, milestone);
+    setDismissedInSession(prev => new Set([...prev, `${studentName}_${milestone}`]));
+  }
+
   if (!teacher) return null;
+
+  const myAssignments = assignments.filter(a => a.teacherId === teacher.id);
+  const myEvents      = scoringEvents.filter(e => e.teacherId === teacher.id);
 
   const freeCount    = Object.values(grid).filter(c => c.state === 'libre').length;
   const ocupadoCount = Object.values(grid).filter(c => c.state === 'ocupado').length;
   const bloqCount    = Object.values(grid).filter(c => c.state === 'bloqueado').length;
 
-  const classes = Object.entries(grid)
-    .filter(([, cell]) => cell.state === 'ocupado')
-    .map(([key, cell]) => { const [day, hour] = key.split('_'); return { day, hour, student: cell.student ?? '—' }; })
-    .sort((a, b) => a.day.localeCompare(b.day) || a.hour.localeCompare(b.hour));
-
-  // Group grid entries by unique student name
-  const studentMap = new Map<string, { student: string; slots: {day: string; hour: string}[]; email?: string }>();
-  for (const cls of classes) {
-    if (!studentMap.has(cls.student)) {
-      const assignment = assignments.find(a => a.teacherId === teacher.id && a.studentName === cls.student);
-      studentMap.set(cls.student, { student: cls.student, slots: [], email: assignment?.studentEmail });
+  // Compute visible milestone banners from assignments (auto time-based)
+  type BannerEntry = { studentName: string; milestone: 15 | 30; startDate: string; slotsPerWeek: number };
+  const visibleBanners: BannerEntry[] = [];
+  for (const a of myAssignments) {
+    if (!a.startDate) continue;
+    const classNum = calcCurrentClassNumber(a);
+    for (const milestone of [15, 30] as const) {
+      if (classNum >= milestone && !hasSeenAlert(teacher.id, a.studentName, milestone) && !dismissedInSession.has(`${a.studentName}_${milestone}`)) {
+        visibleBanners.push({ studentName: a.studentName, milestone, startDate: a.startDate, slotsPerWeek: a.slots.length });
+        break;
+      }
     }
-    studentMap.get(cls.student)!.slots.push({ day: cls.day, hour: cls.hour });
-  }
-  const studentList = Array.from(studentMap.values());
-
-  // Banners: students exactly at class 15 or 30 that haven't been dismissed
-  const visibleBanners = classCounts.filter(
-    c => (c.classNumber === 15 || c.classNumber === 30) &&
-         !dismissedBanners.has(`${c.studentName}_${c.classNumber}`)
-  );
-
-  async function handleIncrementClass(studentName: string, email?: string) {
-    if (!teacher) return;
-    await incrementClassCount(teacher.id, studentName, email);
   }
 
-  function dismissBanner(studentName: string, classNumber: number) {
-    setDismissedBanners(prev => new Set([...prev, `${studentName}_${classNumber}`]));
+  // Grid-only students (ocupado cells without a DB assignment)
+  const assignedNames = new Set(myAssignments.map(a => a.studentName));
+  const gridOcupado = Object.entries(grid)
+    .filter(([, cell]) => cell.state === 'ocupado' && cell.student && !assignedNames.has(cell.student))
+    .map(([key, cell]) => { const [day, hour] = key.split('_'); return { day, hour, student: cell.student! }; });
+  const legacyMap = new Map<string, { student: string; slots: { day: string; hour: string }[] }>();
+  for (const c of gridOcupado) {
+    if (!legacyMap.has(c.student)) legacyMap.set(c.student, { student: c.student, slots: [] });
+    legacyMap.get(c.student)!.slots.push({ day: c.day, hour: c.hour });
   }
-
-  const myAssignments = assignments.filter(a => a.teacherId === teacher.id);
-  const myEvents      = scoringEvents.filter(e => e.teacherId === teacher.id);
+  const legacyList = Array.from(legacyMap.values());
 
   const tabs = [
     { id: 'calendar', label: '📅 Mi calendario' },
@@ -383,25 +560,20 @@ function TeacherContent() {
 
         {/* Milestone banners */}
         {visibleBanners.map(banner => (
-          <div key={`${banner.studentName}_${banner.classNumber}`} style={{
-            background: banner.classNumber === 15 ? '#FFC400' : '#1E9E3A',
-            color: banner.classNumber === 15 ? '#1a0f00' : 'white',
-            borderRadius: 12,
-            padding: '14px 20px',
-            marginBottom: 14,
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            gap: 12,
+          <div key={`${banner.studentName}_${banner.milestone}`} style={{
+            background: banner.milestone === 15 ? '#FFC400' : '#1E9E3A',
+            color: banner.milestone === 15 ? '#1a0f00' : 'white',
+            borderRadius: 12, padding: '14px 20px', marginBottom: 14,
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12,
           }}>
             <div style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.5 }}>
-              {banner.classNumber === 15
-                ? `🎉 ¡Clase 15 con ${banner.studentName}! Es un buen momento para pedir una reseña en Trustpilot y consultar si quiere continuar con el plan.`
+              {banner.milestone === 15
+                ? `🎉 ¡Clase 15 con ${banner.studentName}! Es un buen momento para pedir una reseña en Trustpilot y consultar si quiere continuar con el plan. Fecha estimada de clase 30: ${estimateMilestoneDate(banner.startDate, 30, banner.slotsPerWeek)}.`
                 : `🏆 ¡Clase 30 con ${banner.studentName}! Este alumno es un ejemplo de retención. Recordá que podés solicitar el bono de retención al admin.`
               }
             </div>
             <button
-              onClick={() => dismissBanner(banner.studentName, banner.classNumber)}
+              onClick={() => dismissBanner(teacher.id, banner.studentName, banner.milestone)}
               style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 20, color: 'inherit', flexShrink: 0, opacity: 0.75, fontFamily: 'inherit', lineHeight: 1 }}
             >
               ✕
@@ -418,9 +590,9 @@ function TeacherContent() {
           </div>
           <div style={{ display: 'flex', gap: 20 }}>
             {[
-              { label: 'Libre',     count: freeCount,    color: '#4ade80' },
-              { label: 'Ocupado',   count: ocupadoCount, color: '#93c5fd' },
-              { label: 'Bloqueado', count: bloqCount,    color: '#fbbf24' },
+              { label: 'Libre',          count: freeCount,    color: '#4ade80' },
+              { label: 'Ocupado',        count: ocupadoCount, color: '#93c5fd' },
+              { label: 'En recuperación', count: bloqCount,   color: '#fbbf24' },
             ].map(s => (
               <div key={s.label} style={{ textAlign: 'center' }}>
                 <div style={{ fontSize: 20, fontWeight: 700, color: s.color }}>{s.count}</div>
@@ -454,10 +626,10 @@ function TeacherContent() {
 
             <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
               {[
-                { icon: '⬜', label: 'No work',   desc: 'No trabajás ese horario' },
-                { icon: '🟢', label: 'Libre',     desc: 'Disponible para clases' },
-                { icon: '🔵', label: 'Ocupado',   desc: 'Clase con alumno' },
-                { icon: '🟡', label: 'Bloqueado', desc: 'No disponible' },
+                { icon: '⬜', label: 'No work',          desc: 'No trabajás ese horario' },
+                { icon: '🟢', label: 'Libre',            desc: 'Disponible para clases' },
+                { icon: '🔵', label: 'Ocupado',          desc: 'Clase con alumno' },
+                { icon: '🩹', label: 'En recuperación',  desc: 'Clase de recuperación o ajuste' },
               ].map(s => (
                 <div key={s.label} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px', background: 'var(--bg-surface-2)', borderRadius: 8, border: '1px solid var(--border)' }}>
                   <span>{s.icon}</span>
@@ -472,83 +644,106 @@ function TeacherContent() {
             {gridLoading ? (
               <div style={{ textAlign: 'center', padding: '48px 0', color: 'var(--text-muted)' }}>Cargando calendario...</div>
             ) : (
-              <VisualCalendar mode="teacher" grid={grid} onGridChange={handleGridChange} />
+              <VisualCalendar mode="teacher" grid={grid} onGridChange={handleGridChange} onOcupadoNeed={handleOcupadoNeed} />
             )}
           </div>
         )}
 
         {activeTab === 'classes' && (
           <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '20px' }}>
-            <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)', marginBottom: 16 }}>Clases asignadas</div>
-            {studentList.length === 0 ? (
+            <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)', marginBottom: 4 }}>Clases asignadas</div>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 18 }}>El contador se actualiza automáticamente según la fecha de inicio y los días asignados.</div>
+
+            {myAssignments.length === 0 && legacyList.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)', fontSize: 14 }}>
-                No hay clases marcadas en tu calendario.<br />
-                <span style={{ fontSize: 12 }}>Marcá celdas como "Ocupado" para verlas acá.</span>
+                No tenés alumnos asignados todavía.<br />
+                <span style={{ fontSize: 12 }}>Hacé clic en una celda "Ocupado" del calendario para asignar un alumno.</span>
               </div>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                {studentList.map(s => {
-                  const count    = classCounts.find(c => c.studentName === s.student);
-                  const classNum = count?.classNumber ?? 0;
-                  const barPct   = Math.min(100, (classNum / 30) * 100);
-                  const isMilestone = classNum === 15 || classNum === 30;
+              <>
+                {/* DB assignments with auto class count */}
+                {myAssignments.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                    {myAssignments.map(a => {
+                      const classNum = calcCurrentClassNumber(a);
+                      const barPct   = Math.min(100, (classNum / 30) * 100);
+                      const isMilestone = classNum >= 15;
+                      const slotsPerWeek = a.slots.length;
+                      const est15 = a.startDate ? estimateMilestoneDate(a.startDate, 15, slotsPerWeek) : null;
+                      const est30 = a.startDate ? estimateMilestoneDate(a.startDate, 30, slotsPerWeek) : null;
 
-                  return (
-                    <div key={s.student} style={{ background: 'var(--bg-surface-2)', border: `1px solid ${isMilestone ? '#FFC400' : 'var(--border)'}`, borderRadius: 12, padding: '16px 20px' }}>
-                      {/* Header row */}
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
-                        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-                          <div style={{ width: 42, height: 42, borderRadius: '50%', background: 'rgba(30,158,58,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 17, fontWeight: 700, color: '#1E9E3A', flexShrink: 0 }}>
-                            {s.student.charAt(0).toUpperCase()}
-                          </div>
-                          <div>
-                            <div style={{ fontWeight: 600, fontSize: 15, color: 'var(--text-primary)' }}>{s.student}</div>
-                            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3 }}>
-                              {s.slots.map(sl => `${sl.day} ${sl.hour}`).join(' · ')}
+                      return (
+                        <div key={a.id} style={{ background: 'var(--bg-surface-2)', border: `1px solid ${classNum >= 30 ? '#1E9E3A' : classNum >= 15 ? '#FFC400' : 'var(--border)'}`, borderRadius: 12, padding: '16px 20px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
+                            <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                              <div style={{ width: 42, height: 42, borderRadius: '50%', background: 'rgba(30,158,58,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 17, fontWeight: 700, color: '#1E9E3A', flexShrink: 0 }}>
+                                {a.studentName.charAt(0).toUpperCase()}
+                              </div>
+                              <div>
+                                <div style={{ fontWeight: 600, fontSize: 15, color: 'var(--text-primary)' }}>{a.studentName}</div>
+                                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+                                  {a.slots.map(sl => `${sl.day} ${sl.hour}`).join(' · ')}
+                                  {a.studentLevel && ` · ${a.studentLevel}`}
+                                </div>
+                              </div>
+                            </div>
+                            <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                              <div style={{ fontSize: 18, fontWeight: 800, color: classNum >= 30 ? '#1E9E3A' : classNum >= 15 ? '#b45309' : 'var(--text-primary)' }}>
+                                Clase {classNum}
+                              </div>
+                              {classNum >= 30 && <div style={{ fontSize: 11, color: '#1E9E3A', fontWeight: 700 }}>🏆 Milestone</div>}
+                              {classNum >= 15 && classNum < 30 && <div style={{ fontSize: 11, color: '#b45309', fontWeight: 700 }}>🎯 Milestone</div>}
                             </div>
                           </div>
-                        </div>
-                        <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                          <div style={{ fontSize: 15, fontWeight: 700, color: isMilestone ? (classNum === 15 ? '#b45309' : '#1E9E3A') : 'var(--text-primary)' }}>
-                            Clase {classNum} de ∞
+
+                          {/* Progress bar */}
+                          <div style={{ position: 'relative', marginBottom: 6 }}>
+                            <div style={{ height: 10, borderRadius: 5, background: '#e5e7eb', overflow: 'hidden' }}>
+                              <div style={{ width: `${barPct}%`, height: '100%', background: classNum >= 30 ? '#1E9E3A' : classNum >= 15 ? '#FFC400' : '#3b82f6', borderRadius: 5, transition: 'width 0.4s ease' }} />
+                            </div>
+                            <div style={{ position: 'absolute', left: '50%', top: 0, width: 2, height: 10, background: '#FFC400', transform: 'translateX(-50%)', zIndex: 2, pointerEvents: 'none' }} />
                           </div>
-                          {isMilestone && (
-                            <div style={{ fontSize: 11, color: classNum === 15 ? '#b45309' : '#1E9E3A', fontWeight: 600, marginTop: 2 }}>
-                              {classNum === 15 ? '🎯 Milestone' : '🏆 Milestone'}
+                          <div style={{ position: 'relative', height: 15, fontSize: 10, color: 'var(--text-muted)', marginBottom: 10 }}>
+                            <span style={{ position: 'absolute', left: 0 }}>Clase 1</span>
+                            <span style={{ position: 'absolute', left: '50%', transform: 'translateX(-50%)' }}>15</span>
+                            <span style={{ position: 'absolute', right: 0 }}>30</span>
+                          </div>
+
+                          {/* Estimated dates */}
+                          {a.startDate && (
+                            <div style={{ display: 'flex', gap: 14, fontSize: 11, color: 'var(--text-muted)' }}>
+                              <span>Inicio: <b>{new Date(a.startDate + 'T00:00:00').toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}</b></span>
+                              {classNum < 15 && est15 && <span>Clase 15 est.: <b>{est15}</b></span>}
+                              {classNum < 30 && est30 && <span>Clase 30 est.: <b>{est30}</b></span>}
                             </div>
                           )}
                         </div>
-                      </div>
+                      );
+                    })}
+                  </div>
+                )}
 
-                      {/* Progress bar */}
-                      <div style={{ position: 'relative', marginBottom: 6 }}>
-                        <div style={{ height: 12, borderRadius: 6, background: '#e5e7eb', overflow: 'hidden' }}>
-                          <div style={{ width: `${barPct}%`, height: '100%', background: '#1E9E3A', borderRadius: 6, transition: 'width 0.4s ease' }} />
+                {/* Legacy: grid-only ocupado students without a DB assignment */}
+                {legacyList.length > 0 && (
+                  <div style={{ marginTop: myAssignments.length > 0 ? 20 : 0 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Sin registro de inicio</div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {legacyList.map(s => (
+                        <div key={s.student} style={{ background: 'var(--bg-surface-2)', border: '1px solid var(--border)', borderRadius: 10, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <div style={{ width: 34, height: 34, borderRadius: '50%', background: 'rgba(107,114,128,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, color: '#6b7280', flexShrink: 0 }}>
+                            {s.student.charAt(0).toUpperCase()}
+                          </div>
+                          <div>
+                            <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)' }}>{s.student}</div>
+                            <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{s.slots.map(sl => `${sl.day} ${sl.hour}`).join(' · ')}</div>
+                          </div>
+                          <div style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-muted)' }}>Sin fecha de inicio registrada</div>
                         </div>
-                        {/* Marker at clase 15 (50%) */}
-                        <div style={{ position: 'absolute', left: '50%', top: 0, width: 2, height: 12, background: '#FFC400', transform: 'translateX(-50%)', zIndex: 2, pointerEvents: 'none' }} />
-                      </div>
-
-                      {/* Labels */}
-                      <div style={{ position: 'relative', height: 16, fontSize: 10, color: 'var(--text-muted)', marginBottom: 14 }}>
-                        <span style={{ position: 'absolute', left: 0 }}>Clase 1</span>
-                        <span style={{ position: 'absolute', left: '50%', transform: 'translateX(-50%)' }}>Clase 15</span>
-                        <span style={{ position: 'absolute', right: 0 }}>Clase 30</span>
-                      </div>
-
-                      {/* Action */}
-                      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                        <button
-                          onClick={() => handleIncrementClass(s.student, s.email)}
-                          style={{ padding: '8px 18px', borderRadius: 8, border: 'none', background: '#1E9E3A', color: 'white', fontWeight: 600, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit', transition: 'opacity 0.15s' }}
-                        >
-                          + Registrar clase
-                        </button>
-                      </div>
+                      ))}
                     </div>
-                  );
-                })}
-              </div>
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}
@@ -570,6 +765,17 @@ function TeacherContent() {
           <span style={{ marginLeft: 'auto', fontSize: 11, padding: '3px 10px', borderRadius: 20, background: 'var(--bg-surface-3)', color: 'var(--text-muted)' }}>Próximamente</span>
         </div>
       </div>
+
+      {/* Assign student modal (triggered from calendar ocupado cell) */}
+      {pendingOcupado && (
+        <AssignStudentModal
+          day={pendingOcupado.day}
+          hour={pendingOcupado.hour}
+          myAssignments={myAssignments}
+          onConfirm={handleAssignStudent}
+          onCancel={handleAssignCancel}
+        />
+      )}
     </div>
   );
 }

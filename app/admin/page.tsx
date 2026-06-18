@@ -7,8 +7,8 @@ import { DAYS, HOURS_ES, stateColor, VisualCalendar, buildGridFromTeacher } from
 import { useTeachers } from '@/lib/TeachersContext';
 import { useAuth } from '@/lib/AuthContext';
 import { mockAlerts } from '@/lib/mock-data';
-import { Teacher, Grid, Assignment, ScoringEvent, ScoringEventType, ClassCount } from '@/types';
-import { EVENT_POINTS, EVENT_EUROS, dbGetClassCounts } from '@/lib/db';
+import { Teacher, Grid, Assignment, ScoringEvent, ScoringEventType } from '@/types';
+import { EVENT_POINTS, EVENT_EUROS, calcCurrentClassNumber, dbUpdateAssignmentStartDate } from '@/lib/db';
 
 // ─── Scoring constants ────────────────────────────────────────────────────────
 const LEVEL_INFO = {
@@ -1054,21 +1054,13 @@ function AdminContent() {
   const [showNewTeacher, setShowNewTeacher] = useState(false);
   const [activeTab, setActiveTab] = useState<'overview' | 'teachers' | 'weekly' | 'scoring'>('overview');
   const [editCalendarTeacher, setEditCalendarTeacher] = useState<Teacher | null>(null);
-  const [teacherClassCounts, setTeacherClassCounts] = useState<ClassCount[]>([]);
+  const [editingStartDate, setEditingStartDate] = useState<Record<string, string>>({});
+  const [savingStartDate, setSavingStartDate] = useState<Set<string>>(new Set());
 
   // Check for resets on load
   useEffect(() => {
     checkAndRunResets();
   }, []);
-
-  // Load class counts when a teacher is selected
-  useEffect(() => {
-    if (selectedTeacher) {
-      dbGetClassCounts(selectedTeacher).then(setTeacherClassCounts);
-    } else {
-      setTeacherClassCounts([]);
-    }
-  }, [selectedTeacher]);
 
   const activeTeachers  = teachers.filter(t => t.status !== 'vacation').length;
   const totalClasses    = teachers.reduce((a, t) => a + t.upcomingClasses.length, 0);
@@ -1293,26 +1285,58 @@ function AdminContent() {
                     {(() => {
                       const ta = assignments.filter(a => a.teacherId === teacher.id);
                       if (ta.length === 0) return <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Sin alumnos asignados.</div>;
-                      const sorted = [...ta].sort((a, b) => {
-                        const ca = teacherClassCounts.find(c => c.studentName === a.studentName)?.classNumber ?? 0;
-                        const cb = teacherClassCounts.find(c => c.studentName === b.studentName)?.classNumber ?? 0;
-                        return cb - ca;
-                      });
+                      const sorted = [...ta].sort((a, b) => calcCurrentClassNumber(b) - calcCurrentClassNumber(a));
                       return sorted.map(a => {
-                        const count = teacherClassCounts.find(c => c.studentName === a.studentName);
-                        const classNum = count?.classNumber ?? 0;
-                        const isMilestone = classNum === 15 || classNum === 30;
+                        const classNum = calcCurrentClassNumber(a);
+                        const isMilestone = classNum >= 15;
+                        const isEditing = editingStartDate[a.id] !== undefined;
                         return (
-                          <div key={a.id} style={{ marginBottom: 6, paddingBottom: 6, borderBottom: '1px solid var(--border)' }}>
+                          <div key={a.id} style={{ marginBottom: 8, paddingBottom: 8, borderBottom: '1px solid var(--border)' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                               <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>👤 {a.studentName}</div>
                               {classNum > 0 && (
-                                <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 10, background: isMilestone ? 'rgba(255,196,0,0.2)' : 'rgba(30,158,58,0.1)', border: `1px solid ${isMilestone ? '#FFC400' : 'rgba(30,158,58,0.3)'}`, color: isMilestone ? '#b8860b' : '#1E9E3A', fontWeight: 700 }}>
-                                  {isMilestone ? (classNum === 15 ? '🎯 ' : '🏆 ') : ''}Clase {classNum}
+                                <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 10, background: classNum >= 30 ? 'rgba(30,158,58,0.15)' : isMilestone ? 'rgba(255,196,0,0.2)' : 'rgba(30,158,58,0.1)', border: `1px solid ${classNum >= 30 ? 'rgba(30,158,58,0.4)' : isMilestone ? '#FFC400' : 'rgba(30,158,58,0.3)'}`, color: classNum >= 30 ? '#1E9E3A' : isMilestone ? '#b8860b' : '#1E9E3A', fontWeight: 700 }}>
+                                  {classNum >= 30 ? '🏆 ' : isMilestone ? '🎯 ' : ''}Clase {classNum}
                                 </span>
                               )}
                             </div>
-                            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>{a.studentLevel} · {a.slots.map(sl => `${sl.day} ${sl.hour}`).join(', ')}</div>
+                            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{a.studentLevel} · {a.slots.map(sl => `${sl.day} ${sl.hour}`).join(', ')}</div>
+                            {/* Inline start_date editor */}
+                            <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                              {isEditing ? (
+                                <>
+                                  <input
+                                    type="date"
+                                    value={editingStartDate[a.id]}
+                                    onChange={e => setEditingStartDate(prev => ({ ...prev, [a.id]: e.target.value }))}
+                                    style={{ fontSize: 11, padding: '2px 6px', borderRadius: 5, border: '1px solid var(--border)', background: 'var(--bg-surface-2)', color: 'var(--text-primary)' }}
+                                  />
+                                  <button
+                                    disabled={savingStartDate.has(a.id)}
+                                    onClick={async () => {
+                                      if (!editingStartDate[a.id]) return;
+                                      setSavingStartDate(prev => new Set([...prev, a.id]));
+                                      await dbUpdateAssignmentStartDate(a.id, editingStartDate[a.id]);
+                                      setSavingStartDate(prev => { const n = new Set(prev); n.delete(a.id); return n; });
+                                      setEditingStartDate(prev => { const n = { ...prev }; delete n[a.id]; return n; });
+                                    }}
+                                    style={{ fontSize: 11, padding: '2px 8px', borderRadius: 5, border: 'none', background: '#1E9E3A', color: 'white', cursor: savingStartDate.has(a.id) ? 'wait' : 'pointer', fontFamily: 'inherit' }}>
+                                    {savingStartDate.has(a.id) ? '...' : 'Guardar'}
+                                  </button>
+                                  <button
+                                    onClick={() => setEditingStartDate(prev => { const n = { ...prev }; delete n[a.id]; return n; })}
+                                    style={{ fontSize: 11, padding: '2px 8px', borderRadius: 5, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', fontFamily: 'inherit' }}>
+                                    Cancelar
+                                  </button>
+                                </>
+                              ) : (
+                                <button
+                                  onClick={() => setEditingStartDate(prev => ({ ...prev, [a.id]: a.startDate ?? new Date().toISOString().split('T')[0] }))}
+                                  style={{ fontSize: 10, padding: '2px 7px', borderRadius: 5, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', fontFamily: 'inherit' }}>
+                                  {a.startDate ? `Inicio: ${new Date(a.startDate + 'T00:00:00').toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })} ✏️` : '+ Fecha inicio'}
+                                </button>
+                              )}
+                            </div>
                           </div>
                         );
                       });
