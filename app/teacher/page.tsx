@@ -18,6 +18,16 @@ function markBannerSeen(teacherId: string, studentName: string, milestone: numbe
   catch {}
 }
 
+// ── localStorage helpers for 6-month bonus banner ────────────────────────────
+function hasSeenBonusBanner(teacherId: string, studentName: string, assignmentId: string): boolean {
+  try { return localStorage.getItem(`banner_6meses_seen_${teacherId}_${studentName}_${assignmentId}`) === '1'; }
+  catch { return false; }
+}
+function markBonusBannerSeen(teacherId: string, studentName: string, assignmentId: string): void {
+  try { localStorage.setItem(`banner_6meses_seen_${teacherId}_${studentName}_${assignmentId}`, '1'); }
+  catch {}
+}
+
 // ── Milestone date estimator ──────────────────────────────────────────────────
 function estimateMilestoneDate(startDate: string, milestone: number, slotsPerWeek: number): string {
   const weeksNeeded = Math.ceil(milestone / slotsPerWeek);
@@ -648,6 +658,7 @@ function TeacherContent() {
   const [gridLoading, setGridLoading]   = useState(true);
   const [saveStatus, setSaveStatus]     = useState<'idle' | 'saving' | 'saved'>('idle');
   const [dismissedInSession, setDismissedInSession] = useState<Set<string>>(new Set());
+  const [dismissedBonusInSession, setDismissedBonusInSession] = useState<Set<string>>(new Set());
   const [pendingOcupado, setPendingOcupado] = useState<{ day: string; hour: string; resolve: (name: string) => void } | null>(null);
   const [deductConfirm, setDeductConfirm] = useState<Assignment | null>(null);
   const [startDateModal, setStartDateModal] = useState<{ assignment: Assignment; date: string } | null>(null);
@@ -785,6 +796,11 @@ function TeacherContent() {
     setDismissedInSession(prev => new Set([...prev, `${studentName}_${milestone}`]));
   }
 
+  function dismissBonusBanner(teacherId: string, studentName: string, assignmentId: string) {
+    markBonusBannerSeen(teacherId, studentName, assignmentId);
+    setDismissedBonusInSession(prev => new Set([...prev, `${studentName}_${assignmentId}`]));
+  }
+
   if (!teacher) return null;
 
   const myAssignments = assignments.filter(a => a.teacherId === teacher.id);
@@ -794,7 +810,7 @@ function TeacherContent() {
   const ocupadoCount = Object.values(grid).filter(c => c.state === 'ocupado').length;
   const bloqCount    = Object.values(grid).filter(c => c.state === 'bloqueado').length;
 
-  // Compute visible milestone banners from assignments (auto time-based)
+  // checkClass15And30Banners: revisa cantidad de clases, sin mencionar bonos
   type BannerEntry = { studentName: string; milestone: 15 | 30; startDate: string; slotsPerWeek: number };
   const visibleBanners: BannerEntry[] = [];
   for (const a of myAssignments) {
@@ -805,6 +821,25 @@ function TeacherContent() {
         visibleBanners.push({ studentName: a.studentName, milestone, startDate: a.startDate, slotsPerWeek: a.slots.length });
         break;
       }
+    }
+  }
+
+  // check6MonthBonusBanners: revisa antigüedad en meses desde start_date, independiente de clases
+  type BonusBannerEntry = { studentName: string; assignmentId: string };
+  const visibleBonusBanners: BonusBannerEntry[] = [];
+  const today6m = new Date();
+  for (const a of myAssignments) {
+    if (!a.startDate) continue;
+    const startDate6m = new Date(a.startDate + 'T00:00:00');
+    const monthsElapsed =
+      (today6m.getFullYear() - startDate6m.getFullYear()) * 12 +
+      (today6m.getMonth() - startDate6m.getMonth());
+    if (
+      monthsElapsed >= 6 &&
+      !hasSeenBonusBanner(teacher.id, a.studentName, a.id) &&
+      !dismissedBonusInSession.has(`${a.studentName}_${a.id}`)
+    ) {
+      visibleBonusBanners.push({ studentName: a.studentName, assignmentId: a.id });
     }
   }
 
@@ -831,7 +866,7 @@ function TeacherContent() {
       <NavBar />
       <div style={{ maxWidth: 980, margin: '0 auto', padding: '24px 16px 48px' }}>
 
-        {/* Milestone banners */}
+        {/* Milestone banners — clase 15 (amarillo) y clase 30 (verde), sin mencionar bonos */}
         {visibleBanners.map(banner => (
           <div key={`${banner.studentName}_${banner.milestone}`} style={{
             background: banner.milestone === 15 ? '#FFC400' : '#1E9E3A',
@@ -842,12 +877,34 @@ function TeacherContent() {
             <div style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.5 }}>
               {banner.milestone === 15
                 ? `🎬 ¡Clase 15 con ${banner.studentName}! Recordá grabar la clase y compartir el enlace de Fathom en el Excel. ¡Gran trabajo!`
-                : `🏆 ¡Clase 30 con ${banner.studentName}! Recordá solicitar el bono de retención al admin.`
+                : `🏆 ¡Clase 30 con ${banner.studentName}! Excelente continuidad, seguí así. ¡Gran trabajo!`
               }
             </div>
             <button
               onClick={() => dismissBanner(teacher.id, banner.studentName, banner.milestone)}
               style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 20, color: 'inherit', flexShrink: 0, opacity: 0.75, fontFamily: 'inherit', lineHeight: 1 }}
+            >
+              ✕
+            </button>
+          </div>
+        ))}
+
+        {/* 6-month bonus banners — dorado, independiente de cantidad de clases */}
+        {visibleBonusBanners.map(banner => (
+          <div key={`bonus_6m_${banner.assignmentId}`} style={{
+            background: '#FFFBEB',
+            border: '2px solid #D97706',
+            borderLeft: '5px solid #D97706',
+            borderRadius: 12, padding: '14px 20px', marginBottom: 14,
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12,
+          }}>
+            <div style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.5, color: '#92400E' }}>
+              {`🎁 ¡${banner.studentName} cumplió 6 meses! Recordá solicitar el bono de retención escribiendo a `}
+              <span style={{ fontWeight: 700, color: '#B45309' }}>pagos@drcacademy.com</span>
+            </div>
+            <button
+              onClick={() => dismissBonusBanner(teacher.id, banner.studentName, banner.assignmentId)}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 20, color: '#92400E', flexShrink: 0, opacity: 0.75, fontFamily: 'inherit', lineHeight: 1 }}
             >
               ✕
             </button>
