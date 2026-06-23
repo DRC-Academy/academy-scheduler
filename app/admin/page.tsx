@@ -1047,12 +1047,303 @@ function ScoringTab() {
   );
 }
 
+// ─── Class Tracking helpers ───────────────────────────────────────────────────
+function TrackingMiniBar({ pct, color }: { pct: number; color: string }) {
+  return (
+    <div style={{ height: 4, borderRadius: 2, background: 'var(--bg-surface-3)', overflow: 'hidden', minWidth: 70 }}>
+      <div style={{ width: `${pct}%`, height: '100%', background: color, borderRadius: 2 }} />
+    </div>
+  );
+}
+
+// ─── Class Tracking Tab ───────────────────────────────────────────────────────
+function ClassTrackingTab() {
+  const { assignments, teachers } = useTeachers();
+
+  const [search, setSearch]               = useState('');
+  const [teacherFilter, setTeacherFilter] = useState('');
+  const [statusFilter, setStatusFilter]   = useState<'all' | 'near15' | 'near30' | 'near6m' | 'bonus'>('all');
+  const [sortCol, setSortCol]             = useState<'urgency' | 'classNum' | 'seniority' | 'name' | 'teacher'>('urgency');
+  const [sortDir, setSortDir]             = useState<'asc' | 'desc'>('asc');
+
+  const today = new Date();
+
+  const rows = assignments.map(a => {
+    const classNum   = calcCurrentClassNumber(a);
+    const totalDays  = a.startDate
+      ? Math.max(0, Math.floor((today.getTime() - new Date(a.startDate + 'T00:00:00').getTime()) / 86400000))
+      : null;
+    const seniorityMonths = totalDays !== null ? Math.floor(totalDays / 30) : null;
+    const seniorityDays   = totalDays !== null ? totalDays % 30 : null;
+    const daysToBonus     = totalDays !== null ? Math.max(0, 180 - totalDays) : null;
+    const bonusAvailable  = totalDays !== null && totalDays >= 180;
+    const bonusPct        = totalDays !== null ? Math.min(100, (totalDays / 180) * 100) : 0;
+    const toClass15       = Math.max(0, 15 - classNum);
+    const class15Reached  = classNum >= 15;
+    const class15Pct      = Math.min(100, (classNum / 15) * 100);
+    const toClass30       = Math.max(0, 30 - classNum);
+    const class30Reached  = classNum >= 30;
+    const class30Pct      = Math.min(100, (classNum / 30) * 100);
+    return {
+      a, classNum, totalDays, seniorityMonths, seniorityDays,
+      daysToBonus, bonusAvailable, bonusPct,
+      toClass15, class15Reached, class15Pct,
+      toClass30, class30Reached, class30Pct,
+    };
+  });
+
+  const near15Count     = rows.filter(d => !d.class15Reached && d.toClass15 <= 3).length;
+  const near30Count     = rows.filter(d => d.class15Reached && !d.class30Reached && d.toClass30 <= 3).length;
+  const bonusAvailCount = rows.filter(d => d.bonusAvailable).length;
+
+  function handleSort(col: typeof sortCol) {
+    if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortCol(col); setSortDir('asc'); }
+  }
+
+  const filtered = rows.filter(d => {
+    const q = search.toLowerCase();
+    if (q && !d.a.studentName.toLowerCase().includes(q) && !d.a.teacherName.toLowerCase().includes(q)) return false;
+    if (teacherFilter && d.a.teacherId !== teacherFilter) return false;
+    if (statusFilter === 'near15' && (d.class15Reached || d.toClass15 > 3)) return false;
+    if (statusFilter === 'near30' && (!d.class15Reached || d.class30Reached || d.toClass30 > 3)) return false;
+    if (statusFilter === 'near6m' && (d.bonusAvailable || d.daysToBonus === null || d.daysToBonus > 15)) return false;
+    if (statusFilter === 'bonus'  && !d.bonusAvailable) return false;
+    return true;
+  });
+
+  function urgencyOf(d: typeof rows[0]) {
+    return Math.min(
+      !d.class15Reached && d.toClass15 <= 3 ? d.toClass15 : 9999,
+      d.class15Reached && !d.class30Reached && d.toClass30 <= 3 ? d.toClass30 : 9999,
+      !d.bonusAvailable && d.daysToBonus !== null && d.daysToBonus <= 15 ? d.daysToBonus : 9999,
+    );
+  }
+
+  const sorted = [...filtered].sort((a, b) => {
+    let v = 0;
+    if      (sortCol === 'urgency')   v = urgencyOf(a) - urgencyOf(b);
+    else if (sortCol === 'classNum')  v = a.classNum - b.classNum;
+    else if (sortCol === 'seniority') v = (a.totalDays ?? -1) - (b.totalDays ?? -1);
+    else if (sortCol === 'name')      v = a.a.studentName.localeCompare(b.a.studentName);
+    else if (sortCol === 'teacher')   v = a.a.teacherName.localeCompare(b.a.teacherName);
+    return sortDir === 'asc' ? v : -v;
+  });
+
+  const uniqueTeachers = teachers.filter(t => assignments.some(a => a.teacherId === t.id));
+
+  function arrow(col: typeof sortCol) {
+    if (sortCol !== col) return <span style={{ color: 'var(--text-muted)', marginLeft: 4, fontSize: 10 }}>↕</span>;
+    return <span style={{ color: '#1E9E3A', marginLeft: 4, fontSize: 10 }}>{sortDir === 'asc' ? '↑' : '↓'}</span>;
+  }
+
+  const thBase = {
+    padding: '10px 12px', textAlign: 'left' as const, fontSize: 11, fontWeight: 600,
+    color: 'var(--text-muted)', textTransform: 'uppercase' as const, letterSpacing: '0.04em',
+    whiteSpace: 'nowrap' as const, background: 'var(--bg-surface-2)', borderBottom: '1px solid var(--border)',
+  };
+
+  const alertCards = [
+    { icon: '🎬', count: near15Count,     status: 'near15' as const, label: 'cerca de clase 15',    color: '#b8860b', bg: 'rgba(255,196,0,0.1)',    border: 'rgba(255,196,0,0.6)' },
+    { icon: '🏆', count: near30Count,     status: 'near30' as const, label: 'cerca de clase 30',    color: '#1E9E3A', bg: 'rgba(30,158,58,0.08)',   border: 'rgba(30,158,58,0.4)' },
+    { icon: '🎁', count: bonusAvailCount, status: 'bonus'  as const, label: 'bono 6 meses listo',   color: '#92400E', bg: 'rgba(255,196,0,0.12)',   border: '#D97706' },
+  ];
+
+  const filterOpts = [
+    { val: 'all'    as const, label: 'Todos' },
+    { val: 'near15' as const, label: '🎬 Cerca clase 15' },
+    { val: 'near30' as const, label: '🏆 Cerca clase 30' },
+    { val: 'near6m' as const, label: '⏳ Cerca del bono' },
+    { val: 'bonus'  as const, label: '🎁 Bono disponible' },
+  ];
+
+  return (
+    <div>
+      {/* Alert summary cards */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 20 }}>
+        {alertCards.map(card => (
+          <button key={card.status}
+            onClick={() => setStatusFilter(statusFilter === card.status ? 'all' : card.status)}
+            style={{
+              background: statusFilter === card.status ? card.bg : 'var(--bg-surface)',
+              border: `2px solid ${statusFilter === card.status ? card.border : 'var(--border)'}`,
+              borderRadius: 12, padding: '16px 20px', cursor: 'pointer',
+              textAlign: 'left', fontFamily: "'Radio Canada', sans-serif",
+              transition: 'all 0.12s', width: '100%',
+            }}>
+            <div style={{ fontSize: 24, marginBottom: 6 }}>{card.icon}</div>
+            <div style={{ fontSize: 28, fontWeight: 800, color: card.color, marginBottom: 2 }}>{card.count}</div>
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+              alumnos {card.label}
+            </div>
+          </button>
+        ))}
+      </div>
+
+      {/* Filters */}
+      <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '12px 16px', marginBottom: 16, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+        <input
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="🔍 Buscar alumno o profesor..."
+          style={{ flex: 1, minWidth: 180, padding: '7px 12px', borderRadius: 8, border: '1.5px solid var(--border)', background: 'var(--bg-surface-2)', color: 'var(--text-primary)', fontSize: 13, fontFamily: "'Radio Canada', sans-serif" }}
+        />
+        <select
+          value={teacherFilter}
+          onChange={e => setTeacherFilter(e.target.value)}
+          style={{ padding: '7px 12px', borderRadius: 8, border: '1.5px solid var(--border)', background: 'var(--bg-surface-2)', color: 'var(--text-primary)', fontSize: 13, fontFamily: "'Radio Canada', sans-serif" }}>
+          <option value="">Todos los profesores</option>
+          {uniqueTeachers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+        </select>
+        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+          {filterOpts.map(opt => (
+            <button key={opt.val}
+              onClick={() => setStatusFilter(opt.val)}
+              style={{ padding: '5px 11px', borderRadius: 8, border: `1px solid ${statusFilter === opt.val ? '#1E9E3A' : 'var(--border)'}`, background: statusFilter === opt.val ? 'rgba(30,158,58,0.1)' : 'transparent', color: statusFilter === opt.val ? '#1E9E3A' : 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, fontWeight: statusFilter === opt.val ? 700 : 400, fontFamily: "'Radio Canada', sans-serif", whiteSpace: 'nowrap' }}>
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Table */}
+      <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+        <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ fontWeight: 700, fontSize: 15, color: 'var(--text-primary)' }}>📋 Seguimiento de alumnos</span>
+          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{sorted.length} alumno{sorted.length !== 1 ? 's' : ''}</span>
+        </div>
+
+        {sorted.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '48px 0', color: 'var(--text-muted)', fontSize: 13 }}>
+            Sin resultados con los filtros actuales.
+          </div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820 }}>
+              <thead>
+                <tr>
+                  <th onClick={() => handleSort('name')}    style={{ ...thBase, cursor: 'pointer', userSelect: 'none' }}>Alumno{arrow('name')}</th>
+                  <th onClick={() => handleSort('teacher')} style={{ ...thBase, cursor: 'pointer', userSelect: 'none' }}>Profesor{arrow('teacher')}</th>
+                  <th onClick={() => handleSort('classNum')} style={{ ...thBase, cursor: 'pointer', userSelect: 'none' }}>Clase actual{arrow('classNum')}</th>
+                  <th style={thBase}>Progreso clase 15</th>
+                  <th style={thBase}>Progreso clase 30</th>
+                  <th onClick={() => handleSort('seniority')} style={{ ...thBase, cursor: 'pointer', userSelect: 'none' }}>Antigüedad{arrow('seniority')}</th>
+                  <th style={thBase}>Bono 6 meses</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sorted.map(d => {
+                  const barColor = d.classNum >= 30 ? '#1E9E3A' : d.classNum >= 15 ? '#FFC400' : '#6b7280';
+                  return (
+                    <tr key={d.a.id} style={{ borderBottom: '1px solid var(--border)' }}>
+
+                      {/* Alumno */}
+                      <td style={{ padding: '12px 12px', minWidth: 150 }}>
+                        <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)' }}>{d.a.studentName}</div>
+                        {d.a.slots.length > 0 && (
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>
+                            {d.a.slots.map(s => `${s.day} ${s.hour}`).join(' · ')}
+                          </div>
+                        )}
+                      </td>
+
+                      {/* Profesor */}
+                      <td style={{ padding: '12px 12px', fontSize: 13, color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                        {d.a.teacherName}
+                      </td>
+
+                      {/* Clase actual + barra */}
+                      <td style={{ padding: '12px 12px', minWidth: 140 }}>
+                        <div style={{ fontWeight: 700, fontSize: 14, color: barColor, marginBottom: 5 }}>
+                          Clase {d.classNum}
+                          {d.classNum >= 30 ? ' 🏆' : d.classNum >= 15 ? ' 🎬' : ''}
+                        </div>
+                        <div style={{ position: 'relative', height: 6, borderRadius: 3, background: 'var(--bg-surface-3)', overflow: 'visible', minWidth: 100 }}>
+                          <div style={{ width: `${Math.min(100, (d.classNum / 30) * 100)}%`, height: '100%', background: barColor, borderRadius: 3 }} />
+                          <div style={{ position: 'absolute', left: '50%', top: -1, width: 1.5, height: 8, background: 'rgba(0,0,0,0.25)', transform: 'translateX(-50%)' }} />
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: 'var(--text-muted)', marginTop: 2, minWidth: 100 }}>
+                          <span>1</span><span>15</span><span>30</span>
+                        </div>
+                      </td>
+
+                      {/* Progreso clase 15 */}
+                      <td style={{ padding: '12px 12px', minWidth: 130 }}>
+                        {d.class15Reached ? (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 9px', borderRadius: 12, background: 'rgba(30,158,58,0.1)', border: '1px solid rgba(30,158,58,0.3)', color: '#1E9E3A', fontSize: 11, fontWeight: 700 }}>
+                            ✅ Alcanzada
+                          </span>
+                        ) : (
+                          <>
+                            <div style={{ fontSize: 12, color: d.toClass15 <= 3 ? '#b8860b' : 'var(--text-secondary)', fontWeight: d.toClass15 <= 3 ? 700 : 400, marginBottom: 4 }}>
+                              Faltan {d.toClass15} clases
+                            </div>
+                            <TrackingMiniBar pct={d.class15Pct} color={d.toClass15 <= 3 ? '#FFC400' : '#6b7280'} />
+                          </>
+                        )}
+                      </td>
+
+                      {/* Progreso clase 30 */}
+                      <td style={{ padding: '12px 12px', minWidth: 130 }}>
+                        {d.class30Reached ? (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 9px', borderRadius: 12, background: 'rgba(30,158,58,0.1)', border: '1px solid rgba(30,158,58,0.3)', color: '#1E9E3A', fontSize: 11, fontWeight: 700 }}>
+                            ✅ Alcanzada
+                          </span>
+                        ) : (
+                          <>
+                            <div style={{ fontSize: 12, color: d.toClass30 <= 3 && d.class15Reached ? '#1E9E3A' : 'var(--text-secondary)', fontWeight: d.toClass30 <= 3 && d.class15Reached ? 700 : 400, marginBottom: 4 }}>
+                              Faltan {d.toClass30} clases
+                            </div>
+                            <TrackingMiniBar pct={d.class30Pct} color={d.toClass30 <= 3 && d.class15Reached ? '#1E9E3A' : '#6b7280'} />
+                          </>
+                        )}
+                      </td>
+
+                      {/* Antigüedad */}
+                      <td style={{ padding: '12px 12px', fontSize: 13, color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                        {d.totalDays === null
+                          ? <span style={{ color: 'var(--text-muted)', fontStyle: 'italic', fontSize: 11 }}>Sin fecha</span>
+                          : d.seniorityMonths! > 0
+                            ? `${d.seniorityMonths} mes${d.seniorityMonths !== 1 ? 'es' : ''}, ${d.seniorityDays} día${d.seniorityDays !== 1 ? 's' : ''}`
+                            : `${d.totalDays} días`
+                        }
+                      </td>
+
+                      {/* Bono 6 meses */}
+                      <td style={{ padding: '12px 12px', minWidth: 140 }}>
+                        {d.totalDays === null ? (
+                          <span style={{ color: 'var(--text-muted)', fontSize: 11, fontStyle: 'italic' }}>Sin fecha</span>
+                        ) : d.bonusAvailable ? (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 12, background: 'rgba(255,196,0,0.15)', border: '1px solid #D97706', color: '#92400E', fontSize: 11, fontWeight: 700, boxShadow: '0 0 6px rgba(255,196,0,0.2)' }}>
+                            🎁 Disponible
+                          </span>
+                        ) : (
+                          <>
+                            <div style={{ fontSize: 12, color: d.daysToBonus! <= 15 ? '#b8860b' : 'var(--text-secondary)', fontWeight: d.daysToBonus! <= 15 ? 700 : 400, marginBottom: 4 }}>
+                              Faltan {d.daysToBonus} días
+                            </div>
+                            <TrackingMiniBar pct={d.bonusPct} color={d.daysToBonus! <= 15 ? '#FFC400' : '#6b7280'} />
+                          </>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Admin Content ────────────────────────────────────────────────────────────
 function AdminContent() {
   const { teachers, assignments, students, addTeacher, loadingTeachers, getTeacherGrid, updateTeacherGrid, checkAndRunResets } = useTeachers();
   const [selectedTeacher, setSelectedTeacher] = useState<string | null>(null);
   const [showNewTeacher, setShowNewTeacher] = useState(false);
-  const [activeTab, setActiveTab] = useState<'overview' | 'teachers' | 'weekly' | 'scoring'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'teachers' | 'weekly' | 'scoring' | 'tracking'>('overview');
   const [editCalendarTeacher, setEditCalendarTeacher] = useState<Teacher | null>(null);
   const [editingStartDate, setEditingStartDate] = useState<Record<string, string>>({});
   const [savingStartDate, setSavingStartDate] = useState<Set<string>>(new Set());
@@ -1076,10 +1367,11 @@ function AdminContent() {
   const teacher = selectedTeacher ? teachers.find(t => t.id === selectedTeacher) : null;
 
   const tabs = [
-    { id: 'overview', label: '📊 Resumen' },
-    { id: 'teachers', label: '👨‍🏫 Profesores' },
-    { id: 'weekly',   label: '📅 Cobertura' },
-    { id: 'scoring',  label: '⭐ Scoring' },
+    { id: 'overview',  label: '📊 Resumen' },
+    { id: 'teachers',  label: '👨‍🏫 Profesores' },
+    { id: 'weekly',    label: '📅 Cobertura' },
+    { id: 'scoring',   label: '⭐ Scoring' },
+    { id: 'tracking',  label: '📈 Seguimiento' },
   ] as const;
 
   return (
@@ -1361,6 +1653,9 @@ function AdminContent() {
 
         {/* SCORING TAB */}
         {activeTab === 'scoring' && <ScoringTab />}
+
+        {/* TRACKING TAB */}
+        {activeTab === 'tracking' && <ClassTrackingTab />}
       </div>
 
       {showNewTeacher && (
