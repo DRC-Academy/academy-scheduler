@@ -2,7 +2,7 @@
 import { useState, useEffect } from 'react';
 import { NavBar } from '@/components/NavBar';
 import { AuthGuard } from '@/components/AuthGuard';
-import { VisualCalendar } from '@/components/VisualCalendar';
+import { VisualCalendar, DAYS, cellKey } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
 import { calcCurrentClassNumber } from '@/lib/db';
@@ -27,104 +27,274 @@ function estimateMilestoneDate(startDate: string, milestone: number, slotsPerWee
   return target.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' });
 }
 
+// ── AssignConfirmData ─────────────────────────────────────────────────────────
+interface AssignConfirmData {
+  isNew: boolean;
+  studentName: string;
+  slots: Array<{ day: string; hour: string }>;
+  startDate: string;
+  weeklyHours: number;
+  newStudentData?: { name: string; email: string; level: string; plan: string };
+  existingAssignment?: Assignment;
+}
+
 // ── Assign Student Modal ──────────────────────────────────────────────────────
 function AssignStudentModal({
-  day, hour, myAssignments, onConfirm, onCancel,
+  day, hour, grid, myAssignments, onConfirm, onCancel,
 }: {
   day: string;
   hour: string;
+  grid: Grid;
   myAssignments: Assignment[];
-  onConfirm: (studentName: string, isNew: boolean, newData?: { name: string; email: string; level: string; plan: string }) => void;
+  onConfirm: (data: AssignConfirmData) => void;
   onCancel: () => void;
 }) {
+  const today = new Date().toISOString().split('T')[0];
   const [tab, setTab]       = useState<'existing' | 'new'>('existing');
   const [search, setSearch] = useState('');
+  const [step, setStep]     = useState<1 | 2>(1);
+  const [selectedAssignment, setSelectedAssignment] = useState<Assignment | null>(null);
+  const [slots, setSlots]       = useState<Array<{ day: string; hour: string }>>([{ day, hour }]);
+  const [startDate, setStartDate] = useState(today);
   const [newName, setNewName]   = useState('');
   const [newEmail, setNewEmail] = useState('');
   const [newLevel, setNewLevel] = useState('B1');
   const [newPlan, setNewPlan]   = useState('Inglés general');
 
+  // Compute cells available for slot picking: all libre cells + clicked cell
+  const libreCells: Array<{ day: string; hour: string }> = [];
+  const seenKeys = new Set<string>();
+  libreCells.push({ day, hour });
+  seenKeys.add(`${day}_${hour}`);
+  for (const [key, cell] of Object.entries(grid)) {
+    if (cell.state === 'libre' && !seenKeys.has(key)) {
+      const [d, h] = key.split('_');
+      libreCells.push({ day: d, hour: h });
+      seenKeys.add(key);
+    }
+  }
+
+  function getAvailableDays(slotIndex: number): string[] {
+    const taken = new Set(
+      slots.filter((s, i) => i !== slotIndex && s.day && s.hour).map(s => `${s.day}_${s.hour}`)
+    );
+    const avail = new Set(libreCells.filter(c => !taken.has(`${c.day}_${c.hour}`)).map(c => c.day));
+    return DAYS.filter(d => avail.has(d));
+  }
+
+  function getAvailableHours(slotIndex: number, selDay: string): string[] {
+    const taken = new Set(
+      slots.filter((s, i) => i !== slotIndex && s.day && s.hour).map(s => `${s.day}_${s.hour}`)
+    );
+    return libreCells
+      .filter(c => c.day === selDay && !taken.has(`${c.day}_${c.hour}`))
+      .map(c => c.hour)
+      .sort((a, b) => parseInt(a) - parseInt(b));
+  }
+
+  function updateSlotDay(i: number, d: string) {
+    setSlots(prev => prev.map((s, idx) => idx === i ? { day: d, hour: '' } : s));
+  }
+  function updateSlotHour(i: number, h: string) {
+    setSlots(prev => prev.map((s, idx) => idx === i ? { ...s, hour: h } : s));
+  }
+  function addSlot() { setSlots(prev => [...prev, { day: '', hour: '' }]); }
+  function removeSlot(i: number) { setSlots(prev => prev.filter((_, idx) => idx !== i)); }
+
+  const allSlotsValid = slots.length > 0 && slots.every(s => s.day && s.hour);
+
+  function selectStudent(a: Assignment) {
+    setSelectedAssignment(a);
+    const base = [...(a.slots || [])];
+    if (!base.some(s => s.day === day && s.hour === hour)) base.unshift({ day, hour });
+    setSlots(base);
+    setStartDate(a.startDate || today);
+    setStep(2);
+  }
+
+  function handleTabChange(t: 'existing' | 'new') {
+    setTab(t);
+    setStep(1);
+    setSelectedAssignment(null);
+    setSlots([{ day, hour }]);
+    setStartDate(today);
+  }
+
   const uniqueStudents = Array.from(new Map(myAssignments.map(a => [a.studentName, a])).values());
   const filtered = uniqueStudents.filter(a => a.studentName.toLowerCase().includes(search.toLowerCase()));
+
+  // Slot editor (shared between step 2 and new-student tab)
+  const slotEditor = (
+    <div>
+      <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+        Horarios · {slots.length} {slots.length === 1 ? 'clase' : 'clases'}/semana
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 10 }}>
+        {slots.map((slot, i) => {
+          const availDays  = getAvailableDays(i);
+          const availHours = slot.day ? getAvailableHours(i, slot.day) : [];
+          const dayOpts  = slot.day && !availDays.includes(slot.day) ? [slot.day, ...availDays] : availDays;
+          const hourOpts = slot.hour && !availHours.includes(slot.hour) ? [slot.hour, ...availHours] : availHours;
+          return (
+            <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <span style={{ fontSize: 11, color: 'var(--text-muted)', minWidth: 16, textAlign: 'right' }}>{i + 1}.</span>
+              <select value={slot.day} onChange={e => updateSlotDay(i, e.target.value)} style={{ flex: 1, fontSize: 12 }}>
+                <option value="">Día...</option>
+                {dayOpts.map(d => <option key={d} value={d}>{d}</option>)}
+              </select>
+              <select value={slot.hour} onChange={e => updateSlotHour(i, e.target.value)} disabled={!slot.day} style={{ flex: 1, fontSize: 12 }}>
+                <option value="">Hora...</option>
+                {hourOpts.map(h => <option key={h} value={h}>{h} 🇪🇸</option>)}
+              </select>
+              {slots.length > 1 && (
+                <button onClick={() => removeSlot(i)} title="Eliminar"
+                  style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 18, lineHeight: 1, padding: '0 2px', fontFamily: 'inherit' }}>
+                  ×
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {slots.length < 5 && (
+        <button onClick={addSlot}
+          style={{ fontSize: 12, color: '#1E9E3A', background: 'rgba(30,158,58,0.06)', border: '1px dashed rgba(30,158,58,0.4)', borderRadius: 7, padding: '5px 12px', cursor: 'pointer', fontFamily: 'inherit', marginBottom: 4 }}>
+          + Agregar horario
+        </button>
+      )}
+    </div>
+  );
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
       onClick={e => { if (e.target === e.currentTarget) onCancel(); }}>
-      <div style={{ background: 'var(--bg-surface)', border: '1px solid #35405a', borderRadius: 16, width: '100%', maxWidth: 440, overflow: 'hidden' }}>
+      <div style={{ background: 'var(--bg-surface)', border: '1px solid #35405a', borderRadius: 16, width: '100%', maxWidth: 460, maxHeight: '90vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
         {/* Header */}
-        <div style={{ padding: '18px 22px 0' }}>
-          <div style={{ fontWeight: 700, fontSize: 17, color: 'var(--text-primary)', marginBottom: 3 }}>Asignar alumno</div>
-          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 14 }}>
-            {day} · {hour} — ¿quién ocupa este horario?
-          </div>
-          <div style={{ display: 'flex', borderBottom: '1px solid var(--border)' }}>
-            {(['existing', 'new'] as const).map(id => (
-              <button key={id} onClick={() => setTab(id)} style={{
-                flex: 1, padding: '8px 12px', border: 'none',
-                borderBottom: `2px solid ${tab === id ? '#1E9E3A' : 'transparent'}`,
-                background: 'transparent', color: tab === id ? '#1E9E3A' : 'var(--text-muted)',
-                cursor: 'pointer', fontSize: 13, fontWeight: tab === id ? 700 : 400,
-              }}>
-                {id === 'existing' ? 'Mis alumnos' : 'Nuevo alumno'}
+        <div style={{ padding: '18px 22px 0', flexShrink: 0 }}>
+          <div style={{ fontWeight: 700, fontSize: 17, color: 'var(--text-primary)', marginBottom: 2 }}>Asignar alumno</div>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>{day} · {hour} 🇪🇸</div>
+
+          {step === 1 ? (
+            <div style={{ display: 'flex', borderBottom: '1px solid var(--border)' }}>
+              {(['existing', 'new'] as const).map(id => (
+                <button key={id} onClick={() => handleTabChange(id)} style={{
+                  flex: 1, padding: '8px 12px', border: 'none',
+                  borderBottom: `2px solid ${tab === id ? '#1E9E3A' : 'transparent'}`,
+                  background: 'transparent', color: tab === id ? '#1E9E3A' : 'var(--text-muted)',
+                  cursor: 'pointer', fontSize: 13, fontWeight: tab === id ? 700 : 400, fontFamily: 'inherit',
+                }}>
+                  {id === 'existing' ? 'Mis alumnos' : 'Nuevo alumno'}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div style={{ paddingBottom: 12, borderBottom: '1px solid var(--border)' }}>
+              <button onClick={() => { setStep(1); setSelectedAssignment(null); }}
+                style={{ background: 'none', border: 'none', color: '#1E9E3A', cursor: 'pointer', fontSize: 13, fontWeight: 600, padding: 0, fontFamily: 'inherit' }}>
+                ← Volver
               </button>
-            ))}
-          </div>
+              <span style={{ fontSize: 13, color: 'var(--text-muted)', marginLeft: 10 }}>
+                Horario de <b style={{ color: 'var(--text-primary)' }}>{selectedAssignment?.studentName}</b>
+              </span>
+            </div>
+          )}
         </div>
 
-        {/* Content */}
-        <div style={{ padding: '16px 22px 22px' }}>
-          {tab === 'existing' ? (
+        {/* Scrollable body */}
+        <div style={{ overflowY: 'auto', padding: '14px 22px 22px', flex: 1 }}>
+
+          {/* Existing — step 1: student list */}
+          {tab === 'existing' && step === 1 && (
             <>
-              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar alumno..." autoFocus style={{ marginBottom: 12 }} />
-              <div style={{ maxHeight: 260, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar alumno..." autoFocus style={{ marginBottom: 10 }} />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {filtered.length === 0 ? (
                   <div style={{ textAlign: 'center', padding: '24px 0', color: 'var(--text-muted)', fontSize: 13 }}>
                     {myAssignments.length === 0 ? 'No tenés alumnos asignados aún.' : 'Sin resultados.'}
                   </div>
                 ) : filtered.map(a => (
-                  <button key={a.id} onClick={() => onConfirm(a.studentName, false)} style={{
+                  <button key={a.id} onClick={() => selectStudent(a)} style={{
                     display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderRadius: 9,
-                    border: '1px solid var(--border)', background: 'var(--bg-surface-2)', cursor: 'pointer', textAlign: 'left',
+                    border: '1px solid var(--border)', background: 'var(--bg-surface-2)', cursor: 'pointer',
+                    textAlign: 'left', width: '100%', fontFamily: 'inherit',
                   }}>
                     <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(30,158,58,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, color: '#1E9E3A', flexShrink: 0 }}>
                       {a.studentName.charAt(0).toUpperCase()}
                     </div>
-                    <div>
+                    <div style={{ flex: 1 }}>
                       <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{a.studentName}</div>
-                      <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{a.studentLevel} · {a.studentEmail}</div>
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                        {a.studentLevel} · {a.slots.length} h/sem · {a.slots.map(s => `${s.day} ${s.hour}`).join(', ')}
+                      </div>
                     </div>
+                    <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Editar →</span>
                   </button>
                 ))}
               </div>
             </>
-          ) : (
+          )}
+
+          {/* Existing — step 2: slot editor */}
+          {tab === 'existing' && step === 2 && selectedAssignment && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              {slotEditor}
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: 5, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                  Fecha de inicio
+                </label>
+                <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} style={{ width: '100%' }} />
+              </div>
+              <button
+                onClick={() => allSlotsValid && onConfirm({ isNew: false, studentName: selectedAssignment.studentName, slots, startDate, weeklyHours: slots.length, existingAssignment: selectedAssignment })}
+                disabled={!allSlotsValid}
+                style={{ padding: '11px', borderRadius: 9, border: 'none', background: allSlotsValid ? '#1E9E3A' : 'var(--bg-surface-3)', color: allSlotsValid ? 'white' : 'var(--text-muted)', cursor: allSlotsValid ? 'pointer' : 'not-allowed', fontSize: 14, fontWeight: 700, fontFamily: 'inherit' }}>
+                Confirmar — {slots.length} {slots.length === 1 ? 'clase' : 'clases'}/semana
+              </button>
+            </div>
+          )}
+
+          {/* New student tab */}
+          {tab === 'new' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <div><label>Nombre *</label><input value={newName} onChange={e => setNewName(e.target.value)} placeholder="Nombre completo" autoFocus /></div>
+              <div><label>Nombre *</label><input value={newName} onChange={e => setNewName(e.target.value)} placeholder="Nombre completo" /></div>
               <div><label>Email</label><input value={newEmail} onChange={e => setNewEmail(e.target.value)} placeholder="email@ejemplo.com" type="email" /></div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                <div>
-                  <label>Nivel</label>
+                <div><label>Nivel</label>
                   <select value={newLevel} onChange={e => setNewLevel(e.target.value)}>
                     {['A1','A2','B1','B2','C1','C2'].map(l => <option key={l}>{l}</option>)}
                   </select>
                 </div>
-                <div>
-                  <label>Plan</label>
+                <div><label>Plan</label>
                   <select value={newPlan} onChange={e => setNewPlan(e.target.value)}>
                     {['Inglés general','B1 Exámenes','B2 Exámenes','C1 Exámenes','Intensivo'].map(p => <option key={p}>{p}</option>)}
                   </select>
                 </div>
               </div>
-              <button
-                onClick={() => newName.trim() && onConfirm(newName.trim(), true, { name: newName.trim(), email: newEmail, level: newLevel, plan: newPlan })}
-                disabled={!newName.trim()}
-                style={{ marginTop: 4, padding: '11px', borderRadius: 9, border: 'none', background: newName.trim() ? '#1E9E3A' : 'var(--bg-surface-3)', color: newName.trim() ? 'white' : 'var(--text-muted)', cursor: newName.trim() ? 'pointer' : 'not-allowed', fontSize: 14, fontWeight: 700, fontFamily: 'inherit' }}>
-                Crear y asignar
-              </button>
+              <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+                {slotEditor}
+              </div>
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: 5, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                  Fecha de inicio *
+                </label>
+                <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} style={{ width: '100%' }} />
+              </div>
+              {(() => {
+                const canCreate = !!newName.trim() && allSlotsValid && !!startDate;
+                return (
+                  <button
+                    onClick={() => canCreate && onConfirm({ isNew: true, studentName: newName.trim(), slots, startDate, weeklyHours: slots.length, newStudentData: { name: newName.trim(), email: newEmail, level: newLevel, plan: newPlan } })}
+                    disabled={!canCreate}
+                    style={{ padding: '11px', borderRadius: 9, border: 'none', background: canCreate ? '#1E9E3A' : 'var(--bg-surface-3)', color: canCreate ? 'white' : 'var(--text-muted)', cursor: canCreate ? 'pointer' : 'not-allowed', fontSize: 14, fontWeight: 700, fontFamily: 'inherit' }}>
+                    Crear y asignar — {slots.length} {slots.length === 1 ? 'clase' : 'clases'}/semana
+                  </button>
+                );
+              })()}
             </div>
           )}
-          <button onClick={onCancel} style={{ marginTop: 10, width: '100%', padding: '9px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
+
+          <button onClick={onCancel} style={{ marginTop: 12, width: '100%', padding: '9px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
             Cancelar
           </button>
         </div>
@@ -429,7 +599,7 @@ function TeacherScoringTab({ teacher, myAssignments, myEvents }: {
 // ─── Teacher Content ──────────────────────────────────────────────────────────
 function TeacherContent() {
   const { user } = useAuth();
-  const { teachers, assignments, scoringEvents, getTeacherGrid, updateTeacherGrid, addStudent, addAssignment, updateAssignmentAdjustment, updateAssignmentStartDate } = useTeachers();
+  const { teachers, assignments, scoringEvents, getTeacherGrid, updateTeacherGrid, addStudent, addAssignment, updateAssignmentAdjustment, updateAssignmentStartDate, updateAssignmentSlots } = useTeachers();
   const [activeTab, setActiveTab] = useState<'calendar' | 'classes' | 'scoring'>('calendar');
   const [grid, setGrid]           = useState<Grid>({});
   const [gridLoading, setGridLoading]   = useState(true);
@@ -463,23 +633,21 @@ function TeacherContent() {
     setPendingOcupado({ day, hour, resolve });
   }
 
-  async function handleAssignStudent(studentName: string, isNew: boolean, newData?: { name: string; email: string; level: string; plan: string }) {
+  async function handleAssignStudent(data: AssignConfirmData) {
     if (!teacher || !pendingOcupado) return;
-    const { day, hour, resolve } = pendingOcupado;
-    let finalName = studentName;
+    let finalName = data.studentName;
 
-    if (isNew && newData) {
+    if (data.isNew && data.newStudentData) {
       const newStudent: Student = {
         id: crypto.randomUUID(),
-        name: newData.name,
-        email: newData.email,
-        level: newData.level,
-        plan: newData.plan,
+        name: data.newStudentData.name,
+        email: data.newStudentData.email,
+        level: data.newStudentData.level,
+        plan: data.newStudentData.plan,
         createdAt: new Date().toISOString(),
       };
       await addStudent(newStudent);
 
-      const today = new Date().toISOString().split('T')[0];
       const newAssignment: Assignment = {
         id: crypto.randomUUID(),
         teacherId: teacher.id,
@@ -489,20 +657,37 @@ function TeacherContent() {
         studentName: newStudent.name,
         studentEmail: newStudent.email,
         studentLevel: newStudent.level,
-        slots: [{ day, hour }],
-        objetivo: newData.plan,
-        plan: newData.plan,
-        weeklyHours: 1,
-        availability: `${day} ${hour}`,
+        slots: data.slots,
+        objetivo: data.newStudentData.plan,
+        plan: data.newStudentData.plan,
+        weeklyHours: data.slots.length,
+        availability: data.slots.map(s => `${s.day} ${s.hour}`).join(', '),
         notes: '',
-        startDate: today,
+        startDate: data.startDate,
         createdAt: new Date().toISOString(),
       };
       await addAssignment(newAssignment);
       finalName = newStudent.name;
+    } else if (data.existingAssignment) {
+      await updateAssignmentSlots(data.existingAssignment.id, data.slots, data.slots.length);
+      if (data.startDate && data.startDate !== data.existingAssignment.startDate) {
+        await updateAssignmentStartDate(data.existingAssignment.id, data.startDate);
+      }
     }
 
-    resolve(finalName);
+    // Update grid for all new slots and revert removed slots to libre
+    const updatedGrid = { ...grid };
+    if (data.existingAssignment) {
+      for (const old of data.existingAssignment.slots) {
+        if (!data.slots.some(s => s.day === old.day && s.hour === old.hour)) {
+          updatedGrid[cellKey(old.day, old.hour)] = { state: 'libre' };
+        }
+      }
+    }
+    for (const slot of data.slots) {
+      updatedGrid[cellKey(slot.day, slot.hour)] = { state: 'ocupado', student: finalName };
+    }
+    await handleGridChange(updatedGrid);
     setPendingOcupado(null);
   }
 
@@ -590,7 +775,7 @@ function TeacherContent() {
           }}>
             <div style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.5 }}>
               {banner.milestone === 15
-                ? `🎉 ¡Clase 15 con ${banner.studentName}! Buen momento para pedir reseña en Trustpilot y consultar continuidad del plan.`
+                ? `🎬 ¡Clase 15 con ${banner.studentName}! Recordá grabar la clase y compartir el enlace de Fathom en el Excel. ¡Gran trabajo!`
                 : `🏆 ¡Clase 30 con ${banner.studentName}! Recordá solicitar el bono de retención al admin.`
               }
             </div>
@@ -819,6 +1004,7 @@ function TeacherContent() {
         <AssignStudentModal
           day={pendingOcupado.day}
           hour={pendingOcupado.hour}
+          grid={grid}
           myAssignments={myAssignments}
           onConfirm={handleAssignStudent}
           onCancel={handleAssignCancel}

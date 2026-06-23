@@ -11,7 +11,7 @@ import {
   dbCheckAndResetMonthly, dbCheckAndResetQuarterly,
   dbForceMonthlyReset, dbForceQuarterlyReset,
   dbGetClassCounts, dbIncrementClassCount,
-  dbUpdateAssignmentAdjustment, dbUpdateAssignmentStartDate,
+  dbUpdateAssignmentAdjustment, dbUpdateAssignmentStartDate, dbUpdateAssignmentSlots,
 } from '@/lib/db';
 
 interface TeachersContextType {
@@ -42,6 +42,7 @@ interface TeachersContextType {
   incrementClassCount: (teacherId: string, studentName: string, studentEmail?: string) => Promise<ClassCount>;
   updateAssignmentAdjustment: (assignmentId: string, newAdjustment: number) => Promise<void>;
   updateAssignmentStartDate: (assignmentId: string, startDate: string) => Promise<void>;
+  updateAssignmentSlots: (assignmentId: string, slots: Array<{ day: string; hour: string }>, weeklyHours: number) => Promise<void>;
 }
 
 const TeachersContext = createContext<TeachersContextType>({
@@ -67,6 +68,7 @@ const TeachersContext = createContext<TeachersContextType>({
   incrementClassCount:        async () => ({ id: '', teacherId: '', studentName: '', classNumber: 0, lastUpdated: '' }),
   updateAssignmentAdjustment: async () => {},
   updateAssignmentStartDate:  async () => {},
+  updateAssignmentSlots:      async () => {},
 });
 
 export function TeachersProvider({ children }: { children: ReactNode }) {
@@ -223,6 +225,15 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     setAssignments(prev => prev.map(a => a.id === assignmentId ? { ...a, startDate } : a));
   }
 
+  async function updateAssignmentSlots(
+    assignmentId: string,
+    slots: Array<{ day: string; hour: string }>,
+    weeklyHours: number,
+  ) {
+    await dbUpdateAssignmentSlots(assignmentId, slots, weeklyHours);
+    setAssignments(prev => prev.map(a => a.id === assignmentId ? { ...a, slots, weeklyHours } : a));
+  }
+
   return (
     <TeachersContext.Provider value={{
       teachers, students, assignments, teacherGrids, loadingTeachers, scoringEvents, classCounts,
@@ -232,7 +243,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
       assignTeacherOfMonth, assignTeacherOfQuarter,
       forceMonthlyReset, forceQuarterlyReset,
       reloadAll, loadClassCounts, incrementClassCount,
-      updateAssignmentAdjustment, updateAssignmentStartDate,
+      updateAssignmentAdjustment, updateAssignmentStartDate, updateAssignmentSlots,
     }}>
       {children}
     </TeachersContext.Provider>

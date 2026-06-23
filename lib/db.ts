@@ -787,6 +787,18 @@ export async function dbUpdateAssignmentStartDate(assignmentId: string, startDat
   await supabase.from('assignments').update({ start_date: startDate }).eq('id', assignmentId);
 }
 
+export async function dbUpdateAssignmentSlots(
+  assignmentId: string,
+  slots: Array<{ day: string; hour: string }>,
+  weeklyHours: number,
+): Promise<void> {
+  await supabase.from('assignments').update({
+    slots,
+    weekly_hours: weeklyHours,
+    availability: slots.map(s => `${s.day} ${s.hour}`).join(', '),
+  }).eq('id', assignmentId);
+}
+
 export async function dbGetAllClassCounts(): Promise<ClassCount[]> {
   const { data, error } = await supabase
     .from('class_count')
