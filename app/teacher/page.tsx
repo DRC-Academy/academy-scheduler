@@ -8,13 +8,13 @@ import { useTeachers } from '@/lib/TeachersContext';
 import { calcCurrentClassNumber } from '@/lib/db';
 import { Grid, Teacher, Assignment, ScoringEvent, Student } from '@/types';
 
-// ── localStorage helpers for milestone alert persistence ─────────────────────
-function hasSeenAlert(teacherId: string, studentName: string, milestone: number): boolean {
-  try { return localStorage.getItem(`alert_seen_${teacherId}_${studentName}_${milestone}`) === '1'; }
+// ── localStorage helpers for milestone banner persistence ─────────────────────
+function hasSeenBanner(teacherId: string, studentName: string, milestone: number): boolean {
+  try { return localStorage.getItem(`banner_seen_${teacherId}_${studentName}_${milestone}`) === '1'; }
   catch { return false; }
 }
-function markAlertSeen(teacherId: string, studentName: string, milestone: number): void {
-  try { localStorage.setItem(`alert_seen_${teacherId}_${studentName}_${milestone}`, '1'); }
+function markBannerSeen(teacherId: string, studentName: string, milestone: number): void {
+  try { localStorage.setItem(`banner_seen_${teacherId}_${studentName}_${milestone}`, '1'); }
   catch {}
 }
 
@@ -429,13 +429,16 @@ function TeacherScoringTab({ teacher, myAssignments, myEvents }: {
 // ─── Teacher Content ──────────────────────────────────────────────────────────
 function TeacherContent() {
   const { user } = useAuth();
-  const { teachers, assignments, scoringEvents, getTeacherGrid, updateTeacherGrid, addStudent, addAssignment } = useTeachers();
+  const { teachers, assignments, scoringEvents, getTeacherGrid, updateTeacherGrid, addStudent, addAssignment, updateAssignmentAdjustment, updateAssignmentStartDate } = useTeachers();
   const [activeTab, setActiveTab] = useState<'calendar' | 'classes' | 'scoring'>('calendar');
   const [grid, setGrid]           = useState<Grid>({});
   const [gridLoading, setGridLoading]   = useState(true);
   const [saveStatus, setSaveStatus]     = useState<'idle' | 'saving' | 'saved'>('idle');
   const [dismissedInSession, setDismissedInSession] = useState<Set<string>>(new Set());
   const [pendingOcupado, setPendingOcupado] = useState<{ day: string; hour: string; resolve: (name: string) => void } | null>(null);
+  const [deductConfirm, setDeductConfirm] = useState<Assignment | null>(null);
+  const [startDateModal, setStartDateModal] = useState<{ assignment: Assignment; date: string } | null>(null);
+  const [adjustSaving, setAdjustSaving] = useState<string | null>(null);
 
   const teacher = teachers.find(t => t.id === user?.teacherId) ?? teachers[0];
 
@@ -507,8 +510,27 @@ function TeacherContent() {
     setPendingOcupado(null);
   }
 
+  async function handleAdjust(a: Assignment, delta: number) {
+    setAdjustSaving(a.id);
+    const newAdj = (a.manualClassAdjustment ?? 0) + delta;
+    await updateAssignmentAdjustment(a.id, newAdj);
+    setAdjustSaving(null);
+  }
+
+  async function handleDeductConfirmAction() {
+    if (!deductConfirm) return;
+    await handleAdjust(deductConfirm, -1);
+    setDeductConfirm(null);
+  }
+
+  async function handleStartDateSave() {
+    if (!startDateModal) return;
+    await updateAssignmentStartDate(startDateModal.assignment.id, startDateModal.date);
+    setStartDateModal(null);
+  }
+
   function dismissBanner(teacherId: string, studentName: string, milestone: number) {
-    markAlertSeen(teacherId, studentName, milestone);
+    markBannerSeen(teacherId, studentName, milestone);
     setDismissedInSession(prev => new Set([...prev, `${studentName}_${milestone}`]));
   }
 
@@ -528,7 +550,7 @@ function TeacherContent() {
     if (!a.startDate) continue;
     const classNum = calcCurrentClassNumber(a);
     for (const milestone of [15, 30] as const) {
-      if (classNum >= milestone && !hasSeenAlert(teacher.id, a.studentName, milestone) && !dismissedInSession.has(`${a.studentName}_${milestone}`)) {
+      if (classNum >= milestone && !hasSeenBanner(teacher.id, a.studentName, milestone) && !dismissedInSession.has(`${a.studentName}_${milestone}`)) {
         visibleBanners.push({ studentName: a.studentName, milestone, startDate: a.startDate, slotsPerWeek: a.slots.length });
         break;
       }
@@ -568,8 +590,8 @@ function TeacherContent() {
           }}>
             <div style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.5 }}>
               {banner.milestone === 15
-                ? `🎉 ¡Clase 15 con ${banner.studentName}! Es un buen momento para pedir una reseña en Trustpilot y consultar si quiere continuar con el plan. Fecha estimada de clase 30: ${estimateMilestoneDate(banner.startDate, 30, banner.slotsPerWeek)}.`
-                : `🏆 ¡Clase 30 con ${banner.studentName}! Este alumno es un ejemplo de retención. Recordá que podés solicitar el bono de retención al admin.`
+                ? `🎉 ¡Clase 15 con ${banner.studentName}! Buen momento para pedir reseña en Trustpilot y consultar continuidad del plan.`
+                : `🏆 ¡Clase 30 con ${banner.studentName}! Recordá solicitar el bono de retención al admin.`
               }
             </div>
             <button
@@ -717,6 +739,32 @@ function TeacherContent() {
                               {classNum < 30 && est30 && <span>Clase 30 est.: <b>{est30}</b></span>}
                             </div>
                           )}
+
+                          {/* Action buttons */}
+                          <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+                            <button
+                              onClick={() => handleAdjust(a, +1)}
+                              disabled={adjustSaving === a.id}
+                              style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '6px 12px', borderRadius: 7, border: '1px solid rgba(30,158,58,0.4)', background: 'rgba(30,158,58,0.08)', color: '#1E9E3A', cursor: 'pointer', fontSize: 12, fontWeight: 600, fontFamily: 'inherit', opacity: adjustSaving === a.id ? 0.6 : 1 }}>
+                              + Sumar clase
+                            </button>
+                            <button
+                              onClick={() => setDeductConfirm(a)}
+                              disabled={adjustSaving === a.id}
+                              style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '6px 12px', borderRadius: 7, border: '1px solid rgba(239,68,68,0.35)', background: 'rgba(239,68,68,0.07)', color: '#dc2626', cursor: 'pointer', fontSize: 12, fontWeight: 600, fontFamily: 'inherit', opacity: adjustSaving === a.id ? 0.6 : 1 }}>
+                              − Descontar clase
+                            </button>
+                            <button
+                              onClick={() => setStartDateModal({ assignment: a, date: a.startDate ?? new Date().toISOString().split('T')[0] })}
+                              style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '6px 12px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--bg-surface-3)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, fontWeight: 500, fontFamily: 'inherit' }}>
+                              📅 Fecha inicio
+                            </button>
+                            {(a.manualClassAdjustment ?? 0) !== 0 && (
+                              <span style={{ fontSize: 11, color: (a.manualClassAdjustment ?? 0) > 0 ? '#1E9E3A' : '#dc2626', alignSelf: 'center' }}>
+                                Ajuste manual: {(a.manualClassAdjustment ?? 0) > 0 ? '+' : ''}{a.manualClassAdjustment}
+                              </span>
+                            )}
+                          </div>
                         </div>
                       );
                     })}
@@ -775,6 +823,54 @@ function TeacherContent() {
           onConfirm={handleAssignStudent}
           onCancel={handleAssignCancel}
         />
+      )}
+
+      {/* Deduct class confirmation modal */}
+      {deductConfirm && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+          onClick={e => { if (e.target === e.currentTarget) setDeductConfirm(null); }}>
+          <div style={{ background: 'var(--bg-surface)', border: '1px solid #35405a', borderRadius: 14, padding: 24, width: '100%', maxWidth: 380 }}>
+            <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)', marginBottom: 10 }}>Confirmar falta</div>
+            <div style={{ fontSize: 14, color: 'var(--text-secondary)', marginBottom: 20, lineHeight: 1.5 }}>
+              ¿Confirmás que <b>{deductConfirm.studentName}</b> faltó a la clase?
+            </div>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button onClick={() => setDeductConfirm(null)} style={{ flex: 1, padding: '9px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
+                Cancelar
+              </button>
+              <button onClick={handleDeductConfirmAction} style={{ flex: 2, padding: '9px', borderRadius: 8, border: '1px solid rgba(239,68,68,0.35)', background: 'rgba(239,68,68,0.15)', color: '#dc2626', cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+                Sí, descontar clase
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Start date modal */}
+      {startDateModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+          onClick={e => { if (e.target === e.currentTarget) setStartDateModal(null); }}>
+          <div style={{ background: 'var(--bg-surface)', border: '1px solid #35405a', borderRadius: 14, padding: 24, width: '100%', maxWidth: 380 }}>
+            <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)', marginBottom: 6 }}>Modificar fecha de inicio</div>
+            <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 16 }}>
+              Alumno: <b style={{ color: 'var(--text-primary)' }}>{startDateModal.assignment.studentName}</b>
+            </div>
+            <input
+              type="date"
+              value={startDateModal.date}
+              onChange={e => setStartDateModal(prev => prev ? { ...prev, date: e.target.value } : null)}
+              style={{ width: '100%', marginBottom: 16 }}
+            />
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button onClick={() => setStartDateModal(null)} style={{ flex: 1, padding: '9px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
+                Cancelar
+              </button>
+              <button onClick={handleStartDateSave} disabled={!startDateModal.date} style={{ flex: 2, padding: '9px', borderRadius: 8, border: 'none', background: startDateModal.date ? '#1E9E3A' : 'var(--bg-surface-3)', color: startDateModal.date ? 'white' : 'var(--text-muted)', cursor: startDateModal.date ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+                Guardar fecha
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -222,43 +222,49 @@ export async function dbGetAssignments(): Promise<Assignment[]> {
   if (error || !data) return [];
 
   return data.map(row => ({
-    id:            row.id,
-    teacherId:     row.teacher_id,
-    teacherName:   row.teacher_name,
-    teacherEmail:  row.teacher_email,
-    studentId:     row.student_id,
-    studentName:   row.student_name,
-    studentEmail:  row.student_email,
-    studentLevel:  row.student_level,
-    slots:         row.slots,
-    objetivo:      row.objetivo ?? '',
-    plan:          row.plan ?? '',
-    weeklyHours:   row.weekly_hours,
-    availability:  row.availability ?? '',
-    notes:         row.notes ?? '',
-    startDate:     row.start_date ?? undefined,
-    createdAt:     row.created_at,
+    id:                    row.id,
+    teacherId:             row.teacher_id,
+    teacherName:           row.teacher_name,
+    teacherEmail:          row.teacher_email,
+    studentId:             row.student_id,
+    studentName:           row.student_name,
+    studentEmail:          row.student_email,
+    studentLevel:          row.student_level,
+    slots:                 row.slots,
+    objetivo:              row.objetivo ?? '',
+    plan:                  row.plan ?? '',
+    weeklyHours:           row.weekly_hours,
+    availability:          row.availability ?? '',
+    notes:                 row.notes ?? '',
+    startDate:             row.start_date ?? undefined,
+    createdAt:             row.created_at,
+    manualClassAdjustment: row.manual_class_adjustment ?? 0,
   }));
 }
 
 export async function dbAddAssignment(a: Assignment): Promise<void> {
   await supabase.from('assignments').insert({
-    id:            a.id,
-    teacher_id:    a.teacherId,
-    teacher_name:  a.teacherName,
-    teacher_email: a.teacherEmail,
-    student_id:    a.studentId,
-    student_name:  a.studentName,
-    student_email: a.studentEmail,
-    student_level: a.studentLevel,
-    slots:         a.slots,
-    objetivo:      a.objetivo,
-    plan:          a.plan,
-    weekly_hours:  a.weeklyHours,
-    availability:  a.availability,
-    notes:         a.notes,
-    start_date:    a.startDate ?? null,
+    id:                     a.id,
+    teacher_id:             a.teacherId,
+    teacher_name:           a.teacherName,
+    teacher_email:          a.teacherEmail,
+    student_id:             a.studentId,
+    student_name:           a.studentName,
+    student_email:          a.studentEmail,
+    student_level:          a.studentLevel,
+    slots:                  a.slots,
+    objetivo:               a.objetivo,
+    plan:                   a.plan,
+    weekly_hours:           a.weeklyHours,
+    availability:           a.availability,
+    notes:                  a.notes,
+    start_date:             a.startDate ?? null,
+    manual_class_adjustment: a.manualClassAdjustment ?? 0,
   });
+}
+
+export async function dbUpdateAssignmentAdjustment(assignmentId: string, newAdjustment: number): Promise<void> {
+  await supabase.from('assignments').update({ manual_class_adjustment: newAdjustment }).eq('id', assignmentId);
 }
 
 export async function dbUpdateTeacherRating(teacherId: string, rating: number): Promise<void> {
@@ -641,25 +647,33 @@ const DAY_TO_JSDAY: Record<string, number> = {
   'Lunes': 1, 'Martes': 2, 'Miércoles': 3, 'Jueves': 4, 'Viernes': 5, 'Sábado': 6,
 };
 
-export function calcCurrentClassNumber(assignment: { startDate?: string; slots: Array<{ day: string; hour: string }> }): number {
-  if (!assignment.startDate) return 0;
+export function calcCurrentClassNumber(assignment: {
+  startDate?: string;
+  slots: Array<{ day: string; hour: string }>;
+  manualClassAdjustment?: number;
+}): number {
+  const adjustment = assignment.manualClassAdjustment ?? 0;
+
+  if (!assignment.startDate) return Math.max(0, adjustment);
 
   const [sy, sm, sd] = assignment.startDate.split('-').map(Number);
   const startLocal = new Date(sy, sm - 1, sd, 0, 0, 0, 0);
   const now = new Date();
 
-  if (now < startLocal) return 0;
+  if (now < startLocal) return Math.max(0, adjustment);
 
   const MS_DAY = 24 * 60 * 60 * 1000;
-  const diffMs  = now.getTime() - startLocal.getTime();
+  const diffMs   = now.getTime() - startLocal.getTime();
   const diffDays = Math.floor(diffMs / MS_DAY);
 
-  const fullWeeks  = Math.floor(diffDays / 7);
+  const fullWeeks   = Math.floor(diffDays / 7);
   const partialDays = diffDays % 7;
   const startJsDay  = startLocal.getDay();
 
+  // Full weeks × slots per week
   let count = fullWeeks * assignment.slots.length;
 
+  // Add slots from the current partial week that have already occurred
   for (const slot of assignment.slots) {
     const slotJsDay = DAY_TO_JSDAY[slot.day] ?? -1;
     if (slotJsDay === -1) continue;
@@ -674,7 +688,7 @@ export function calcCurrentClassNumber(assignment: { startDate?: string; slots: 
     }
   }
 
-  return Math.max(0, count);
+  return Math.max(0, count + adjustment);
 }
 
 // ── CLASS COUNT ───────────────────────────────────────────────────────────────
@@ -749,22 +763,23 @@ export async function dbGetTeacherStudents(teacherId: string): Promise<Assignmen
   return (data as any[])
     .filter(row => { if (seen.has(row.student_name)) return false; seen.add(row.student_name); return true; })
     .map(row => ({
-      id:           row.id,
-      teacherId:    row.teacher_id,
-      teacherName:  row.teacher_name,
-      teacherEmail: row.teacher_email,
-      studentId:    row.student_id,
-      studentName:  row.student_name,
-      studentEmail: row.student_email,
-      studentLevel: row.student_level,
-      slots:        row.slots,
-      objetivo:     row.objetivo ?? '',
-      plan:         row.plan ?? '',
-      weeklyHours:  row.weekly_hours,
-      availability: row.availability ?? '',
-      notes:        row.notes ?? '',
-      startDate:    row.start_date ?? undefined,
-      createdAt:    row.created_at,
+      id:                    row.id,
+      teacherId:             row.teacher_id,
+      teacherName:           row.teacher_name,
+      teacherEmail:          row.teacher_email,
+      studentId:             row.student_id,
+      studentName:           row.student_name,
+      studentEmail:          row.student_email,
+      studentLevel:          row.student_level,
+      slots:                 row.slots,
+      objetivo:              row.objetivo ?? '',
+      plan:                  row.plan ?? '',
+      weeklyHours:           row.weekly_hours,
+      availability:          row.availability ?? '',
+      notes:                 row.notes ?? '',
+      startDate:             row.start_date ?? undefined,
+      createdAt:             row.created_at,
+      manualClassAdjustment: row.manual_class_adjustment ?? 0,
     }));
 }
 

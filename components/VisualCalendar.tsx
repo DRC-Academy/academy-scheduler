@@ -10,9 +10,13 @@ const MONTH_NAMES_SHORT = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep'
 
 export function toAR(hourES: string): string {
   const h = parseInt(hourES);
-  let ar = h - 4;
+  let ar = h - 5;
   if (ar < 0) ar += 24;
   return `${ar.toString().padStart(2, '0')}:00`;
+}
+
+function toISODateStr(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
 
 export function cellKey(day: string, hour: string) {
@@ -24,7 +28,7 @@ export type { Grid, Cell, CellState };
 export function stateColor(state: CellState) {
   switch (state) {
     case 'libre':     return { bg: 'rgba(30,158,58,0.12)',  border: 'rgba(30,158,58,0.4)',   text: '#167a2d' };
-    case 'ocupado':   return { bg: 'rgba(30,158,58,0.25)',  border: 'rgba(30,158,58,0.6)',   text: '#0f5a20' };
+    case 'ocupado':   return { bg: 'rgba(239,68,68,0.12)',  border: 'rgba(239,68,68,0.4)',   text: '#dc2626' };
     case 'bloqueado': return { bg: 'rgba(255,196,0,0.15)',  border: 'rgba(255,196,0,0.5)',   text: '#b38600' };
     case 'no_work':   return { bg: 'transparent',           border: 'rgba(200,200,195,0.6)', text: 'var(--text-muted)' };
   }
@@ -213,7 +217,14 @@ export function VisualCalendar(props: Props) {
   }
 
   function getCell(day: string, hour: string): Cell {
-    return props.grid[cellKey(day, hour)] ?? { state: 'no_work' };
+    const cell = props.grid[cellKey(day, hour)] ?? { state: 'no_work' };
+    if (cell.state === 'bloqueado' && cell.weekDate) {
+      const currentMonday = toISODateStr(weekDates[0]);
+      if (cell.weekDate !== currentMonday) {
+        return { state: cell.baseState ?? 'libre' };
+      }
+    }
+    return cell;
   }
 
   function handleCellClick(day: string, hour: string) {
@@ -228,8 +239,15 @@ export function VisualCalendar(props: Props) {
   function handleMenuSelect(day: string, hour: string, state: CellState, student?: string) {
     if (props.mode !== 'teacher') return;
     const key = cellKey(day, hour);
-    const updated = { ...props.grid, [key]: { state, student } };
-    props.onGridChange(updated);
+    let newCell: Cell;
+    if (state === 'bloqueado') {
+      const prevCell = props.grid[key] ?? { state: 'no_work' };
+      const baseState = prevCell.state === 'bloqueado' ? (prevCell.baseState ?? 'libre') : prevCell.state;
+      newCell = { state, student, weekDate: toISODateStr(weekDates[0]), baseState };
+    } else {
+      newCell = { state, student };
+    }
+    props.onGridChange({ ...props.grid, [key]: newCell });
   }
 
   const cells = Object.values(props.grid);
@@ -271,8 +289,8 @@ export function VisualCalendar(props: Props) {
       {/* Stats */}
       <div style={{ display: 'flex', gap: 14, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
         {[
-          { label: 'Libre',     count: libre,     color: '#4ade80' },
-          { label: 'Ocupado',   count: ocupado,   color: '#1E9E3A' },
+          { label: 'Libre',     count: libre,     color: '#1E9E3A' },
+          { label: 'Ocupado',   count: ocupado,   color: '#dc2626' },
           { label: 'En recuperación', count: bloqueado, color: '#FFC400' },
           { label: 'No work',   count: noWork,    color: 'var(--text-muted)' },
         ].map(s => (
@@ -354,7 +372,11 @@ export function VisualCalendar(props: Props) {
                   return (
                     <td key={day}
                       onClick={() => handleCellClick(day, hour)}
-                      title={cell.state === 'ocupado' && cell.student ? `${cell.student} · Recurrente` : cell.state}
+                      title={
+                        cell.state === 'ocupado' && cell.student ? `${cell.student} · Semanal`
+                        : cell.state === 'bloqueado' ? 'En recuperación · Puntual'
+                        : cell.state
+                      }
                       style={{
                         height: 40, padding: '2px 3px',
                         background: bg, border, cursor,
@@ -372,11 +394,14 @@ export function VisualCalendar(props: Props) {
                                 <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                   {cell.student || 'Ocupado'}
                                 </div>
-                                <div style={{ fontSize: 8, color: '#1E9E3A', opacity: 0.8, fontWeight: 400 }}>· Semanal</div>
+                                <div style={{ fontSize: 8, color: '#dc2626', opacity: 0.8, fontWeight: 400 }}>· Semanal</div>
                               </>
-                            : cell.state === 'libre'
-                              ? (props.mode === 'setter' ? '+ Asignar' : 'Libre')
-                              : 'En recuperación'}
+                            : cell.state === 'bloqueado'
+                              ? <>
+                                  <div>En recuperación</div>
+                                  <div style={{ fontSize: 8, color: '#b38600', opacity: 0.8, fontWeight: 400 }}>· Puntual</div>
+                                </>
+                              : props.mode === 'setter' ? '+ Asignar' : 'Libre'}
                         </div>
                       )}
                       {cell.state === 'no_work' && props.mode === 'teacher' && (

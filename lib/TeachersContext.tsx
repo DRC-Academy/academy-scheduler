@@ -11,6 +11,7 @@ import {
   dbCheckAndResetMonthly, dbCheckAndResetQuarterly,
   dbForceMonthlyReset, dbForceQuarterlyReset,
   dbGetClassCounts, dbIncrementClassCount,
+  dbUpdateAssignmentAdjustment, dbUpdateAssignmentStartDate,
 } from '@/lib/db';
 
 interface TeachersContextType {
@@ -39,6 +40,8 @@ interface TeachersContextType {
   reloadAll: () => Promise<void>;
   loadClassCounts: (teacherId: string) => Promise<void>;
   incrementClassCount: (teacherId: string, studentName: string, studentEmail?: string) => Promise<ClassCount>;
+  updateAssignmentAdjustment: (assignmentId: string, newAdjustment: number) => Promise<void>;
+  updateAssignmentStartDate: (assignmentId: string, startDate: string) => Promise<void>;
 }
 
 const TeachersContext = createContext<TeachersContextType>({
@@ -59,9 +62,11 @@ const TeachersContext = createContext<TeachersContextType>({
   assignTeacherOfQuarter: async () => {},
   forceMonthlyReset:    async () => {},
   forceQuarterlyReset:  async () => {},
-  reloadAll:            async () => {},
-  loadClassCounts:      async () => {},
-  incrementClassCount:  async () => ({ id: '', teacherId: '', studentName: '', classNumber: 0, lastUpdated: '' }),
+  reloadAll:                  async () => {},
+  loadClassCounts:            async () => {},
+  incrementClassCount:        async () => ({ id: '', teacherId: '', studentName: '', classNumber: 0, lastUpdated: '' }),
+  updateAssignmentAdjustment: async () => {},
+  updateAssignmentStartDate:  async () => {},
 });
 
 export function TeachersProvider({ children }: { children: ReactNode }) {
@@ -208,6 +213,16 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     return result;
   }
 
+  async function updateAssignmentAdjustment(assignmentId: string, newAdjustment: number) {
+    await dbUpdateAssignmentAdjustment(assignmentId, newAdjustment);
+    setAssignments(prev => prev.map(a => a.id === assignmentId ? { ...a, manualClassAdjustment: newAdjustment } : a));
+  }
+
+  async function updateAssignmentStartDate(assignmentId: string, startDate: string) {
+    await dbUpdateAssignmentStartDate(assignmentId, startDate);
+    setAssignments(prev => prev.map(a => a.id === assignmentId ? { ...a, startDate } : a));
+  }
+
   return (
     <TeachersContext.Provider value={{
       teachers, students, assignments, teacherGrids, loadingTeachers, scoringEvents, classCounts,
@@ -217,6 +232,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
       assignTeacherOfMonth, assignTeacherOfQuarter,
       forceMonthlyReset, forceQuarterlyReset,
       reloadAll, loadClassCounts, incrementClassCount,
+      updateAssignmentAdjustment, updateAssignmentStartDate,
     }}>
       {children}
     </TeachersContext.Provider>

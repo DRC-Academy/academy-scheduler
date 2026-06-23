@@ -96,6 +96,7 @@ export interface Assignment {
   notes: string;
   startDate?: string;
   createdAt: string;
+  manualClassAdjustment?: number;
 }
 
 export interface AdminAlert {
@@ -122,6 +123,8 @@ export type CellState = 'libre' | 'ocupado' | 'bloqueado' | 'no_work';
 export interface Cell {
   state: CellState;
   student?: string;
+  weekDate?: string;     // 'bloqueado' cells: Monday ISO date of the specific week (YYYY-MM-DD)
+  baseState?: CellState; // 'bloqueado' cells: state to revert to in other weeks
 }
 
 export type Grid = Record<string, Cell>;
