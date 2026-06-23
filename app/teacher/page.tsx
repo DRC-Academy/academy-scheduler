@@ -5,7 +5,7 @@ import { AuthGuard } from '@/components/AuthGuard';
 import { VisualCalendar, DAYS, cellKey } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
-import { calcCurrentClassNumber } from '@/lib/db';
+import { calcCurrentClassNumber, dbCheckStudentExists } from '@/lib/db';
 import { Grid, Teacher, Assignment, ScoringEvent, Student } from '@/types';
 
 // ── localStorage helpers for milestone banner persistence ─────────────────────
@@ -36,6 +36,8 @@ interface AssignConfirmData {
   weeklyHours: number;
   newStudentData?: { name: string; email: string; level: string; plan: string };
   existingAssignment?: Assignment;
+  // Use existing student record without creating a new one
+  useExistingStudent?: { id: string; name: string; email: string; level: string };
 }
 
 // ── Assign Student Modal ──────────────────────────────────────────────────────
@@ -60,6 +62,8 @@ function AssignStudentModal({
   const [newEmail, setNewEmail] = useState('');
   const [newLevel, setNewLevel] = useState('B1');
   const [newPlan, setNewPlan]   = useState('Inglés general');
+  const [duplicateStudent, setDuplicateStudent] = useState<{ id: string; name: string; email: string; level: string } | null>(null);
+  const [checkingEmail, setCheckingEmail] = useState(false);
 
   // Compute cells available for slot picking: all libre cells + clicked cell
   const libreCells: Array<{ day: string; hour: string }> = [];
@@ -281,15 +285,54 @@ function AssignStudentModal({
                 <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} style={{ width: '100%' }} />
               </div>
               {(() => {
-                const canCreate = !!newName.trim() && allSlotsValid && !!startDate;
-                return (
+                const canCreate = !!newName.trim() && allSlotsValid && !!startDate && !checkingEmail;
+                return (<>
                   <button
-                    onClick={() => canCreate && onConfirm({ isNew: true, studentName: newName.trim(), slots, startDate, weeklyHours: slots.length, newStudentData: { name: newName.trim(), email: newEmail, level: newLevel, plan: newPlan } })}
+                    onClick={async () => {
+                      if (!canCreate) return;
+                      if (newEmail.trim()) {
+                        setCheckingEmail(true);
+                        const existing = await dbCheckStudentExists(newEmail.trim());
+                        setCheckingEmail(false);
+                        if (existing) { setDuplicateStudent(existing); return; }
+                      }
+                      onConfirm({ isNew: true, studentName: newName.trim(), slots, startDate, weeklyHours: slots.length, newStudentData: { name: newName.trim(), email: newEmail, level: newLevel, plan: newPlan } });
+                    }}
                     disabled={!canCreate}
                     style={{ padding: '11px', borderRadius: 9, border: 'none', background: canCreate ? '#1E9E3A' : 'var(--bg-surface-3)', color: canCreate ? 'white' : 'var(--text-muted)', cursor: canCreate ? 'pointer' : 'not-allowed', fontSize: 14, fontWeight: 700, fontFamily: 'inherit' }}>
-                    Crear y asignar — {slots.length} {slots.length === 1 ? 'clase' : 'clases'}/semana
+                    {checkingEmail ? 'Verificando...' : `Crear y asignar — ${slots.length} ${slots.length === 1 ? 'clase' : 'clases'}/semana`}
                   </button>
-                );
+
+                  {/* Duplicate email overlay */}
+                  {duplicateStudent && (
+                    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)', zIndex: 90, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+                      <div style={{ background: 'var(--bg-surface)', border: '1px solid #35405a', borderRadius: 14, padding: 24, width: '100%', maxWidth: 400 }}>
+                        <div style={{ fontSize: 24, marginBottom: 10 }}>⚠️</div>
+                        <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)', marginBottom: 8 }}>Este alumno ya existe</div>
+                        <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 20, lineHeight: 1.6 }}>
+                          Ya hay un alumno registrado con el email <b>{duplicateStudent.email}</b>:<br />
+                          <b style={{ color: 'var(--text-primary)' }}>{duplicateStudent.name}</b> · {duplicateStudent.level}
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                          <button
+                            onClick={() => { setDuplicateStudent(null); onConfirm({ isNew: false, studentName: duplicateStudent.name, slots, startDate, weeklyHours: slots.length, useExistingStudent: duplicateStudent }); }}
+                            style={{ padding: '10px', borderRadius: 8, border: 'none', background: '#1E9E3A', color: 'white', cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+                            Usar alumno existente
+                          </button>
+                          <button
+                            onClick={() => { setDuplicateStudent(null); onConfirm({ isNew: true, studentName: newName.trim(), slots, startDate, weeklyHours: slots.length, newStudentData: { name: newName.trim(), email: newEmail, level: newLevel, plan: newPlan } }); }}
+                            style={{ padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
+                            Crear de todas formas (duplicado)
+                          </button>
+                          <button onClick={() => setDuplicateStudent(null)}
+                            style={{ padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
+                            Cancelar
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </>);
               })()}
             </div>
           )}
@@ -673,6 +716,29 @@ function TeacherContent() {
       if (data.startDate && data.startDate !== data.existingAssignment.startDate) {
         await updateAssignmentStartDate(data.existingAssignment.id, data.startDate);
       }
+    } else if (data.useExistingStudent) {
+      // Existing student record, new assignment for this teacher
+      const es = data.useExistingStudent;
+      const newAssignment: Assignment = {
+        id: crypto.randomUUID(),
+        teacherId: teacher.id,
+        teacherName: teacher.name,
+        teacherEmail: teacher.email,
+        studentId: es.id,
+        studentName: es.name,
+        studentEmail: es.email,
+        studentLevel: es.level,
+        slots: data.slots,
+        objetivo: '',
+        plan: '',
+        weeklyHours: data.slots.length,
+        availability: data.slots.map(s => `${s.day} ${s.hour}`).join(', '),
+        notes: '',
+        startDate: data.startDate,
+        createdAt: new Date().toISOString(),
+      };
+      await addAssignment(newAssignment);
+      finalName = es.name;
     }
 
     // Update grid for all new slots and revert removed slots to libre

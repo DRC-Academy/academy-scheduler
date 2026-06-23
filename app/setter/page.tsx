@@ -4,6 +4,7 @@ import { NavBar } from '@/components/NavBar';
 import { StatusBadge } from '@/components/StatusBadge';
 import { AuthGuard } from '@/components/AuthGuard';
 import { VisualCalendar, buildGridFromTeacher, cellKey, HOURS_ES, getWeekDates, formatWeekRange } from '@/components/VisualCalendar';
+import { dbCheckStudentExists } from '@/lib/db';
 import { useTeachers } from '@/lib/TeachersContext';
 import { daysOfWeek } from '@/lib/mock-data';
 import { Teacher, SlotFilter, Grid, Assignment, Student, AssignedSlot } from '@/types';
@@ -176,6 +177,8 @@ function AssignModal({
   const [startDate, setStartDate] = useState('');
   const [success, setSuccess] = useState(false);
   const [resultAssignment, setResultAssignment] = useState<Assignment | null>(null);
+  const [duplicateStudent, setDuplicateStudent] = useState<Student | null>(null);
+  const [checkingEmail, setCheckingEmail] = useState(false);
 
   const todayISO = new Date().toISOString().split('T')[0];
 
@@ -201,11 +204,27 @@ function AssignModal({
   const slotsComplete = slots.length === weeklyHours;
   const canConfirm = hasStudent && slotsComplete && availableSlots.length > 0 && !!startDate;
 
-  function handleConfirm() {
+  async function handleConfirm() {
     if (!canConfirm) return;
-    const student: Student = tab === 'existing'
+
+    // Check for duplicate email when creating new student
+    if (tab === 'new' && newStudent.email.trim()) {
+      setCheckingEmail(true);
+      const existing = await dbCheckStudentExists(newStudent.email.trim());
+      setCheckingEmail(false);
+      if (existing) {
+        setDuplicateStudent(existing);
+        return;
+      }
+    }
+
+    doConfirm();
+  }
+
+  function doConfirm(overrideStudent?: Student) {
+    const student: Student = overrideStudent ?? (tab === 'existing'
       ? existingStudents.find(s => s.id === selectedExisting)!
-      : { id: `s_${Date.now()}`, name: newStudent.name, email: newStudent.email, level: newStudent.level, plan, createdAt: new Date().toISOString() };
+      : { id: `s_${Date.now()}`, name: newStudent.name, email: newStudent.email, level: newStudent.level, plan, createdAt: new Date().toISOString() });
 
     const assignment: Assignment = {
       id: `a_${Date.now()}`,
@@ -257,7 +276,7 @@ function AssignModal({
     );
   }
 
-  return (
+  return (<>
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(6px)', zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
       onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
       <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 18, width: '100%', maxWidth: 560, maxHeight: '94vh', overflowY: 'auto', padding: 28 }}>
@@ -409,12 +428,44 @@ function AssignModal({
 
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={onClose} style={{ flex: 1, padding: '11px', borderRadius: 9, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 14 }}>Cancelar</button>
-          <button onClick={handleConfirm} disabled={!canConfirm} style={{ flex: 2, padding: '11px', borderRadius: 9, border: 'none', background: canConfirm ? '#1E9E3A' : 'var(--bg-surface-3)', color: canConfirm ? 'white' : 'var(--text-muted)', cursor: canConfirm ? 'pointer' : 'not-allowed', fontSize: 14, fontWeight: 700 }}>
-            {!hasStudent ? 'Elegí un alumno primero' : !slotsComplete ? `Faltan ${weeklyHours - slots.length} horario${weeklyHours - slots.length !== 1 ? 's' : ''}` : !startDate ? 'Ingresá la fecha de inicio' : 'Confirmar asignación ✓'}
+          <button onClick={handleConfirm} disabled={!canConfirm || checkingEmail} style={{ flex: 2, padding: '11px', borderRadius: 9, border: 'none', background: canConfirm && !checkingEmail ? '#1E9E3A' : 'var(--bg-surface-3)', color: canConfirm && !checkingEmail ? 'white' : 'var(--text-muted)', cursor: canConfirm && !checkingEmail ? 'pointer' : 'not-allowed', fontSize: 14, fontWeight: 700 }}>
+            {checkingEmail ? 'Verificando...' : !hasStudent ? 'Elegí un alumno primero' : !slotsComplete ? `Faltan ${weeklyHours - slots.length} horario${weeklyHours - slots.length !== 1 ? 's' : ''}` : !startDate ? 'Ingresá la fecha de inicio' : 'Confirmar asignación ✓'}
           </button>
         </div>
       </div>
     </div>
+
+    {/* Duplicate email modal */}
+    {duplicateStudent && (
+      <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)', zIndex: 70, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+        <div style={{ background: 'var(--bg-surface)', border: '1px solid #35405a', borderRadius: 14, padding: 24, width: '100%', maxWidth: 400 }}>
+          <div style={{ fontSize: 24, marginBottom: 10 }}>⚠️</div>
+          <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)', marginBottom: 8 }}>Este alumno ya existe</div>
+          <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 20, lineHeight: 1.6 }}>
+            Ya hay un alumno con el email <b>{duplicateStudent.email}</b>:<br />
+            <b style={{ color: 'var(--text-primary)' }}>{duplicateStudent.name}</b> · {duplicateStudent.level}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <button
+              onClick={() => { setDuplicateStudent(null); setTab('existing'); setSelectedExisting(duplicateStudent.id); }}
+              style={{ padding: '10px', borderRadius: 8, border: 'none', background: '#1E9E3A', color: 'white', cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+              Usar alumno existente
+            </button>
+            <button
+              onClick={() => { setDuplicateStudent(null); doConfirm(); }}
+              style={{ padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
+              Crear de todas formas (duplicado)
+            </button>
+            <button
+              onClick={() => setDuplicateStudent(null)}
+              style={{ padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
+              Cancelar
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+  </>
   );
 }
 

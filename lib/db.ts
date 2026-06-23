@@ -787,6 +787,18 @@ export async function dbUpdateAssignmentStartDate(assignmentId: string, startDat
   await supabase.from('assignments').update({ start_date: startDate }).eq('id', assignmentId);
 }
 
+export async function dbCheckStudentExists(email: string): Promise<import('@/types').Student | null> {
+  const trimmed = email.trim().toLowerCase();
+  const { data } = await supabase.from('students').select('*').ilike('email', trimmed).limit(1).single();
+  if (!data) return null;
+  return {
+    id: data.id, name: data.name, email: data.email,
+    level: data.level, plan: data.plan ?? 'Plan Individual',
+    phone: data.phone ?? undefined, notes: data.notes ?? undefined,
+    createdAt: data.created_at,
+  };
+}
+
 export async function dbUpdateAssignmentSlots(
   assignmentId: string,
   slots: Array<{ day: string; hour: string }>,
