@@ -22,6 +22,7 @@ interface TeachersContextType {
   loadingTeachers: boolean;
   scoringEvents: ScoringEvent[];
   classCounts: ClassCount[];
+  lastUpdated: Date | null;
   addTeacher: (t: Teacher, username: string) => Promise<void>;
   addStudent: (s: Student) => Promise<void>;
   deleteStudent: (studentId: string, studentName: string) => Promise<void>;
@@ -47,7 +48,7 @@ interface TeachersContextType {
 
 const TeachersContext = createContext<TeachersContextType>({
   teachers: [], students: [], assignments: [], teacherGrids: {},
-  loadingTeachers: true, scoringEvents: [], classCounts: [],
+  loadingTeachers: true, scoringEvents: [], classCounts: [], lastUpdated: null,
   addTeacher:           async () => {},
   addStudent:           async () => {},
   deleteStudent:        async () => {},
@@ -79,9 +80,10 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   const [loadingTeachers, setLoadingTeachers] = useState(true);
   const [scoringEvents, setScoringEvents] = useState<ScoringEvent[]>([]);
   const [classCounts, setClassCounts]   = useState<ClassCount[]>([]);
+  const [lastUpdated, setLastUpdated]   = useState<Date | null>(null);
 
+  // Silent reload — no loading spinner, just swaps in fresh data
   async function reloadAll() {
-    setLoadingTeachers(true);
     const [t, s, a, ev] = await Promise.all([
       dbGetTeachers(),
       dbGetStudents(),
@@ -93,11 +95,30 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     setAssignments(a);
     setScoringEvents(ev);
     setTeacherGrids({});
-    setLoadingTeachers(false);
+    setLastUpdated(new Date());
   }
 
   useEffect(() => {
-    reloadAll();
+    // Initial load — show the loading state only once
+    setLoadingTeachers(true);
+    reloadAll().finally(() => setLoadingTeachers(false));
+
+    // Auto-refresh every 60 s, but skip if tab is hidden
+    const interval = setInterval(() => {
+      if (!document.hidden) reloadAll();
+    }, 60_000);
+
+    // Refresh immediately when the tab becomes visible again
+    function handleVisibility() {
+      if (!document.hidden) reloadAll();
+    }
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function addTeacher(t: Teacher, username: string) {
@@ -156,7 +177,6 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   async function addScoringEvent(event: Omit<ScoringEvent, 'id' | 'createdAt'>) {
     const newEvent = await dbAddScoringEvent(event);
     setScoringEvents(prev => [newEvent, ...prev]);
-    // Reload teachers to reflect updated scores/blocked status
     const t = await dbGetTeachers();
     setTeachers(t);
   }
@@ -236,7 +256,8 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
 
   return (
     <TeachersContext.Provider value={{
-      teachers, students, assignments, teacherGrids, loadingTeachers, scoringEvents, classCounts,
+      teachers, students, assignments, teacherGrids, loadingTeachers,
+      scoringEvents, classCounts, lastUpdated,
       addTeacher, addStudent, deleteStudent, updateStudent, addAssignment,
       getTeacherGrid, updateTeacherGrid, updateTeacherRating, addScoringEvent,
       loadScoringEvents, checkAndRunResets,

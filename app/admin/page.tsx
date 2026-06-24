@@ -3,6 +3,8 @@ import { useState, useEffect } from 'react';
 import { NavBar } from '@/components/NavBar';
 import { StatusBadge } from '@/components/StatusBadge';
 import { AuthGuard } from '@/components/AuthGuard';
+import { PullToRefresh } from '@/components/PullToRefresh';
+import { LastUpdated } from '@/components/LastUpdated';
 import { DAYS, HOURS_ES, stateColor, VisualCalendar, buildGridFromTeacher } from '@/components/VisualCalendar';
 import { useTeachers } from '@/lib/TeachersContext';
 import { useAuth } from '@/lib/AuthContext';
@@ -1340,7 +1342,7 @@ function ClassTrackingTab() {
 
 // ─── Admin Content ────────────────────────────────────────────────────────────
 function AdminContent() {
-  const { teachers, assignments, students, addTeacher, loadingTeachers, getTeacherGrid, updateTeacherGrid, checkAndRunResets } = useTeachers();
+  const { teachers, assignments, students, addTeacher, loadingTeachers, getTeacherGrid, updateTeacherGrid, checkAndRunResets, reloadAll } = useTeachers();
   const [selectedTeacher, setSelectedTeacher] = useState<string | null>(null);
   const [showNewTeacher, setShowNewTeacher] = useState(false);
   const [activeTab, setActiveTab] = useState<'overview' | 'teachers' | 'weekly' | 'scoring' | 'tracking'>('overview');
@@ -1377,7 +1379,9 @@ function AdminContent() {
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }}>
       <NavBar />
+      <PullToRefresh onRefresh={reloadAll}>
       <div style={{ maxWidth: 1200, margin: '0 auto', padding: '28px 24px' }}>
+        <LastUpdated />
 
         <div className="admin-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24, flexWrap: 'wrap', gap: 12 }}>
           <div>
@@ -1700,6 +1704,8 @@ function AdminContent() {
           updateTeacherGrid={updateTeacherGrid}
         />
       )}
+      </div>
+      </PullToRefresh>
     </div>
   );
 }

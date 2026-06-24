@@ -2,6 +2,8 @@
 import { useState, useMemo } from 'react';
 import { NavBar } from '@/components/NavBar';
 import { AuthGuard } from '@/components/AuthGuard';
+import { PullToRefresh } from '@/components/PullToRefresh';
+import { LastUpdated } from '@/components/LastUpdated';
 import { useTeachers } from '@/lib/TeachersContext';
 import { DAYS, cellKey } from '@/components/VisualCalendar';
 import { dbCheckStudentExists } from '@/lib/db';
@@ -226,7 +228,7 @@ function EditStudentModal({ student, assignment, teacherGrid, onClose, onSave }:
 function StudentsContent() {
   const {
     students, assignments, deleteStudent, updateStudent,
-    getTeacherGrid, updateTeacherGrid, updateAssignmentSlots, updateAssignmentStartDate,
+    getTeacherGrid, updateTeacherGrid, updateAssignmentSlots, updateAssignmentStartDate, reloadAll,
   } = useTeachers();
   const [search, setSearch] = useState('');
   const [editingStudent, setEditingStudent] = useState<DisplayStudent | null>(null);
@@ -303,7 +305,9 @@ function StudentsContent() {
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }}>
       <NavBar />
+      <PullToRefresh onRefresh={reloadAll}>
       <div style={{ maxWidth: 1200, margin: '0 auto', padding: '32px 20px 48px' }}>
+        <LastUpdated />
         <div style={{ marginBottom: 24 }}>
           <h1 style={{ fontSize: 24, fontWeight: 700, color: 'var(--text-primary)', margin: '0 0 4px' }}>Alumnos</h1>
           <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0 }}>Todos los alumnos registrados y asignados.</p>
@@ -478,6 +482,8 @@ function StudentsContent() {
           onCancel={() => setDuplicateStudent(null)}
         />
       )}
+      </div>
+      </PullToRefresh>
     </div>
   );
 }

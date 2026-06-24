@@ -3,6 +3,8 @@ import { useState, useMemo, useEffect } from 'react';
 import { NavBar } from '@/components/NavBar';
 import { StatusBadge } from '@/components/StatusBadge';
 import { AuthGuard } from '@/components/AuthGuard';
+import { PullToRefresh } from '@/components/PullToRefresh';
+import { LastUpdated } from '@/components/LastUpdated';
 import { VisualCalendar, buildGridFromTeacher, cellKey, HOURS_ES, getWeekDates, formatWeekRange } from '@/components/VisualCalendar';
 import { dbCheckStudentExists } from '@/lib/db';
 import { useTeachers } from '@/lib/TeachersContext';
@@ -669,7 +671,7 @@ function AgendaSemanal({ assignments }: { assignments: Assignment[] }) {
 
 // ─── Setter Content ───────────────────────────────────────────────────────────
 function SetterContent() {
-  const { teachers, students, assignments, addStudent, addAssignment } = useTeachers();
+  const { teachers, students, assignments, addStudent, addAssignment, reloadAll } = useTeachers();
 
   const [slotFilters, setSlotFilters] = useState<SlotFilter[]>([]);
   const [onlyAvailable, setOnlyAvailable] = useState(false);
@@ -716,7 +718,9 @@ function SetterContent() {
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }}>
       <NavBar />
+      <PullToRefresh onRefresh={reloadAll}>
       <div style={{ maxWidth: 980, margin: '0 auto', padding: '28px 20px' }}>
+        <LastUpdated />
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 22, flexWrap: 'wrap', gap: 12 }}>
           <div>
@@ -898,6 +902,8 @@ function SetterContent() {
       )}
 
       {emailAssignment && <EmailModal assignment={emailAssignment} onClose={() => setEmailAssignment(null)} />}
+      </div>
+      </PullToRefresh>
     </div>
   );
 }

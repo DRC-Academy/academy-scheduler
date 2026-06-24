@@ -2,6 +2,8 @@
 import { useState, useEffect } from 'react';
 import { NavBar } from '@/components/NavBar';
 import { AuthGuard } from '@/components/AuthGuard';
+import { PullToRefresh } from '@/components/PullToRefresh';
+import { LastUpdated } from '@/components/LastUpdated';
 import { VisualCalendar, DAYS, cellKey } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
@@ -652,7 +654,7 @@ function TeacherScoringTab({ teacher, myAssignments, myEvents }: {
 // ─── Teacher Content ──────────────────────────────────────────────────────────
 function TeacherContent() {
   const { user } = useAuth();
-  const { teachers, assignments, scoringEvents, getTeacherGrid, updateTeacherGrid, addStudent, addAssignment, updateAssignmentAdjustment, updateAssignmentStartDate, updateAssignmentSlots } = useTeachers();
+  const { teachers, assignments, scoringEvents, getTeacherGrid, updateTeacherGrid, addStudent, addAssignment, updateAssignmentAdjustment, updateAssignmentStartDate, updateAssignmentSlots, reloadAll } = useTeachers();
   const [activeTab, setActiveTab] = useState<'calendar' | 'classes' | 'scoring'>('calendar');
   const [grid, setGrid]           = useState<Grid>({});
   const [gridLoading, setGridLoading]   = useState(true);
@@ -864,7 +866,9 @@ function TeacherContent() {
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }}>
       <NavBar />
+      <PullToRefresh onRefresh={reloadAll}>
       <div style={{ maxWidth: 980, margin: '0 auto', padding: '24px 16px 48px' }}>
+        <LastUpdated />
 
         {/* Milestone banners — clase 15 (amarillo) y clase 30 (verde), sin mencionar bonos */}
         {visibleBanners.map(banner => (
@@ -1186,6 +1190,7 @@ function TeacherContent() {
           </div>
         </div>
       )}
+      </PullToRefresh>
     </div>
   );
 }
