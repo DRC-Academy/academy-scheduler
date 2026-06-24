@@ -1379,7 +1379,7 @@ function AdminContent() {
       <NavBar />
       <div style={{ maxWidth: 1200, margin: '0 auto', padding: '28px 24px' }}>
 
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24, flexWrap: 'wrap', gap: 12 }}>
+        <div className="admin-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24, flexWrap: 'wrap', gap: 12 }}>
           <div>
             <h1 style={{ fontSize: 24, fontWeight: 700, color: 'var(--text-primary)', margin: '0 0 4px' }}>Admin</h1>
             <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0 }}>
@@ -1387,12 +1387,12 @@ function AdminContent() {
               {blockedCount > 0 && <span style={{ color: '#ef4444', fontWeight: 700 }}> · {blockedCount} bloqueado{blockedCount !== 1 ? 's' : ''}</span>}
             </p>
           </div>
-          <button onClick={() => setShowNewTeacher(true)} style={{ padding: '9px 18px', borderRadius: 9, border: 'none', background: '#1E9E3A', color: 'white', fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>
+          <button className="admin-header-btn" onClick={() => setShowNewTeacher(true)} style={{ padding: '9px 18px', borderRadius: 9, border: 'none', background: '#1E9E3A', color: 'white', fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>
             ＋ Nuevo profesor
           </button>
         </div>
 
-        <div style={{ display: 'flex', gap: 4, marginBottom: 22, background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 4 }}>
+        <div className="tabs-scroll" style={{ display: 'flex', gap: 4, marginBottom: 22, background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 4 }}>
           {tabs.map(tab => (
             <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ flex: 1, padding: '8px 12px', borderRadius: 7, border: 'none', background: activeTab === tab.id ? '#1E9E3A' : 'transparent', color: activeTab === tab.id ? 'white' : 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontWeight: activeTab === tab.id ? 700 : 500, transition: 'all 0.12s' }}>
               {tab.label}
@@ -1469,7 +1469,8 @@ function AdminContent() {
         {/* TEACHERS TAB */}
         {activeTab === 'teachers' && (
           <div>
-            <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', marginBottom: 16 }}>
+            {/* Desktop: table */}
+            <div className="desk-only" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', marginBottom: 16 }}>
               <div style={{ overflowX: 'auto', maxHeight: 500, overflowY: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}>
@@ -1523,6 +1524,32 @@ function AdminContent() {
                   </tbody>
                 </table>
               </div>
+            </div>
+
+            {/* Mobile: cards */}
+            <div className="mob-only" style={{ flexDirection: 'column', gap: 10, marginBottom: 16 }}>
+              {teachers.map(t => {
+                const isBlocked = t.isBlocked ?? false;
+                const teacherAssignments = assignments.filter(a => a.teacherId === t.id);
+                return (
+                  <div key={t.id} style={{ background: 'var(--bg-surface)', border: `1px solid ${isBlocked ? 'rgba(239,68,68,0.25)' : 'var(--border)'}`, borderRadius: 12, padding: 14, opacity: isBlocked ? 0.9 : 1 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+                      <div style={{ width: 38, height: 38, borderRadius: '50%', background: isBlocked ? 'rgba(239,68,68,0.1)' : 'var(--bg-surface-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, color: isBlocked ? '#ef4444' : 'var(--text-secondary)', flexShrink: 0 }}>{t.avatar}</div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.name}</div>
+                        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>{teacherAssignments.length} alumnos · {t.weeklyLoad}h/sem</div>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10, alignItems: 'center' }}>
+                      <StatusBadge status={t.status} />
+                      {isBlocked ? <LevelBadge level={t.currentLevel ?? 1} blocked /> : <LevelBadge level={t.currentLevel ?? 1} />}
+                    </div>
+                    <button onClick={() => setSelectedTeacher(t.id === selectedTeacher ? null : t.id)} style={{ width: '100%', padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: selectedTeacher === t.id ? 'var(--bg-surface-3)' : 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
+                      {selectedTeacher === t.id ? 'Cerrar detalle' : 'Ver detalle →'}
+                    </button>
+                  </div>
+                );
+              })}
             </div>
 
             {teacher && (

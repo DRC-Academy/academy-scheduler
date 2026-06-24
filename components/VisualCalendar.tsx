@@ -262,7 +262,7 @@ export function VisualCalendar(props: Props) {
   const highlightDays = props.highlightSlots?.map(s => s.day) ?? [];
 
   return (
-    <div style={{ userSelect: 'none' }}>
+    <div className="visual-calendar" style={{ userSelect: 'none' }}>
       {/* Week navigation header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, background: 'var(--bg-surface-2)', border: '1px solid var(--border)', borderRadius: 10, padding: '8px 14px' }}>
         <button
@@ -271,7 +271,7 @@ export function VisualCalendar(props: Props) {
           ‹
         </button>
         <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{weekLabel}</div>
+          <div className="cal-week-label" style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{weekLabel}</div>
           {offset === 0 && <div style={{ fontSize: 10, color: '#1E9E3A', fontWeight: 600, marginTop: 1 }}>Semana actual</div>}
           {offset !== 0 && (
             <button onClick={() => handleOffsetChange(0)} style={{ background: 'none', border: 'none', fontSize: 10, color: 'var(--text-muted)', cursor: 'pointer', padding: 0, marginTop: 1 }}>

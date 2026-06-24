@@ -868,7 +868,7 @@ function TeacherContent() {
 
         {/* Milestone banners — clase 15 (amarillo) y clase 30 (verde), sin mencionar bonos */}
         {visibleBanners.map(banner => (
-          <div key={`${banner.studentName}_${banner.milestone}`} style={{
+          <div key={`${banner.studentName}_${banner.milestone}`} className="milestone-banner" style={{
             background: banner.milestone === 15 ? '#FFC400' : '#1E9E3A',
             color: banner.milestone === 15 ? '#1a0f00' : 'white',
             borderRadius: 12, padding: '14px 20px', marginBottom: 14,
@@ -881,6 +881,7 @@ function TeacherContent() {
               }
             </div>
             <button
+              className="milestone-banner-close"
               onClick={() => dismissBanner(teacher.id, banner.studentName, banner.milestone)}
               style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 20, color: 'inherit', flexShrink: 0, opacity: 0.75, fontFamily: 'inherit', lineHeight: 1 }}
             >
@@ -891,7 +892,7 @@ function TeacherContent() {
 
         {/* 6-month bonus banners — dorado, independiente de cantidad de clases */}
         {visibleBonusBanners.map(banner => (
-          <div key={`bonus_6m_${banner.assignmentId}`} style={{
+          <div key={`bonus_6m_${banner.assignmentId}`} className="milestone-banner" style={{
             background: '#FFFBEB',
             border: '2px solid #D97706',
             borderLeft: '5px solid #D97706',
@@ -903,6 +904,7 @@ function TeacherContent() {
               <span style={{ fontWeight: 700, color: '#B45309' }}>pagos@drcacademy.com</span>
             </div>
             <button
+              className="milestone-banner-close"
               onClick={() => dismissBonusBanner(teacher.id, banner.studentName, banner.assignmentId)}
               style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 20, color: '#92400E', flexShrink: 0, opacity: 0.75, fontFamily: 'inherit', lineHeight: 1 }}
             >
@@ -912,13 +914,13 @@ function TeacherContent() {
         ))}
 
         {/* Profile */}
-        <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 14, padding: '18px 22px', marginBottom: 18, display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+        <div className="teacher-profile-card" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 14, padding: '18px 22px', marginBottom: 18, display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
           <div style={{ width: 50, height: 50, borderRadius: '50%', background: 'rgba(34,197,94,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 700, color: '#4ade80', flexShrink: 0 }}>{teacher.avatar}</div>
           <div style={{ flex: 1 }}>
             <div style={{ fontWeight: 700, fontSize: 20, color: 'var(--text-primary)' }}>{teacher.name}</div>
             <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 2 }}>{teacher.email}</div>
           </div>
-          <div style={{ display: 'flex', gap: 20 }}>
+          <div className="teacher-profile-stats" style={{ display: 'flex', gap: 20 }}>
             {[
               { label: 'Libre',          count: freeCount,    color: '#4ade80' },
               { label: 'Ocupado',        count: ocupadoCount, color: '#93c5fd' },
@@ -954,7 +956,7 @@ function TeacherContent() {
               </div>
             </div>
 
-            <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+            <div className="states-legend" style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
               {[
                 { icon: '⬜', label: 'No work',          desc: 'No trabajás ese horario' },
                 { icon: '🟢', label: 'Libre',            desc: 'Disponible para clases' },
@@ -1051,18 +1053,21 @@ function TeacherContent() {
                           {/* Action buttons */}
                           <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
                             <button
+                              className="class-action-btn"
                               onClick={() => handleAdjust(a, +1)}
                               disabled={adjustSaving === a.id}
                               style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '6px 12px', borderRadius: 7, border: '1px solid rgba(30,158,58,0.4)', background: 'rgba(30,158,58,0.08)', color: '#1E9E3A', cursor: 'pointer', fontSize: 12, fontWeight: 600, fontFamily: 'inherit', opacity: adjustSaving === a.id ? 0.6 : 1 }}>
                               + Sumar clase
                             </button>
                             <button
+                              className="class-action-btn"
                               onClick={() => setDeductConfirm(a)}
                               disabled={adjustSaving === a.id}
                               style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '6px 12px', borderRadius: 7, border: '1px solid rgba(239,68,68,0.35)', background: 'rgba(239,68,68,0.07)', color: '#dc2626', cursor: 'pointer', fontSize: 12, fontWeight: 600, fontFamily: 'inherit', opacity: adjustSaving === a.id ? 0.6 : 1 }}>
                               − Descontar clase
                             </button>
                             <button
+                              className="class-action-btn"
                               onClick={() => setStartDateModal({ assignment: a, date: a.startDate ?? new Date().toISOString().split('T')[0] })}
                               style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '6px 12px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--bg-surface-3)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, fontWeight: 500, fontFamily: 'inherit' }}>
                               📅 Fecha inicio

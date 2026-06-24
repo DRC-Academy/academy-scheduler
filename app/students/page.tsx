@@ -108,9 +108,9 @@ function EditStudentModal({ student, assignment, teacherGrid, onClose, onSave }:
   }
 
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(6px)', zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+    <div className="modal-cover" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(6px)', zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
       onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={{ background: 'var(--bg-surface)', border: '1px solid #35405a', borderRadius: 16, width: '100%', maxWidth: 480, maxHeight: '90vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div className="modal-sheet" style={{ background: 'var(--bg-surface)', border: '1px solid #35405a', borderRadius: 16, width: '100%', maxWidth: 480, maxHeight: '90vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
         {/* Header */}
         <div style={{ padding: '22px 24px 18px', flexShrink: 0, borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -335,8 +335,9 @@ function StudentsContent() {
               <div style={{ padding: '32px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
                 Sin resultados para &quot;{search}&quot;
               </div>
-            ) : (
-              <div style={{ overflowX: 'auto' }}>
+            ) : (<>
+              {/* Desktop: table */}
+              <div className="desk-only" style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
                   <thead>
                     <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface-2)' }}>
@@ -409,7 +410,53 @@ function StudentsContent() {
                   </tbody>
                 </table>
               </div>
-            )}
+
+              {/* Mobile: cards */}
+              <div className="mob-only" style={{ flexDirection: 'column', gap: 0 }}>
+                {filtered.map(s => {
+                  const studentAssignments = assignments.filter(a => a.studentId === s.id || a.studentName === s.name);
+                  return (
+                    <div key={s.id} style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
+                      {/* Name + avatar */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                        <div style={{ width: 34, height: 34, borderRadius: '50%', background: 'rgba(59,130,246,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: '#93c5fd', flexShrink: 0 }}>
+                          {s.name.split(' ').map(p => p[0]).join('').toUpperCase().slice(0, 2)}
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</div>
+                          <div style={{ fontSize: 11, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.email || '—'}</div>
+                        </div>
+                      </div>
+                      {/* Badges */}
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+                        <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 20, background: 'rgba(167,139,250,0.15)', color: '#a78bfa', fontWeight: 600 }}>{s.level || '—'}</span>
+                        {s.plan && <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 20, background: 'var(--bg-surface-2)', color: 'var(--text-secondary)', fontWeight: 500 }}>{s.plan}</span>}
+                      </div>
+                      {/* Assignments */}
+                      {studentAssignments.map((a, i) => (
+                        <div key={i} style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 2 }}>
+                          👨‍🏫 {a.teacherName}
+                          {a.slots.length > 0 && <span style={{ color: 'var(--text-muted)' }}> · {a.slots.map(sl => `${sl.day} ${sl.hour}`).join(', ')}</span>}
+                        </div>
+                      ))}
+                      {/* Actions */}
+                      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                        {s.inStudentsTable && (
+                          <button onClick={() => handleEditClick(s)}
+                            style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
+                            Editar
+                          </button>
+                        )}
+                        <button onClick={() => deleteStudent(s.id, s.name)}
+                          style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.08)', color: '#ef4444', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
+                          Eliminar
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>)}
           </div>
         )}
       </div>
