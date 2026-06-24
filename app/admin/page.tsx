@@ -682,7 +682,7 @@ function ScoringTab() {
     <div>
 
       {/* ── Profe del Mes section ── */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 20 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 14, marginBottom: 20 }}>
 
         {/* Profe del Mes */}
         <div style={{
@@ -886,7 +886,7 @@ function ScoringTab() {
                     </td>
                     <td style={{ padding: '12px 8px' }} onClick={e => e.stopPropagation()}>
                       <button onClick={() => setEventModalTeacher(t)}
-                        style={{ padding: '5px 10px', borderRadius: 7, border: '1px solid #1E9E3A', background: 'rgba(30,158,58,0.08)', color: '#1E9E3A', cursor: 'pointer', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>
+                        style={{ padding: '8px 10px', borderRadius: 7, border: '1px solid #1E9E3A', background: 'rgba(30,158,58,0.08)', color: '#1E9E3A', cursor: 'pointer', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', minHeight: 40 }}>
                         ➕ Evento
                       </button>
                     </td>
@@ -914,7 +914,7 @@ function ScoringTab() {
             <button onClick={() => setSelectedTeacherId(null)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 18 }}>✕</button>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 16 }}>
             {/* Level requirements */}
             <div>
               <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 10 }}>Requisitos de nivel</div>
@@ -1420,7 +1420,7 @@ function AdminContent() {
             ))}
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 16 }}>
             <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
               <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)' }}>
                 <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>Alertas</span>
