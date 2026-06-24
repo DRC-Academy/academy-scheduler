@@ -902,7 +902,6 @@ function SetterContent() {
       )}
 
       {emailAssignment && <EmailModal assignment={emailAssignment} onClose={() => setEmailAssignment(null)} />}
-      </div>
       </PullToRefresh>
     </div>
   );

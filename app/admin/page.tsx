@@ -1704,7 +1704,6 @@ function AdminContent() {
           updateTeacherGrid={updateTeacherGrid}
         />
       )}
-      </div>
       </PullToRefresh>
     </div>
   );

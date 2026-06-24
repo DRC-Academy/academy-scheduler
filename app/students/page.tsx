@@ -482,7 +482,6 @@ function StudentsContent() {
           onCancel={() => setDuplicateStudent(null)}
         />
       )}
-      </div>
       </PullToRefresh>
     </div>
   );
