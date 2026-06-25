@@ -46,6 +46,7 @@ export interface Teacher {
   vacations: Vacation[];
   upcomingClasses: UpcomingClass[];
   specialties: string[];
+  libreCells?: string[];         // exact `${day}_${hour}` keys whose grid cell state === 'libre'
   internalRating?: number;
   createdAt?: string;
   currentLevel?: number;

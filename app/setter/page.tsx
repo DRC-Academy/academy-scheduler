@@ -715,23 +715,30 @@ function SetterContent() {
     setSlotFilters(prev => prev.map(f => f.id === id ? { ...f, [field]: value } : f));
   }
 
+  // A searched slot counts as available ONLY if the teacher's real grid cell
+  // (from teacher_calendars) is exactly 'libre'. libreCells holds those exact
+  // `${day}_${hour}` keys — NOT a min-max range — so 'ocupado' / 'bloqueado'
+  // ("En recuperación") / 'no_work' cells between free hours never match.
+  const teacherHasAllSlots = (t: Teacher) =>
+    slotFilters.every(sf => (t.libreCells ?? []).includes(`${sf.day}_${sf.hour}`));
+
   const filtered = useMemo(() => {
     return teachers.filter(t => {
       if (onlyAvailable && t.status !== 'available' && t.status !== 'almost_full') return false;
       if (searchName && !t.name.toLowerCase().includes(searchName.toLowerCase())) return false;
       if (specialtyFilter && !(t.specialties ?? []).includes(specialtyFilter)) return false;
-      if (slotFilters.length > 0) {
-        const hasAll = slotFilters.every(sf => {
-          const h = parseInt(sf.hour);
-          return t.timeSlots.some(ts => ts.day === sf.day && h >= parseInt(ts.from) && h < parseInt(ts.to));
-        });
-        if (!hasAll) return false;
-      }
+      if (slotFilters.length > 0 && !teacherHasAllSlots(t)) return false;
       return true;
     });
   }, [teachers, onlyAvailable, searchName, specialtyFilter, slotFilters]);
 
-  const recommended = filtered.find(t => !t.isBlocked && t.status === 'available' && t.freeSpots >= Math.max(slotFilters.length, 1));
+  // Recommend only a teacher who has EVERY searched slot genuinely free in their grid.
+  const recommended = filtered.find(t =>
+    !t.isBlocked &&
+    t.status === 'available' &&
+    t.freeSpots >= Math.max(slotFilters.length, 1) &&
+    (slotFilters.length === 0 || teacherHasAllSlots(t))
+  );
   const highlightSlots = slotFilters.map(sf => ({ day: sf.day, hour: sf.hour }));
 
   function handleAssigned(a: Assignment, s: Student) {
@@ -832,7 +839,10 @@ function SetterContent() {
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 11, fontWeight: 700, color: '#1E9E3A', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Recomendado</div>
                 <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--text-primary)' }}>{recommended.name} — {recommended.freeSpots} cupos libres</div>
-                {slotFilters.length > 0 && <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Disponible en: {slotFilters.map(sf => `${sf.day} ${sf.hour}`).join(' · ')}</div>}
+                {slotFilters.length > 0 && (() => {
+                  const freeSearched = slotFilters.filter(sf => (recommended.libreCells ?? []).includes(`${sf.day}_${sf.hour}`));
+                  return freeSearched.length > 0 && <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Disponible en: {freeSearched.map(sf => `${sf.day} ${sf.hour}`).join(' · ')}</div>;
+                })()}
               </div>
               <button onClick={() => setCalendarTeacher(recommended)} style={{ padding: '8px 18px', borderRadius: 8, border: 'none', background: '#1E9E3A', color: 'white', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>📅 Ver calendario →</button>
             </div>

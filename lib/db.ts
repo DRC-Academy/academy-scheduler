@@ -85,22 +85,28 @@ export async function dbGetTeachers(): Promise<Teacher[]> {
         return { id: key, studentName: cell.student ?? '—', day, time, duration: 1, type: 'Clase' };
       });
 
-    const liberDays: Record<string, number[]> = {};
-    Object.entries(grid)
+    // Exact list of free cell keys (`${day}_${hour}`) — the single source of truth
+    // for slot availability. ONLY cells whose state is exactly 'libre' count.
+    const libreCells = Object.entries(grid)
       .filter(([, cell]) => cell.state === 'libre')
-      .forEach(([key]) => {
-        const [day, hour] = key.split('_');
-        if (!liberDays[day]) liberDays[day] = [];
-        liberDays[day].push(parseInt(hour));
-      });
+      .map(([key]) => key);
 
-    const timeSlots = Object.entries(liberDays).map(([day, hours]) => ({
-      day,
-      from: Math.min(...hours).toString().padStart(2, '0') + ':00',
-      to:   (Math.max(...hours) + 1).toString().padStart(2, '0') + ':00',
-      spots: hours.length,
-      usedSpots: 0,
-    }));
+    // One TimeSlot per individual free hour (NOT a min-max range), so any
+    // consumer iterating from→to lands on real free cells only — occupied
+    // cells between free hours are never spanned over.
+    const timeSlots = libreCells
+      .map(key => {
+        const [day, hour] = key.split('_');
+        const h = parseInt(hour);
+        return {
+          day,
+          from: h.toString().padStart(2, '0') + ':00',
+          to:   (h + 1).toString().padStart(2, '0') + ':00',
+          spots: 1,
+          usedSpots: 0,
+        };
+      })
+      .sort((a, b) => a.day.localeCompare(b.day) || a.from.localeCompare(b.from));
 
     return {
       id:                  row.id,
@@ -114,6 +120,7 @@ export async function dbGetTeachers(): Promise<Teacher[]> {
       totalSpots:          freeSpots + ocupadoSpots,
       specialties:         row.specialties ?? ['Inglés'],
       timeSlots,
+      libreCells,
       blockedSlots:        [],
       vacations:           [],
       upcomingClasses,
