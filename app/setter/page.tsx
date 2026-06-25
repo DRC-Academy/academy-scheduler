@@ -11,6 +11,30 @@ import { useTeachers } from '@/lib/TeachersContext';
 import { daysOfWeek } from '@/lib/mock-data';
 import { Teacher, SlotFilter, Grid, Assignment, Student, AssignedSlot } from '@/types';
 
+// ─── Specialty constants ──────────────────────────────────────────────────────
+const ALL_SPECIALTIES = ['Adultos', 'Niños', 'Exámenes'] as const;
+
+const SPECIALTY_STYLE: Record<string, { color: string; bg: string; border: string }> = {
+  Adultos:   { color: '#2563eb', bg: 'rgba(59,130,246,0.1)',    border: 'rgba(59,130,246,0.35)' },
+  Niños:     { color: '#ea580c', bg: 'rgba(249,115,22,0.1)',    border: 'rgba(249,115,22,0.35)' },
+  Exámenes:  { color: '#7c3aed', bg: 'rgba(139,92,246,0.1)',    border: 'rgba(139,92,246,0.35)' },
+};
+
+function SpecialtyChip({ specialty }: { specialty: string }) {
+  const s = SPECIALTY_STYLE[specialty] ?? { color: '#6b7280', bg: 'rgba(107,114,128,0.1)', border: 'rgba(107,114,128,0.3)' };
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center',
+      padding: '2px 8px', borderRadius: 12,
+      background: s.bg, border: `1px solid ${s.border}`,
+      color: s.color, fontSize: 10, fontWeight: 700,
+      whiteSpace: 'nowrap',
+    }}>
+      {specialty}
+    </span>
+  );
+}
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 const LEVELS       = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
 const WEEKLY_HOURS = [1, 2, 3, 4, 5];
@@ -676,6 +700,7 @@ function SetterContent() {
   const [slotFilters, setSlotFilters] = useState<SlotFilter[]>([]);
   const [onlyAvailable, setOnlyAvailable] = useState(false);
   const [searchName, setSearchName] = useState('');
+  const [specialtyFilter, setSpecialtyFilter] = useState<string>('');
   const [calendarTeacher, setCalendarTeacher] = useState<Teacher | null>(null);
   const [emailAssignment, setEmailAssignment] = useState<Assignment | null>(null);
   const [activeTab, setActiveTab] = useState<'search' | 'agenda' | 'history'>('search');
@@ -694,6 +719,7 @@ function SetterContent() {
     return teachers.filter(t => {
       if (onlyAvailable && t.status !== 'available' && t.status !== 'almost_full') return false;
       if (searchName && !t.name.toLowerCase().includes(searchName.toLowerCase())) return false;
+      if (specialtyFilter && !(t.specialties ?? []).includes(specialtyFilter)) return false;
       if (slotFilters.length > 0) {
         const hasAll = slotFilters.every(sf => {
           const h = parseInt(sf.hour);
@@ -703,7 +729,7 @@ function SetterContent() {
       }
       return true;
     });
-  }, [teachers, onlyAvailable, searchName, slotFilters]);
+  }, [teachers, onlyAvailable, searchName, specialtyFilter, slotFilters]);
 
   const recommended = filtered.find(t => !t.isBlocked && t.status === 'available' && t.freeSpots >= Math.max(slotFilters.length, 1));
   const highlightSlots = slotFilters.map(sf => ({ day: sf.day, hour: sf.hour }));
@@ -774,6 +800,25 @@ function SetterContent() {
               )}
             </div>
 
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ display: 'block', marginBottom: 8, fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                Especialidad
+                <span style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 400, marginLeft: 8, textTransform: 'none', letterSpacing: 0 }}>(opcional)</span>
+              </label>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {(['', ...ALL_SPECIALTIES] as string[]).map(sp => {
+                  const active = specialtyFilter === sp;
+                  const st = sp ? SPECIALTY_STYLE[sp] : null;
+                  return (
+                    <button key={sp || 'all'} onClick={() => setSpecialtyFilter(sp)}
+                      style={{ padding: '5px 14px', borderRadius: 20, border: `1.5px solid ${active ? (st?.border ?? '#1E9E3A') : 'var(--border)'}`, background: active ? (st?.bg ?? 'rgba(30,158,58,0.1)') : 'transparent', color: active ? (st?.color ?? '#1E9E3A') : 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, fontWeight: active ? 700 : 500, fontFamily: 'inherit' }}>
+                      {sp || 'Todas'}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             <label style={{ display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer', margin: 0, fontSize: 13, color: 'var(--text-secondary)', textTransform: 'none', letterSpacing: 0 }}>
               <input type="checkbox" checked={onlyAvailable} onChange={e => setOnlyAvailable(e.target.checked)} style={{ width: 'auto', margin: 0 }} />
               Solo profesores con cupos disponibles
@@ -813,7 +858,10 @@ function SetterContent() {
                     <div style={{ width: 36, height: 36, borderRadius: '50%', background: isBlocked ? 'rgba(239,68,68,0.1)' : 'var(--bg-surface-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: isBlocked ? '#ef4444' : 'var(--text-secondary)', flexShrink: 0 }}>{t.avatar}</div>
                     <div>
                       <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)' }}>{t.name}</div>
-                      <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{t.email}</div>
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>{t.email}</div>
+                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                        {(t.specialties ?? []).map(sp => <SpecialtyChip key={sp} specialty={sp} />)}
+                      </div>
                     </div>
                   </div>
 

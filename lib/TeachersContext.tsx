@@ -1,6 +1,6 @@
 'use client';
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { Teacher, Student, Assignment, Grid, ScoringEvent, ClassCount } from '@/types';
+import { Teacher, Student, Assignment, Grid, ScoringEvent, ClassCount, AppNotification } from '@/types';
 import {
   dbGetTeachers, dbAddTeacher,
   dbGetStudents, dbUpsertStudent, dbDeleteStudent, dbUpdateStudent,
@@ -12,6 +12,8 @@ import {
   dbForceMonthlyReset, dbForceQuarterlyReset,
   dbGetClassCounts, dbIncrementClassCount,
   dbUpdateAssignmentAdjustment, dbUpdateAssignmentStartDate, dbUpdateAssignmentSlots,
+  dbUpdateTeacherSpecialties, dbUpdateTeacherInfo,
+  dbSendNotification, dbGetNotificationsForUser, dbMarkNotificationRead,
 } from '@/lib/db';
 
 interface TeachersContextType {
@@ -22,6 +24,7 @@ interface TeachersContextType {
   loadingTeachers: boolean;
   scoringEvents: ScoringEvent[];
   classCounts: ClassCount[];
+  notifications: AppNotification[];
   lastUpdated: Date | null;
   addTeacher: (t: Teacher, username: string) => Promise<void>;
   addStudent: (s: Student) => Promise<void>;
@@ -31,6 +34,8 @@ interface TeachersContextType {
   getTeacherGrid: (teacherId: string) => Promise<Grid>;
   updateTeacherGrid: (teacherId: string, grid: Grid) => Promise<void>;
   updateTeacherRating: (teacherId: string, rating: number) => Promise<void>;
+  updateTeacherSpecialties: (teacherId: string, specialties: string[]) => Promise<void>;
+  updateTeacherInfo: (teacherId: string, data: { name: string; email: string; specialties: string[] }) => Promise<void>;
   addScoringEvent: (event: Omit<ScoringEvent, 'id' | 'createdAt'>) => Promise<void>;
   loadScoringEvents: () => Promise<void>;
   checkAndRunResets: () => Promise<void>;
@@ -44,32 +49,40 @@ interface TeachersContextType {
   updateAssignmentAdjustment: (assignmentId: string, newAdjustment: number) => Promise<void>;
   updateAssignmentStartDate: (assignmentId: string, startDate: string) => Promise<void>;
   updateAssignmentSlots: (assignmentId: string, slots: Array<{ day: string; hour: string }>, weeklyHours: number) => Promise<void>;
+  sendNotification: (n: Omit<AppNotification, 'id' | 'createdAt' | 'readBy'>) => Promise<void>;
+  loadNotifications: (userId: string, role: string) => Promise<void>;
+  markNotificationRead: (notifId: string, userId: string) => Promise<void>;
 }
 
 const TeachersContext = createContext<TeachersContextType>({
   teachers: [], students: [], assignments: [], teacherGrids: {},
-  loadingTeachers: true, scoringEvents: [], classCounts: [], lastUpdated: null,
-  addTeacher:           async () => {},
-  addStudent:           async () => {},
-  deleteStudent:        async () => {},
-  updateStudent:        async () => {},
-  addAssignment:        async () => {},
-  getTeacherGrid:       async () => ({}),
-  updateTeacherGrid:    async () => {},
-  updateTeacherRating:  async () => {},
-  addScoringEvent:      async () => {},
-  loadScoringEvents:    async () => {},
-  checkAndRunResets:    async () => {},
-  assignTeacherOfMonth: async () => {},
-  assignTeacherOfQuarter: async () => {},
-  forceMonthlyReset:    async () => {},
-  forceQuarterlyReset:  async () => {},
+  loadingTeachers: true, scoringEvents: [], classCounts: [], notifications: [], lastUpdated: null,
+  addTeacher:               async () => {},
+  addStudent:               async () => {},
+  deleteStudent:            async () => {},
+  updateStudent:            async () => {},
+  addAssignment:            async () => {},
+  getTeacherGrid:           async () => ({}),
+  updateTeacherGrid:        async () => {},
+  updateTeacherRating:      async () => {},
+  updateTeacherSpecialties: async () => {},
+  updateTeacherInfo:        async () => {},
+  addScoringEvent:          async () => {},
+  loadScoringEvents:        async () => {},
+  checkAndRunResets:        async () => {},
+  assignTeacherOfMonth:     async () => {},
+  assignTeacherOfQuarter:   async () => {},
+  forceMonthlyReset:        async () => {},
+  forceQuarterlyReset:      async () => {},
   reloadAll:                  async () => {},
   loadClassCounts:            async () => {},
   incrementClassCount:        async () => ({ id: '', teacherId: '', studentName: '', classNumber: 0, lastUpdated: '' }),
   updateAssignmentAdjustment: async () => {},
   updateAssignmentStartDate:  async () => {},
   updateAssignmentSlots:      async () => {},
+  sendNotification:           async () => {},
+  loadNotifications:          async () => {},
+  markNotificationRead:       async () => {},
 });
 
 export function TeachersProvider({ children }: { children: ReactNode }) {
@@ -80,6 +93,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   const [loadingTeachers, setLoadingTeachers] = useState(true);
   const [scoringEvents, setScoringEvents] = useState<ScoringEvent[]>([]);
   const [classCounts, setClassCounts]   = useState<ClassCount[]>([]);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [lastUpdated, setLastUpdated]   = useState<Date | null>(null);
 
   // Silent reload — no loading spinner, just swaps in fresh data
@@ -174,6 +188,34 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     setTeachers(prev => prev.map(t => t.id === teacherId ? { ...t, internalRating: rating } : t));
   }
 
+  async function updateTeacherSpecialties(teacherId: string, specialties: string[]) {
+    await dbUpdateTeacherSpecialties(teacherId, specialties);
+    setTeachers(prev => prev.map(t => t.id === teacherId ? { ...t, specialties } : t));
+  }
+
+  async function updateTeacherInfo(teacherId: string, data: { name: string; email: string; specialties: string[] }) {
+    await dbUpdateTeacherInfo(teacherId, data);
+    setTeachers(prev => prev.map(t => t.id === teacherId ? { ...t, ...data } : t));
+  }
+
+  async function sendNotification(n: Omit<AppNotification, 'id' | 'createdAt' | 'readBy'>) {
+    await dbSendNotification(n);
+  }
+
+  async function loadNotifications(userId: string, role: string) {
+    const data = await dbGetNotificationsForUser(userId, role);
+    setNotifications(data);
+  }
+
+  async function markNotificationRead(notifId: string, userId: string) {
+    await dbMarkNotificationRead(notifId, userId);
+    setNotifications(prev => prev.map(n =>
+      n.id === notifId && !n.readBy.includes(userId)
+        ? { ...n, readBy: [...n.readBy, userId] }
+        : n
+    ));
+  }
+
   async function addScoringEvent(event: Omit<ScoringEvent, 'id' | 'createdAt'>) {
     const newEvent = await dbAddScoringEvent(event);
     setScoringEvents(prev => [newEvent, ...prev]);
@@ -257,14 +299,16 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   return (
     <TeachersContext.Provider value={{
       teachers, students, assignments, teacherGrids, loadingTeachers,
-      scoringEvents, classCounts, lastUpdated,
+      scoringEvents, classCounts, notifications, lastUpdated,
       addTeacher, addStudent, deleteStudent, updateStudent, addAssignment,
-      getTeacherGrid, updateTeacherGrid, updateTeacherRating, addScoringEvent,
-      loadScoringEvents, checkAndRunResets,
+      getTeacherGrid, updateTeacherGrid, updateTeacherRating,
+      updateTeacherSpecialties, updateTeacherInfo,
+      addScoringEvent, loadScoringEvents, checkAndRunResets,
       assignTeacherOfMonth, assignTeacherOfQuarter,
       forceMonthlyReset, forceQuarterlyReset,
       reloadAll, loadClassCounts, incrementClassCount,
       updateAssignmentAdjustment, updateAssignmentStartDate, updateAssignmentSlots,
+      sendNotification, loadNotifications, markNotificationRead,
     }}>
       {children}
     </TeachersContext.Provider>

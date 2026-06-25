@@ -167,3 +167,15 @@ export interface ClassCount {
   classNumber: number;
   lastUpdated: string;
 }
+
+export interface AppNotification {
+  id: string;
+  targetUser?: string;
+  targetRole?: string;
+  title: string;
+  body: string;
+  type: string;
+  readBy: string[];
+  createdAt: string;
+  createdBy: string;
+}

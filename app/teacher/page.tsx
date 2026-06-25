@@ -8,7 +8,31 @@ import { VisualCalendar, DAYS, cellKey } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
 import { calcCurrentClassNumber, dbCheckStudentExists } from '@/lib/db';
-import { Grid, Teacher, Assignment, ScoringEvent, Student } from '@/types';
+import { Grid, Teacher, Assignment, ScoringEvent, Student, AppNotification } from '@/types';
+
+// ─── Specialty constants ──────────────────────────────────────────────────────
+const ALL_SPECIALTIES = ['Adultos', 'Niños', 'Exámenes'] as const;
+
+const SPECIALTY_STYLE: Record<string, { color: string; bg: string; border: string }> = {
+  Adultos:   { color: '#2563eb', bg: 'rgba(59,130,246,0.1)',    border: 'rgba(59,130,246,0.35)' },
+  Niños:     { color: '#ea580c', bg: 'rgba(249,115,22,0.1)',    border: 'rgba(249,115,22,0.35)' },
+  Exámenes:  { color: '#7c3aed', bg: 'rgba(139,92,246,0.1)',    border: 'rgba(139,92,246,0.35)' },
+};
+
+function SpecialtyChip({ specialty }: { specialty: string }) {
+  const s = SPECIALTY_STYLE[specialty] ?? { color: '#6b7280', bg: 'rgba(107,114,128,0.1)', border: 'rgba(107,114,128,0.3)' };
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center',
+      padding: '2px 9px', borderRadius: 12,
+      background: s.bg, border: `1px solid ${s.border}`,
+      color: s.color, fontSize: 11, fontWeight: 700,
+      whiteSpace: 'nowrap',
+    }}>
+      {specialty}
+    </span>
+  );
+}
 
 // ── localStorage helpers for milestone banner persistence ─────────────────────
 function hasSeenBanner(teacherId: string, studentName: string, milestone: number): boolean {
@@ -651,11 +675,142 @@ function TeacherScoringTab({ teacher, myAssignments, myEvents }: {
   );
 }
 
+// ─── Notifications Tab (teacher) ─────────────────────────────────────────────
+function TeacherNotificationsTab({ teacher, myAssignments, notifications, loadNotifications, markNotificationRead }: {
+  teacher: Teacher;
+  myAssignments: Assignment[];
+  notifications: AppNotification[];
+  loadNotifications: (userId: string, role: string) => Promise<void>;
+  markNotificationRead: (notifId: string, userId: string) => Promise<void>;
+}) {
+  const today = new Date();
+
+  useEffect(() => {
+    loadNotifications(teacher.id, 'teacher');
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teacher.id]);
+
+  // Auto-mark as read
+  useEffect(() => {
+    for (const n of notifications) {
+      if (!n.readBy.includes(teacher.id)) {
+        markNotificationRead(n.id, teacher.id);
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [notifications.length]);
+
+  // Section A: near clase 15 (≤3 clases para llegar)
+  const near15 = myAssignments
+    .map(a => ({ a, classNum: calcCurrentClassNumber(a) }))
+    .filter(({ classNum }) => classNum < 15 && (15 - classNum) <= 3)
+    .map(({ a, classNum }) => ({ name: a.studentName, classNum, faltanClases: 15 - classNum }));
+
+  // Section B: near 6 months (≤15 days or already there)
+  const near6m = myAssignments
+    .filter(a => a.startDate)
+    .map(a => {
+      const start     = new Date(a.startDate! + 'T00:00:00');
+      const daysActive = Math.floor((today.getTime() - start.getTime()) / 86400000);
+      const daysTo6m   = Math.max(0, 180 - daysActive);
+      const bonusDate  = new Date(start.getTime() + 180 * 86400000);
+      return { a, daysActive, daysTo6m, bonusDate, bonusAvailable: daysActive >= 180 };
+    })
+    .filter(({ daysTo6m, bonusAvailable }) => bonusAvailable || daysTo6m <= 15);
+
+  const cardStyle = { borderRadius: 12, padding: '16px 20px', marginBottom: 10 };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+
+      {/* Section A */}
+      <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)', marginBottom: 6, marginTop: 4 }}>🎬 Alumnos cerca de clase 15</div>
+      {near15.length === 0 ? (
+        <div style={{ ...cardStyle, background: 'var(--bg-surface)', border: '1px solid var(--border)', fontSize: 13, color: 'var(--text-muted)', textAlign: 'center', padding: '20px' }}>
+          Ningún alumno está a 3 clases o menos de la clase 15.
+        </div>
+      ) : near15.map(item => (
+        <div key={item.name} style={{ ...cardStyle, background: 'rgba(255,196,0,0.1)', border: '1.5px solid rgba(255,196,0,0.5)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 24 }}>🎬</span>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 14, color: '#92400E' }}>{item.name}</div>
+              <div style={{ fontSize: 13, color: '#b45309', marginTop: 2 }}>
+                Clase actual: <b>{item.classNum}</b> · Faltan <b>{item.faltanClases}</b> {item.faltanClases === 1 ? 'clase' : 'clases'} para la clase 15
+              </div>
+            </div>
+          </div>
+        </div>
+      ))}
+
+      {/* Section B */}
+      <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)', marginBottom: 6, marginTop: 10 }}>🎁 Alumnos cerca de 6 meses</div>
+      {near6m.length === 0 ? (
+        <div style={{ ...cardStyle, background: 'var(--bg-surface)', border: '1px solid var(--border)', fontSize: 13, color: 'var(--text-muted)', textAlign: 'center', padding: '20px' }}>
+          Ningún alumno está a 15 días o menos de cumplir 6 meses.
+        </div>
+      ) : near6m.map(item => (
+        <div key={item.a.id} style={{ ...cardStyle, background: item.bonusAvailable ? 'rgba(255,196,0,0.12)' : 'rgba(249,115,22,0.07)', border: `1.5px solid ${item.bonusAvailable ? '#D97706' : 'rgba(249,115,22,0.35)'}` }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 24 }}>🎁</span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 700, fontSize: 14, color: '#92400E' }}>{item.a.studentName}</div>
+              <div style={{ fontSize: 13, color: '#b45309', marginTop: 2 }}>
+                Inicio: {new Date(item.a.startDate! + 'T00:00:00').toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' })}
+                {' · '}
+                {item.bonusAvailable
+                  ? <span style={{ fontWeight: 700 }}>¡Cumplió 6 meses! Solicitar bono</span>
+                  : <>Cumple 6 meses el <b>{item.bonusDate.toLocaleDateString('es-ES', { day: 'numeric', month: 'long' })}</b> · Faltan <b>{item.daysTo6m}</b> días</>
+                }
+              </div>
+              {item.bonusAvailable && (
+                <div style={{ marginTop: 6, fontSize: 12, background: 'rgba(255,196,0,0.2)', border: '1px solid #D97706', borderRadius: 7, padding: '5px 10px', color: '#92400E', fontWeight: 600 }}>
+                  🎁 Bono disponible — escribir a <span style={{ fontWeight: 700 }}>pagos@drcacademy.com</span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      ))}
+
+      {/* Section C */}
+      <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)', marginBottom: 6, marginTop: 10 }}>📢 Avisos y circulares</div>
+      {notifications.length === 0 ? (
+        <div style={{ ...cardStyle, background: 'var(--bg-surface)', border: '1px solid var(--border)', fontSize: 13, color: 'var(--text-muted)', textAlign: 'center', padding: '20px' }}>
+          No hay avisos por el momento.
+        </div>
+      ) : notifications.map(n => {
+        const isRead = n.readBy.includes(teacher.id);
+        return (
+          <div key={n.id} style={{ ...cardStyle, background: isRead ? 'var(--bg-surface)' : 'rgba(30,158,58,0.04)', border: `1.5px solid ${isRead ? 'var(--border)' : 'rgba(30,158,58,0.3)'}` }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+              <span style={{ fontSize: 22, marginTop: 2 }}>📢</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)' }}>{n.title}</div>
+                  {!isRead && <span style={{ fontSize: 10, padding: '1px 7px', borderRadius: 10, background: 'rgba(30,158,58,0.15)', border: '1px solid rgba(30,158,58,0.3)', color: '#1E9E3A', fontWeight: 700 }}>NUEVO</span>}
+                </div>
+                <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: 6 }}>{n.body}</div>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                  {new Date(n.createdAt).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ─── Teacher Content ──────────────────────────────────────────────────────────
 function TeacherContent() {
   const { user } = useAuth();
-  const { teachers, assignments, scoringEvents, getTeacherGrid, updateTeacherGrid, addStudent, addAssignment, updateAssignmentAdjustment, updateAssignmentStartDate, updateAssignmentSlots, reloadAll } = useTeachers();
-  const [activeTab, setActiveTab] = useState<'calendar' | 'classes' | 'scoring'>('calendar');
+  const { teachers, assignments, scoringEvents, notifications, getTeacherGrid, updateTeacherGrid, addStudent, addAssignment, updateAssignmentAdjustment, updateAssignmentStartDate, updateAssignmentSlots, reloadAll, updateTeacherSpecialties, loadNotifications, markNotificationRead } = useTeachers();
+  const [activeTab, setActiveTab] = useState<'calendar' | 'classes' | 'scoring' | 'notifications'>('calendar');
+  const [showSpecialtiesModal, setShowSpecialtiesModal] = useState(false);
+  const [specialtiesDraft, setSpecialtiesDraft] = useState<string[]>([]);
+  const [savingSpecialties, setSavingSpecialties] = useState(false);
   const [grid, setGrid]           = useState<Grid>({});
   const [gridLoading, setGridLoading]   = useState(true);
   const [saveStatus, setSaveStatus]     = useState<'idle' | 'saving' | 'saved'>('idle');
@@ -858,9 +1013,10 @@ function TeacherContent() {
   const legacyList = Array.from(legacyMap.values());
 
   const tabs = [
-    { id: 'calendar', label: '📅 Mi calendario' },
-    { id: 'classes',  label: '📚 Clases asignadas' },
-    { id: 'scoring',  label: '⭐ Mi Scoring' },
+    { id: 'calendar',      label: '📅 Mi calendario' },
+    { id: 'classes',       label: '📚 Clases asignadas' },
+    { id: 'scoring',       label: '⭐ Mi Scoring' },
+    { id: 'notifications', label: '🔔 Avisos' },
   ] as const;
 
   return (
@@ -920,9 +1076,16 @@ function TeacherContent() {
         {/* Profile */}
         <div className="teacher-profile-card" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 14, padding: '18px 22px', marginBottom: 18, display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
           <div style={{ width: 50, height: 50, borderRadius: '50%', background: 'rgba(34,197,94,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 700, color: '#4ade80', flexShrink: 0 }}>{teacher.avatar}</div>
-          <div style={{ flex: 1 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontWeight: 700, fontSize: 20, color: 'var(--text-primary)' }}>{teacher.name}</div>
             <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 2 }}>{teacher.email}</div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginTop: 8 }}>
+              {(teacher.specialties ?? []).map(sp => <SpecialtyChip key={sp} specialty={sp} />)}
+              <button onClick={() => { setSpecialtiesDraft([...(teacher.specialties ?? [])]); setShowSpecialtiesModal(true); }}
+                style={{ padding: '2px 10px', borderRadius: 12, border: '1px dashed var(--border)', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 11, fontFamily: 'inherit' }}>
+                {(teacher.specialties ?? []).length === 0 ? '+ Mis especialidades' : '✏️ Editar'}
+              </button>
+            </div>
           </div>
           <div className="teacher-profile-stats" style={{ display: 'flex', gap: 20 }}>
             {[
@@ -937,6 +1100,42 @@ function TeacherContent() {
             ))}
           </div>
         </div>
+
+        {/* Specialties modal */}
+        {showSpecialtiesModal && (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+            onClick={e => { if (e.target === e.currentTarget) setShowSpecialtiesModal(false); }}>
+            <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 16, width: '100%', maxWidth: 400, padding: 28 }}>
+              <div style={{ fontWeight: 700, fontSize: 17, color: 'var(--text-primary)', marginBottom: 16 }}>Mis especialidades</div>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 20 }}>
+                {ALL_SPECIALTIES.map(s => {
+                  const active = specialtiesDraft.includes(s);
+                  const st = SPECIALTY_STYLE[s];
+                  return (
+                    <button key={s} onClick={() => setSpecialtiesDraft(prev => active ? prev.filter(x => x !== s) : [...prev, s])}
+                      style={{ padding: '8px 18px', borderRadius: 20, border: `2px solid ${active ? st.border : 'var(--border)'}`, background: active ? st.bg : 'transparent', color: active ? st.color : 'var(--text-secondary)', cursor: 'pointer', fontSize: 14, fontWeight: active ? 700 : 500, fontFamily: 'inherit', transition: 'all 0.12s' }}>
+                      {s}
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button onClick={() => setShowSpecialtiesModal(false)} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 14, fontFamily: 'inherit' }}>Cancelar</button>
+                <button
+                  onClick={async () => {
+                    setSavingSpecialties(true);
+                    await updateTeacherSpecialties(teacher.id, specialtiesDraft);
+                    setSavingSpecialties(false);
+                    setShowSpecialtiesModal(false);
+                  }}
+                  disabled={savingSpecialties}
+                  style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: savingSpecialties ? '#d1d5db' : '#1E9E3A', color: 'white', cursor: savingSpecialties ? 'not-allowed' : 'pointer', fontSize: 14, fontWeight: 700, fontFamily: 'inherit' }}>
+                  {savingSpecialties ? 'Guardando...' : 'Guardar especialidades'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Tabs */}
         <div style={{ display: 'flex', gap: 4, marginBottom: 18, background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 4 }}>
@@ -1119,6 +1318,20 @@ function TeacherContent() {
             myAssignments={myAssignments}
             myEvents={myEvents}
           />
+        )}
+
+        {activeTab === 'notifications' && (
+          <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '20px' }}>
+            <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)', marginBottom: 4 }}>Notificaciones</div>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 18 }}>Alertas automáticas y avisos del equipo DRC.</div>
+            <TeacherNotificationsTab
+              teacher={teacher}
+              myAssignments={myAssignments}
+              notifications={notifications}
+              loadNotifications={loadNotifications}
+              markNotificationRead={markNotificationRead}
+            />
+          </div>
         )}
 
         <div style={{ marginTop: 16, border: '1px dashed var(--border)', borderRadius: 10, padding: '12px 18px', display: 'flex', alignItems: 'center', gap: 10 }}>

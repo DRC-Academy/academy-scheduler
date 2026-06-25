@@ -10,7 +10,238 @@ import { useTeachers } from '@/lib/TeachersContext';
 import { useAuth } from '@/lib/AuthContext';
 import { mockAlerts } from '@/lib/mock-data';
 import { Teacher, Grid, Assignment, ScoringEvent, ScoringEventType } from '@/types';
-import { EVENT_POINTS, EVENT_EUROS, calcCurrentClassNumber, dbUpdateAssignmentStartDate } from '@/lib/db';
+import { EVENT_POINTS, EVENT_EUROS, calcCurrentClassNumber, dbUpdateAssignmentStartDate, dbGetAllNotifications } from '@/lib/db';
+import { AppNotification } from '@/types';
+
+// ─── Specialty constants ──────────────────────────────────────────────────────
+const ALL_SPECIALTIES = ['Adultos', 'Niños', 'Exámenes'] as const;
+
+const SPECIALTY_STYLE: Record<string, { color: string; bg: string; border: string }> = {
+  Adultos:   { color: '#2563eb', bg: 'rgba(59,130,246,0.1)',    border: 'rgba(59,130,246,0.35)' },
+  Niños:     { color: '#ea580c', bg: 'rgba(249,115,22,0.1)',    border: 'rgba(249,115,22,0.35)' },
+  Exámenes:  { color: '#7c3aed', bg: 'rgba(139,92,246,0.1)',    border: 'rgba(139,92,246,0.35)' },
+};
+
+function SpecialtyChip({ specialty }: { specialty: string }) {
+  const s = SPECIALTY_STYLE[specialty] ?? { color: '#6b7280', bg: 'rgba(107,114,128,0.1)', border: 'rgba(107,114,128,0.3)' };
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center',
+      padding: '2px 8px', borderRadius: 12,
+      background: s.bg, border: `1px solid ${s.border}`,
+      color: s.color, fontSize: 10, fontWeight: 700,
+      whiteSpace: 'nowrap',
+    }}>
+      {specialty}
+    </span>
+  );
+}
+
+// ─── Edit Teacher Modal ───────────────────────────────────────────────────────
+function EditTeacherModal({ teacher, onClose, onSave }: {
+  teacher: Teacher;
+  onClose: () => void;
+  onSave: (id: string, data: { name: string; email: string; specialties: string[] }) => Promise<void>;
+}) {
+  const [form, setForm] = useState({
+    name:       teacher.name,
+    email:      teacher.email,
+    specialties: [...(teacher.specialties ?? [])],
+  });
+  const [saving, setSaving] = useState(false);
+
+  function toggleSpecialty(s: string) {
+    setForm(f => ({
+      ...f,
+      specialties: f.specialties.includes(s)
+        ? f.specialties.filter(x => x !== s)
+        : [...f.specialties, s],
+    }));
+  }
+
+  async function handleSave() {
+    if (!form.name.trim()) return;
+    setSaving(true);
+    await onSave(teacher.id, form);
+    setSaving(false);
+    onClose();
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(6px)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div style={{ background: '#F7F7F5', border: '1px solid var(--border)', borderRadius: 16, width: '100%', maxWidth: 440, padding: 28 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 22 }}>
+          <div style={{ fontWeight: 700, fontSize: 17, color: '#111827' }}>Editar profesor</div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: '#6b7280' }}>✕</button>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 5 }}>Nombre</label>
+            <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1.5px solid var(--border)', fontSize: 13, background: 'white', color: '#111827', fontFamily: 'inherit' }} />
+          </div>
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 5 }}>Email</label>
+            <input type="email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1.5px solid var(--border)', fontSize: 13, background: 'white', color: '#111827', fontFamily: 'inherit' }} />
+          </div>
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 8 }}>Especialidades</label>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {ALL_SPECIALTIES.map(s => {
+                const active = form.specialties.includes(s);
+                const st = SPECIALTY_STYLE[s];
+                return (
+                  <button key={s} onClick={() => toggleSpecialty(s)} style={{
+                    padding: '6px 14px', borderRadius: 20,
+                    border: `2px solid ${active ? st.border : 'var(--border)'}`,
+                    background: active ? st.bg : 'transparent',
+                    color: active ? st.color : '#6b7280',
+                    cursor: 'pointer', fontSize: 13, fontWeight: active ? 700 : 500,
+                    fontFamily: 'inherit', transition: 'all 0.12s',
+                  }}>
+                    {s}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
+            <button onClick={onClose} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#6b7280', cursor: 'pointer', fontSize: 14, fontFamily: 'inherit' }}>Cancelar</button>
+            <button onClick={handleSave} disabled={!form.name.trim() || saving}
+              style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: form.name.trim() && !saving ? '#1E9E3A' : '#d1d5db', color: 'white', cursor: form.name.trim() && !saving ? 'pointer' : 'not-allowed', fontSize: 14, fontWeight: 600, fontFamily: 'inherit' }}>
+              {saving ? 'Guardando...' : 'Guardar cambios'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Notifications Admin Tab ──────────────────────────────────────────────────
+function NotificationsAdminTab() {
+  const { teachers, sendNotification } = useTeachers();
+  const { user } = useAuth();
+  const [targetType, setTargetType] = useState<'all' | 'specific'>('all');
+  const [targetTeacherId, setTargetTeacherId] = useState('');
+  const [title, setTitle] = useState('');
+  const [body, setBody] = useState('');
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [allNotifs, setAllNotifs] = useState<AppNotification[]>([]);
+  const [loadingNotifs, setLoadingNotifs] = useState(true);
+
+  async function loadAll() {
+    setLoadingNotifs(true);
+    const data = await dbGetAllNotifications();
+    setAllNotifs(data);
+    setLoadingNotifs(false);
+  }
+
+  useEffect(() => { loadAll(); }, []);
+
+  async function handleSend() {
+    if (!title.trim() || !body.trim()) return;
+    if (targetType === 'specific' && !targetTeacherId) return;
+    setSending(true);
+    await sendNotification({
+      targetUser: targetType === 'specific' ? targetTeacherId : undefined,
+      targetRole: targetType === 'all' ? 'teacher' : undefined,
+      title: title.trim(),
+      body: body.trim(),
+      type: 'circular',
+      createdBy: user?.displayName ?? 'Admin',
+    });
+    setTitle('');
+    setBody('');
+    setSent(true);
+    setSending(false);
+    setTimeout(() => setSent(false), 2500);
+    await loadAll();
+  }
+
+  const inputStyle = {
+    width: '100%', padding: '9px 12px', borderRadius: 8,
+    border: '1.5px solid var(--border)', fontSize: 13,
+    background: 'white', color: '#111827', fontFamily: "'Radio Canada', sans-serif",
+    boxSizing: 'border-box' as const,
+  };
+
+  const canSend = !!title.trim() && !!body.trim() && !sending && (targetType === 'all' || !!targetTeacherId);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      {/* Send form */}
+      <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '22px 24px' }}>
+        <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)', marginBottom: 18 }}>📤 Enviar notificación</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>Destinatario</label>
+            <div style={{ display: 'flex', gap: 8, marginBottom: targetType === 'specific' ? 10 : 0 }}>
+              {(['all', 'specific'] as const).map(t => (
+                <button key={t} onClick={() => { setTargetType(t); setTargetTeacherId(''); }}
+                  style={{ padding: '7px 16px', borderRadius: 8, border: `1.5px solid ${targetType === t ? '#1E9E3A' : 'var(--border)'}`, background: targetType === t ? 'rgba(30,158,58,0.1)' : 'transparent', color: targetType === t ? '#1E9E3A' : 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontWeight: targetType === t ? 700 : 500, fontFamily: 'inherit' }}>
+                  {t === 'all' ? '👥 Todos los profesores' : '👤 Un profesor específico'}
+                </button>
+              ))}
+            </div>
+            {targetType === 'specific' && (
+              <select value={targetTeacherId} onChange={e => setTargetTeacherId(e.target.value)} style={inputStyle}>
+                <option value="">— Seleccionar profesor —</option>
+                {teachers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+            )}
+          </div>
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>Título <span style={{ color: '#ef4444' }}>*</span></label>
+            <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Ej: Recordatorio reunión de equipo" style={inputStyle} />
+          </div>
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>Mensaje <span style={{ color: '#ef4444' }}>*</span></label>
+            <textarea value={body} onChange={e => setBody(e.target.value)} placeholder="Escribí el mensaje completo aquí..." rows={4}
+              style={{ ...inputStyle, resize: 'vertical' }} />
+          </div>
+          <button onClick={handleSend} disabled={!canSend}
+            style={{ padding: '11px 20px', borderRadius: 9, border: 'none', background: canSend ? '#1E9E3A' : '#d1d5db', color: 'white', cursor: canSend ? 'pointer' : 'not-allowed', fontSize: 14, fontWeight: 700, fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'center' }}>
+            {sent ? '✅ Enviado' : sending ? '⏳ Enviando...' : '📤 Enviar notificación'}
+          </button>
+        </div>
+      </div>
+
+      {/* History */}
+      <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '22px 24px' }}>
+        <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)', marginBottom: 16 }}>📋 Historial de enviadas</div>
+        {loadingNotifs ? (
+          <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)', fontSize: 13 }}>Cargando...</div>
+        ) : allNotifs.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)', fontSize: 13 }}>Sin notificaciones enviadas todavía.</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {allNotifs.map(n => {
+              const targetTeacher = n.targetUser ? teachers.find(t => t.id === n.targetUser) : null;
+              const dest = targetTeacher ? targetTeacher.name : n.targetRole === 'teacher' ? 'Todos los profesores' : '—';
+              return (
+                <div key={n.id} style={{ background: 'var(--bg-surface-2)', border: '1px solid var(--border)', borderRadius: 10, padding: '14px 18px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)', marginBottom: 4 }}>{n.title}</div>
+                      <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: 8 }}>{n.body}</div>
+                      <div style={{ display: 'flex', gap: 12, fontSize: 11, color: 'var(--text-muted)', flexWrap: 'wrap' }}>
+                        <span>📨 Para: <b style={{ color: 'var(--text-secondary)' }}>{dest}</b></span>
+                        <span>📅 {new Date(n.createdAt).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+                        <span>👁 Leído por: <b style={{ color: n.readBy.length > 0 ? '#1E9E3A' : 'var(--text-muted)' }}>{n.readBy.length}</b></span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 // ─── Scoring constants ────────────────────────────────────────────────────────
 const LEVEL_INFO = {
@@ -857,12 +1088,15 @@ function ScoringTab() {
                           color: isBlocked ? '#ef4444' : info.color, flexShrink: 0,
                         }}>{t.avatar}</div>
                         <div>
-                          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                             {t.name}
                             {isToM && <span title="Profe del Mes" style={{ fontSize: 14 }}>🏆</span>}
                             {isToQ && <span title="Profe del Trimestre" style={{ fontSize: 12 }}>🏅</span>}
                           </div>
-                          {t.createdAt && <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>desde {new Date(t.createdAt).toLocaleDateString('es-ES', { month: 'short', year: 'numeric' })}</div>}
+                          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 3 }}>
+                            {(t.specialties ?? []).map(sp => <SpecialtyChip key={sp} specialty={sp} />)}
+                          </div>
+                          {t.createdAt && <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>desde {new Date(t.createdAt).toLocaleDateString('es-ES', { month: 'short', year: 'numeric' })}</div>}
                         </div>
                       </div>
                     </td>
@@ -1342,11 +1576,13 @@ function ClassTrackingTab() {
 
 // ─── Admin Content ────────────────────────────────────────────────────────────
 function AdminContent() {
-  const { teachers, assignments, students, addTeacher, loadingTeachers, getTeacherGrid, updateTeacherGrid, checkAndRunResets, reloadAll } = useTeachers();
+  const { teachers, assignments, students, addTeacher, loadingTeachers, getTeacherGrid, updateTeacherGrid, checkAndRunResets, reloadAll, updateTeacherInfo } = useTeachers();
   const [selectedTeacher, setSelectedTeacher] = useState<string | null>(null);
   const [showNewTeacher, setShowNewTeacher] = useState(false);
-  const [activeTab, setActiveTab] = useState<'overview' | 'teachers' | 'weekly' | 'scoring' | 'tracking'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'teachers' | 'weekly' | 'scoring' | 'tracking' | 'notifications'>('overview');
   const [editCalendarTeacher, setEditCalendarTeacher] = useState<Teacher | null>(null);
+  const [editTeacher, setEditTeacher] = useState<Teacher | null>(null);
+  const [specialtyFilter, setSpecialtyFilter] = useState<string>('');
   const [editingStartDate, setEditingStartDate] = useState<Record<string, string>>({});
   const [savingStartDate, setSavingStartDate] = useState<Set<string>>(new Set());
 
@@ -1369,11 +1605,12 @@ function AdminContent() {
   const teacher = selectedTeacher ? teachers.find(t => t.id === selectedTeacher) : null;
 
   const tabs = [
-    { id: 'overview',  label: '📊 Resumen' },
-    { id: 'teachers',  label: '👨‍🏫 Profesores' },
-    { id: 'weekly',    label: '📅 Cobertura' },
-    { id: 'scoring',   label: '⭐ Scoring' },
-    { id: 'tracking',  label: '📈 Seguimiento' },
+    { id: 'overview',       label: '📊 Resumen' },
+    { id: 'teachers',       label: '👨‍🏫 Profesores' },
+    { id: 'weekly',         label: '📅 Cobertura' },
+    { id: 'scoring',        label: '⭐ Scoring' },
+    { id: 'tracking',       label: '📈 Seguimiento' },
+    { id: 'notifications',  label: '🔔 Notificaciones' },
   ] as const;
 
   return (
@@ -1473,19 +1710,36 @@ function AdminContent() {
         {/* TEACHERS TAB */}
         {activeTab === 'teachers' && (
           <div>
+            {/* Specialty filter */}
+            <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)' }}>Filtrar por especialidad:</span>
+              {(['', ...ALL_SPECIALTIES] as string[]).map(sp => {
+                const active = specialtyFilter === sp;
+                const st = sp ? SPECIALTY_STYLE[sp] : null;
+                return (
+                  <button key={sp || 'all'} onClick={() => setSpecialtyFilter(sp)}
+                    style={{ padding: '4px 12px', borderRadius: 20, border: `1.5px solid ${active ? (st?.border ?? '#1E9E3A') : 'var(--border)'}`, background: active ? (st?.bg ?? 'rgba(30,158,58,0.1)') : 'transparent', color: active ? (st?.color ?? '#1E9E3A') : 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, fontWeight: active ? 700 : 500, fontFamily: 'inherit' }}>
+                    {sp || 'Todas'}
+                  </button>
+                );
+              })}
+            </div>
+
             {/* Desktop: table */}
             <div className="desk-only" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', marginBottom: 16 }}>
               <div style={{ overflowX: 'auto', maxHeight: 500, overflowY: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}>
                     <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)' }}>
-                      {['Nombre', 'Estado', 'Nivel', 'Carga', 'Cupos', ''].map(h => (
+                      {['Nombre', 'Especialidades', 'Estado', 'Nivel', 'Carga', 'Cupos', ''].map(h => (
                         <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {teachers.map(t => {
+                    {teachers
+                      .filter(t => !specialtyFilter || (t.specialties ?? []).includes(specialtyFilter))
+                      .map(t => {
                       const loadPct = t.maxWeeklyLoad > 0 ? Math.round((t.weeklyLoad / t.maxWeeklyLoad) * 100) : 0;
                       const loadColor = loadPct >= 90 ? '#ef4444' : loadPct >= 70 ? '#f59e0b' : '#1E9E3A';
                       const isBlocked = t.isBlocked ?? false;
@@ -1498,6 +1752,12 @@ function AdminContent() {
                                 <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{t.name}</span>
                                 {isBlocked && <span style={{ marginLeft: 6, fontSize: 10, color: '#ef4444', fontWeight: 700 }}>🔴 BLOQUEADO</span>}
                               </div>
+                            </div>
+                          </td>
+                          <td style={{ padding: '11px 14px' }}>
+                            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                              {(t.specialties ?? []).map(sp => <SpecialtyChip key={sp} specialty={sp} />)}
+                              {(t.specialties ?? []).length === 0 && <span style={{ fontSize: 11, color: 'var(--text-muted)', fontStyle: 'italic' }}>—</span>}
                             </div>
                           </td>
                           <td style={{ padding: '11px 14px' }}><StatusBadge status={t.status} /></td>
@@ -1518,9 +1778,14 @@ function AdminContent() {
                             <span style={{ fontSize: 13, color: t.freeSpots > 0 ? '#1E9E3A' : 'var(--text-muted)', fontWeight: 600 }}>{t.freeSpots}</span>
                           </td>
                           <td style={{ padding: '11px 14px' }}>
-                            <button onClick={() => setSelectedTeacher(t.id === selectedTeacher ? null : t.id)} style={{ padding: '5px 12px', borderRadius: 7, border: '1px solid var(--border)', background: selectedTeacher === t.id ? 'var(--bg-surface-3)' : 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 12 }}>
-                              {selectedTeacher === t.id ? 'Cerrar' : 'Ver'}
-                            </button>
+                            <div style={{ display: 'flex', gap: 6 }}>
+                              <button onClick={() => setEditTeacher(t)} style={{ padding: '5px 10px', borderRadius: 7, border: '1px solid rgba(30,158,58,0.35)', background: 'rgba(30,158,58,0.07)', color: '#1E9E3A', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>
+                                Editar
+                              </button>
+                              <button onClick={() => setSelectedTeacher(t.id === selectedTeacher ? null : t.id)} style={{ padding: '5px 12px', borderRadius: 7, border: '1px solid var(--border)', background: selectedTeacher === t.id ? 'var(--bg-surface-3)' : 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 12 }}>
+                                {selectedTeacher === t.id ? 'Cerrar' : 'Ver'}
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -1532,7 +1797,9 @@ function AdminContent() {
 
             {/* Mobile: cards */}
             <div className="mob-only" style={{ flexDirection: 'column', gap: 10, marginBottom: 16 }}>
-              {teachers.map(t => {
+              {teachers
+                .filter(t => !specialtyFilter || (t.specialties ?? []).includes(specialtyFilter))
+                .map(t => {
                 const isBlocked = t.isBlocked ?? false;
                 const teacherAssignments = assignments.filter(a => a.teacherId === t.id);
                 return (
@@ -1544,13 +1811,21 @@ function AdminContent() {
                         <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>{teacherAssignments.length} alumnos · {t.weeklyLoad}h/sem</div>
                       </div>
                     </div>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+                      {(t.specialties ?? []).map(sp => <SpecialtyChip key={sp} specialty={sp} />)}
+                    </div>
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10, alignItems: 'center' }}>
                       <StatusBadge status={t.status} />
                       {isBlocked ? <LevelBadge level={t.currentLevel ?? 1} blocked /> : <LevelBadge level={t.currentLevel ?? 1} />}
                     </div>
-                    <button onClick={() => setSelectedTeacher(t.id === selectedTeacher ? null : t.id)} style={{ width: '100%', padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: selectedTeacher === t.id ? 'var(--bg-surface-3)' : 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
-                      {selectedTeacher === t.id ? 'Cerrar detalle' : 'Ver detalle →'}
-                    </button>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button onClick={() => setEditTeacher(t)} style={{ flex: 1, padding: '8px', borderRadius: 8, border: '1px solid rgba(30,158,58,0.35)', background: 'rgba(30,158,58,0.07)', color: '#1E9E3A', cursor: 'pointer', fontSize: 12, fontWeight: 700, fontFamily: 'inherit' }}>
+                        Editar
+                      </button>
+                      <button onClick={() => setSelectedTeacher(t.id === selectedTeacher ? null : t.id)} style={{ flex: 2, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: selectedTeacher === t.id ? 'var(--bg-surface-3)' : 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
+                        {selectedTeacher === t.id ? 'Cerrar detalle' : 'Ver detalle →'}
+                      </button>
+                    </div>
                   </div>
                 );
               })}
@@ -1687,6 +1962,9 @@ function AdminContent() {
 
         {/* TRACKING TAB */}
         {activeTab === 'tracking' && <ClassTrackingTab />}
+
+        {/* NOTIFICATIONS TAB */}
+        {activeTab === 'notifications' && <NotificationsAdminTab />}
       </div>
 
       {showNewTeacher && (
@@ -1702,6 +1980,14 @@ function AdminContent() {
           onClose={() => setEditCalendarTeacher(null)}
           getTeacherGrid={getTeacherGrid}
           updateTeacherGrid={updateTeacherGrid}
+        />
+      )}
+
+      {editTeacher && (
+        <EditTeacherModal
+          teacher={editTeacher}
+          onClose={() => setEditTeacher(null)}
+          onSave={async (id, data) => { await updateTeacherInfo(id, data); setEditTeacher(null); }}
         />
       )}
       </PullToRefresh>

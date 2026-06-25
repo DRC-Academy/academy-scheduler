@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import { Teacher, Student, Assignment, AppUser, Grid, TeacherStatus, ScoringEvent, ClassCount } from '@/types';
+import { Teacher, Student, Assignment, AppUser, Grid, TeacherStatus, ScoringEvent, ClassCount, AppNotification } from '@/types';
 
 // ── AUTH ─────────────────────────────────────────────────────────────────────
 
@@ -827,4 +827,95 @@ export async function dbGetAllClassCounts(): Promise<ClassCount[]> {
     classNumber:  row.class_number,
     lastUpdated:  row.last_updated,
   }));
+}
+
+// ── TEACHER UPDATE ────────────────────────────────────────────────────────────
+
+export async function dbUpdateTeacherSpecialties(teacherId: string, specialties: string[]): Promise<void> {
+  await supabase.from('teachers').update({ specialties }).eq('id', teacherId);
+}
+
+export async function dbUpdateTeacherInfo(teacherId: string, data: { name: string; email: string; specialties: string[] }): Promise<void> {
+  await supabase.from('teachers').update({
+    name:       data.name,
+    email:      data.email,
+    specialties: data.specialties,
+  }).eq('id', teacherId);
+}
+
+// ── NOTIFICATIONS ─────────────────────────────────────────────────────────────
+
+function mapNotif(row: any): AppNotification {
+  return {
+    id:         row.id,
+    targetUser: row.target_user ?? undefined,
+    targetRole: row.target_role ?? undefined,
+    title:      row.title,
+    body:       row.body,
+    type:       row.type,
+    readBy:     row.read_by ?? [],
+    createdAt:  row.created_at,
+    createdBy:  row.created_by,
+  };
+}
+
+export async function dbSendNotification(notification: {
+  targetUser?: string;
+  targetRole?: string;
+  title: string;
+  body: string;
+  type: string;
+  createdBy: string;
+}): Promise<AppNotification> {
+  const id        = `notif_${Date.now()}`;
+  const createdAt = new Date().toISOString();
+  await supabase.from('notifications').insert({
+    id,
+    target_user: notification.targetUser ?? null,
+    target_role: notification.targetRole ?? null,
+    title:       notification.title,
+    body:        notification.body,
+    type:        notification.type,
+    read_by:     [],
+    created_at:  createdAt,
+    created_by:  notification.createdBy,
+  });
+  return {
+    id,
+    targetUser: notification.targetUser,
+    targetRole: notification.targetRole,
+    title:      notification.title,
+    body:       notification.body,
+    type:       notification.type,
+    readBy:     [],
+    createdAt,
+    createdBy:  notification.createdBy,
+  };
+}
+
+export async function dbGetNotificationsForUser(userId: string, role: string): Promise<AppNotification[]> {
+  const { data, error } = await supabase
+    .from('notifications')
+    .select('*')
+    .or(`target_user.eq.${userId},target_role.eq.${role}`)
+    .order('created_at', { ascending: false });
+  if (error || !data) return [];
+  return data.map(mapNotif);
+}
+
+export async function dbMarkNotificationRead(notificationId: string, userId: string): Promise<void> {
+  const { data } = await supabase.from('notifications').select('read_by').eq('id', notificationId).single();
+  if (!data) return;
+  const readBy: string[] = data.read_by ?? [];
+  if (readBy.includes(userId)) return;
+  await supabase.from('notifications').update({ read_by: [...readBy, userId] }).eq('id', notificationId);
+}
+
+export async function dbGetAllNotifications(): Promise<AppNotification[]> {
+  const { data, error } = await supabase
+    .from('notifications')
+    .select('*')
+    .order('created_at', { ascending: false });
+  if (error || !data) return [];
+  return data.map(mapNotif);
 }
