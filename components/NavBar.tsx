@@ -1,8 +1,8 @@
 'use client';
 import Link from 'next/link';
-
 import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/AuthContext';
+import { NotificationBell } from '@/components/NotificationBell';
 
 const navItems = [
   { href: '/setter',   label: 'Buscar',     icon: '🔍', roles: ['setter', 'admin'] },
@@ -69,7 +69,8 @@ export function NavBar() {
 
       {/* User info */}
       {user && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+          <NotificationBell />
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <div style={{
               width: 32, height: 32, borderRadius: '50%',

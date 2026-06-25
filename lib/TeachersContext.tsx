@@ -13,7 +13,7 @@ import {
   dbGetClassCounts, dbIncrementClassCount,
   dbUpdateAssignmentAdjustment, dbUpdateAssignmentStartDate, dbUpdateAssignmentSlots,
   dbUpdateTeacherSpecialties, dbUpdateTeacherInfo,
-  dbSendNotification, dbGetNotificationsForUser, dbMarkNotificationRead,
+  dbSendNotification, dbGetNotificationsForUser, dbMarkNotificationRead, dbMarkAllNotificationsRead,
 } from '@/lib/db';
 
 interface TeachersContextType {
@@ -52,6 +52,7 @@ interface TeachersContextType {
   sendNotification: (n: Omit<AppNotification, 'id' | 'createdAt' | 'readBy'>) => Promise<void>;
   loadNotifications: (userId: string, role: string) => Promise<void>;
   markNotificationRead: (notifId: string, userId: string) => Promise<void>;
+  markAllNotificationsRead: (userId: string, role: string) => Promise<void>;
 }
 
 const TeachersContext = createContext<TeachersContextType>({
@@ -83,6 +84,7 @@ const TeachersContext = createContext<TeachersContextType>({
   sendNotification:           async () => {},
   loadNotifications:          async () => {},
   markNotificationRead:       async () => {},
+  markAllNotificationsRead:   async () => {},
 });
 
 export function TeachersProvider({ children }: { children: ReactNode }) {
@@ -216,6 +218,14 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     ));
   }
 
+  async function markAllNotificationsRead(userId: string, role: string) {
+    await dbMarkAllNotificationsRead(userId, role);
+    setNotifications(prev => prev.map(n => ({
+      ...n,
+      readBy: n.readBy.includes(userId) ? n.readBy : [...n.readBy, userId],
+    })));
+  }
+
   async function addScoringEvent(event: Omit<ScoringEvent, 'id' | 'createdAt'>) {
     const newEvent = await dbAddScoringEvent(event);
     setScoringEvents(prev => [newEvent, ...prev]);
@@ -308,7 +318,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
       forceMonthlyReset, forceQuarterlyReset,
       reloadAll, loadClassCounts, incrementClassCount,
       updateAssignmentAdjustment, updateAssignmentStartDate, updateAssignmentSlots,
-      sendNotification, loadNotifications, markNotificationRead,
+      sendNotification, loadNotifications, markNotificationRead, markAllNotificationsRead,
     }}>
       {children}
     </TeachersContext.Provider>

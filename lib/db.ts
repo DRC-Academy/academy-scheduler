@@ -919,3 +919,79 @@ export async function dbGetAllNotifications(): Promise<AppNotification[]> {
   if (error || !data) return [];
   return data.map(mapNotif);
 }
+
+export async function dbMarkAllNotificationsRead(userId: string, role: string): Promise<void> {
+  const { data } = await supabase
+    .from('notifications')
+    .select('id, read_by')
+    .or(`target_user.eq.${userId},target_role.eq.${role}`);
+  if (!data || data.length === 0) return;
+  const unread = data.filter((n: any) => !(n.read_by ?? []).includes(userId));
+  if (unread.length === 0) return;
+  await Promise.all(unread.map((n: any) =>
+    supabase.from('notifications')
+      .update({ read_by: [...(n.read_by ?? []), userId] })
+      .eq('id', n.id)
+  ));
+}
+
+export async function dbUpsertTeacherAlerts(
+  teacherId: string,
+  assignments: Array<{
+    studentName: string;
+    startDate?: string;
+    slots: Array<{ day: string; hour: string }>;
+    manualClassAdjustment?: number;
+  }>,
+): Promise<void> {
+  const today = new Date();
+  const toInsert: any[] = [];
+
+  for (const a of assignments) {
+    const slugName = a.studentName.replace(/\s+/g, '_').toLowerCase();
+    const classNum = calcCurrentClassNumber(a as any);
+
+    // Near clase 15 (3 or fewer classes away, not yet reached)
+    if (classNum < 15 && 15 - classNum <= 3) {
+      const left = 15 - classNum;
+      toInsert.push({
+        id:          `alert_c15_${teacherId}_${slugName}`,
+        target_user: teacherId,
+        title:       `🎬 ${a.studentName} está cerca de la clase 15`,
+        body:        `Faltan ${left} clase${left === 1 ? '' : 's'} para llegar a la clase 15. Recordá grabar la clase y compartir el enlace de Fathom.`,
+        type:        'clase15',
+        read_by:     [],
+        created_at:  new Date().toISOString(),
+        created_by:  'Sistema',
+      });
+    }
+
+    // Near 6-month bonus (0-15 days remaining) or already reached
+    if (a.startDate) {
+      const start     = new Date(a.startDate + 'T00:00:00');
+      const daysActive = Math.floor((today.getTime() - start.getTime()) / 86400000);
+      const daysLeft   = 180 - daysActive;
+
+      if (daysLeft <= 15) {
+        toInsert.push({
+          id:          `alert_6m_${teacherId}_${slugName}`,
+          target_user: teacherId,
+          title:       daysLeft <= 0
+            ? `🎁 Bono disponible — ${a.studentName}`
+            : `🎁 ${a.studentName} cumple 6 meses pronto`,
+          body:        daysLeft <= 0
+            ? `${a.studentName} lleva más de 6 meses. Solicitá el bono de retención a pagos@drcacademy.com.`
+            : `Faltan ${daysLeft} día${daysLeft === 1 ? '' : 's'} para que ${a.studentName} cumpla 6 meses. Prepará la solicitud del bono.`,
+          type:        'bono6m',
+          read_by:     [],
+          created_at:  new Date().toISOString(),
+          created_by:  'Sistema',
+        });
+      }
+    }
+  }
+
+  if (toInsert.length === 0) return;
+  // ignoreDuplicates preserves existing read_by state
+  await supabase.from('notifications').upsert(toInsert, { onConflict: 'id', ignoreDuplicates: true });
+}
