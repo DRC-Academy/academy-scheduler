@@ -803,11 +803,282 @@ function TeacherNotificationsTab({ teacher, myAssignments, notifications, loadNo
   );
 }
 
+// ─── Date / class helpers (Próximas clases) ───────────────────────────────────
+const DAY_NAMES_BY_JSDAY = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+
+function dayNameFromDate(d: Date): string {
+  return DAY_NAMES_BY_JSDAY[d.getDay()];
+}
+function isoDateLocal(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+function stripProtocol(url: string): string {
+  return url.replace(/^https?:\/\//, '').replace(/\/$/, '');
+}
+function normalizeUrl(url: string): string {
+  const t = url.trim();
+  if (!t) return t;
+  return /^https?:\/\//i.test(t) ? t : `https://${t}`;
+}
+
+interface TodayClass {
+  key: string;
+  assignment: Assignment;
+  studentName: string;
+  hour: string;       // "HH:00"
+  level: string;
+  plan: string;
+  meetLink?: string;
+}
+
+// All classes for a given date, built from recurring assignment slots, sorted by hour.
+function classesForDate(myAssignments: Assignment[], date: Date): TodayClass[] {
+  const dayName = dayNameFromDate(date);
+  const list: TodayClass[] = [];
+  for (const a of myAssignments) {
+    for (const slot of a.slots) {
+      if (slot.day !== dayName) continue;
+      list.push({
+        key:         `${a.id}_${slot.hour}`,
+        assignment:  a,
+        studentName: a.studentName,
+        hour:        slot.hour,
+        level:       a.studentLevel,
+        plan:        a.plan || a.objetivo || '',
+        meetLink:    a.meetLink,
+      });
+    }
+  }
+  return list.sort((x, y) => parseInt(x.hour) - parseInt(y.hour));
+}
+
+// ─── Teacher Upcoming Classes Tab ─────────────────────────────────────────────
+function TeacherUpcomingTab({ teacher, myAssignments, updateMeetLink, logClassJoin }: {
+  teacher: Teacher;
+  myAssignments: Assignment[];
+  updateMeetLink: (assignmentId: string, link: string) => Promise<void>;
+  logClassJoin: (teacherId: string, teacherName: string, studentName: string, scheduledDate: string, scheduledTime: string) => Promise<void>;
+}) {
+  const [linkModal, setLinkModal] = useState<{ assignment: Assignment; value: string } | null>(null);
+  const [savingLink, setSavingLink] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+  const [showNextDays, setShowNextDays] = useState(false);
+  const [joined, setJoined] = useState<Set<string>>(new Set());
+
+  const now = new Date();
+  const todayIso = isoDateLocal(now);
+  const currentDecimal = now.getHours() + now.getMinutes() / 60;
+
+  const todayClasses = classesForDate(myAssignments, now);
+
+  // Highlight the in-progress class, or the next upcoming one (first not yet ended).
+  const highlightKey = todayClasses.find(c => parseInt(c.hour) + 1 > currentDecimal)?.key ?? null;
+
+  // Assignments today missing a meet link (deduped by assignment)
+  const missingSeen = new Set<string>();
+  const missingLinks: TodayClass[] = [];
+  for (const c of todayClasses) {
+    if (!c.meetLink && !missingSeen.has(c.assignment.id)) {
+      missingSeen.add(c.assignment.id);
+      missingLinks.push(c);
+    }
+  }
+  const missingNames = missingLinks.map(c => c.studentName.split(' ')[0]);
+
+  const todayLabel = now.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' });
+
+  // Next two days
+  const nextDays = [1, 2].map(offset => {
+    const d = new Date(now);
+    d.setDate(now.getDate() + offset);
+    return {
+      label: d.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' }),
+      classes: classesForDate(myAssignments, d),
+    };
+  });
+
+  async function handleSaveLink() {
+    if (!linkModal) return;
+    setSavingLink(true);
+    await updateMeetLink(linkModal.assignment.id, linkModal.value);
+    setSavingLink(false);
+    setLinkModal(null);
+  }
+
+  function handleJoin(c: TodayClass) {
+    if (!c.meetLink) return;
+    window.open(normalizeUrl(c.meetLink), '_blank', 'noopener,noreferrer');
+    logClassJoin(teacher.id, teacher.name, c.studentName, todayIso, c.hour);
+    setJoined(prev => new Set([...prev, c.key]));
+    setToast('✅ Ingreso registrado');
+    setTimeout(() => setToast(null), 2500);
+  }
+
+  function ClassRow({ c, isToday }: { c: TodayClass; isToday: boolean }) {
+    const highlight = isToday && c.key === highlightKey;
+    const passed = isToday && parseInt(c.hour) + 1 <= currentDecimal && !joined.has(c.key);
+    const inProgress = isToday && parseInt(c.hour) <= currentDecimal && parseInt(c.hour) + 1 > currentDecimal;
+    return (
+      <div style={{
+        background: 'var(--bg-surface-2)',
+        border: `1.5px solid ${highlight ? '#1E9E3A' : 'var(--border)'}`,
+        boxShadow: highlight ? '0 0 0 3px rgba(30,158,58,0.1)' : 'none',
+        borderRadius: 12, padding: '14px 16px',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ width: 40, height: 40, borderRadius: '50%', background: 'rgba(30,158,58,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 700, color: '#1E9E3A', flexShrink: 0 }}>
+            {c.studentName.charAt(0).toUpperCase()}
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)' }}>{c.studentName}</span>
+              {inProgress && <span style={{ fontSize: 10, padding: '1px 8px', borderRadius: 10, background: 'rgba(30,158,58,0.15)', border: '1px solid rgba(30,158,58,0.35)', color: '#1E9E3A', fontWeight: 700 }}>● En curso</span>}
+              {passed && <span style={{ fontSize: 10, padding: '1px 8px', borderRadius: 10, background: 'var(--bg-surface-3)', color: 'var(--text-muted)', fontWeight: 600 }}>⏰ Hora pasada</span>}
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+              {c.plan || 'Clase'}{c.level ? ` · ${c.level}` : ''}
+            </div>
+          </div>
+          <div style={{ fontSize: 18, fontWeight: 800, color: highlight ? '#1E9E3A' : 'var(--text-primary)', flexShrink: 0 }}>{c.hour}</div>
+        </div>
+
+        {/* Link area */}
+        <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+          {c.meetLink ? (
+            <>
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8, wordBreak: 'break-all' }}>
+                🔗 {stripProtocol(c.meetLink)}
+              </div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button onClick={() => handleJoin(c)}
+                  style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', borderRadius: 8, border: 'none', background: '#1E9E3A', color: 'white', cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+                  🎥 Ingresar a clase
+                </button>
+                <button onClick={() => setLinkModal({ assignment: c.assignment, value: c.meetLink ?? '' })}
+                  style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface-3)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
+                  ✏️ Cambiar enlace
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize: 12, color: '#b45309', marginBottom: 8, fontWeight: 600 }}>⚠️ Sin enlace definido</div>
+              <button onClick={() => setLinkModal({ assignment: c.assignment, value: '' })}
+                style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', borderRadius: 8, border: '1px solid rgba(30,158,58,0.4)', background: 'rgba(30,158,58,0.08)', color: '#1E9E3A', cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+                🔗 Definir enlace
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '20px' }}>
+      <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)', marginBottom: 4, textTransform: 'capitalize' }}>
+        Próximas clases — {todayLabel}
+      </div>
+      <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 16 }}>
+        Definí el enlace de Meet/Zoom de cada alumno una sola vez. Se reutiliza siempre para esa persona.
+      </div>
+
+      {/* Missing links banner */}
+      {missingLinks.length > 0 && (
+        <div style={{ background: 'rgba(249,115,22,0.08)', border: '1px solid rgba(249,115,22,0.35)', borderRadius: 10, padding: '12px 16px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <div style={{ flex: 1, fontSize: 13, color: '#b45309', fontWeight: 600 }}>
+            ⚠️ Tenés {missingLinks.length} alumno{missingLinks.length !== 1 ? 's' : ''} sin enlace de Meet definido: {missingNames.join(', ')}
+          </div>
+          <button onClick={() => setLinkModal({ assignment: missingLinks[0].assignment, value: '' })}
+            style={{ padding: '7px 14px', borderRadius: 8, border: 'none', background: '#ea580c', color: 'white', cursor: 'pointer', fontSize: 12, fontWeight: 700, fontFamily: 'inherit', flexShrink: 0 }}>
+            Definir todos →
+          </button>
+        </div>
+      )}
+
+      {/* Today's classes */}
+      {todayClasses.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)', fontSize: 14 }}>
+          <div style={{ fontSize: 32, marginBottom: 8 }}>📅</div>
+          No tenés clases hoy.
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {todayClasses.map(c => <ClassRow key={c.key} c={c} isToday />)}
+        </div>
+      )}
+
+      {/* Next days */}
+      <div style={{ marginTop: 18 }}>
+        <button onClick={() => setShowNextDays(s => !s)}
+          style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderRadius: 9, border: '1px solid var(--border)', background: 'var(--bg-surface-2)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
+          <span>📆 Ver próximos días</span>
+          <span>{showNextDays ? '▲' : '▼'}</span>
+        </button>
+        {showNextDays && (
+          <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 16 }}>
+            {nextDays.map(nd => (
+              <div key={nd.label}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', marginBottom: 8, textTransform: 'capitalize' }}>{nd.label}</div>
+                {nd.classes.length === 0 ? (
+                  <div style={{ fontSize: 13, color: 'var(--text-muted)', padding: '8px 0' }}>Sin clases.</div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {nd.classes.map(c => <ClassRow key={c.key} c={c} isToday={false} />)}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Link modal */}
+      {linkModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+          onClick={e => { if (e.target === e.currentTarget) setLinkModal(null); }}>
+          <div style={{ background: 'var(--bg-surface)', border: '1px solid #35405a', borderRadius: 14, padding: 24, width: '100%', maxWidth: 420 }}>
+            <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)', marginBottom: 6 }}>
+              {linkModal.assignment.meetLink ? 'Cambiar enlace' : 'Definir enlace'}
+            </div>
+            <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 14, lineHeight: 1.5 }}>
+              Este enlace se usará siempre para <b style={{ color: 'var(--text-primary)' }}>{linkModal.assignment.studentName}</b>, no hace falta volver a definirlo.
+            </div>
+            <input
+              value={linkModal.value}
+              onChange={e => setLinkModal(prev => prev ? { ...prev, value: e.target.value } : null)}
+              placeholder="https://meet.google.com/abc-xyz"
+              autoFocus
+              style={{ width: '100%', marginBottom: 16 }}
+            />
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button onClick={() => setLinkModal(null)} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
+                Cancelar
+              </button>
+              <button onClick={handleSaveLink} disabled={savingLink || !linkModal.value.trim()}
+                style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: savingLink || !linkModal.value.trim() ? 'var(--bg-surface-3)' : '#1E9E3A', color: savingLink || !linkModal.value.trim() ? 'var(--text-muted)' : 'white', cursor: savingLink || !linkModal.value.trim() ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+                {savingLink ? 'Guardando...' : 'Guardar enlace'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Toast */}
+      {toast && (
+        <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', background: '#1E9E3A', color: 'white', padding: '10px 22px', borderRadius: 24, fontSize: 14, fontWeight: 700, zIndex: 90, boxShadow: '0 4px 16px rgba(0,0,0,0.25)' }}>
+          {toast}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Teacher Content ──────────────────────────────────────────────────────────
 function TeacherContent() {
   const { user } = useAuth();
-  const { teachers, assignments, scoringEvents, notifications, getTeacherGrid, updateTeacherGrid, addStudent, addAssignment, updateAssignmentAdjustment, updateAssignmentStartDate, updateAssignmentSlots, reloadAll, updateTeacherSpecialties, loadNotifications, markNotificationRead } = useTeachers();
-  const [activeTab, setActiveTab] = useState<'calendar' | 'classes' | 'scoring' | 'notifications'>('calendar');
+  const { teachers, assignments, scoringEvents, notifications, getTeacherGrid, updateTeacherGrid, addStudent, addAssignment, updateAssignmentAdjustment, updateAssignmentStartDate, updateAssignmentSlots, reloadAll, updateTeacherSpecialties, loadNotifications, markNotificationRead, updateMeetLink, logClassJoin } = useTeachers();
+  const [activeTab, setActiveTab] = useState<'calendar' | 'upcoming' | 'students' | 'scoring' | 'notifications'>('calendar');
   const [showSpecialtiesModal, setShowSpecialtiesModal] = useState(false);
   const [specialtiesDraft, setSpecialtiesDraft] = useState<string[]>([]);
   const [savingSpecialties, setSavingSpecialties] = useState(false);
@@ -1014,10 +1285,29 @@ function TeacherContent() {
 
   const tabs = [
     { id: 'calendar',      label: '📅 Mi calendario' },
-    { id: 'classes',       label: '📚 Clases asignadas' },
+    { id: 'upcoming',      label: '🎥 Próximas clases' },
+    { id: 'students',      label: '👥 Mis alumnos' },
     { id: 'scoring',       label: '⭐ Mi Scoring' },
     { id: 'notifications', label: '🔔 Avisos' },
   ] as const;
+
+  // ── Header mini-stats ──────────────────────────────────────────────────────
+  const uniqueStudentCount = new Set([
+    ...myAssignments.map(a => a.studentName),
+    ...legacyList.map(l => l.student),
+  ]).size;
+
+  const nowHeader = new Date();
+  const todayClassesHeader = classesForDate(myAssignments, nowHeader);
+  const nextClassHeader = todayClassesHeader.find(c => parseInt(c.hour) + 1 > nowHeader.getHours() + nowHeader.getMinutes() / 60);
+  const nextClassLabel = nextClassHeader
+    ? `Hoy ${nextClassHeader.hour} — ${nextClassHeader.studentName}`
+    : 'Sin clases hoy';
+
+  const headerLevel = (teacher.currentLevel as 1 | 2 | 3) ?? 1;
+  const headerLevelInfo = LEVEL_INFO[headerLevel];
+  const headerLevelStars = '⭐'.repeat(headerLevel);
+  const headerLevelShort = headerLevel === 1 ? 'Junior' : headerLevel === 2 ? 'Senior' : 'Elite';
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }}>
@@ -1085,6 +1375,17 @@ function TeacherContent() {
                 style={{ padding: '2px 10px', borderRadius: 12, border: '1px dashed var(--border)', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 11, fontFamily: 'inherit' }}>
                 {(teacher.specialties ?? []).length === 0 ? '+ Mis especialidades' : '✏️ Editar'}
               </button>
+            </div>
+
+            {/* Mini-stats row */}
+            <div className="teacher-header-ministats" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 10, fontSize: 12, color: 'var(--text-secondary)' }}>
+              <span>🎥 Próxima clase: <b style={{ color: 'var(--text-primary)' }}>{nextClassLabel}</b></span>
+              <span style={{ color: 'var(--border)' }}>·</span>
+              <span>👥 <b style={{ color: 'var(--text-primary)' }}>{uniqueStudentCount}</b> alumno{uniqueStudentCount !== 1 ? 's' : ''} activo{uniqueStudentCount !== 1 ? 's' : ''}</span>
+              <span style={{ color: 'var(--border)' }}>·</span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                Nivel: <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, padding: '1px 9px', borderRadius: 12, background: headerLevelInfo.bg, border: `1px solid ${headerLevelInfo.border}`, color: headerLevelInfo.color, fontWeight: 700 }}>{headerLevelStars} {headerLevelShort}</span>
+              </span>
             </div>
           </div>
           <div className="teacher-profile-stats" style={{ display: 'flex', gap: 20 }}>
@@ -1184,9 +1485,18 @@ function TeacherContent() {
           </div>
         )}
 
-        {activeTab === 'classes' && (
+        {activeTab === 'upcoming' && (
+          <TeacherUpcomingTab
+            teacher={teacher}
+            myAssignments={myAssignments}
+            updateMeetLink={updateMeetLink}
+            logClassJoin={logClassJoin}
+          />
+        )}
+
+        {activeTab === 'students' && (
           <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '20px' }}>
-            <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)', marginBottom: 4 }}>Clases asignadas</div>
+            <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)', marginBottom: 4 }}>Mis alumnos — Contador automático</div>
             <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 18 }}>El contador se actualiza automáticamente según la fecha de inicio y los días asignados.</div>
 
             {myAssignments.length === 0 && legacyList.length === 0 ? (

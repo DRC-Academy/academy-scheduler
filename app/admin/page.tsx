@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { NavBar } from '@/components/NavBar';
 import { StatusBadge } from '@/components/StatusBadge';
 import { AuthGuard } from '@/components/AuthGuard';
@@ -11,7 +11,7 @@ import { useAuth } from '@/lib/AuthContext';
 import { mockAlerts } from '@/lib/mock-data';
 import { Teacher, Grid, Assignment, ScoringEvent, ScoringEventType } from '@/types';
 import { EVENT_POINTS, EVENT_EUROS, calcCurrentClassNumber, dbUpdateAssignmentStartDate, dbGetAllNotifications } from '@/lib/db';
-import { AppNotification } from '@/types';
+import { AppNotification, ClassJoinLog } from '@/types';
 
 // ─── Specialty constants ──────────────────────────────────────────────────────
 const ALL_SPECIALTIES = ['Adultos', 'Niños', 'Exámenes'] as const;
@@ -1574,12 +1574,308 @@ function ClassTrackingTab() {
   );
 }
 
+// ─── Class Log Tab (Registro de clases) ───────────────────────────────────────
+const DAY_NAMES_BY_JSDAY_ADMIN = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+function isoDateAdmin(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+function minutesLate(scheduledDate: string, scheduledTime: string, clickedAt: string): number {
+  const [y, m, d] = scheduledDate.split('-').map(Number);
+  const hour = parseInt(scheduledTime);
+  const scheduled = new Date(y, (m ?? 1) - 1, d ?? 1, isNaN(hour) ? 0 : hour, 0, 0, 0);
+  return (new Date(clickedAt).getTime() - scheduled.getTime()) / 60000;
+}
+
+const PUNCT_STYLE: Record<string, { label: string; color: string; bg: string }> = {
+  on_time:   { label: '✅ A tiempo',  color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)' },
+  late:      { label: '🟡 Tarde',     color: '#b45309', bg: 'rgba(245,158,11,0.12)' },
+  very_late: { label: '🟠 Muy tarde', color: '#ea580c', bg: 'rgba(249,115,22,0.12)' },
+  missed:    { label: '🔴 No ingresó', color: '#dc2626', bg: 'rgba(239,68,68,0.1)' },
+};
+
+interface LogRow {
+  id: string;
+  date: string;
+  hour: string;
+  teacherId: string;
+  teacherName: string;
+  studentName: string;
+  joinedAt?: string;
+  status: 'on_time' | 'late' | 'very_late' | 'missed';
+  hasLink: boolean;
+}
+
+function ClassLogTab() {
+  const { teachers, assignments, classJoinLogs, loadClassJoinLogs } = useTeachers();
+
+  const today = new Date();
+  const defaultFrom = new Date(today); defaultFrom.setDate(today.getDate() - 30);
+
+  const [teacherFilter, setTeacherFilter] = useState<string>('');
+  const [fromDate, setFromDate] = useState(isoDateAdmin(defaultFrom));
+  const [toDate, setToDate] = useState(isoDateAdmin(today));
+  const [statusFilter, setStatusFilter] = useState<'all' | 'on_time' | 'late' | 'missed' | 'no_link'>('all');
+  const [expandedTeacher, setExpandedTeacher] = useState<string | null>(null);
+
+  useEffect(() => {
+    loadClassJoinLogs();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const todayIso = isoDateAdmin(today);
+
+  // Build all rows: expected recurring class instances over the range + any extra logs.
+  const baseRows = useMemo<LogRow[]>(() => {
+    const rows: LogRow[] = [];
+    const consumedLogs = new Set<string>();
+
+    const relevantAssignments = assignments.filter(a => !teacherFilter || a.teacherId === teacherFilter);
+
+    // Index logs by composite key for fast matching
+    const logByKey = new Map<string, ClassJoinLog>();
+    for (const log of classJoinLogs) {
+      logByKey.set(`${log.teacherId}|${log.studentName}|${log.scheduledDate}|${log.scheduledTime}`, log);
+    }
+
+    const start = new Date(fromDate + 'T00:00:00');
+    const end   = new Date(toDate + 'T00:00:00');
+    if (isNaN(start.getTime()) || isNaN(end.getTime()) || start > end) return rows;
+
+    // Cap iteration to a reasonable window
+    const maxDays = 370;
+    for (const a of relevantAssignments) {
+      const hasLink = !!a.meetLink;
+      const cursor = new Date(start);
+      let dayCount = 0;
+      while (cursor <= end && dayCount <= maxDays) {
+        const dayName = DAY_NAMES_BY_JSDAY_ADMIN[cursor.getDay()];
+        for (const slot of a.slots) {
+          if (slot.day !== dayName) continue;
+          const dateIso = isoDateAdmin(cursor);
+          const key = `${a.teacherId}|${a.studentName}|${dateIso}|${slot.hour}`;
+          const log = logByKey.get(key);
+          if (log) {
+            consumedLogs.add(key);
+            rows.push({
+              id: `${a.id}_${dateIso}_${slot.hour}`,
+              date: dateIso, hour: slot.hour,
+              teacherId: a.teacherId, teacherName: a.teacherName, studentName: a.studentName,
+              joinedAt: log.clickedAt, status: log.punctuality, hasLink,
+            });
+          } else if (dateIso < todayIso) {
+            // Past class with no join recorded
+            rows.push({
+              id: `${a.id}_${dateIso}_${slot.hour}`,
+              date: dateIso, hour: slot.hour,
+              teacherId: a.teacherId, teacherName: a.teacherName, studentName: a.studentName,
+              status: 'missed', hasLink,
+            });
+          }
+        }
+        cursor.setDate(cursor.getDate() + 1);
+        dayCount++;
+      }
+    }
+
+    // Include logs that didn't match a current assignment slot (e.g. slot changed afterwards)
+    for (const log of classJoinLogs) {
+      if (teacherFilter && log.teacherId !== teacherFilter) continue;
+      if (log.scheduledDate < fromDate || log.scheduledDate > toDate) continue;
+      const key = `${log.teacherId}|${log.studentName}|${log.scheduledDate}|${log.scheduledTime}`;
+      if (consumedLogs.has(key)) continue;
+      const linkedAssignment = assignments.find(a => a.teacherId === log.teacherId && a.studentName === log.studentName);
+      rows.push({
+        id: log.id,
+        date: log.scheduledDate, hour: log.scheduledTime,
+        teacherId: log.teacherId, teacherName: log.teacherName, studentName: log.studentName,
+        joinedAt: log.clickedAt, status: log.punctuality, hasLink: !!linkedAssignment?.meetLink,
+      });
+    }
+
+    return rows.sort((x, y) => (y.date.localeCompare(x.date)) || (parseInt(y.hour) - parseInt(x.hour)));
+  }, [assignments, classJoinLogs, teacherFilter, fromDate, toDate, todayIso]);
+
+  // Summary metrics
+  const totalRegistered = baseRows.filter(r => r.status !== 'missed').length;
+  const onTimeCount     = baseRows.filter(r => r.status === 'on_time').length;
+  const missedCount     = baseRows.filter(r => r.status === 'missed').length;
+  const punctualityPct  = totalRegistered > 0 ? Math.round((onTimeCount / totalRegistered) * 100) : 0;
+  const noLinkCount     = assignments.filter(a => (!teacherFilter || a.teacherId === teacherFilter) && !a.meetLink).length;
+
+  const visibleRows = baseRows.filter(r => {
+    if (statusFilter === 'all') return true;
+    if (statusFilter === 'on_time') return r.status === 'on_time';
+    if (statusFilter === 'late') return r.status === 'late' || r.status === 'very_late';
+    if (statusFilter === 'missed') return r.status === 'missed';
+    if (statusFilter === 'no_link') return !r.hasLink;
+    return true;
+  });
+
+  // Per-teacher expandable summary
+  function teacherSummary(teacherId: string) {
+    const trows = baseRows.filter(r => r.teacherId === teacherId);
+    const registered = trows.filter(r => r.status !== 'missed');
+    const onTime = trows.filter(r => r.status === 'on_time').length;
+    const late   = trows.filter(r => r.status === 'late' || r.status === 'very_late').length;
+    const missed = trows.filter(r => r.status === 'missed').length;
+    const joinLogsForTeacher = classJoinLogs.filter(l =>
+      l.teacherId === teacherId && l.scheduledDate >= fromDate && l.scheduledDate <= toDate
+    );
+    const avgMin = joinLogsForTeacher.length > 0
+      ? Math.round(joinLogsForTeacher.reduce((s, l) => s + Math.max(0, minutesLate(l.scheduledDate, l.scheduledTime, l.clickedAt)), 0) / joinLogsForTeacher.length)
+      : 0;
+    const regTotal = registered.length;
+    return {
+      total: trows.length,
+      onTimePct: regTotal > 0 ? Math.round((onTime / regTotal) * 100) : 0,
+      latePct:   regTotal > 0 ? Math.round((late / regTotal) * 100) : 0,
+      missed, avgMin,
+    };
+  }
+
+  const cards = [
+    { label: 'Clases registradas', value: totalRegistered, color: '#1E9E3A' },
+    { label: 'Puntualidad', value: `${punctualityPct}%`, color: punctualityPct >= 80 ? '#1E9E3A' : punctualityPct >= 60 ? '#f59e0b' : '#ef4444' },
+    { label: 'Clases perdidas', value: missedCount, color: missedCount > 0 ? '#ef4444' : '#1E9E3A' },
+    { label: 'Sin enlace', value: noLinkCount, color: noLinkCount > 0 ? '#ea580c' : '#1E9E3A' },
+  ];
+
+  const statusChips: Array<{ id: typeof statusFilter; label: string }> = [
+    { id: 'all', label: 'Todos' },
+    { id: 'on_time', label: 'A tiempo' },
+    { id: 'late', label: 'Tarde' },
+    { id: 'missed', label: 'No ingresó' },
+    { id: 'no_link', label: 'Sin enlace' },
+  ];
+
+  return (
+    <div>
+      {/* Summary cards */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 14, marginBottom: 18 }}>
+        {cards.map(c => (
+          <div key={c.label} style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '16px 18px' }}>
+            <div style={{ fontSize: 26, fontWeight: 700, color: c.color }}>{c.value}</div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginTop: 3 }}>{c.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Filters */}
+      <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '16px 18px', marginBottom: 18 }}>
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 14 }}>
+          <div>
+            <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 5 }}>Profesor</label>
+            <select value={teacherFilter} onChange={e => setTeacherFilter(e.target.value)} style={{ minWidth: 180 }}>
+              <option value="">Todos</option>
+              {teachers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 5 }}>Desde</label>
+            <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} />
+          </div>
+          <div>
+            <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 5 }}>Hasta</label>
+            <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} />
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {statusChips.map(chip => (
+            <button key={chip.id} onClick={() => setStatusFilter(chip.id)}
+              style={{ padding: '5px 14px', borderRadius: 20, border: `1.5px solid ${statusFilter === chip.id ? '#1E9E3A' : 'var(--border)'}`, background: statusFilter === chip.id ? 'rgba(30,158,58,0.1)' : 'transparent', color: statusFilter === chip.id ? '#1E9E3A' : 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, fontWeight: statusFilter === chip.id ? 700 : 500, fontFamily: 'inherit' }}>
+              {chip.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Table */}
+      <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+        {visibleRows.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)', fontSize: 14 }}>
+            Sin registros para los filtros seleccionados.
+          </div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead>
+                <tr style={{ background: 'var(--bg-surface-2)', textAlign: 'left' }}>
+                  {['Fecha', 'Hora', 'Profesor', 'Alumno', 'Hora ingreso', 'Puntualidad'].map(h => (
+                    <th key={h} style={{ padding: '10px 14px', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {visibleRows.map(r => {
+                  const ps = PUNCT_STYLE[r.status];
+                  return (
+                    <tr key={r.id} style={{ borderTop: '1px solid var(--border)' }}>
+                      <td style={{ padding: '10px 14px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>
+                        {new Date(r.date + 'T00:00:00').toLocaleDateString('es-ES', { day: '2-digit', month: 'short' })}
+                      </td>
+                      <td style={{ padding: '10px 14px', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 600 }}>{r.hour}</td>
+                      <td style={{ padding: '10px 14px', whiteSpace: 'nowrap' }}>
+                        <button onClick={() => setExpandedTeacher(prev => prev === r.teacherId ? null : r.teacherId)}
+                          style={{ background: 'none', border: 'none', color: '#1E9E3A', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit', padding: 0, textAlign: 'left' }}>
+                          {r.teacherName}
+                        </button>
+                      </td>
+                      <td style={{ padding: '10px 14px', whiteSpace: 'nowrap', color: 'var(--text-primary)' }}>
+                        {r.studentName}
+                        {!r.hasLink && <span style={{ marginLeft: 6, fontSize: 10, padding: '1px 6px', borderRadius: 8, background: 'rgba(249,115,22,0.12)', color: '#ea580c', fontWeight: 700 }}>sin enlace</span>}
+                      </td>
+                      <td style={{ padding: '10px 14px', whiteSpace: 'nowrap', color: 'var(--text-muted)' }}>
+                        {r.joinedAt ? new Date(r.joinedAt).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }) : '—'}
+                      </td>
+                      <td style={{ padding: '10px 14px', whiteSpace: 'nowrap' }}>
+                        <span style={{ fontSize: 11, padding: '2px 9px', borderRadius: 12, background: ps.bg, color: ps.color, fontWeight: 700 }}>{ps.label}</span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Expanded teacher summary */}
+      {expandedTeacher && (() => {
+        const t = teachers.find(x => x.id === expandedTeacher);
+        const s = teacherSummary(expandedTeacher);
+        return (
+          <div style={{ background: 'var(--bg-surface)', border: '1px solid rgba(30,158,58,0.3)', borderRadius: 12, padding: '18px 20px', marginTop: 16 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+              <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--text-primary)' }}>Resumen de {t?.name ?? 'profesor'}</div>
+              <button onClick={() => setExpandedTeacher(null)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 18 }}>✕</button>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 12 }}>
+              {[
+                { label: 'Total clases', value: s.total, color: 'var(--text-primary)' },
+                { label: '% a tiempo', value: `${s.onTimePct}%`, color: '#1E9E3A' },
+                { label: '% tarde', value: `${s.latePct}%`, color: '#b45309' },
+                { label: 'No ingresadas', value: s.missed, color: s.missed > 0 ? '#ef4444' : '#1E9E3A' },
+                { label: 'Atraso promedio', value: `${s.avgMin} min`, color: 'var(--text-primary)' },
+              ].map(m => (
+                <div key={m.label} style={{ background: 'var(--bg-surface-2)', borderRadius: 10, padding: '12px 14px' }}>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: m.color }}>{m.value}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{m.label}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
 // ─── Admin Content ────────────────────────────────────────────────────────────
 function AdminContent() {
   const { teachers, assignments, students, addTeacher, loadingTeachers, getTeacherGrid, updateTeacherGrid, checkAndRunResets, reloadAll, updateTeacherInfo } = useTeachers();
   const [selectedTeacher, setSelectedTeacher] = useState<string | null>(null);
   const [showNewTeacher, setShowNewTeacher] = useState(false);
-  const [activeTab, setActiveTab] = useState<'overview' | 'teachers' | 'weekly' | 'scoring' | 'tracking' | 'notifications'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'teachers' | 'weekly' | 'scoring' | 'tracking' | 'classlog' | 'notifications'>('overview');
   const [editCalendarTeacher, setEditCalendarTeacher] = useState<Teacher | null>(null);
   const [editTeacher, setEditTeacher] = useState<Teacher | null>(null);
   const [specialtyFilter, setSpecialtyFilter] = useState<string>('');
@@ -1610,6 +1906,7 @@ function AdminContent() {
     { id: 'weekly',         label: '📅 Cobertura' },
     { id: 'scoring',        label: '⭐ Scoring' },
     { id: 'tracking',       label: '📈 Seguimiento' },
+    { id: 'classlog',       label: '📊 Registro de clases' },
     { id: 'notifications',  label: '🔔 Notificaciones' },
   ] as const;
 
@@ -1962,6 +2259,9 @@ function AdminContent() {
 
         {/* TRACKING TAB */}
         {activeTab === 'tracking' && <ClassTrackingTab />}
+
+        {/* CLASS LOG TAB */}
+        {activeTab === 'classlog' && <ClassLogTab />}
 
         {/* NOTIFICATIONS TAB */}
         {activeTab === 'notifications' && <NotificationsAdminTab />}

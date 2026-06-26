@@ -98,6 +98,18 @@ export interface Assignment {
   startDate?: string;
   createdAt: string;
   manualClassAdjustment?: number;
+  meetLink?: string;
+}
+
+export interface ClassJoinLog {
+  id: string;
+  teacherId: string;
+  teacherName: string;
+  studentName: string;
+  scheduledDate: string;
+  scheduledTime: string;
+  clickedAt: string;
+  punctuality: 'on_time' | 'late' | 'very_late';
 }
 
 export interface AdminAlert {

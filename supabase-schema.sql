@@ -164,6 +164,21 @@ alter table teachers add column if not exists retention_rate         numeric def
 
 -- ── MIGRATIONS: new columns for assignments ──────────────────
 alter table assignments add column if not exists start_date text;
+alter table assignments add column if not exists meet_link  text;
+
+-- ── CLASS JOIN LOGS ──────────────────────────────────────────
+-- Registro de ingresos a clase (clic en "Ingresar a clase")
+create table if not exists class_join_logs (
+  id              text primary key,
+  teacher_id      text not null references teachers(id),
+  teacher_name    text not null,
+  student_name    text not null,
+  scheduled_date  date not null,
+  scheduled_time  text not null,
+  clicked_at      timestamptz default now(),
+  punctuality     text -- 'on_time' | 'late' | 'very_late'
+);
+alter table class_join_logs disable row level security;
 
 -- ── DISABLE Row Level Security for now (internal tool) ──────
 alter table teachers          disable row level security;

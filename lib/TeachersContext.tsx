@@ -1,6 +1,6 @@
 'use client';
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { Teacher, Student, Assignment, Grid, ScoringEvent, ClassCount, AppNotification } from '@/types';
+import { Teacher, Student, Assignment, Grid, ScoringEvent, ClassCount, AppNotification, ClassJoinLog } from '@/types';
 import {
   dbGetTeachers, dbAddTeacher,
   dbGetStudents, dbUpsertStudent, dbDeleteStudent, dbUpdateStudent,
@@ -14,6 +14,7 @@ import {
   dbUpdateAssignmentAdjustment, dbUpdateAssignmentStartDate, dbUpdateAssignmentSlots,
   dbUpdateTeacherSpecialties, dbUpdateTeacherInfo,
   dbSendNotification, dbGetNotificationsForUser, dbMarkNotificationRead, dbMarkAllNotificationsRead,
+  dbUpdateMeetLink, dbLogClassJoin, dbGetClassJoinLogs, dbGetUnassignedStudents,
 } from '@/lib/db';
 
 interface TeachersContextType {
@@ -25,6 +26,8 @@ interface TeachersContextType {
   scoringEvents: ScoringEvent[];
   classCounts: ClassCount[];
   notifications: AppNotification[];
+  unassignedStudents: Student[];
+  classJoinLogs: ClassJoinLog[];
   lastUpdated: Date | null;
   addTeacher: (t: Teacher, username: string) => Promise<void>;
   addStudent: (s: Student) => Promise<void>;
@@ -53,11 +56,15 @@ interface TeachersContextType {
   loadNotifications: (userId: string, role: string) => Promise<void>;
   markNotificationRead: (notifId: string, userId: string) => Promise<void>;
   markAllNotificationsRead: (userId: string, role: string) => Promise<void>;
+  updateMeetLink: (assignmentId: string, link: string) => Promise<void>;
+  logClassJoin: (teacherId: string, teacherName: string, studentName: string, scheduledDate: string, scheduledTime: string) => Promise<void>;
+  loadClassJoinLogs: () => Promise<void>;
 }
 
 const TeachersContext = createContext<TeachersContextType>({
   teachers: [], students: [], assignments: [], teacherGrids: {},
-  loadingTeachers: true, scoringEvents: [], classCounts: [], notifications: [], lastUpdated: null,
+  loadingTeachers: true, scoringEvents: [], classCounts: [], notifications: [],
+  unassignedStudents: [], classJoinLogs: [], lastUpdated: null,
   addTeacher:               async () => {},
   addStudent:               async () => {},
   deleteStudent:            async () => {},
@@ -85,6 +92,9 @@ const TeachersContext = createContext<TeachersContextType>({
   loadNotifications:          async () => {},
   markNotificationRead:       async () => {},
   markAllNotificationsRead:   async () => {},
+  updateMeetLink:             async () => {},
+  logClassJoin:               async () => {},
+  loadClassJoinLogs:          async () => {},
 });
 
 export function TeachersProvider({ children }: { children: ReactNode }) {
@@ -96,20 +106,24 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   const [scoringEvents, setScoringEvents] = useState<ScoringEvent[]>([]);
   const [classCounts, setClassCounts]   = useState<ClassCount[]>([]);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [unassignedStudents, setUnassignedStudents] = useState<Student[]>([]);
+  const [classJoinLogs, setClassJoinLogs] = useState<ClassJoinLog[]>([]);
   const [lastUpdated, setLastUpdated]   = useState<Date | null>(null);
 
   // Silent reload — no loading spinner, just swaps in fresh data
   async function reloadAll() {
-    const [t, s, a, ev] = await Promise.all([
+    const [t, s, a, ev, unassigned] = await Promise.all([
       dbGetTeachers(),
       dbGetStudents(),
       dbGetAssignments(),
       dbGetScoringEvents(),
+      dbGetUnassignedStudents(),
     ]);
     setTeachers(t);
     setStudents(s);
     setAssignments(a);
     setScoringEvents(ev);
+    setUnassignedStudents(unassigned);
     setTeacherGrids({});
     setLastUpdated(new Date());
   }
@@ -152,14 +166,16 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
 
   async function deleteStudent(studentId: string, studentName: string) {
     await dbDeleteStudent(studentId, studentName);
-    const [t, s, a] = await Promise.all([
+    const [t, s, a, unassigned] = await Promise.all([
       dbGetTeachers(),
       dbGetStudents(),
       dbGetAssignments(),
+      dbGetUnassignedStudents(),
     ]);
     setTeachers(t);
     setStudents(s);
     setAssignments(a);
+    setUnassignedStudents(unassigned);
     setTeacherGrids({});
   }
 
@@ -171,6 +187,8 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   async function addAssignment(a: Assignment) {
     await dbAddAssignment(a);
     setAssignments(prev => [a, ...prev]);
+    // The student now has an assignment — drop it from the unassigned list
+    setUnassignedStudents(prev => prev.filter(s => s.id !== a.studentId && s.name !== a.studentName));
   }
 
   async function getTeacherGrid(teacherId: string): Promise<Grid> {
@@ -306,10 +324,32 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     setAssignments(prev => prev.map(a => a.id === assignmentId ? { ...a, slots, weeklyHours } : a));
   }
 
+  async function updateMeetLink(assignmentId: string, link: string) {
+    await dbUpdateMeetLink(assignmentId, link);
+    const trimmed = link.trim();
+    setAssignments(prev => prev.map(a => a.id === assignmentId ? { ...a, meetLink: trimmed || undefined } : a));
+  }
+
+  async function logClassJoin(
+    teacherId: string,
+    teacherName: string,
+    studentName: string,
+    scheduledDate: string,
+    scheduledTime: string,
+  ) {
+    const log = await dbLogClassJoin(teacherId, teacherName, studentName, scheduledDate, scheduledTime);
+    setClassJoinLogs(prev => [log, ...prev]);
+  }
+
+  async function loadClassJoinLogs() {
+    const logs = await dbGetClassJoinLogs();
+    setClassJoinLogs(logs);
+  }
+
   return (
     <TeachersContext.Provider value={{
       teachers, students, assignments, teacherGrids, loadingTeachers,
-      scoringEvents, classCounts, notifications, lastUpdated,
+      scoringEvents, classCounts, notifications, unassignedStudents, classJoinLogs, lastUpdated,
       addTeacher, addStudent, deleteStudent, updateStudent, addAssignment,
       getTeacherGrid, updateTeacherGrid, updateTeacherRating,
       updateTeacherSpecialties, updateTeacherInfo,
@@ -319,6 +359,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
       reloadAll, loadClassCounts, incrementClassCount,
       updateAssignmentAdjustment, updateAssignmentStartDate, updateAssignmentSlots,
       sendNotification, loadNotifications, markNotificationRead, markAllNotificationsRead,
+      updateMeetLink, logClassJoin, loadClassJoinLogs,
     }}>
       {children}
     </TeachersContext.Provider>

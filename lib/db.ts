@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import { Teacher, Student, Assignment, AppUser, Grid, TeacherStatus, ScoringEvent, ClassCount, AppNotification } from '@/types';
+import { Teacher, Student, Assignment, AppUser, Grid, TeacherStatus, ScoringEvent, ClassCount, AppNotification, ClassJoinLog } from '@/types';
 
 // ── AUTH ─────────────────────────────────────────────────────────────────────
 
@@ -246,6 +246,7 @@ export async function dbGetAssignments(): Promise<Assignment[]> {
     startDate:             row.start_date ?? undefined,
     createdAt:             row.created_at,
     manualClassAdjustment: row.manual_class_adjustment ?? 0,
+    meetLink:              row.meet_link ?? undefined,
   }));
 }
 
@@ -787,6 +788,7 @@ export async function dbGetTeacherStudents(teacherId: string): Promise<Assignmen
       startDate:             row.start_date ?? undefined,
       createdAt:             row.created_at,
       manualClassAdjustment: row.manual_class_adjustment ?? 0,
+      meetLink:              row.meet_link ?? undefined,
     }));
 }
 
@@ -848,6 +850,107 @@ export async function dbUpdateTeacherInfo(teacherId: string, data: { name: strin
     email:      data.email,
     specialties: data.specialties,
   }).eq('id', teacherId);
+}
+
+// ── MEET LINKS ────────────────────────────────────────────────────────────────
+
+export async function dbUpdateMeetLink(assignmentId: string, link: string): Promise<void> {
+  await supabase.from('assignments').update({ meet_link: link.trim() || null }).eq('id', assignmentId);
+}
+
+// ── CLASS JOIN LOGS ───────────────────────────────────────────────────────────
+
+function calcPunctuality(scheduledDate: string, scheduledTime: string, clickedAt: Date): ClassJoinLog['punctuality'] {
+  // scheduledTime is "HH:00" (Spain time, same reference used across the app)
+  const [y, m, d] = scheduledDate.split('-').map(Number);
+  const hour = parseInt(scheduledTime);
+  const scheduled = new Date(y, (m ?? 1) - 1, d ?? 1, isNaN(hour) ? 0 : hour, 0, 0, 0);
+  const diffMin = (clickedAt.getTime() - scheduled.getTime()) / 60000;
+  if (diffMin <= 5)  return 'on_time';
+  if (diffMin <= 15) return 'late';
+  return 'very_late';
+}
+
+export async function dbLogClassJoin(
+  teacherId: string,
+  teacherName: string,
+  studentName: string,
+  scheduledDate: string,
+  scheduledTime: string,
+): Promise<ClassJoinLog> {
+  const clickedAt   = new Date();
+  const punctuality = calcPunctuality(scheduledDate, scheduledTime, clickedAt);
+  const id          = `cjl_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+  await supabase.from('class_join_logs').insert({
+    id,
+    teacher_id:     teacherId,
+    teacher_name:   teacherName,
+    student_name:   studentName,
+    scheduled_date: scheduledDate,
+    scheduled_time: scheduledTime,
+    clicked_at:     clickedAt.toISOString(),
+    punctuality,
+  });
+
+  return {
+    id, teacherId, teacherName, studentName,
+    scheduledDate, scheduledTime,
+    clickedAt: clickedAt.toISOString(),
+    punctuality,
+  };
+}
+
+export async function dbGetClassJoinLogs(): Promise<ClassJoinLog[]> {
+  const { data, error } = await supabase
+    .from('class_join_logs')
+    .select('*')
+    .order('clicked_at', { ascending: false });
+
+  if (error || !data) return [];
+
+  return (data as any[]).map(row => ({
+    id:            row.id,
+    teacherId:     row.teacher_id,
+    teacherName:   row.teacher_name,
+    studentName:   row.student_name,
+    scheduledDate: row.scheduled_date,
+    scheduledTime: row.scheduled_time,
+    clickedAt:     row.clicked_at,
+    punctuality:   row.punctuality,
+  }));
+}
+
+// ── UNASSIGNED STUDENTS ───────────────────────────────────────────────────────
+
+// Students that exist in `students` but have no row in `assignments`.
+export async function dbGetUnassignedStudents(): Promise<Student[]> {
+  const [studentsRes, assignmentsRes] = await Promise.all([
+    supabase.from('students').select('*').order('created_at', { ascending: true }),
+    supabase.from('assignments').select('student_id, student_name'),
+  ]);
+
+  if (studentsRes.error || !studentsRes.data) return [];
+
+  const assignedIds   = new Set<string>();
+  const assignedNames = new Set<string>();
+  for (const row of (assignmentsRes.data ?? [])) {
+    if (row.student_id)   assignedIds.add(row.student_id);
+    if (row.student_name) assignedNames.add(row.student_name);
+  }
+
+  return (studentsRes.data as any[])
+    .filter(row => !assignedIds.has(row.id) && !assignedNames.has(row.name))
+    .map(row => ({
+      id:        row.id,
+      name:      row.name,
+      email:     row.email,
+      phone:     row.phone ?? undefined,
+      level:     row.level,
+      plan:      row.plan,
+      notes:     row.notes ?? undefined,
+      createdAt: row.created_at,
+    }));
 }
 
 // ── NOTIFICATIONS ─────────────────────────────────────────────────────────────

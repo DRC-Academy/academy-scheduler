@@ -695,7 +695,7 @@ function AgendaSemanal({ assignments }: { assignments: Assignment[] }) {
 
 // ─── Setter Content ───────────────────────────────────────────────────────────
 function SetterContent() {
-  const { teachers, students, assignments, addStudent, addAssignment, reloadAll } = useTeachers();
+  const { teachers, students, assignments, unassignedStudents, addStudent, addAssignment, reloadAll } = useTeachers();
 
   const [slotFilters, setSlotFilters] = useState<SlotFilter[]>([]);
   const [onlyAvailable, setOnlyAvailable] = useState(false);
@@ -703,7 +703,7 @@ function SetterContent() {
   const [specialtyFilter, setSpecialtyFilter] = useState<string>('');
   const [calendarTeacher, setCalendarTeacher] = useState<Teacher | null>(null);
   const [emailAssignment, setEmailAssignment] = useState<Assignment | null>(null);
-  const [activeTab, setActiveTab] = useState<'search' | 'agenda' | 'history'>('search');
+  const [activeTab, setActiveTab] = useState<'search' | 'unassigned' | 'agenda' | 'history'>('search');
 
   function addSlotFilter() {
     setSlotFilters(prev => [...prev, { id: Date.now().toString(), day: 'Lunes', hour: '14:00' }]);
@@ -760,10 +760,18 @@ function SetterContent() {
             <h1 style={{ fontSize: 24, fontWeight: 700, color: 'var(--text-primary)', margin: '0 0 4px' }}>Setter</h1>
             <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0 }}>Asigná alumnos a profesores disponibles.</p>
           </div>
-          <div style={{ display: 'flex', background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 9, padding: 3, gap: 3 }}>
-            {(['search', 'agenda', 'history'] as const).map(tab => (
-              <button key={tab} onClick={() => setActiveTab(tab)} style={{ padding: '7px 16px', borderRadius: 7, border: 'none', background: activeTab === tab ? '#1E9E3A' : 'transparent', color: activeTab === tab ? 'white' : 'var(--text-secondary)', fontSize: 13, fontWeight: activeTab === tab ? 700 : 500, cursor: 'pointer' }}>
-                {tab === 'search' ? '🔍 Buscar' : tab === 'agenda' ? `📅 Agenda` : `📋 Historial (${assignments.length})`}
+          <div style={{ display: 'flex', background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 9, padding: 3, gap: 3, flexWrap: 'wrap' }}>
+            {(['search', 'unassigned', 'agenda', 'history'] as const).map(tab => (
+              <button key={tab} onClick={() => setActiveTab(tab)} style={{ padding: '7px 16px', borderRadius: 7, border: 'none', background: activeTab === tab ? '#1E9E3A' : 'transparent', color: activeTab === tab ? 'white' : 'var(--text-secondary)', fontSize: 13, fontWeight: activeTab === tab ? 700 : 500, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                {tab === 'search' ? '🔍 Buscar'
+                  : tab === 'unassigned' ? '📋 Sin asignar'
+                  : tab === 'agenda' ? '📅 Agenda'
+                  : `📋 Historial (${assignments.length})`}
+                {tab === 'unassigned' && unassignedStudents.length > 0 && (
+                  <span style={{ background: activeTab === tab ? 'rgba(255,255,255,0.25)' : '#ef4444', color: 'white', borderRadius: 10, padding: '0 7px', fontSize: 11, fontWeight: 700, minWidth: 18, textAlign: 'center' }}>
+                    {unassignedStudents.length}
+                  </span>
+                )}
               </button>
             ))}
           </div>
@@ -914,6 +922,59 @@ function SetterContent() {
             })}
           </div>
         </>)}
+
+        {activeTab === 'unassigned' && (
+          <div>
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)' }}>📋 Alumnos sin asignar</div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3 }}>
+                Alumnos registrados que todavía no tienen ningún profesor asignado. Ordenados por antigüedad.
+              </div>
+            </div>
+
+            {unassignedStudents.length === 0 ? (
+              <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '48px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 14 }}>
+                <div style={{ fontSize: 32, marginBottom: 10 }}>✅</div>
+                Todos los alumnos tienen profesor asignado.
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {[...unassignedStudents]
+                  .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+                  .map(s => {
+                    const daysWaiting = Math.floor((Date.now() - new Date(s.createdAt).getTime()) / 86400000);
+                    const urgent = daysWaiting > 3;
+                    return (
+                      <div key={s.id} style={{ background: 'var(--bg-surface)', border: `1px solid ${urgent ? 'rgba(239,68,68,0.3)' : 'var(--border)'}`, borderRadius: 12, padding: '14px 18px', display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+                        <div style={{ width: 40, height: 40, borderRadius: '50%', background: urgent ? 'rgba(239,68,68,0.1)' : 'var(--bg-surface-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, fontWeight: 700, color: urgent ? '#ef4444' : 'var(--text-secondary)', flexShrink: 0 }}>
+                          {s.name.charAt(0).toUpperCase()}
+                        </div>
+                        <div style={{ flex: 1, minWidth: 140 }}>
+                          <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)' }}>{s.name}</div>
+                          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 1 }}>{s.email}</div>
+                          <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 3 }}>
+                            Plan: <b>{s.plan || '—'}</b> · Nivel: <b>{s.level}</b>
+                          </div>
+                          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+                            Registrado hace {daysWaiting} día{daysWaiting !== 1 ? 's' : ''}
+                          </div>
+                        </div>
+                        {urgent && (
+                          <span style={{ padding: '3px 10px', borderRadius: 20, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.35)', color: '#ef4444', fontSize: 11, fontWeight: 700, flexShrink: 0 }}>
+                            ⚠️ {daysWaiting} días sin asignar
+                          </span>
+                        )}
+                        <button onClick={() => { setSearchName(''); setSpecialtyFilter(''); setActiveTab('search'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                          style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: '#1E9E3A', color: 'white', fontWeight: 700, fontSize: 13, cursor: 'pointer', flexShrink: 0 }}>
+                          Asignar profesor →
+                        </button>
+                      </div>
+                    );
+                  })}
+              </div>
+            )}
+          </div>
+        )}
 
         {activeTab === 'agenda' && (
           <AgendaSemanal assignments={assignments} />
