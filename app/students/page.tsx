@@ -283,6 +283,8 @@ function StudentsContent() {
   const [subFilter, setSubFilter] = useState<'all' | SubCategory>('all');
   const [subInfo, setSubInfo] = useState<Record<string, SubInfo>>({});
   const [verifyingSubs, setVerifyingSubs] = useState(false);
+  const [subProgress, setSubProgress] = useState<{ done: number; total: number } | null>(null);
+  const [refreshing, setRefreshing] = useState<Set<string>>(new Set());
 
   // Merge students from both sources: students table + assignments
   const allStudents = useMemo<DisplayStudent[]>(() => {
@@ -309,22 +311,48 @@ function StudentsContent() {
   }, [allStudents]);
   const subEmailsKey = subEmails.join('|');
 
+  // Verify subscriptions in batches of 5 (not all 90+ at once) to avoid
+  // saturating our API and WooCommerce, with a live progress indicator.
   useEffect(() => {
     if (subEmails.length === 0) return;
     let cancelled = false;
+    const BATCH_SIZE = 5;
+
     setVerifyingSubs(true);
-    Promise.all(subEmails.map(async e => [e, await fetchSubInfo(e)] as const)).then(results => {
-      if (cancelled) return;
-      setSubInfo(prev => {
-        const next = { ...prev };
-        for (const [e, info] of results) next[e] = info;
-        return next;
-      });
-      setVerifyingSubs(false);
-    });
+    setSubProgress({ done: 0, total: subEmails.length });
+
+    (async () => {
+      for (let i = 0; i < subEmails.length; i += BATCH_SIZE) {
+        if (cancelled) return;
+        const batch = subEmails.slice(i, i + BATCH_SIZE);
+        const results = await Promise.all(batch.map(async e => [e, await fetchSubInfo(e)] as const));
+        if (cancelled) return;
+        setSubInfo(prev => {
+          const next = { ...prev };
+          for (const [e, info] of results) next[e] = info;
+          return next;
+        });
+        setSubProgress({ done: Math.min(subEmails.length, i + batch.length), total: subEmails.length });
+      }
+      if (!cancelled) {
+        setVerifyingSubs(false);
+        setSubProgress(null);
+      }
+    })();
+
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [subEmailsKey]);
+
+  // Manual re-check for a single student (e.g. after a failed verification).
+  async function refreshOne(email?: string) {
+    const e = email?.trim().toLowerCase();
+    if (!e || refreshing.has(e)) return;
+    setRefreshing(prev => new Set(prev).add(e));
+    const info = await fetchSubInfo(e);
+    setSubInfo(prev => ({ ...prev, [e]: info }));
+    setRefreshing(prev => { const n = new Set(prev); n.delete(e); return n; });
+  }
 
   const filtered = useMemo(() => {
     let list = allStudents;
@@ -341,11 +369,24 @@ function StudentsContent() {
   function renderSubBadge(email?: string) {
     const e = email?.trim().toLowerCase();
     if (!e) return <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>—</span>;
-    const b = subBadge(subInfo[e]);
+    const isRefreshing = refreshing.has(e);
+    const info = subInfo[e];
+    // While refreshing, force the loading look.
+    const b = subBadge(isRefreshing ? undefined : info);
+    // Show a manual retry only on a real failed verification (not while loading).
+    const showRetry = !isRefreshing && info != null && info.active === null;
     return (
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 700, padding: '2px 9px', borderRadius: 12, background: b.bg, color: b.color, whiteSpace: 'nowrap' }}>
-        {b.spin && <span className="drc-spinner-xs" />}
-        {b.label}
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 700, padding: '2px 9px', borderRadius: 12, background: b.bg, color: b.color }}>
+          {b.spin && <span className="drc-spinner-xs" />}
+          {b.label}
+        </span>
+        {showRetry && (
+          <button onClick={() => refreshOne(e)} title="Reintentar verificación"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: 2, color: 'var(--text-muted)', fontFamily: 'inherit' }}>
+            🔄
+          </button>
+        )}
       </span>
     );
   }
@@ -428,7 +469,7 @@ function StudentsContent() {
           ))}
           {verifyingSubs && (
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-muted)', marginLeft: 4 }}>
-              <span className="drc-spinner-xs" /> Verificando suscripciones...
+              <span className="drc-spinner-xs" /> Verificando suscripciones...{subProgress ? ` ${subProgress.done}/${subProgress.total}` : ''}
             </span>
           )}
         </div>

@@ -13,10 +13,19 @@ interface SubResult {
 const ERROR_RESULT: SubResult = { active: null, status: 'error', endDate: null, daysRemaining: null, planName: null };
 
 // Cache simple en memoria (por instancia serverless): 5 minutos por email.
+// Solo se cachean resultados EXITOSOS — los errores nunca se cachean para que
+// el próximo intento (reintento o recarga) vuelva a consultar.
 const TTL_MS = 5 * 60 * 1000;
 const cache = new Map<string, { result: SubResult; ts: number }>();
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+// Reintentos / timeout para la llamada a WooCommerce.
+const MAX_ATTEMPTS = 3;       // 1 intento + 2 reintentos
+const RETRY_DELAY_MS = 500;   // backoff simple
+const TIMEOUT_MS = 10_000;    // 10s por intento
+
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 // WooCommerce devuelve fechas como "2024-12-31 23:59:59" (o "" / "0000-00-00…"
 // cuando no aplica). Devuelve una Date válida o null.
@@ -30,6 +39,44 @@ function parseWcDate(raw: unknown): Date | null {
 
 function firstNonEmpty(...vals: unknown[]): unknown {
   return vals.find(v => typeof v === 'string' && v.trim() && !v.trim().startsWith('0000'));
+}
+
+// Llama a WooCommerce con timeout explícito y reintentos. Devuelve el array de
+// suscripciones, o lanza un error (tras agotar los intentos) ya logueado.
+async function fetchWooSubscriptions(url: string, email: string): Promise<any[]> {
+  let lastErr: { status?: number; message: string } = { message: 'unknown error' };
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    try {
+      const res = await fetch(url, {
+        headers: { Accept: 'application/json' },
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+
+      if (!res.ok) {
+        lastErr = { status: res.status, message: `HTTP ${res.status}` };
+      } else {
+        const data = await res.json();
+        return Array.isArray(data) ? data : [];
+      }
+    } catch (err: any) {
+      clearTimeout(timer);
+      lastErr = { message: err?.name === 'AbortError' ? `timeout tras ${TIMEOUT_MS}ms` : String(err?.message ?? err) };
+    }
+
+    if (attempt < MAX_ATTEMPTS) await sleep(RETRY_DELAY_MS);
+  }
+
+  console.error(
+    `[check-subscription] Falló la verificación de "${email}" tras ${MAX_ATTEMPTS} intentos — ` +
+    `${lastErr.status ? `status HTTP ${lastErr.status}` : 'sin respuesta'}: ${lastErr.message}` +
+    (lastErr.status === 429 ? ' (rate limit)' : lastErr.status === 401 ? ' (auth)' : '')
+  );
+  throw new Error(lastErr.message);
 }
 
 export async function GET(request: Request): Promise<Response> {
@@ -50,54 +97,47 @@ export async function GET(request: Request): Promise<Response> {
   const cs   = process.env.WOOCOMMERCE_CONSUMER_SECRET;
 
   if (!base || !ck || !cs) {
-    // Sin configuración no podemos verificar; no bloqueamos al profesor.
+    console.error('[check-subscription] Variables de entorno de WooCommerce no configuradas');
+    return Response.json(ERROR_RESULT); // no se cachea
+  }
+
+  const url =
+    `${base.replace(/\/$/, '')}/wp-json/wc/v3/subscriptions` +
+    `?search=${encodeURIComponent(email)}` +
+    `&consumer_key=${encodeURIComponent(ck)}` +
+    `&consumer_secret=${encodeURIComponent(cs)}`;
+
+  let subs: any[];
+  try {
+    subs = await fetchWooSubscriptions(url, email);
+  } catch {
+    // Error tras reintentos → no bloquear y NO cachear.
     return Response.json(ERROR_RESULT);
   }
 
-  try {
-    const url =
-      `${base.replace(/\/$/, '')}/wp-json/wc/v3/subscriptions` +
-      `?search=${encodeURIComponent(email)}` +
-      `&consumer_key=${encodeURIComponent(ck)}` +
-      `&consumer_secret=${encodeURIComponent(cs)}`;
-
-    const res = await fetch(url, { headers: { Accept: 'application/json' }, cache: 'no-store' });
-
-    if (!res.ok) {
-      // No cacheamos errores: queremos reintentar cuando WooCommerce se recupere.
-      return Response.json(ERROR_RESULT);
-    }
-
-    const data = await res.json();
-    const subs: any[] = Array.isArray(data) ? data : [];
-
-    if (subs.length === 0) {
-      const result: SubResult = { active: false, status: 'not_found', endDate: null, daysRemaining: null, planName: null };
-      cache.set(email, { result, ts: Date.now() });
-      return Response.json(result);
-    }
-
-    // Preferimos una suscripción activa; si no hay, usamos la primera reportada.
-    const chosen = subs.find(s => s?.status === 'active') ?? subs[0];
-    const status = String(chosen?.status ?? 'cancelled');
-    const active = status === 'active';
-
-    const endDate = parseWcDate(firstNonEmpty(chosen?.end_date, chosen?.next_payment_date));
-    const endDateIso = endDate ? endDate.toISOString() : null;
-    const daysRemaining = endDate
-      ? Math.max(0, Math.ceil((endDate.getTime() - Date.now()) / DAY_MS))
-      : null;
-
-    const planName: string | null =
-      (Array.isArray(chosen?.line_items) && typeof chosen.line_items[0]?.name === 'string')
-        ? chosen.line_items[0].name
-        : null;
-
-    const result: SubResult = { active, status, endDate: endDateIso, daysRemaining, planName };
+  if (subs.length === 0) {
+    const result: SubResult = { active: false, status: 'not_found', endDate: null, daysRemaining: null, planName: null };
     cache.set(email, { result, ts: Date.now() });
     return Response.json(result);
-  } catch {
-    // Error de conexión → no bloquear.
-    return Response.json(ERROR_RESULT);
   }
+
+  // Preferimos una suscripción activa; si no hay, usamos la primera reportada.
+  const chosen = subs.find(s => s?.status === 'active') ?? subs[0];
+  const status = String(chosen?.status ?? 'cancelled');
+  const active = status === 'active';
+
+  const endDate = parseWcDate(firstNonEmpty(chosen?.end_date, chosen?.next_payment_date));
+  const endDateIso = endDate ? endDate.toISOString() : null;
+  const daysRemaining = endDate
+    ? Math.max(0, Math.ceil((endDate.getTime() - Date.now()) / DAY_MS))
+    : null;
+
+  const planName: string | null =
+    (Array.isArray(chosen?.line_items) && typeof chosen.line_items[0]?.name === 'string')
+      ? chosen.line_items[0].name
+      : null;
+
+  const result: SubResult = { active, status, endDate: endDateIso, daysRemaining, planName };
+  cache.set(email, { result, ts: Date.now() });
+  return Response.json(result);
 }
