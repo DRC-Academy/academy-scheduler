@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { NavBar } from '@/components/NavBar';
 import { AuthGuard } from '@/components/AuthGuard';
 import { PullToRefresh } from '@/components/PullToRefresh';
@@ -878,6 +878,32 @@ function subDisclaimer(name: string, status: string, daysRemaining: number | nul
   }
 }
 
+// Cached WooCommerce subscription state per student email.
+interface SubInfo {
+  active: boolean | null;
+  status: string;
+  daysRemaining: number | null;
+  endDate: string | null;
+  fetchedAt: number;
+}
+const SUB_TTL_MS = 5 * 60 * 1000;
+
+async function fetchSubInfo(email: string): Promise<SubInfo> {
+  try {
+    const res = await fetch(`/api/check-subscription?email=${encodeURIComponent(email)}`);
+    const data = await res.json();
+    return {
+      active:        data.active ?? null,
+      status:        data.status ?? 'error',
+      daysRemaining: data.daysRemaining ?? null,
+      endDate:       data.endDate ?? null,
+      fetchedAt:     Date.now(),
+    };
+  } catch {
+    return { active: null, status: 'error', daysRemaining: null, endDate: null, fetchedAt: Date.now() };
+  }
+}
+
 interface TodayClass {
   key: string;
   assignment: Assignment;
@@ -924,6 +950,7 @@ function TeacherUpcomingTab({ teacher, myAssignments, updateMeetLink, logClassJo
   const [joined, setJoined] = useState<Set<string>>(new Set());
   const [checkingKey, setCheckingKey] = useState<string | null>(null);
   const [subModal, setSubModal] = useState<{ c: TodayClass; status: string; daysRemaining: number | null; endDate: string | null } | null>(null);
+  const [subInfo, setSubInfo] = useState<Record<string, SubInfo>>({});
 
   // Live "now" — set on mount (avoids SSR hydration mismatch) and refreshed every
   // minute so each class's state (pasada / en curso / próxima) updates on its own.
@@ -956,6 +983,53 @@ function TeacherUpcomingTab({ teacher, myAssignments, updateMeetLink, logClassJo
 
   const pastClasses    = todayClasses.filter(c => statusOf(c) === 'passed');
   const currentClasses = todayClasses.filter(c => statusOf(c) !== 'passed');
+
+  // Unique emails of every student visible in this tab (today + next 2 days).
+  const visibleEmails = useMemo(() => {
+    const set = new Set<string>();
+    for (let off = 0; off <= 2; off++) {
+      const d = new Date();
+      d.setDate(d.getDate() + off);
+      for (const c of classesForDate(myAssignments, d)) {
+        const e = c.assignment.studentEmail?.trim().toLowerCase();
+        if (e) set.add(e);
+      }
+    }
+    return [...set].sort();
+  }, [myAssignments]);
+  const emailsKey = visibleEmails.join('|');
+
+  // Fetch all subscription states once when the tab opens (parallel, in-memory).
+  useEffect(() => {
+    if (visibleEmails.length === 0) return;
+    let cancelled = false;
+    Promise.all(visibleEmails.map(async e => [e, await fetchSubInfo(e)] as const)).then(results => {
+      if (cancelled) return;
+      setSubInfo(prev => {
+        const next = { ...prev };
+        for (const [e, info] of results) next[e] = info;
+        return next;
+      });
+    });
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [emailsKey]);
+
+  // Badge config from cached subscription state (undefined entry → still verifying).
+  function subBadgeFor(email?: string): { label: string; color: string; bg: string; spin?: boolean } | null {
+    const e = email?.trim().toLowerCase();
+    if (!e) return null;
+    const info = subInfo[e];
+    if (!info) return { label: 'Verificando...', color: 'var(--text-muted)', bg: 'var(--bg-surface-3)', spin: true };
+    if (info.active === true) return { label: '✅ Suscripción activa', color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)' };
+    if (info.active === false && info.status === 'pending-cancel') {
+      const d = info.daysRemaining;
+      const tail = d != null && d > 0 ? ` (${d} día${d === 1 ? '' : 's'})` : '';
+      return { label: `⏳ Pendiente de cancelar${tail}`, color: '#b45309', bg: 'rgba(255,196,0,0.15)' };
+    }
+    if (info.active === false) return { label: '⚠️ Sin suscripción activa', color: '#ea580c', bg: 'rgba(249,115,22,0.12)' };
+    return { label: '❓ No verificado', color: 'var(--text-muted)', bg: 'var(--bg-surface-3)' };
+  }
 
   // Assignments today missing a meet link (deduped by assignment)
   const missingSeen = new Set<string>();
@@ -1001,33 +1075,33 @@ function TeacherUpcomingTab({ teacher, myAssignments, updateMeetLink, logClassJo
     setJoined(prev => new Set([...prev, c.key]));
   }
 
-  // Verifies the student's WooCommerce subscription before joining.
+  // Verifies the student's WooCommerce subscription before joining. Reuses the
+  // in-memory result from tab load; only re-fetches if it's older than 5 min.
   async function handleJoin(c: TodayClass) {
     if (!c.meetLink || checkingKey) return;
-    const email = c.assignment.studentEmail?.trim();
+    const email = c.assignment.studentEmail?.trim().toLowerCase();
     if (!email) {
       doJoin(c, 'not_verified', false);
       showToast('No se pudo verificar la suscripción, ingreso permitido', 3000);
       return;
     }
-    setCheckingKey(c.key);
-    try {
-      const res = await fetch(`/api/check-subscription?email=${encodeURIComponent(email)}`);
-      const data = await res.json();
-      if (data.active === true) {
-        doJoin(c, 'active', false);
-        showToast('✅ Ingreso registrado');
-      } else if (data.active === false) {
-        setSubModal({ c, status: data.status ?? 'not_found', daysRemaining: data.daysRemaining ?? null, endDate: data.endDate ?? null });
-      } else {
-        doJoin(c, 'error', false);
-        showToast('No se pudo verificar la suscripción, ingreso permitido', 3000);
-      }
-    } catch {
+
+    let info = subInfo[email];
+    if (!info || Date.now() - info.fetchedAt >= SUB_TTL_MS) {
+      setCheckingKey(c.key);
+      info = await fetchSubInfo(email);
+      setSubInfo(prev => ({ ...prev, [email]: info! }));
+      setCheckingKey(null);
+    }
+
+    if (info.active === true) {
+      doJoin(c, 'active', false);
+      showToast('✅ Ingreso registrado');
+    } else if (info.active === false) {
+      setSubModal({ c, status: info.status, daysRemaining: info.daysRemaining, endDate: info.endDate });
+    } else {
       doJoin(c, 'error', false);
       showToast('No se pudo verificar la suscripción, ingreso permitido', 3000);
-    } finally {
-      setCheckingKey(null);
     }
   }
 
@@ -1080,6 +1154,16 @@ function TeacherUpcomingTab({ teacher, myAssignments, updateMeetLink, logClassJo
             <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
               {c.plan || 'Clase'}{c.level ? ` · ${c.level}` : ''}
             </div>
+            {(() => {
+              const sb = subBadgeFor(c.assignment.studentEmail);
+              if (!sb) return null;
+              return (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 6, fontSize: 10, fontWeight: 700, padding: '2px 9px', borderRadius: 10, background: sb.bg, color: sb.color }}>
+                  {sb.spin && <span className="drc-spinner-xs" />}
+                  {sb.label}
+                </span>
+              );
+            })()}
           </div>
           <div style={{ fontSize: 18, fontWeight: 800, color: passed ? 'var(--text-muted)' : highlight ? '#1E9E3A' : 'var(--text-primary)', flexShrink: 0 }}>{c.hour}</div>
         </div>

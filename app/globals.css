@@ -228,3 +228,13 @@ label {
   border-radius: 50%;
   animation: drc-spin 0.7s linear infinite;
 }
+.drc-spinner-xs {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border: 2px solid rgba(120, 120, 120, 0.3);
+  border-top-color: #9ca3af;
+  border-radius: 50%;
+  animation: drc-spin 0.7s linear infinite;
+  vertical-align: middle;
+}
