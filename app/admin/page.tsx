@@ -1593,10 +1593,15 @@ const PUNCT_STYLE: Record<string, { label: string; color: string; bg: string }> 
   missed:    { label: '🔴 No ingresó', color: '#dc2626', bg: 'rgba(239,68,68,0.1)' },
 };
 
-function subscriptionBadge(r: { joinedAt?: string; subscriptionStatus?: string; enteredWithoutActive?: boolean }):
+function subscriptionBadge(r: { joinedAt?: string; subscriptionStatus?: string; enteredWithoutActive?: boolean; subscriptionDaysRemaining?: number }):
   { label: string; color: string; bg: string } | null {
   if (!r.joinedAt) return null; // no se registró ingreso (no ingresó)
-  if (r.enteredWithoutActive) return { label: '⚠️ Inactiva (ingresó igual)', color: '#ea580c', bg: 'rgba(249,115,22,0.12)' };
+  if (r.enteredWithoutActive) {
+    const days = (r.subscriptionDaysRemaining != null && r.subscriptionDaysRemaining > 0)
+      ? ` · ${r.subscriptionDaysRemaining}d`
+      : '';
+    return { label: `⚠️ Inactiva (ingresó igual)${days}`, color: '#ea580c', bg: 'rgba(249,115,22,0.12)' };
+  }
   if (r.subscriptionStatus === 'active') return { label: '✅ Activa', color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)' };
   return { label: '❓ No verificado', color: 'var(--text-muted)', bg: 'var(--bg-surface-3)' };
 }
@@ -1613,6 +1618,7 @@ interface LogRow {
   hasLink: boolean;
   subscriptionStatus?: string;
   enteredWithoutActive?: boolean;
+  subscriptionDaysRemaining?: number;
 }
 
 function ClassLogTab() {
@@ -1672,6 +1678,7 @@ function ClassLogTab() {
               teacherId: a.teacherId, teacherName: a.teacherName, studentName: a.studentName,
               joinedAt: log.clickedAt, status: log.punctuality, hasLink,
               subscriptionStatus: log.subscriptionStatus, enteredWithoutActive: log.enteredWithoutActive,
+              subscriptionDaysRemaining: log.subscriptionDaysRemaining,
             });
           } else if (dateIso < todayIso) {
             // Past class with no join recorded
@@ -1701,6 +1708,7 @@ function ClassLogTab() {
         teacherId: log.teacherId, teacherName: log.teacherName, studentName: log.studentName,
         joinedAt: log.clickedAt, status: log.punctuality, hasLink: !!linkedAssignment?.meetLink,
         subscriptionStatus: log.subscriptionStatus, enteredWithoutActive: log.enteredWithoutActive,
+        subscriptionDaysRemaining: log.subscriptionDaysRemaining,
       });
     }
 

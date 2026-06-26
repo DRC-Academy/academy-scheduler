@@ -110,8 +110,9 @@ export interface ClassJoinLog {
   scheduledTime: string;
   clickedAt: string;
   punctuality: 'on_time' | 'late' | 'very_late';
-  subscriptionStatus?: string;     // estado WooCommerce: 'active' | 'cancelled' | 'on-hold' | 'expired' | 'pending-cancel' | 'not_found' | 'error' | 'not_verified'
-  enteredWithoutActive?: boolean;  // ingresó pese a no tener suscripción activa
+  subscriptionStatus?: string;          // estado WooCommerce: 'active' | 'cancelled' | 'on-hold' | 'expired' | 'pending-cancel' | 'not_found' | 'error' | 'not_verified'
+  enteredWithoutActive?: boolean;       // ingresó pese a no tener suscripción activa
+  subscriptionDaysRemaining?: number;   // días restantes hasta fin de suscripción (ej. en 'pending-cancel')
 }
 
 export interface AdminAlert {

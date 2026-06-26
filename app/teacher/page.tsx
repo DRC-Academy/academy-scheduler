@@ -821,14 +821,62 @@ function normalizeUrl(url: string): string {
   return /^https?:\/\//i.test(t) ? t : `https://${t}`;
 }
 
-// Human-readable reason shown in the inactive-subscription disclaimer.
-const SUB_STATUS_LABEL: Record<string, string> = {
-  cancelled:        'cancelada',
-  'pending-cancel': 'pendiente de cancelación',
-  'on-hold':        'en espera de pago',
-  expired:          'expirada',
-  not_found:        'no encontrada',
-};
+function fmtDateDMY(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+}
+
+// Builds the inactive-subscription disclaimer copy + styling per WooCommerce status.
+function subDisclaimer(name: string, status: string, daysRemaining: number | null, endDate: string | null):
+  { title: string; body: string; accent: string; bg: string; soft: boolean } {
+  switch (status) {
+    case 'pending-cancel':
+      if (daysRemaining != null && daysRemaining > 0) {
+        return {
+          title: '⏳ Suscripción pendiente de cancelar',
+          body: `${name} tiene su suscripción en estado 'pendiente de cancelar'. Finaliza definitivamente en ${daysRemaining} día${daysRemaining === 1 ? '' : 's'} (el ${fmtDateDMY(endDate)}).`,
+          accent: '#D97706', bg: '#FFFBEB', soft: true,
+        };
+      }
+      return {
+        title: '⏳ Suscripción pendiente de cancelar',
+        body: `${name} tiene su suscripción pendiente de cancelar.`,
+        accent: '#D97706', bg: '#FFFBEB', soft: true,
+      };
+    case 'on-hold':
+      return {
+        title: '⚠️ Pago pendiente',
+        body: `${name} tiene un pago pendiente de procesar. Su suscripción está en espera.`,
+        accent: '#ea580c', bg: 'rgba(249,115,22,0.06)', soft: false,
+      };
+    case 'cancelled':
+      return {
+        title: '❌ Suscripción cancelada',
+        body: `${name} canceló su suscripción.`,
+        accent: '#dc2626', bg: 'rgba(239,68,68,0.05)', soft: false,
+      };
+    case 'expired':
+      return {
+        title: '❌ Suscripción expirada',
+        body: `${name} tiene su suscripción expirada.`,
+        accent: '#dc2626', bg: 'rgba(239,68,68,0.05)', soft: false,
+      };
+    case 'not_found':
+      return {
+        title: '❓ Sin suscripción registrada',
+        body: 'No se encontró ninguna suscripción asociada a este email en el sistema de pagos.',
+        accent: '#6b7280', bg: 'rgba(107,114,128,0.06)', soft: false,
+      };
+    default:
+      return {
+        title: '⚠️ Suscripción inactiva',
+        body: `${name} no cuenta con una suscripción activa en este momento.`,
+        accent: '#D97706', bg: '#FFFBEB', soft: false,
+      };
+  }
+}
 
 interface TodayClass {
   key: string;
@@ -866,7 +914,7 @@ function TeacherUpcomingTab({ teacher, myAssignments, updateMeetLink, logClassJo
   teacher: Teacher;
   myAssignments: Assignment[];
   updateMeetLink: (assignmentId: string, link: string) => Promise<void>;
-  logClassJoin: (teacherId: string, teacherName: string, studentName: string, scheduledDate: string, scheduledTime: string, subscriptionStatus?: string, enteredWithoutActive?: boolean) => Promise<void>;
+  logClassJoin: (teacherId: string, teacherName: string, studentName: string, scheduledDate: string, scheduledTime: string, subscriptionStatus?: string, enteredWithoutActive?: boolean, subscriptionDaysRemaining?: number | null) => Promise<void>;
 }) {
   const [linkModal, setLinkModal] = useState<{ assignment: Assignment; value: string } | null>(null);
   const [savingLink, setSavingLink] = useState(false);
@@ -875,7 +923,7 @@ function TeacherUpcomingTab({ teacher, myAssignments, updateMeetLink, logClassJo
   const [showPastToday, setShowPastToday] = useState(false);
   const [joined, setJoined] = useState<Set<string>>(new Set());
   const [checkingKey, setCheckingKey] = useState<string | null>(null);
-  const [subModal, setSubModal] = useState<{ c: TodayClass; status: string } | null>(null);
+  const [subModal, setSubModal] = useState<{ c: TodayClass; status: string; daysRemaining: number | null; endDate: string | null } | null>(null);
 
   // Live "now" — set on mount (avoids SSR hydration mismatch) and refreshed every
   // minute so each class's state (pasada / en curso / próxima) updates on its own.
@@ -946,10 +994,10 @@ function TeacherUpcomingTab({ teacher, myAssignments, updateMeetLink, logClassJo
   }
 
   // Opens the Meet link and records the join with the verified subscription status.
-  function doJoin(c: TodayClass, subscriptionStatus: string, enteredWithoutActive: boolean) {
+  function doJoin(c: TodayClass, subscriptionStatus: string, enteredWithoutActive: boolean, daysRemaining: number | null = null) {
     if (!c.meetLink) return;
     window.open(normalizeUrl(c.meetLink), '_blank', 'noopener,noreferrer');
-    logClassJoin(teacher.id, teacher.name, c.studentName, todayIso, c.hour, subscriptionStatus, enteredWithoutActive);
+    logClassJoin(teacher.id, teacher.name, c.studentName, todayIso, c.hour, subscriptionStatus, enteredWithoutActive, daysRemaining);
     setJoined(prev => new Set([...prev, c.key]));
   }
 
@@ -970,7 +1018,7 @@ function TeacherUpcomingTab({ teacher, myAssignments, updateMeetLink, logClassJo
         doJoin(c, 'active', false);
         showToast('✅ Ingreso registrado');
       } else if (data.active === false) {
-        setSubModal({ c, status: data.status ?? 'not_found' });
+        setSubModal({ c, status: data.status ?? 'not_found', daysRemaining: data.daysRemaining ?? null, endDate: data.endDate ?? null });
       } else {
         doJoin(c, 'error', false);
         showToast('No se pudo verificar la suscripción, ingreso permitido', 3000);
@@ -986,7 +1034,7 @@ function TeacherUpcomingTab({ teacher, myAssignments, updateMeetLink, logClassJo
   // Confirmed join from the inactive-subscription disclaimer.
   function handleJoinAnyway() {
     if (!subModal) return;
-    doJoin(subModal.c, subModal.status, true);
+    doJoin(subModal.c, subModal.status, true, subModal.daysRemaining);
     setSubModal(null);
     showToast('✅ Ingreso registrado');
   }
@@ -1200,31 +1248,37 @@ function TeacherUpcomingTab({ teacher, myAssignments, updateMeetLink, logClassJo
       )}
 
       {/* Inactive subscription disclaimer */}
-      {subModal && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 85, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
-          onClick={e => { if (e.target === e.currentTarget) setSubModal(null); }}>
-          <div style={{ background: 'var(--bg-surface)', border: '2px solid #D97706', borderRadius: 14, padding: 24, width: '100%', maxWidth: 420 }}>
-            <div style={{ fontWeight: 700, fontSize: 17, color: '#92400E', marginBottom: 12 }}>⚠️ Suscripción inactiva</div>
-            <div style={{ fontSize: 14, color: 'var(--text-secondary)', marginBottom: 8, lineHeight: 1.6 }}>
-              <b style={{ color: 'var(--text-primary)' }}>{subModal.c.studentName}</b> no cuenta con una suscripción activa en este momento.
-            </div>
-            <div style={{ fontSize: 13, color: '#b45309', marginBottom: 14, fontWeight: 600 }}>
-              Estado: suscripción {SUB_STATUS_LABEL[subModal.status] ?? subModal.status}.
-            </div>
-            <div style={{ fontSize: 14, color: 'var(--text-secondary)', marginBottom: 20 }}>
-              ¿Seguro que deseas ingresar a la clase de todas formas?
-            </div>
-            <div style={{ display: 'flex', gap: 10 }}>
-              <button onClick={() => setSubModal(null)} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
-                Cancelar
-              </button>
-              <button onClick={handleJoinAnyway} style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: '#D97706', color: 'white', cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
-                Ingresar de todas formas
-              </button>
+      {subModal && (() => {
+        const d = subDisclaimer(subModal.c.studentName, subModal.status, subModal.daysRemaining, subModal.endDate);
+        return (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 85, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+            onClick={e => { if (e.target === e.currentTarget) setSubModal(null); }}>
+            <div style={{ background: d.bg, border: `2px solid ${d.accent}`, borderRadius: 14, padding: 24, width: '100%', maxWidth: 420 }}>
+              <div style={{ fontWeight: 700, fontSize: 17, color: d.accent, marginBottom: 12 }}>{d.title}</div>
+              <div style={{ fontSize: 14, color: 'var(--text-secondary)', marginBottom: 18, lineHeight: 1.6 }}>
+                {d.body}
+              </div>
+              <div style={{ fontSize: 14, color: 'var(--text-primary)', fontWeight: 600, marginBottom: 20 }}>
+                ¿Seguro que deseas ingresar a la clase de todas formas?
+              </div>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button onClick={() => setSubModal(null)} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
+                  Cancelar
+                </button>
+                {/* "pending-cancel" sigue activo hasta la fecha → CTA con menor énfasis (outline) */}
+                <button onClick={handleJoinAnyway} style={{
+                  flex: 2, padding: '10px', borderRadius: 8, cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit',
+                  border: d.soft ? `1.5px solid ${d.accent}` : 'none',
+                  background: d.soft ? 'transparent' : d.accent,
+                  color: d.soft ? d.accent : 'white',
+                }}>
+                  Ingresar de todas formas
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Toast */}
       {toast && (

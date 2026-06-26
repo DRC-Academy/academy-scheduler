@@ -181,6 +181,7 @@ create table if not exists class_join_logs (
 -- Estado de suscripción WooCommerce verificado al momento del ingreso
 alter table class_join_logs add column if not exists subscription_status   text;
 alter table class_join_logs add column if not exists entered_without_active boolean default false;
+alter table class_join_logs add column if not exists subscription_days_remaining int;
 alter table class_join_logs disable row level security;
 
 -- ── DISABLE Row Level Security for now (internal tool) ──────
