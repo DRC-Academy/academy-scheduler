@@ -1,5 +1,5 @@
 'use client';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { NavBar } from '@/components/NavBar';
 import { AuthGuard } from '@/components/AuthGuard';
 import { PullToRefresh } from '@/components/PullToRefresh';
@@ -23,6 +23,51 @@ interface DisplayStudent {
   plan: string;
   inStudentsTable: boolean;
   createdAt: string;
+}
+
+// ── Subscription status (WooCommerce) ─────────────────────────────────────────
+interface SubInfo {
+  active: boolean | null;
+  status: string;
+  daysRemaining: number | null;
+  fetchedAt: number;
+}
+const SUB_TTL_MS = 5 * 60 * 1000;
+type SubCategory = 'active' | 'inactive' | 'pending' | 'unverified';
+
+async function fetchSubInfo(email: string): Promise<SubInfo> {
+  try {
+    const res = await fetch(`/api/check-subscription?email=${encodeURIComponent(email)}`);
+    const data = await res.json();
+    return {
+      active:        data.active ?? null,
+      status:        data.status ?? 'error',
+      daysRemaining: data.daysRemaining ?? null,
+      fetchedAt:     Date.now(),
+    };
+  } catch {
+    return { active: null, status: 'error', daysRemaining: null, fetchedAt: Date.now() };
+  }
+}
+
+function subCategory(info: SubInfo | undefined): SubCategory {
+  if (!info) return 'unverified';
+  if (info.active === true) return 'active';
+  if (info.active === false && info.status === 'pending-cancel') return 'pending';
+  if (info.active === false) return 'inactive';
+  return 'unverified';
+}
+
+function subBadge(info: SubInfo | undefined): { label: string; color: string; bg: string; spin?: boolean } {
+  if (!info) return { label: '...', color: 'var(--text-muted)', bg: 'var(--bg-surface-3)', spin: true };
+  if (info.active === true) return { label: '✅ Activa', color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)' };
+  if (info.active === false && info.status === 'pending-cancel') {
+    const d = info.daysRemaining;
+    const tail = d != null && d > 0 ? ` (${d} día${d === 1 ? '' : 's'})` : '';
+    return { label: `⏳ Pendiente${tail}`, color: '#b45309', bg: 'rgba(255,196,0,0.15)' };
+  }
+  if (info.active === false) return { label: '⚠️ Inactiva', color: '#ea580c', bg: 'rgba(249,115,22,0.12)' };
+  return { label: '❓ Sin verificar', color: 'var(--text-muted)', bg: 'var(--bg-surface-3)' };
 }
 
 // ── Duplicate Email Modal ─────────────────────────────────────────────────────
@@ -235,6 +280,9 @@ function StudentsContent() {
   const [editingAssignment, setEditingAssignment] = useState<Assignment | null>(null);
   const [teacherGridForEdit, setTeacherGridForEdit] = useState<Grid>({});
   const [duplicateStudent, setDuplicateStudent] = useState<Student | null>(null);
+  const [subFilter, setSubFilter] = useState<'all' | SubCategory>('all');
+  const [subInfo, setSubInfo] = useState<Record<string, SubInfo>>({});
+  const [verifyingSubs, setVerifyingSubs] = useState(false);
 
   // Merge students from both sources: students table + assignments
   const allStudents = useMemo<DisplayStudent[]>(() => {
@@ -250,11 +298,57 @@ function StudentsContent() {
     return [...map.values()].sort((a, b) => a.name.localeCompare(b.name));
   }, [students, assignments]);
 
+  // Unique student emails — fetch all subscription states once when the page loads.
+  const subEmails = useMemo(() => {
+    const set = new Set<string>();
+    for (const s of allStudents) {
+      const e = s.email?.trim().toLowerCase();
+      if (e) set.add(e);
+    }
+    return [...set].sort();
+  }, [allStudents]);
+  const subEmailsKey = subEmails.join('|');
+
+  useEffect(() => {
+    if (subEmails.length === 0) return;
+    let cancelled = false;
+    setVerifyingSubs(true);
+    Promise.all(subEmails.map(async e => [e, await fetchSubInfo(e)] as const)).then(results => {
+      if (cancelled) return;
+      setSubInfo(prev => {
+        const next = { ...prev };
+        for (const [e, info] of results) next[e] = info;
+        return next;
+      });
+      setVerifyingSubs(false);
+    });
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subEmailsKey]);
+
   const filtered = useMemo(() => {
-    if (!search.trim()) return allStudents;
-    const q = search.toLowerCase();
-    return allStudents.filter(s => s.name.toLowerCase().includes(q) || s.email.toLowerCase().includes(q));
-  }, [allStudents, search]);
+    let list = allStudents;
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      list = list.filter(s => s.name.toLowerCase().includes(q) || s.email.toLowerCase().includes(q));
+    }
+    if (subFilter !== 'all') {
+      list = list.filter(s => subCategory(subInfo[s.email?.trim().toLowerCase() ?? '']) === subFilter);
+    }
+    return list;
+  }, [allStudents, search, subFilter, subInfo]);
+
+  function renderSubBadge(email?: string) {
+    const e = email?.trim().toLowerCase();
+    if (!e) return <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>—</span>;
+    const b = subBadge(subInfo[e]);
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 700, padding: '2px 9px', borderRadius: 12, background: b.bg, color: b.color, whiteSpace: 'nowrap' }}>
+        {b.spin && <span className="drc-spinner-xs" />}
+        {b.label}
+      </span>
+    );
+  }
 
   async function handleEditClick(s: DisplayStudent) {
     const asgn = assignments.find(a => a.studentId === s.id || a.studentName === s.name) ?? null;
@@ -314,8 +408,29 @@ function StudentsContent() {
         </div>
 
         {/* Search */}
-        <div style={{ marginBottom: 16 }}>
+        <div style={{ marginBottom: 12 }}>
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar por nombre o email..." style={{ maxWidth: 360 }} />
+        </div>
+
+        {/* Subscription filter */}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
+          {([
+            { id: 'all',        label: 'Todos' },
+            { id: 'active',     label: 'Activa' },
+            { id: 'inactive',   label: 'Inactiva' },
+            { id: 'pending',    label: 'Pendiente cancelar' },
+            { id: 'unverified', label: 'Sin verificar' },
+          ] as const).map(chip => (
+            <button key={chip.id} onClick={() => setSubFilter(chip.id)}
+              style={{ padding: '5px 14px', borderRadius: 20, border: `1.5px solid ${subFilter === chip.id ? '#1E9E3A' : 'var(--border)'}`, background: subFilter === chip.id ? 'rgba(30,158,58,0.1)' : 'transparent', color: subFilter === chip.id ? '#1E9E3A' : 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, fontWeight: subFilter === chip.id ? 700 : 500, fontFamily: 'inherit' }}>
+              {chip.label}
+            </button>
+          ))}
+          {verifyingSubs && (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-muted)', marginLeft: 4 }}>
+              <span className="drc-spinner-xs" /> Verificando suscripciones...
+            </span>
+          )}
         </div>
 
         {allStudents.length === 0 ? (
@@ -342,7 +457,7 @@ function StudentsContent() {
             ) : (<>
               {/* Desktop: table */}
               <div className="desk-only" style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 860 }}>
                   <thead>
                     <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface-2)' }}>
                       <th style={thStyle(160)}>Nombre</th>
@@ -350,6 +465,7 @@ function StudentsContent() {
                       <th style={thStyle(70)}>Nivel</th>
                       <th style={thStyle(130)}>Plan</th>
                       <th style={thStyle(110)}>Profesor</th>
+                      <th style={thStyle(150)}>Suscripción</th>
                       <th style={thStyle(160)}>Horarios</th>
                       <th style={{ ...thStyle(160), textAlign: 'right' }}></th>
                     </tr>
@@ -382,6 +498,9 @@ function StudentsContent() {
                                 <div key={i} style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 1, whiteSpace: 'nowrap' }}>{a.teacherName}</div>
                               ))}</div>
                             )}
+                          </td>
+                          <td style={{ padding: '11px 14px', minWidth: 150 }}>
+                            {renderSubBadge(s.email)}
                           </td>
                           <td style={{ padding: '11px 14px', minWidth: 160 }}>
                             {studentAssignments.length === 0 ? (
@@ -436,6 +555,8 @@ function StudentsContent() {
                         <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 20, background: 'rgba(167,139,250,0.15)', color: '#a78bfa', fontWeight: 600 }}>{s.level || '—'}</span>
                         {s.plan && <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 20, background: 'var(--bg-surface-2)', color: 'var(--text-secondary)', fontWeight: 500 }}>{s.plan}</span>}
                       </div>
+                      {/* Subscription badge */}
+                      {s.email && <div style={{ marginBottom: 8 }}>{renderSubBadge(s.email)}</div>}
                       {/* Assignments */}
                       {studentAssignments.map((a, i) => (
                         <div key={i} style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 2 }}>
