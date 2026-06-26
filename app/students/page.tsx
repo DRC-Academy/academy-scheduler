@@ -5,6 +5,7 @@ import { AuthGuard } from '@/components/AuthGuard';
 import { PullToRefresh } from '@/components/PullToRefresh';
 import { LastUpdated } from '@/components/LastUpdated';
 import { useTeachers } from '@/lib/TeachersContext';
+import { useAuth } from '@/lib/AuthContext';
 import { DAYS, cellKey } from '@/components/VisualCalendar';
 import { dbCheckStudentExists } from '@/lib/db';
 import { Student, Grid, Assignment } from '@/types';
@@ -21,8 +22,19 @@ interface DisplayStudent {
   email: string;
   level: string;
   plan: string;
+  phone: string;
   inStudentsTable: boolean;
   createdAt: string;
+}
+
+// WhatsApp de baja — mensaje precargado (reemplaza [Nombre]).
+function buildWhatsAppLink(phone: string, studentName: string): string {
+  const digits = phone.replace(/\D/g, ''); // solo dígitos con código de país
+  const msg =
+    `Hola ${studentName.split(' ')[0]}, Queremos informarte que has finalizado tu plan con la academia. ` +
+    `Por lo tanto, ya no puedes continuar con clases. Si deseas seguir aprendiendo con nosotros, ` +
+    `puedes renovar tu plan cuando lo desees 😊`;
+  return `https://wa.me/${digits}?text=${encodeURIComponent(msg)}`;
 }
 
 // ── Subscription status (WooCommerce) ─────────────────────────────────────────
@@ -270,16 +282,85 @@ function EditStudentModal({ student, assignment, teacherGrid, onClose, onSave }:
   );
 }
 
+// ── Delete confirmation + WhatsApp notice ─────────────────────────────────────
+function DeleteStudentModal({ student, onConfirm, onCancel }: {
+  student: DisplayStudent;
+  onConfirm: () => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [phone, setPhone] = useState(student.phone || '');
+  const [loadingPhone, setLoadingPhone] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  // If there's no local phone, try to get it from WooCommerce (billing.phone).
+  useEffect(() => {
+    if (phone || !student.email) return;
+    let cancelled = false;
+    setLoadingPhone(true);
+    fetch(`/api/check-subscription?email=${encodeURIComponent(student.email)}`)
+      .then(r => r.json())
+      .then(d => { if (!cancelled && d?.phone) setPhone(String(d.phone)); })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setLoadingPhone(false); });
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const waLink = phone ? buildWhatsAppLink(phone, student.name) : null;
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)', zIndex: 90, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+      onClick={e => { if (e.target === e.currentTarget && !deleting) onCancel(); }}>
+      <div style={{ background: 'var(--bg-surface)', border: '1px solid #35405a', borderRadius: 14, padding: 24, width: '100%', maxWidth: 420 }}>
+        <div style={{ fontSize: 24, marginBottom: 10 }}>🗑️</div>
+        <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)', marginBottom: 8 }}>Eliminar alumno</div>
+        <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 16, lineHeight: 1.6 }}>
+          ¿Seguro que querés eliminar a <b style={{ color: 'var(--text-primary)' }}>{student.name}</b>? Se borrarán sus asignaciones y se liberará su horario. Esta acción no se puede deshacer.
+        </div>
+
+        {/* WhatsApp notice */}
+        <div style={{ marginBottom: 18 }}>
+          {waLink ? (
+            <a href={waLink} target="_blank" rel="noopener noreferrer"
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, width: '100%', padding: '10px', borderRadius: 8, border: 'none', background: '#25D366', color: 'white', cursor: 'pointer', fontSize: 13, fontWeight: 700, textDecoration: 'none' }}>
+              📱 Enviar WhatsApp de baja
+            </a>
+          ) : (
+            <button disabled title={loadingPhone ? 'Buscando teléfono...' : 'Sin teléfono registrado'}
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, width: '100%', padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface-3)', color: 'var(--text-muted)', cursor: 'not-allowed', fontSize: 13, fontWeight: 600 }}>
+              {loadingPhone ? <><span className="drc-spinner-xs" /> Buscando teléfono...</> : '📱 Sin teléfono registrado'}
+            </button>
+          )}
+        </div>
+
+        {/* Actions */}
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button onClick={onCancel} disabled={deleting}
+            style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: deleting ? 'not-allowed' : 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
+            Cancelar
+          </button>
+          <button onClick={async () => { setDeleting(true); await onConfirm(); }} disabled={deleting}
+            style={{ flex: 2, padding: '10px', borderRadius: 8, border: '1px solid rgba(239,68,68,0.35)', background: 'rgba(239,68,68,0.15)', color: '#dc2626', cursor: deleting ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+            {deleting ? 'Eliminando...' : 'Eliminar alumno'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function StudentsContent() {
   const {
     students, assignments, deleteStudent, updateStudent,
     getTeacherGrid, updateTeacherGrid, updateAssignmentSlots, updateAssignmentStartDate, reloadAll,
   } = useTeachers();
+  const { user } = useAuth();
   const [search, setSearch] = useState('');
   const [editingStudent, setEditingStudent] = useState<DisplayStudent | null>(null);
   const [editingAssignment, setEditingAssignment] = useState<Assignment | null>(null);
   const [teacherGridForEdit, setTeacherGridForEdit] = useState<Grid>({});
   const [duplicateStudent, setDuplicateStudent] = useState<Student | null>(null);
+  const [deletingStudent, setDeletingStudent] = useState<DisplayStudent | null>(null);
   const [subFilter, setSubFilter] = useState<'all' | SubCategory>('all');
   const [subInfo, setSubInfo] = useState<Record<string, SubInfo>>({});
   const [verifyingSubs, setVerifyingSubs] = useState(false);
@@ -290,11 +371,11 @@ function StudentsContent() {
   const allStudents = useMemo<DisplayStudent[]>(() => {
     const map = new Map<string, DisplayStudent>();
     for (const s of students) {
-      map.set(s.id, { id: s.id, name: s.name, email: s.email, level: s.level, plan: s.plan ?? '', inStudentsTable: true, createdAt: s.createdAt });
+      map.set(s.id, { id: s.id, name: s.name, email: s.email, level: s.level, plan: s.plan ?? '', phone: s.phone ?? '', inStudentsTable: true, createdAt: s.createdAt });
     }
     for (const a of assignments) {
       if (!map.has(a.studentId)) {
-        map.set(a.studentId, { id: a.studentId, name: a.studentName, email: a.studentEmail, level: a.studentLevel, plan: a.plan ?? '', inStudentsTable: false, createdAt: a.createdAt });
+        map.set(a.studentId, { id: a.studentId, name: a.studentName, email: a.studentEmail, level: a.studentLevel, plan: a.plan ?? '', phone: '', inStudentsTable: false, createdAt: a.createdAt });
       }
     }
     return [...map.values()].sort((a, b) => a.name.localeCompare(b.name));
@@ -562,7 +643,7 @@ function StudentsContent() {
                                   Editar
                                 </button>
                               )}
-                              <button onClick={() => deleteStudent(s.id, s.name)}
+                              <button onClick={() => setDeletingStudent(s)}
                                 style={{ padding: '8px 12px', borderRadius: 7, border: '1px solid rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.08)', color: '#ef4444', cursor: 'pointer', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', fontFamily: 'inherit', minHeight: 40 }}>
                                 Eliminar
                               </button>
@@ -613,7 +694,7 @@ function StudentsContent() {
                             Editar
                           </button>
                         )}
-                        <button onClick={() => deleteStudent(s.id, s.name)}
+                        <button onClick={() => setDeletingStudent(s)}
                           style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.08)', color: '#ef4444', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
                           Eliminar
                         </button>
@@ -642,6 +723,17 @@ function StudentsContent() {
           existingStudent={duplicateStudent}
           onCreateAnyway={() => setDuplicateStudent(null)}
           onCancel={() => setDuplicateStudent(null)}
+        />
+      )}
+
+      {deletingStudent && (
+        <DeleteStudentModal
+          student={deletingStudent}
+          onConfirm={async () => {
+            await deleteStudent(deletingStudent.id, deletingStudent.name, user?.username);
+            setDeletingStudent(null);
+          }}
+          onCancel={() => setDeletingStudent(null)}
         />
       )}
       </PullToRefresh>

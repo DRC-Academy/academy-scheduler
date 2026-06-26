@@ -31,9 +31,12 @@ function timeAgo(isoDate: string): string {
 }
 
 function notifIcon(type: string): string {
-  if (type === 'clase15')     return '🎬';
-  if (type === 'bono6m')      return '🎁';
-  if (type === 'new_student') return '📚';
+  if (type === 'clase15')              return '🎬';
+  if (type === 'bono6m')               return '🎁';
+  if (type === 'new_student')          return '📚';
+  if (type === 'new_assignment')       return '📚';
+  if (type === 'student_removed')      return '❌';
+  if (type === 'subscription_cancelled') return '❌';
   return '📢';
 }
 

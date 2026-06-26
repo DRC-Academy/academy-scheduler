@@ -79,35 +79,10 @@ export async function POST(req: Request): Promise<Response> {
     const studentId   = studentRow.id;
     const studentName = studentRow.name;
 
-    // 6) Profesores que tenían a este alumno (antes de eliminar)
-    const [byId, byName] = await Promise.all([
-      supabase.from('assignments').select('teacher_id, teacher_name').eq('student_id', studentId),
-      supabase.from('assignments').select('teacher_id, teacher_name').eq('student_name', studentName),
-    ]);
-
-    const teacherMap = new Map<string, string>();
-    for (const r of [...(byId.data ?? []), ...(byName.data ?? [])]) {
-      if (r.teacher_id) teacherMap.set(r.teacher_id, r.teacher_name ?? '');
-    }
-
-    // 7) Notificar a cada profesor
-    const notifRows = Array.from(teacherMap.keys()).map((teacherId, i) => ({
-      id:          `notif_subcancel_${logId}_${i}`,
-      target_user: teacherId,
-      target_role: null,
-      title:       '❌ Alumno dio de baja su suscripción',
-      body:        `${studentName || fullName} canceló su suscripción y fue removido de tu calendario.`,
-      type:        'subscription_cancelled',
-      read_by:     [],
-      created_at:  new Date().toISOString(),
-      created_by:  'sistema',
-    }));
-    if (notifRows.length > 0) {
-      await supabase.from('notifications').insert(notifRows);
-    }
-
-    // 8) Eliminar al alumno en todos lados (grid + assignments + students)
-    await dbDeleteStudent(studentId, studentName);
+    // 6) Eliminar al alumno en todos lados (grid + assignments + students) y
+    //    notificar a cada profesor afectado (createdBy 'sistema').
+    void fullName; // disponible por si se requiere en logs
+    await dbDeleteStudent(studentId, studentName, 'sistema');
 
     await supabase.from('webhook_logs').update({ processed: true }).eq('id', logId);
     return new Response('ok', { status: 200 });

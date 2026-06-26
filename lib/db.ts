@@ -279,7 +279,7 @@ export async function dbUpdateTeacherRating(teacherId: string, rating: number): 
   await supabase.from('teachers').update({ internal_rating: rating }).eq('id', teacherId);
 }
 
-export async function dbDeleteStudent(studentId: string, studentName: string): Promise<void> {
+export async function dbDeleteStudent(studentId: string, studentName: string, createdBy?: string): Promise<void> {
   const firstName = studentName.split(' ')[0];
 
   const [byId, byName] = await Promise.all([
@@ -297,6 +297,23 @@ export async function dbDeleteStudent(studentId: string, studentName: string): P
     `assignments: ${byId.data?.length ?? 0} por id + ${byName.data?.length ?? 0} por nombre → ` +
     `profesores afectados: [${[...teacherIds].join(', ')}]`
   );
+
+  // Notificar a cada profesor afectado antes de limpiar (manual o vía webhook).
+  if (createdBy && teacherIds.size > 0) {
+    const now = new Date().toISOString();
+    const notifRows = [...teacherIds].map((tid, i) => ({
+      id:          `notif_studrm_${Date.now()}_${i}`,
+      target_user: tid,
+      target_role: null,
+      title:       '❌ Alumno eliminado del sistema',
+      body:        `${studentName} fue eliminado porque no cuenta con suscripción activa.`,
+      type:        'student_removed',
+      read_by:     [],
+      created_at:  now,
+      created_by:  createdBy,
+    }));
+    await supabase.from('notifications').insert(notifRows);
+  }
 
   for (const teacherId of teacherIds) {
     const grid = await dbGetTeacherGrid(teacherId);
@@ -1013,6 +1030,21 @@ export async function dbSendNotification(notification: {
     createdAt,
     createdBy:  notification.createdBy,
   };
+}
+
+// Notifica a un profesor que se le asignó un nuevo alumno.
+export async function dbNotifyNewAssignment(teacherId: string, studentName: string, studentEmail: string): Promise<void> {
+  await supabase.from('notifications').insert({
+    id:          `notif_newasgn_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    target_user: teacherId,
+    target_role: null,
+    title:       '📚 Nuevo alumno asignado',
+    body:        `Se te asignó ${studentName}. Recordá presentarte por correo electrónico (${studentEmail || 'sin email'}) antes de la primera clase.`,
+    type:        'new_assignment',
+    read_by:     [],
+    created_at:  new Date().toISOString(),
+    created_by:  'sistema',
+  });
 }
 
 export async function dbGetNotificationsForUser(userId: string, role: string): Promise<AppNotification[]> {

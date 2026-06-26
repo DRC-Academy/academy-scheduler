@@ -15,6 +15,7 @@ import {
   dbUpdateTeacherSpecialties, dbUpdateTeacherInfo,
   dbSendNotification, dbGetNotificationsForUser, dbMarkNotificationRead, dbMarkAllNotificationsRead,
   dbUpdateMeetLink, dbLogClassJoin, dbGetClassJoinLogs, dbGetUnassignedStudents,
+  dbNotifyNewAssignment,
 } from '@/lib/db';
 
 interface TeachersContextType {
@@ -31,7 +32,7 @@ interface TeachersContextType {
   lastUpdated: Date | null;
   addTeacher: (t: Teacher, username: string) => Promise<void>;
   addStudent: (s: Student) => Promise<void>;
-  deleteStudent: (studentId: string, studentName: string) => Promise<void>;
+  deleteStudent: (studentId: string, studentName: string, createdBy?: string) => Promise<void>;
   updateStudent: (student: Student) => Promise<void>;
   addAssignment: (a: Assignment) => Promise<void>;
   getTeacherGrid: (teacherId: string) => Promise<Grid>;
@@ -164,8 +165,8 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     });
   }
 
-  async function deleteStudent(studentId: string, studentName: string) {
-    await dbDeleteStudent(studentId, studentName);
+  async function deleteStudent(studentId: string, studentName: string, createdBy?: string) {
+    await dbDeleteStudent(studentId, studentName, createdBy);
     const [t, s, a, unassigned] = await Promise.all([
       dbGetTeachers(),
       dbGetStudents(),
@@ -186,6 +187,8 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
 
   async function addAssignment(a: Assignment) {
     await dbAddAssignment(a);
+    // Notify the teacher that received a new student (covers setter + teacher flows)
+    await dbNotifyNewAssignment(a.teacherId, a.studentName, a.studentEmail);
     setAssignments(prev => [a, ...prev]);
     // The student now has an assignment — drop it from the unassigned list
     setUnassignedStudents(prev => prev.filter(s => s.id !== a.studentId && s.name !== a.studentName));

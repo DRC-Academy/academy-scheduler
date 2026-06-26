@@ -8,9 +8,10 @@ interface SubResult {
   endDate: string | null;    // ISO — fin definitivo (end_date, o next_payment_date como fallback)
   daysRemaining: number | null;
   planName: string | null;
+  phone: string | null;      // billing.phone de WooCommerce
 }
 
-const ERROR_RESULT: SubResult = { active: null, status: 'error', endDate: null, daysRemaining: null, planName: null };
+const ERROR_RESULT: SubResult = { active: null, status: 'error', endDate: null, daysRemaining: null, planName: null, phone: null };
 
 // Cache simple en memoria (por instancia serverless): 5 minutos por email.
 // Solo se cachean resultados EXITOSOS — los errores nunca se cachean para que
@@ -116,7 +117,7 @@ export async function GET(request: Request): Promise<Response> {
   }
 
   if (subs.length === 0) {
-    const result: SubResult = { active: false, status: 'not_found', endDate: null, daysRemaining: null, planName: null };
+    const result: SubResult = { active: false, status: 'not_found', endDate: null, daysRemaining: null, planName: null, phone: null };
     cache.set(email, { result, ts: Date.now() });
     return Response.json(result);
   }
@@ -137,7 +138,12 @@ export async function GET(request: Request): Promise<Response> {
       ? chosen.line_items[0].name
       : null;
 
-  const result: SubResult = { active, status, endDate: endDateIso, daysRemaining, planName };
+  const phone: string | null =
+    (typeof chosen?.billing?.phone === 'string' && chosen.billing.phone.trim())
+      ? chosen.billing.phone.trim()
+      : null;
+
+  const result: SubResult = { active, status, endDate: endDateIso, daysRemaining, planName, phone };
   cache.set(email, { result, ts: Date.now() });
   return Response.json(result);
 }
