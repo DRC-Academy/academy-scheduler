@@ -1,5 +1,5 @@
 'use client';
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { Grid, Cell, CellState } from '@/types';
 
 export const DAYS = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
@@ -21,6 +21,26 @@ function toISODateStr(d: Date): string {
 
 export function cellKey(day: string, hour: string) {
   return `${day}_${hour}`;
+}
+
+// Current time in Europe/Madrid (Spain) — the calendar's reference timezone — no
+// matter where the user's browser actually is. Returns the Spain wall-clock hour,
+// minute and the Spain calendar date as YYYY-MM-DD.
+export function getSpainParts(now: Date): { hour: number; minute: number; dateStr: string } {
+  const fmt = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Madrid',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  });
+  const parts = fmt.formatToParts(now);
+  const get = (t: string) => parts.find(p => p.type === t)?.value ?? '00';
+  let hour = parseInt(get('hour'), 10);
+  if (hour === 24) hour = 0; // some runtimes emit '24' for midnight
+  return {
+    hour,
+    minute: parseInt(get('minute'), 10),
+    dateStr: `${get('year')}-${get('month')}-${get('day')}`,
+  };
 }
 
 export type { Grid, Cell, CellState };
@@ -204,9 +224,25 @@ export function VisualCalendar(props: Props) {
   const [menu, setMenu] = useState<{ day: string; hour: string } | null>(null);
   const [internalOffset, setInternalOffset] = useState(props.weekOffset ?? 0);
 
+  // Live "now" — set on mount (avoids SSR hydration mismatch) and refreshed every
+  // minute so the current-time line and dimming recalculate without a page reload.
+  const [now, setNow] = useState<Date | null>(null);
+  useEffect(() => {
+    setNow(new Date());
+    const id = setInterval(() => setNow(new Date()), 60000);
+    return () => clearInterval(id);
+  }, []);
+
   const offset = props.weekOffset ?? internalOffset;
   const weekDates = getWeekDates(offset);
   const weekLabel = formatWeekRange(weekDates);
+
+  // Spain-referenced "now" → which visible column is today, current hour/minute.
+  const spain = now ? getSpainParts(now) : null;
+  const todayColIndex = spain ? weekDates.findIndex(d => toISODateStr(d) === spain.dateStr) : -1;
+  const currentHour   = spain ? spain.hour : -1;
+  const currentMinute = spain ? spain.minute : 0;
+  const nowLabel      = spain ? `${String(spain.hour).padStart(2, '0')}:${String(spain.minute).padStart(2, '0')}` : '';
 
   function handleOffsetChange(newOffset: number) {
     if (props.onWeekChange) {
@@ -353,10 +389,17 @@ export function VisualCalendar(props: Props) {
                   <div style={{ fontWeight: 600 }}>{hour}</div>
                   <div style={{ color: 'var(--text-muted)', fontSize: 10 }}>{toAR(hour)}</div>
                 </td>
-                {DAYS.map(day => {
+                {DAYS.map((day, dayIdx) => {
                   const cell = getCell(day, hour);
                   const colors = stateColor(cell.state);
                   const hlCell = isHighlighted(day, hour);
+
+                  const isTodayCol = dayIdx === todayColIndex;
+                  const hourInt    = parseInt(hour);
+                  // Past cells: only in today's column, only hours strictly before now.
+                  const dimPast    = isTodayCol && currentHour >= 0 && hourInt < currentHour;
+                  // "Now" line sits inside today's current-hour cell, at the right minute.
+                  const showNowLine = isTodayCol && hourInt === currentHour;
 
                   let cursor = 'default';
                   if (props.mode === 'teacher') cursor = 'pointer';
@@ -380,9 +423,32 @@ export function VisualCalendar(props: Props) {
                       style={{
                         height: 40, padding: '2px 3px',
                         background: bg, border, cursor,
-                        transition: 'background 0.08s',
+                        transition: 'background 0.08s, opacity 0.3s',
                         textAlign: 'center', verticalAlign: 'middle',
+                        position: showNowLine ? 'relative' : undefined,
+                        opacity: dimPast ? 0.5 : 1,
                       }}>
+                      {showNowLine && (
+                        <div style={{
+                          position: 'absolute', left: 0, right: 0,
+                          top: `${(currentMinute / 60) * 100}%`,
+                          height: 2, background: '#1E9E3A',
+                          zIndex: 3, pointerEvents: 'none',
+                          boxShadow: '0 0 4px rgba(30,158,58,0.6)',
+                        }}>
+                          <span style={{
+                            position: 'absolute', left: 2, top: '50%', transform: 'translateY(-50%)',
+                            background: '#1E9E3A', color: 'white', fontSize: 9, fontWeight: 700,
+                            padding: '1px 5px', borderRadius: 7, lineHeight: 1.3, whiteSpace: 'nowrap',
+                          }}>
+                            {nowLabel}
+                          </span>
+                          <span style={{
+                            position: 'absolute', left: -3, top: '50%', transform: 'translateY(-50%)',
+                            width: 6, height: 6, borderRadius: '50%', background: '#1E9E3A',
+                          }} />
+                        </div>
+                      )}
                       {cell.state !== 'no_work' && (
                         <div style={{
                           fontSize: 9, fontWeight: 600, color: colors.text,
