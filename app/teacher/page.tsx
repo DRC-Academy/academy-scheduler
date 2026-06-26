@@ -4,7 +4,7 @@ import { NavBar } from '@/components/NavBar';
 import { AuthGuard } from '@/components/AuthGuard';
 import { PullToRefresh } from '@/components/PullToRefresh';
 import { LastUpdated } from '@/components/LastUpdated';
-import { VisualCalendar, DAYS, cellKey } from '@/components/VisualCalendar';
+import { VisualCalendar, DAYS, cellKey, getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
 import { calcCurrentClassNumber, dbCheckStudentExists } from '@/lib/db';
@@ -821,6 +821,15 @@ function normalizeUrl(url: string): string {
   return /^https?:\/\//i.test(t) ? t : `https://${t}`;
 }
 
+// Human-readable reason shown in the inactive-subscription disclaimer.
+const SUB_STATUS_LABEL: Record<string, string> = {
+  cancelled:        'cancelada',
+  'pending-cancel': 'pendiente de cancelación',
+  'on-hold':        'en espera de pago',
+  expired:          'expirada',
+  not_found:        'no encontrada',
+};
+
 interface TodayClass {
   key: string;
   assignment: Assignment;
@@ -857,22 +866,48 @@ function TeacherUpcomingTab({ teacher, myAssignments, updateMeetLink, logClassJo
   teacher: Teacher;
   myAssignments: Assignment[];
   updateMeetLink: (assignmentId: string, link: string) => Promise<void>;
-  logClassJoin: (teacherId: string, teacherName: string, studentName: string, scheduledDate: string, scheduledTime: string) => Promise<void>;
+  logClassJoin: (teacherId: string, teacherName: string, studentName: string, scheduledDate: string, scheduledTime: string, subscriptionStatus?: string, enteredWithoutActive?: boolean) => Promise<void>;
 }) {
   const [linkModal, setLinkModal] = useState<{ assignment: Assignment; value: string } | null>(null);
   const [savingLink, setSavingLink] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [showNextDays, setShowNextDays] = useState(false);
+  const [showPastToday, setShowPastToday] = useState(false);
   const [joined, setJoined] = useState<Set<string>>(new Set());
+  const [checkingKey, setCheckingKey] = useState<string | null>(null);
+  const [subModal, setSubModal] = useState<{ c: TodayClass; status: string } | null>(null);
 
-  const now = new Date();
-  const todayIso = isoDateLocal(now);
-  const currentDecimal = now.getHours() + now.getMinutes() / 60;
+  // Live "now" — set on mount (avoids SSR hydration mismatch) and refreshed every
+  // minute so each class's state (pasada / en curso / próxima) updates on its own.
+  const [now, setNow] = useState<Date | null>(null);
+  useEffect(() => {
+    setNow(new Date());
+    const id = setInterval(() => setNow(new Date()), 60000);
+    return () => clearInterval(id);
+  }, []);
 
-  const todayClasses = classesForDate(myAssignments, now);
+  const refDate = now ?? new Date();
+  const todayIso = isoDateLocal(refDate);
 
-  // Highlight the in-progress class, or the next upcoming one (first not yet ended).
-  const highlightKey = todayClasses.find(c => parseInt(c.hour) + 1 > currentDecimal)?.key ?? null;
+  // Current time in Spain (Europe/Madrid) — the calendar's reference timezone.
+  const spain = now ? getSpainParts(now) : null;
+  const currentDecimal = spain ? spain.hour + spain.minute / 60 : -1;
+
+  const todayClasses = classesForDate(myAssignments, refDate);
+
+  type ClassStatus = 'passed' | 'inprogress' | 'next' | 'future';
+  function statusOf(c: TodayClass): ClassStatus {
+    if (currentDecimal < 0) return 'future';
+    const h = parseInt(c.hour);
+    if (h <= currentDecimal && h + 1 > currentDecimal) return 'inprogress';
+    if (h + 1 <= currentDecimal) return 'passed';
+    return 'future';
+  }
+  // The "next" class is the earliest one that has not started yet.
+  const nextKey = todayClasses.find(c => parseInt(c.hour) > currentDecimal)?.key ?? null;
+
+  const pastClasses    = todayClasses.filter(c => statusOf(c) === 'passed');
+  const currentClasses = todayClasses.filter(c => statusOf(c) !== 'passed');
 
   // Assignments today missing a meet link (deduped by assignment)
   const missingSeen = new Set<string>();
@@ -885,12 +920,12 @@ function TeacherUpcomingTab({ teacher, myAssignments, updateMeetLink, logClassJo
   }
   const missingNames = missingLinks.map(c => c.studentName.split(' ')[0]);
 
-  const todayLabel = now.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' });
+  const todayLabel = refDate.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' });
 
   // Next two days
   const nextDays = [1, 2].map(offset => {
-    const d = new Date(now);
-    d.setDate(now.getDate() + offset);
+    const d = new Date(refDate);
+    d.setDate(refDate.getDate() + offset);
     return {
       label: d.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' }),
       classes: classesForDate(myAssignments, d),
@@ -905,25 +940,71 @@ function TeacherUpcomingTab({ teacher, myAssignments, updateMeetLink, logClassJo
     setLinkModal(null);
   }
 
-  function handleJoin(c: TodayClass) {
-    if (!c.meetLink) return;
-    window.open(normalizeUrl(c.meetLink), '_blank', 'noopener,noreferrer');
-    logClassJoin(teacher.id, teacher.name, c.studentName, todayIso, c.hour);
-    setJoined(prev => new Set([...prev, c.key]));
-    setToast('✅ Ingreso registrado');
-    setTimeout(() => setToast(null), 2500);
+  function showToast(msg: string, ms = 2500) {
+    setToast(msg);
+    setTimeout(() => setToast(null), ms);
   }
 
-  function ClassRow({ c, isToday }: { c: TodayClass; isToday: boolean }) {
-    const highlight = isToday && c.key === highlightKey;
-    const passed = isToday && parseInt(c.hour) + 1 <= currentDecimal && !joined.has(c.key);
-    const inProgress = isToday && parseInt(c.hour) <= currentDecimal && parseInt(c.hour) + 1 > currentDecimal;
+  // Opens the Meet link and records the join with the verified subscription status.
+  function doJoin(c: TodayClass, subscriptionStatus: string, enteredWithoutActive: boolean) {
+    if (!c.meetLink) return;
+    window.open(normalizeUrl(c.meetLink), '_blank', 'noopener,noreferrer');
+    logClassJoin(teacher.id, teacher.name, c.studentName, todayIso, c.hour, subscriptionStatus, enteredWithoutActive);
+    setJoined(prev => new Set([...prev, c.key]));
+  }
+
+  // Verifies the student's WooCommerce subscription before joining.
+  async function handleJoin(c: TodayClass) {
+    if (!c.meetLink || checkingKey) return;
+    const email = c.assignment.studentEmail?.trim();
+    if (!email) {
+      doJoin(c, 'not_verified', false);
+      showToast('No se pudo verificar la suscripción, ingreso permitido', 3000);
+      return;
+    }
+    setCheckingKey(c.key);
+    try {
+      const res = await fetch(`/api/check-subscription?email=${encodeURIComponent(email)}`);
+      const data = await res.json();
+      if (data.active === true) {
+        doJoin(c, 'active', false);
+        showToast('✅ Ingreso registrado');
+      } else if (data.active === false) {
+        setSubModal({ c, status: data.status ?? 'not_found' });
+      } else {
+        doJoin(c, 'error', false);
+        showToast('No se pudo verificar la suscripción, ingreso permitido', 3000);
+      }
+    } catch {
+      doJoin(c, 'error', false);
+      showToast('No se pudo verificar la suscripción, ingreso permitido', 3000);
+    } finally {
+      setCheckingKey(null);
+    }
+  }
+
+  // Confirmed join from the inactive-subscription disclaimer.
+  function handleJoinAnyway() {
+    if (!subModal) return;
+    doJoin(subModal.c, subModal.status, true);
+    setSubModal(null);
+    showToast('✅ Ingreso registrado');
+  }
+
+  function ClassRow({ c, status }: { c: TodayClass; status: ClassStatus }) {
+    const passed     = status === 'passed';
+    const inProgress = status === 'inprogress';
+    const isNext     = status === 'next';
+    const highlight  = inProgress || isNext;
+
     return (
       <div style={{
         background: 'var(--bg-surface-2)',
         border: `1.5px solid ${highlight ? '#1E9E3A' : 'var(--border)'}`,
         boxShadow: highlight ? '0 0 0 3px rgba(30,158,58,0.1)' : 'none',
         borderRadius: 12, padding: '14px 16px',
+        opacity: passed ? 0.55 : 1,
+        transition: 'opacity 0.3s',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <div style={{ width: 40, height: 40, borderRadius: '50%', background: 'rgba(30,158,58,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 700, color: '#1E9E3A', flexShrink: 0 }}>
@@ -932,14 +1013,27 @@ function TeacherUpcomingTab({ teacher, myAssignments, updateMeetLink, logClassJo
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
               <span style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)' }}>{c.studentName}</span>
-              {inProgress && <span style={{ fontSize: 10, padding: '1px 8px', borderRadius: 10, background: 'rgba(30,158,58,0.15)', border: '1px solid rgba(30,158,58,0.35)', color: '#1E9E3A', fontWeight: 700 }}>● En curso</span>}
-              {passed && <span style={{ fontSize: 10, padding: '1px 8px', borderRadius: 10, background: 'var(--bg-surface-3)', color: 'var(--text-muted)', fontWeight: 600 }}>⏰ Hora pasada</span>}
+              {inProgress && (
+                <span className="upcoming-live-badge" style={{ fontSize: 10, padding: '1px 9px', borderRadius: 10, background: 'rgba(220,38,38,0.12)', border: '1px solid rgba(220,38,38,0.4)', color: '#dc2626', fontWeight: 700 }}>
+                  🔴 En curso
+                </span>
+              )}
+              {isNext && (
+                <span style={{ fontSize: 10, padding: '1px 9px', borderRadius: 10, background: 'rgba(30,158,58,0.15)', border: '1px solid rgba(30,158,58,0.35)', color: '#1E9E3A', fontWeight: 700 }}>
+                  Próxima
+                </span>
+              )}
+              {passed && (
+                <span style={{ fontSize: 10, padding: '1px 9px', borderRadius: 10, background: 'var(--bg-surface-3)', color: 'var(--text-muted)', fontWeight: 600 }}>
+                  ✓ Finalizada
+                </span>
+              )}
             </div>
             <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
               {c.plan || 'Clase'}{c.level ? ` · ${c.level}` : ''}
             </div>
           </div>
-          <div style={{ fontSize: 18, fontWeight: 800, color: highlight ? '#1E9E3A' : 'var(--text-primary)', flexShrink: 0 }}>{c.hour}</div>
+          <div style={{ fontSize: 18, fontWeight: 800, color: passed ? 'var(--text-muted)' : highlight ? '#1E9E3A' : 'var(--text-primary)', flexShrink: 0 }}>{c.hour}</div>
         </div>
 
         {/* Link area */}
@@ -950,10 +1044,19 @@ function TeacherUpcomingTab({ teacher, myAssignments, updateMeetLink, logClassJo
                 🔗 {stripProtocol(c.meetLink)}
               </div>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <button onClick={() => handleJoin(c)}
-                  style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', borderRadius: 8, border: 'none', background: '#1E9E3A', color: 'white', cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
-                  🎥 Ingresar a clase
-                </button>
+                {passed ? (
+                  <button disabled
+                    style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface-3)', color: 'var(--text-muted)', cursor: 'not-allowed', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
+                    Clase finalizada
+                  </button>
+                ) : (
+                  <button onClick={() => handleJoin(c)} disabled={checkingKey === c.key}
+                    style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', borderRadius: 8, border: 'none', background: '#1E9E3A', color: 'white', cursor: checkingKey === c.key ? 'wait' : 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit', opacity: checkingKey === c.key ? 0.8 : 1 }}>
+                    {checkingKey === c.key
+                      ? <><span className="drc-spinner" /> Verificando...</>
+                      : <>🎥 Ingresar a clase</>}
+                  </button>
+                )}
                 <button onClick={() => setLinkModal({ assignment: c.assignment, value: c.meetLink ?? '' })}
                   style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface-3)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
                   ✏️ Cambiar enlace
@@ -962,16 +1065,25 @@ function TeacherUpcomingTab({ teacher, myAssignments, updateMeetLink, logClassJo
             </>
           ) : (
             <>
-              <div style={{ fontSize: 12, color: '#b45309', marginBottom: 8, fontWeight: 600 }}>⚠️ Sin enlace definido</div>
-              <button onClick={() => setLinkModal({ assignment: c.assignment, value: '' })}
-                style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', borderRadius: 8, border: '1px solid rgba(30,158,58,0.4)', background: 'rgba(30,158,58,0.08)', color: '#1E9E3A', cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
-                🔗 Definir enlace
-              </button>
+              <div style={{ fontSize: 12, color: passed ? 'var(--text-muted)' : '#b45309', marginBottom: passed ? 0 : 8, fontWeight: 600 }}>⚠️ Sin enlace definido</div>
+              {!passed && (
+                <button onClick={() => setLinkModal({ assignment: c.assignment, value: '' })}
+                  style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', borderRadius: 8, border: '1px solid rgba(30,158,58,0.4)', background: 'rgba(30,158,58,0.08)', color: '#1E9E3A', cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+                  🔗 Definir enlace
+                </button>
+              )}
             </>
           )}
         </div>
       </div>
     );
+  }
+
+  // Resolves the visual status, promoting the earliest not-started class to "next".
+  function rowStatus(c: TodayClass): ClassStatus {
+    const s = statusOf(c);
+    if (s === 'future' && c.key === nextKey) return 'next';
+    return s;
   }
 
   return (
@@ -1004,7 +1116,30 @@ function TeacherUpcomingTab({ teacher, myAssignments, updateMeetLink, logClassJo
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {todayClasses.map(c => <ClassRow key={c.key} c={c} isToday />)}
+          {/* Past classes — collapsed by default */}
+          {pastClasses.length > 0 && (
+            <div>
+              <button onClick={() => setShowPastToday(s => !s)}
+                style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '9px 14px', borderRadius: 9, border: '1px dashed var(--border)', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 12, fontWeight: 600, fontFamily: 'inherit' }}>
+                <span>Ver clases pasadas de hoy ({pastClasses.length})</span>
+                <span>{showPastToday ? '▲' : '▼'}</span>
+              </button>
+              {showPastToday && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
+                  {pastClasses.map(c => <ClassRow key={c.key} c={c} status="passed" />)}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* In-progress / next / future — always visible */}
+          {currentClasses.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '24px 0', color: 'var(--text-muted)', fontSize: 13 }}>
+              No quedan más clases por hoy.
+            </div>
+          ) : (
+            currentClasses.map(c => <ClassRow key={c.key} c={c} status={rowStatus(c)} />)
+          )}
         </div>
       )}
 
@@ -1024,7 +1159,7 @@ function TeacherUpcomingTab({ teacher, myAssignments, updateMeetLink, logClassJo
                   <div style={{ fontSize: 13, color: 'var(--text-muted)', padding: '8px 0' }}>Sin clases.</div>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    {nd.classes.map(c => <ClassRow key={c.key} c={c} isToday={false} />)}
+                    {nd.classes.map(c => <ClassRow key={c.key} c={c} status="future" />)}
                   </div>
                 )}
               </div>
@@ -1058,6 +1193,33 @@ function TeacherUpcomingTab({ teacher, myAssignments, updateMeetLink, logClassJo
               <button onClick={handleSaveLink} disabled={savingLink || !linkModal.value.trim()}
                 style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: savingLink || !linkModal.value.trim() ? 'var(--bg-surface-3)' : '#1E9E3A', color: savingLink || !linkModal.value.trim() ? 'var(--text-muted)' : 'white', cursor: savingLink || !linkModal.value.trim() ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
                 {savingLink ? 'Guardando...' : 'Guardar enlace'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Inactive subscription disclaimer */}
+      {subModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 85, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+          onClick={e => { if (e.target === e.currentTarget) setSubModal(null); }}>
+          <div style={{ background: 'var(--bg-surface)', border: '2px solid #D97706', borderRadius: 14, padding: 24, width: '100%', maxWidth: 420 }}>
+            <div style={{ fontWeight: 700, fontSize: 17, color: '#92400E', marginBottom: 12 }}>⚠️ Suscripción inactiva</div>
+            <div style={{ fontSize: 14, color: 'var(--text-secondary)', marginBottom: 8, lineHeight: 1.6 }}>
+              <b style={{ color: 'var(--text-primary)' }}>{subModal.c.studentName}</b> no cuenta con una suscripción activa en este momento.
+            </div>
+            <div style={{ fontSize: 13, color: '#b45309', marginBottom: 14, fontWeight: 600 }}>
+              Estado: suscripción {SUB_STATUS_LABEL[subModal.status] ?? subModal.status}.
+            </div>
+            <div style={{ fontSize: 14, color: 'var(--text-secondary)', marginBottom: 20 }}>
+              ¿Seguro que deseas ingresar a la clase de todas formas?
+            </div>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button onClick={() => setSubModal(null)} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
+                Cancelar
+              </button>
+              <button onClick={handleJoinAnyway} style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: '#D97706', color: 'white', cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+                Ingresar de todas formas
               </button>
             </div>
           </div>

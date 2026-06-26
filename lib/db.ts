@@ -877,6 +877,8 @@ export async function dbLogClassJoin(
   studentName: string,
   scheduledDate: string,
   scheduledTime: string,
+  subscriptionStatus?: string,
+  enteredWithoutActive?: boolean,
 ): Promise<ClassJoinLog> {
   const clickedAt   = new Date();
   const punctuality = calcPunctuality(scheduledDate, scheduledTime, clickedAt);
@@ -884,13 +886,15 @@ export async function dbLogClassJoin(
 
   await supabase.from('class_join_logs').insert({
     id,
-    teacher_id:     teacherId,
-    teacher_name:   teacherName,
-    student_name:   studentName,
-    scheduled_date: scheduledDate,
-    scheduled_time: scheduledTime,
-    clicked_at:     clickedAt.toISOString(),
+    teacher_id:              teacherId,
+    teacher_name:            teacherName,
+    student_name:            studentName,
+    scheduled_date:          scheduledDate,
+    scheduled_time:          scheduledTime,
+    clicked_at:              clickedAt.toISOString(),
     punctuality,
+    subscription_status:     subscriptionStatus ?? null,
+    entered_without_active:  enteredWithoutActive ?? false,
   });
 
   return {
@@ -898,6 +902,8 @@ export async function dbLogClassJoin(
     scheduledDate, scheduledTime,
     clickedAt: clickedAt.toISOString(),
     punctuality,
+    subscriptionStatus,
+    enteredWithoutActive: enteredWithoutActive ?? false,
   };
 }
 
@@ -918,6 +924,8 @@ export async function dbGetClassJoinLogs(): Promise<ClassJoinLog[]> {
     scheduledTime: row.scheduled_time,
     clickedAt:     row.clicked_at,
     punctuality:   row.punctuality,
+    subscriptionStatus:   row.subscription_status ?? undefined,
+    enteredWithoutActive: row.entered_without_active ?? false,
   }));
 }
 

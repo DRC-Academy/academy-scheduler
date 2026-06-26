@@ -204,3 +204,27 @@ label {
     padding-bottom: max(env(safe-area-inset-bottom), 32px) !important;
   }
 }
+
+/* ── "En curso" live badge pulse (Próximas clases) ── */
+@keyframes upcoming-live-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.55; }
+}
+.upcoming-live-badge {
+  animation: upcoming-live-pulse 1.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .upcoming-live-badge { animation: none; }
+}
+
+/* ── Inline button spinner ── */
+@keyframes drc-spin { to { transform: rotate(360deg); } }
+.drc-spinner {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-top-color: #ffffff;
+  border-radius: 50%;
+  animation: drc-spin 0.7s linear infinite;
+}

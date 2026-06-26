@@ -57,7 +57,7 @@ interface TeachersContextType {
   markNotificationRead: (notifId: string, userId: string) => Promise<void>;
   markAllNotificationsRead: (userId: string, role: string) => Promise<void>;
   updateMeetLink: (assignmentId: string, link: string) => Promise<void>;
-  logClassJoin: (teacherId: string, teacherName: string, studentName: string, scheduledDate: string, scheduledTime: string) => Promise<void>;
+  logClassJoin: (teacherId: string, teacherName: string, studentName: string, scheduledDate: string, scheduledTime: string, subscriptionStatus?: string, enteredWithoutActive?: boolean) => Promise<void>;
   loadClassJoinLogs: () => Promise<void>;
 }
 
@@ -336,8 +336,10 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     studentName: string,
     scheduledDate: string,
     scheduledTime: string,
+    subscriptionStatus?: string,
+    enteredWithoutActive?: boolean,
   ) {
-    const log = await dbLogClassJoin(teacherId, teacherName, studentName, scheduledDate, scheduledTime);
+    const log = await dbLogClassJoin(teacherId, teacherName, studentName, scheduledDate, scheduledTime, subscriptionStatus, enteredWithoutActive);
     setClassJoinLogs(prev => [log, ...prev]);
   }
 

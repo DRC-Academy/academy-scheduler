@@ -1593,6 +1593,14 @@ const PUNCT_STYLE: Record<string, { label: string; color: string; bg: string }> 
   missed:    { label: '🔴 No ingresó', color: '#dc2626', bg: 'rgba(239,68,68,0.1)' },
 };
 
+function subscriptionBadge(r: { joinedAt?: string; subscriptionStatus?: string; enteredWithoutActive?: boolean }):
+  { label: string; color: string; bg: string } | null {
+  if (!r.joinedAt) return null; // no se registró ingreso (no ingresó)
+  if (r.enteredWithoutActive) return { label: '⚠️ Inactiva (ingresó igual)', color: '#ea580c', bg: 'rgba(249,115,22,0.12)' };
+  if (r.subscriptionStatus === 'active') return { label: '✅ Activa', color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)' };
+  return { label: '❓ No verificado', color: 'var(--text-muted)', bg: 'var(--bg-surface-3)' };
+}
+
 interface LogRow {
   id: string;
   date: string;
@@ -1603,6 +1611,8 @@ interface LogRow {
   joinedAt?: string;
   status: 'on_time' | 'late' | 'very_late' | 'missed';
   hasLink: boolean;
+  subscriptionStatus?: string;
+  enteredWithoutActive?: boolean;
 }
 
 function ClassLogTab() {
@@ -1614,7 +1624,7 @@ function ClassLogTab() {
   const [teacherFilter, setTeacherFilter] = useState<string>('');
   const [fromDate, setFromDate] = useState(isoDateAdmin(defaultFrom));
   const [toDate, setToDate] = useState(isoDateAdmin(today));
-  const [statusFilter, setStatusFilter] = useState<'all' | 'on_time' | 'late' | 'missed' | 'no_link'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'on_time' | 'late' | 'missed' | 'no_link' | 'no_sub'>('all');
   const [expandedTeacher, setExpandedTeacher] = useState<string | null>(null);
 
   useEffect(() => {
@@ -1661,6 +1671,7 @@ function ClassLogTab() {
               date: dateIso, hour: slot.hour,
               teacherId: a.teacherId, teacherName: a.teacherName, studentName: a.studentName,
               joinedAt: log.clickedAt, status: log.punctuality, hasLink,
+              subscriptionStatus: log.subscriptionStatus, enteredWithoutActive: log.enteredWithoutActive,
             });
           } else if (dateIso < todayIso) {
             // Past class with no join recorded
@@ -1689,6 +1700,7 @@ function ClassLogTab() {
         date: log.scheduledDate, hour: log.scheduledTime,
         teacherId: log.teacherId, teacherName: log.teacherName, studentName: log.studentName,
         joinedAt: log.clickedAt, status: log.punctuality, hasLink: !!linkedAssignment?.meetLink,
+        subscriptionStatus: log.subscriptionStatus, enteredWithoutActive: log.enteredWithoutActive,
       });
     }
 
@@ -1708,6 +1720,7 @@ function ClassLogTab() {
     if (statusFilter === 'late') return r.status === 'late' || r.status === 'very_late';
     if (statusFilter === 'missed') return r.status === 'missed';
     if (statusFilter === 'no_link') return !r.hasLink;
+    if (statusFilter === 'no_sub') return r.enteredWithoutActive === true;
     return true;
   });
 
@@ -1746,6 +1759,7 @@ function ClassLogTab() {
     { id: 'late', label: 'Tarde' },
     { id: 'missed', label: 'No ingresó' },
     { id: 'no_link', label: 'Sin enlace' },
+    { id: 'no_sub', label: 'Sin suscripción' },
   ];
 
   return (
@@ -1800,7 +1814,7 @@ function ClassLogTab() {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
                 <tr style={{ background: 'var(--bg-surface-2)', textAlign: 'left' }}>
-                  {['Fecha', 'Hora', 'Profesor', 'Alumno', 'Hora ingreso', 'Puntualidad'].map(h => (
+                  {['Fecha', 'Hora', 'Profesor', 'Alumno', 'Hora ingreso', 'Puntualidad', 'Suscripción'].map(h => (
                     <th key={h} style={{ padding: '10px 14px', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>{h}</th>
                   ))}
                 </tr>
@@ -1829,6 +1843,14 @@ function ClassLogTab() {
                       </td>
                       <td style={{ padding: '10px 14px', whiteSpace: 'nowrap' }}>
                         <span style={{ fontSize: 11, padding: '2px 9px', borderRadius: 12, background: ps.bg, color: ps.color, fontWeight: 700 }}>{ps.label}</span>
+                      </td>
+                      <td style={{ padding: '10px 14px', whiteSpace: 'nowrap' }}>
+                        {(() => {
+                          const sb = subscriptionBadge(r);
+                          return sb
+                            ? <span style={{ fontSize: 11, padding: '2px 9px', borderRadius: 12, background: sb.bg, color: sb.color, fontWeight: 700 }}>{sb.label}</span>
+                            : <span style={{ color: 'var(--text-muted)' }}>—</span>;
+                        })()}
                       </td>
                     </tr>
                   );
