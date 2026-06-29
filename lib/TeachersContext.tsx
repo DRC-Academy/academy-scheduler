@@ -16,7 +16,7 @@ import {
   dbSendNotification, dbGetNotificationsForUser, dbMarkNotificationRead, dbMarkAllNotificationsRead,
   dbUpdateMeetLink, dbLogClassJoin, dbGetClassJoinLogs, dbGetUnassignedStudents,
   dbNotifyNewAssignment,
-  dbGetClassRecords, dbUploadClassScreenshot, dbAddClassRecord,
+  dbGetClassRecords, dbUploadClassScreenshot, dbAddClassRecord, dbAttachScreenshotToClass,
   dbGetFinanceRates, dbGetFinancePayments, dbSetFinanceOverrides, dbMarkPaymentPaid,
 } from '@/lib/db';
 import { calculateTeacherFinance } from '@/lib/finance';
@@ -69,6 +69,7 @@ interface TeachersContextType {
   loadClassRecords: () => Promise<void>;
   loadFinanceData: () => Promise<void>;
   registerClassRecord: (teacherId: string, studentName: string, date: string, time: string | undefined, screenshotFile: File) => Promise<void>;
+  attachScreenshotToClass: (teacherId: string, studentName: string, date: string, time: string | undefined, screenshotFile: File, comment?: string) => Promise<void>;
   markPaymentAsPaid: (teacherId: string, monthYear: string) => Promise<void>;
   approveReviewClass: (teacherId: string, studentName: string, date: string) => Promise<void>;
   approveExceedLimitClass: (teacherId: string, studentName: string, date: string) => Promise<void>;
@@ -112,6 +113,7 @@ const TeachersContext = createContext<TeachersContextType>({
   loadClassRecords:           async () => {},
   loadFinanceData:            async () => {},
   registerClassRecord:        async () => {},
+  attachScreenshotToClass:    async () => {},
   markPaymentAsPaid:          async () => {},
   approveReviewClass:         async () => {},
   approveExceedLimitClass:    async () => {},
@@ -403,6 +405,21 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     setClassRecords(prev => [record, ...prev]);
   }
 
+  // Adjunta una captura a una clase puntual existente (o la crea para esa fecha).
+  async function attachScreenshotToClass(
+    teacherId: string, studentName: string, date: string, time: string | undefined, screenshotFile: File, comment?: string,
+  ) {
+    const teacherName = teachers.find(t => t.id === teacherId)?.name ?? '';
+    const url = await dbUploadClassScreenshot(screenshotFile, teacherId);
+    const record = await dbAttachScreenshotToClass(teacherId, teacherName, studentName, date, time, url, comment);
+    setClassRecords(prev => {
+      const filtered = prev.filter(r =>
+        r.id !== record.id && !(r.teacherId === teacherId && r.studentName === studentName && r.classDate === date)
+      );
+      return [record, ...filtered];
+    });
+  }
+
   async function markPaymentAsPaid(teacherId: string, monthYear: string) {
     const teacherName = teachers.find(t => t.id === teacherId)?.name ?? '';
     const existing = financePayments.find(p => p.teacherId === teacherId && p.monthYear === monthYear) ?? null;
@@ -460,7 +477,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
       updateAssignmentAdjustment, updateAssignmentStartDate, updateAssignmentSlots,
       sendNotification, loadNotifications, markNotificationRead, markAllNotificationsRead,
       updateMeetLink, logClassJoin, loadClassJoinLogs,
-      loadClassRecords, loadFinanceData, registerClassRecord,
+      loadClassRecords, loadFinanceData, registerClassRecord, attachScreenshotToClass,
       markPaymentAsPaid, approveReviewClass, approveExceedLimitClass,
     }}>
       {children}

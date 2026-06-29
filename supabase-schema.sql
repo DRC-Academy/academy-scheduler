@@ -207,8 +207,11 @@ create table if not exists class_records (
   class_date     date not null,
   class_time     text,
   screenshot_url text not null,
+  comment        text,
   created_at     timestamptz default now()
 );
+-- Para bases ya existentes:
+alter table class_records add column if not exists comment text;
 alter table class_records disable row level security;
 
 -- ── FINANCE: RATES (4 tarifas) ──────────────────────────────────────────────

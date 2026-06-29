@@ -208,6 +208,7 @@ export interface ClassRecord {
   classDate: string;       // 'YYYY-MM-DD'
   classTime?: string;      // 'HH:MM'
   screenshotUrl: string;
+  comment?: string;        // comentario opcional del profesor
   createdAt: string;
 }
 

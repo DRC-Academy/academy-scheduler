@@ -137,15 +137,80 @@ function AddClassModal({ teacher, myAssignments, onClose, onSaved }: {
   );
 }
 
+// Modal "Adjuntar captura" a una clase puntual existente.
+function AttachScreenshotModal({ studentName, date, hour, onClose, onSaved }: {
+  studentName: string;
+  date: string;
+  hour: string;
+  onClose: () => void;
+  onSaved: (file: File, comment: string) => Promise<void>;
+}) {
+  const [file, setFile] = useState<File | null>(null);
+  const [comment, setComment] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const canSave = !!file && !saving;
+
+  async function handleSave() {
+    if (!file) return;
+    setSaving(true); setError('');
+    try {
+      await onSaved(file, comment.trim());
+      onClose();
+    } catch (e: any) {
+      setError(e?.message ?? 'No se pudo guardar la captura.');
+      setSaving(false);
+    }
+  }
+
+  const inputStyle = { width: '100%', padding: '9px 12px', borderRadius: 8, border: '1.5px solid var(--border)', fontSize: 13, background: 'white', color: '#111827', fontFamily: 'inherit', boxSizing: 'border-box' as const };
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(6px)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+      onClick={e => { if (e.target === e.currentTarget && !saving) onClose(); }}>
+      <div style={{ background: '#F7F7F5', border: '1px solid var(--border)', borderRadius: 16, width: '100%', maxWidth: 420, padding: 26 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+          <div style={{ fontWeight: 700, fontSize: 16, color: '#111827' }}>📷 Adjuntar captura</div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: '#6b7280' }}>✕</button>
+        </div>
+        <div style={{ fontSize: 12.5, color: '#6b7280', marginBottom: 16 }}>
+          <b style={{ color: '#111827' }}>{studentName}</b> — {finShortDate(date)}{hour ? ` ${hour}` : ''}
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>Captura de pantalla <span style={{ color: '#ef4444' }}>*</span></label>
+            <input type="file" accept="image/*" onChange={e => setFile(e.target.files?.[0] ?? null)} style={{ ...inputStyle, padding: '7px 10px' }} />
+            {file && <div style={{ fontSize: 11, color: '#1E9E3A', marginTop: 5 }}>📷 {file.name}</div>}
+          </div>
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>Comentario (opcional)</label>
+            <textarea value={comment} onChange={e => setComment(e.target.value)} rows={2} placeholder="Ej: Clase de recuperación, el alumno llegó tarde..." style={{ ...inputStyle, resize: 'vertical' }} />
+          </div>
+          {error && <div style={{ fontSize: 12, color: '#ef4444' }}>{error}</div>}
+          <div style={{ display: 'flex', gap: 10, marginTop: 2 }}>
+            <button onClick={onClose} disabled={saving} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#6b7280', cursor: saving ? 'not-allowed' : 'pointer', fontSize: 14, fontFamily: 'inherit' }}>Cancelar</button>
+            <button onClick={handleSave} disabled={!canSave} style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: canSave ? '#1E9E3A' : '#d1d5db', color: 'white', cursor: canSave ? 'pointer' : 'not-allowed', fontSize: 14, fontWeight: 700, fontFamily: 'inherit' }}>
+              {saving ? 'Guardando...' : 'Guardar'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignments: Assignment[] }) {
   const {
     assignments, classRecords, classJoinLogs, financeRates, financePayments, scoringEvents,
-    registerClassRecord,
+    registerClassRecord, attachScreenshotToClass,
   } = useTeachers();
 
   const [monthYear, setMonthYear] = useState(currentMonthYear());
   const [showAdd, setShowAdd] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // Clase a la que se le va a adjuntar una captura desde la tabla.
+  const [attachTarget, setAttachTarget] = useState<{ studentName: string; date: string; hour: string } | null>(null);
 
   // Registros (capturas) del profesor para el mes seleccionado.
   const monthRecords = useMemo(
@@ -220,12 +285,11 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
     setExpanded(prev => { const n = new Set(prev); n.has(name) ? n.delete(name) : n.add(name); return n; });
   }
 
-  // Captura asociada a una clase (alumno + fecha ±1 día), si existe.
-  function screenshotFor(name: string, date: string): string | null {
-    const rec = classRecords.find(r =>
+  // Registro (captura) asociado a una clase (alumno + fecha ±1 día), si existe.
+  function recordFor(name: string, date: string) {
+    return classRecords.find(r =>
       r.teacherId === teacher.id && r.studentName === name && Math.abs(daysDiff(r.classDate, date)) <= 1
-    );
-    return rec?.screenshotUrl ?? null;
+    ) ?? null;
   }
 
   // Alertas de clases a revisar (qué falta).
@@ -321,40 +385,63 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
               {isOpen && (
                 <div>
                   <div style={{ overflowX: 'auto', borderTop: '1px solid var(--border)', background: 'var(--bg-surface-2)' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 520 }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 680 }}>
                       <thead>
                         <tr style={{ textAlign: 'left' }}>
-                          {['Fecha', 'Hora', 'Estado', 'Tarifa'].map(h => (
+                          {['Fecha', 'Hora', 'Ingreso', 'Captura', 'Tarifa', 'Acción'].map(h => (
                             <th key={h} style={{ padding: '8px 16px', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>{h}</th>
                           ))}
                         </tr>
                       </thead>
                       <tbody>
                         {g.rows.map((r, i) => {
-                          const sinIngreso = !r.hasJoinLog;
+                          const rec = recordFor(g.name, r.date);
+                          const hasShot = !!rec;
                           const isExcede = r.status === 'excede_limite';
                           const approved = overrideSet.has(`${g.name}__${r.date}`);
-                          const shot = screenshotFor(g.name, r.date);
+                          const complete = r.hasJoinLog && hasShot;
                           return (
-                            <tr key={i} style={{ borderTop: '1px solid var(--border)', background: sinIngreso ? 'rgba(255,196,0,0.07)' : 'transparent' }}>
+                            <tr key={i} style={{ borderTop: '1px solid var(--border)', background: !hasShot ? 'rgba(255,196,0,0.07)' : 'transparent' }}>
+                              {/* Fecha */}
                               <td style={{ padding: '8px 16px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>
-                                {finShortDate(r.date)}
-                                {shot && <a href={shot} target="_blank" rel="noopener noreferrer" title="Ver captura" style={{ marginLeft: 6, textDecoration: 'none' }}>📷</a>}
-                              </td>
-                              <td style={{ padding: '8px 16px', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 600 }}>{r.hour || '—'}</td>
-                              <td style={{ padding: '8px 16px', whiteSpace: 'nowrap' }}>
-                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                                  {isExcede ? (
-                                    <span style={{ fontSize: 11, padding: '2px 9px', borderRadius: 12, background: 'rgba(255,196,0,0.18)', color: '#b45309', fontWeight: 700 }}>🔶 Excede límite del plan</span>
-                                  ) : r.hasJoinLog ? (
-                                    <span style={{ fontSize: 11, padding: '2px 9px', borderRadius: 12, background: 'rgba(30,158,58,0.1)', color: '#1E9E3A', fontWeight: 700 }}>✅ Ingreso detectado</span>
-                                  ) : (
-                                    <span style={{ fontSize: 11, padding: '2px 9px', borderRadius: 12, background: 'rgba(249,115,22,0.12)', color: '#ea580c', fontWeight: 700 }}>⚠️ Sin ingreso detectado</span>
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                                  {finShortDate(r.date)}
+                                  {isExcede && <span title="Excede el límite del plan">🔶</span>}
+                                  {approved && <span style={{ fontSize: 10, color: '#1E9E3A', fontWeight: 700 }} title="Aprobada manualmente por el admin">✓admin</span>}
+                                  {rec?.comment && (
+                                    <span title={rec.comment} style={{ cursor: 'help' }}>💬</span>
                                   )}
-                                  {approved && <span style={{ fontSize: 10.5, color: '#1E9E3A', fontWeight: 700 }} title="Aprobada manualmente por el admin">✓ Aprobada por admin</span>}
                                 </span>
                               </td>
+                              {/* Hora */}
+                              <td style={{ padding: '8px 16px', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 600 }}>{r.hour || '—'}</td>
+                              {/* Ingreso */}
+                              <td style={{ padding: '8px 16px', whiteSpace: 'nowrap' }}>
+                                {r.hasJoinLog
+                                  ? <span style={{ fontSize: 11, padding: '2px 9px', borderRadius: 12, background: 'rgba(30,158,58,0.1)', color: '#1E9E3A', fontWeight: 700 }}>✅ Detectado</span>
+                                  : <span style={{ fontSize: 11, padding: '2px 9px', borderRadius: 12, background: 'rgba(249,115,22,0.12)', color: '#ea580c', fontWeight: 700 }}>❌ No detectado</span>}
+                              </td>
+                              {/* Captura */}
+                              <td style={{ padding: '8px 16px', whiteSpace: 'nowrap' }}>
+                                {hasShot
+                                  ? <a href={rec!.screenshotUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, padding: '2px 9px', borderRadius: 12, background: 'rgba(30,158,58,0.1)', color: '#1E9E3A', fontWeight: 700, textDecoration: 'none' }}>📷 Ver</a>
+                                  : <span style={{ fontSize: 11, padding: '2px 9px', borderRadius: 12, background: 'rgba(255,196,0,0.18)', color: '#b45309', fontWeight: 700 }}>⚠️ Sin cargar</span>}
+                              </td>
+                              {/* Tarifa */}
                               <td style={{ padding: '8px 16px', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 600 }}>€{r.rate.toFixed(2)}</td>
+                              {/* Acción */}
+                              <td style={{ padding: '8px 16px', whiteSpace: 'nowrap' }}>
+                                {!hasShot ? (
+                                  <button onClick={() => setAttachTarget({ studentName: g.name, date: r.date, hour: r.hour })}
+                                    style={{ padding: '5px 11px', borderRadius: 7, border: '1px solid rgba(30,158,58,0.4)', background: 'rgba(30,158,58,0.08)', color: '#1E9E3A', cursor: 'pointer', fontSize: 11, fontWeight: 700, fontFamily: 'inherit' }}>
+                                    📷 Adjuntar captura
+                                  </button>
+                                ) : complete ? (
+                                  <span style={{ fontSize: 11, color: '#1E9E3A', fontWeight: 700 }}>✓ Completo</span>
+                                ) : (
+                                  <span style={{ fontSize: 11, color: 'var(--text-muted)' }} title="No se puede falsear el ingreso">ℹ️ Recordá usar &apos;Ingresar a clase&apos; la próxima vez</span>
+                                )}
+                              </td>
                             </tr>
                           );
                         })}
@@ -423,6 +510,16 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
           myAssignments={myAssignments}
           onClose={() => setShowAdd(false)}
           onSaved={(studentName, date, time, file) => registerClassRecord(teacher.id, studentName, date, time, file)}
+        />
+      )}
+
+      {attachTarget && (
+        <AttachScreenshotModal
+          studentName={attachTarget.studentName}
+          date={attachTarget.date}
+          hour={attachTarget.hour}
+          onClose={() => setAttachTarget(null)}
+          onSaved={(file, comment) => attachScreenshotToClass(teacher.id, attachTarget.studentName, attachTarget.date, attachTarget.hour || undefined, file, comment || undefined)}
         />
       )}
     </div>

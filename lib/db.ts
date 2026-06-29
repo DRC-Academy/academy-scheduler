@@ -1169,6 +1169,7 @@ function mapClassRecord(row: any): import('@/types').ClassRecord {
     classDate:     row.class_date,
     classTime:     row.class_time ?? undefined,
     screenshotUrl: row.screenshot_url,
+    comment:       row.comment ?? undefined,
     createdAt:     row.created_at,
   };
 }
@@ -1211,6 +1212,46 @@ export async function dbAddClassRecord(
     created_at:     createdAt,
   });
   return { id, teacherId, teacherName, studentName, classDate, classTime, screenshotUrl, createdAt };
+}
+
+// Adjunta una captura a una clase puntual (fecha+alumno). Si ya existe un
+// class_records para esa fecha lo actualiza; si no, crea uno nuevo (caso típico
+// cuando el origen fue solo un class_join_logs).
+export async function dbAttachScreenshotToClass(
+  teacherId: string, teacherName: string, studentName: string,
+  date: string, classTime: string | undefined, screenshotUrl: string, comment?: string,
+): Promise<import('@/types').ClassRecord> {
+  const { data: existing } = await supabase
+    .from('class_records')
+    .select('*')
+    .eq('teacher_id', teacherId)
+    .eq('student_name', studentName)
+    .eq('class_date', date)
+    .limit(1)
+    .maybeSingle();
+
+  if (existing) {
+    const newComment = comment ?? existing.comment ?? null;
+    await supabase.from('class_records')
+      .update({ screenshot_url: screenshotUrl, comment: newComment })
+      .eq('id', existing.id);
+    return mapClassRecord({ ...existing, screenshot_url: screenshotUrl, comment: newComment });
+  }
+
+  const id        = `cr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const createdAt = new Date().toISOString();
+  await supabase.from('class_records').insert({
+    id,
+    teacher_id:     teacherId,
+    teacher_name:   teacherName,
+    student_name:   studentName,
+    class_date:     date,
+    class_time:     classTime ?? null,
+    screenshot_url: screenshotUrl,
+    comment:        comment ?? null,
+    created_at:     createdAt,
+  });
+  return { id, teacherId, teacherName, studentName, classDate: date, classTime, screenshotUrl, comment, createdAt };
 }
 
 // ── FINANCE: RATES ────────────────────────────────────────────────────────────
