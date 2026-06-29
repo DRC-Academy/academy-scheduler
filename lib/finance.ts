@@ -23,6 +23,7 @@ export type ClassFinanceStatus = 'pagable' | 'a_revisar' | 'excede_limite';
 
 export interface ClassFinanceRow {
   date: string;            // 'YYYY-MM-DD'
+  hour: string;            // 'HH:MM' del slot recurrente
   studentName: string;
   plan: string;
   weeklyHours: number;
@@ -129,7 +130,7 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
 
   for (const a of myAssignments) {
     const planType = resolvePlanType(a.plan, a.objetivo);
-    for (const { date } of expandAssignmentDates(a, monthYear)) {
+    for (const { date, hour } of expandAssignmentDates(a, monthYear)) {
       const join = hasJoinLog(a.studentName, date);
       const shot = hasScreenshot(a.studentName, date);
       if (!join && !shot) continue; // ninguno de los dos → se ignora por completo
@@ -140,7 +141,7 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
       const status: ClassFinanceStatus = (join && shot) ? 'pagable' : 'a_revisar';
 
       drafts.push({
-        date, studentName: a.studentName, plan: a.plan ?? '',
+        date, hour, studentName: a.studentName, plan: a.plan ?? '',
         weeklyHours: a.weeklyHours ?? 0, antiquityDays, rate, status,
         hasJoinLog: join, hasScreenshot: shot,
         overrideKey: `${a.studentName}__${date}`,

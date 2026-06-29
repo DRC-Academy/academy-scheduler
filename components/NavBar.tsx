@@ -7,9 +7,10 @@ import { NotificationBell } from '@/components/NotificationBell';
 const navItems = [
   { href: '/setter',     label: 'Buscar',     icon: '🔍', roles: ['setter', 'admin'] },
   { href: '/students',   label: 'Alumnos',    icon: '👤', roles: ['setter', 'admin'] },
-  { href: '/teacher',    label: 'Calendario', icon: '📅', roles: ['teacher'] },
-  { href: '/mis-clases', label: 'Mis clases', icon: '💰', roles: ['teacher'] },
-  { href: '/admin',      label: 'Admin',      icon: '⚙️', roles: ['admin'] },
+  { href: '/teacher',           label: 'Calendario',        icon: '📅', roles: ['teacher'] },
+  { href: '/mis-clases',        label: 'Mis clases',        icon: '💰', roles: ['teacher'] },
+  { href: '/conteo-automatico', label: 'Conteo automático', icon: '📊', roles: ['teacher'] },
+  { href: '/admin',             label: 'Admin',             icon: '⚙️', roles: ['admin'] },
   { href: '/finanzas',   label: 'Finanzas',   icon: '💰', roles: ['admin'] },
 ];
 

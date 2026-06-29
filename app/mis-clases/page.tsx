@@ -7,7 +7,7 @@ import { LastUpdated } from '@/components/LastUpdated';
 import { getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
-import { calculateTeacherFinance, recordVerification } from '@/lib/finance';
+import { calculateTeacherFinance, recordVerification, ClassFinanceRow } from '@/lib/finance';
 import { Teacher, Assignment } from '@/types';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -29,6 +29,12 @@ function monthLabel(monthYear: string): string {
 function finShortDate(iso: string): string {
   const d = new Date(iso + 'T00:00:00');
   return `${String(d.getDate()).padStart(2, '0')} ${FIN_MONTHS[d.getMonth()].slice(0, 3)}`;
+}
+function isoOf(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+function daysDiff(aIso: string, bIso: string): number {
+  return Math.round((new Date(bIso + 'T00:00:00').getTime() - new Date(aIso + 'T00:00:00').getTime()) / 86400000);
 }
 
 // Modal "Añadir clase"
@@ -150,17 +156,6 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
   const detectedCount = monthRecords.filter(r => recordVerification(r.studentName, r.classDate, classJoinLogs, teacher.id) === 'detected').length;
   const notDetectedCount = monthRecords.length - detectedCount;
 
-  // Agrupar por alumno.
-  const byStudent = useMemo(() => {
-    const map = new Map<string, typeof monthRecords>();
-    for (const r of monthRecords) {
-      if (!map.has(r.studentName)) map.set(r.studentName, []);
-      map.get(r.studentName)!.push(r);
-    }
-    for (const list of map.values()) list.sort((a, b) => a.classDate.localeCompare(b.classDate));
-    return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  }, [monthRecords]);
-
   // Resumen de pago (cálculo de finanzas).
   const payment = financePayments.find(p => p.teacherId === teacher.id && p.monthYear === monthYear) ?? null;
   const finance = useMemo(() => calculateTeacherFinance({
@@ -169,13 +164,68 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
     scoringEvents, payment,
   }), [teacher.id, teacher.name, monthYear, assignments, classJoinLogs, classRecords, financeRates, scoringEvents, payment]);
 
+  // Claves de clases aprobadas manualmente por el admin (override).
+  const overrideSet = useMemo(() => new Set(payment?.approvedOverrides ?? []), [payment]);
+  const todayIso = getSpainParts(new Date()).dateStr;
+
+  // Agrupar las clases detectadas (finance.rows) por alumno, con su desglose.
+  const financeGroups = useMemo(() => {
+    const map = new Map<string, ClassFinanceRow[]>();
+    for (const r of finance.rows) {
+      if (!map.has(r.studentName)) map.set(r.studentName, []);
+      map.get(r.studentName)!.push(r);
+    }
+    const groups = [...map.entries()].map(([name, unsorted]) => {
+      const rows = [...unsorted].sort((a, b) => a.date.localeCompare(b.date));
+      const asgn = myAssignments.find(a => a.studentName === name);
+      const plan = asgn?.plan || rows[0]?.plan || '';
+      const level = asgn?.studentLevel ?? '';
+      const startDate = asgn?.startDate;
+      const planTypeLabel = /examen/i.test(`${plan} ${asgn?.objetivo ?? ''}`) ? 'Exámenes' : 'Inglés general';
+
+      const nuevoRows = rows.filter(r => r.antiquityDays < 30);
+      const antiguoRows = rows.filter(r => r.antiquityDays >= 30);
+      const oldRate = nuevoRows[0]?.rate ?? 0;
+      const newRate = antiguoRows[0]?.rate ?? oldRate;
+      const rateChanged = nuevoRows.length > 0 && antiguoRows.length > 0 && oldRate !== newRate;
+      const currentRate = rows[rows.length - 1]?.rate ?? 0;
+      const antiquityToday = startDate ? Math.max(0, daysDiff(startDate, todayIso)) : 0;
+
+      // Fecha del cruce de umbral (30 días) cuando cambió la tarifa.
+      let changeIso = ''; let prevDayLabel = '';
+      if (rateChanged && startDate) {
+        const t = new Date(startDate + 'T00:00:00'); t.setDate(t.getDate() + 30);
+        changeIso = isoOf(t);
+        const prev = new Date(t); prev.setDate(prev.getDate() - 1);
+        prevDayLabel = String(prev.getDate());
+      }
+
+      const pagables = rows.filter(r => r.status === 'pagable');
+      const aRevisar = rows.filter(r => r.status === 'a_revisar');
+      const subtotal = pagables.reduce((s, r) => s + r.rate, 0);
+
+      return {
+        name, rows, plan, planTypeLabel, level, startDate, antiquityToday,
+        oldRate, newRate, currentRate, rateChanged, changeIso, prevDayLabel,
+        subtotal, total: rows.length, pagablesCount: pagables.length, aRevisarCount: aRevisar.length,
+        hasReview: aRevisar.length > 0,
+      };
+    });
+    // Orden: primero los que tienen clases a revisar, luego alfabético.
+    groups.sort((a, b) => (Number(b.hasReview) - Number(a.hasReview)) || a.name.localeCompare(b.name));
+    return groups;
+  }, [finance, myAssignments, todayIso]);
+
   function toggle(name: string) {
     setExpanded(prev => { const n = new Set(prev); n.has(name) ? n.delete(name) : n.add(name); return n; });
   }
 
-  function planLevelFor(studentName: string): { plan: string; level: string } {
-    const a = myAssignments.find(a => a.studentName === studentName);
-    return { plan: a?.plan ?? '', level: a?.studentLevel ?? '' };
+  // Captura asociada a una clase (alumno + fecha ±1 día), si existe.
+  function screenshotFor(name: string, date: string): string | null {
+    const rec = classRecords.find(r =>
+      r.teacherId === teacher.id && r.studentName === name && Math.abs(daysDiff(r.classDate, date)) <= 1
+    );
+    return rec?.screenshotUrl ?? null;
   }
 
   // Alertas de clases a revisar (qué falta).
@@ -209,6 +259,7 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
           { label: 'Total clases registradas este mes', value: monthRecords.length, color: 'var(--text-primary)' },
           { label: 'Con ingreso detectado', value: `${detectedCount} ✅`, color: '#1E9E3A' },
           { label: 'Sin ingreso detectado', value: `${notDetectedCount} ⚠️`, color: notDetectedCount > 0 ? '#ea580c' : '#1E9E3A' },
+          { label: 'Alumnos con clases este mes', value: financeGroups.length, color: '#1E9E3A' },
         ].map(c => (
           <div key={c.label} style={card}>
             <div style={{ fontSize: 24, fontWeight: 700, color: c.color }}>{c.value}</div>
@@ -217,59 +268,106 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
         ))}
       </div>
 
-      {/* Agrupado por alumno */}
+      {/* Clases por alumno — desglose detallado */}
       <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
         <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)', fontWeight: 700, fontSize: 14, color: 'var(--text-primary)' }}>Clases por alumno</div>
-        {byStudent.length === 0 ? (
+        {financeGroups.length === 0 ? (
           <div style={{ padding: '32px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
-            No registraste clases este mes. Usá <b>＋ Añadir clase</b> para subir una captura.
+            No hay clases detectadas este mes. Registrá clases con <b>＋ Añadir clase</b> o ingresá con el botón Meet.
           </div>
-        ) : byStudent.map(([name, records]) => {
-          const { plan, level } = planLevelFor(name);
-          const isOpen = expanded.has(name);
+        ) : financeGroups.map(g => {
+          const isOpen = expanded.has(g.name);
           return (
-            <div key={name} style={{ borderBottom: '1px solid var(--border)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 18px', cursor: 'pointer' }} onClick={() => toggle(name)}>
-                <div style={{ width: 34, height: 34, borderRadius: '50%', background: 'rgba(34,197,94,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: '#16a34a', flexShrink: 0 }}>
-                  {name.split(' ').map(p => p[0]).join('').toUpperCase().slice(0, 2)}
+            <div key={g.name} style={{ borderBottom: '1px solid var(--border)' }}>
+              {/* Cabecera de la card */}
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '14px 18px', cursor: 'pointer' }} onClick={() => toggle(g.name)}>
+                <div style={{ width: 38, height: 38, borderRadius: '50%', background: 'rgba(34,197,94,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, color: '#16a34a', flexShrink: 0 }}>
+                  {g.name.split(' ').map(p => p[0]).join('').toUpperCase().slice(0, 2)}
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)' }}>{name}</div>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{[plan, level].filter(Boolean).join(' · ') || '—'}</div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
+                    <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--text-primary)' }}>{g.name}</div>
+                    <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                      {g.total} clase{g.total !== 1 ? 's' : ''} · €{g.currentRate.toFixed(2)}/clase
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 3 }}>
+                    Plan: <b style={{ color: 'var(--text-secondary)' }}>{g.planTypeLabel}</b>{g.level ? <> · Nivel: <b style={{ color: 'var(--text-secondary)' }}>{g.level}</b></> : null}
+                  </div>
+                  <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 2 }}>
+                    {g.startDate ? <>Inicio: <b style={{ color: 'var(--text-secondary)' }}>{finShortDate(g.startDate)}</b> · Antigüedad: <b style={{ color: 'var(--text-secondary)' }}>{g.antiquityToday} días</b> · </> : null}
+                    Tarifa actual: <b style={{ color: 'var(--text-secondary)' }}>€{g.currentRate.toFixed(2)}</b>
+                    {g.rateChanged && <span style={{ color: 'var(--text-muted)' }}> (€{g.oldRate.toFixed(2)} hasta el {g.prevDayLabel}, luego €{g.newRate.toFixed(2)})</span>}
+                  </div>
+                  <div style={{ fontSize: 12, color: '#1E9E3A', fontWeight: 700, marginTop: 5 }}>
+                    Subtotal del mes: €{g.subtotal.toFixed(2)}
+                  </div>
+                  {/* Indicador de cambio de tarifa */}
+                  {g.rateChanged && (
+                    <div style={{ marginTop: 8, fontSize: 11.5, color: '#b45309', background: 'rgba(255,196,0,0.12)', border: '1px solid rgba(255,196,0,0.4)', borderRadius: 8, padding: '6px 10px', display: 'inline-block' }}>
+                      📈 Este alumno cambió de tarifa el {finShortDate(g.changeIso)} (pasó a tarifa de alumno con antigüedad)
+                    </div>
+                  )}
+                  <div style={{ fontSize: 12, color: '#1E9E3A', fontWeight: 600, marginTop: 8 }}>
+                    {isOpen ? 'Ocultar detalle de clases ▲' : 'Ver detalle de clases ▼'}
+                  </div>
                 </div>
-                <span style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 600 }}>{records.length} clase{records.length !== 1 ? 's' : ''} registrada{records.length !== 1 ? 's' : ''}</span>
-                <span style={{ fontSize: 12, color: '#1E9E3A', fontWeight: 600 }}>{isOpen ? 'Ocultar ▲' : 'Ver detalle ▼'}</span>
+                {g.hasReview && (
+                  <span style={{ fontSize: 10.5, padding: '2px 8px', borderRadius: 10, background: 'rgba(255,196,0,0.15)', color: '#b45309', fontWeight: 700, whiteSpace: 'nowrap', flexShrink: 0 }}>A revisar</span>
+                )}
               </div>
+
+              {/* Detalle expandible */}
               {isOpen && (
-                <div style={{ overflowX: 'auto', borderTop: '1px solid var(--border)', background: 'var(--bg-surface-2)' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 460 }}>
-                    <thead>
-                      <tr style={{ textAlign: 'left' }}>
-                        {['Fecha', 'Hora', 'Captura', 'Verificación'].map(h => (
-                          <th key={h} style={{ padding: '8px 16px', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {records.map(r => {
-                        const v = recordVerification(r.studentName, r.classDate, classJoinLogs, teacher.id);
-                        return (
-                          <tr key={r.id} style={{ borderTop: '1px solid var(--border)' }}>
-                            <td style={{ padding: '8px 16px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>{finShortDate(r.classDate)}</td>
-                            <td style={{ padding: '8px 16px', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 600 }}>{r.classTime ?? '—'}</td>
-                            <td style={{ padding: '8px 16px', whiteSpace: 'nowrap' }}>
-                              <a href={r.screenshotUrl} target="_blank" rel="noopener noreferrer" style={{ color: '#1E9E3A', fontWeight: 600, textDecoration: 'none' }}>📷 Ver</a>
-                            </td>
-                            <td style={{ padding: '8px 16px', whiteSpace: 'nowrap' }}>
-                              {v === 'detected'
-                                ? <span style={{ fontSize: 11, padding: '2px 9px', borderRadius: 12, background: 'rgba(30,158,58,0.1)', color: '#1E9E3A', fontWeight: 700 }}>✅ Ingreso detectado</span>
-                                : <span style={{ fontSize: 11, padding: '2px 9px', borderRadius: 12, background: 'rgba(249,115,22,0.12)', color: '#ea580c', fontWeight: 700 }}>⚠️ Sin ingreso detectado</span>}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+                <div>
+                  <div style={{ overflowX: 'auto', borderTop: '1px solid var(--border)', background: 'var(--bg-surface-2)' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 520 }}>
+                      <thead>
+                        <tr style={{ textAlign: 'left' }}>
+                          {['Fecha', 'Hora', 'Estado', 'Tarifa'].map(h => (
+                            <th key={h} style={{ padding: '8px 16px', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {g.rows.map((r, i) => {
+                          const sinIngreso = !r.hasJoinLog;
+                          const isExcede = r.status === 'excede_limite';
+                          const approved = overrideSet.has(`${g.name}__${r.date}`);
+                          const shot = screenshotFor(g.name, r.date);
+                          return (
+                            <tr key={i} style={{ borderTop: '1px solid var(--border)', background: sinIngreso ? 'rgba(255,196,0,0.07)' : 'transparent' }}>
+                              <td style={{ padding: '8px 16px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>
+                                {finShortDate(r.date)}
+                                {shot && <a href={shot} target="_blank" rel="noopener noreferrer" title="Ver captura" style={{ marginLeft: 6, textDecoration: 'none' }}>📷</a>}
+                              </td>
+                              <td style={{ padding: '8px 16px', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 600 }}>{r.hour || '—'}</td>
+                              <td style={{ padding: '8px 16px', whiteSpace: 'nowrap' }}>
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                  {isExcede ? (
+                                    <span style={{ fontSize: 11, padding: '2px 9px', borderRadius: 12, background: 'rgba(255,196,0,0.18)', color: '#b45309', fontWeight: 700 }}>🔶 Excede límite del plan</span>
+                                  ) : r.hasJoinLog ? (
+                                    <span style={{ fontSize: 11, padding: '2px 9px', borderRadius: 12, background: 'rgba(30,158,58,0.1)', color: '#1E9E3A', fontWeight: 700 }}>✅ Ingreso detectado</span>
+                                  ) : (
+                                    <span style={{ fontSize: 11, padding: '2px 9px', borderRadius: 12, background: 'rgba(249,115,22,0.12)', color: '#ea580c', fontWeight: 700 }}>⚠️ Sin ingreso detectado</span>
+                                  )}
+                                  {approved && <span style={{ fontSize: 10.5, color: '#1E9E3A', fontWeight: 700 }} title="Aprobada manualmente por el admin">✓ Aprobada por admin</span>}
+                                </span>
+                              </td>
+                              <td style={{ padding: '8px 16px', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 600 }}>€{r.rate.toFixed(2)}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  {/* Pie de la card */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '10px 18px', borderTop: '1px solid var(--border)', background: 'var(--bg-surface-2)' }}>
+                    <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                      Total clases: <b style={{ color: 'var(--text-primary)' }}>{g.total}</b> · Pagables: <b style={{ color: '#1E9E3A' }}>{g.pagablesCount}</b> · A revisar: <b style={{ color: g.aRevisarCount > 0 ? '#b45309' : 'var(--text-primary)' }}>{g.aRevisarCount}</b>
+                    </div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#1E9E3A' }}>Subtotal: €{g.subtotal.toFixed(2)}</div>
+                  </div>
                 </div>
               )}
             </div>
