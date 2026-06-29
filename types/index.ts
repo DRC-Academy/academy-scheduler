@@ -196,3 +196,40 @@ export interface AppNotification {
   createdAt: string;
   createdBy: string;
 }
+
+// ── FINANCE ───────────────────────────────────────────────────────────────────
+
+// Captura de pantalla de una clase dada, subida por el profesor.
+export interface ClassRecord {
+  id: string;
+  teacherId: string;
+  teacherName: string;
+  studentName: string;
+  classDate: string;       // 'YYYY-MM-DD'
+  classTime?: string;      // 'HH:MM'
+  screenshotUrl: string;
+  createdAt: string;
+}
+
+// Pago mensual liquidado/pendiente por profesor. Cuando status='paid' el mes
+// queda congelado como histórico (no se recalcula).
+export interface FinancePayment {
+  id: string;
+  teacherId: string;
+  teacherName: string;
+  monthYear: string;       // 'YYYY-MM'
+  totalClassesPayable: number;
+  totalAmount: number;
+  bonusAmount: number;
+  status: 'pending' | 'paid';
+  paidAt?: string;
+  approvedOverrides?: string[]; // claves 'studentName__YYYY-MM-DD' forzadas a pagable
+}
+
+// Tarifa por tipo de plan + antigüedad.
+export interface FinanceRate {
+  id: string;
+  planType: 'general' | 'examenes';
+  tier: 'nuevo' | 'antiguo';
+  rate: number;
+}

@@ -197,3 +197,43 @@ alter table students          disable row level security;
 alter table assignments       disable row level security;
 alter table app_users         disable row level security;
 alter table scoring_events    disable row level security;
+
+-- ── FINANCE: CLASS RECORDS (capturas de clase subidas por el profesor) ──────
+create table if not exists class_records (
+  id             text primary key,
+  teacher_id     text not null references teachers(id),
+  teacher_name   text not null,
+  student_name   text not null,
+  class_date     date not null,
+  class_time     text,
+  screenshot_url text not null,
+  created_at     timestamptz default now()
+);
+alter table class_records disable row level security;
+
+-- ── FINANCE: RATES (4 tarifas) ──────────────────────────────────────────────
+create table if not exists finance_rates (
+  id         text primary key,
+  plan_type  text not null,   -- 'general' | 'examenes'
+  tier       text not null,   -- 'nuevo' | 'antiguo'
+  rate       numeric not null
+);
+alter table finance_rates disable row level security;
+
+-- ── FINANCE: PAYMENTS (liquidación mensual por profesor) ────────────────────
+create table if not exists finance_payments (
+  id                    text primary key,
+  teacher_id            text not null references teachers(id),
+  teacher_name          text not null,
+  month_year            text not null,   -- 'YYYY-MM'
+  total_classes_payable int default 0,
+  total_amount          numeric default 0,
+  bonus_amount          numeric default 0,
+  status                text default 'pending',  -- 'pending' | 'paid'
+  paid_at               timestamptz,
+  approved_overrides    jsonb default '[]'::jsonb,
+  created_at            timestamptz default now()
+);
+-- Para bases ya existentes (las tablas se crearon antes de añadir aprobaciones):
+alter table finance_payments add column if not exists approved_overrides jsonb default '[]'::jsonb;
+alter table finance_payments disable row level security;

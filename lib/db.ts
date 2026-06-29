@@ -1157,3 +1157,134 @@ export async function dbUpsertTeacherAlerts(
   // ignoreDuplicates preserves existing read_by state
   await supabase.from('notifications').upsert(toInsert, { onConflict: 'id', ignoreDuplicates: true });
 }
+
+// ── FINANCE: CLASS RECORDS (capturas) ─────────────────────────────────────────
+
+function mapClassRecord(row: any): import('@/types').ClassRecord {
+  return {
+    id:            row.id,
+    teacherId:     row.teacher_id,
+    teacherName:   row.teacher_name,
+    studentName:   row.student_name,
+    classDate:     row.class_date,
+    classTime:     row.class_time ?? undefined,
+    screenshotUrl: row.screenshot_url,
+    createdAt:     row.created_at,
+  };
+}
+
+export async function dbGetClassRecords(): Promise<import('@/types').ClassRecord[]> {
+  const { data, error } = await supabase
+    .from('class_records')
+    .select('*')
+    .order('class_date', { ascending: false });
+  if (error || !data) return [];
+  return (data as any[]).map(mapClassRecord);
+}
+
+// Sube la captura al bucket público "class-screenshots" y devuelve su URL pública.
+export async function dbUploadClassScreenshot(file: File, teacherId: string): Promise<string> {
+  const ext  = (file.name.split('.').pop() || 'jpg').toLowerCase();
+  const path = `${teacherId}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
+  const { error } = await supabase.storage.from('class-screenshots').upload(path, file, {
+    cacheControl: '3600', upsert: false, contentType: file.type || undefined,
+  });
+  if (error) throw new Error(error.message);
+  const { data } = supabase.storage.from('class-screenshots').getPublicUrl(path);
+  return data.publicUrl;
+}
+
+export async function dbAddClassRecord(
+  teacherId: string, teacherName: string, studentName: string,
+  classDate: string, classTime: string | undefined, screenshotUrl: string,
+): Promise<import('@/types').ClassRecord> {
+  const id        = `cr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const createdAt = new Date().toISOString();
+  await supabase.from('class_records').insert({
+    id,
+    teacher_id:     teacherId,
+    teacher_name:   teacherName,
+    student_name:   studentName,
+    class_date:     classDate,
+    class_time:     classTime ?? null,
+    screenshot_url: screenshotUrl,
+    created_at:     createdAt,
+  });
+  return { id, teacherId, teacherName, studentName, classDate, classTime, screenshotUrl, createdAt };
+}
+
+// ── FINANCE: RATES ────────────────────────────────────────────────────────────
+
+export async function dbGetFinanceRates(): Promise<import('@/types').FinanceRate[]> {
+  const { data, error } = await supabase.from('finance_rates').select('*');
+  if (error || !data) return [];
+  return (data as any[]).map(row => ({
+    id:       row.id,
+    planType: row.plan_type,
+    tier:     row.tier,
+    rate:     Number(row.rate),
+  }));
+}
+
+// ── FINANCE: PAYMENTS ─────────────────────────────────────────────────────────
+
+function mapFinancePayment(row: any): import('@/types').FinancePayment {
+  return {
+    id:                  row.id,
+    teacherId:           row.teacher_id,
+    teacherName:         row.teacher_name,
+    monthYear:           row.month_year,
+    totalClassesPayable: row.total_classes_payable ?? 0,
+    totalAmount:         Number(row.total_amount ?? 0),
+    bonusAmount:         Number(row.bonus_amount ?? 0),
+    status:              row.status ?? 'pending',
+    paidAt:              row.paid_at ?? undefined,
+    approvedOverrides:   row.approved_overrides ?? [],
+  };
+}
+
+export async function dbGetFinancePayments(): Promise<import('@/types').FinancePayment[]> {
+  const { data, error } = await supabase.from('finance_payments').select('*');
+  if (error || !data) return [];
+  return (data as any[]).map(mapFinancePayment);
+}
+
+const financePaymentId = (teacherId: string, monthYear: string) => `fp_${teacherId}_${monthYear}`;
+
+// Upsert de aprobaciones manuales (mantiene status/paid_at existentes).
+export async function dbSetFinanceOverrides(
+  teacherId: string, teacherName: string, monthYear: string, overrides: string[],
+): Promise<import('@/types').FinancePayment> {
+  const id = financePaymentId(teacherId, monthYear);
+  await supabase.from('finance_payments').upsert({
+    id,
+    teacher_id:        teacherId,
+    teacher_name:      teacherName,
+    month_year:        monthYear,
+    approved_overrides: overrides,
+  }, { onConflict: 'id' });
+  const { data } = await supabase.from('finance_payments').select('*').eq('id', id).single();
+  return mapFinancePayment(data);
+}
+
+// Marca el mes como pagado, congelando los totales calculados.
+export async function dbMarkPaymentPaid(
+  teacherId: string, teacherName: string, monthYear: string,
+  totals: { totalClassesPayable: number; totalAmount: number; bonusAmount: number },
+): Promise<import('@/types').FinancePayment> {
+  const id     = financePaymentId(teacherId, monthYear);
+  const paidAt = new Date().toISOString();
+  await supabase.from('finance_payments').upsert({
+    id,
+    teacher_id:            teacherId,
+    teacher_name:          teacherName,
+    month_year:            monthYear,
+    total_classes_payable: totals.totalClassesPayable,
+    total_amount:          totals.totalAmount,
+    bonus_amount:          totals.bonusAmount,
+    status:                'paid',
+    paid_at:               paidAt,
+  }, { onConflict: 'id' });
+  const { data } = await supabase.from('finance_payments').select('*').eq('id', id).single();
+  return mapFinancePayment(data);
+}

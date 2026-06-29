@@ -1,6 +1,6 @@
 'use client';
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { Teacher, Student, Assignment, Grid, ScoringEvent, ClassCount, AppNotification, ClassJoinLog } from '@/types';
+import { Teacher, Student, Assignment, Grid, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, ClassRecord, FinanceRate, FinancePayment } from '@/types';
 import {
   dbGetTeachers, dbAddTeacher,
   dbGetStudents, dbUpsertStudent, dbDeleteStudent, dbUpdateStudent,
@@ -16,7 +16,10 @@ import {
   dbSendNotification, dbGetNotificationsForUser, dbMarkNotificationRead, dbMarkAllNotificationsRead,
   dbUpdateMeetLink, dbLogClassJoin, dbGetClassJoinLogs, dbGetUnassignedStudents,
   dbNotifyNewAssignment,
+  dbGetClassRecords, dbUploadClassScreenshot, dbAddClassRecord,
+  dbGetFinanceRates, dbGetFinancePayments, dbSetFinanceOverrides, dbMarkPaymentPaid,
 } from '@/lib/db';
+import { calculateTeacherFinance } from '@/lib/finance';
 
 interface TeachersContextType {
   teachers: Teacher[];
@@ -29,6 +32,9 @@ interface TeachersContextType {
   notifications: AppNotification[];
   unassignedStudents: Student[];
   classJoinLogs: ClassJoinLog[];
+  classRecords: ClassRecord[];
+  financeRates: FinanceRate[];
+  financePayments: FinancePayment[];
   lastUpdated: Date | null;
   addTeacher: (t: Teacher, username: string) => Promise<void>;
   addStudent: (s: Student) => Promise<void>;
@@ -60,12 +66,19 @@ interface TeachersContextType {
   updateMeetLink: (assignmentId: string, link: string) => Promise<void>;
   logClassJoin: (teacherId: string, teacherName: string, studentName: string, scheduledDate: string, scheduledTime: string, subscriptionStatus?: string, enteredWithoutActive?: boolean, subscriptionDaysRemaining?: number | null) => Promise<void>;
   loadClassJoinLogs: () => Promise<void>;
+  loadClassRecords: () => Promise<void>;
+  loadFinanceData: () => Promise<void>;
+  registerClassRecord: (teacherId: string, studentName: string, date: string, time: string | undefined, screenshotFile: File) => Promise<void>;
+  markPaymentAsPaid: (teacherId: string, monthYear: string) => Promise<void>;
+  approveReviewClass: (teacherId: string, studentName: string, date: string) => Promise<void>;
+  approveExceedLimitClass: (teacherId: string, studentName: string, date: string) => Promise<void>;
 }
 
 const TeachersContext = createContext<TeachersContextType>({
   teachers: [], students: [], assignments: [], teacherGrids: {},
   loadingTeachers: true, scoringEvents: [], classCounts: [], notifications: [],
-  unassignedStudents: [], classJoinLogs: [], lastUpdated: null,
+  unassignedStudents: [], classJoinLogs: [], classRecords: [],
+  financeRates: [], financePayments: [], lastUpdated: null,
   addTeacher:               async () => {},
   addStudent:               async () => {},
   deleteStudent:            async () => {},
@@ -96,6 +109,12 @@ const TeachersContext = createContext<TeachersContextType>({
   updateMeetLink:             async () => {},
   logClassJoin:               async () => {},
   loadClassJoinLogs:          async () => {},
+  loadClassRecords:           async () => {},
+  loadFinanceData:            async () => {},
+  registerClassRecord:        async () => {},
+  markPaymentAsPaid:          async () => {},
+  approveReviewClass:         async () => {},
+  approveExceedLimitClass:    async () => {},
 });
 
 export function TeachersProvider({ children }: { children: ReactNode }) {
@@ -109,6 +128,9 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [unassignedStudents, setUnassignedStudents] = useState<Student[]>([]);
   const [classJoinLogs, setClassJoinLogs] = useState<ClassJoinLog[]>([]);
+  const [classRecords, setClassRecords] = useState<ClassRecord[]>([]);
+  const [financeRates, setFinanceRates] = useState<FinanceRate[]>([]);
+  const [financePayments, setFinancePayments] = useState<FinancePayment[]>([]);
   const [lastUpdated, setLastUpdated]   = useState<Date | null>(null);
 
   // Silent reload — no loading spinner, just swaps in fresh data
@@ -133,6 +155,8 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     // Initial load — show the loading state only once
     setLoadingTeachers(true);
     reloadAll().finally(() => setLoadingTeachers(false));
+    // Finance data (rates/payments/records/logs) — cargado una vez al iniciar.
+    loadFinanceData();
 
     // Auto-refresh every 60 s, but skip if tab is hidden
     const interval = setInterval(() => {
@@ -352,10 +376,80 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     setClassJoinLogs(logs);
   }
 
+  async function loadClassRecords() {
+    const records = await dbGetClassRecords();
+    setClassRecords(records);
+  }
+
+  async function loadFinanceData() {
+    const [rates, payments, records, logs] = await Promise.all([
+      dbGetFinanceRates(),
+      dbGetFinancePayments(),
+      dbGetClassRecords(),
+      dbGetClassJoinLogs(),
+    ]);
+    setFinanceRates(rates);
+    setFinancePayments(payments);
+    setClassRecords(records);
+    setClassJoinLogs(logs);
+  }
+
+  async function registerClassRecord(
+    teacherId: string, studentName: string, date: string, time: string | undefined, screenshotFile: File,
+  ) {
+    const teacherName = teachers.find(t => t.id === teacherId)?.name ?? '';
+    const url = await dbUploadClassScreenshot(screenshotFile, teacherId);
+    const record = await dbAddClassRecord(teacherId, teacherName, studentName, date, time, url);
+    setClassRecords(prev => [record, ...prev]);
+  }
+
+  async function markPaymentAsPaid(teacherId: string, monthYear: string) {
+    const teacherName = teachers.find(t => t.id === teacherId)?.name ?? '';
+    const existing = financePayments.find(p => p.teacherId === teacherId && p.monthYear === monthYear) ?? null;
+    const result = calculateTeacherFinance({
+      teacherId, teacherName, monthYear,
+      assignments, joinLogs: classJoinLogs, classRecords, rates: financeRates,
+      scoringEvents, payment: existing,
+    });
+    const saved = await dbMarkPaymentPaid(teacherId, teacherName, monthYear, {
+      totalClassesPayable: result.totalPagable,
+      totalAmount:         result.totalAPagar,
+      bonusAmount:         result.bonusFromScoring,
+    });
+    setFinancePayments(prev => {
+      const idx = prev.findIndex(p => p.id === saved.id);
+      if (idx >= 0) { const next = [...prev]; next[idx] = saved; return next; }
+      return [...prev, saved];
+    });
+  }
+
+  async function addOverride(teacherId: string, studentName: string, date: string) {
+    const teacherName = teachers.find(t => t.id === teacherId)?.name ?? '';
+    const monthYear = date.slice(0, 7);
+    const existing = financePayments.find(p => p.teacherId === teacherId && p.monthYear === monthYear);
+    const key = `${studentName}__${date}`;
+    const overrides = Array.from(new Set([...(existing?.approvedOverrides ?? []), key]));
+    const saved = await dbSetFinanceOverrides(teacherId, teacherName, monthYear, overrides);
+    setFinancePayments(prev => {
+      const idx = prev.findIndex(p => p.id === saved.id);
+      if (idx >= 0) { const next = [...prev]; next[idx] = saved; return next; }
+      return [...prev, saved];
+    });
+  }
+
+  async function approveReviewClass(teacherId: string, studentName: string, date: string) {
+    await addOverride(teacherId, studentName, date);
+  }
+
+  async function approveExceedLimitClass(teacherId: string, studentName: string, date: string) {
+    await addOverride(teacherId, studentName, date);
+  }
+
   return (
     <TeachersContext.Provider value={{
       teachers, students, assignments, teacherGrids, loadingTeachers,
-      scoringEvents, classCounts, notifications, unassignedStudents, classJoinLogs, lastUpdated,
+      scoringEvents, classCounts, notifications, unassignedStudents, classJoinLogs,
+      classRecords, financeRates, financePayments, lastUpdated,
       addTeacher, addStudent, deleteStudent, updateStudent, addAssignment,
       getTeacherGrid, updateTeacherGrid, updateTeacherRating,
       updateTeacherSpecialties, updateTeacherInfo,
@@ -366,6 +460,8 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
       updateAssignmentAdjustment, updateAssignmentStartDate, updateAssignmentSlots,
       sendNotification, loadNotifications, markNotificationRead, markAllNotificationsRead,
       updateMeetLink, logClassJoin, loadClassJoinLogs,
+      loadClassRecords, loadFinanceData, registerClassRecord,
+      markPaymentAsPaid, approveReviewClass, approveExceedLimitClass,
     }}>
       {children}
     </TeachersContext.Provider>
