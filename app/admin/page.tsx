@@ -5,7 +5,7 @@ import { StatusBadge } from '@/components/StatusBadge';
 import { AuthGuard } from '@/components/AuthGuard';
 import { PullToRefresh } from '@/components/PullToRefresh';
 import { LastUpdated } from '@/components/LastUpdated';
-import { DAYS, HOURS_ES, stateColor, VisualCalendar, buildGridFromTeacher } from '@/components/VisualCalendar';
+import { DAYS, HOURS_ES, stateColor, VisualCalendar, buildGridFromTeacher, getSpainParts } from '@/components/VisualCalendar';
 import { useTeachers } from '@/lib/TeachersContext';
 import { useAuth } from '@/lib/AuthContext';
 import { mockAlerts } from '@/lib/mock-data';
@@ -1591,6 +1591,7 @@ const PUNCT_STYLE: Record<string, { label: string; color: string; bg: string }> 
   late:      { label: '🟡 Tarde',     color: '#b45309', bg: 'rgba(245,158,11,0.12)' },
   very_late: { label: '🟠 Muy tarde', color: '#ea580c', bg: 'rgba(249,115,22,0.12)' },
   missed:    { label: '🔴 No ingresó', color: '#dc2626', bg: 'rgba(239,68,68,0.1)' },
+  pending:   { label: '⏳ Pendiente',  color: 'var(--text-muted)', bg: 'var(--bg-surface-3)' },
 };
 
 function subscriptionBadge(r: { joinedAt?: string; subscriptionStatus?: string; enteredWithoutActive?: boolean; subscriptionDaysRemaining?: number }):
@@ -1614,7 +1615,7 @@ interface LogRow {
   teacherName: string;
   studentName: string;
   joinedAt?: string;
-  status: 'on_time' | 'late' | 'very_late' | 'missed';
+  status: 'on_time' | 'late' | 'very_late' | 'missed' | 'pending';
   hasLink: boolean;
   subscriptionStatus?: string;
   enteredWithoutActive?: boolean;
@@ -1624,21 +1625,26 @@ interface LogRow {
 function ClassLogTab() {
   const { teachers, assignments, classJoinLogs, loadClassJoinLogs } = useTeachers();
 
-  const today = new Date();
-  const defaultFrom = new Date(today); defaultFrom.setDate(today.getDate() - 30);
+  // "Ahora" se calcula SIEMPRE en hora de España (Europe/Madrid), igual que el
+  // indicador de hora actual del calendario — no importa dónde esté el admin.
+  const nowSpain = getSpainParts(new Date());
+  const todayIso = nowSpain.dateStr;
+  const nowMinutes = nowSpain.hour * 60 + nowSpain.minute;
+
+  const [sy, sm, sd] = todayIso.split('-').map(Number);
+  const spainToday = new Date(sy, (sm ?? 1) - 1, sd ?? 1);
+  const defaultFrom = new Date(spainToday); defaultFrom.setDate(spainToday.getDate() - 30);
 
   const [teacherFilter, setTeacherFilter] = useState<string>('');
   const [fromDate, setFromDate] = useState(isoDateAdmin(defaultFrom));
-  const [toDate, setToDate] = useState(isoDateAdmin(today));
-  const [statusFilter, setStatusFilter] = useState<'all' | 'on_time' | 'late' | 'missed' | 'no_link' | 'no_sub'>('all');
+  const [toDate, setToDate] = useState(todayIso);
+  const [statusFilter, setStatusFilter] = useState<'all' | 'on_time' | 'late' | 'missed' | 'pending' | 'no_link' | 'no_sub'>('all');
   const [expandedTeacher, setExpandedTeacher] = useState<string | null>(null);
 
   useEffect(() => {
     loadClassJoinLogs();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  const todayIso = isoDateAdmin(today);
 
   // Build all rows: expected recurring class instances over the range + any extra logs.
   const baseRows = useMemo<LogRow[]>(() => {
@@ -1680,14 +1686,28 @@ function ClassLogTab() {
               subscriptionStatus: log.subscriptionStatus, enteredWithoutActive: log.enteredWithoutActive,
               subscriptionDaysRemaining: log.subscriptionDaysRemaining,
             });
-          } else if (dateIso < todayIso) {
-            // Past class with no join recorded
-            rows.push({
-              id: `${a.id}_${dateIso}_${slot.hour}`,
-              date: dateIso, hour: slot.hour,
-              teacherId: a.teacherId, teacherName: a.teacherName, studentName: a.studentName,
-              status: 'missed', hasLink,
-            });
+          } else {
+            // No hay registro de ingreso para esta clase programada. Decidimos su
+            // estado según el reloj de España (todayIso / nowMinutes):
+            //  · día anterior            → "No ingresó"
+            //  · hoy y su hora ya pasó   → "No ingresó"
+            //  · hoy y todavía no llegó  → "Pendiente" (gris)
+            //  · fecha futura            → no se incluye en este reporte
+            let status: LogRow['status'] | null = null;
+            if (dateIso < todayIso) {
+              status = 'missed';
+            } else if (dateIso === todayIso) {
+              const startMinutes = (parseInt(slot.hour) || 0) * 60;
+              status = startMinutes < nowMinutes ? 'missed' : 'pending';
+            }
+            if (status) {
+              rows.push({
+                id: `${a.id}_${dateIso}_${slot.hour}`,
+                date: dateIso, hour: slot.hour,
+                teacherId: a.teacherId, teacherName: a.teacherName, studentName: a.studentName,
+                status, hasLink,
+              });
+            }
           }
         }
         cursor.setDate(cursor.getDate() + 1);
@@ -1713,10 +1733,11 @@ function ClassLogTab() {
     }
 
     return rows.sort((x, y) => (y.date.localeCompare(x.date)) || (parseInt(y.hour) - parseInt(x.hour)));
-  }, [assignments, classJoinLogs, teacherFilter, fromDate, toDate, todayIso]);
+  }, [assignments, classJoinLogs, teacherFilter, fromDate, toDate, todayIso, nowMinutes]);
 
-  // Summary metrics
-  const totalRegistered = baseRows.filter(r => r.status !== 'missed').length;
+  // Summary metrics — las clases "Pendiente" (hoy, aún sin pasar) no cuentan como
+  // registradas ni como perdidas.
+  const totalRegistered = baseRows.filter(r => r.status !== 'missed' && r.status !== 'pending').length;
   const onTimeCount     = baseRows.filter(r => r.status === 'on_time').length;
   const missedCount     = baseRows.filter(r => r.status === 'missed').length;
   const punctualityPct  = totalRegistered > 0 ? Math.round((onTimeCount / totalRegistered) * 100) : 0;
@@ -1727,6 +1748,7 @@ function ClassLogTab() {
     if (statusFilter === 'on_time') return r.status === 'on_time';
     if (statusFilter === 'late') return r.status === 'late' || r.status === 'very_late';
     if (statusFilter === 'missed') return r.status === 'missed';
+    if (statusFilter === 'pending') return r.status === 'pending';
     if (statusFilter === 'no_link') return !r.hasLink;
     if (statusFilter === 'no_sub') return r.enteredWithoutActive === true;
     return true;
@@ -1735,7 +1757,7 @@ function ClassLogTab() {
   // Per-teacher expandable summary
   function teacherSummary(teacherId: string) {
     const trows = baseRows.filter(r => r.teacherId === teacherId);
-    const registered = trows.filter(r => r.status !== 'missed');
+    const registered = trows.filter(r => r.status !== 'missed' && r.status !== 'pending');
     const onTime = trows.filter(r => r.status === 'on_time').length;
     const late   = trows.filter(r => r.status === 'late' || r.status === 'very_late').length;
     const missed = trows.filter(r => r.status === 'missed').length;
@@ -1766,6 +1788,7 @@ function ClassLogTab() {
     { id: 'on_time', label: 'A tiempo' },
     { id: 'late', label: 'Tarde' },
     { id: 'missed', label: 'No ingresó' },
+    { id: 'pending', label: 'Pendiente' },
     { id: 'no_link', label: 'Sin enlace' },
     { id: 'no_sub', label: 'Sin suscripción' },
   ];

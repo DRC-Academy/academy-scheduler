@@ -32,8 +32,14 @@ create table if not exists students (
   level       text not null default 'B1',
   plan        text not null default 'Plan Individual',
   notes       text,
+  -- Activación manual de suscripción: mientras esta fecha sea futura, el alumno
+  -- se considera "Activa (manual)" sin consultar WooCommerce.
+  manual_active_until date,
   created_at  timestamptz default now()
 );
+
+-- Para bases ya existentes:
+alter table students add column if not exists manual_active_until date;
 
 -- ── ASSIGNMENTS ──────────────────────────────────────────────
 create table if not exists assignments (

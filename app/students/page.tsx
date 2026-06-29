@@ -7,7 +7,7 @@ import { LastUpdated } from '@/components/LastUpdated';
 import { useTeachers } from '@/lib/TeachersContext';
 import { useAuth } from '@/lib/AuthContext';
 import { DAYS, cellKey } from '@/components/VisualCalendar';
-import { dbCheckStudentExists } from '@/lib/db';
+import { dbCheckStudentExists, dbSetStudentManualActive } from '@/lib/db';
 import { Student, Grid, Assignment } from '@/types';
 
 const LEVELS = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
@@ -42,6 +42,7 @@ interface SubInfo {
   active: boolean | null;
   status: string;
   daysRemaining: number | null;
+  endDate: string | null;
   fetchedAt: number;
 }
 const SUB_TTL_MS = 5 * 60 * 1000;
@@ -55,10 +56,11 @@ async function fetchSubInfo(email: string): Promise<SubInfo> {
       active:        data.active ?? null,
       status:        data.status ?? 'error',
       daysRemaining: data.daysRemaining ?? null,
+      endDate:       data.endDate ?? null,
       fetchedAt:     Date.now(),
     };
   } catch {
-    return { active: null, status: 'error', daysRemaining: null, fetchedAt: Date.now() };
+    return { active: null, status: 'error', daysRemaining: null, endDate: null, fetchedAt: Date.now() };
   }
 }
 
@@ -70,8 +72,21 @@ function subCategory(info: SubInfo | undefined): SubCategory {
   return 'unverified';
 }
 
+// Formatea 'YYYY-MM-DD' (o ISO) como 'DD/MM'.
+function shortDate(iso: string | null): string {
+  if (!iso) return '';
+  const d = new Date(iso.length <= 10 ? iso + 'T00:00:00' : iso);
+  if (isNaN(d.getTime())) return '';
+  return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
 function subBadge(info: SubInfo | undefined): { label: string; color: string; bg: string; spin?: boolean } {
   if (!info) return { label: '...', color: 'var(--text-muted)', bg: 'var(--bg-surface-3)', spin: true };
+  // Activación manual: mismo verde, aclarando "(manual hasta DD/MM)".
+  if (info.status === 'manual_override') {
+    const tail = info.endDate ? ` hasta ${shortDate(info.endDate)}` : '';
+    return { label: `✅ Activa (manual${tail})`, color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)' };
+  }
   if (info.active === true) return { label: '✅ Activa', color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)' };
   if (info.active === false && info.status === 'pending-cancel') {
     const d = info.daysRemaining;
@@ -349,6 +364,57 @@ function DeleteStudentModal({ student, onConfirm, onCancel }: {
   );
 }
 
+// ── Manual subscription activation modal ──────────────────────────────────────
+function ManualActivateModal({ student, onConfirm, onCancel }: {
+  student: DisplayStudent;
+  onConfirm: (until: string) => Promise<void>;
+  onCancel: () => void;
+}) {
+  // Valor por defecto: 30 días desde hoy.
+  const defaultUntil = (() => {
+    const d = new Date(); d.setDate(d.getDate() + 30);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  })();
+  const todayStr = (() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  })();
+  const [until, setUntil] = useState(defaultUntil);
+  const [saving, setSaving] = useState(false);
+
+  const canSave = !!until && until >= todayStr && !saving;
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)', zIndex: 90, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+      onClick={e => { if (e.target === e.currentTarget && !saving) onCancel(); }}>
+      <div style={{ background: 'var(--bg-surface)', border: '1px solid #35405a', borderRadius: 14, padding: 24, width: '100%', maxWidth: 420 }}>
+        <div style={{ fontSize: 24, marginBottom: 10 }}>✅</div>
+        <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)', marginBottom: 8 }}>Activar suscripción manualmente</div>
+        <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 18, lineHeight: 1.6 }}>
+          <b style={{ color: 'var(--text-primary)' }}>{student.name}</b> no cuenta con suscripción activa en WooCommerce.
+          Podés activarla manualmente en el sistema hasta una fecha específica.
+        </div>
+        <div style={{ marginBottom: 20 }}>
+          <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+            ¿Hasta qué fecha deseas activarla?
+          </label>
+          <input type="date" value={until} min={todayStr} onChange={e => setUntil(e.target.value)} style={{ width: '100%' }} />
+        </div>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button onClick={onCancel} disabled={saving}
+            style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: saving ? 'not-allowed' : 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
+            Cancelar
+          </button>
+          <button onClick={async () => { setSaving(true); await onConfirm(until); }} disabled={!canSave}
+            style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: canSave ? '#1E9E3A' : 'var(--bg-surface-3)', color: canSave ? 'white' : 'var(--text-muted)', cursor: canSave ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+            {saving ? 'Activando...' : 'Activar'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function StudentsContent() {
   const {
     students, assignments, deleteStudent, updateStudent,
@@ -361,6 +427,7 @@ function StudentsContent() {
   const [teacherGridForEdit, setTeacherGridForEdit] = useState<Grid>({});
   const [duplicateStudent, setDuplicateStudent] = useState<Student | null>(null);
   const [deletingStudent, setDeletingStudent] = useState<DisplayStudent | null>(null);
+  const [activatingStudent, setActivatingStudent] = useState<DisplayStudent | null>(null);
   const [subFilter, setSubFilter] = useState<'all' | SubCategory>('all');
   const [subInfo, setSubInfo] = useState<Record<string, SubInfo>>({});
   const [verifyingSubs, setVerifyingSubs] = useState(false);
@@ -447,8 +514,8 @@ function StudentsContent() {
     return list;
   }, [allStudents, search, subFilter, subInfo]);
 
-  function renderSubBadge(email?: string) {
-    const e = email?.trim().toLowerCase();
+  function renderSubBadge(student: DisplayStudent) {
+    const e = student.email?.trim().toLowerCase();
     if (!e) return <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>—</span>;
     const isRefreshing = refreshing.has(e);
     const info = subInfo[e];
@@ -456,9 +523,13 @@ function StudentsContent() {
     const b = subBadge(isRefreshing ? undefined : info);
     // Show a manual retry only on a real failed verification (not while loading).
     const showRetry = !isRefreshing && info != null && info.active === null;
+    // Activar manualmente: solo cuando ya se verificó (info != null), no está
+    // activa, y el alumno existe en la tabla students (donde se guarda la fecha).
+    const showActivate = !isRefreshing && info != null && student.inStudentsTable
+      && subCategory(info) !== 'active';
     return (
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 700, padding: '2px 9px', borderRadius: 12, background: b.bg, color: b.color }}>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 700, padding: '2px 9px', borderRadius: 12, background: b.bg, color: b.color, whiteSpace: 'nowrap' }}>
           {b.spin && <span className="drc-spinner-xs" />}
           {b.label}
         </span>
@@ -466,6 +537,12 @@ function StudentsContent() {
           <button onClick={() => refreshOne(e)} title="Reintentar verificación"
             style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: 2, color: 'var(--text-muted)', fontFamily: 'inherit' }}>
             🔄
+          </button>
+        )}
+        {showActivate && (
+          <button onClick={() => setActivatingStudent(student)} title="Activar suscripción manualmente"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: 'rgba(30,158,58,0.08)', border: '1px solid rgba(30,158,58,0.4)', borderRadius: 10, cursor: 'pointer', fontSize: 10, fontWeight: 700, lineHeight: 1, padding: '3px 7px', color: '#1E9E3A', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
+            ✓ Activar
           </button>
         )}
       </span>
@@ -577,17 +654,17 @@ function StudentsContent() {
                 Sin resultados para &quot;{search}&quot;
               </div>
             ) : (<>
-              {/* Desktop: table */}
-              <div className="desk-only" style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 860 }}>
+              {/* Desktop: table — scrolls horizontally if it exceeds the viewport width */}
+              <div className="desk-only" style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1100 }}>
                   <thead>
                     <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface-2)' }}>
-                      <th style={thStyle(160)}>Nombre</th>
+                      <th style={thStyle(140)}>Nombre</th>
                       <th style={thStyle(180)}>Email</th>
-                      <th style={thStyle(70)}>Nivel</th>
-                      <th style={thStyle(130)}>Plan</th>
-                      <th style={thStyle(110)}>Profesor</th>
-                      <th style={thStyle(150)}>Suscripción</th>
+                      <th style={thStyle(60)}>Nivel</th>
+                      <th style={thStyle(110)}>Plan</th>
+                      <th style={thStyle(90)}>Profesor</th>
+                      <th style={thStyle(130)}>Suscripción</th>
                       <th style={thStyle(160)}>Horarios</th>
                       <th style={{ ...thStyle(160), textAlign: 'right' }}></th>
                     </tr>
@@ -597,7 +674,7 @@ function StudentsContent() {
                       const studentAssignments = assignments.filter(a => a.studentId === s.id || a.studentName === s.name);
                       return (
                         <tr key={s.id} style={{ borderBottom: '1px solid var(--border)' }}>
-                          <td style={{ padding: '11px 14px', minWidth: 160 }}>
+                          <td style={{ padding: '11px 14px', minWidth: 140 }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
                               <div style={{ width: 30, height: 30, borderRadius: '50%', background: 'rgba(59,130,246,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: '#93c5fd', flexShrink: 0 }}>
                                 {s.name.split(' ').map(p => p[0]).join('').toUpperCase().slice(0, 2)}
@@ -606,13 +683,13 @@ function StudentsContent() {
                             </div>
                           </td>
                           <td style={{ padding: '11px 14px', fontSize: 12, color: 'var(--text-secondary)', minWidth: 180 }}>{s.email}</td>
-                          <td style={{ padding: '11px 14px', minWidth: 70 }}>
+                          <td style={{ padding: '11px 14px', minWidth: 60 }}>
                             <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 20, background: 'rgba(167,139,250,0.15)', color: '#a78bfa', fontWeight: 600 }}>{s.level || '—'}</span>
                           </td>
-                          <td style={{ padding: '11px 14px', fontSize: 12, color: 'var(--text-secondary)', minWidth: 130 }}>
+                          <td style={{ padding: '11px 14px', fontSize: 12, color: 'var(--text-secondary)', minWidth: 110 }}>
                             <span style={{ display: 'block', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.plan || '—'}</span>
                           </td>
-                          <td style={{ padding: '11px 14px', minWidth: 110 }}>
+                          <td style={{ padding: '11px 14px', minWidth: 90 }}>
                             {studentAssignments.length === 0 ? (
                               <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>—</span>
                             ) : (
@@ -621,15 +698,15 @@ function StudentsContent() {
                               ))}</div>
                             )}
                           </td>
-                          <td style={{ padding: '11px 14px', minWidth: 150 }}>
-                            {renderSubBadge(s.email)}
+                          <td style={{ padding: '11px 14px', minWidth: 130 }}>
+                            {renderSubBadge(s)}
                           </td>
                           <td style={{ padding: '11px 14px', minWidth: 160 }}>
                             {studentAssignments.length === 0 ? (
                               <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>—</span>
                             ) : (
                               <div>{studentAssignments.map((a, i) => (
-                                <div key={i} style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 1 }}>
+                                <div key={i} style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 1, whiteSpace: 'normal', wordBreak: 'break-word' }}>
                                   {a.slots.map(sl => `${sl.day} ${sl.hour}`).join(', ')}
                                 </div>
                               ))}</div>
@@ -678,7 +755,7 @@ function StudentsContent() {
                         {s.plan && <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 20, background: 'var(--bg-surface-2)', color: 'var(--text-secondary)', fontWeight: 500 }}>{s.plan}</span>}
                       </div>
                       {/* Subscription badge */}
-                      {s.email && <div style={{ marginBottom: 8 }}>{renderSubBadge(s.email)}</div>}
+                      {s.email && <div style={{ marginBottom: 8 }}>{renderSubBadge(s)}</div>}
                       {/* Assignments */}
                       {studentAssignments.map((a, i) => (
                         <div key={i} style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 2 }}>
@@ -734,6 +811,20 @@ function StudentsContent() {
             setDeletingStudent(null);
           }}
           onCancel={() => setDeletingStudent(null)}
+        />
+      )}
+
+      {activatingStudent && (
+        <ManualActivateModal
+          student={activatingStudent}
+          onConfirm={async (until) => {
+            await dbSetStudentManualActive(activatingStudent.id, until);
+            setActivatingStudent(null);
+            await reloadAll();
+            // Re-verificar la suscripción: ahora devolverá "manual_override".
+            await refreshOne(activatingStudent.email);
+          }}
+          onCancel={() => setActivatingStudent(null)}
         />
       )}
       </PullToRefresh>

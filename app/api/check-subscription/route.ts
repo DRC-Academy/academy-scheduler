@@ -2,13 +2,49 @@
 // permitir el ingreso a clase. Nunca bloquea de forma dura: ante un error de
 // conexión devuelve { active: null } para que el profesor pueda decidir.
 
+import { supabase } from '@/lib/supabase';
+
 interface SubResult {
   active: boolean | null;
-  status: string;            // 'active' | 'cancelled' | 'on-hold' | 'expired' | 'pending-cancel' | 'switched' | 'not_found' | 'error'
+  status: string;            // 'active' | 'cancelled' | 'on-hold' | 'expired' | 'pending-cancel' | 'switched' | 'not_found' | 'error' | 'manual_override'
   endDate: string | null;    // ISO — fin definitivo (end_date, o next_payment_date como fallback)
   daysRemaining: number | null;
   planName: string | null;
   phone: string | null;      // billing.phone de WooCommerce
+}
+
+// Fecha de hoy (YYYY-MM-DD) en hora de España — referencia para la activación manual.
+function madridTodayStr(): string {
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Madrid', year: 'numeric', month: '2-digit', day: '2-digit',
+  });
+  return fmt.format(new Date()); // en-CA → 'YYYY-MM-DD'
+}
+
+// Si el alumno tiene manual_active_until en el futuro (o hoy), devolvemos una
+// suscripción "manual_override" activa sin consultar WooCommerce.
+async function checkManualOverride(email: string): Promise<SubResult | null> {
+  try {
+    const { data } = await supabase
+      .from('students')
+      .select('manual_active_until')
+      .ilike('email', email)
+      .not('manual_active_until', 'is', null)
+      .limit(1)
+      .maybeSingle();
+
+    const until = data?.manual_active_until as string | null | undefined;
+    if (!until) return null;
+
+    const today = madridTodayStr();
+    if (until < today) return null; // ya venció → se vuelve a consultar WooCommerce
+
+    const endDate = new Date(until + 'T23:59:59');
+    const daysRemaining = Math.max(0, Math.ceil((endDate.getTime() - Date.now()) / DAY_MS));
+    return { active: true, status: 'manual_override', endDate: endDate.toISOString(), daysRemaining, planName: null, phone: null };
+  } catch {
+    return null; // ante cualquier error de Supabase, seguimos con WooCommerce
+  }
 }
 
 const ERROR_RESULT: SubResult = { active: null, status: 'error', endDate: null, daysRemaining: null, planName: null, phone: null };
@@ -86,6 +122,11 @@ export async function GET(request: Request): Promise<Response> {
   if (!email) {
     return Response.json({ ...ERROR_RESULT, status: 'error' } satisfies SubResult, { status: 400 });
   }
+
+  // Activación manual: tiene prioridad sobre WooCommerce y sobre el cache, para
+  // que el acceso se refleje de inmediato tras activarlo. No se cachea.
+  const manual = await checkManualOverride(email);
+  if (manual) return Response.json(manual);
 
   // Hit de cache vigente
   const cached = cache.get(email);

@@ -72,6 +72,7 @@ export interface Student {
   assignedTeacher?: string;
   assignedSlots?: Array<{ day: string; hour: string }>;
   notes?: string;
+  manualActiveUntil?: string; // 'YYYY-MM-DD' — activación manual de suscripción
   createdAt: string;
 }
 

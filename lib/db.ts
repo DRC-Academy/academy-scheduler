@@ -195,15 +195,23 @@ export async function dbGetStudents(): Promise<Student[]> {
   if (error || !data) return [];
 
   return data.map(row => ({
-    id:         row.id,
-    name:       row.name,
-    email:      row.email,
-    phone:      row.phone ?? undefined,
-    level:      row.level,
-    plan:       row.plan,
-    notes:      row.notes ?? undefined,
-    createdAt:  row.created_at,
+    id:                row.id,
+    name:              row.name,
+    email:             row.email,
+    phone:             row.phone ?? undefined,
+    level:             row.level,
+    plan:              row.plan,
+    notes:             row.notes ?? undefined,
+    manualActiveUntil: row.manual_active_until ?? undefined,
+    createdAt:         row.created_at,
   }));
+}
+
+// Activa (o desactiva con null) manualmente la suscripción de un alumno hasta una
+// fecha límite ('YYYY-MM-DD'). Mientras esa fecha sea futura, el sistema lo trata
+// como suscripción activa sin consultar WooCommerce.
+export async function dbSetStudentManualActive(studentId: string, until: string | null): Promise<void> {
+  await supabase.from('students').update({ manual_active_until: until }).eq('id', studentId);
 }
 
 export async function dbUpsertStudent(student: Student): Promise<void> {

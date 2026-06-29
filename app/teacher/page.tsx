@@ -1021,6 +1021,7 @@ function TeacherUpcomingTab({ teacher, myAssignments, updateMeetLink, logClassJo
     if (!e) return null;
     const info = subInfo[e];
     if (!info) return { label: 'Verificando...', color: 'var(--text-muted)', bg: 'var(--bg-surface-3)', spin: true };
+    if (info.status === 'manual_override') return { label: '✅ Activa (manual)', color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)' };
     if (info.active === true) return { label: '✅ Suscripción activa', color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)' };
     if (info.active === false && info.status === 'pending-cancel') {
       const d = info.daysRemaining;
