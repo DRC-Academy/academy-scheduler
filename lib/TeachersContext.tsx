@@ -12,13 +12,14 @@ import {
   dbForceMonthlyReset, dbForceQuarterlyReset,
   dbGetClassCounts, dbIncrementClassCount,
   dbUpdateAssignmentAdjustment, dbUpdateAssignmentStartDate, dbUpdateAssignmentSlots,
-  dbUpdateTeacherSpecialties, dbUpdateTeacherInfo,
+  dbUpdateTeacherSpecialties, dbUpdateTeacherInfo, dbUpdateTeacherNotificationEmail,
   dbSendNotification, dbGetNotificationsForUser, dbMarkNotificationRead, dbMarkAllNotificationsRead,
   dbUpdateMeetLink, dbLogClassJoin, dbGetClassJoinLogs, dbGetUnassignedStudents,
   dbNotifyNewAssignment,
   dbGetClassRecords, dbUploadClassScreenshot, dbAddClassRecord, dbAttachScreenshotToClass,
   dbGetFinanceRates, dbGetFinancePayments, dbSetFinanceOverrides, dbMarkPaymentPaid,
 } from '@/lib/db';
+import type { AffectedTeacher } from '@/lib/db';
 import { calculateTeacherFinance } from '@/lib/finance';
 
 interface TeachersContextType {
@@ -38,14 +39,14 @@ interface TeachersContextType {
   lastUpdated: Date | null;
   addTeacher: (t: Teacher, username: string) => Promise<void>;
   addStudent: (s: Student) => Promise<void>;
-  deleteStudent: (studentId: string, studentName: string, createdBy?: string) => Promise<void>;
+  deleteStudent: (studentId: string, studentName: string, createdBy?: string) => Promise<AffectedTeacher[]>;
   updateStudent: (student: Student) => Promise<void>;
   addAssignment: (a: Assignment) => Promise<void>;
   getTeacherGrid: (teacherId: string) => Promise<Grid>;
   updateTeacherGrid: (teacherId: string, grid: Grid) => Promise<void>;
   updateTeacherRating: (teacherId: string, rating: number) => Promise<void>;
   updateTeacherSpecialties: (teacherId: string, specialties: string[]) => Promise<void>;
-  updateTeacherInfo: (teacherId: string, data: { name: string; email: string; specialties: string[] }) => Promise<void>;
+  updateTeacherInfo: (teacherId: string, data: { name: string; email: string; specialties: string[]; notificationEmail?: string }) => Promise<void>;
   addScoringEvent: (event: Omit<ScoringEvent, 'id' | 'createdAt'>) => Promise<void>;
   loadScoringEvents: () => Promise<void>;
   checkAndRunResets: () => Promise<void>;
@@ -82,7 +83,7 @@ const TeachersContext = createContext<TeachersContextType>({
   financeRates: [], financePayments: [], lastUpdated: null,
   addTeacher:               async () => {},
   addStudent:               async () => {},
-  deleteStudent:            async () => {},
+  deleteStudent:            async () => [],
   updateStudent:            async () => {},
   addAssignment:            async () => {},
   getTeacherGrid:           async () => ({}),
@@ -192,7 +193,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   }
 
   async function deleteStudent(studentId: string, studentName: string, createdBy?: string) {
-    await dbDeleteStudent(studentId, studentName, createdBy);
+    const affected = await dbDeleteStudent(studentId, studentName, createdBy);
     const [t, s, a, unassigned] = await Promise.all([
       dbGetTeachers(),
       dbGetStudents(),
@@ -204,6 +205,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     setAssignments(a);
     setUnassignedStudents(unassigned);
     setTeacherGrids({});
+    return affected;
   }
 
   async function updateStudent(student: Student) {
@@ -242,9 +244,14 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     setTeachers(prev => prev.map(t => t.id === teacherId ? { ...t, specialties } : t));
   }
 
-  async function updateTeacherInfo(teacherId: string, data: { name: string; email: string; specialties: string[] }) {
-    await dbUpdateTeacherInfo(teacherId, data);
-    setTeachers(prev => prev.map(t => t.id === teacherId ? { ...t, ...data } : t));
+  async function updateTeacherInfo(teacherId: string, data: { name: string; email: string; specialties: string[]; notificationEmail?: string }) {
+    const { notificationEmail, ...info } = data;
+    await dbUpdateTeacherInfo(teacherId, info);
+    if (notificationEmail !== undefined) {
+      await dbUpdateTeacherNotificationEmail(teacherId, notificationEmail);
+    }
+    const normalizedNotif = notificationEmail?.trim() ? notificationEmail.trim() : undefined;
+    setTeachers(prev => prev.map(t => t.id === teacherId ? { ...t, ...info, notificationEmail: normalizedNotif } : t));
   }
 
   async function sendNotification(n: Omit<AppNotification, 'id' | 'createdAt' | 'readBy'>) {

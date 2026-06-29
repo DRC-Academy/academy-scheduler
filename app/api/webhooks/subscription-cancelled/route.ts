@@ -7,6 +7,7 @@
 import crypto from 'crypto';
 import { supabase } from '@/lib/supabase';
 import { dbDeleteStudent } from '@/lib/db';
+import { sendCancellationEmail } from '@/lib/notifications-email';
 
 export const runtime = 'nodejs';
 
@@ -82,9 +83,18 @@ export async function POST(req: Request): Promise<Response> {
     // 6) Eliminar al alumno en todos lados (grid + assignments + students) y
     //    notificar a cada profesor afectado (createdBy 'sistema').
     void fullName; // disponible por si se requiere en logs
-    await dbDeleteStudent(studentId, studentName, 'sistema');
+    const affectedTeachers = await dbDeleteStudent(studentId, studentName, 'sistema');
 
-    await supabase.from('webhook_logs').update({ processed: true }).eq('id', logId);
+    // 7) Aviso por email a cada profesor afectado (notificationEmail || email).
+    //    El envío NO debe romper el flujo: sendCancellationEmail captura errores.
+    let emailSent = false;
+    for (const t of affectedTeachers) {
+      const to = t.notificationEmail || t.email;
+      const ok = await sendCancellationEmail(to, t.name, studentName);
+      if (ok) emailSent = true;
+    }
+
+    await supabase.from('webhook_logs').update({ processed: true, email_sent: emailSent }).eq('id', logId);
     return new Response('ok', { status: 200 });
   } catch (err: any) {
     // Loggear el error pero responder 200 igual (evita reintentos infinitos).

@@ -41,12 +41,13 @@ function SpecialtyChip({ specialty }: { specialty: string }) {
 function EditTeacherModal({ teacher, onClose, onSave }: {
   teacher: Teacher;
   onClose: () => void;
-  onSave: (id: string, data: { name: string; email: string; specialties: string[] }) => Promise<void>;
+  onSave: (id: string, data: { name: string; email: string; specialties: string[]; notificationEmail: string }) => Promise<void>;
 }) {
   const [form, setForm] = useState({
-    name:       teacher.name,
-    email:      teacher.email,
-    specialties: [...(teacher.specialties ?? [])],
+    name:             teacher.name,
+    email:            teacher.email,
+    notificationEmail: teacher.notificationEmail ?? '',
+    specialties:      [...(teacher.specialties ?? [])],
   });
   const [saving, setSaving] = useState(false);
 
@@ -83,6 +84,13 @@ function EditTeacherModal({ teacher, onClose, onSave }: {
           <div>
             <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 5 }}>Email</label>
             <input type="email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1.5px solid var(--border)', fontSize: 13, background: 'white', color: '#111827', fontFamily: 'inherit' }} />
+          </div>
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 5 }}>Correo de notificaciones</label>
+            <input type="email" value={form.notificationEmail} onChange={e => setForm(f => ({ ...f, notificationEmail: e.target.value }))}
+              placeholder="Si lo dejás vacío, se usa el correo principal del profesor"
+              style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1.5px solid var(--border)', fontSize: 13, background: 'white', color: '#111827', fontFamily: 'inherit' }} />
+            <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 5 }}>Aquí llegan los avisos de bajas de alumnos y novedades importantes.</div>
           </div>
           <div>
             <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 8 }}>Especialidades</label>

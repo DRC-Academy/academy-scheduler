@@ -167,6 +167,12 @@ alter table teachers add column if not exists teacher_of_month_date  timestamptz
 alter table teachers add column if not exists last_monthly_reset     timestamptz;
 alter table teachers add column if not exists last_quarterly_reset   timestamptz;
 alter table teachers add column if not exists retention_rate         numeric default 0;
+-- Correo de notificaciones (avisos de bajas, etc.). Si vacío, se usa `email`.
+alter table teachers add column if not exists notification_email     text;
+
+-- ── MIGRATIONS: webhook_logs (avisos por email) ──────────────
+-- Marca si se envió el email de aviso a los profesores tras procesar el webhook.
+alter table webhook_logs add column if not exists email_sent boolean default false;
 
 -- ── MIGRATIONS: new columns for assignments ──────────────────
 alter table assignments add column if not exists start_date text;

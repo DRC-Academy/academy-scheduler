@@ -807,7 +807,19 @@ function StudentsContent() {
         <DeleteStudentModal
           student={deletingStudent}
           onConfirm={async () => {
-            await deleteStudent(deletingStudent.id, deletingStudent.name, user?.username);
+            const studentName = deletingStudent.name;
+            const affected = await deleteStudent(deletingStudent.id, studentName, user?.username);
+            // Aviso por email a los profesores afectados (server-side via API).
+            const recipients = affected
+              .map(t => ({ email: t.notificationEmail || t.email, name: t.name }))
+              .filter(r => r.email);
+            if (recipients.length > 0) {
+              fetch('/api/send-cancellation-email', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ studentName, recipients }),
+              }).catch(() => { /* el email no debe romper la baja */ });
+            }
             setDeletingStudent(null);
           }}
           onCancel={() => setDeletingStudent(null)}

@@ -112,6 +112,7 @@ export async function dbGetTeachers(): Promise<Teacher[]> {
       id:                  row.id,
       name:                row.name,
       email:               row.email,
+      notificationEmail:   row.notification_email ?? undefined,
       avatar:              row.avatar,
       status,
       weeklyLoad,
@@ -287,7 +288,16 @@ export async function dbUpdateTeacherRating(teacherId: string, rating: number): 
   await supabase.from('teachers').update({ internal_rating: rating }).eq('id', teacherId);
 }
 
-export async function dbDeleteStudent(studentId: string, studentName: string, createdBy?: string): Promise<void> {
+// Profesor afectado por la baja de un alumno, con los datos necesarios para
+// enviarle el aviso por email.
+export interface AffectedTeacher {
+  teacherId: string;
+  name: string;
+  email: string;
+  notificationEmail?: string;
+}
+
+export async function dbDeleteStudent(studentId: string, studentName: string, createdBy?: string): Promise<AffectedTeacher[]> {
   const firstName = studentName.split(' ')[0];
 
   const [byId, byName] = await Promise.all([
@@ -298,6 +308,21 @@ export async function dbDeleteStudent(studentId: string, studentName: string, cr
   const teacherIds = new Set<string>();
   for (const row of [...(byId.data ?? []), ...(byName.data ?? [])]) {
     teacherIds.add(row.teacher_id);
+  }
+
+  // Datos de contacto de los profesores afectados (para el aviso por email).
+  let affectedTeachers: AffectedTeacher[] = [];
+  if (teacherIds.size > 0) {
+    const { data: teacherRows } = await supabase
+      .from('teachers')
+      .select('id, name, email, notification_email')
+      .in('id', [...teacherIds]);
+    affectedTeachers = (teacherRows ?? []).map(r => ({
+      teacherId:         r.id,
+      name:              r.name,
+      email:             r.email,
+      notificationEmail: r.notification_email ?? undefined,
+    }));
   }
 
   console.log(
@@ -367,6 +392,7 @@ export async function dbDeleteStudent(studentId: string, studentName: string, cr
   await supabase.from('students').delete().eq('id', studentId);
 
   console.log(`[dbDeleteStudent] Alumno "${studentName}" eliminado correctamente`);
+  return affectedTeachers;
 }
 
 export async function dbUpdateStudent(student: Student): Promise<void> {
@@ -875,6 +901,13 @@ export async function dbUpdateTeacherInfo(teacherId: string, data: { name: strin
     email:      data.email,
     specialties: data.specialties,
   }).eq('id', teacherId);
+}
+
+// Correo de notificaciones del profesor (opcional). Vacío → null (se usa email).
+export async function dbUpdateTeacherNotificationEmail(teacherId: string, email: string): Promise<void> {
+  await supabase.from('teachers')
+    .update({ notification_email: email.trim() || null })
+    .eq('id', teacherId);
 }
 
 // ── MEET LINKS ────────────────────────────────────────────────────────────────

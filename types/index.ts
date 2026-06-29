@@ -34,6 +34,7 @@ export interface Teacher {
   id: string;
   name: string;
   email: string;
+  notificationEmail?: string;    // correo donde llegan los avisos (si vacío, se usa email)
   avatar: string;
   status: TeacherStatus;
   weeklyLoad: number;
