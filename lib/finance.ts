@@ -62,6 +62,9 @@ function daysBetween(aIso: string, bIso: string): number {
   return Math.round((b.getTime() - a.getTime()) / DAY_MS);
 }
 
+// Normaliza un nombre para comparar (trim + lower).
+function nkey(x: string): string { return (x ?? '').trim().toLowerCase(); }
+
 // 'examen' en plan u objetivo → 'examenes'; cualquier otro caso → 'general'.
 export function resolvePlanType(plan: string, objetivo?: string): 'general' | 'examenes' {
   const haystack = `${plan ?? ''} ${objetivo ?? ''}`.toLowerCase();
@@ -172,6 +175,48 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
   }
 
   const rows: ClassFinanceRow[] = drafts.map(({ overrideKey, ...r }) => r);
+
+  // 3b) HISTORIAL DE EX-ALUMNOS — clases con ingreso y/o captura de alumnos que
+  //     ya NO tienen assignment activa con este profesor (fueron eliminados).
+  //     Sus clases ya dadas deben seguir contando para el pago. Como no hay
+  //     assignment, la antigüedad se aproxima con la primera clase conocida del
+  //     alumno y el plan se asume 'general'. Las clases POSTERIORES a la baja no
+  //     existen (sin log ni captura) → no se incluyen, automáticamente.
+  const activeNames = new Set(myAssignments.map(a => nkey(a.studentName)));
+  const inMonth = (d: string) => (d ?? '').slice(0, 7) === monthYear;
+
+  // Primera fecha conocida por alumno (proxy de inicio), sobre logs + records.
+  const firstDateByStudent = new Map<string, string>();
+  const noteFirst = (name: string, date: string) => {
+    const k = nkey(name);
+    const cur = firstDateByStudent.get(k);
+    if (!cur || date < cur) firstDateByStudent.set(k, date);
+  };
+  for (const l of myLogs) noteFirst(l.studentName, l.scheduledDate);
+  for (const r of myRecords) noteFirst(r.studentName, r.classDate);
+
+  // Candidatos (alumno+fecha) del mes que NO pertenecen a un alumno activo.
+  const orphanCandidates = new Map<string, { studentName: string; date: string; hour: string }>();
+  const addOrphan = (studentName: string, date: string, hour: string) => {
+    if (!inMonth(date) || activeNames.has(nkey(studentName))) return;
+    const key = `${nkey(studentName)}__${date}`;
+    if (!orphanCandidates.has(key)) orphanCandidates.set(key, { studentName, date, hour });
+  };
+  for (const l of myLogs) addOrphan(l.studentName, l.scheduledDate, l.scheduledTime ?? '');
+  for (const r of myRecords) addOrphan(r.studentName, r.classDate, r.classTime ?? '');
+
+  for (const { studentName, date, hour } of orphanCandidates.values()) {
+    const join = hasJoinLog(studentName, date);
+    const shot = hasScreenshot(studentName, date);
+    if (!join && !shot) continue;
+    const proxyStart = firstDateByStudent.get(nkey(studentName));
+    const antiquityDays = proxyStart ? Math.max(0, daysBetween(proxyStart, date)) : 0;
+    const tier: 'nuevo' | 'antiguo' = antiquityDays < 30 ? 'nuevo' : 'antiguo';
+    const rate = findRate(rates, 'general', tier);
+    const status: ClassFinanceStatus =
+      overrides.has(`${studentName}__${date}`) ? 'pagable' : (join && shot) ? 'pagable' : 'a_revisar';
+    rows.push({ date, hour, studentName, plan: '', weeklyHours: 0, antiquityDays, rate, status, hasJoinLog: join, hasScreenshot: shot });
+  }
 
   // 4) Agregados.
   const pagables = rows.filter(r => r.status === 'pagable');

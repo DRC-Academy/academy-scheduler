@@ -138,22 +138,32 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
 
   // Silent reload — no loading spinner, just swaps in fresh data.
   // students + assignments se traen JUNTOS (consistentes, con auto-corrección de
-  // student_id) y el estado se actualiza recién cuando TODO está disponible, para
-  // evitar el race condition que dejaba la UI sin profesor/horarios.
+  // student_id) y el estado se actualiza recién cuando TODO está disponible.
+  //
+  // GUARDA ANTI-WIPE: las funciones db devuelven [] ante un error de red. Si un
+  // refresh transitorio falla, NO debemos borrar lo que ya teníamos (eso causaba
+  // que el profesor/horarios "desaparecieran" a los segundos). Por eso teachers,
+  // students y assignments solo se reemplazan si el fetch trajo datos.
   async function reloadAll() {
-    const [t, sa, ev, unassigned] = await Promise.all([
-      dbGetTeachers(),
-      dbGetAllStudentsWithAssignments(),
-      dbGetScoringEvents(),
-      dbGetUnassignedStudents(),
-    ]);
-    setTeachers(t);
-    setStudents(sa.students);
-    setAssignments(sa.assignments);
-    setScoringEvents(ev);
-    setUnassignedStudents(unassigned);
-    setTeacherGrids({});
-    setLastUpdated(new Date());
+    try {
+      const [t, sa, ev, unassigned] = await Promise.all([
+        dbGetTeachers(),
+        dbGetAllStudentsWithAssignments(),
+        dbGetScoringEvents(),
+        dbGetUnassignedStudents(),
+      ]);
+      setTeachers(prev => t.length > 0 ? t : prev);
+      setStudents(prev => sa.students.length > 0 ? sa.students : prev);
+      setAssignments(prev => sa.assignments.length > 0 ? sa.assignments : prev);
+      setScoringEvents(ev);
+      setUnassignedStudents(unassigned);
+      setTeacherGrids({});
+      setLastUpdated(new Date());
+    } catch (err) {
+      // Nunca dejamos la UI en blanco por un error de refresh: se conserva el
+      // último estado válido y se reintenta en el próximo ciclo.
+      console.error('[reloadAll] Falló el refresh, se conserva el estado anterior:', err);
+    }
   }
 
   useEffect(() => {

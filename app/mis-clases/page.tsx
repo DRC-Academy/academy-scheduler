@@ -8,6 +8,7 @@ import { getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
 import { calculateTeacherFinance, recordVerification, ClassFinanceRow } from '@/lib/finance';
+import { dbGetAssignmentsByTeacher } from '@/lib/db';
 import { Teacher, Assignment } from '@/types';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -202,7 +203,7 @@ function AttachScreenshotModal({ studentName, date, hour, onClose, onSaved }: {
 
 function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignments: Assignment[] }) {
   const {
-    assignments, classRecords, classJoinLogs, financeRates, financePayments, scoringEvents,
+    classRecords, classJoinLogs, financeRates, financePayments, scoringEvents,
     registerClassRecord, attachScreenshotToClass,
   } = useTeachers();
 
@@ -225,9 +226,9 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
   const payment = financePayments.find(p => p.teacherId === teacher.id && p.monthYear === monthYear) ?? null;
   const finance = useMemo(() => calculateTeacherFinance({
     teacherId: teacher.id, teacherName: teacher.name, monthYear,
-    assignments, joinLogs: classJoinLogs, classRecords, rates: financeRates,
+    assignments: myAssignments, joinLogs: classJoinLogs, classRecords, rates: financeRates,
     scoringEvents, payment,
-  }), [teacher.id, teacher.name, monthYear, assignments, classJoinLogs, classRecords, financeRates, scoringEvents, payment]);
+  }), [teacher.id, teacher.name, monthYear, myAssignments, classJoinLogs, classRecords, financeRates, scoringEvents, payment]);
 
   // Claves de clases aprobadas manualmente por el admin (override).
   const overrideSet = useMemo(() => new Set(payment?.approvedOverrides ?? []), [payment]);
@@ -242,7 +243,9 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
     }
     const groups = [...map.entries()].map(([name, unsorted]) => {
       const rows = [...unsorted].sort((a, b) => a.date.localeCompare(b.date));
-      const asgn = myAssignments.find(a => a.studentName === name);
+      const asgn = myAssignments.find(a => a.studentName.trim().toLowerCase() === name.trim().toLowerCase());
+      // Ex-alumno: aparece en el historial de clases pero ya no tiene assignment.
+      const isExStudent = !asgn;
       const plan = asgn?.plan || rows[0]?.plan || '';
       const level = asgn?.studentLevel ?? '';
       const startDate = asgn?.startDate;
@@ -270,7 +273,7 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
       const subtotal = pagables.reduce((s, r) => s + r.rate, 0);
 
       return {
-        name, rows, plan, planTypeLabel, level, startDate, antiquityToday,
+        name, rows, plan, planTypeLabel, level, startDate, antiquityToday, isExStudent,
         oldRate, newRate, currentRate, rateChanged, changeIso, prevDayLabel,
         subtotal, total: rows.length, pagablesCount: pagables.length, aRevisarCount: aRevisar.length,
         hasReview: aRevisar.length > 0,
@@ -350,7 +353,10 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
-                    <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--text-primary)' }}>{g.name}</div>
+                    <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--text-primary)' }}>
+                      {g.name}
+                      {g.isExStudent && <span style={{ marginLeft: 7, fontSize: 11, fontWeight: 600, color: '#9ca3af' }} title="Este alumno ya no está activo, pero sus clases del mes siguen contando para el pago">[ex-alumno]</span>}
+                    </div>
                     <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', fontWeight: 600, whiteSpace: 'nowrap' }}>
                       {g.total} clase{g.total !== 1 ? 's' : ''} · €{g.currentRate.toFixed(2)}/clase
                     </div>
@@ -531,10 +537,21 @@ function MisClasesContent() {
   const { user } = useAuth();
   const { teachers, assignments, reloadAll, loadFinanceData } = useTeachers();
 
-  useEffect(() => { loadFinanceData(); /* eslint-disable-next-line */ }, []);
-
   const teacher = teachers.find(t => t.id === user?.teacherId) ?? teachers[0];
-  const myAssignments = teacher ? assignments.filter(a => a.teacherId === teacher.id) : [];
+
+  // Las assignments del profesor se traen con query DIRECTA por teacher_id, sin
+  // depender del estado del contexto (que puede estar vacío momentáneamente y
+  // hacía que "Añadir clase" dijera "no hay alumnos asignados"). Se usa el
+  // contexto solo como fallback inicial.
+  const [directAssignments, setDirectAssignments] = useState<Assignment[]>([]);
+  useEffect(() => {
+    loadFinanceData();
+    if (teacher) dbGetAssignmentsByTeacher(teacher.id).then(setDirectAssignments);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teacher?.id]);
+
+  const contextAssignments = teacher ? assignments.filter(a => a.teacherId === teacher.id) : [];
+  const myAssignments = directAssignments.length > 0 ? directAssignments : contextAssignments;
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }}>

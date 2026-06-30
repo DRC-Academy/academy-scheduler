@@ -404,6 +404,37 @@ export async function dbMergeDuplicateStudents(keepId: string, removeId: string)
   await supabase.from('students').delete().eq('id', removeId);
 }
 
+// Trae TODAS las assignments de un profesor con una query directa por teacher_id
+// (sin depender del estado del contexto, que puede estar vacío momentáneamente).
+export async function dbGetAssignmentsByTeacher(teacherId: string): Promise<Assignment[]> {
+  const { data, error } = await supabase
+    .from('assignments')
+    .select('*')
+    .eq('teacher_id', teacherId)
+    .order('created_at', { ascending: false });
+  if (error || !data) return [];
+  return (data as any[]).map(row => ({
+    id:                    row.id,
+    teacherId:             row.teacher_id,
+    teacherName:           row.teacher_name,
+    teacherEmail:          row.teacher_email,
+    studentId:             row.student_id,
+    studentName:           row.student_name,
+    studentEmail:          row.student_email,
+    studentLevel:          row.student_level,
+    slots:                 row.slots,
+    objetivo:              row.objetivo ?? '',
+    plan:                  row.plan ?? '',
+    weeklyHours:           row.weekly_hours,
+    availability:          row.availability ?? '',
+    notes:                 row.notes ?? '',
+    startDate:             row.start_date ?? undefined,
+    createdAt:             row.created_at,
+    manualClassAdjustment: row.manual_class_adjustment ?? 0,
+    meetLink:              row.meet_link ?? undefined,
+  }));
+}
+
 export async function dbAddAssignment(a: Assignment): Promise<void> {
   await supabase.from('assignments').insert({
     id:                     a.id,
@@ -532,11 +563,19 @@ export async function dbDeleteStudent(studentId: string, studentName: string, cr
     }
   }
 
+  // Solo se eliminan assignments + students (y se liberan las celdas del grid).
+  //
+  // IMPORTANTE — historial intacto: NO se borran class_records (capturas) ni
+  // class_join_logs (ingresos), porque son la base del cálculo de finanzas del
+  // mes en curso y de meses anteriores. Aunque el alumno ya no exista en
+  // `students`, sus clases ya dadas deben seguir contando para el pago al
+  // profesor (ver lib/finance.ts → "orphan history"). Tampoco se tocan
+  // scoring_events (ej. bonos ya cobrados) ni notifications.
   await supabase.from('assignments').delete().eq('student_id', studentId);
   await supabase.from('assignments').delete().eq('student_name', studentName);
   await supabase.from('students').delete().eq('id', studentId);
 
-  console.log(`[dbDeleteStudent] Alumno "${studentName}" eliminado correctamente`);
+  console.log(`[dbDeleteStudent] Alumno "${studentName}" eliminado correctamente (historial de clases/finanzas preservado)`);
   return affectedTeachers;
 }
 
