@@ -620,7 +620,7 @@ function StudentsContent() {
     setEditingAssignment(null);
   }
 
-  const isMobile = useIsMobile(1024);
+  const isMobile = useIsMobile(768);
 
   const thStyle = (minWidth: number, align: 'left' | 'center' | 'right' = 'left') => ({
     padding: '11px 14px', textAlign: align,
@@ -749,8 +749,9 @@ function StudentsContent() {
           </div>
         ) : (
           /* ───── DESKTOP: tabla con scroll horizontal ───── */
-          <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
-            <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            {/* Header del listado — FUERA del contenedor de scroll (sin overflow) */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0 4px', marginBottom: 12 }}>
               <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>Listado</span>
               <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
                 {filtered.length === allStudents.length
@@ -760,22 +761,23 @@ function StudentsContent() {
             </div>
 
             {filtered.length === 0 ? (
-              <div style={{ padding: '32px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
+              <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '32px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
                 Sin resultados para &quot;{search}&quot;
               </div>
             ) : (
-              <div style={{ overflowX: 'auto', width: '100%', WebkitOverflowScrolling: 'touch' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1100 }}>
+              /* ÚNICO contenedor que maneja el overflow entre la tabla y la página */
+              <div style={{ width: '100%', overflowX: 'auto', WebkitOverflowScrolling: 'touch', border: '1px solid var(--border)', borderRadius: 12 }}>
+                <table style={{ width: '100%', minWidth: 1200, borderCollapse: 'collapse' }}>
                   <thead>
                     <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface-2)' }}>
                       <th style={thStyle(160)}>Nombre</th>
                       <th style={thStyle(200)}>Email</th>
                       <th style={thStyle(70, 'center')}>Nivel</th>
-                      <th style={thStyle(130)}>Plan</th>
+                      <th style={thStyle(140)}>Plan</th>
                       <th style={thStyle(100)}>Profesor</th>
-                      <th style={thStyle(140)}>Suscripción</th>
+                      <th style={thStyle(160)}>Suscripción</th>
                       <th style={thStyle(180)}>Horarios</th>
-                      <th style={thStyle(180, 'right')}>Acciones</th>
+                      <th style={thStyle(190)}>Acciones</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -795,7 +797,7 @@ function StudentsContent() {
                           <td style={{ padding: '12px 14px', minWidth: 70, textAlign: 'center' }}>
                             <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 20, background: 'rgba(167,139,250,0.15)', color: '#a78bfa', fontWeight: 600 }}>{s.level || '—'}</span>
                           </td>
-                          <td style={{ padding: '12px 14px', fontSize: 12, color: 'var(--text-secondary)', minWidth: 130, wordBreak: 'break-word', whiteSpace: 'normal' }}>{s.plan || '—'}</td>
+                          <td style={{ padding: '12px 14px', fontSize: 12, color: 'var(--text-secondary)', minWidth: 140, wordBreak: 'break-word', whiteSpace: 'normal' }}>{s.plan || '—'}</td>
                           <td style={{ padding: '12px 14px', minWidth: 100 }}>
                             {studentAssignments.length === 0 ? (
                               <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>—</span>
@@ -805,7 +807,7 @@ function StudentsContent() {
                               ))}</div>
                             )}
                           </td>
-                          <td style={{ padding: '12px 14px', minWidth: 140 }}>
+                          <td style={{ padding: '12px 14px', minWidth: 160 }}>
                             {renderSubBadge(s)}
                           </td>
                           <td style={{ padding: '12px 14px', minWidth: 180 }}>
@@ -819,8 +821,8 @@ function StudentsContent() {
                               ))}</div>
                             )}
                           </td>
-                          <td style={{ padding: '12px 14px', minWidth: 180 }}>
-                            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
+                          <td style={{ padding: '12px 14px', minWidth: 190 }}>
+                            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-start', flexWrap: 'nowrap' }}>
                               {s.inStudentsTable && (
                                 <button onClick={() => handleEditClick(s)}
                                   style={{ padding: '8px 14px', borderRadius: 7, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', fontFamily: 'inherit', minHeight: 38 }}>
