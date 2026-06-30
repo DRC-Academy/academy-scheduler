@@ -220,6 +220,8 @@ create table if not exists class_records (
 alter table class_records add column if not exists comment text;
 -- Tipo de clase: 'normal' | 'falta_sin_aviso' | 'cancelacion_hora' | 'recuperacion'
 alter table class_records add column if not exists class_type text default 'normal';
+-- Estado de suscripción WooCommerce capturado al registrar la clase manualmente.
+alter table class_records add column if not exists subscription_status text;
 alter table class_records disable row level security;
 
 -- ── FINANCE: APROBACIONES MANUALES (admin aprueba a_revisar / excede_limite) ──

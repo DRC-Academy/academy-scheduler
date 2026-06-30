@@ -1388,8 +1388,23 @@ function mapClassRecord(row: any): import('@/types').ClassRecord {
     screenshotUrl: row.screenshot_url,
     comment:       row.comment ?? undefined,
     classType:     row.class_type ?? 'normal',
+    subscriptionStatus: row.subscription_status ?? undefined,
     createdAt:     row.created_at,
   };
+}
+
+// Cuenta cuántos registros de un class_type específico existen para un
+// alumno+profesor en class_records (acumulativo, sin filtro de mes).
+export async function dbCountClassTypeForStudent(
+  teacherId: string, studentName: string, classType: import('@/types').ClassRecordType,
+): Promise<number> {
+  const { count } = await supabase
+    .from('class_records')
+    .select('id', { count: 'exact', head: true })
+    .eq('teacher_id', teacherId)
+    .eq('student_name', studentName)
+    .eq('class_type', classType);
+  return count ?? 0;
 }
 
 export async function dbGetClassRecords(): Promise<import('@/types').ClassRecord[]> {
@@ -1416,11 +1431,11 @@ export async function dbUploadClassScreenshot(file: File, teacherId: string): Pr
 export async function dbAddClassRecord(
   teacherId: string, teacherName: string, studentName: string,
   classDate: string, classTime: string | undefined, screenshotUrl: string,
-  classType: import('@/types').ClassRecordType = 'normal', comment?: string,
+  classType: import('@/types').ClassRecordType = 'normal', comment?: string, subscriptionStatus?: string,
 ): Promise<import('@/types').ClassRecord> {
   const id        = `cr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   const createdAt = new Date().toISOString();
-  await supabase.from('class_records').insert({
+  const base = {
     id,
     teacher_id:     teacherId,
     teacher_name:   teacherName,
@@ -1431,8 +1446,12 @@ export async function dbAddClassRecord(
     class_type:     classType,
     comment:        comment ?? null,
     created_at:     createdAt,
-  });
-  return { id, teacherId, teacherName, studentName, classDate, classTime, screenshotUrl, classType, comment, createdAt };
+  };
+  // Resiliente: si la columna subscription_status aún no existe en la BD,
+  // reintenta sin ella para no bloquear el registro de la clase.
+  const { error } = await supabase.from('class_records').insert({ ...base, subscription_status: subscriptionStatus ?? null });
+  if (error) await supabase.from('class_records').insert(base);
+  return { id, teacherId, teacherName, studentName, classDate, classTime, screenshotUrl, classType, comment, subscriptionStatus, createdAt };
 }
 
 // ── FINANCE: APROBACIONES MANUALES ────────────────────────────────────────────

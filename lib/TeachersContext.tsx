@@ -424,9 +424,19 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     screenshotFile: File | null, classType: ClassRecordType = 'normal', comment?: string,
   ) {
     const teacherName = teachers.find(t => t.id === teacherId)?.name ?? '';
+    // Estado de suscripción al momento de registrar (no bloquea si falla).
+    const email = students.find(s => s.name.trim().toLowerCase() === studentName.trim().toLowerCase())?.email;
+    let subscriptionStatus = 'error';
+    if (email) {
+      try {
+        const res = await fetch(`/api/check-subscription?email=${encodeURIComponent(email)}`);
+        const data = await res.json();
+        subscriptionStatus = data?.status ?? 'error';
+      } catch { subscriptionStatus = 'error'; }
+    }
     // Las faltas/cancelaciones no llevan captura: se guarda screenshot_url vacío.
     const url = screenshotFile ? await dbUploadClassScreenshot(screenshotFile, teacherId) : '';
-    const record = await dbAddClassRecord(teacherId, teacherName, studentName, date, time, url, classType, comment);
+    const record = await dbAddClassRecord(teacherId, teacherName, studentName, date, time, url, classType, comment, subscriptionStatus);
     setClassRecords(prev => [record, ...prev]);
   }
 

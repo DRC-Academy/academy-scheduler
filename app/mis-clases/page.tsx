@@ -7,9 +7,15 @@ import { LastUpdated } from '@/components/LastUpdated';
 import { getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
-import { calculateTeacherFinance, recordVerification, ClassFinanceRow, ingresoBadge, classTypeBadge } from '@/lib/finance';
+import { calculateTeacherFinance, recordVerification, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge } from '@/lib/finance';
 import { dbGetAssignmentsByTeacher } from '@/lib/db';
-import { Teacher, Assignment, ClassRecordType } from '@/types';
+import { Teacher, Assignment, ClassRecordType, ClassRecord } from '@/types';
+
+// Etiquetas singular/plural por tipo de falta (para los mensajes de límite).
+const FALTA_TYPE_LABELS: Record<string, { sing: string; plural: string }> = {
+  falta_sin_aviso:  { sing: 'falta sin aviso',           plural: 'faltas sin aviso' },
+  cancelacion_hora: { sing: 'cancelación sobre la hora', plural: 'cancelaciones sobre la hora' },
+};
 
 // Opciones del selector "Tipo de clase".
 const CLASS_TYPE_OPTIONS: Array<{ value: ClassRecordType; label: string; needsCapture: boolean }> = [
@@ -47,9 +53,10 @@ function daysDiff(aIso: string, bIso: string): number {
 }
 
 // Modal "Añadir clase"
-function AddClassModal({ teacher, myAssignments, onClose, onSaved }: {
+function AddClassModal({ teacher, myAssignments, classRecords, onClose, onSaved }: {
   teacher: Teacher;
   myAssignments: Assignment[];
+  classRecords: ClassRecord[];
   onClose: () => void;
   onSaved: (studentName: string, date: string, time: string | undefined, file: File | null, classType: ClassRecordType, comment: string) => Promise<void>;
 }) {
@@ -73,6 +80,18 @@ function AddClassModal({ teacher, myAssignments, onClose, onSaved }: {
   const [error, setError] = useState('');
 
   const needsCapture = CLASS_TYPE_OPTIONS.find(o => o.value === classType)?.needsCapture ?? true;
+  const isFaltaType = classType === 'falta_sin_aviso' || classType === 'cancelacion_hora';
+
+  // Cuántos registros de ESE tipo ya tiene el alumno (acumulativo, todo el historial).
+  const typeCount = useMemo(() => {
+    if (!isFaltaType) return 0;
+    const nk = (x: string) => (x ?? '').trim().toLowerCase();
+    return classRecords.filter(r =>
+      r.teacherId === teacher.id && nk(r.studentName) === nk(studentName) && r.classType === classType
+    ).length;
+  }, [classRecords, teacher.id, studentName, classType, isFaltaType]);
+  const limitReached = isFaltaType && typeCount >= 2;
+  const typeLabel = FALTA_TYPE_LABELS[classType];
 
   // Auto-rellenar la hora con el slot recurrente del alumno si el día coincide.
   // Depende solo de alumno+fecha para no pisar una hora editada a mano.
@@ -87,8 +106,9 @@ function AddClassModal({ teacher, myAssignments, onClose, onSaved }: {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [studentName, date]);
 
-  // Normal/recuperación: captura obligatoria. Falta/cancelación: comentario obligatorio.
-  const canSave = !!studentName && !!date && !saving &&
+  // Normal/recuperación: captura obligatoria. Falta/cancelación: comentario
+  // obligatorio y bloqueado si ya llegó al límite de 2 de ese tipo.
+  const canSave = !!studentName && !!date && !saving && !limitReached &&
     (needsCapture ? !!file : !!comment.trim());
 
   async function handleSave() {
@@ -130,42 +150,55 @@ function AddClassModal({ teacher, myAssignments, onClose, onSaved }: {
               {CLASS_TYPE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-            <div>
-              <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>Fecha de la clase</label>
-              <input type="date" value={date} onChange={e => setDate(e.target.value)} style={inputStyle} />
-            </div>
-            <div>
-              <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>Hora 🇪🇸</label>
-              <input type="time" value={time} onChange={e => setTime(e.target.value)} style={inputStyle} />
-            </div>
-          </div>
-          {needsCapture ? (
-            <div>
-              <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>Captura de pantalla <span style={{ color: '#ef4444' }}>*</span></label>
-              <input type="file" accept="image/*" onChange={e => setFile(e.target.files?.[0] ?? null)} style={{ ...inputStyle, padding: '7px 10px' }} />
-              {file && <div style={{ fontSize: 11, color: '#1E9E3A', marginTop: 5 }}>📷 {file.name}</div>}
-            </div>
+          {limitReached ? (
+            <>
+              <div style={{ fontSize: 13, color: '#dc2626', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.35)', borderRadius: 10, padding: '12px 14px', lineHeight: 1.5 }}>
+                ⚠️ Este alumno ya registró 2 {typeLabel?.plural}. No se pueden registrar más con este motivo.
+              </div>
+              <div style={{ display: 'flex', gap: 10, marginTop: 2 }}>
+                <button onClick={onClose} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#6b7280', cursor: 'pointer', fontSize: 14, fontFamily: 'inherit' }}>Cerrar</button>
+              </div>
+            </>
           ) : (
-            <div style={{ fontSize: 11.5, color: '#b45309', background: 'rgba(255,196,0,0.1)', border: '1px solid rgba(255,196,0,0.3)', borderRadius: 8, padding: '8px 10px' }}>
-              Este tipo de clase no requiere captura y <b>no genera cobro</b>. Se registra solo como constancia.
-            </div>
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>Fecha de la clase</label>
+                  <input type="date" value={date} onChange={e => setDate(e.target.value)} style={inputStyle} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>Hora 🇪🇸</label>
+                  <input type="time" value={time} onChange={e => setTime(e.target.value)} style={inputStyle} />
+                </div>
+              </div>
+              {needsCapture ? (
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>Captura de pantalla <span style={{ color: '#ef4444' }}>*</span></label>
+                  <input type="file" accept="image/*" onChange={e => setFile(e.target.files?.[0] ?? null)} style={{ ...inputStyle, padding: '7px 10px' }} />
+                  {file && <div style={{ fontSize: 11, color: '#1E9E3A', marginTop: 5 }}>📷 {file.name}</div>}
+                </div>
+              ) : (
+                <div style={{ fontSize: 11.5, color: '#b45309', background: 'rgba(255,196,0,0.1)', border: '1px solid rgba(255,196,0,0.3)', borderRadius: 8, padding: '8px 10px', lineHeight: 1.5 }}>
+                  Este tipo de clase <b>SÍ genera cobro</b> (tarifa normal del alumno), pero solo se permite hasta 2 veces. Llevás <b>{typeCount}</b> de 2 registradas.
+                </div>
+              )}
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>
+                  Comentario {needsCapture ? '(opcional)' : <span style={{ color: '#ef4444' }}>*</span>}
+                </label>
+                <textarea value={comment} onChange={e => setComment(e.target.value)} rows={2}
+                  placeholder={needsCapture ? 'Ej: el alumno llegó tarde...' : 'Detallá el motivo (obligatorio)'}
+                  style={{ ...inputStyle, resize: 'vertical' }} />
+              </div>
+              {error && <div style={{ fontSize: 12, color: '#ef4444' }}>{error}</div>}
+              <div style={{ display: 'flex', gap: 10, marginTop: 2 }}>
+                <button onClick={onClose} disabled={saving} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#6b7280', cursor: saving ? 'not-allowed' : 'pointer', fontSize: 14, fontFamily: 'inherit' }}>Cancelar</button>
+                <button onClick={handleSave} disabled={!canSave} style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: canSave ? '#1E9E3A' : '#d1d5db', color: 'white', cursor: canSave ? 'pointer' : 'not-allowed', fontSize: 14, fontWeight: 700, fontFamily: 'inherit' }}>
+                  {saving ? 'Guardando...' : 'Guardar registro'}
+                </button>
+              </div>
+            </>
           )}
-          <div>
-            <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>
-              Comentario {needsCapture ? '(opcional)' : <span style={{ color: '#ef4444' }}>*</span>}
-            </label>
-            <textarea value={comment} onChange={e => setComment(e.target.value)} rows={2}
-              placeholder={needsCapture ? 'Ej: el alumno llegó tarde...' : 'Detallá el motivo (obligatorio)'}
-              style={{ ...inputStyle, resize: 'vertical' }} />
-          </div>
-          {error && <div style={{ fontSize: 12, color: '#ef4444' }}>{error}</div>}
-          <div style={{ display: 'flex', gap: 10, marginTop: 2 }}>
-            <button onClick={onClose} disabled={saving} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#6b7280', cursor: saving ? 'not-allowed' : 'pointer', fontSize: 14, fontFamily: 'inherit' }}>Cancelar</button>
-            <button onClick={handleSave} disabled={!canSave} style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: canSave ? '#1E9E3A' : '#d1d5db', color: 'white', cursor: canSave ? 'pointer' : 'not-allowed', fontSize: 14, fontWeight: 700, fontFamily: 'inherit' }}>
-              {saving ? 'Guardando...' : 'Guardar registro'}
-            </button>
-          </div>
         </div>
       </div>
     </div>
@@ -423,10 +456,10 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
               {isOpen && (
                 <div>
                   <div style={{ overflowX: 'auto', borderTop: '1px solid var(--border)', background: 'var(--bg-surface-2)' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 680 }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 760 }}>
                       <thead>
                         <tr style={{ textAlign: 'left' }}>
-                          {['Fecha', 'Hora', 'Ingreso', 'Captura', 'Tarifa', 'Acción'].map(h => (
+                          {['Fecha', 'Hora', 'Ingreso', 'Captura', 'Suscripción', 'Tarifa', 'Acción'].map(h => (
                             <th key={h} style={{ padding: '8px 16px', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>{h}</th>
                           ))}
                         </tr>
@@ -436,16 +469,18 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                           const rec = recordFor(g.name, r.date);
                           const ing = ingresoBadge(r);
                           const ct = classTypeBadge(r.classType);
-                          const noCobrable = r.status === 'no_cobrable';
-                          const isExcede = r.status === 'excede_limite';
+                          const isFalta = r.classType === 'falta_sin_aviso' || r.classType === 'cancelacion_hora';
+                          const isExcede = r.status === 'excede_limite' || r.status === 'excede_limite_tipo';
                           const complete = r.hasJoinLog && r.hasScreenshot;
+                          const sub = subscriptionBadge(r.subscriptionStatus);
+                          const subDiffer = r.subAtJoin && r.subAtRecord && r.subAtJoin !== r.subAtRecord;
                           return (
                             <tr key={i} style={{ borderTop: '1px solid var(--border)', background: r.status === 'a_revisar' ? 'rgba(255,196,0,0.07)' : 'transparent' }}>
                               {/* Fecha */}
                               <td style={{ padding: '8px 16px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>
                                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
                                   {finShortDate(r.date)}
-                                  {isExcede && <span title="Excede el límite del plan">🔶</span>}
+                                  {isExcede && <span title={r.status === 'excede_limite_tipo' ? 'Supera las 2 cobrables de este tipo' : 'Excede el límite del plan'}>🔶</span>}
                                   {r.manuallyApproved && <span style={{ fontSize: 10, color: '#1E9E3A', fontWeight: 700 }} title="Aprobada manualmente por el admin">✓admin</span>}
                                   {rec?.comment && <span title={rec.comment} style={{ cursor: 'help' }}>💬</span>}
                                 </span>
@@ -461,20 +496,27 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                               </td>
                               {/* Captura */}
                               <td style={{ padding: '8px 16px', whiteSpace: 'nowrap' }}>
-                                {noCobrable
+                                {isFalta
                                   ? <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>—</span>
                                   : r.hasScreenshot
                                     ? <a href={rec?.screenshotUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, padding: '2px 9px', borderRadius: 12, background: 'rgba(30,158,58,0.1)', color: '#1E9E3A', fontWeight: 700, textDecoration: 'none' }}>📷 Ver</a>
                                     : <span style={{ fontSize: 11, padding: '2px 9px', borderRadius: 12, background: 'rgba(255,196,0,0.18)', color: '#b45309', fontWeight: 700 }}>⚠️ Sin cargar</span>}
                               </td>
-                              {/* Tarifa */}
-                              <td style={{ padding: '8px 16px', whiteSpace: 'nowrap', color: noCobrable ? 'var(--text-muted)' : 'var(--text-primary)', fontWeight: 600 }}>
-                                {noCobrable ? '—' : `€${r.rate.toFixed(2)}`}
+                              {/* Suscripción */}
+                              <td style={{ padding: '8px 16px', whiteSpace: 'nowrap' }}>
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                                  <span style={{ fontSize: 10.5, padding: '2px 8px', borderRadius: 10, background: sub.bg, color: sub.color, fontWeight: 700 }}>{sub.label}</span>
+                                  {subDiffer && <span style={{ cursor: 'help' }} title={`Al ingresar: ${subscriptionBadge(r.subAtJoin).label.replace(/^[^ ]+ /, '')} · Al registrar: ${subscriptionBadge(r.subAtRecord).label.replace(/^[^ ]+ /, '')}`}>ℹ️</span>}
+                                </span>
                               </td>
+                              {/* Tarifa */}
+                              <td style={{ padding: '8px 16px', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 600 }}>€{r.rate.toFixed(2)}</td>
                               {/* Acción */}
                               <td style={{ padding: '8px 16px', whiteSpace: 'nowrap' }}>
-                                {noCobrable ? (
-                                  <span style={{ fontSize: 11, padding: '2px 9px', borderRadius: 12, background: 'var(--bg-surface-3)', color: 'var(--text-muted)', fontWeight: 700 }}>No cobrable</span>
+                                {isFalta ? (
+                                  r.status === 'excede_limite_tipo'
+                                    ? <span style={{ fontSize: 11, padding: '2px 9px', borderRadius: 12, background: 'rgba(249,115,22,0.12)', color: '#ea580c', fontWeight: 700 }}>Supera 2 · revisión admin</span>
+                                    : <span style={{ fontSize: 11, color: '#1E9E3A', fontWeight: 700 }}>✓ Cobrable</span>
                                 ) : !r.hasScreenshot ? (
                                   <button onClick={() => setAttachTarget({ studentName: g.name, date: r.date, hour: r.hour })}
                                     style={{ padding: '5px 11px', borderRadius: 7, border: '1px solid rgba(30,158,58,0.4)', background: 'rgba(30,158,58,0.08)', color: '#1E9E3A', cursor: 'pointer', fontSize: 11, fontWeight: 700, fontFamily: 'inherit' }}>
@@ -552,6 +594,7 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
         <AddClassModal
           teacher={teacher}
           myAssignments={myAssignments}
+          classRecords={classRecords}
           onClose={() => setShowAdd(false)}
           onSaved={(studentName, date, time, file, classType, comment) => registerClassRecord(teacher.id, studentName, date, time, file, classType, comment)}
         />

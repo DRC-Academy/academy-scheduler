@@ -7,7 +7,7 @@ import { LastUpdated } from '@/components/LastUpdated';
 import { getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
-import { calculateTeacherFinance, TeacherFinanceResult, ClassFinanceRow, ingresoBadge, classTypeBadge } from '@/lib/finance';
+import { calculateTeacherFinance, TeacherFinanceResult, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge, SUBSCRIPTION_STATUS_OPTIONS } from '@/lib/finance';
 import { Assignment } from '@/types';
 
 // ─── Finance helpers ──────────────────────────────────────────────────────────
@@ -22,10 +22,11 @@ function finDateShort(iso: string): string {
 }
 
 const FIN_STATUS_STYLE: Record<string, { label: string; color: string; bg: string }> = {
-  pagable:       { label: 'Pagable',       color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)' },
-  a_revisar:     { label: 'A revisar',     color: '#b45309', bg: 'rgba(255,196,0,0.15)' },
-  excede_limite: { label: 'Excede límite', color: '#ea580c', bg: 'rgba(249,115,22,0.12)' },
-  no_cobrable:   { label: 'No cobrable',   color: 'var(--text-muted)', bg: 'var(--bg-surface-3)' },
+  pagable:            { label: 'Pagable',          color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)' },
+  a_revisar:          { label: 'A revisar',        color: '#b45309', bg: 'rgba(255,196,0,0.15)' },
+  excede_limite:      { label: 'Excede límite',    color: '#ea580c', bg: 'rgba(249,115,22,0.12)' },
+  excede_limite_tipo: { label: 'Supera 2/tipo',    color: '#ea580c', bg: 'rgba(249,115,22,0.12)' },
+  no_cobrable:        { label: 'No cobrable',       color: 'var(--text-muted)', bg: 'var(--bg-surface-3)' },
 };
 
 function ClassDetailRows({ result, studentName, classRecords, onApproveReview, onApproveExceed }: {
@@ -45,10 +46,10 @@ function ClassDetailRows({ result, studentName, classRecords, onApproveReview, o
   }
   return (
     <div style={{ overflowX: 'auto', background: 'var(--bg-surface-2)', borderTop: '1px solid var(--border)' }}>
-      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5, minWidth: 560 }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5, minWidth: 640 }}>
         <thead>
           <tr style={{ textAlign: 'left' }}>
-            {['Fecha', 'Ingresó', 'Captura', 'Tarifa', 'Estado', ''].map((h, i) => (
+            {['Fecha', 'Ingresó', 'Captura', 'Suscripción', 'Tarifa', 'Estado', ''].map((h, i) => (
               <th key={i} style={{ padding: '7px 14px', fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>{h}</th>
             ))}
           </tr>
@@ -58,6 +59,8 @@ function ClassDetailRows({ result, studentName, classRecords, onApproveReview, o
             const st = FIN_STATUS_STYLE[r.status];
             const ing = ingresoBadge(r);
             const ct = classTypeBadge(r.classType);
+            const sub = subscriptionBadge(r.subscriptionStatus);
+            const subDiffer = r.subAtJoin && r.subAtRecord && r.subAtJoin !== r.subAtRecord;
             const url = screenshotUrl(r.date);
             return (
               <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
@@ -67,6 +70,12 @@ function ClassDetailRows({ result, studentName, classRecords, onApproveReview, o
                 </td>
                 <td style={{ padding: '7px 14px', whiteSpace: 'nowrap' }}>
                   {url ? <a href={url} target="_blank" rel="noopener noreferrer" style={{ color: '#1E9E3A', fontWeight: 600, textDecoration: 'none' }}>📷 Ver</a> : '—'}
+                </td>
+                <td style={{ padding: '7px 14px', whiteSpace: 'nowrap' }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{ fontSize: 10.5, padding: '2px 8px', borderRadius: 10, background: sub.bg, color: sub.color, fontWeight: 700 }}>{sub.label}</span>
+                    {subDiffer && <span style={{ cursor: 'help' }} title={`Al ingresar: ${subscriptionBadge(r.subAtJoin).label.replace(/^[^ ]+ /, '')} · Al registrar: ${subscriptionBadge(r.subAtRecord).label.replace(/^[^ ]+ /, '')}`}>ℹ️</span>}
+                  </span>
                 </td>
                 <td style={{ padding: '7px 14px', whiteSpace: 'nowrap', color: 'var(--text-primary)' }}>€{r.rate.toFixed(2)}</td>
                 <td style={{ padding: '7px 14px', whiteSpace: 'nowrap' }}>
@@ -80,7 +89,7 @@ function ClassDetailRows({ result, studentName, classRecords, onApproveReview, o
                     <span style={{ fontSize: 11, color: '#1E9E3A', fontWeight: 700 }}>✓ Aprobada</span>
                   ) : result.paymentStatus !== 'paid' && r.status === 'a_revisar' ? (
                     <button onClick={() => onApproveReview(r.date)} style={{ padding: '4px 10px', borderRadius: 7, border: '1px solid rgba(30,158,58,0.4)', background: 'rgba(30,158,58,0.08)', color: '#1E9E3A', cursor: 'pointer', fontSize: 11, fontWeight: 700, fontFamily: 'inherit' }}>✓ Aprobar manualmente</button>
-                  ) : result.paymentStatus !== 'paid' && r.status === 'excede_limite' ? (
+                  ) : result.paymentStatus !== 'paid' && (r.status === 'excede_limite' || r.status === 'excede_limite_tipo') ? (
                     <button onClick={() => onApproveExceed(r.date)} style={{ padding: '4px 10px', borderRadius: 7, border: '1px solid rgba(30,158,58,0.4)', background: 'rgba(30,158,58,0.08)', color: '#1E9E3A', cursor: 'pointer', fontSize: 11, fontWeight: 700, fontFamily: 'inherit' }}>✓ Incluir igual</button>
                   ) : null}
                 </td>
@@ -180,6 +189,7 @@ function FinanceTab() {
   const [monthYear, setMonthYear] = useState(nowSpain.dateStr.slice(0, 7));
   const [teacherFilter, setTeacherFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'paid' | 'pending'>('all');
+  const [subFilter, setSubFilter] = useState('all'); // estado de suscripción
   const [expandedTeacher, setExpandedTeacher] = useState<string | null>(null);
   const [paying, setPaying] = useState<string | null>(null);
 
@@ -205,7 +215,11 @@ function FinanceTab() {
   }, [teachers, students, teacherFilter, statusFilter, monthYear, assignments, classJoinLogs, classRecords, financeRates, scoringEvents, manualApprovals, financePayments]);
 
   // Solo mostrar profesores con actividad en el mes (o el filtrado explícito).
-  const visible = results.filter(r => teacherFilter || r.rows.length > 0 || r.bonusFromScoring > 0 || r.paymentStatus === 'paid');
+  let visible = results.filter(r => teacherFilter || r.rows.length > 0 || r.bonusFromScoring > 0 || r.paymentStatus === 'paid');
+  // Filtro por estado de suscripción: profesores con alguna clase de ese estado.
+  if (subFilter !== 'all') {
+    visible = visible.filter(r => r.rows.some(row => (row.subscriptionStatus ?? 'error') === subFilter));
+  }
 
   // Cards de resumen.
   const sumTotal     = visible.reduce((s, r) => s + r.totalAPagar, 0);
@@ -278,6 +292,13 @@ function FinanceTab() {
             ))}
           </div>
         </div>
+        <div>
+          <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 5 }}>Suscripción</label>
+          <select value={subFilter} onChange={e => setSubFilter(e.target.value)} style={inputStyle}>
+            <option value="all">Todas</option>
+            {SUBSCRIPTION_STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        </div>
         <button onClick={exportCsv} style={{ marginLeft: 'auto', padding: '9px 16px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface-2)', color: 'var(--text-primary)', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
           ⬇ Exportar CSV
         </button>
@@ -308,7 +329,15 @@ function FinanceTab() {
                         <td style={{ padding: '10px 14px', whiteSpace: 'nowrap', color: r.totalARevisar > 0 ? '#b45309' : 'var(--text-secondary)' }}>{r.totalARevisar}</td>
                         <td style={{ padding: '10px 14px', whiteSpace: 'nowrap', color: r.totalExcedeLimite > 0 ? '#ea580c' : 'var(--text-secondary)' }}>{r.totalExcedeLimite} <span style={{ color: 'var(--text-muted)' }}>· €{r.montoRetenido.toFixed(2)}</span></td>
                         <td style={{ padding: '10px 14px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>€{r.bonusFromScoring.toFixed(2)}</td>
-                        <td style={{ padding: '10px 14px', whiteSpace: 'nowrap', color: '#1E9E3A', fontWeight: 700 }}>€{r.totalAPagar.toFixed(2)}</td>
+                        <td style={{ padding: '10px 14px', whiteSpace: 'nowrap', color: '#1E9E3A', fontWeight: 700 }}>
+                          €{r.totalAPagar.toFixed(2)}
+                          {r.hasInactiveSubPayable && (
+                            <div style={{ fontSize: 10, color: '#ea580c', fontWeight: 600, marginTop: 2, whiteSpace: 'normal', maxWidth: 150 }}
+                              title="Incluye clases pagables donde el alumno NO tenía suscripción activa al momento de darse">
+                              ⚠️ Incluye clases con suscripción inactiva
+                            </div>
+                          )}
+                        </td>
                         <td style={{ padding: '10px 14px', whiteSpace: 'nowrap' }}>
                           <span style={{ fontSize: 11, padding: '2px 9px', borderRadius: 12, fontWeight: 700, background: r.paymentStatus === 'paid' ? 'rgba(30,158,58,0.12)' : 'rgba(255,196,0,0.15)', color: r.paymentStatus === 'paid' ? '#1E9E3A' : '#b45309' }}>
                             {r.paymentStatus === 'paid' ? '✅ Pagado' : '⏳ Pendiente'}

@@ -26,7 +26,8 @@ function monthlyLimit(weeklyHours: number): number {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-export type ClassFinanceStatus = 'pagable' | 'a_revisar' | 'excede_limite' | 'no_cobrable';
+// 'excede_limite_tipo' = falta/cancelación más allá de las 2 cobrables por tipo.
+export type ClassFinanceStatus = 'pagable' | 'a_revisar' | 'excede_limite' | 'excede_limite_tipo' | 'no_cobrable';
 
 export interface ClassFinanceRow {
   date: string;            // 'YYYY-MM-DD'
@@ -43,6 +44,9 @@ export interface ClassFinanceRow {
   hasMeetLink: boolean;    // la assignment del alumno tiene meet_link definido
   punctuality?: 'on_time' | 'late' | 'very_late';
   manuallyApproved: boolean;
+  subscriptionStatus?: string;  // efectivo: join log (momento de la clase) → record
+  subAtJoin?: string;           // estado al ingresar (class_join_logs)
+  subAtRecord?: string;         // estado al registrar la captura (class_records)
 }
 
 export interface TeacherFinanceResult {
@@ -53,7 +57,9 @@ export interface TeacherFinanceResult {
   totalPagable: number;
   totalARevisar: number;
   totalExcedeLimite: number;
+  totalExcedeLimiteTipo: number;
   totalNoCobrable: number;
+  hasInactiveSubPayable: boolean; // alguna clase pagable tuvo suscripción ≠ active
   montoPagable: number;
   montoARevisar: number;
   montoRetenido: number;
@@ -144,6 +150,21 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
   for (const l of myLogs) noteFirst(l.studentName, l.scheduledDate);
   for (const r of myRecords) noteFirst(r.studentName, r.classDate);
 
+  // Faltas/cancelaciones cobrables: las primeras 2 de CADA tipo por alumno
+  // (acumulativo de TODO el historial, ordenadas por fecha de creación).
+  const cobrableTypeRecordIds = new Set<string>();
+  const byStudentType = new Map<string, ClassRecord[]>();
+  for (const r of myRecords) {
+    if (r.classType !== 'falta_sin_aviso' && r.classType !== 'cancelacion_hora') continue;
+    const k = `${nkey(r.studentName)}__${r.classType}`;
+    const arr = byStudentType.get(k);
+    if (arr) arr.push(r); else byStudentType.set(k, [r]);
+  }
+  for (const arr of byStudentType.values()) {
+    arr.sort((a, b) => (a.createdAt ?? '').localeCompare(b.createdAt ?? '') || a.classDate.localeCompare(b.classDate));
+    arr.slice(0, 2).forEach(r => cobrableTypeRecordIds.add(r.id));
+  }
+
   // Candidatos (alumno + fecha) del mes: provienen de los logs y los records
   // (las únicas fuentes de "esta clase ocurrió"). Un record se fusiona con un
   // candidato del mismo alumno a ±1 día (tolerancia captura subida un día corrido).
@@ -176,8 +197,9 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     const classType: ClassRecordType = (record?.classType as ClassRecordType) ?? 'normal';
     const join = !!log;
     const punctuality = log?.punctuality;
-    const isCobrableType = classType === 'normal' || classType === 'recuperacion';
-    const isCapture = !!record && isCobrableType && !!record.screenshotUrl;
+    const isNormalType = classType === 'normal' || classType === 'recuperacion';
+    const isFaltaType  = classType === 'falta_sin_aviso' || classType === 'cancelacion_hora';
+    const isCapture = !!record && isNormalType && !!record.screenshotUrl;
     const hasMeetLink = !!(a?.meetLink && a.meetLink.trim());
 
     // Plan (punto 4): assignments.plan → objetivo → students.plan → 'Inglés general'.
@@ -188,15 +210,22 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     const start = a?.startDate ?? firstDateByStudent.get(nkey(c.studentName));
     const antiquityDays = start ? Math.max(0, daysBetween(start, c.date)) : 0;
     const tier: 'nuevo' | 'antiguo' = antiquityDays < 30 ? 'nuevo' : 'antiguo';
-    const rate = findRate(rates, planType, tier);
+    const rate = findRate(rates, planType, tier);  // tarifa normal del alumno (también para faltas)
     const weeklyHours = a?.weeklyHours ?? 0;
     const hour = firstNonEmpty(log?.scheduledTime, record?.classTime, slotHourForDate(a, c.date));
 
-    const approved = isCobrableType && isApproved(c.studentName, c.date);
+    // Estado de suscripción: prioriza el del join log (momento real de la clase).
+    const subAtJoin = log?.subscriptionStatus;
+    const subAtRecord = record?.subscriptionStatus;
+    const subscriptionStatus = subAtJoin ?? subAtRecord;
+
+    const approved = isApproved(c.studentName, c.date);
 
     let status: ClassFinanceStatus;
-    if (!isCobrableType) {
-      status = 'no_cobrable';
+    if (isFaltaType) {
+      // Falta/cancelación: cobrable si es de las primeras 2 de ese tipo (o aprobada).
+      const within2 = !!record && cobrableTypeRecordIds.has(record.id);
+      status = (approved || within2) ? 'pagable' : 'excede_limite_tipo';
     } else if (approved) {
       status = 'pagable';
     } else {
@@ -206,6 +235,7 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     rows.push({
       date: c.date, hour, studentName: c.studentName, plan, weeklyHours, antiquityDays, rate, status,
       classType, hasJoinLog: join, hasScreenshot: isCapture, hasMeetLink, punctuality, manuallyApproved: approved,
+      subscriptionStatus, subAtJoin, subAtRecord,
     });
   }
 
@@ -214,8 +244,10 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
   const limitByStudent = new Map<string, number>();
   for (const a of myAssignments) limitByStudent.set(nkey(a.studentName), monthlyLimit(a.weeklyHours ?? 0));
 
+  // El límite mensual aplica solo a clases normales/recuperación (las faltas
+  // tienen su propio límite de 2 por tipo).
   const countable = rows
-    .filter(r => r.status === 'pagable' || r.status === 'a_revisar')
+    .filter(r => (r.status === 'pagable' || r.status === 'a_revisar') && (r.classType === 'normal' || r.classType === 'recuperacion'))
     .sort((x, y) => x.date.localeCompare(y.date) || x.studentName.localeCompare(y.studentName));
   const usedByStudent = new Map<string, number>();
   for (const row of countable) {
@@ -232,14 +264,18 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
   rows.sort((x, y) => x.date.localeCompare(y.date) || x.studentName.localeCompare(y.studentName));
 
   // Agregados (punto 6).
-  const pagables  = rows.filter(r => r.status === 'pagable');      // ya implica normal/recuperacion
-  const revisar   = rows.filter(r => r.status === 'a_revisar');
-  const excede    = rows.filter(r => r.status === 'excede_limite');
+  const pagables   = rows.filter(r => r.status === 'pagable');      // normal/recuperacion + faltas cobrables
+  const revisar    = rows.filter(r => r.status === 'a_revisar');
+  const excede     = rows.filter(r => r.status === 'excede_limite');
+  const excedeTipo = rows.filter(r => r.status === 'excede_limite_tipo');
   const noCobrable = rows.filter(r => r.status === 'no_cobrable');
 
   const montoPagable  = pagables.reduce((s, r) => s + r.rate, 0);
   const montoARevisar = revisar.reduce((s, r) => s + r.rate, 0);
-  const montoRetenido = excede.reduce((s, r) => s + r.rate, 0);
+  const montoRetenido = excede.reduce((s, r) => s + r.rate, 0) + excedeTipo.reduce((s, r) => s + r.rate, 0);
+
+  // Alerta: ¿alguna clase pagable tuvo suscripción ≠ active al momento de darse?
+  const hasInactiveSubPayable = pagables.some(r => r.subscriptionStatus && r.subscriptionStatus !== 'active');
 
   const bonusFromScoring = scoringEvents
     .filter(e => e.teacherId === teacherId && (e.euros ?? 0) > 0 && (e.createdAt ?? '').slice(0, 7) === monthYear)
@@ -260,7 +296,9 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     totalPagable: pagables.length,
     totalARevisar: revisar.length,
     totalExcedeLimite: excede.length,
+    totalExcedeLimiteTipo: excedeTipo.length,
     totalNoCobrable: noCobrable.length,
+    hasInactiveSubPayable,
     montoPagable, montoARevisar, montoRetenido,
     bonusFromScoring, totalAPagar,
     paymentStatus, paidAt,
@@ -293,13 +331,38 @@ export function ingresoBadge(row: { hasJoinLog: boolean; punctuality?: string; h
   return { label: '❌ No utilizó', color: 'var(--text-muted)', bg: 'var(--bg-surface-3)' };
 }
 
-// Badge del tipo de clase (punto 5) — null para 'normal'.
+// Badge del tipo de clase — null para 'normal'. Faltas/cancelaciones son cobrables.
 export function classTypeBadge(t: ClassRecordType | undefined):
   { label: string; color: string; bg: string } | null {
   switch (t) {
-    case 'falta_sin_aviso':  return { label: '🚫 Falta sin aviso', color: '#ea580c', bg: 'rgba(249,115,22,0.12)' };
-    case 'cancelacion_hora': return { label: '⏰ Cancelación',     color: '#dc2626', bg: 'rgba(239,68,68,0.1)' };
-    case 'recuperacion':     return { label: '📋 Recuperación',    color: '#2563eb', bg: 'rgba(37,99,235,0.1)' };
+    case 'falta_sin_aviso':  return { label: '🚫 Falta sin aviso (cobrable)', color: '#ea580c', bg: 'rgba(249,115,22,0.12)' };
+    case 'cancelacion_hora': return { label: '⏰ Cancelación (cobrable)',     color: '#dc2626', bg: 'rgba(239,68,68,0.1)' };
+    case 'recuperacion':     return { label: '📋 Recuperación',               color: '#2563eb', bg: 'rgba(37,99,235,0.1)' };
     default:                 return null;
+  }
+}
+
+// Estados de suscripción posibles (para filtros y leyendas).
+export const SUBSCRIPTION_STATUS_OPTIONS = [
+  { value: 'active',         label: 'Activa' },
+  { value: 'pending-cancel', label: 'Pendiente cancelar' },
+  { value: 'on-hold',        label: 'En espera' },
+  { value: 'cancelled',      label: 'Cancelada' },
+  { value: 'expired',        label: 'Expirada' },
+  { value: 'not_found',      label: 'No encontrada' },
+  { value: 'error',          label: 'No verificado' },
+] as const;
+
+// Badge de la columna "SUSCRIPCIÓN" según el estado guardado.
+export function subscriptionBadge(status?: string):
+  { label: string; color: string; bg: string } {
+  switch (status) {
+    case 'active':         return { label: '✅ Activa',              color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)' };
+    case 'pending-cancel': return { label: '⏳ Pendiente cancelar',  color: '#b45309', bg: 'rgba(255,196,0,0.18)' };
+    case 'on-hold':        return { label: '⚠️ En espera',           color: '#ea580c', bg: 'rgba(249,115,22,0.12)' };
+    case 'cancelled':      return { label: '❌ Cancelada',           color: '#dc2626', bg: 'rgba(239,68,68,0.1)' };
+    case 'expired':        return { label: '❌ Expirada',            color: '#dc2626', bg: 'rgba(239,68,68,0.1)' };
+    case 'not_found':      return { label: '❓ No encontrada',       color: 'var(--text-muted)', bg: 'var(--bg-surface-3)' };
+    default:               return { label: '❓ No verificado',       color: 'var(--text-muted)', bg: 'var(--bg-surface-3)' };
   }
 }

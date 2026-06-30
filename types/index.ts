@@ -214,6 +214,7 @@ export interface ClassRecord {
   screenshotUrl: string;
   comment?: string;        // comentario opcional del profesor
   classType?: ClassRecordType; // 'normal' por defecto
+  subscriptionStatus?: string; // estado WooCommerce al momento de registrar la clase
   createdAt: string;
 }
 
