@@ -1387,6 +1387,7 @@ function mapClassRecord(row: any): import('@/types').ClassRecord {
     classTime:     row.class_time ?? undefined,
     screenshotUrl: row.screenshot_url,
     comment:       row.comment ?? undefined,
+    classType:     row.class_type ?? 'normal',
     createdAt:     row.created_at,
   };
 }
@@ -1415,6 +1416,7 @@ export async function dbUploadClassScreenshot(file: File, teacherId: string): Pr
 export async function dbAddClassRecord(
   teacherId: string, teacherName: string, studentName: string,
   classDate: string, classTime: string | undefined, screenshotUrl: string,
+  classType: import('@/types').ClassRecordType = 'normal', comment?: string,
 ): Promise<import('@/types').ClassRecord> {
   const id        = `cr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   const createdAt = new Date().toISOString();
@@ -1426,9 +1428,49 @@ export async function dbAddClassRecord(
     class_date:     classDate,
     class_time:     classTime ?? null,
     screenshot_url: screenshotUrl,
+    class_type:     classType,
+    comment:        comment ?? null,
     created_at:     createdAt,
   });
-  return { id, teacherId, teacherName, studentName, classDate, classTime, screenshotUrl, createdAt };
+  return { id, teacherId, teacherName, studentName, classDate, classTime, screenshotUrl, classType, comment, createdAt };
+}
+
+// ── FINANCE: APROBACIONES MANUALES ────────────────────────────────────────────
+
+function mapManualApproval(row: any): import('@/types').FinanceManualApproval {
+  return {
+    id:          row.id,
+    teacherId:   row.teacher_id,
+    studentName: row.student_name,
+    classDate:   row.class_date,
+    approvedBy:  row.approved_by,
+    approvedAt:  row.approved_at,
+    reason:      row.reason ?? undefined,
+  };
+}
+
+export async function dbGetManualApprovals(): Promise<import('@/types').FinanceManualApproval[]> {
+  const { data, error } = await supabase.from('finance_manual_approvals').select('*');
+  if (error || !data) return [];
+  return (data as any[]).map(mapManualApproval);
+}
+
+// Aprueba manualmente una clase puntual (a_revisar o excede_limite → pagable).
+export async function dbAddManualApproval(
+  teacherId: string, studentName: string, classDate: string, approvedBy: string, reason: string,
+): Promise<import('@/types').FinanceManualApproval> {
+  const id        = `fma_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const approvedAt = new Date().toISOString();
+  await supabase.from('finance_manual_approvals').insert({
+    id,
+    teacher_id:   teacherId,
+    student_name: studentName,
+    class_date:   classDate,
+    approved_by:  approvedBy,
+    approved_at:  approvedAt,
+    reason,
+  });
+  return { id, teacherId, studentName, classDate, approvedBy, approvedAt, reason };
 }
 
 // Adjunta una captura a una clase puntual (fecha+alumno). Si ya existe un

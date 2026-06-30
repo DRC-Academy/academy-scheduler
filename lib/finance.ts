@@ -1,37 +1,48 @@
 // Lógica de cálculo de finanzas (liquidación de clases a profesores).
 //
 // Funciona sobre datos ya cargados en memoria (assignments, class_join_logs,
-// class_records, finance_rates, scoring_events) para poder correr tanto en el
-// panel del profesor como en el del admin sin llamadas extra a la base.
+// class_records, finance_rates, scoring_events, students, manual_approvals) para
+// poder correr tanto en el panel del profesor como en el del admin sin llamadas
+// extra a la base.
+//
+// REGLA DEL DOBLE FACTOR (inclusión de una clase de tipo cobrable):
+//   · Sin class_join_logs Y sin class_records → se IGNORA (no se cuenta).
+//   · Con AL MENOS uno de los dos → se incluye.
+//       - Ambos                → 'pagable' ✅
+//       - Solo uno             → 'a_revisar' ⚠️
+//   · Aprobada manualmente por el admin → 'pagable' (override).
+//   · Supera el límite mensual del plan → 'excede_limite' (salvo aprobación).
+//   · Tipo 'falta_sin_aviso' o 'cancelacion_hora' → 'no_cobrable' (constancia,
+//     nunca suma al total, independientemente de logs/capturas).
 
-import { Assignment, ClassJoinLog, ClassRecord, FinanceRate, ScoringEvent, FinancePayment } from '@/types';
+import { Assignment, ClassJoinLog, ClassRecord, FinanceRate, ScoringEvent, FinancePayment, Student, ClassRecordType, FinanceManualApproval } from '@/types';
 
-// Nombres de día por getDay() (0=Domingo) — coinciden con los slots ('Lunes'...).
 const DAY_NAMES_BY_JSDAY = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 
-// Límite de clases pagables por mes según horas semanales contratadas.
-const MONTHLY_LIMIT_BY_WEEKLY_HOURS: Record<number, number> = {
-  1: 5, 2: 9, 3: 14, 4: 18, 5: 25,
-};
+const MONTHLY_LIMIT_BY_WEEKLY_HOURS: Record<number, number> = { 1: 5, 2: 9, 3: 14, 4: 18, 5: 25 };
 function monthlyLimit(weeklyHours: number): number {
   return MONTHLY_LIMIT_BY_WEEKLY_HOURS[weeklyHours] ?? Math.max(5, weeklyHours * 5);
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-export type ClassFinanceStatus = 'pagable' | 'a_revisar' | 'excede_limite';
+export type ClassFinanceStatus = 'pagable' | 'a_revisar' | 'excede_limite' | 'no_cobrable';
 
 export interface ClassFinanceRow {
   date: string;            // 'YYYY-MM-DD'
-  hour: string;            // 'HH:MM' del slot recurrente
+  hour: string;            // 'HH:MM'
   studentName: string;
-  plan: string;
+  plan: string;            // plan resuelto (assignments → objetivo → students → 'Inglés general')
   weeklyHours: number;
   antiquityDays: number;
   rate: number;
   status: ClassFinanceStatus;
+  classType: ClassRecordType;
   hasJoinLog: boolean;
-  hasScreenshot: boolean;
+  hasScreenshot: boolean;  // captura REAL (tipo normal/recuperacion con screenshot)
+  hasMeetLink: boolean;    // la assignment del alumno tiene meet_link definido
+  punctuality?: 'on_time' | 'late' | 'very_late';
+  manuallyApproved: boolean;
 }
 
 export interface TeacherFinanceResult {
@@ -42,6 +53,7 @@ export interface TeacherFinanceResult {
   totalPagable: number;
   totalARevisar: number;
   totalExcedeLimite: number;
+  totalNoCobrable: number;
   montoPagable: number;
   montoARevisar: number;
   montoRetenido: number;
@@ -54,174 +66,176 @@ export interface TeacherFinanceResult {
 function isoDate(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
-
-// Diferencia en días naturales entre dos fechas 'YYYY-MM-DD' (b - a).
 function daysBetween(aIso: string, bIso: string): number {
-  const a = new Date(aIso + 'T00:00:00');
-  const b = new Date(bIso + 'T00:00:00');
-  return Math.round((b.getTime() - a.getTime()) / DAY_MS);
+  return Math.round((new Date(bIso + 'T00:00:00').getTime() - new Date(aIso + 'T00:00:00').getTime()) / DAY_MS);
 }
-
-// Normaliza un nombre para comparar (trim + lower).
 function nkey(x: string): string { return (x ?? '').trim().toLowerCase(); }
+function firstNonEmpty(...vals: Array<string | undefined>): string {
+  for (const v of vals) { if (v && v.trim()) return v.trim(); }
+  return '';
+}
 
 // 'examen' en plan u objetivo → 'examenes'; cualquier otro caso → 'general'.
 export function resolvePlanType(plan: string, objetivo?: string): 'general' | 'examenes' {
-  const haystack = `${plan ?? ''} ${objetivo ?? ''}`.toLowerCase();
-  return haystack.includes('examen') ? 'examenes' : 'general';
+  return `${plan ?? ''} ${objetivo ?? ''}`.toLowerCase().includes('examen') ? 'examenes' : 'general';
 }
 
 function findRate(rates: FinanceRate[], planType: 'general' | 'examenes', tier: 'nuevo' | 'antiguo'): number {
   return rates.find(r => r.planType === planType && r.tier === tier)?.rate ?? 0;
 }
 
-// Expande los slots recurrentes de una assignment a fechas concretas dentro del
-// mes 'YYYY-MM'. Solo incluye fechas iguales o posteriores a su start_date.
-function expandAssignmentDates(a: Assignment, monthYear: string): Array<{ date: string; hour: string }> {
-  const [y, m] = monthYear.split('-').map(Number);
-  if (!y || !m) return [];
-  const out: Array<{ date: string; hour: string }> = [];
-  const daysInMonth = new Date(y, m, 0).getDate();
-  for (let day = 1; day <= daysInMonth; day++) {
-    const d = new Date(y, m - 1, day);
-    const dateIso = isoDate(d);
-    if (a.startDate && dateIso < a.startDate) continue;
-    const dayName = DAY_NAMES_BY_JSDAY[d.getDay()];
-    for (const slot of a.slots ?? []) {
-      if (slot.day === dayName) out.push({ date: dateIso, hour: slot.hour });
-    }
-  }
-  return out;
+// Hora del slot recurrente del alumno que cae en el día de `dateIso` (si la hay).
+function slotHourForDate(a: Assignment | undefined, dateIso: string): string {
+  if (!a) return '';
+  const dayName = DAY_NAMES_BY_JSDAY[new Date(dateIso + 'T00:00:00').getDay()];
+  return (a.slots ?? []).find(s => s.day === dayName)?.hour ?? '';
 }
 
 export interface CalcInput {
   teacherId: string;
   teacherName: string;
   monthYear: string;                 // 'YYYY-MM'
-  assignments: Assignment[];         // todas (se filtran por teacher adentro)
+  assignments: Assignment[];         // se filtran por teacher adentro
   joinLogs: ClassJoinLog[];
   classRecords: ClassRecord[];
   rates: FinanceRate[];
   scoringEvents: ScoringEvent[];
+  students?: Student[];              // para el fallback de plan
+  manualApprovals?: FinanceManualApproval[];
   payment?: FinancePayment | null;   // si existe y está 'paid' → congelado
 }
 
 // Calcula la liquidación de UN profesor para un mes.
 export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult {
-  const { teacherId, teacherName, monthYear, assignments, joinLogs, classRecords, rates, scoringEvents, payment } = input;
+  const {
+    teacherId, teacherName, monthYear, assignments, joinLogs, classRecords,
+    rates, scoringEvents, students = [], manualApprovals = [], payment,
+  } = input;
 
-  const overrides = new Set(payment?.approvedOverrides ?? []);
   const myAssignments = assignments.filter(a => a.teacherId === teacherId);
-
-  // Pre-indexar logs y records de este profesor para matching rápido.
   const myLogs = joinLogs.filter(l => l.teacherId === teacherId);
   const myRecords = classRecords.filter(r => r.teacherId === teacherId);
 
-  function hasJoinLog(student: string, dateIso: string): boolean {
-    return myLogs.some(l => l.studentName === student && l.scheduledDate === dateIso);
+  // Índices por nombre (normalizado).
+  const asgnByName = new Map<string, Assignment>();
+  for (const a of myAssignments) if (!asgnByName.has(nkey(a.studentName))) asgnByName.set(nkey(a.studentName), a);
+  const studentByName = new Map<string, Student>();
+  for (const s of students) studentByName.set(nkey(s.name), s);
+
+  // Aprobaciones manuales: tabla finance_manual_approvals + legacy approved_overrides.
+  const approvedSet = new Set<string>();
+  for (const k of payment?.approvedOverrides ?? []) approvedSet.add(k);
+  for (const m of manualApprovals) {
+    if (m.teacherId !== teacherId) continue;
+    approvedSet.add(`${m.studentName}__${m.classDate}`);
+    approvedSet.add(`${nkey(m.studentName)}__${m.classDate}`);
   }
-  function hasScreenshot(student: string, dateIso: string): boolean {
-    // tolerancia ±1 día
-    return myRecords.some(r =>
-      r.studentName === student && Math.abs(daysBetween(r.classDate, dateIso)) <= 1
-    );
-  }
+  const isApproved = (name: string, date: string) =>
+    approvedSet.has(`${name}__${date}`) || approvedSet.has(`${nkey(name)}__${date}`);
 
-  // 1) Generar todas las filas candidatas (que pasan el paso 1).
-  interface Draft extends ClassFinanceRow { overrideKey: string; }
-  const drafts: Draft[] = [];
-
-  for (const a of myAssignments) {
-    const planType = resolvePlanType(a.plan, a.objetivo);
-    for (const { date, hour } of expandAssignmentDates(a, monthYear)) {
-      const join = hasJoinLog(a.studentName, date);
-      const shot = hasScreenshot(a.studentName, date);
-      if (!join && !shot) continue; // ninguno de los dos → se ignora por completo
-
-      const antiquityDays = a.startDate ? Math.max(0, daysBetween(a.startDate, date)) : 0;
-      const tier: 'nuevo' | 'antiguo' = antiquityDays < 30 ? 'nuevo' : 'antiguo';
-      const rate = findRate(rates, planType, tier);
-      const status: ClassFinanceStatus = (join && shot) ? 'pagable' : 'a_revisar';
-
-      drafts.push({
-        date, hour, studentName: a.studentName, plan: a.plan ?? '',
-        weeklyHours: a.weeklyHours ?? 0, antiquityDays, rate, status,
-        hasJoinLog: join, hasScreenshot: shot,
-        overrideKey: `${a.studentName}__${date}`,
-      });
-    }
-  }
-
-  // 2) Aplicar límite mensual por alumno (sobre clases pagable/a_revisar, en orden de fecha).
-  const limitByStudent = new Map<string, number>();
-  for (const a of myAssignments) limitByStudent.set(a.studentName, monthlyLimit(a.weeklyHours ?? 0));
-
-  drafts.sort((x, y) => x.date.localeCompare(y.date) || x.studentName.localeCompare(y.studentName));
-
-  const countByStudent = new Map<string, number>();
-  for (const row of drafts) {
-    const limit = limitByStudent.get(row.studentName) ?? 5;
-    const used = countByStudent.get(row.studentName) ?? 0;
-    if (used + 1 > limit) {
-      row.status = 'excede_limite';
-    } else {
-      countByStudent.set(row.studentName, used + 1);
-    }
-  }
-
-  // 3) Aplicar aprobaciones manuales del admin (fuerzan a pagable / inclusión).
-  for (const row of drafts) {
-    if (overrides.has(row.overrideKey)) row.status = 'pagable';
-  }
-
-  const rows: ClassFinanceRow[] = drafts.map(({ overrideKey, ...r }) => r);
-
-  // 3b) HISTORIAL DE EX-ALUMNOS — clases con ingreso y/o captura de alumnos que
-  //     ya NO tienen assignment activa con este profesor (fueron eliminados).
-  //     Sus clases ya dadas deben seguir contando para el pago. Como no hay
-  //     assignment, la antigüedad se aproxima con la primera clase conocida del
-  //     alumno y el plan se asume 'general'. Las clases POSTERIORES a la baja no
-  //     existen (sin log ni captura) → no se incluyen, automáticamente.
-  const activeNames = new Set(myAssignments.map(a => nkey(a.studentName)));
   const inMonth = (d: string) => (d ?? '').slice(0, 7) === monthYear;
 
-  // Primera fecha conocida por alumno (proxy de inicio), sobre logs + records.
+  // Primera fecha conocida por alumno (proxy de inicio para ex-alumnos).
   const firstDateByStudent = new Map<string, string>();
   const noteFirst = (name: string, date: string) => {
-    const k = nkey(name);
-    const cur = firstDateByStudent.get(k);
+    const k = nkey(name); const cur = firstDateByStudent.get(k);
     if (!cur || date < cur) firstDateByStudent.set(k, date);
   };
   for (const l of myLogs) noteFirst(l.studentName, l.scheduledDate);
   for (const r of myRecords) noteFirst(r.studentName, r.classDate);
 
-  // Candidatos (alumno+fecha) del mes que NO pertenecen a un alumno activo.
-  const orphanCandidates = new Map<string, { studentName: string; date: string; hour: string }>();
-  const addOrphan = (studentName: string, date: string, hour: string) => {
-    if (!inMonth(date) || activeNames.has(nkey(studentName))) return;
-    const key = `${nkey(studentName)}__${date}`;
-    if (!orphanCandidates.has(key)) orphanCandidates.set(key, { studentName, date, hour });
-  };
-  for (const l of myLogs) addOrphan(l.studentName, l.scheduledDate, l.scheduledTime ?? '');
-  for (const r of myRecords) addOrphan(r.studentName, r.classDate, r.classTime ?? '');
+  // Candidatos (alumno + fecha) del mes: provienen de los logs y los records
+  // (las únicas fuentes de "esta clase ocurrió"). Un record se fusiona con un
+  // candidato del mismo alumno a ±1 día (tolerancia captura subida un día corrido).
+  interface Cand { studentName: string; date: string; log?: ClassJoinLog; record?: ClassRecord; }
+  const cands: Cand[] = [];
+  const findCand = (student: string, date: string, tol: number) =>
+    cands.find(c => nkey(c.studentName) === nkey(student) && Math.abs(daysBetween(c.date, date)) <= tol);
 
-  for (const { studentName, date, hour } of orphanCandidates.values()) {
-    const join = hasJoinLog(studentName, date);
-    const shot = hasScreenshot(studentName, date);
-    if (!join && !shot) continue;
-    const proxyStart = firstDateByStudent.get(nkey(studentName));
-    const antiquityDays = proxyStart ? Math.max(0, daysBetween(proxyStart, date)) : 0;
-    const tier: 'nuevo' | 'antiguo' = antiquityDays < 30 ? 'nuevo' : 'antiguo';
-    const rate = findRate(rates, 'general', tier);
-    const status: ClassFinanceStatus =
-      overrides.has(`${studentName}__${date}`) ? 'pagable' : (join && shot) ? 'pagable' : 'a_revisar';
-    rows.push({ date, hour, studentName, plan: '', weeklyHours: 0, antiquityDays, rate, status, hasJoinLog: join, hasScreenshot: shot });
+  for (const l of myLogs) {
+    if (!inMonth(l.scheduledDate)) continue;
+    let c = findCand(l.studentName, l.scheduledDate, 0);
+    if (!c) { c = { studentName: l.studentName, date: l.scheduledDate }; cands.push(c); }
+    c.log = l;
+  }
+  for (const r of myRecords) {
+    if (!inMonth(r.classDate)) continue;
+    let c = findCand(r.studentName, r.classDate, 1);
+    if (!c) { c = { studentName: r.studentName, date: r.classDate }; cands.push(c); }
+    if (!c.record) c.record = r;
   }
 
-  // 4) Agregados.
-  const pagables = rows.filter(r => r.status === 'pagable');
-  const revisar  = rows.filter(r => r.status === 'a_revisar');
-  const excede   = rows.filter(r => r.status === 'excede_limite');
+  // Construir las filas.
+  const rows: ClassFinanceRow[] = [];
+  for (const c of cands) {
+    const a = asgnByName.get(nkey(c.studentName));
+    const stu = studentByName.get(nkey(c.studentName));
+    const record = c.record;
+    const log = c.log;
+
+    const classType: ClassRecordType = (record?.classType as ClassRecordType) ?? 'normal';
+    const join = !!log;
+    const punctuality = log?.punctuality;
+    const isCobrableType = classType === 'normal' || classType === 'recuperacion';
+    const isCapture = !!record && isCobrableType && !!record.screenshotUrl;
+    const hasMeetLink = !!(a?.meetLink && a.meetLink.trim());
+
+    // Plan (punto 4): assignments.plan → objetivo → students.plan → 'Inglés general'.
+    const plan = firstNonEmpty(a?.plan, a?.objetivo, stu?.plan) || 'Inglés general';
+    const planType: 'general' | 'examenes' =
+      `${a?.plan ?? ''} ${a?.objetivo ?? ''} ${stu?.plan ?? ''}`.toLowerCase().includes('examen') ? 'examenes' : 'general';
+
+    const start = a?.startDate ?? firstDateByStudent.get(nkey(c.studentName));
+    const antiquityDays = start ? Math.max(0, daysBetween(start, c.date)) : 0;
+    const tier: 'nuevo' | 'antiguo' = antiquityDays < 30 ? 'nuevo' : 'antiguo';
+    const rate = findRate(rates, planType, tier);
+    const weeklyHours = a?.weeklyHours ?? 0;
+    const hour = firstNonEmpty(log?.scheduledTime, record?.classTime, slotHourForDate(a, c.date));
+
+    const approved = isCobrableType && isApproved(c.studentName, c.date);
+
+    let status: ClassFinanceStatus;
+    if (!isCobrableType) {
+      status = 'no_cobrable';
+    } else if (approved) {
+      status = 'pagable';
+    } else {
+      status = (join && isCapture) ? 'pagable' : 'a_revisar';
+    }
+
+    rows.push({
+      date: c.date, hour, studentName: c.studentName, plan, weeklyHours, antiquityDays, rate, status,
+      classType, hasJoinLog: join, hasScreenshot: isCapture, hasMeetLink, punctuality, manuallyApproved: approved,
+    });
+  }
+
+  // Límite mensual por alumno (solo clases cobrables normal/recuperacion). Las
+  // aprobadas manualmente nunca pasan a 'excede_limite'.
+  const limitByStudent = new Map<string, number>();
+  for (const a of myAssignments) limitByStudent.set(nkey(a.studentName), monthlyLimit(a.weeklyHours ?? 0));
+
+  const countable = rows
+    .filter(r => r.status === 'pagable' || r.status === 'a_revisar')
+    .sort((x, y) => x.date.localeCompare(y.date) || x.studentName.localeCompare(y.studentName));
+  const usedByStudent = new Map<string, number>();
+  for (const row of countable) {
+    const k = nkey(row.studentName);
+    const limit = limitByStudent.has(k) ? limitByStudent.get(k)! : Infinity; // ex-alumnos: sin límite
+    const used = usedByStudent.get(k) ?? 0;
+    if (used + 1 > limit && !row.manuallyApproved) {
+      row.status = 'excede_limite';
+    } else {
+      usedByStudent.set(k, used + 1);
+    }
+  }
+
+  rows.sort((x, y) => x.date.localeCompare(y.date) || x.studentName.localeCompare(y.studentName));
+
+  // Agregados (punto 6).
+  const pagables  = rows.filter(r => r.status === 'pagable');      // ya implica normal/recuperacion
+  const revisar   = rows.filter(r => r.status === 'a_revisar');
+  const excede    = rows.filter(r => r.status === 'excede_limite');
+  const noCobrable = rows.filter(r => r.status === 'no_cobrable');
 
   const montoPagable  = pagables.reduce((s, r) => s + r.rate, 0);
   const montoARevisar = revisar.reduce((s, r) => s + r.rate, 0);
@@ -233,7 +247,6 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
 
   let totalAPagar = montoPagable + bonusFromScoring;
 
-  // Si el mes ya fue pagado, congelamos los totales guardados.
   let paymentStatus: 'pending' | 'paid' = 'pending';
   let paidAt: string | undefined;
   if (payment?.status === 'paid') {
@@ -247,20 +260,46 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     totalPagable: pagables.length,
     totalARevisar: revisar.length,
     totalExcedeLimite: excede.length,
+    totalNoCobrable: noCobrable.length,
     montoPagable, montoARevisar, montoRetenido,
     bonusFromScoring, totalAPagar,
     paymentStatus, paidAt,
   };
 }
 
-// Verificación visible para el profesor (sección "Mis clases").
+// Verificación visible para el profesor (sección "Mis clases"): ¿hubo ingreso?
 export function recordVerification(
   studentName: string, classDate: string, joinLogs: ClassJoinLog[], teacherId: string,
 ): 'detected' | 'not_detected' {
   const found = joinLogs.some(l =>
     l.teacherId === teacherId &&
-    l.studentName === studentName &&
+    nkey(l.studentName) === nkey(studentName) &&
     Math.abs(daysBetween(l.scheduledDate, classDate)) <= 1
   );
   return found ? 'detected' : 'not_detected';
+}
+
+// Etiqueta de la columna "INGRESO" (punto 3) — estado + color por puntualidad.
+export function ingresoBadge(row: { hasJoinLog: boolean; punctuality?: string; hasMeetLink: boolean }):
+  { label: string; color: string; bg: string } {
+  if (row.hasJoinLog) {
+    if (row.punctuality === 'on_time')   return { label: '✅ A tiempo',  color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)' };
+    if (row.punctuality === 'late')      return { label: '⚠️ Tarde',     color: '#b45309', bg: 'rgba(255,196,0,0.18)' };
+    if (row.punctuality === 'very_late') return { label: '🔴 Muy tarde', color: '#dc2626', bg: 'rgba(239,68,68,0.1)' };
+    return { label: '✅ A tiempo', color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)' };
+  }
+  // Sin registro de ingreso.
+  if (!row.hasMeetLink) return { label: '🔗 Sin enlace', color: '#ea580c', bg: 'rgba(249,115,22,0.12)' };
+  return { label: '❌ No utilizó', color: 'var(--text-muted)', bg: 'var(--bg-surface-3)' };
+}
+
+// Badge del tipo de clase (punto 5) — null para 'normal'.
+export function classTypeBadge(t: ClassRecordType | undefined):
+  { label: string; color: string; bg: string } | null {
+  switch (t) {
+    case 'falta_sin_aviso':  return { label: '🚫 Falta sin aviso', color: '#ea580c', bg: 'rgba(249,115,22,0.12)' };
+    case 'cancelacion_hora': return { label: '⏰ Cancelación',     color: '#dc2626', bg: 'rgba(239,68,68,0.1)' };
+    case 'recuperacion':     return { label: '📋 Recuperación',    color: '#2563eb', bg: 'rgba(37,99,235,0.1)' };
+    default:                 return null;
+  }
 }

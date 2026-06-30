@@ -218,7 +218,21 @@ create table if not exists class_records (
 );
 -- Para bases ya existentes:
 alter table class_records add column if not exists comment text;
+-- Tipo de clase: 'normal' | 'falta_sin_aviso' | 'cancelacion_hora' | 'recuperacion'
+alter table class_records add column if not exists class_type text default 'normal';
 alter table class_records disable row level security;
+
+-- ── FINANCE: APROBACIONES MANUALES (admin aprueba a_revisar / excede_limite) ──
+create table if not exists finance_manual_approvals (
+  id           text primary key,
+  teacher_id   text not null,
+  student_name text not null,
+  class_date   date not null,
+  approved_by  text not null,
+  approved_at  timestamptz default now(),
+  reason       text
+);
+alter table finance_manual_approvals disable row level security;
 
 -- ── FINANCE: RATES (4 tarifas) ──────────────────────────────────────────────
 create table if not exists finance_rates (

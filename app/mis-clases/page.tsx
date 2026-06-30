@@ -7,9 +7,17 @@ import { LastUpdated } from '@/components/LastUpdated';
 import { getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
-import { calculateTeacherFinance, recordVerification, ClassFinanceRow } from '@/lib/finance';
+import { calculateTeacherFinance, recordVerification, ClassFinanceRow, ingresoBadge, classTypeBadge } from '@/lib/finance';
 import { dbGetAssignmentsByTeacher } from '@/lib/db';
-import { Teacher, Assignment } from '@/types';
+import { Teacher, Assignment, ClassRecordType } from '@/types';
+
+// Opciones del selector "Tipo de clase".
+const CLASS_TYPE_OPTIONS: Array<{ value: ClassRecordType; label: string; needsCapture: boolean }> = [
+  { value: 'normal',           label: '📸 Clase normal',                needsCapture: true },
+  { value: 'falta_sin_aviso',  label: '🚫 Falta del alumno sin aviso',  needsCapture: false },
+  { value: 'cancelacion_hora', label: '⏰ Cancelación sobre la hora',    needsCapture: false },
+  { value: 'recuperacion',     label: '📋 Clase de recuperación',        needsCapture: true },
+];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const FIN_MONTHS = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
@@ -43,7 +51,7 @@ function AddClassModal({ teacher, myAssignments, onClose, onSaved }: {
   teacher: Teacher;
   myAssignments: Assignment[];
   onClose: () => void;
-  onSaved: (studentName: string, date: string, time: string | undefined, file: File) => Promise<void>;
+  onSaved: (studentName: string, date: string, time: string | undefined, file: File | null, classType: ClassRecordType, comment: string) => Promise<void>;
 }) {
   const studentOptions = useMemo(() => {
     const seen = new Set<string>();
@@ -59,8 +67,12 @@ function AddClassModal({ teacher, myAssignments, onClose, onSaved }: {
   const [date, setDate] = useState(todayIso);
   const [time, setTime] = useState('');
   const [file, setFile] = useState<File | null>(null);
+  const [classType, setClassType] = useState<ClassRecordType>('normal');
+  const [comment, setComment] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+
+  const needsCapture = CLASS_TYPE_OPTIONS.find(o => o.value === classType)?.needsCapture ?? true;
 
   // Auto-rellenar la hora con el slot recurrente del alumno si el día coincide.
   // Depende solo de alumno+fecha para no pisar una hora editada a mano.
@@ -75,13 +87,15 @@ function AddClassModal({ teacher, myAssignments, onClose, onSaved }: {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [studentName, date]);
 
-  const canSave = !!studentName && !!date && !!file && !saving;
+  // Normal/recuperación: captura obligatoria. Falta/cancelación: comentario obligatorio.
+  const canSave = !!studentName && !!date && !saving &&
+    (needsCapture ? !!file : !!comment.trim());
 
   async function handleSave() {
-    if (!canSave || !file) return;
+    if (!canSave) return;
     setSaving(true); setError('');
     try {
-      await onSaved(studentName, date, time || undefined, file);
+      await onSaved(studentName, date, time || undefined, needsCapture ? file : null, classType, comment.trim());
       onClose();
     } catch (e: any) {
       setError(e?.message ?? 'No se pudo guardar el registro.');
@@ -110,6 +124,12 @@ function AddClassModal({ teacher, myAssignments, onClose, onSaved }: {
               </select>
             )}
           </div>
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>Tipo de clase <span style={{ color: '#ef4444' }}>*</span></label>
+            <select value={classType} onChange={e => setClassType(e.target.value as ClassRecordType)} style={inputStyle}>
+              {CLASS_TYPE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
             <div>
               <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>Fecha de la clase</label>
@@ -120,10 +140,24 @@ function AddClassModal({ teacher, myAssignments, onClose, onSaved }: {
               <input type="time" value={time} onChange={e => setTime(e.target.value)} style={inputStyle} />
             </div>
           </div>
+          {needsCapture ? (
+            <div>
+              <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>Captura de pantalla <span style={{ color: '#ef4444' }}>*</span></label>
+              <input type="file" accept="image/*" onChange={e => setFile(e.target.files?.[0] ?? null)} style={{ ...inputStyle, padding: '7px 10px' }} />
+              {file && <div style={{ fontSize: 11, color: '#1E9E3A', marginTop: 5 }}>📷 {file.name}</div>}
+            </div>
+          ) : (
+            <div style={{ fontSize: 11.5, color: '#b45309', background: 'rgba(255,196,0,0.1)', border: '1px solid rgba(255,196,0,0.3)', borderRadius: 8, padding: '8px 10px' }}>
+              Este tipo de clase no requiere captura y <b>no genera cobro</b>. Se registra solo como constancia.
+            </div>
+          )}
           <div>
-            <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>Captura de pantalla <span style={{ color: '#ef4444' }}>*</span></label>
-            <input type="file" accept="image/*" onChange={e => setFile(e.target.files?.[0] ?? null)} style={{ ...inputStyle, padding: '7px 10px' }} />
-            {file && <div style={{ fontSize: 11, color: '#1E9E3A', marginTop: 5 }}>📷 {file.name}</div>}
+            <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>
+              Comentario {needsCapture ? '(opcional)' : <span style={{ color: '#ef4444' }}>*</span>}
+            </label>
+            <textarea value={comment} onChange={e => setComment(e.target.value)} rows={2}
+              placeholder={needsCapture ? 'Ej: el alumno llegó tarde...' : 'Detallá el motivo (obligatorio)'}
+              style={{ ...inputStyle, resize: 'vertical' }} />
           </div>
           {error && <div style={{ fontSize: 12, color: '#ef4444' }}>{error}</div>}
           <div style={{ display: 'flex', gap: 10, marginTop: 2 }}>
@@ -203,7 +237,7 @@ function AttachScreenshotModal({ studentName, date, hour, onClose, onSaved }: {
 
 function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignments: Assignment[] }) {
   const {
-    classRecords, classJoinLogs, financeRates, financePayments, scoringEvents,
+    students, classRecords, classJoinLogs, financeRates, financePayments, scoringEvents, manualApprovals,
     registerClassRecord, attachScreenshotToClass,
   } = useTeachers();
 
@@ -227,11 +261,9 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
   const finance = useMemo(() => calculateTeacherFinance({
     teacherId: teacher.id, teacherName: teacher.name, monthYear,
     assignments: myAssignments, joinLogs: classJoinLogs, classRecords, rates: financeRates,
-    scoringEvents, payment,
-  }), [teacher.id, teacher.name, monthYear, myAssignments, classJoinLogs, classRecords, financeRates, scoringEvents, payment]);
+    scoringEvents, students, manualApprovals, payment,
+  }), [teacher.id, teacher.name, monthYear, myAssignments, classJoinLogs, classRecords, financeRates, scoringEvents, students, manualApprovals, payment]);
 
-  // Claves de clases aprobadas manualmente por el admin (override).
-  const overrideSet = useMemo(() => new Set(payment?.approvedOverrides ?? []), [payment]);
   const todayIso = getSpainParts(new Date()).dateStr;
 
   // Agrupar las clases detectadas (finance.rows) por alumno, con su desglose.
@@ -402,42 +434,48 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                       <tbody>
                         {g.rows.map((r, i) => {
                           const rec = recordFor(g.name, r.date);
-                          const hasShot = !!rec;
+                          const ing = ingresoBadge(r);
+                          const ct = classTypeBadge(r.classType);
+                          const noCobrable = r.status === 'no_cobrable';
                           const isExcede = r.status === 'excede_limite';
-                          const approved = overrideSet.has(`${g.name}__${r.date}`);
-                          const complete = r.hasJoinLog && hasShot;
+                          const complete = r.hasJoinLog && r.hasScreenshot;
                           return (
-                            <tr key={i} style={{ borderTop: '1px solid var(--border)', background: !hasShot ? 'rgba(255,196,0,0.07)' : 'transparent' }}>
+                            <tr key={i} style={{ borderTop: '1px solid var(--border)', background: r.status === 'a_revisar' ? 'rgba(255,196,0,0.07)' : 'transparent' }}>
                               {/* Fecha */}
                               <td style={{ padding: '8px 16px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>
                                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
                                   {finShortDate(r.date)}
                                   {isExcede && <span title="Excede el límite del plan">🔶</span>}
-                                  {approved && <span style={{ fontSize: 10, color: '#1E9E3A', fontWeight: 700 }} title="Aprobada manualmente por el admin">✓admin</span>}
-                                  {rec?.comment && (
-                                    <span title={rec.comment} style={{ cursor: 'help' }}>💬</span>
-                                  )}
+                                  {r.manuallyApproved && <span style={{ fontSize: 10, color: '#1E9E3A', fontWeight: 700 }} title="Aprobada manualmente por el admin">✓admin</span>}
+                                  {rec?.comment && <span title={rec.comment} style={{ cursor: 'help' }}>💬</span>}
                                 </span>
                               </td>
                               {/* Hora */}
                               <td style={{ padding: '8px 16px', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 600 }}>{r.hour || '—'}</td>
-                              {/* Ingreso */}
+                              {/* Ingreso (+ tipo de clase) */}
                               <td style={{ padding: '8px 16px', whiteSpace: 'nowrap' }}>
-                                {r.hasJoinLog
-                                  ? <span style={{ fontSize: 11, padding: '2px 9px', borderRadius: 12, background: 'rgba(30,158,58,0.1)', color: '#1E9E3A', fontWeight: 700 }}>✅ Detectado</span>
-                                  : <span style={{ fontSize: 11, padding: '2px 9px', borderRadius: 12, background: 'rgba(249,115,22,0.12)', color: '#ea580c', fontWeight: 700 }}>❌ No detectado</span>}
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+                                  <span style={{ fontSize: 11, padding: '2px 9px', borderRadius: 12, background: ing.bg, color: ing.color, fontWeight: 700 }}>{ing.label}</span>
+                                  {ct && <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 10, background: ct.bg, color: ct.color, fontWeight: 700 }}>{ct.label}</span>}
+                                </span>
                               </td>
                               {/* Captura */}
                               <td style={{ padding: '8px 16px', whiteSpace: 'nowrap' }}>
-                                {hasShot
-                                  ? <a href={rec!.screenshotUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, padding: '2px 9px', borderRadius: 12, background: 'rgba(30,158,58,0.1)', color: '#1E9E3A', fontWeight: 700, textDecoration: 'none' }}>📷 Ver</a>
-                                  : <span style={{ fontSize: 11, padding: '2px 9px', borderRadius: 12, background: 'rgba(255,196,0,0.18)', color: '#b45309', fontWeight: 700 }}>⚠️ Sin cargar</span>}
+                                {noCobrable
+                                  ? <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>—</span>
+                                  : r.hasScreenshot
+                                    ? <a href={rec?.screenshotUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, padding: '2px 9px', borderRadius: 12, background: 'rgba(30,158,58,0.1)', color: '#1E9E3A', fontWeight: 700, textDecoration: 'none' }}>📷 Ver</a>
+                                    : <span style={{ fontSize: 11, padding: '2px 9px', borderRadius: 12, background: 'rgba(255,196,0,0.18)', color: '#b45309', fontWeight: 700 }}>⚠️ Sin cargar</span>}
                               </td>
                               {/* Tarifa */}
-                              <td style={{ padding: '8px 16px', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 600 }}>€{r.rate.toFixed(2)}</td>
+                              <td style={{ padding: '8px 16px', whiteSpace: 'nowrap', color: noCobrable ? 'var(--text-muted)' : 'var(--text-primary)', fontWeight: 600 }}>
+                                {noCobrable ? '—' : `€${r.rate.toFixed(2)}`}
+                              </td>
                               {/* Acción */}
                               <td style={{ padding: '8px 16px', whiteSpace: 'nowrap' }}>
-                                {!hasShot ? (
+                                {noCobrable ? (
+                                  <span style={{ fontSize: 11, padding: '2px 9px', borderRadius: 12, background: 'var(--bg-surface-3)', color: 'var(--text-muted)', fontWeight: 700 }}>No cobrable</span>
+                                ) : !r.hasScreenshot ? (
                                   <button onClick={() => setAttachTarget({ studentName: g.name, date: r.date, hour: r.hour })}
                                     style={{ padding: '5px 11px', borderRadius: 7, border: '1px solid rgba(30,158,58,0.4)', background: 'rgba(30,158,58,0.08)', color: '#1E9E3A', cursor: 'pointer', fontSize: 11, fontWeight: 700, fontFamily: 'inherit' }}>
                                     📷 Adjuntar captura
@@ -515,7 +553,7 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
           teacher={teacher}
           myAssignments={myAssignments}
           onClose={() => setShowAdd(false)}
-          onSaved={(studentName, date, time, file) => registerClassRecord(teacher.id, studentName, date, time, file)}
+          onSaved={(studentName, date, time, file, classType, comment) => registerClassRecord(teacher.id, studentName, date, time, file, classType, comment)}
         />
       )}
 

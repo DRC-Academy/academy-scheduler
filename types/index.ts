@@ -200,6 +200,9 @@ export interface AppNotification {
 
 // ── FINANCE ───────────────────────────────────────────────────────────────────
 
+// Tipo de clase registrada por el profesor.
+export type ClassRecordType = 'normal' | 'falta_sin_aviso' | 'cancelacion_hora' | 'recuperacion';
+
 // Captura de pantalla de una clase dada, subida por el profesor.
 export interface ClassRecord {
   id: string;
@@ -210,7 +213,19 @@ export interface ClassRecord {
   classTime?: string;      // 'HH:MM'
   screenshotUrl: string;
   comment?: string;        // comentario opcional del profesor
+  classType?: ClassRecordType; // 'normal' por defecto
   createdAt: string;
+}
+
+// Aprobación manual de una clase puntual por el admin (tabla finance_manual_approvals).
+export interface FinanceManualApproval {
+  id: string;
+  teacherId: string;
+  studentName: string;
+  classDate: string;       // 'YYYY-MM-DD'
+  approvedBy: string;
+  approvedAt: string;
+  reason?: string;         // 'a_revisar_aprobado' | 'excede_limite_aprobado'
 }
 
 // Pago mensual liquidado/pendiente por profesor. Cuando status='paid' el mes

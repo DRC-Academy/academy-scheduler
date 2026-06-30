@@ -1,6 +1,6 @@
 'use client';
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { Teacher, Student, Assignment, Grid, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, ClassRecord, FinanceRate, FinancePayment } from '@/types';
+import { Teacher, Student, Assignment, Grid, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, ClassRecord, ClassRecordType, FinanceRate, FinancePayment, FinanceManualApproval } from '@/types';
 import {
   dbGetTeachers, dbAddTeacher,
   dbGetStudents, dbUpsertStudent, dbDeleteStudent, dbUpdateStudent,
@@ -17,7 +17,8 @@ import {
   dbUpdateMeetLink, dbLogClassJoin, dbGetClassJoinLogs, dbGetUnassignedStudents,
   dbNotifyNewAssignment,
   dbGetClassRecords, dbUploadClassScreenshot, dbAddClassRecord, dbAttachScreenshotToClass,
-  dbGetFinanceRates, dbGetFinancePayments, dbSetFinanceOverrides, dbMarkPaymentPaid,
+  dbGetFinanceRates, dbGetFinancePayments, dbMarkPaymentPaid,
+  dbGetManualApprovals, dbAddManualApproval,
 } from '@/lib/db';
 import type { AffectedTeacher } from '@/lib/db';
 import { calculateTeacherFinance } from '@/lib/finance';
@@ -36,6 +37,7 @@ interface TeachersContextType {
   classRecords: ClassRecord[];
   financeRates: FinanceRate[];
   financePayments: FinancePayment[];
+  manualApprovals: FinanceManualApproval[];
   lastUpdated: Date | null;
   addTeacher: (t: Teacher, username: string) => Promise<void>;
   addStudent: (s: Student) => Promise<void>;
@@ -69,18 +71,18 @@ interface TeachersContextType {
   loadClassJoinLogs: () => Promise<void>;
   loadClassRecords: () => Promise<void>;
   loadFinanceData: () => Promise<void>;
-  registerClassRecord: (teacherId: string, studentName: string, date: string, time: string | undefined, screenshotFile: File) => Promise<void>;
+  registerClassRecord: (teacherId: string, studentName: string, date: string, time: string | undefined, screenshotFile: File | null, classType?: ClassRecordType, comment?: string) => Promise<void>;
   attachScreenshotToClass: (teacherId: string, studentName: string, date: string, time: string | undefined, screenshotFile: File, comment?: string) => Promise<void>;
   markPaymentAsPaid: (teacherId: string, monthYear: string) => Promise<void>;
-  approveReviewClass: (teacherId: string, studentName: string, date: string) => Promise<void>;
-  approveExceedLimitClass: (teacherId: string, studentName: string, date: string) => Promise<void>;
+  approveReviewClass: (teacherId: string, studentName: string, date: string, approvedBy?: string) => Promise<void>;
+  approveExceedLimitClass: (teacherId: string, studentName: string, date: string, approvedBy?: string) => Promise<void>;
 }
 
 const TeachersContext = createContext<TeachersContextType>({
   teachers: [], students: [], assignments: [], teacherGrids: {},
   loadingTeachers: true, scoringEvents: [], classCounts: [], notifications: [],
   unassignedStudents: [], classJoinLogs: [], classRecords: [],
-  financeRates: [], financePayments: [], lastUpdated: null,
+  financeRates: [], financePayments: [], manualApprovals: [], lastUpdated: null,
   addTeacher:               async () => {},
   addStudent:               async () => {},
   deleteStudent:            async () => [],
@@ -134,6 +136,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   const [classRecords, setClassRecords] = useState<ClassRecord[]>([]);
   const [financeRates, setFinanceRates] = useState<FinanceRate[]>([]);
   const [financePayments, setFinancePayments] = useState<FinancePayment[]>([]);
+  const [manualApprovals, setManualApprovals] = useState<FinanceManualApproval[]>([]);
   const [lastUpdated, setLastUpdated]   = useState<Date | null>(null);
 
   // Silent reload — no loading spinner, just swaps in fresh data.
@@ -402,24 +405,28 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   }
 
   async function loadFinanceData() {
-    const [rates, payments, records, logs] = await Promise.all([
+    const [rates, payments, records, logs, approvals] = await Promise.all([
       dbGetFinanceRates(),
       dbGetFinancePayments(),
       dbGetClassRecords(),
       dbGetClassJoinLogs(),
+      dbGetManualApprovals(),
     ]);
     setFinanceRates(rates);
     setFinancePayments(payments);
     setClassRecords(records);
     setClassJoinLogs(logs);
+    setManualApprovals(approvals);
   }
 
   async function registerClassRecord(
-    teacherId: string, studentName: string, date: string, time: string | undefined, screenshotFile: File,
+    teacherId: string, studentName: string, date: string, time: string | undefined,
+    screenshotFile: File | null, classType: ClassRecordType = 'normal', comment?: string,
   ) {
     const teacherName = teachers.find(t => t.id === teacherId)?.name ?? '';
-    const url = await dbUploadClassScreenshot(screenshotFile, teacherId);
-    const record = await dbAddClassRecord(teacherId, teacherName, studentName, date, time, url);
+    // Las faltas/cancelaciones no llevan captura: se guarda screenshot_url vacío.
+    const url = screenshotFile ? await dbUploadClassScreenshot(screenshotFile, teacherId) : '';
+    const record = await dbAddClassRecord(teacherId, teacherName, studentName, date, time, url, classType, comment);
     setClassRecords(prev => [record, ...prev]);
   }
 
@@ -444,7 +451,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     const result = calculateTeacherFinance({
       teacherId, teacherName, monthYear,
       assignments, joinLogs: classJoinLogs, classRecords, rates: financeRates,
-      scoringEvents, payment: existing,
+      scoringEvents, students, manualApprovals, payment: existing,
     });
     const saved = await dbMarkPaymentPaid(teacherId, teacherName, monthYear, {
       totalClassesPayable: result.totalPagable,
@@ -458,33 +465,29 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     });
   }
 
-  async function addOverride(teacherId: string, studentName: string, date: string) {
-    const teacherName = teachers.find(t => t.id === teacherId)?.name ?? '';
-    const monthYear = date.slice(0, 7);
-    const existing = financePayments.find(p => p.teacherId === teacherId && p.monthYear === monthYear);
-    const key = `${studentName}__${date}`;
-    const overrides = Array.from(new Set([...(existing?.approvedOverrides ?? []), key]));
-    const saved = await dbSetFinanceOverrides(teacherId, teacherName, monthYear, overrides);
-    setFinancePayments(prev => {
-      const idx = prev.findIndex(p => p.id === saved.id);
-      if (idx >= 0) { const next = [...prev]; next[idx] = saved; return next; }
-      return [...prev, saved];
+  // Aprobación manual de una clase puntual: persiste en finance_manual_approvals
+  // y actualiza el estado local para que el cálculo se recompute al instante.
+  async function approveClass(teacherId: string, studentName: string, date: string, reason: string, approvedBy?: string) {
+    const approval = await dbAddManualApproval(teacherId, studentName, date, approvedBy || 'admin', reason);
+    setManualApprovals(prev => {
+      const dup = prev.some(m => m.teacherId === teacherId && m.studentName === studentName && m.classDate === date);
+      return dup ? prev : [...prev, approval];
     });
   }
 
-  async function approveReviewClass(teacherId: string, studentName: string, date: string) {
-    await addOverride(teacherId, studentName, date);
+  async function approveReviewClass(teacherId: string, studentName: string, date: string, approvedBy?: string) {
+    await approveClass(teacherId, studentName, date, 'a_revisar_aprobado', approvedBy);
   }
 
-  async function approveExceedLimitClass(teacherId: string, studentName: string, date: string) {
-    await addOverride(teacherId, studentName, date);
+  async function approveExceedLimitClass(teacherId: string, studentName: string, date: string, approvedBy?: string) {
+    await approveClass(teacherId, studentName, date, 'excede_limite_aprobado', approvedBy);
   }
 
   return (
     <TeachersContext.Provider value={{
       teachers, students, assignments, teacherGrids, loadingTeachers,
       scoringEvents, classCounts, notifications, unassignedStudents, classJoinLogs,
-      classRecords, financeRates, financePayments, lastUpdated,
+      classRecords, financeRates, financePayments, manualApprovals, lastUpdated,
       addTeacher, addStudent, deleteStudent, updateStudent, addAssignment,
       getTeacherGrid, updateTeacherGrid, updateTeacherRating,
       updateTeacherSpecialties, updateTeacherInfo,

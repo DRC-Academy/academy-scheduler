@@ -5,8 +5,9 @@ import { AuthGuard } from '@/components/AuthGuard';
 import { PullToRefresh } from '@/components/PullToRefresh';
 import { LastUpdated } from '@/components/LastUpdated';
 import { getSpainParts } from '@/components/VisualCalendar';
+import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
-import { calculateTeacherFinance, TeacherFinanceResult, ClassFinanceRow } from '@/lib/finance';
+import { calculateTeacherFinance, TeacherFinanceResult, ClassFinanceRow, ingresoBadge, classTypeBadge } from '@/lib/finance';
 import { Assignment } from '@/types';
 
 // ─── Finance helpers ──────────────────────────────────────────────────────────
@@ -24,6 +25,7 @@ const FIN_STATUS_STYLE: Record<string, { label: string; color: string; bg: strin
   pagable:       { label: 'Pagable',       color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)' },
   a_revisar:     { label: 'A revisar',     color: '#b45309', bg: 'rgba(255,196,0,0.15)' },
   excede_limite: { label: 'Excede límite', color: '#ea580c', bg: 'rgba(249,115,22,0.12)' },
+  no_cobrable:   { label: 'No cobrable',   color: 'var(--text-muted)', bg: 'var(--bg-surface-3)' },
 };
 
 function ClassDetailRows({ result, studentName, classRecords, onApproveReview, onApproveExceed }: {
@@ -54,25 +56,33 @@ function ClassDetailRows({ result, studentName, classRecords, onApproveReview, o
         <tbody>
           {rows.map((r, i) => {
             const st = FIN_STATUS_STYLE[r.status];
+            const ing = ingresoBadge(r);
+            const ct = classTypeBadge(r.classType);
             const url = screenshotUrl(r.date);
             return (
               <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
                 <td style={{ padding: '7px 14px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>{finDateShort(r.date)}</td>
-                <td style={{ padding: '7px 14px', whiteSpace: 'nowrap' }}>{r.hasJoinLog ? '✅' : '—'}</td>
+                <td style={{ padding: '7px 14px', whiteSpace: 'nowrap' }}>
+                  <span style={{ fontSize: 10.5, padding: '2px 8px', borderRadius: 10, background: ing.bg, color: ing.color, fontWeight: 700 }}>{ing.label}</span>
+                </td>
                 <td style={{ padding: '7px 14px', whiteSpace: 'nowrap' }}>
                   {url ? <a href={url} target="_blank" rel="noopener noreferrer" style={{ color: '#1E9E3A', fontWeight: 600, textDecoration: 'none' }}>📷 Ver</a> : '—'}
                 </td>
                 <td style={{ padding: '7px 14px', whiteSpace: 'nowrap', color: 'var(--text-primary)' }}>€{r.rate.toFixed(2)}</td>
                 <td style={{ padding: '7px 14px', whiteSpace: 'nowrap' }}>
-                  <span style={{ fontSize: 10.5, padding: '2px 8px', borderRadius: 10, background: st.bg, color: st.color, fontWeight: 700 }}>{st.label}</span>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 10.5, padding: '2px 8px', borderRadius: 10, background: st.bg, color: st.color, fontWeight: 700 }}>{st.label}</span>
+                    {ct && <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 10, background: ct.bg, color: ct.color, fontWeight: 700 }}>{ct.label}</span>}
+                  </span>
                 </td>
                 <td style={{ padding: '7px 14px', whiteSpace: 'nowrap', textAlign: 'right' }}>
-                  {result.paymentStatus !== 'paid' && r.status === 'a_revisar' && (
+                  {r.manuallyApproved ? (
+                    <span style={{ fontSize: 11, color: '#1E9E3A', fontWeight: 700 }}>✓ Aprobada</span>
+                  ) : result.paymentStatus !== 'paid' && r.status === 'a_revisar' ? (
                     <button onClick={() => onApproveReview(r.date)} style={{ padding: '4px 10px', borderRadius: 7, border: '1px solid rgba(30,158,58,0.4)', background: 'rgba(30,158,58,0.08)', color: '#1E9E3A', cursor: 'pointer', fontSize: 11, fontWeight: 700, fontFamily: 'inherit' }}>✓ Aprobar manualmente</button>
-                  )}
-                  {result.paymentStatus !== 'paid' && r.status === 'excede_limite' && (
+                  ) : result.paymentStatus !== 'paid' && r.status === 'excede_limite' ? (
                     <button onClick={() => onApproveExceed(r.date)} style={{ padding: '4px 10px', borderRadius: 7, border: '1px solid rgba(30,158,58,0.4)', background: 'rgba(30,158,58,0.08)', color: '#1E9E3A', cursor: 'pointer', fontSize: 11, fontWeight: 700, fontFamily: 'inherit' }}>✓ Incluir igual</button>
-                  )}
+                  ) : null}
                 </td>
               </tr>
             );
@@ -124,7 +134,7 @@ function StudentDetailTable({ result, assignments, classRecords, onApproveReview
                 <Fragment key={name}>
                   <tr style={{ borderTop: '1px solid var(--border)', cursor: 'pointer' }} onClick={() => setOpenStudent(isOpen ? null : name)}>
                     <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 600 }}>{isOpen ? '▾ ' : '▸ '}{name}</td>
-                    <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>{asgn?.plan || '—'}</td>
+                    <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>{rows[0]?.plan || asgn?.plan || 'Inglés general'}</td>
                     <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>{asgn?.startDate ? finDateShort(asgn.startDate) : '—'}</td>
                     <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>{antiquity}d</td>
                     <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', color: 'var(--text-primary)' }}>€{rate.toFixed(2)}</td>
@@ -158,10 +168,13 @@ function StudentDetailTable({ result, assignments, classRecords, onApproveReview
 }
 
 function FinanceTab() {
+  const { user } = useAuth();
   const {
-    teachers, assignments, classJoinLogs, classRecords, financeRates, financePayments, scoringEvents,
+    teachers, students, assignments, classJoinLogs, classRecords, financeRates, financePayments,
+    scoringEvents, manualApprovals,
     loadFinanceData, markPaymentAsPaid, approveReviewClass, approveExceedLimitClass,
   } = useTeachers();
+  const approvedBy = user?.displayName || user?.username || 'admin';
 
   const nowSpain = getSpainParts(new Date());
   const [monthYear, setMonthYear] = useState(nowSpain.dateStr.slice(0, 7));
@@ -181,7 +194,7 @@ function FinanceTab() {
         return calculateTeacherFinance({
           teacherId: t.id, teacherName: t.name, monthYear,
           assignments, joinLogs: classJoinLogs, classRecords, rates: financeRates,
-          scoringEvents, payment,
+          scoringEvents, students, manualApprovals, payment,
         });
       })
       .filter(r => {
@@ -189,7 +202,7 @@ function FinanceTab() {
         if (statusFilter === 'pending') return r.paymentStatus !== 'paid';
         return true;
       });
-  }, [teachers, teacherFilter, statusFilter, monthYear, assignments, classJoinLogs, classRecords, financeRates, scoringEvents, financePayments]);
+  }, [teachers, students, teacherFilter, statusFilter, monthYear, assignments, classJoinLogs, classRecords, financeRates, scoringEvents, manualApprovals, financePayments]);
 
   // Solo mostrar profesores con actividad en el mes (o el filtrado explícito).
   const visible = results.filter(r => teacherFilter || r.rows.length > 0 || r.bonusFromScoring > 0 || r.paymentStatus === 'paid');
@@ -319,8 +332,8 @@ function FinanceTab() {
                           <td colSpan={8} style={{ padding: '0 14px 14px' }}>
                             <StudentDetailTable
                               result={r} assignments={assignments} classRecords={classRecords}
-                              onApproveReview={(student, date) => approveReviewClass(r.teacherId, student, date)}
-                              onApproveExceed={(student, date) => approveExceedLimitClass(r.teacherId, student, date)}
+                              onApproveReview={(student, date) => approveReviewClass(r.teacherId, student, date, approvedBy)}
+                              onApproveExceed={(student, date) => approveExceedLimitClass(r.teacherId, student, date, approvedBy)}
                             />
                           </td>
                         </tr>
