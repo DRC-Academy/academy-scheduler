@@ -697,6 +697,9 @@ function AgendaSemanal({ assignments }: { assignments: Assignment[] }) {
 function SetterContent() {
   const { teachers, students, assignments, unassignedStudents, addStudent, addAssignment, reloadAll } = useTeachers();
 
+  const [searchMode, setSearchMode] = useState<'dayhour' | 'day' | 'hour'>('dayhour');
+  const [dayOnly, setDayOnly] = useState('Lunes');
+  const [hourOnly, setHourOnly] = useState('18:00');
   const [slotFilters, setSlotFilters] = useState<SlotFilter[]>([]);
   const [onlyAvailable, setOnlyAvailable] = useState(false);
   const [searchName, setSearchName] = useState('');
@@ -722,24 +725,56 @@ function SetterContent() {
   const teacherHasAllSlots = (t: Teacher) =>
     slotFilters.every(sf => (t.libreCells ?? []).includes(`${sf.day}_${sf.hour}`));
 
+  // Horas libres de un profesor un día dado (modo "Solo por día").
+  const freeHoursOnDay = (t: Teacher, day: string) =>
+    (t.libreCells ?? []).filter(k => k.split('_')[0] === day).map(k => k.split('_')[1])
+      .sort((a, b) => parseInt(a) - parseInt(b));
+  // Días libres de un profesor a una hora dada (modo "Solo por hora").
+  const freeDaysAtHour = (t: Teacher, hour: string) => {
+    const set = new Set((t.libreCells ?? []).filter(k => k.split('_')[1] === hour).map(k => k.split('_')[0]));
+    return daysOfWeek.filter(d => set.has(d));
+  };
+
   const filtered = useMemo(() => {
-    return teachers.filter(t => {
+    // Filtros comunes a todos los modos: cupos, nombre, especialidad.
+    const base = teachers.filter(t => {
       if (onlyAvailable && t.status !== 'available' && t.status !== 'almost_full') return false;
       if (searchName && !t.name.toLowerCase().includes(searchName.toLowerCase())) return false;
       if (specialtyFilter && !(t.specialties ?? []).includes(specialtyFilter)) return false;
-      if (slotFilters.length > 0 && !teacherHasAllSlots(t)) return false;
       return true;
     });
-  }, [teachers, onlyAvailable, searchName, specialtyFilter, slotFilters]);
+    if (searchMode === 'day') {
+      return base.filter(t => freeHoursOnDay(t, dayOnly).length > 0)
+        .sort((a, b) => freeHoursOnDay(b, dayOnly).length - freeHoursOnDay(a, dayOnly).length);
+    }
+    if (searchMode === 'hour') {
+      return base.filter(t => freeDaysAtHour(t, hourOnly).length > 0)
+        .sort((a, b) => freeDaysAtHour(b, hourOnly).length - freeDaysAtHour(a, hourOnly).length);
+    }
+    return base.filter(t => slotFilters.length === 0 || teacherHasAllSlots(t));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teachers, onlyAvailable, searchName, specialtyFilter, slotFilters, searchMode, dayOnly, hourOnly]);
 
-  // Recommend only a teacher who has EVERY searched slot genuinely free in their grid.
-  const recommended = filtered.find(t =>
-    !t.isBlocked &&
-    t.status === 'available' &&
-    t.freeSpots >= Math.max(slotFilters.length, 1) &&
-    (slotFilters.length === 0 || teacherHasAllSlots(t))
-  );
-  const highlightSlots = slotFilters.map(sf => ({ day: sf.day, hour: sf.hour }));
+  // Recomendado: el primero de la lista (ya ordenada) que pueda recibir alumnos.
+  const recommended = useMemo(() => {
+    if (searchMode === 'day' || searchMode === 'hour') {
+      return filtered.find(t => !t.isBlocked && t.status === 'available' && t.freeSpots > 0);
+    }
+    return filtered.find(t =>
+      !t.isBlocked && t.status === 'available' &&
+      t.freeSpots >= Math.max(slotFilters.length, 1) &&
+      (slotFilters.length === 0 || teacherHasAllSlots(t))
+    );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtered, searchMode, slotFilters]);
+
+  // Celdas a resaltar en el calendario del profesor que se está viendo.
+  const highlightSlots = useMemo<AssignedSlot[]>(() => {
+    if (searchMode === 'day' && calendarTeacher) return freeHoursOnDay(calendarTeacher, dayOnly).map(h => ({ day: dayOnly, hour: h }));
+    if (searchMode === 'hour' && calendarTeacher) return freeDaysAtHour(calendarTeacher, hourOnly).map(d => ({ day: d, hour: hourOnly }));
+    return slotFilters.map(sf => ({ day: sf.day, hour: sf.hour }));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchMode, calendarTeacher, dayOnly, hourOnly, slotFilters]);
 
   function handleAssigned(a: Assignment, s: Student) {
     addAssignment(a);
@@ -784,36 +819,89 @@ function SetterContent() {
               <input value={searchName} onChange={e => setSearchName(e.target.value)} placeholder="Ej: Silvia, Sebastian..." style={{ maxWidth: 280 }} />
             </div>
 
+            {/* Selector de modo de búsqueda */}
             <div style={{ marginBottom: 16 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                <label style={{ margin: 0 }}>
-                  Filtrar por horarios
-                  <span style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 400, marginLeft: 8, textTransform: 'none', letterSpacing: 0 }}>(opcional)</span>
-                </label>
-                <button onClick={addSlotFilter} style={{ padding: '5px 12px', borderRadius: 8, border: '1px solid rgba(30,158,58,0.3)', background: 'rgba(30,158,58,0.08)', color: '#1E9E3A', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>+ Agregar horario</button>
+              <label style={{ display: 'block', marginBottom: 8, fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Tipo de búsqueda</label>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {([
+                  ['dayhour', '📅 Día + Hora específica'],
+                  ['day',     '📆 Solo por día'],
+                  ['hour',    '🕐 Solo por hora'],
+                ] as const).map(([m, label]) => {
+                  const active = searchMode === m;
+                  return (
+                    <button key={m} onClick={() => setSearchMode(m)}
+                      style={{ padding: '7px 14px', borderRadius: 20, border: `1.5px solid ${active ? '#1E9E3A' : 'var(--border)'}`, background: active ? 'rgba(30,158,58,0.1)' : 'transparent', color: active ? '#1E9E3A' : 'var(--text-secondary)', cursor: 'pointer', fontSize: 12.5, fontWeight: active ? 700 : 500, fontFamily: 'inherit' }}>
+                      {label}
+                    </button>
+                  );
+                })}
               </div>
-
-              {slotFilters.length === 0 ? (
-                <div style={{ padding: '12px 16px', border: '1px dashed var(--border)', borderRadius: 9, fontSize: 13, color: 'var(--text-muted)', textAlign: 'center' }}>
-                  Sin filtros — mostrando todos los profesores
-                </div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {slotFilters.map((sf, idx) => (
-                    <div key={sf.id} style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--bg-surface-2)', borderRadius: 10, padding: '10px 14px', border: '1px solid var(--border)', flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', minWidth: 64 }}>Horario {idx + 1}</span>
-                      <select value={sf.day} onChange={e => updateSlotFilter(sf.id, 'day', e.target.value)} style={{ flex: '1 1 110px', minWidth: 100 }}>
-                        {daysOfWeek.map(d => <option key={d}>{d}</option>)}
-                      </select>
-                      <select value={sf.hour} onChange={e => updateSlotFilter(sf.id, 'hour', e.target.value)} style={{ flex: '1 1 90px', minWidth: 80 }}>
-                        {HOURS_ES.map(h => <option key={h} value={h}>{h} 🇪🇸</option>)}
-                      </select>
-                      <button onClick={() => removeSlotFilter(sf.id)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 18, padding: '0 4px' }}>✕</button>
-                    </div>
-                  ))}
-                </div>
-              )}
             </div>
+
+            {/* MODO 1 — Día + Hora específica */}
+            {searchMode === 'dayhour' && (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                  <label style={{ margin: 0 }}>
+                    Filtrar por horarios
+                    <span style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 400, marginLeft: 8, textTransform: 'none', letterSpacing: 0 }}>(opcional)</span>
+                  </label>
+                  <button onClick={addSlotFilter} style={{ padding: '5px 12px', borderRadius: 8, border: '1px solid rgba(30,158,58,0.3)', background: 'rgba(30,158,58,0.08)', color: '#1E9E3A', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>+ Agregar horario</button>
+                </div>
+
+                {slotFilters.length === 0 ? (
+                  <div style={{ padding: '12px 16px', border: '1px dashed var(--border)', borderRadius: 9, fontSize: 13, color: 'var(--text-muted)', textAlign: 'center' }}>
+                    Sin filtros — mostrando todos los profesores
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {slotFilters.map((sf, idx) => (
+                      <div key={sf.id} style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--bg-surface-2)', borderRadius: 10, padding: '10px 14px', border: '1px solid var(--border)', flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', minWidth: 64 }}>Horario {idx + 1}</span>
+                        <select value={sf.day} onChange={e => updateSlotFilter(sf.id, 'day', e.target.value)} style={{ flex: '1 1 110px', minWidth: 100 }}>
+                          {daysOfWeek.map(d => <option key={d}>{d}</option>)}
+                        </select>
+                        <select value={sf.hour} onChange={e => updateSlotFilter(sf.id, 'hour', e.target.value)} style={{ flex: '1 1 90px', minWidth: 80 }}>
+                          {HOURS_ES.map(h => <option key={h} value={h}>{h} 🇪🇸</option>)}
+                        </select>
+                        <button onClick={() => removeSlotFilter(sf.id)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 18, padding: '0 4px' }}>✕</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* MODO 2 — Solo por día */}
+            {searchMode === 'day' && (
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ display: 'block', marginBottom: 8, fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Día</label>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {daysOfWeek.map(d => {
+                    const active = dayOnly === d;
+                    return (
+                      <button key={d} onClick={() => setDayOnly(d)}
+                        style={{ padding: '6px 14px', borderRadius: 20, border: `1.5px solid ${active ? '#1E9E3A' : 'var(--border)'}`, background: active ? 'rgba(30,158,58,0.1)' : 'transparent', color: active ? '#1E9E3A' : 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, fontWeight: active ? 700 : 500, fontFamily: 'inherit' }}>
+                        {d}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 8 }}>Profesores con al menos una hora libre el {dayOnly}, ordenados por cantidad de horas libres.</div>
+              </div>
+            )}
+
+            {/* MODO 3 — Solo por hora */}
+            {searchMode === 'hour' && (
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ display: 'block', marginBottom: 8, fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Hora 🇪🇸</label>
+                <select value={hourOnly} onChange={e => setHourOnly(e.target.value)} style={{ maxWidth: 170 }}>
+                  {HOURS_ES.map(h => <option key={h} value={h}>{h}</option>)}
+                </select>
+                <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 8 }}>Profesores con la hora {hourOnly} libre en cualquier día, ordenados por cantidad de días libres.</div>
+              </div>
+            )}
 
             <div style={{ marginBottom: 14 }}>
               <label style={{ display: 'block', marginBottom: 8, fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
@@ -846,11 +934,25 @@ function SetterContent() {
               <span style={{ fontSize: 22 }}>⭐</span>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 11, fontWeight: 700, color: '#1E9E3A', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Recomendado</div>
-                <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--text-primary)' }}>{recommended.name} — {recommended.freeSpots} cupos libres</div>
-                {slotFilters.length > 0 && (() => {
-                  const freeSearched = slotFilters.filter(sf => (recommended.libreCells ?? []).includes(`${sf.day}_${sf.hour}`));
-                  return freeSearched.length > 0 && <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Disponible en: {freeSearched.map(sf => `${sf.day} ${sf.hour}`).join(' · ')}</div>;
-                })()}
+                {searchMode === 'day' ? (() => {
+                  const hrs = freeHoursOnDay(recommended, dayOnly);
+                  return (<>
+                    <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--text-primary)' }}>{recommended.name} — {hrs.length} horario{hrs.length !== 1 ? 's' : ''} libre{hrs.length !== 1 ? 's' : ''} el {dayOnly}</div>
+                    <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{hrs.join(', ')}</div>
+                  </>);
+                })() : searchMode === 'hour' ? (() => {
+                  const dys = freeDaysAtHour(recommended, hourOnly);
+                  return (<>
+                    <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--text-primary)' }}>{recommended.name} — Libre a las {hourOnly} en {dys.length} día{dys.length !== 1 ? 's' : ''}</div>
+                    <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{dys.join(', ')}</div>
+                  </>);
+                })() : (<>
+                  <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--text-primary)' }}>{recommended.name} — {recommended.freeSpots} cupos libres</div>
+                  {slotFilters.length > 0 && (() => {
+                    const freeSearched = slotFilters.filter(sf => (recommended.libreCells ?? []).includes(`${sf.day}_${sf.hour}`));
+                    return freeSearched.length > 0 && <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Disponible en: {freeSearched.map(sf => `${sf.day} ${sf.hour}`).join(' · ')}</div>;
+                  })()}
+                </>)}
               </div>
               <button onClick={() => setCalendarTeacher(recommended)} style={{ padding: '8px 18px', borderRadius: 8, border: 'none', background: '#1E9E3A', color: 'white', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>📅 Ver calendario →</button>
             </div>
@@ -880,6 +982,16 @@ function SetterContent() {
                       <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                         {(t.specialties ?? []).map(sp => <SpecialtyChip key={sp} specialty={sp} />)}
                       </div>
+                      {searchMode === 'day' && (
+                        <div style={{ fontSize: 11, color: '#1E9E3A', fontWeight: 600, marginTop: 5 }}>
+                          🕐 Libre el {dayOnly}: {freeHoursOnDay(t, dayOnly).join(', ') || '—'}
+                        </div>
+                      )}
+                      {searchMode === 'hour' && (
+                        <div style={{ fontSize: 11, color: '#1E9E3A', fontWeight: 600, marginTop: 5 }}>
+                          📆 Libre a las {hourOnly}: {freeDaysAtHour(t, hourOnly).join(', ') || '—'}
+                        </div>
+                      )}
                     </div>
                   </div>
 
