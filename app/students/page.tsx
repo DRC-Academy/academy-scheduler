@@ -434,19 +434,40 @@ function StudentsContent() {
   const [subProgress, setSubProgress] = useState<{ done: number; total: number } | null>(null);
   const [refreshing, setRefreshing] = useState<Set<string>>(new Set());
 
-  // Merge students from both sources: students table + assignments
+  // Merge students from both sources: students table + assignments.
+  // Una assignment ya representada por un alumno de la tabla (por id, email o
+  // nombre) NO genera una fila aparte — solo las assignments verdaderamente
+  // huérfanas (sin alumno en la tabla) se muestran como entrada propia.
   const allStudents = useMemo<DisplayStudent[]>(() => {
     const map = new Map<string, DisplayStudent>();
     for (const s of students) {
       map.set(s.id, { id: s.id, name: s.name, email: s.email, level: s.level, plan: s.plan ?? '', phone: s.phone ?? '', inStudentsTable: true, createdAt: s.createdAt });
     }
+    const studentMatchesAssignment = (s: Student, a: Assignment) =>
+      a.studentId === s.id ||
+      (!!a.studentEmail && !!s.email && a.studentEmail.trim().toLowerCase() === s.email.trim().toLowerCase()) ||
+      a.studentName.trim().toLowerCase() === s.name.trim().toLowerCase();
+
     for (const a of assignments) {
-      if (!map.has(a.studentId)) {
+      const represented = students.some(s => studentMatchesAssignment(s, a));
+      if (!represented && !map.has(a.studentId)) {
         map.set(a.studentId, { id: a.studentId, name: a.studentName, email: a.studentEmail, level: a.studentLevel, plan: a.plan ?? '', phone: '', inStudentsTable: false, createdAt: a.createdAt });
       }
     }
     return [...map.values()].sort((a, b) => a.name.localeCompare(b.name));
   }, [students, assignments]);
+
+  // Matching robusto alumno ↔ assignment: id (principal), email (fallback),
+  // nombre (último recurso) — tolerante a mayúsculas y espacios.
+  function assignmentsForStudent(s: DisplayStudent): Assignment[] {
+    const sEmail = s.email?.trim().toLowerCase();
+    const sName  = s.name.trim().toLowerCase();
+    return assignments.filter(a =>
+      a.studentId === s.id ||
+      (!!a.studentEmail && !!sEmail && a.studentEmail.trim().toLowerCase() === sEmail) ||
+      a.studentName.trim().toLowerCase() === sName
+    );
+  }
 
   // Unique student emails — fetch all subscription states once when the page loads.
   const subEmails = useMemo(() => {
@@ -550,7 +571,7 @@ function StudentsContent() {
   }
 
   async function handleEditClick(s: DisplayStudent) {
-    const asgn = assignments.find(a => a.studentId === s.id || a.studentName === s.name) ?? null;
+    const asgn = assignmentsForStudent(s)[0] ?? null;
     let tGrid: Grid = {};
     if (asgn) {
       tGrid = await getTeacherGrid(asgn.teacherId);
@@ -671,7 +692,7 @@ function StudentsContent() {
                   </thead>
                   <tbody>
                     {filtered.map(s => {
-                      const studentAssignments = assignments.filter(a => a.studentId === s.id || a.studentName === s.name);
+                      const studentAssignments = assignmentsForStudent(s);
                       return (
                         <tr key={s.id} style={{ borderBottom: '1px solid var(--border)' }}>
                           <td style={{ padding: '11px 14px', minWidth: 140 }}>
@@ -736,7 +757,7 @@ function StudentsContent() {
               {/* Mobile: cards */}
               <div className="mob-only" style={{ flexDirection: 'column', gap: 0 }}>
                 {filtered.map(s => {
-                  const studentAssignments = assignments.filter(a => a.studentId === s.id || a.studentName === s.name);
+                  const studentAssignments = assignmentsForStudent(s);
                   return (
                     <div key={s.id} style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
                       {/* Name + avatar */}

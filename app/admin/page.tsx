@@ -10,7 +10,9 @@ import { useTeachers } from '@/lib/TeachersContext';
 import { useAuth } from '@/lib/AuthContext';
 import { mockAlerts } from '@/lib/mock-data';
 import { Teacher, Grid, Assignment, ScoringEvent, ScoringEventType } from '@/types';
-import { EVENT_POINTS, EVENT_EUROS, calcCurrentClassNumber, dbUpdateAssignmentStartDate, dbGetAllNotifications } from '@/lib/db';
+import { EVENT_POINTS, EVENT_EUROS, calcCurrentClassNumber, dbUpdateAssignmentStartDate, dbGetAllNotifications,
+  dbAuditStudentAssignments, dbRelinkAssignment, dbSyncAssignmentName, dbMergeDuplicateStudents, AuditResult } from '@/lib/db';
+import { useRouter } from 'next/navigation';
 import { AppNotification, ClassJoinLog } from '@/types';
 
 // ─── Specialty constants ──────────────────────────────────────────────────────
@@ -1931,6 +1933,262 @@ function ClassLogTab() {
   );
 }
 
+// ─── Audit Panel (Auditoría de vínculos) ──────────────────────────────────────
+const AUDIT_REVIEWED_KEY = 'drc_audit_reviewed_multi';
+
+function loadReviewed(): Set<string> {
+  try { return new Set(JSON.parse(localStorage.getItem(AUDIT_REVIEWED_KEY) || '[]')); }
+  catch { return new Set(); }
+}
+function saveReviewed(set: Set<string>) {
+  try { localStorage.setItem(AUDIT_REVIEWED_KEY, JSON.stringify([...set])); } catch { /* noop */ }
+}
+
+const auditCard = { background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 10, padding: '14px 16px' };
+const auditSectionTitle = (color: string) => ({ fontSize: 13, fontWeight: 700, color, marginBottom: 10 });
+const auditBtn = (color: string, bg: string, border: string) => ({
+  padding: '5px 11px', borderRadius: 7, border: `1px solid ${border}`, background: bg,
+  color, cursor: 'pointer', fontSize: 11, fontWeight: 700, fontFamily: 'inherit', whiteSpace: 'nowrap' as const,
+});
+
+function AuditPanel() {
+  const { students, reloadAll } = useTeachers();
+  const router = useRouter();
+
+  const [open, setOpen] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState<AuditResult | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [reviewed, setReviewed] = useState<Set<string>>(new Set());
+  const [relinkFor, setRelinkFor] = useState<AuditResult['orphanAssignments'][number] | null>(null);
+  const [relinkSearch, setRelinkSearch] = useState('');
+  const [mergeFor, setMergeFor] = useState<AuditResult['duplicateEmails'][number] | null>(null);
+  const [mergeKeepId, setMergeKeepId] = useState('');
+
+  useEffect(() => { setReviewed(loadReviewed()); }, []);
+
+  async function runAudit() {
+    setRunning(true);
+    try { setResult(await dbAuditStudentAssignments()); }
+    finally { setRunning(false); }
+  }
+
+  async function withBusy(key: string, fn: () => Promise<void>) {
+    setBusy(key);
+    try { await fn(); await reloadAll(); await runAudit(); }
+    finally { setBusy(null); }
+  }
+
+  function toggleReviewed(key: string) {
+    setReviewed(prev => {
+      const n = new Set(prev);
+      n.has(key) ? n.delete(key) : n.add(key);
+      saveReviewed(n);
+      return n;
+    });
+  }
+
+  function exportCsv() {
+    if (!result) return;
+    const rows: string[] = ['Tipo,Detalle 1,Detalle 2,Detalle 3'];
+    const q = (s: unknown) => `"${String(s ?? '').replace(/"/g, '""')}"`;
+    for (const a of result.studentsWithoutAssignment) rows.push(['A - Sin profesor', q(a.name), q(a.email), ''].join(','));
+    for (const b of result.orphanAssignments) rows.push(['B - Asignacion sin alumno', q(b.studentName), q(b.studentEmail), q(b.teacherName)].join(','));
+    for (const c of result.nameMismatches) rows.push(['C - Nombre inconsistente', q(c.nameStudents), q(c.nameAssignments), q(c.teacherName)].join(','));
+    for (const d of result.duplicateEmails) rows.push(['D - Email duplicado', q(d.email), q(d.names), q(d.total)].join(','));
+    for (const e of result.multipleAssignments) rows.push(['E - Multiples asignaciones', q(e.studentName), q(e.teachers), q(e.total)].join(','));
+    const blob = new Blob([rows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url; link.download = `auditoria_vinculos_${new Date().toISOString().slice(0, 10)}.csv`; link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  const visibleMultiples = result?.multipleAssignments.filter(m => !reviewed.has(`${m.studentId}|${m.studentName}`)) ?? [];
+  const allClean = result &&
+    result.studentsWithoutAssignment.length === 0 &&
+    result.orphanAssignments.length === 0 &&
+    result.nameMismatches.length === 0 &&
+    result.duplicateEmails.length === 0 &&
+    visibleMultiples.length === 0;
+
+  const relinkStudents = students.filter(s => {
+    const q = relinkSearch.trim().toLowerCase();
+    if (!q) return true;
+    return s.name.toLowerCase().includes(q) || s.email.toLowerCase().includes(q);
+  }).slice(0, 30);
+
+  return (
+    <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', marginTop: 16 }}>
+      <button onClick={() => setOpen(o => !o)}
+        style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 18px', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
+        <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>🔍 Auditoría de vínculos</span>
+        <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>{open ? '▲' : '▼'}</span>
+      </button>
+
+      {open && (
+        <div style={{ padding: '0 18px 18px', borderTop: '1px solid var(--border)' }}>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', margin: '14px 0 16px' }}>
+            <button onClick={runAudit} disabled={running}
+              style={{ padding: '9px 16px', borderRadius: 8, border: 'none', background: '#1E9E3A', color: 'white', cursor: running ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+              {running ? 'Ejecutando...' : '▶ Ejecutar auditoría'}
+            </button>
+            {result && (
+              <button onClick={exportCsv}
+                style={{ padding: '9px 16px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface-2)', color: 'var(--text-primary)', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
+                ⬇ Exportar reporte
+              </button>
+            )}
+          </div>
+
+          {!result ? (
+            <div style={{ fontSize: 13, color: 'var(--text-muted)', padding: '8px 0' }}>Ejecutá la auditoría para detectar inconsistencias entre alumnos y asignaciones.</div>
+          ) : allClean ? (
+            <div style={{ padding: '24px', textAlign: 'center', color: '#1E9E3A', fontSize: 15, fontWeight: 700, background: 'rgba(30,158,58,0.08)', borderRadius: 10 }}>
+              ✅ Todo en orden — No se encontraron inconsistencias
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              {/* A */}
+              {result.studentsWithoutAssignment.length > 0 && (
+                <div style={auditCard}>
+                  <div style={auditSectionTitle('#ea580c')}>A · Alumnos sin profesor asignado ({result.studentsWithoutAssignment.length})</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                    {result.studentsWithoutAssignment.map(s => (
+                      <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, fontSize: 12.5, flexWrap: 'wrap' }}>
+                        <span><b style={{ color: 'var(--text-primary)' }}>{s.name}</b> <span style={{ color: 'var(--text-muted)' }}>· {s.email || '—'}</span></span>
+                        <button onClick={() => router.push('/setter')} style={auditBtn('#1E9E3A', 'rgba(30,158,58,0.08)', 'rgba(30,158,58,0.4)')}>Asignar profesor →</button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* B */}
+              {result.orphanAssignments.length > 0 && (
+                <div style={auditCard}>
+                  <div style={auditSectionTitle('#dc2626')}>B · Asignaciones sin alumno válido ({result.orphanAssignments.length})</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                    {result.orphanAssignments.map(b => (
+                      <div key={b.assignmentId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, fontSize: 12.5, flexWrap: 'wrap' }}>
+                        <span><b style={{ color: 'var(--text-primary)' }}>{b.studentName}</b> <span style={{ color: 'var(--text-muted)' }}>· {b.studentEmail || 'sin email'} · 👨‍🏫 {b.teacherName}</span></span>
+                        <button onClick={() => { setRelinkFor(b); setRelinkSearch(b.studentName); }} style={auditBtn('#2563eb', 'rgba(37,99,235,0.08)', 'rgba(37,99,235,0.4)')}>Vincular alumno</button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* C */}
+              {result.nameMismatches.length > 0 && (
+                <div style={auditCard}>
+                  <div style={auditSectionTitle('#b45309')}>C · Nombres inconsistentes ({result.nameMismatches.length})</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                    {result.nameMismatches.map(c => (
+                      <div key={c.assignmentId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, fontSize: 12.5, flexWrap: 'wrap' }}>
+                        <span style={{ color: 'var(--text-secondary)' }}>En alumnos: <b style={{ color: 'var(--text-primary)' }}>{c.nameStudents}</b> · En asignación: <b style={{ color: '#b45309' }}>{c.nameAssignments}</b></span>
+                        <button disabled={busy === c.assignmentId} onClick={() => withBusy(c.assignmentId, () => dbSyncAssignmentName(c.assignmentId, c.nameStudents))} style={auditBtn('#1E9E3A', 'rgba(30,158,58,0.08)', 'rgba(30,158,58,0.4)')}>
+                          {busy === c.assignmentId ? '...' : 'Sincronizar nombre'}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* D */}
+              {result.duplicateEmails.length > 0 && (
+                <div style={auditCard}>
+                  <div style={auditSectionTitle('#7c3aed')}>D · Alumnos duplicados ({result.duplicateEmails.length})</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                    {result.duplicateEmails.map(d => (
+                      <div key={d.email} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, fontSize: 12.5, flexWrap: 'wrap' }}>
+                        <span><b style={{ color: 'var(--text-primary)' }}>{d.email}</b> <span style={{ color: 'var(--text-muted)' }}>· {d.names}</span></span>
+                        <button onClick={() => { setMergeFor(d); setMergeKeepId(d.students.find(s => s.hasAssignment)?.id ?? d.students[0].id); }} style={auditBtn('#7c3aed', 'rgba(124,58,237,0.08)', 'rgba(124,58,237,0.4)')}>Fusionar</button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* E */}
+              {visibleMultiples.length > 0 && (
+                <div style={auditCard}>
+                  <div style={auditSectionTitle('#2563eb')}>E · Múltiples asignaciones ({visibleMultiples.length})</div>
+                  <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginBottom: 10, fontStyle: 'italic' }}>
+                    Algunos alumnos pueden tener clases con más de un profesor (es válido). Revisá si es intencional.
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                    {visibleMultiples.map(m => (
+                      <div key={`${m.studentId}|${m.studentName}`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, fontSize: 12.5, flexWrap: 'wrap' }}>
+                        <span><b style={{ color: 'var(--text-primary)' }}>{m.studentName}</b> <span style={{ color: 'var(--text-muted)' }}>· {m.total} profesores: {m.teachers}</span></span>
+                        <button onClick={() => toggleReviewed(`${m.studentId}|${m.studentName}`)} style={auditBtn('var(--text-secondary)', 'transparent', 'var(--border)')}>Marcar como revisado</button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Modal: Vincular alumno (B) */}
+      {relinkFor && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(6px)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+          onClick={e => { if (e.target === e.currentTarget) setRelinkFor(null); }}>
+          <div style={{ background: '#F7F7F5', border: '1px solid var(--border)', borderRadius: 16, width: '100%', maxWidth: 460, padding: 24, maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ fontWeight: 700, fontSize: 16, color: '#111827', marginBottom: 4 }}>Vincular alumno</div>
+            <div style={{ fontSize: 12.5, color: '#6b7280', marginBottom: 14 }}>Asignación de <b>{relinkFor.studentName}</b> ({relinkFor.teacherName}). Elegí el alumno real:</div>
+            <input value={relinkSearch} onChange={e => setRelinkSearch(e.target.value)} placeholder="Buscar por nombre o email..."
+              style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1.5px solid var(--border)', fontSize: 13, background: 'white', color: '#111827', fontFamily: 'inherit', boxSizing: 'border-box', marginBottom: 12 }} />
+            <div style={{ overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {relinkStudents.map(s => (
+                <button key={s.id} disabled={busy === relinkFor.assignmentId}
+                  onClick={() => withBusy(relinkFor.assignmentId, async () => { await dbRelinkAssignment(relinkFor.assignmentId, { id: s.id, name: s.name, email: s.email, level: s.level }); setRelinkFor(null); })}
+                  style={{ textAlign: 'left', padding: '9px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'white', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
+                  <b style={{ color: '#111827' }}>{s.name}</b> <span style={{ color: '#6b7280' }}>· {s.email || '—'} · {s.level}</span>
+                </button>
+              ))}
+              {relinkStudents.length === 0 && <div style={{ fontSize: 12, color: '#9ca3af', padding: 8 }}>Sin resultados.</div>}
+            </div>
+            <button onClick={() => setRelinkFor(null)} style={{ marginTop: 12, padding: '9px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#6b7280', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit' }}>Cancelar</button>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Fusionar duplicados (D) */}
+      {mergeFor && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(6px)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+          onClick={e => { if (e.target === e.currentTarget) setMergeFor(null); }}>
+          <div style={{ background: '#F7F7F5', border: '1px solid var(--border)', borderRadius: 16, width: '100%', maxWidth: 440, padding: 24 }}>
+            <div style={{ fontWeight: 700, fontSize: 16, color: '#111827', marginBottom: 4 }}>Fusionar alumnos duplicados</div>
+            <div style={{ fontSize: 12.5, color: '#6b7280', marginBottom: 14 }}>Email <b>{mergeFor.email}</b>. Elegí cuál conservar — las asignaciones del resto se reapuntarán y los duplicados se eliminarán.</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 18 }}>
+              {mergeFor.students.map(s => (
+                <label key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 8, border: `1.5px solid ${mergeKeepId === s.id ? '#1E9E3A' : 'var(--border)'}`, background: mergeKeepId === s.id ? 'rgba(30,158,58,0.06)' : 'white', cursor: 'pointer' }}>
+                  <input type="radio" checked={mergeKeepId === s.id} onChange={() => setMergeKeepId(s.id)} />
+                  <span style={{ fontSize: 13, color: '#111827' }}><b>{s.name}</b>{s.hasAssignment && <span style={{ color: '#1E9E3A', fontWeight: 700 }}> · con asignación</span>}</span>
+                </label>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button onClick={() => setMergeFor(null)} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#6b7280', cursor: 'pointer', fontSize: 14, fontFamily: 'inherit' }}>Cancelar</button>
+              <button disabled={busy === 'merge'} onClick={() => withBusy('merge', async () => {
+                const removeIds = mergeFor.students.filter(s => s.id !== mergeKeepId).map(s => s.id);
+                for (const rid of removeIds) await dbMergeDuplicateStudents(mergeKeepId, rid);
+                setMergeFor(null);
+              })} style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: '#1E9E3A', color: 'white', cursor: 'pointer', fontSize: 14, fontWeight: 700, fontFamily: 'inherit' }}>
+                {busy === 'merge' ? 'Fusionando...' : 'Fusionar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Admin Content ────────────────────────────────────────────────────────────
 function AdminContent() {
   const { teachers, assignments, students, addTeacher, loadingTeachers, getTeacherGrid, updateTeacherGrid, checkAndRunResets, reloadAll, updateTeacherInfo } = useTeachers();
@@ -2063,6 +2321,8 @@ function AdminContent() {
               </div>
             </div>
           </div>
+
+          <AuditPanel />
         </>)}
 
         {/* TEACHERS TAB */}

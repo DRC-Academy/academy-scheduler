@@ -4,7 +4,7 @@ import { Teacher, Student, Assignment, Grid, ScoringEvent, ClassCount, AppNotifi
 import {
   dbGetTeachers, dbAddTeacher,
   dbGetStudents, dbUpsertStudent, dbDeleteStudent, dbUpdateStudent,
-  dbGetAssignments, dbAddAssignment,
+  dbGetAssignments, dbAddAssignment, dbGetAllStudentsWithAssignments,
   dbGetTeacherGrid, dbSaveTeacherGrid, dbUpdateTeacherRating,
   dbAddScoringEvent, dbGetScoringEvents,
   dbAssignTeacherOfMonth, dbAssignTeacherOfQuarter,
@@ -136,18 +136,20 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   const [financePayments, setFinancePayments] = useState<FinancePayment[]>([]);
   const [lastUpdated, setLastUpdated]   = useState<Date | null>(null);
 
-  // Silent reload — no loading spinner, just swaps in fresh data
+  // Silent reload — no loading spinner, just swaps in fresh data.
+  // students + assignments se traen JUNTOS (consistentes, con auto-corrección de
+  // student_id) y el estado se actualiza recién cuando TODO está disponible, para
+  // evitar el race condition que dejaba la UI sin profesor/horarios.
   async function reloadAll() {
-    const [t, s, a, ev, unassigned] = await Promise.all([
+    const [t, sa, ev, unassigned] = await Promise.all([
       dbGetTeachers(),
-      dbGetStudents(),
-      dbGetAssignments(),
+      dbGetAllStudentsWithAssignments(),
       dbGetScoringEvents(),
       dbGetUnassignedStudents(),
     ]);
     setTeachers(t);
-    setStudents(s);
-    setAssignments(a);
+    setStudents(sa.students);
+    setAssignments(sa.assignments);
     setScoringEvents(ev);
     setUnassignedStudents(unassigned);
     setTeacherGrids({});
@@ -194,15 +196,14 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
 
   async function deleteStudent(studentId: string, studentName: string, createdBy?: string) {
     const affected = await dbDeleteStudent(studentId, studentName, createdBy);
-    const [t, s, a, unassigned] = await Promise.all([
+    const [t, sa, unassigned] = await Promise.all([
       dbGetTeachers(),
-      dbGetStudents(),
-      dbGetAssignments(),
+      dbGetAllStudentsWithAssignments(),
       dbGetUnassignedStudents(),
     ]);
     setTeachers(t);
-    setStudents(s);
-    setAssignments(a);
+    setStudents(sa.students);
+    setAssignments(sa.assignments);
     setUnassignedStudents(unassigned);
     setTeacherGrids({});
     return affected;

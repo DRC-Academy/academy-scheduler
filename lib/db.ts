@@ -259,6 +259,151 @@ export async function dbGetAssignments(): Promise<Assignment[]> {
   }));
 }
 
+// Normaliza para comparaciones tolerantes (trim + lower).
+const normKey = (x: unknown): string => String(x ?? '').trim().toLowerCase();
+
+// Trae students + assignments de forma consistente y auto-corrige los
+// student_id de assignments que no apuntan a ningún alumno real (matcheando por
+// email y, como último recurso, por nombre). Persiste la corrección en la BD
+// para que no vuelva a ocurrir.
+export async function dbGetAllStudentsWithAssignments(): Promise<{ students: Student[]; assignments: Assignment[] }> {
+  const [students, rawAssignments] = await Promise.all([dbGetStudents(), dbGetAssignments()]);
+
+  const byId    = new Map(students.map(s => [s.id, s]));
+  const byEmail = new Map(students.filter(s => s.email).map(s => [normKey(s.email), s]));
+  const byName  = new Map(students.map(s => [normKey(s.name), s]));
+
+  const fixes: Array<{ assignmentId: string; studentId: string }> = [];
+
+  const assignments = rawAssignments.map(a => {
+    if (byId.has(a.studentId)) return a; // ya apunta a un alumno válido
+    // Orphan: resolver por email → nombre (criterio principal id ya falló).
+    const match =
+      (a.studentEmail && byEmail.get(normKey(a.studentEmail))) ||
+      byName.get(normKey(a.studentName));
+    if (match && match.id !== a.studentId) {
+      fixes.push({ assignmentId: a.id, studentId: match.id });
+      return { ...a, studentId: match.id, studentName: match.name, studentEmail: match.email };
+    }
+    return a;
+  });
+
+  // Persistir las correcciones (best-effort; no bloquea si alguna falla).
+  if (fixes.length > 0) {
+    console.log(`[dbGetAllStudentsWithAssignments] Corrigiendo ${fixes.length} student_id huérfano(s)`);
+    await Promise.all(fixes.map(f =>
+      supabase.from('assignments').update({ student_id: f.studentId }).eq('id', f.assignmentId)
+    ));
+  }
+
+  return { students, assignments };
+}
+
+// ── AUDIT: vínculos alumnos ↔ assignments ─────────────────────────────────────
+
+export interface AuditResult {
+  // A) Alumnos sin ninguna assignment.
+  studentsWithoutAssignment: Array<{ id: string; name: string; email: string }>;
+  // B) Assignments cuyo student_id no existe en students.
+  orphanAssignments: Array<{ assignmentId: string; studentId: string; studentName: string; studentEmail: string; studentLevel: string; teacherName: string }>;
+  // C) student_name en assignments ≠ name en students (mismo student_id).
+  nameMismatches: Array<{ assignmentId: string; studentId: string; nameStudents: string; nameAssignments: string; email: string; teacherName: string }>;
+  // D) Alumnos duplicados por email.
+  duplicateEmails: Array<{ email: string; total: number; names: string; students: Array<{ id: string; name: string; hasAssignment: boolean }> }>;
+  // E) Alumnos con más de una assignment.
+  multipleAssignments: Array<{ studentId: string; studentName: string; total: number; teachers: string }>;
+}
+
+export async function dbAuditStudentAssignments(): Promise<AuditResult> {
+  const [students, assignments] = await Promise.all([dbGetStudents(), dbGetAssignments()]);
+  const byId = new Map(students.map(s => [s.id, s]));
+
+  const matches = (s: Student, a: Assignment) =>
+    a.studentId === s.id ||
+    (!!a.studentEmail && !!s.email && normKey(a.studentEmail) === normKey(s.email)) ||
+    normKey(a.studentName) === normKey(s.name);
+
+  // A
+  const studentsWithoutAssignment = students
+    .filter(s => !assignments.some(a => matches(s, a)))
+    .map(s => ({ id: s.id, name: s.name, email: s.email }));
+
+  // B (LEFT JOIN solo por student_id)
+  const orphanAssignments = assignments
+    .filter(a => !byId.has(a.studentId))
+    .map(a => ({ assignmentId: a.id, studentId: a.studentId, studentName: a.studentName, studentEmail: a.studentEmail, studentLevel: a.studentLevel, teacherName: a.teacherName }));
+
+  // C
+  const nameMismatches = assignments
+    .filter(a => { const s = byId.get(a.studentId); return !!s && normKey(s.name) !== normKey(a.studentName); })
+    .map(a => { const s = byId.get(a.studentId)!; return { assignmentId: a.id, studentId: a.studentId, nameStudents: s.name, nameAssignments: a.studentName, email: s.email, teacherName: a.teacherName }; });
+
+  // D — duplicados por email
+  const emailGroups = new Map<string, Student[]>();
+  for (const s of students) {
+    const e = normKey(s.email);
+    if (!e) continue;
+    const arr = emailGroups.get(e);
+    if (arr) arr.push(s); else emailGroups.set(e, [s]);
+  }
+  const duplicateEmails = [...emailGroups.entries()]
+    .filter(([, arr]) => arr.length > 1)
+    .map(([email, arr]) => ({
+      email,
+      total: arr.length,
+      names: arr.map(s => s.name).join(' / '),
+      students: arr.map(s => ({ id: s.id, name: s.name, hasAssignment: assignments.some(a => matches(s, a)) })),
+    }));
+
+  // E — múltiples assignments por alumno
+  const asgnGroups = new Map<string, Assignment[]>();
+  for (const a of assignments) {
+    const key = a.studentId || normKey(a.studentName);
+    const arr = asgnGroups.get(key);
+    if (arr) arr.push(a); else asgnGroups.set(key, [a]);
+  }
+  const multipleAssignments = [...asgnGroups.values()]
+    .filter(arr => arr.length > 1)
+    .map(arr => ({
+      studentId: arr[0].studentId,
+      studentName: arr[0].studentName,
+      total: arr.length,
+      teachers: arr.map(a => a.teacherName).join(' / '),
+    }));
+
+  return { studentsWithoutAssignment, orphanAssignments, nameMismatches, duplicateEmails, multipleAssignments };
+}
+
+// Vincula una assignment a un alumno real (corrige id + sincroniza datos).
+export async function dbRelinkAssignment(assignmentId: string, student: { id: string; name: string; email: string; level: string }): Promise<void> {
+  await supabase.from('assignments').update({
+    student_id:    student.id,
+    student_name:  student.name,
+    student_email: student.email,
+    student_level: student.level,
+  }).eq('id', assignmentId);
+}
+
+// Sincroniza el student_name de una assignment con el nombre real del alumno.
+export async function dbSyncAssignmentName(assignmentId: string, name: string): Promise<void> {
+  await supabase.from('assignments').update({ student_name: name }).eq('id', assignmentId);
+}
+
+// Fusiona dos alumnos duplicados: reapunta las assignments del duplicado al que
+// se conserva y elimina el registro duplicado.
+export async function dbMergeDuplicateStudents(keepId: string, removeId: string): Promise<void> {
+  if (keepId === removeId) return;
+  const { data: keep } = await supabase.from('students').select('*').eq('id', keepId).maybeSingle();
+  if (keep) {
+    await supabase.from('assignments')
+      .update({ student_id: keepId, student_name: keep.name, student_email: keep.email })
+      .eq('student_id', removeId);
+  } else {
+    await supabase.from('assignments').update({ student_id: keepId }).eq('student_id', removeId);
+  }
+  await supabase.from('students').delete().eq('id', removeId);
+}
+
 export async function dbAddAssignment(a: Assignment): Promise<void> {
   await supabase.from('assignments').insert({
     id:                     a.id,
