@@ -40,6 +40,10 @@ create table if not exists students (
 
 -- Para bases ya existentes:
 alter table students add column if not exists manual_active_until date;
+-- Tipo y nombre del producto WooCommerce (persistido para no consultar la API
+-- cada vez). product_type: 'subscription' | 'one_time'.
+alter table students add column if not exists product_type text;
+alter table students add column if not exists product_name text;
 
 -- ── ASSIGNMENTS ──────────────────────────────────────────────
 create table if not exists assignments (

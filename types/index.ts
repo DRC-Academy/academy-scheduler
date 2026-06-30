@@ -73,7 +73,9 @@ export interface Student {
   assignedTeacher?: string;
   assignedSlots?: Array<{ day: string; hour: string }>;
   notes?: string;
-  manualActiveUntil?: string; // 'YYYY-MM-DD' — activación manual de suscripción
+  manualActiveUntil?: string; // 'YYYY-MM-DD' — activación manual / acceso pago único
+  productType?: 'subscription' | 'one_time'; // tipo de producto WooCommerce
+  productName?: string;       // nombre real del producto en WooCommerce
   createdAt: string;
 }
 

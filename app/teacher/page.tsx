@@ -8,6 +8,7 @@ import { VisualCalendar, DAYS, cellKey, getSpainParts } from '@/components/Visua
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
 import { calcCurrentClassNumber, dbCheckStudentExists } from '@/lib/db';
+import { classCategoryBadge } from '@/lib/finance';
 import { Grid, Teacher, Assignment, ScoringEvent, Student, AppNotification } from '@/types';
 
 // ─── Specialty constants ──────────────────────────────────────────────────────
@@ -1128,6 +1129,9 @@ function TeacherUpcomingTab({ teacher, myAssignments, updateMeetLink, logClassJo
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
               <span style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)' }}>{c.studentName}</span>
+              {(() => { const cat = classCategoryBadge(c.plan); return (
+                <span style={{ fontSize: 10, padding: '1px 9px', borderRadius: 10, background: cat.bg, color: cat.color, fontWeight: 700 }}>{cat.label}</span>
+              ); })()}
               {inProgress && (
                 <span className="upcoming-live-badge" style={{ fontSize: 10, padding: '1px 9px', borderRadius: 10, background: 'rgba(220,38,38,0.12)', border: '1px solid rgba(220,38,38,0.4)', color: '#dc2626', fontWeight: 700 }}>
                   🔴 En curso

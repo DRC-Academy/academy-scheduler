@@ -7,7 +7,7 @@ import { LastUpdated } from '@/components/LastUpdated';
 import { useTeachers } from '@/lib/TeachersContext';
 import { useAuth } from '@/lib/AuthContext';
 import { DAYS, cellKey } from '@/components/VisualCalendar';
-import { dbCheckStudentExists, dbSetStudentManualActive } from '@/lib/db';
+import { dbCheckStudentExists, dbSetStudentManualActive, dbActivateOneTimeAccess } from '@/lib/db';
 import { Student, Grid, Assignment } from '@/types';
 
 // Detecta viewport mobile (< breakpoint). Alterna tabla (desktop) ↔ cards (mobile).
@@ -35,6 +35,9 @@ interface DisplayStudent {
   level: string;
   plan: string;
   phone: string;
+  productType?: 'subscription' | 'one_time';
+  productName?: string;
+  manualActiveUntil?: string;
   inStudentsTable: boolean;
   createdAt: string;
 }
@@ -49,15 +52,17 @@ function buildWhatsAppLink(phone: string, studentName: string): string {
   return `https://wa.me/${digits}?text=${encodeURIComponent(msg)}`;
 }
 
-// ── Subscription status (WooCommerce) ─────────────────────────────────────────
+// ── Subscription / one-time access status (WooCommerce) ───────────────────────
 interface SubInfo {
   active: boolean | null;
   status: string;
   daysRemaining: number | null;
   endDate: string | null;
+  productType: 'subscription' | 'one_time' | null;
+  productName: string | null;
+  manualActiveUntil: string | null;
   fetchedAt: number;
 }
-const SUB_TTL_MS = 5 * 60 * 1000;
 type SubCategory = 'active' | 'inactive' | 'pending' | 'unverified';
 
 async function fetchSubInfo(email: string): Promise<SubInfo> {
@@ -65,23 +70,26 @@ async function fetchSubInfo(email: string): Promise<SubInfo> {
     const res = await fetch(`/api/check-subscription?email=${encodeURIComponent(email)}`);
     const data = await res.json();
     return {
-      active:        data.active ?? null,
-      status:        data.status ?? 'error',
-      daysRemaining: data.daysRemaining ?? null,
-      endDate:       data.endDate ?? null,
-      fetchedAt:     Date.now(),
+      active:            data.active ?? null,
+      status:            data.status ?? 'error',
+      daysRemaining:     data.daysRemaining ?? null,
+      endDate:           data.endDate ?? null,
+      productType:       data.productType ?? null,
+      productName:       data.productName ?? null,
+      manualActiveUntil: data.manualActiveUntil ?? null,
+      fetchedAt:         Date.now(),
     };
   } catch {
-    return { active: null, status: 'error', daysRemaining: null, endDate: null, fetchedAt: Date.now() };
+    return { active: null, status: 'error', daysRemaining: null, endDate: null, productType: null, productName: null, manualActiveUntil: null, fetchedAt: Date.now() };
   }
 }
 
 function subCategory(info: SubInfo | undefined): SubCategory {
   if (!info) return 'unverified';
-  if (info.active === true) return 'active';
-  if (info.active === false && info.status === 'pending-cancel') return 'pending';
-  if (info.active === false) return 'inactive';
-  return 'unverified';
+  if (info.active === true) return 'active';                                    // active / manual_active / manual_override
+  if (info.status === 'pending-cancel') return 'pending';
+  if (info.active === null || info.status === 'error' || info.status === 'not_found') return 'unverified';
+  return 'inactive';   // cancelled, expired, on-hold, one_time_no_access (expirado o sin activar)
 }
 
 // Formatea 'YYYY-MM-DD' (o ISO) como 'DD/MM'.
@@ -94,19 +102,36 @@ function shortDate(iso: string | null): string {
 
 function subBadge(info: SubInfo | undefined): { label: string; color: string; bg: string; spin?: boolean } {
   if (!info) return { label: '...', color: 'var(--text-muted)', bg: 'var(--bg-surface-3)', spin: true };
-  // Activación manual: mismo verde, aclarando "(manual hasta DD/MM)".
+  const green  = { color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)' };
+  const red    = { color: '#dc2626', bg: 'rgba(239,68,68,0.1)' };
+  const gray   = { color: 'var(--text-muted)', bg: 'var(--bg-surface-3)' };
+
+  // PAGO ÚNICO
+  if (info.productType === 'one_time') {
+    if (info.status === 'manual_active' && info.manualActiveUntil) {
+      return { label: `🎯 Activo hasta ${shortDate(info.manualActiveUntil)}`, ...green };
+    }
+    if (info.manualActiveUntil) return { label: '❌ Expirado', ...red }; // tenía fecha y ya pasó
+    return { label: '⚪ Sin activar', ...gray };
+  }
+
+  // SUSCRIPCIÓN (y desconocido)
   if (info.status === 'manual_override') {
-    const tail = info.endDate ? ` hasta ${shortDate(info.endDate)}` : '';
-    return { label: `✅ Activa (manual${tail})`, color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)' };
+    const tail = info.manualActiveUntil ? ` hasta ${shortDate(info.manualActiveUntil)}` : (info.endDate ? ` hasta ${shortDate(info.endDate)}` : '');
+    return { label: `✅ Activa (manual${tail})`, ...green };
   }
-  if (info.active === true) return { label: '✅ Activa', color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)' };
-  if (info.active === false && info.status === 'pending-cancel') {
-    const d = info.daysRemaining;
-    const tail = d != null && d > 0 ? ` (${d} día${d === 1 ? '' : 's'})` : '';
-    return { label: `⏳ Pendiente${tail}`, color: '#b45309', bg: 'rgba(255,196,0,0.15)' };
+  switch (info.status) {
+    case 'active':         return { label: '✅ Activa', ...green };
+    case 'pending-cancel': {
+      const d = info.daysRemaining;
+      const tail = d != null && d > 0 ? ` (${d} día${d === 1 ? '' : 's'})` : '';
+      return { label: `⏳ Pendiente cancelar${tail}`, color: '#b45309', bg: 'rgba(255,196,0,0.15)' };
+    }
+    case 'on-hold':        return { label: '⚠️ En espera', color: '#ea580c', bg: 'rgba(249,115,22,0.12)' };
+    case 'cancelled':      return { label: '❌ Cancelada', ...red };
+    case 'expired':        return { label: '❌ Expirada', ...red };
+    default:               return { label: '❓ Sin verificar', ...gray }; // error / not_found
   }
-  if (info.active === false) return { label: '⚠️ Inactiva', color: '#ea580c', bg: 'rgba(249,115,22,0.12)' };
-  return { label: '❓ Sin verificar', color: 'var(--text-muted)', bg: 'var(--bg-surface-3)' };
 }
 
 // ── Duplicate Email Modal ─────────────────────────────────────────────────────
@@ -427,6 +452,70 @@ function ManualActivateModal({ student, onConfirm, onCancel }: {
   );
 }
 
+// ── One-time access modal (Gestionar acceso) ──────────────────────────────────
+function AccessModal({ student, onConfirm, onCancel }: {
+  student: DisplayStudent;
+  onConfirm: (until: string) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const todayStr = (() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  })();
+  const productName = student.productName || student.plan || 'Producto de pago único';
+
+  // Sugerencia de fin según el producto: Intensivo +4 semanas, Empresas +8.
+  function suggestEnd(start: string): string {
+    const weeks = /empresas/i.test(productName) ? 8 : /intensivo/i.test(productName) ? 4 : 4;
+    const d = new Date((start || todayStr) + 'T00:00:00');
+    d.setDate(d.getDate() + weeks * 7);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+
+  const [start, setStart] = useState(todayStr);
+  const [until, setUntil] = useState(suggestEnd(todayStr));
+  const [saving, setSaving] = useState(false);
+
+  // Reajustar la sugerencia de fin al cambiar la fecha de inicio.
+  function onStartChange(v: string) {
+    setStart(v);
+    setUntil(suggestEnd(v));
+  }
+
+  const canSave = !!until && until >= todayStr && until >= start && !saving;
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)', zIndex: 90, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+      onClick={e => { if (e.target === e.currentTarget && !saving) onCancel(); }}>
+      <div style={{ background: 'var(--bg-surface)', border: '1px solid #35405a', borderRadius: 14, padding: 24, width: '100%', maxWidth: 440 }}>
+        <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)', marginBottom: 4 }}>Gestionar acceso — {student.name}</div>
+        <div style={{ background: 'var(--bg-surface-2)', border: '1px solid var(--border)', borderRadius: 10, padding: '10px 14px', margin: '14px 0 18px' }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>📦 {productName}</div>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>Tipo: Pago único</div>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 20 }}>
+          <div>
+            <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Fecha de inicio</label>
+            <input type="date" value={start} onChange={e => onStartChange(e.target.value)} style={{ width: '100%' }} />
+          </div>
+          <div>
+            <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Fecha de finalización <span style={{ color: '#ef4444' }}>*</span></label>
+            <input type="date" value={until} min={start} onChange={e => setUntil(e.target.value)} style={{ width: '100%' }} />
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button onClick={onCancel} disabled={saving}
+            style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: saving ? 'not-allowed' : 'pointer', fontSize: 13, fontFamily: 'inherit' }}>Cancelar</button>
+          <button onClick={async () => { setSaving(true); await onConfirm(until); }} disabled={!canSave}
+            style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: canSave ? '#1E9E3A' : 'var(--bg-surface-3)', color: canSave ? 'white' : 'var(--text-muted)', cursor: canSave ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+            {saving ? 'Guardando...' : 'Guardar acceso'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function StudentsContent() {
   const {
     students, assignments, deleteStudent, updateStudent,
@@ -440,6 +529,7 @@ function StudentsContent() {
   const [duplicateStudent, setDuplicateStudent] = useState<Student | null>(null);
   const [deletingStudent, setDeletingStudent] = useState<DisplayStudent | null>(null);
   const [activatingStudent, setActivatingStudent] = useState<DisplayStudent | null>(null);
+  const [accessStudent, setAccessStudent] = useState<DisplayStudent | null>(null);
   const [subFilter, setSubFilter] = useState<'all' | SubCategory>('all');
   const [subInfo, setSubInfo] = useState<Record<string, SubInfo>>({});
   const [verifyingSubs, setVerifyingSubs] = useState(false);
@@ -453,7 +543,7 @@ function StudentsContent() {
   const allStudents = useMemo<DisplayStudent[]>(() => {
     const map = new Map<string, DisplayStudent>();
     for (const s of students) {
-      map.set(s.id, { id: s.id, name: s.name, email: s.email, level: s.level, plan: s.plan ?? '', phone: s.phone ?? '', inStudentsTable: true, createdAt: s.createdAt });
+      map.set(s.id, { id: s.id, name: s.name, email: s.email, level: s.level, plan: s.plan ?? '', phone: s.phone ?? '', productType: s.productType, productName: s.productName, manualActiveUntil: s.manualActiveUntil, inStudentsTable: true, createdAt: s.createdAt });
     }
     const studentMatchesAssignment = (s: Student, a: Assignment) =>
       a.studentId === s.id ||
@@ -547,19 +637,31 @@ function StudentsContent() {
     return list;
   }, [allStudents, search, subFilter, subInfo]);
 
+  // Plan a mostrar: productName de WooCommerce (principal) → producto persistido
+  // → plan local (fallback).
+  function planFor(s: DisplayStudent): string {
+    const info = subInfo[s.email?.trim().toLowerCase() ?? ''];
+    return info?.productName || s.productName || s.plan || '—';
+  }
+
   function renderSubBadge(student: DisplayStudent) {
     const e = student.email?.trim().toLowerCase();
     if (!e) return <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>—</span>;
     const isRefreshing = refreshing.has(e);
     const info = subInfo[e];
-    // While refreshing, force the loading look.
     const b = subBadge(isRefreshing ? undefined : info);
-    // Show a manual retry only on a real failed verification (not while loading).
     const showRetry = !isRefreshing && info != null && info.active === null;
-    // Activar manualmente: solo cuando ya se verificó (info != null), no está
-    // activa, y el alumno existe en la tabla students (donde se guarda la fecha).
-    const showActivate = !isRefreshing && info != null && student.inStudentsTable
-      && subCategory(info) !== 'active';
+
+    const pType = info?.productType ?? student.productType;
+    const isOneTime = pType === 'one_time';
+    const hasActiveAccess = info?.status === 'manual_active';
+    // Pago único: "Gestionar acceso" siempre visible (admin/setter). Suscripción:
+    // "✓ Activar" (override manual) solo cuando no está activa.
+    const showAccess   = !isRefreshing && info != null && student.inStudentsTable && isOneTime;
+    const showActivate = !isRefreshing && info != null && student.inStudentsTable && !isOneTime && subCategory(info) !== 'active';
+
+    const openAccess = () => setAccessStudent({ ...student, productName: info?.productName ?? student.productName });
+
     return (
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 700, padding: '2px 9px', borderRadius: 12, background: b.bg, color: b.color, whiteSpace: 'nowrap' }}>
@@ -570,6 +672,15 @@ function StudentsContent() {
           <button onClick={() => refreshOne(e)} title="Reintentar verificación"
             style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: 2, color: 'var(--text-muted)', fontFamily: 'inherit' }}>
             🔄
+          </button>
+        )}
+        {showAccess && (
+          <button onClick={openAccess} title="Gestionar acceso de pago único"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 3, borderRadius: 10, cursor: 'pointer', fontSize: 10, fontWeight: 700, lineHeight: 1, padding: '3px 8px', fontFamily: 'inherit', whiteSpace: 'nowrap',
+              ...(hasActiveAccess
+                ? { background: 'var(--bg-surface-3)', border: '1px solid var(--border)', color: 'var(--text-secondary)' }
+                : { background: 'rgba(37,99,235,0.08)', border: '1px solid rgba(37,99,235,0.4)', color: '#2563eb' }) }}>
+            📅 {hasActiveAccess ? 'Modificar fecha' : 'Activar acceso'}
           </button>
         )}
         {showActivate && (
@@ -722,7 +833,7 @@ function StudentsContent() {
 
                   {/* Datos — label gris + valor oscuro */}
                   <CardRow label="Nivel">{s.level || '—'}</CardRow>
-                  <CardRow label="Plan">{s.plan || '—'}</CardRow>
+                  <CardRow label="Plan">{planFor(s)}</CardRow>
                   <CardRow label="Profesor">{profes || '—'}</CardRow>
                   <CardRow label="Horarios">{horarios || '—'}</CardRow>
                   <div style={{ display: 'flex', gap: 8, fontSize: 13, lineHeight: 1.5, marginBottom: 4, alignItems: 'center' }}>
@@ -797,7 +908,7 @@ function StudentsContent() {
                           <td style={{ padding: '12px 14px', minWidth: 70, textAlign: 'center' }}>
                             <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 20, background: 'rgba(167,139,250,0.15)', color: '#a78bfa', fontWeight: 600 }}>{s.level || '—'}</span>
                           </td>
-                          <td style={{ padding: '12px 14px', fontSize: 12, color: 'var(--text-secondary)', minWidth: 140, wordBreak: 'break-word', whiteSpace: 'normal' }}>{s.plan || '—'}</td>
+                          <td style={{ padding: '12px 14px', fontSize: 12, color: 'var(--text-secondary)', minWidth: 140, wordBreak: 'break-word', whiteSpace: 'normal' }}>{planFor(s)}</td>
                           <td style={{ padding: '12px 14px', minWidth: 100 }}>
                             {studentAssignments.length === 0 ? (
                               <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>—</span>
@@ -898,6 +1009,19 @@ function StudentsContent() {
             await refreshOne(activatingStudent.email);
           }}
           onCancel={() => setActivatingStudent(null)}
+        />
+      )}
+
+      {accessStudent && (
+        <AccessModal
+          student={accessStudent}
+          onConfirm={async (until) => {
+            await dbActivateOneTimeAccess(accessStudent.id, accessStudent.name, until, accessStudent.productName ?? null);
+            setAccessStudent(null);
+            await reloadAll();
+            await refreshOne(accessStudent.email); // ahora devolverá 'manual_active'
+          }}
+          onCancel={() => setAccessStudent(null)}
         />
       )}
       </PullToRefresh>

@@ -202,10 +202,11 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     const isCapture = !!record && isNormalType && !!record.screenshotUrl;
     const hasMeetLink = !!(a?.meetLink && a.meetLink.trim());
 
-    // Plan (punto 4): assignments.plan → objetivo → students.plan → 'Inglés general'.
-    const plan = firstNonEmpty(a?.plan, a?.objetivo, stu?.plan) || 'Inglés general';
+    // Plan: productName de WooCommerce (principal) → assignments.plan → objetivo
+    // → students.plan → 'Inglés general'.
+    const plan = firstNonEmpty(stu?.productName, a?.plan, a?.objetivo, stu?.plan) || 'Inglés general';
     const planType: 'general' | 'examenes' =
-      `${a?.plan ?? ''} ${a?.objetivo ?? ''} ${stu?.plan ?? ''}`.toLowerCase().includes('examen') ? 'examenes' : 'general';
+      `${stu?.productName ?? ''} ${a?.plan ?? ''} ${a?.objetivo ?? ''} ${stu?.plan ?? ''}`.toLowerCase().includes('examen') ? 'examenes' : 'general';
 
     const start = a?.startDate ?? firstDateByStudent.get(nkey(c.studentName));
     const antiquityDays = start ? Math.max(0, daysBetween(start, c.date)) : 0;
@@ -329,6 +330,20 @@ export function ingresoBadge(row: { hasJoinLog: boolean; punctuality?: string; h
   // Sin registro de ingreso.
   if (!row.hasMeetLink) return { label: '🔗 Sin enlace', color: '#ea580c', bg: 'rgba(249,115,22,0.12)' };
   return { label: '❌ No utilizó', color: 'var(--text-muted)', bg: 'var(--bg-surface-3)' };
+}
+
+// Categoría simplificada para el profesor según el producto (productName) o el
+// plan/objetivo del alumno: Exámenes / Intensivo / Inglés general.
+export function classCategoryBadge(productName?: string | null):
+  { label: string; color: string; bg: string } {
+  const n = (productName ?? '').toLowerCase();
+  if (n.includes('examen') || n.includes('fce') || n.includes('pet') || n.includes('cae') || n.includes('preparacion de examenes')) {
+    return { label: '📝 Exámenes', color: '#2563eb', bg: 'rgba(37,99,235,0.1)' };
+  }
+  if (n.includes('intensivo')) {
+    return { label: '⚡ Intensivo', color: '#ea580c', bg: 'rgba(249,115,22,0.12)' };
+  }
+  return { label: '💬 Inglés general', color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)' };
 }
 
 // Badge del tipo de clase — null para 'normal'. Faltas/cancelaciones son cobrables.

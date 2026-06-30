@@ -204,6 +204,8 @@ export async function dbGetStudents(): Promise<Student[]> {
     plan:              row.plan,
     notes:             row.notes ?? undefined,
     manualActiveUntil: row.manual_active_until ?? undefined,
+    productType:       row.product_type ?? undefined,
+    productName:       row.product_name ?? undefined,
     createdAt:         row.created_at,
   }));
 }
@@ -213,6 +215,41 @@ export async function dbGetStudents(): Promise<Student[]> {
 // como suscripción activa sin consultar WooCommerce.
 export async function dbSetStudentManualActive(studentId: string, until: string | null): Promise<void> {
   await supabase.from('students').update({ manual_active_until: until }).eq('id', studentId);
+}
+
+// Activa el acceso de un alumno de PAGO ÚNICO hasta una fecha, y notifica a sus
+// profesores. Devuelve la cantidad de profesores notificados.
+export async function dbActivateOneTimeAccess(
+  studentId: string, studentName: string, until: string, productName: string | null,
+): Promise<void> {
+  await supabase.from('students').update({ manual_active_until: until }).eq('id', studentId);
+
+  // Profesores del alumno (por id o por nombre).
+  const [byId, byName] = await Promise.all([
+    supabase.from('assignments').select('teacher_id').eq('student_id', studentId),
+    supabase.from('assignments').select('teacher_id').eq('student_name', studentName),
+  ]);
+  const teacherIds = new Set<string>();
+  for (const r of [...(byId.data ?? []), ...(byName.data ?? [])]) if (r.teacher_id) teacherIds.add(r.teacher_id);
+  if (teacherIds.size === 0) return;
+
+  const untilLabel = (() => {
+    const d = new Date(until + 'T00:00:00');
+    return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`;
+  })();
+  const now = new Date().toISOString();
+  const rows = [...teacherIds].map((tid, i) => ({
+    id:          `notif_access_${Date.now()}_${i}`,
+    target_user: tid,
+    target_role: null,
+    title:       '📅 Acceso activado',
+    body:        `${studentName} tiene acceso activado hasta ${untilLabel}.${productName ? ` Producto: ${productName}` : ''}`,
+    type:        'one_time_access',
+    read_by:     [],
+    created_at:  now,
+    created_by:  'sistema',
+  }));
+  await supabase.from('notifications').insert(rows);
 }
 
 export async function dbUpsertStudent(student: Student): Promise<void> {

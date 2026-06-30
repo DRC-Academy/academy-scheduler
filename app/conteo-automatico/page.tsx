@@ -7,6 +7,7 @@ import { LastUpdated } from '@/components/LastUpdated';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
 import { calcCurrentClassNumber } from '@/lib/db';
+import { classCategoryBadge } from '@/lib/finance';
 import { Assignment, Grid } from '@/types';
 
 // Estima la fecha de un milestone de clase según la fecha de inicio y los días/semana.
@@ -112,7 +113,12 @@ function ContadorContent() {
                                   {a.studentName.charAt(0).toUpperCase()}
                                 </div>
                                 <div>
-                                  <div style={{ fontWeight: 600, fontSize: 15, color: 'var(--text-primary)' }}>{a.studentName}</div>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+                                    <span style={{ fontWeight: 600, fontSize: 15, color: 'var(--text-primary)' }}>{a.studentName}</span>
+                                    {(() => { const cat = classCategoryBadge(a.plan || a.objetivo); return (
+                                      <span style={{ fontSize: 10, padding: '1px 9px', borderRadius: 10, background: cat.bg, color: cat.color, fontWeight: 700 }}>{cat.label}</span>
+                                    ); })()}
+                                  </div>
                                   <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
                                     {a.slots.map(sl => `${sl.day} ${sl.hour}`).join(' · ')}
                                     {a.studentLevel && ` · ${a.studentLevel}`}
