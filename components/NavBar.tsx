@@ -1,4 +1,5 @@
 'use client';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/AuthContext';
@@ -24,8 +25,12 @@ export function NavBar() {
   const path = usePathname();
   const { user, logout } = useAuth();
   const router = useRouter();
+  const [menuOpen, setMenuOpen] = useState(false);
 
-  function handleLogout() { logout(); router.push('/login'); }
+  // Cerrar el menú al navegar a otra ruta.
+  useEffect(() => { setMenuOpen(false); }, [path]);
+
+  function handleLogout() { setMenuOpen(false); logout(); router.push('/login'); }
 
   const visible = navItems.filter(item => !user || item.roles.includes(user.role));
   const rc = user ? (roleColors[user.role] ?? roleColors.setter) : roleColors.setter;
@@ -49,8 +54,8 @@ export function NavBar() {
         <img className="nav-logo" src="/drc-logo.png" alt="DRC Academy" style={{ height: 36, width: 'auto', objectFit: 'contain' }} />
       </Link>
 
-      {/* Nav links */}
-      <div style={{ display: 'flex', gap: 2, flex: 1, overflow: 'auto' }}>
+      {/* Nav links (desktop) */}
+      <div className="nav-links-row" style={{ display: 'flex', gap: 2, flex: 1, overflow: 'auto' }}>
         {visible.map(item => {
           const isActive = path === item.href;
           return (
@@ -70,11 +75,13 @@ export function NavBar() {
         })}
       </div>
 
-      {/* User info */}
+      {/* Right side */}
       {user && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, marginLeft: 'auto' }}>
           <NotificationBell />
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+
+          {/* User info (desktop) */}
+          <div className="nav-user-desktop" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <div style={{
               width: 32, height: 32, borderRadius: '50%',
               background: rc.bg,
@@ -88,14 +95,88 @@ export function NavBar() {
               <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', lineHeight: 1 }}>{user.displayName}</div>
               <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'capitalize' }}>{rc.label}</div>
             </div>
+            <button onClick={handleLogout} style={{
+              background: 'none', border: '1.5px solid var(--border)',
+              borderRadius: 7, color: 'var(--text-muted)',
+              padding: '4px 10px', cursor: 'pointer', fontSize: 12,
+              fontFamily: 'inherit',
+            }}>Salir</button>
           </div>
-          <button onClick={handleLogout} style={{
-            background: 'none', border: '1.5px solid var(--border)',
-            borderRadius: 7, color: 'var(--text-muted)',
-            padding: '4px 10px', cursor: 'pointer', fontSize: 12,
-            fontFamily: 'inherit',
-          }}>Salir</button>
+
+          {/* Hamburguesa (mobile) */}
+          <button
+            className="nav-hamburger"
+            onClick={() => setMenuOpen(o => !o)}
+            aria-label={menuOpen ? 'Cerrar menú' : 'Abrir menú'}
+            aria-expanded={menuOpen}
+            style={{
+              display: 'none', width: 40, height: 40, alignItems: 'center', justifyContent: 'center',
+              background: 'none', border: 'none', cursor: 'pointer', color: '#1E9E3A', flexShrink: 0, padding: 0,
+            }}>
+            {menuOpen ? (
+              <span style={{ fontSize: 24, lineHeight: 1, color: '#1E9E3A' }}>✕</span>
+            ) : (
+              <span style={{ display: 'flex', flexDirection: 'column', gap: 4, width: 22 }}>
+                {[0, 1, 2].map(i => <span key={i} style={{ height: 2.5, borderRadius: 2, background: '#1E9E3A' }} />)}
+              </span>
+            )}
+          </button>
         </div>
+      )}
+
+      {/* Menú desplegable (mobile) */}
+      {user && menuOpen && (
+        <>
+          {/* Backdrop — click fuera cierra. Queda por debajo del navbar (z 40). */}
+          <div onClick={() => setMenuOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 38, background: 'transparent' }} />
+
+          <div style={{
+            position: 'fixed',
+            top: 'calc(52px + env(safe-area-inset-top))',
+            left: 0, right: 0, zIndex: 41,
+            background: '#fff',
+            borderBottom: '1px solid var(--border)',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+            animation: 'nav-slide-down 0.18s ease-out',
+          }}>
+            {visible.map(item => {
+              const isActive = path === item.href;
+              return (
+                <Link key={item.href} href={item.href} onClick={() => setMenuOpen(false)} style={{
+                  display: 'flex', alignItems: 'center', gap: 12,
+                  padding: '16px 20px', textDecoration: 'none',
+                  fontSize: 15, fontWeight: 600,
+                  color: isActive ? '#1E9E3A' : 'var(--text-primary)',
+                  background: isActive ? 'rgba(30,158,58,0.08)' : 'transparent',
+                  borderBottom: '1px solid var(--border)',
+                }}>
+                  <span style={{ fontSize: 18, width: 24, textAlign: 'center' }}>{item.icon}</span>
+                  {item.label}
+                </Link>
+              );
+            })}
+
+            {/* Usuario + Salir */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '16px 20px' }}>
+              <div style={{
+                width: 38, height: 38, borderRadius: '50%', background: rc.bg,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 14, fontWeight: 700, color: rc.color, flexShrink: 0,
+              }}>
+                {user.displayName[0].toUpperCase()}
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user.displayName}</div>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'capitalize' }}>{rc.label}</div>
+              </div>
+              <button onClick={handleLogout} style={{
+                background: 'none', border: '1.5px solid var(--border)', borderRadius: 8,
+                color: 'var(--text-secondary)', padding: '8px 16px', cursor: 'pointer',
+                fontSize: 13, fontWeight: 600, fontFamily: 'inherit', flexShrink: 0,
+              }}>Salir</button>
+            </div>
+          </div>
+        </>
       )}
     </nav>
   );

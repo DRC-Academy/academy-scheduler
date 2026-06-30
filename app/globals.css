@@ -111,6 +111,11 @@ label {
   .nav-user-text   { display: none !important; }
   .nav-link        { padding: 6px 10px !important; }
 
+  /* Menú hamburguesa: ocultar links + info de usuario, mostrar botón ☰ */
+  .nav-links-row    { display: none !important; }
+  .nav-user-desktop { display: none !important; }
+  .nav-hamburger    { display: flex !important; }
+
   /* ── Scrollable tab bar (no text wrap, horizontal scroll) ── */
   .tabs-scroll {
     overflow-x: auto !important;
@@ -215,6 +220,15 @@ label {
 }
 @media (prefers-reduced-motion: reduce) {
   .upcoming-live-badge { animation: none; }
+}
+
+/* ── Menú hamburguesa mobile (slide-down) ── */
+@keyframes nav-slide-down {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  [style*="nav-slide-down"] { animation: none !important; }
 }
 
 /* ── Inline button spinner ── */
