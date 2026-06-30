@@ -6,7 +6,8 @@ import { AuthGuard } from '@/components/AuthGuard';
 import { PullToRefresh } from '@/components/PullToRefresh';
 import { LastUpdated } from '@/components/LastUpdated';
 import { VisualCalendar, buildGridFromTeacher, cellKey, HOURS_ES, getWeekDates, formatWeekRange } from '@/components/VisualCalendar';
-import { dbCheckStudentExists } from '@/lib/db';
+import { dbCheckStudentExists, dbSetStudentProduct } from '@/lib/db';
+import { detectWeeklyHours, type DetectionResult } from '@/lib/productUtils';
 import { useTeachers } from '@/lib/TeachersContext';
 import { daysOfWeek } from '@/lib/mock-data';
 import { Teacher, SlotFilter, Grid, Assignment, Student, AssignedSlot } from '@/types';
@@ -206,11 +207,41 @@ function AssignModal({
   const [duplicateStudent, setDuplicateStudent] = useState<Student | null>(null);
   const [checkingEmail, setCheckingEmail] = useState(false);
 
+  // Detección automática de horas semanales desde WooCommerce.
+  const [detection, setDetection] = useState<DetectionResult | null>(null);
+  const [productInfo, setProductInfo] = useState<{ fullName: string | null; productType: string | null } | null>(null);
+  const [detecting, setDetecting] = useState(false);
+
   const todayISO = new Date().toISOString().split('T')[0];
 
   useEffect(() => {
     setSlots(prev => prev.length > weeklyHours ? prev.slice(0, weeklyHours) : prev);
   }, [weeklyHours]);
+
+  // Email del alumno actual (existente seleccionado o nuevo tipeado).
+  const currentEmail = (tab === 'existing'
+    ? (existingStudents.find(s => s.id === selectedExisting)?.email ?? '')
+    : newStudent.email).trim().toLowerCase();
+
+  useEffect(() => {
+    if (!currentEmail || !currentEmail.includes('@')) { setDetection(null); setProductInfo(null); return; }
+    let cancelled = false;
+    setDetecting(true);
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/check-subscription?email=${encodeURIComponent(currentEmail)}&full=1`);
+        const data = await res.json();
+        const det = await detectWeeklyHours(data.productName ?? '', data.productVariation ?? null, data.metaData ?? null, data.hoursFromApi ?? null);
+        if (cancelled) return;
+        setProductInfo({ fullName: data.productFullName ?? data.productName ?? null, productType: data.productType ?? null });
+        setDetection(det);
+        if (det.confidence === 'high' && det.hours != null) setWeeklyHours(Math.min(5, Math.max(1, det.hours)));
+      } catch { if (!cancelled) { setDetection(null); setProductInfo(null); } }
+      finally { if (!cancelled) setDetecting(false); }
+    }, 450);
+    return () => { cancelled = true; clearTimeout(timer); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentEmail]);
 
   function addSlot() {
     const used = new Set(slots.map(s => `${s.day}_${s.hour}`));
@@ -248,9 +279,11 @@ function AssignModal({
   }
 
   function doConfirm(overrideStudent?: Student) {
+    // El plan a persistir es el producto real de WooCommerce si se detectó.
+    const effectivePlan = productInfo?.fullName || plan;
     const student: Student = overrideStudent ?? (tab === 'existing'
       ? existingStudents.find(s => s.id === selectedExisting)!
-      : { id: `s_${Date.now()}`, name: newStudent.name, email: newStudent.email, level: newStudent.level, plan, createdAt: new Date().toISOString() });
+      : { id: `s_${Date.now()}`, name: newStudent.name, email: newStudent.email, level: newStudent.level, plan: effectivePlan, createdAt: new Date().toISOString() });
 
     const assignment: Assignment = {
       id: `a_${Date.now()}`,
@@ -263,7 +296,7 @@ function AssignModal({
       studentLevel: student.level,
       slots,
       objetivo,
-      plan,
+      plan: effectivePlan,
       weeklyHours,
       availability: '',
       notes,
@@ -273,6 +306,10 @@ function AssignModal({
     setResultAssignment(assignment);
     onConfirm(assignment, student);
     setSuccess(true);
+    // Persistir tipo/nombre de producto en el alumno (best-effort).
+    if (productInfo?.fullName) {
+      dbSetStudentProduct(student.id, (productInfo.productType as 'subscription' | 'one_time' | null) ?? null, productInfo.fullName).catch(() => {});
+    }
   }
 
   if (success && resultAssignment) {
@@ -350,8 +387,20 @@ function AssignModal({
           </div>
         )}
 
+        {/* Producto detectado en WooCommerce */}
+        {(detecting || productInfo?.fullName) && (
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 14, marginTop: -6 }}>
+            {detecting ? <><span className="drc-spinner-xs" /> Consultando producto...</> : <>📦 {productInfo?.fullName}</>}
+          </div>
+        )}
+
         <div style={{ marginBottom: 16 }}>
-          <label>Horas semanales</label>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+            Horas semanales
+            {detection?.source && (
+              <span title={`Detectado desde: ${detection.source}`} style={{ cursor: 'help', fontSize: 12, opacity: 0.7 }}>ℹ️</span>
+            )}
+          </label>
           <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
             {WEEKLY_HOURS.map(h => (
               <button key={h} onClick={() => setWeeklyHours(h)} style={{
@@ -368,6 +417,13 @@ function AssignModal({
               </button>
             ))}
           </div>
+          {detection && (
+            <div style={{ fontSize: 11.5, marginTop: 6, lineHeight: 1.4, color: detection.confidence === 'high' ? '#1E9E3A' : '#ea580c' }}>
+              {detection.confidence === 'high'
+                ? `✅ ${detection.source} — podés editarlo si es incorrecto`
+                : detection.message}
+            </div>
+          )}
         </div>
 
         <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16, marginBottom: 16 }}>

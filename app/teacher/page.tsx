@@ -7,8 +7,9 @@ import { LastUpdated } from '@/components/LastUpdated';
 import { VisualCalendar, DAYS, cellKey, getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
-import { calcCurrentClassNumber, dbCheckStudentExists } from '@/lib/db';
+import { calcCurrentClassNumber, dbCheckStudentExists, dbSetStudentProduct } from '@/lib/db';
 import { classCategoryBadge } from '@/lib/finance';
+import { detectWeeklyHours, type DetectionResult } from '@/lib/productUtils';
 import { Grid, Teacher, Assignment, ScoringEvent, Student, AppNotification } from '@/types';
 
 // ─── Specialty constants ──────────────────────────────────────────────────────
@@ -63,7 +64,7 @@ interface AssignConfirmData {
   slots: Array<{ day: string; hour: string }>;
   startDate: string;
   weeklyHours: number;
-  newStudentData?: { name: string; email: string; level: string; plan: string };
+  newStudentData?: { name: string; email: string; level: string; plan: string; productType?: 'subscription' | 'one_time' | null };
   existingAssignment?: Assignment;
   // Use existing student record without creating a new one
   useExistingStudent?: { id: string; name: string; email: string; level: string };
@@ -93,6 +94,27 @@ function AssignStudentModal({
   const [newPlan, setNewPlan]   = useState('Inglés general');
   const [duplicateStudent, setDuplicateStudent] = useState<{ id: string; name: string; email: string; level: string } | null>(null);
   const [checkingEmail, setCheckingEmail] = useState(false);
+
+  // Detección de producto/horas desde WooCommerce (alumno nuevo, por email).
+  const [detection, setDetection] = useState<DetectionResult | null>(null);
+  const [productInfo, setProductInfo] = useState<{ fullName: string | null; productType: string | null } | null>(null);
+  useEffect(() => {
+    const email = newEmail.trim().toLowerCase();
+    if (tab !== 'new' || !email.includes('@')) { setDetection(null); setProductInfo(null); return; }
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/check-subscription?email=${encodeURIComponent(email)}&full=1`);
+        const data = await res.json();
+        const det = await detectWeeklyHours(data.productName ?? '', data.productVariation ?? null, data.metaData ?? null, data.hoursFromApi ?? null);
+        if (cancelled) return;
+        setProductInfo({ fullName: data.productFullName ?? data.productName ?? null, productType: data.productType ?? null });
+        setDetection(det);
+      } catch { if (!cancelled) { setDetection(null); setProductInfo(null); } }
+    }, 450);
+    return () => { cancelled = true; clearTimeout(timer); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [newEmail, tab]);
 
   // Compute cells available for slot picking: all libre cells + clicked cell
   const libreCells: Array<{ day: string; hour: string }> = [];
@@ -304,6 +326,18 @@ function AssignStudentModal({
                   </select>
                 </div>
               </div>
+              {(productInfo?.fullName || detection) && (
+                <div style={{ background: 'var(--bg-surface-2)', border: '1px solid var(--border)', borderRadius: 9, padding: '9px 12px', fontSize: 11.5, lineHeight: 1.45 }}>
+                  {productInfo?.fullName && <div style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>📦 {productInfo.fullName}</div>}
+                  {detection && (
+                    <div style={{ marginTop: productInfo?.fullName ? 4 : 0, color: detection.confidence === 'high' ? '#1E9E3A' : '#ea580c' }}>
+                      {detection.confidence === 'high' && detection.hours != null
+                        ? `✅ El producto sugiere ${detection.hours}h/sem — seleccioná ${detection.hours} horario${detection.hours === 1 ? '' : 's'} (${detection.source})`
+                        : detection.message}
+                    </div>
+                  )}
+                </div>
+              )}
               <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
                 {slotEditor}
               </div>
@@ -325,7 +359,7 @@ function AssignStudentModal({
                         setCheckingEmail(false);
                         if (existing) { setDuplicateStudent(existing); return; }
                       }
-                      onConfirm({ isNew: true, studentName: newName.trim(), slots, startDate, weeklyHours: slots.length, newStudentData: { name: newName.trim(), email: newEmail, level: newLevel, plan: newPlan } });
+                      onConfirm({ isNew: true, studentName: newName.trim(), slots, startDate, weeklyHours: slots.length, newStudentData: { name: newName.trim(), email: newEmail, level: newLevel, plan: productInfo?.fullName || newPlan, productType: (productInfo?.productType as 'subscription' | 'one_time' | null) ?? null } });
                     }}
                     disabled={!canCreate}
                     style={{ padding: '11px', borderRadius: 9, border: 'none', background: canCreate ? '#1E9E3A' : 'var(--bg-surface-3)', color: canCreate ? 'white' : 'var(--text-muted)', cursor: canCreate ? 'pointer' : 'not-allowed', fontSize: 14, fontWeight: 700, fontFamily: 'inherit' }}>
@@ -349,7 +383,7 @@ function AssignStudentModal({
                             Usar alumno existente
                           </button>
                           <button
-                            onClick={() => { setDuplicateStudent(null); onConfirm({ isNew: true, studentName: newName.trim(), slots, startDate, weeklyHours: slots.length, newStudentData: { name: newName.trim(), email: newEmail, level: newLevel, plan: newPlan } }); }}
+                            onClick={() => { setDuplicateStudent(null); onConfirm({ isNew: true, studentName: newName.trim(), slots, startDate, weeklyHours: slots.length, newStudentData: { name: newName.trim(), email: newEmail, level: newLevel, plan: productInfo?.fullName || newPlan, productType: (productInfo?.productType as 'subscription' | 'one_time' | null) ?? null } }); }}
                             style={{ padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
                             Crear de todas formas (duplicado)
                           </button>
@@ -1423,6 +1457,10 @@ function TeacherContent() {
         createdAt: new Date().toISOString(),
       };
       await addStudent(newStudent);
+      // Persistir tipo de producto detectado (best-effort).
+      if (data.newStudentData.productType !== undefined) {
+        dbSetStudentProduct(newStudent.id, data.newStudentData.productType ?? null, data.newStudentData.plan).catch(() => {});
+      }
 
       const newAssignment: Assignment = {
         id: crypto.randomUUID(),

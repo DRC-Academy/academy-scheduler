@@ -167,11 +167,12 @@ function EditStudentModal({ student, assignment, teacherGrid, onClose, onSave }:
   assignment: Assignment | null;
   teacherGrid: Grid;
   onClose: () => void;
-  onSave: (s: Student, scheduleData?: { slots: Array<{day:string;hour:string}>; startDate: string }) => Promise<void>;
+  onSave: (s: Student, scheduleData?: { slots: Array<{day:string;hour:string}>; startDate: string; weeklyHours: number }) => Promise<void>;
 }) {
   const [form, setForm] = useState({ name: student.name, email: student.email, level: student.level, plan: student.plan ?? '' });
   const [slots, setSlots] = useState<Array<{day:string;hour:string}>>(assignment?.slots || []);
   const [startDate, setStartDate] = useState(assignment?.startDate || '');
+  const [weeklyHours, setWeeklyHours] = useState<number>(assignment?.weeklyHours || assignment?.slots.length || 1);
   const [saving, setSaving] = useState(false);
 
   // Available cells: libre + already assigned to this student
@@ -211,7 +212,7 @@ function EditStudentModal({ student, assignment, teacherGrid, onClose, onSave }:
     setSaving(true);
     const studentRecord: Student = { id: student.id, createdAt: student.createdAt, ...form };
     if (assignment && slots.length > 0) {
-      await onSave(studentRecord, { slots, startDate });
+      await onSave(studentRecord, { slots, startDate, weeklyHours });
     } else {
       await onSave(studentRecord);
     }
@@ -300,12 +301,25 @@ function EditStudentModal({ student, assignment, teacherGrid, onClose, onSave }:
                   </button>
                 )}
 
-                {/* Start date */}
-                <div>
-                  <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: 5, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                    Fecha de inicio
-                  </label>
-                  <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} style={{ width: '100%' }} />
+                {/* Weekly hours + Start date */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: 5, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                      Horas semanales
+                    </label>
+                    <input type="number" min={1} max={5} value={weeklyHours}
+                      onChange={e => setWeeklyHours(Math.min(5, Math.max(1, parseInt(e.target.value) || 1)))}
+                      style={{ width: '100%' }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: 5, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                      Fecha de inicio
+                    </label>
+                    <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} style={{ width: '100%' }} />
+                  </div>
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: -4 }}>
+                  El límite mensual de clases se calcula con este valor. Editá si la detección automática fue incorrecta.
                 </div>
 
                 {slots.length > 0 && (
@@ -704,11 +718,11 @@ function StudentsContent() {
     setEditingStudent(s);
   }
 
-  async function handleSave(updated: Student, scheduleData?: { slots: Array<{day:string;hour:string}>; startDate: string }) {
+  async function handleSave(updated: Student, scheduleData?: { slots: Array<{day:string;hour:string}>; startDate: string; weeklyHours: number }) {
     await updateStudent(updated);
     if (editingAssignment && scheduleData) {
-      const { slots, startDate } = scheduleData;
-      await updateAssignmentSlots(editingAssignment.id, slots, slots.length);
+      const { slots, startDate, weeklyHours } = scheduleData;
+      await updateAssignmentSlots(editingAssignment.id, slots, weeklyHours);
       if (startDate !== editingAssignment.startDate) {
         await updateAssignmentStartDate(editingAssignment.id, startDate);
       }

@@ -217,6 +217,19 @@ export async function dbSetStudentManualActive(studentId: string, until: string 
   await supabase.from('students').update({ manual_active_until: until }).eq('id', studentId);
 }
 
+// Guarda el tipo + nombre de producto WooCommerce del alumno (y plan). Resiliente:
+// si las columnas product_type/product_name aún no existen, persiste al menos plan.
+export async function dbSetStudentProduct(
+  studentId: string, productType: 'subscription' | 'one_time' | null, productName: string | null,
+): Promise<void> {
+  const { error } = await supabase.from('students')
+    .update({ product_type: productType, product_name: productName, plan: productName ?? undefined })
+    .eq('id', studentId);
+  if (error && productName) {
+    await supabase.from('students').update({ plan: productName }).eq('id', studentId);
+  }
+}
+
 // Activa el acceso de un alumno de PAGO ÚNICO hasta una fecha, y notifica a sus
 // profesores. Devuelve la cantidad de profesores notificados.
 export async function dbActivateOneTimeAccess(

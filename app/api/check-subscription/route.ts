@@ -4,6 +4,7 @@
 // ante un error de conexión devuelve { active: null } para que el profesor decida.
 
 import { supabase } from '@/lib/supabase';
+import { parseHoursFromText, parseHoursFromMeta } from '@/lib/productUtils';
 
 // Productos de PAGO ÚNICO (case-insensitive, match por "contiene"). Cualquier
 // otro producto se considera de suscripción recurrente.
@@ -30,9 +31,22 @@ interface SubResult {
   daysRemaining: number | null;
   planName: string | null;        // = productName (compat hacia atrás)
   productName: string | null;
+  productVariation: string | null;
+  productFullName: string | null;
   productType: ProductType;
+  hoursFromApi: number | null;    // horas detectadas desde WooCommerce
   manualActiveUntil: string | null;
+  metaData: any[];                // meta_data crudo del line_item
   phone: string | null;
+}
+
+interface RichProduct {
+  name: string | null;
+  variation: string | null;
+  fullName: string | null;
+  hours: number | null;
+  metaData: any[];
+  productType: ProductType;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -50,12 +64,13 @@ function daysFromNow(d: Date): number {
 
 const ERROR_RESULT: SubResult = {
   active: null, status: 'error', endDate: null, daysRemaining: null,
-  planName: null, productName: null, productType: null, manualActiveUntil: null, phone: null,
+  planName: null, productName: null, productVariation: null, productFullName: null,
+  productType: null, hoursFromApi: null, manualActiveUntil: null, metaData: [], phone: null,
 };
 
 // Cache en memoria (por instancia serverless): 5 min por email.
 const TTL_MS = 5 * 60 * 1000;
-const productCache = new Map<string, { productName: string | null; productType: ProductType; ts: number }>();
+const productCache = new Map<string, { product: RichProduct; ts: number }>();
 const subCache     = new Map<string, { result: { active: boolean; status: string; endDate: string | null; daysRemaining: number | null; phone: string | null; planName: string | null }; ts: number }>();
 
 const MAX_ATTEMPTS = 3;
@@ -107,14 +122,39 @@ function wcCreds(): { base: string; ck: string; cs: string } | null {
   return { base: base.replace(/\/$/, ''), ck, cs };
 }
 
-// Último producto comprado (line_items[0].name del pedido más reciente).
-async function fetchLastProductName(c: { base: string; ck: string; cs: string }, email: string): Promise<string | null> {
+// Variación (display_value) de los atributos del line_item (metas sin "_" inicial).
+function variationFromMeta(metaData: any[]): string | null {
+  const parts: string[] = [];
+  for (const m of metaData) {
+    const key = String(m?.key ?? '');
+    if (key.startsWith('_')) continue; // metas internas de WooCommerce
+    const dv = m?.display_value ?? m?.value;
+    if (typeof dv === 'string' && dv.trim() && !dv.trim().startsWith('http')) parts.push(dv.trim());
+  }
+  return parts.length ? parts.join(' · ') : null;
+}
+
+// Último producto comprado (line_items[0] del pedido más reciente), con
+// variación, horas detectadas (meta + nombre) y meta_data crudo.
+async function fetchLastProduct(c: { base: string; ck: string; cs: string }, email: string): Promise<RichProduct> {
   const url =
     `${c.base}/wp-json/wc/v3/orders?search=${encodeURIComponent(email)}&per_page=1&orderby=date&order=desc` +
     `&consumer_key=${encodeURIComponent(c.ck)}&consumer_secret=${encodeURIComponent(c.cs)}`;
   const arr = await fetchWoo(url, email, 'orders');
-  const name = arr[0]?.line_items?.[0]?.name;
-  return typeof name === 'string' && name.trim() ? name.trim() : null;
+  const li = arr[0]?.line_items?.[0];
+  const name = (typeof li?.name === 'string' && li.name.trim()) ? li.name.trim() : null;
+  if (!name) return { name: null, variation: null, fullName: null, hours: null, metaData: [], productType: null };
+
+  const metaData = Array.isArray(li?.meta_data) ? li.meta_data : [];
+  const variation = li?.variation_id ? variationFromMeta(metaData) : variationFromMeta(metaData);
+  const fullName = variation ? `${name} — ${variation}` : name;
+
+  // Horas: meta_data → variación → nombre → concatenación amplia.
+  const broad = `${name} ${metaData.map((m: any) => m?.display_value ?? m?.value ?? '').join(' ')}`;
+  const hours = parseHoursFromMeta(metaData) ?? parseHoursFromText(variation) ?? parseHoursFromText(name) ?? parseHoursFromText(broad);
+
+  const productType: ProductType = isOneTimeProduct(name) ? 'one_time' : 'subscription';
+  return { name, variation, fullName, hours, metaData, productType };
 }
 
 // Estado de la suscripción recurrente (como antes).
@@ -161,58 +201,70 @@ export async function GET(request: Request): Promise<Response> {
   const manualActive = !!manualUntil && manualUntil >= today;
 
   const creds = wcCreds();
+  // ?full=1 → fuerza traer la info rica del pedido (variación + horas + meta),
+  // usado por los formularios de asignación. Sin él se usa lo persistido (liviano).
+  const full = new URL(request.url).searchParams.get('full') === '1';
 
-  // 2) Tipo + nombre de producto: usar el persistido; si no hay, detectarlo
-  //    consultando el último pedido (y persistirlo para futuras consultas).
+  // 2) Producto: usa lo persistido; trae el pedido (info rica) si se pide `full`
+  //    o si no hay tipo persistido. Lo detectado se persiste (incl. plan).
   let productName = student?.product_name ?? null;
   let productType = (student?.product_type as ProductType) ?? null;
+  let rich: RichProduct | null = null;
 
-  if (!productType) {
+  if (full || !productType) {
     const cached = productCache.get(email);
     if (cached && Date.now() - cached.ts < TTL_MS) {
-      productName = cached.productName; productType = cached.productType;
+      rich = cached.product;
     } else if (creds) {
       try {
-        const name = await fetchLastProductName(creds, email);
-        productName = name;
-        productType = name ? (isOneTimeProduct(name) ? 'one_time' : 'subscription') : null;
-        productCache.set(email, { productName, productType, ts: Date.now() });
-        // Persistir (incluye plan = productName) — fire-and-forget.
-        if (student?.id) {
-          const updates: Record<string, unknown> = { product_type: productType, product_name: productName };
-          if (productName) updates.plan = productName;
+        rich = await fetchLastProduct(creds, email);
+        productCache.set(email, { product: rich, ts: Date.now() });
+        if (student?.id && rich.name) {
+          const updates: Record<string, unknown> = { product_type: rich.productType, product_name: rich.fullName, plan: rich.fullName };
           supabase.from('students').update(updates).eq('id', student.id).then(() => {}, () => {});
         }
       } catch {
-        return Response.json({ ...ERROR_RESULT, manualActiveUntil: manualUntil ?? null });
+        if (!productType) return Response.json({ ...ERROR_RESULT, manualActiveUntil: manualUntil ?? null });
       }
-    } else {
+    } else if (!productType) {
       console.error('[check-subscription] WooCommerce no configurado');
       return Response.json({ ...ERROR_RESULT, manualActiveUntil: manualUntil ?? null });
     }
   }
 
+  if (rich?.name) { productName = rich.name; productType = rich.productType; }
+  const productVariation = rich?.variation ?? null;
+  const productFullName  = rich?.fullName ?? productName;
+  const hoursFromApi     = rich?.hours ?? null;
+  const metaData         = rich?.metaData ?? [];
+
+  // Constructor de respuesta con todos los campos de producto ya resueltos.
+  const make = (o: Partial<SubResult>): SubResult => ({
+    active: false, status: 'error', endDate: null, daysRemaining: null,
+    planName: productName, productName, productVariation, productFullName,
+    productType, hoursFromApi, manualActiveUntil: null, metaData, phone: null,
+    ...o,
+  });
+
   // 3) Ningún producto comprado → not_found.
-  if (!productType) {
-    return Response.json({ active: false, status: 'not_found', endDate: null, daysRemaining: null, planName: productName, productName, productType: null, manualActiveUntil: null, phone: null } satisfies SubResult);
-  }
+  if (!productType) return Response.json(make({ active: false, status: 'not_found' }));
 
   // 4) PAGO ÚNICO → solo cuenta el acceso manual (manual_active_until).
   if (productType === 'one_time') {
     if (manualActive && manualUntil) {
       const endDate = new Date(manualUntil + 'T23:59:59');
-      return Response.json({ active: true, status: 'manual_active', endDate: endDate.toISOString(), daysRemaining: daysFromNow(endDate), planName: productName, productName, productType: 'one_time', manualActiveUntil: manualUntil, phone: null } satisfies SubResult);
+      return Response.json(make({ active: true, status: 'manual_active', endDate: endDate.toISOString(), daysRemaining: daysFromNow(endDate), manualActiveUntil: manualUntil }));
     }
-    return Response.json({ active: false, status: 'one_time_no_access', endDate: null, daysRemaining: null, planName: productName, productName, productType: 'one_time', manualActiveUntil: manualUntil ?? null, phone: null } satisfies SubResult);
+    return Response.json(make({ active: false, status: 'one_time_no_access', manualActiveUntil: manualUntil ?? null }));
   }
 
   // 5) SUSCRIPCIÓN. La activación manual sigue teniendo prioridad (override).
   if (manualActive && manualUntil) {
     const endDate = new Date(manualUntil + 'T23:59:59');
-    return Response.json({ active: true, status: 'manual_override', endDate: endDate.toISOString(), daysRemaining: daysFromNow(endDate), planName: productName, productName, productType: 'subscription', manualActiveUntil: manualUntil, phone: null } satisfies SubResult);
+    return Response.json(make({ active: true, status: 'manual_override', endDate: endDate.toISOString(), daysRemaining: daysFromNow(endDate), manualActiveUntil: manualUntil }));
   }
 
-  if (!creds) return Response.json({ ...ERROR_RESULT, productName, productType: 'subscription', manualActiveUntil: null });
+  if (!creds) return Response.json(make({ active: null, status: 'error' }));
 
   let sub = subCache.get(email)?.result ?? null;
   if (!sub || Date.now() - (subCache.get(email)?.ts ?? 0) >= TTL_MS) {
@@ -220,13 +272,11 @@ export async function GET(request: Request): Promise<Response> {
       sub = await fetchSubStatus(creds, email);
       subCache.set(email, { result: sub, ts: Date.now() });
     } catch {
-      return Response.json({ ...ERROR_RESULT, productName, productType: 'subscription', manualActiveUntil: null });
+      return Response.json(make({ active: null, status: 'error' }));
     }
   }
 
-  return Response.json({
-    active: sub.active, status: sub.status, endDate: sub.endDate, daysRemaining: sub.daysRemaining,
-    planName: productName ?? sub.planName, productName: productName ?? sub.planName,
-    productType: 'subscription', manualActiveUntil: null, phone: sub.phone,
-  } satisfies SubResult);
+  return Response.json(make({
+    active: sub.active, status: sub.status, endDate: sub.endDate, daysRemaining: sub.daysRemaining, phone: sub.phone,
+  }));
 }
