@@ -1,5 +1,5 @@
 'use client';
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, type ReactNode } from 'react';
 import { NavBar } from '@/components/NavBar';
 import { AuthGuard } from '@/components/AuthGuard';
 import { PullToRefresh } from '@/components/PullToRefresh';
@@ -9,6 +9,18 @@ import { useAuth } from '@/lib/AuthContext';
 import { DAYS, cellKey } from '@/components/VisualCalendar';
 import { dbCheckStudentExists, dbSetStudentManualActive } from '@/lib/db';
 import { Student, Grid, Assignment } from '@/types';
+
+// Detecta viewport mobile (< breakpoint). Alterna tabla (desktop) ↔ cards (mobile).
+function useIsMobile(breakpoint = 1024): boolean {
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth < breakpoint);
+    check();
+    window.addEventListener('resize', check);
+    return () => window.removeEventListener('resize', check);
+  }, [breakpoint]);
+  return isMobile;
+}
 
 const LEVELS = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
 const PLANES = [
@@ -608,13 +620,23 @@ function StudentsContent() {
     setEditingAssignment(null);
   }
 
-  const thStyle = (minWidth?: number) => ({
-    padding: '10px 14px', textAlign: 'left' as const,
+  const isMobile = useIsMobile(1024);
+
+  const thStyle = (minWidth: number, align: 'left' | 'center' | 'right' = 'left') => ({
+    padding: '11px 14px', textAlign: align,
     fontSize: 11, fontWeight: 600, color: 'var(--text-muted)',
     textTransform: 'uppercase' as const, letterSpacing: '0.04em',
     whiteSpace: 'nowrap' as const,
-    minWidth: minWidth ? `${minWidth}px` : undefined,
+    minWidth: `${minWidth}px`,
   });
+
+  // Etiqueta gris + valor oscuro (filas de las cards mobile).
+  const CardRow = ({ label, children }: { label: string; children: ReactNode }) => (
+    <div style={{ display: 'flex', gap: 8, fontSize: 13, lineHeight: 1.5, marginBottom: 4 }}>
+      <span style={{ color: 'var(--text-muted)', fontWeight: 600, flexShrink: 0, minWidth: 78 }}>{label}</span>
+      <span style={{ color: 'var(--text-primary)', wordBreak: 'break-word', minWidth: 0 }}>{children}</span>
+    </div>
+  );
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }}>
@@ -627,13 +649,19 @@ function StudentsContent() {
           <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0 }}>Todos los alumnos registrados y asignados.</p>
         </div>
 
-        {/* Search */}
+        {/* Search — ancho completo en mobile, acotado en desktop */}
         <div style={{ marginBottom: 12 }}>
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar por nombre o email..." style={{ maxWidth: 360 }} />
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar por nombre o email..."
+            style={{ width: '100%', maxWidth: isMobile ? '100%' : 360 }} />
         </div>
 
-        {/* Subscription filter */}
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
+        {/* Subscription filter — chips con scroll horizontal en mobile */}
+        <div style={{
+          display: 'flex', gap: 8, alignItems: 'center', marginBottom: verifyingSubs ? 8 : 16,
+          ...(isMobile
+            ? { flexWrap: 'nowrap' as const, overflowX: 'auto' as const, paddingBottom: 4, WebkitOverflowScrolling: 'touch' as const }
+            : { flexWrap: 'wrap' as const }),
+        }}>
           {([
             { id: 'all',        label: 'Todos' },
             { id: 'active',     label: 'Activa' },
@@ -642,16 +670,16 @@ function StudentsContent() {
             { id: 'unverified', label: 'Sin verificar' },
           ] as const).map(chip => (
             <button key={chip.id} onClick={() => setSubFilter(chip.id)}
-              style={{ padding: '5px 14px', borderRadius: 20, border: `1.5px solid ${subFilter === chip.id ? '#1E9E3A' : 'var(--border)'}`, background: subFilter === chip.id ? 'rgba(30,158,58,0.1)' : 'transparent', color: subFilter === chip.id ? '#1E9E3A' : 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, fontWeight: subFilter === chip.id ? 700 : 500, fontFamily: 'inherit' }}>
+              style={{ flexShrink: 0, padding: '6px 14px', borderRadius: 20, border: `1.5px solid ${subFilter === chip.id ? '#1E9E3A' : 'var(--border)'}`, background: subFilter === chip.id ? 'rgba(30,158,58,0.1)' : 'transparent', color: subFilter === chip.id ? '#1E9E3A' : 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, fontWeight: subFilter === chip.id ? 700 : 500, fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
               {chip.label}
             </button>
           ))}
-          {verifyingSubs && (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-muted)', marginLeft: 4 }}>
-              <span className="drc-spinner-xs" /> Verificando suscripciones...{subProgress ? ` ${subProgress.done}/${subProgress.total}` : ''}
-            </span>
-          )}
         </div>
+        {verifyingSubs && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-muted)', marginBottom: 16 }}>
+            <span className="drc-spinner-xs" /> Verificando suscripciones...{subProgress ? ` ${subProgress.done}/${subProgress.total}` : ''}
+          </div>
+        )}
 
         {allStudents.length === 0 ? (
           <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '48px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 14 }}>
@@ -659,7 +687,68 @@ function StudentsContent() {
             No hay alumnos registrados todavía.<br />
             <span style={{ fontSize: 12 }}>Los alumnos se agregan cuando un setter realiza una asignación.</span>
           </div>
+        ) : isMobile ? (
+          /* ───── MOBILE: cards independientes ───── */
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>Listado</span>
+              <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                {filtered.length === allStudents.length
+                  ? `${allStudents.length} alumno${allStudents.length !== 1 ? 's' : ''}`
+                  : `${filtered.length} de ${allStudents.length} alumnos`}
+              </span>
+            </div>
+
+            {filtered.length === 0 ? (
+              <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '32px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
+                Sin resultados para &quot;{search}&quot;
+              </div>
+            ) : filtered.map(s => {
+              const studentAssignments = assignmentsForStudent(s);
+              const horarios = studentAssignments.flatMap(a => a.slots.map(sl => `${sl.day} ${sl.hour}`)).join(', ');
+              const profes = studentAssignments.map(a => a.teacherName).join(', ');
+              return (
+                <div key={s.id} style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: 16, marginBottom: 12 }}>
+                  {/* Avatar + nombre + email */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 12 }}>
+                    <div style={{ width: 38, height: 38, borderRadius: '50%', background: 'rgba(59,130,246,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, color: '#93c5fd', flexShrink: 0 }}>
+                      {s.name.split(' ').map(p => p[0]).join('').toUpperCase().slice(0, 2)}
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--text-primary)', wordBreak: 'break-word' }}>{s.name}</div>
+                      <div style={{ fontSize: 12, color: 'var(--text-muted)', wordBreak: 'break-word' }}>{s.email || '—'}</div>
+                    </div>
+                  </div>
+
+                  {/* Datos — label gris + valor oscuro */}
+                  <CardRow label="Nivel">{s.level || '—'}</CardRow>
+                  <CardRow label="Plan">{s.plan || '—'}</CardRow>
+                  <CardRow label="Profesor">{profes || '—'}</CardRow>
+                  <CardRow label="Horarios">{horarios || '—'}</CardRow>
+                  <div style={{ display: 'flex', gap: 8, fontSize: 13, lineHeight: 1.5, marginBottom: 4, alignItems: 'center' }}>
+                    <span style={{ color: 'var(--text-muted)', fontWeight: 600, flexShrink: 0, minWidth: 78 }}>Suscripción</span>
+                    <span style={{ minWidth: 0 }}>{s.email ? renderSubBadge(s) : '—'}</span>
+                  </div>
+
+                  {/* Botones 50/50, altura táctil */}
+                  <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
+                    {s.inStudentsTable && (
+                      <button onClick={() => handleEditClick(s)}
+                        style={{ flex: 1, padding: '11px', minHeight: 44, borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
+                        Editar
+                      </button>
+                    )}
+                    <button onClick={() => setDeletingStudent(s)}
+                      style={{ flex: 1, padding: '11px', minHeight: 44, borderRadius: 8, border: '1px solid rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.08)', color: '#ef4444', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
+                      Eliminar
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         ) : (
+          /* ───── DESKTOP: tabla con scroll horizontal ───── */
           <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
             <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>Listado</span>
@@ -674,20 +763,19 @@ function StudentsContent() {
               <div style={{ padding: '32px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
                 Sin resultados para &quot;{search}&quot;
               </div>
-            ) : (<>
-              {/* Desktop: table — scrolls horizontally if it exceeds the viewport width */}
-              <div className="desk-only" style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+            ) : (
+              <div style={{ overflowX: 'auto', width: '100%', WebkitOverflowScrolling: 'touch' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1100 }}>
                   <thead>
                     <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface-2)' }}>
-                      <th style={thStyle(140)}>Nombre</th>
-                      <th style={thStyle(180)}>Email</th>
-                      <th style={thStyle(60)}>Nivel</th>
-                      <th style={thStyle(110)}>Plan</th>
-                      <th style={thStyle(90)}>Profesor</th>
-                      <th style={thStyle(130)}>Suscripción</th>
-                      <th style={thStyle(160)}>Horarios</th>
-                      <th style={{ ...thStyle(160), textAlign: 'right' }}></th>
+                      <th style={thStyle(160)}>Nombre</th>
+                      <th style={thStyle(200)}>Email</th>
+                      <th style={thStyle(70, 'center')}>Nivel</th>
+                      <th style={thStyle(130)}>Plan</th>
+                      <th style={thStyle(100)}>Profesor</th>
+                      <th style={thStyle(140)}>Suscripción</th>
+                      <th style={thStyle(180)}>Horarios</th>
+                      <th style={thStyle(180, 'right')}>Acciones</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -695,34 +783,32 @@ function StudentsContent() {
                       const studentAssignments = assignmentsForStudent(s);
                       return (
                         <tr key={s.id} style={{ borderBottom: '1px solid var(--border)' }}>
-                          <td style={{ padding: '11px 14px', minWidth: 140 }}>
+                          <td style={{ padding: '12px 14px', minWidth: 160 }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
                               <div style={{ width: 30, height: 30, borderRadius: '50%', background: 'rgba(59,130,246,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: '#93c5fd', flexShrink: 0 }}>
                                 {s.name.split(' ').map(p => p[0]).join('').toUpperCase().slice(0, 2)}
                               </div>
-                              <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)' }}>{s.name}</span>
+                              <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)', wordBreak: 'break-word' }}>{s.name}</span>
                             </div>
                           </td>
-                          <td style={{ padding: '11px 14px', fontSize: 12, color: 'var(--text-secondary)', minWidth: 180 }}>{s.email}</td>
-                          <td style={{ padding: '11px 14px', minWidth: 60 }}>
+                          <td style={{ padding: '12px 14px', fontSize: 12, color: 'var(--text-secondary)', minWidth: 200, wordBreak: 'break-word', whiteSpace: 'normal' }}>{s.email || '—'}</td>
+                          <td style={{ padding: '12px 14px', minWidth: 70, textAlign: 'center' }}>
                             <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 20, background: 'rgba(167,139,250,0.15)', color: '#a78bfa', fontWeight: 600 }}>{s.level || '—'}</span>
                           </td>
-                          <td style={{ padding: '11px 14px', fontSize: 12, color: 'var(--text-secondary)', minWidth: 110 }}>
-                            <span style={{ display: 'block', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.plan || '—'}</span>
-                          </td>
-                          <td style={{ padding: '11px 14px', minWidth: 90 }}>
+                          <td style={{ padding: '12px 14px', fontSize: 12, color: 'var(--text-secondary)', minWidth: 130, wordBreak: 'break-word', whiteSpace: 'normal' }}>{s.plan || '—'}</td>
+                          <td style={{ padding: '12px 14px', minWidth: 100 }}>
                             {studentAssignments.length === 0 ? (
                               <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>—</span>
                             ) : (
                               <div>{studentAssignments.map((a, i) => (
-                                <div key={i} style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 1, whiteSpace: 'nowrap' }}>{a.teacherName}</div>
+                                <div key={i} style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 1, wordBreak: 'break-word' }}>{a.teacherName}</div>
                               ))}</div>
                             )}
                           </td>
-                          <td style={{ padding: '11px 14px', minWidth: 130 }}>
+                          <td style={{ padding: '12px 14px', minWidth: 140 }}>
                             {renderSubBadge(s)}
                           </td>
-                          <td style={{ padding: '11px 14px', minWidth: 160 }}>
+                          <td style={{ padding: '12px 14px', minWidth: 180 }}>
                             {studentAssignments.length === 0 ? (
                               <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>—</span>
                             ) : (
@@ -733,16 +819,16 @@ function StudentsContent() {
                               ))}</div>
                             )}
                           </td>
-                          <td style={{ padding: '11px 14px', minWidth: 160 }}>
-                            <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
+                          <td style={{ padding: '12px 14px', minWidth: 180 }}>
+                            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
                               {s.inStudentsTable && (
                                 <button onClick={() => handleEditClick(s)}
-                                  style={{ padding: '8px 12px', borderRadius: 7, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', fontFamily: 'inherit', minHeight: 40 }}>
+                                  style={{ padding: '8px 14px', borderRadius: 7, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', fontFamily: 'inherit', minHeight: 38 }}>
                                   Editar
                                 </button>
                               )}
                               <button onClick={() => setDeletingStudent(s)}
-                                style={{ padding: '8px 12px', borderRadius: 7, border: '1px solid rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.08)', color: '#ef4444', cursor: 'pointer', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', fontFamily: 'inherit', minHeight: 40 }}>
+                                style={{ padding: '8px 14px', borderRadius: 7, border: '1px solid rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.08)', color: '#ef4444', cursor: 'pointer', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', fontFamily: 'inherit', minHeight: 38 }}>
                                 Eliminar
                               </button>
                             </div>
@@ -753,55 +839,7 @@ function StudentsContent() {
                   </tbody>
                 </table>
               </div>
-
-              {/* Mobile: cards */}
-              <div className="mob-only" style={{ flexDirection: 'column', gap: 0 }}>
-                {filtered.map(s => {
-                  const studentAssignments = assignmentsForStudent(s);
-                  return (
-                    <div key={s.id} style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
-                      {/* Name + avatar */}
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-                        <div style={{ width: 34, height: 34, borderRadius: '50%', background: 'rgba(59,130,246,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: '#93c5fd', flexShrink: 0 }}>
-                          {s.name.split(' ').map(p => p[0]).join('').toUpperCase().slice(0, 2)}
-                        </div>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</div>
-                          <div style={{ fontSize: 11, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.email || '—'}</div>
-                        </div>
-                      </div>
-                      {/* Badges */}
-                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
-                        <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 20, background: 'rgba(167,139,250,0.15)', color: '#a78bfa', fontWeight: 600 }}>{s.level || '—'}</span>
-                        {s.plan && <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 20, background: 'var(--bg-surface-2)', color: 'var(--text-secondary)', fontWeight: 500 }}>{s.plan}</span>}
-                      </div>
-                      {/* Subscription badge */}
-                      {s.email && <div style={{ marginBottom: 8 }}>{renderSubBadge(s)}</div>}
-                      {/* Assignments */}
-                      {studentAssignments.map((a, i) => (
-                        <div key={i} style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 2 }}>
-                          👨‍🏫 {a.teacherName}
-                          {a.slots.length > 0 && <span style={{ color: 'var(--text-muted)' }}> · {a.slots.map(sl => `${sl.day} ${sl.hour}`).join(', ')}</span>}
-                        </div>
-                      ))}
-                      {/* Actions */}
-                      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-                        {s.inStudentsTable && (
-                          <button onClick={() => handleEditClick(s)}
-                            style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
-                            Editar
-                          </button>
-                        )}
-                        <button onClick={() => setDeletingStudent(s)}
-                          style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.08)', color: '#ef4444', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
-                          Eliminar
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </>)}
+            )}
           </div>
         )}
       </div>
