@@ -7,7 +7,7 @@ import { LastUpdated } from '@/components/LastUpdated';
 import { VisualCalendar, DAYS, cellKey, getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
-import { calcCurrentClassNumber, dbCheckStudentExists, dbSetStudentProduct } from '@/lib/db';
+import { calcCurrentClassNumber, dbCheckStudentExists, dbSetStudentProduct, dbEnsureStudentAndAssignment } from '@/lib/db';
 import { classCategoryBadge } from '@/lib/finance';
 import { detectWeeklyHours, type DetectionResult } from '@/lib/productUtils';
 import { Grid, Teacher, Assignment, ScoringEvent, Student, AppNotification } from '@/types';
@@ -1511,6 +1511,23 @@ function TeacherContent() {
       await addAssignment(newAssignment);
       finalName = es.name;
     }
+
+    // PREVENCIÓN: garantizar que el alumno y su assignment existan y estén
+    // correctamente vinculados ANTES de pintar la celda 'ocupado', para que
+    // grid ↔ students ↔ assignments queden siempre en sincronía desde el origen.
+    // Idempotente: si ya existen (creados arriba), no duplica.
+    try {
+      const ensureEmail = data.isNew ? data.newStudentData?.email
+        : data.useExistingStudent?.email ?? data.existingAssignment?.studentEmail;
+      const ensureLevel = data.isNew ? data.newStudentData?.level
+        : data.useExistingStudent?.level ?? data.existingAssignment?.studentLevel;
+      await dbEnsureStudentAndAssignment({
+        teacherId: teacher.id, teacherName: teacher.name, teacherEmail: teacher.email,
+        studentName: finalName, studentEmail: ensureEmail, studentLevel: ensureLevel,
+        plan: data.isNew ? data.newStudentData?.plan : undefined,
+        slots: data.slots, startDate: data.startDate,
+      });
+    } catch { /* best-effort: nunca bloquea la asignación */ }
 
     // Update grid for all new slots and revert removed slots to libre
     const updatedGrid = { ...grid };

@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import { Teacher, Student, Assignment, AppUser, Grid, TeacherStatus, ScoringEvent, ClassCount, AppNotification, ClassJoinLog } from '@/types';
+import { Teacher, Student, Assignment, AppUser, Grid, TeacherStatus, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, AssignedSlot } from '@/types';
 
 // ── AUTH ─────────────────────────────────────────────────────────────────────
 
@@ -428,6 +428,313 @@ export async function dbRepairAllBrokenLinks(): Promise<number> {
     ));
   }
   return fixes.length;
+}
+
+// ── SINCRONIZACIÓN CALENDARIO (grid) ↔ ASSIGNMENTS/STUDENTS ────────────────────
+// El grid del profesor (teacher_calendars.grid) guarda nombres de alumnos en las
+// celdas 'ocupado'. Esos datos pueden quedar DESCONECTADOS de assignments/students
+// (el alumno aparece en el calendario pero no en las tablas). Estas funciones
+// diagnostican y reparan esa desconexión.
+
+interface OcupadoCell { student: string; day: string; hour: string; }
+
+// Extrae las celdas 'ocupado' con nombre de alumno de un grid.
+function extractOcupadoCells(grid: Grid | null | undefined): OcupadoCell[] {
+  const out: OcupadoCell[] = [];
+  for (const [key, cell] of Object.entries(grid ?? {})) {
+    if (cell?.state === 'ocupado' && cell.student && String(cell.student).trim()) {
+      const [day, hour] = key.split('_');
+      out.push({ student: String(cell.student).trim(), day, hour });
+    }
+  }
+  return out;
+}
+
+// Agrupa las celdas ocupado por nombre de alumno (normalizado), conservando el
+// nombre tal como aparece y todos sus slots.
+function groupCellsByStudent(cells: OcupadoCell[]): Map<string, { name: string; slots: AssignedSlot[] }> {
+  const byName = new Map<string, { name: string; slots: AssignedSlot[] }>();
+  for (const c of cells) {
+    const k = normKey(c.student);
+    if (!byName.has(k)) byName.set(k, { name: c.student, slots: [] });
+    byName.get(k)!.slots.push({ day: c.day, hour: c.hour });
+  }
+  return byName;
+}
+
+export interface CalendarDiagnosisRow {
+  studentNameInGrid: string;
+  day: string;
+  hour: string;
+  slots: AssignedSlot[];
+  existsInAssignments: boolean;
+  existsInStudents: boolean;
+  assignmentId: string | null;
+  studentId: string | null;
+}
+
+export interface CalendarDiagnosisAllRow extends CalendarDiagnosisRow {
+  teacherId: string;
+  teacherName: string;
+  teacherEmail: string;
+}
+
+// Diagnóstico para UN profesor: compara los nombres del grid contra assignments
+// (de ese teacher) y students.
+export async function dbDiagnoseCalendarVsAssignments(teacherId: string): Promise<CalendarDiagnosisRow[]> {
+  const [grid, teacherAsgs, students] = await Promise.all([
+    dbGetTeacherGrid(teacherId),
+    dbGetAssignmentsByTeacher(teacherId),
+    dbGetStudents(),
+  ]);
+  const studentsByName = new Map(students.map(s => [normKey(s.name), s]));
+  const rows: CalendarDiagnosisRow[] = [];
+  for (const { name, slots } of groupCellsByStudent(extractOcupadoCells(grid)).values()) {
+    const nk = normKey(name);
+    const asg = teacherAsgs.find(a => normKey(a.studentName) === nk);
+    const stu = studentsByName.get(nk);
+    rows.push({
+      studentNameInGrid: name,
+      day: slots[0].day, hour: slots[0].hour, slots,
+      existsInAssignments: !!asg,
+      existsInStudents: !!stu,
+      assignmentId: asg?.id ?? null,
+      studentId: stu?.id ?? asg?.studentId ?? null,
+    });
+  }
+  return rows;
+}
+
+// Diagnóstico para TODOS los profesores (1 sola query por tabla, eficiente).
+export async function dbDiagnoseAllCalendars(): Promise<CalendarDiagnosisAllRow[]> {
+  const [teachers, allAssignments, students, calRes] = await Promise.all([
+    dbGetTeachers(),
+    dbGetAssignments(),
+    dbGetStudents(),
+    supabase.from('teacher_calendars').select('teacher_id, grid'),
+  ]);
+  const studentsByName = new Map(students.map(s => [normKey(s.name), s]));
+  const asgByTeacher = new Map<string, Assignment[]>();
+  for (const a of allAssignments) {
+    if (!asgByTeacher.has(a.teacherId)) asgByTeacher.set(a.teacherId, []);
+    asgByTeacher.get(a.teacherId)!.push(a);
+  }
+  const teacherById = new Map(teachers.map(t => [t.id, t]));
+
+  const rows: CalendarDiagnosisAllRow[] = [];
+  for (const cal of (calRes.data ?? []) as any[]) {
+    const t = teacherById.get(cal.teacher_id);
+    if (!t) continue;
+    const tAsgs = asgByTeacher.get(t.id) ?? [];
+    for (const { name, slots } of groupCellsByStudent(extractOcupadoCells(cal.grid as Grid)).values()) {
+      const nk = normKey(name);
+      const asg = tAsgs.find(a => normKey(a.studentName) === nk);
+      const stu = studentsByName.get(nk);
+      rows.push({
+        teacherId: t.id, teacherName: t.name, teacherEmail: t.email,
+        studentNameInGrid: name,
+        day: slots[0].day, hour: slots[0].hour, slots,
+        existsInAssignments: !!asg,
+        existsInStudents: !!stu,
+        assignmentId: asg?.id ?? null,
+        studentId: stu?.id ?? asg?.studentId ?? null,
+      });
+    }
+  }
+  return rows;
+}
+
+// Ocupación de TODOS los grids: nombres de alumnos por profesor (para detectar en
+// el Setter los alumnos que están en un calendario pero no tienen assignment).
+export interface GridOccupancy {
+  teacherId: string;
+  teacherName: string;
+  teacherEmail: string;
+  studentName: string;
+  slots: AssignedSlot[];
+}
+export async function dbGetAllGridOccupancy(): Promise<GridOccupancy[]> {
+  const [teachers, calRes] = await Promise.all([
+    dbGetTeachers(),
+    supabase.from('teacher_calendars').select('teacher_id, grid'),
+  ]);
+  const teacherById = new Map(teachers.map(t => [t.id, t]));
+  const out: GridOccupancy[] = [];
+  for (const cal of (calRes.data ?? []) as any[]) {
+    const t = teacherById.get(cal.teacher_id);
+    if (!t) continue;
+    for (const { name, slots } of groupCellsByStudent(extractOcupadoCells(cal.grid as Grid)).values()) {
+      out.push({ teacherId: t.id, teacherName: t.name, teacherEmail: t.email, studentName: name, slots });
+    }
+  }
+  return out;
+}
+
+// Crea el vínculo COMPLETO (student + assignment) a partir de datos de un
+// formulario. Idempotente: reutiliza el student si ya existe (por email o
+// nombre) y la assignment si ya existe (corrige su student_id).
+export async function dbCreateFullLink(params: {
+  teacherId: string; teacherName: string; teacherEmail: string;
+  name: string; email: string; level: string; plan: string;
+  weeklyHours: number; startDate?: string; slots: AssignedSlot[];
+}): Promise<void> {
+  const emailTrim = params.email.trim();
+  const nameTrim = params.name.trim();
+
+  // 1) student por email → nombre → crear.
+  let studentId: string | null = null;
+  if (emailTrim) {
+    const { data } = await supabase.from('students').select('id').ilike('email', emailTrim).limit(1).maybeSingle();
+    if (data) studentId = data.id;
+  }
+  if (!studentId) {
+    const { data } = await supabase.from('students').select('id').ilike('name', nameTrim).limit(1).maybeSingle();
+    if (data) studentId = data.id;
+  }
+  if (!studentId) {
+    studentId = crypto.randomUUID();
+    await supabase.from('students').insert({
+      id: studentId, name: nameTrim, email: emailTrim,
+      level: params.level, plan: params.plan,
+    });
+  } else {
+    await supabase.from('students').update({
+      email: emailTrim || undefined, level: params.level, plan: params.plan,
+    }).eq('id', studentId);
+  }
+
+  // 2) assignment de ese teacher para ese alumno (por student_id o nombre).
+  let asgId: string | null = null;
+  {
+    const { data } = await supabase.from('assignments').select('id')
+      .eq('teacher_id', params.teacherId).eq('student_id', studentId).limit(1).maybeSingle();
+    if (data) asgId = data.id;
+  }
+  if (!asgId) {
+    const { data } = await supabase.from('assignments').select('id')
+      .eq('teacher_id', params.teacherId).ilike('student_name', nameTrim).limit(1).maybeSingle();
+    if (data) asgId = data.id;
+  }
+
+  const payload = {
+    student_id: studentId, student_name: nameTrim, student_email: emailTrim,
+    student_level: params.level, slots: params.slots, plan: params.plan,
+    weekly_hours: params.weeklyHours, start_date: params.startDate || null,
+    availability: params.slots.map(s => `${s.day} ${s.hour}`).join(', '),
+  };
+  if (asgId) {
+    await supabase.from('assignments').update(payload).eq('id', asgId);
+  } else {
+    await supabase.from('assignments').insert({
+      id: crypto.randomUUID(),
+      teacher_id: params.teacherId, teacher_name: params.teacherName, teacher_email: params.teacherEmail,
+      objetivo: '', notes: '', manual_class_adjustment: 0, ...payload,
+    });
+  }
+}
+
+// Garantiza que exista el student (por email o nombre) y una assignment para el
+// teacher+student dados. Idempotente — pensada para llamarse al marcar una celda
+// 'ocupado', manteniendo grid/students/assignments en sincronía desde el origen.
+export async function dbEnsureStudentAndAssignment(params: {
+  teacherId: string; teacherName: string; teacherEmail: string;
+  studentName: string; studentEmail?: string; studentLevel?: string;
+  plan?: string; slots: AssignedSlot[]; startDate?: string;
+}): Promise<void> {
+  const nameTrim = params.studentName.trim();
+  if (!nameTrim) return;
+  const emailTrim = (params.studentEmail ?? '').trim();
+
+  let student: { id: string; name: string; email: string; level: string; plan: string } | null = null;
+  if (emailTrim) {
+    const { data } = await supabase.from('students').select('id, name, email, level, plan').ilike('email', emailTrim).limit(1).maybeSingle();
+    if (data) student = data as any;
+  }
+  if (!student) {
+    const { data } = await supabase.from('students').select('id, name, email, level, plan').ilike('name', nameTrim).limit(1).maybeSingle();
+    if (data) student = data as any;
+  }
+  if (!student) {
+    const id = crypto.randomUUID();
+    const rec = { id, name: nameTrim, email: emailTrim, level: params.studentLevel ?? 'B1', plan: params.plan ?? '' };
+    await supabase.from('students').insert(rec);
+    student = rec;
+  }
+
+  // ¿ya hay assignment para este teacher+student?
+  let asgId: string | null = null;
+  {
+    const { data } = await supabase.from('assignments').select('id')
+      .eq('teacher_id', params.teacherId).eq('student_id', student.id).limit(1).maybeSingle();
+    if (data) asgId = data.id;
+  }
+  if (!asgId) {
+    const { data } = await supabase.from('assignments').select('id')
+      .eq('teacher_id', params.teacherId).ilike('student_name', nameTrim).limit(1).maybeSingle();
+    if (data) { // existe pero con student_id posiblemente roto → corregir
+      await supabase.from('assignments').update({ student_id: student.id }).eq('id', data.id);
+      return;
+    }
+  } else {
+    return; // ya existe y está bien vinculada
+  }
+
+  await supabase.from('assignments').insert({
+    id: crypto.randomUUID(),
+    teacher_id: params.teacherId, teacher_name: params.teacherName, teacher_email: params.teacherEmail,
+    student_id: student.id, student_name: student.name, student_email: student.email, student_level: student.level,
+    slots: params.slots, objetivo: '', plan: params.plan ?? student.plan ?? '', weekly_hours: params.slots.length,
+    availability: params.slots.map(s => `${s.day} ${s.hour}`).join(', '), notes: '',
+    start_date: params.startDate ?? null, manual_class_adjustment: 0,
+  });
+}
+
+// Sincronización masiva: para cada profesor, crea automáticamente la assignment
+// faltante cuando el alumno del grid YA existe en students. Los que no existen en
+// students quedan como "pendiente manual" (requieren email/datos mínimos).
+export async function dbSyncAllCalendarsToAssignments(): Promise<{ autoFixed: number; pendingManual: string[] }> {
+  const [teachers, allAssignments, students, calRes] = await Promise.all([
+    dbGetTeachers(),
+    dbGetAssignments(),
+    dbGetStudents(),
+    supabase.from('teacher_calendars').select('teacher_id, grid'),
+  ]);
+  const studentsByName = new Map(students.map(s => [normKey(s.name), s]));
+  const asgByTeacher = new Map<string, Assignment[]>();
+  for (const a of allAssignments) {
+    if (!asgByTeacher.has(a.teacherId)) asgByTeacher.set(a.teacherId, []);
+    asgByTeacher.get(a.teacherId)!.push(a);
+  }
+  const teacherById = new Map(teachers.map(t => [t.id, t]));
+
+  const inserts: any[] = [];
+  const pendingManual: string[] = [];
+  for (const cal of (calRes.data ?? []) as any[]) {
+    const t = teacherById.get(cal.teacher_id);
+    if (!t) continue;
+    const tAsgs = asgByTeacher.get(t.id) ?? [];
+    for (const { name, slots } of groupCellsByStudent(extractOcupadoCells(cal.grid as Grid)).values()) {
+      const nk = normKey(name);
+      if (tAsgs.some(a => normKey(a.studentName) === nk)) continue; // ya vinculado
+      const stu = studentsByName.get(nk);
+      if (stu) {
+        inserts.push({
+          id: crypto.randomUUID(),
+          teacher_id: t.id, teacher_name: t.name, teacher_email: t.email,
+          student_id: stu.id, student_name: stu.name, student_email: stu.email, student_level: stu.level,
+          slots, objetivo: '', plan: stu.plan ?? '', weekly_hours: slots.length,
+          availability: slots.map(s => `${s.day} ${s.hour}`).join(', '), notes: '',
+          start_date: null, manual_class_adjustment: 0,
+        });
+      } else {
+        pendingManual.push(`${name} (${t.name})`);
+      }
+    }
+  }
+  if (inserts.length > 0) {
+    await supabase.from('assignments').insert(inserts);
+  }
+  return { autoFixed: inserts.length, pendingManual };
 }
 
 // ── AUDIT: vínculos alumnos ↔ assignments ─────────────────────────────────────

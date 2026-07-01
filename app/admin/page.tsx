@@ -11,9 +11,11 @@ import { useAuth } from '@/lib/AuthContext';
 import { mockAlerts } from '@/lib/mock-data';
 import { Teacher, Grid, Assignment, ScoringEvent, ScoringEventType } from '@/types';
 import { EVENT_POINTS, EVENT_EUROS, calcCurrentClassNumber, dbUpdateAssignmentStartDate, dbGetAllNotifications,
-  dbAuditStudentAssignments, dbRelinkAssignment, dbSyncAssignmentName, dbMergeDuplicateStudents, dbSyncStudentAssignments, AuditResult } from '@/lib/db';
+  dbAuditStudentAssignments, dbRelinkAssignment, dbSyncAssignmentName, dbMergeDuplicateStudents, dbSyncStudentAssignments,
+  dbDiagnoseAllCalendars, dbSyncAllCalendarsToAssignments, dbCreateFullLink, CalendarDiagnosisAllRow, AuditResult } from '@/lib/db';
+import { CrearVinculoModal } from '@/components/CrearVinculoModal';
 import { useRouter } from 'next/navigation';
-import { AppNotification, ClassJoinLog } from '@/types';
+import { AppNotification, ClassJoinLog, AssignedSlot } from '@/types';
 
 // ─── Specialty constants ──────────────────────────────────────────────────────
 const ALL_SPECIALTIES = ['Adultos', 'Niños', 'Exámenes'] as const;
@@ -1951,6 +1953,173 @@ const auditBtn = (color: string, bg: string, border: string) => ({
   color, cursor: 'pointer', fontSize: 11, fontWeight: 700, fontFamily: 'inherit', whiteSpace: 'nowrap' as const,
 });
 
+// ─── Panel de sincronización calendario ↔ assignments/students ────────────────
+function SyncPanel() {
+  const { teachers, students, reloadAll } = useTeachers();
+  const [open, setOpen] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [rows, setRows] = useState<CalendarDiagnosisAllRow[] | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [modalRow, setModalRow] = useState<CalendarDiagnosisAllRow | null>(null);
+
+  const rowKey = (r: CalendarDiagnosisAllRow) => `${r.teacherId}|${r.studentNameInGrid.trim().toLowerCase()}`;
+
+  async function runAnalyze() {
+    setAnalyzing(true);
+    setMsg(null);
+    try { setRows(await dbDiagnoseAllCalendars()); }
+    finally { setAnalyzing(false); }
+  }
+
+  async function syncAllAuto() {
+    setSyncing(true);
+    setMsg(null);
+    try {
+      const { autoFixed, pendingManual } = await dbSyncAllCalendarsToAssignments();
+      await reloadAll();
+      await runAnalyze();
+      setMsg(`✅ ${autoFixed} assignment${autoFixed !== 1 ? 's' : ''} creada${autoFixed !== 1 ? 's' : ''} automáticamente${pendingManual.length > 0 ? ` · ⚠️ ${pendingManual.length} requiere${pendingManual.length !== 1 ? 'n' : ''} datos manuales` : ''}`);
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  // Alumno YA existe en students pero falta la assignment → crear automáticamente.
+  async function crearAssignmentAuto(r: CalendarDiagnosisAllRow) {
+    const t = teachers.find(x => x.id === r.teacherId);
+    if (!t) return;
+    const nk = r.studentNameInGrid.trim().toLowerCase();
+    const stu = students.find(s => s.id === r.studentId) ?? students.find(s => s.name.trim().toLowerCase() === nk);
+    if (!stu) return;
+    setBusyKey(rowKey(r));
+    try {
+      await dbCreateFullLink({
+        teacherId: t.id, teacherName: t.name, teacherEmail: t.email,
+        name: stu.name, email: stu.email, level: stu.level, plan: stu.plan || 'Inglés general',
+        weeklyHours: r.slots.length, slots: r.slots,
+      });
+      await reloadAll();
+      await runAnalyze();
+      setMsg(`✅ ${stu.name} vinculado correctamente con ${t.name}`);
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  async function handleModalDone(text: string) {
+    setModalRow(null);
+    await reloadAll();
+    await runAnalyze();
+    setMsg(text);
+  }
+
+  const problemCount = rows?.filter(r => !(r.existsInAssignments && r.existsInStudents)).length ?? 0;
+
+  return (
+    <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', marginTop: 16 }}>
+      <button onClick={() => setOpen(o => !o)}
+        style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 18px', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
+        <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>🔄 Sincronización calendario ↔ asignaciones</span>
+        <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>{open ? '▲' : '▼'}</span>
+      </button>
+
+      {open && (
+        <div style={{ padding: '0 18px 18px', borderTop: '1px solid var(--border)' }}>
+          <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', margin: '12px 0 14px', lineHeight: 1.5 }}>
+            Detecta alumnos que aparecen en el calendario de un profesor (celda "ocupado") pero no tienen assignment ni registro en la tabla de alumnos.
+          </div>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
+            <button onClick={runAnalyze} disabled={analyzing}
+              style={{ padding: '9px 16px', borderRadius: 8, border: 'none', background: '#1E9E3A', color: 'white', cursor: analyzing ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+              {analyzing ? 'Analizando...' : '🔍 Analizar desconexiones'}
+            </button>
+            <button onClick={syncAllAuto} disabled={syncing}
+              style={{ padding: '9px 16px', borderRadius: 8, border: 'none', background: '#FFC400', color: '#1a1a1a', cursor: syncing ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+              {syncing ? 'Sincronizando...' : '⚡ Sincronizar todos automáticamente'}
+            </button>
+          </div>
+
+          {msg && <div style={{ margin: '0 0 14px', fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{msg}</div>}
+
+          {rows && (
+            rows.length === 0 ? (
+              <div style={{ fontSize: 13, color: 'var(--text-muted)', padding: '10px 0' }}>No hay alumnos en los calendarios.</div>
+            ) : (
+              <>
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>
+                  {rows.length} alumno{rows.length !== 1 ? 's' : ''} en calendarios · {problemCount > 0 ? <b style={{ color: '#ea580c' }}>{problemCount} desconexión{problemCount !== 1 ? 'es' : ''}</b> : <b style={{ color: '#1E9E3A' }}>todo sincronizado</b>}
+                </div>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                    <thead>
+                      <tr style={{ textAlign: 'left', color: 'var(--text-muted)' }}>
+                        <th style={{ padding: '6px 10px', fontWeight: 700 }}>Profesor</th>
+                        <th style={{ padding: '6px 10px', fontWeight: 700 }}>Alumno en grid</th>
+                        <th style={{ padding: '6px 10px', fontWeight: 700, whiteSpace: 'nowrap' }}>En assignments</th>
+                        <th style={{ padding: '6px 10px', fontWeight: 700, whiteSpace: 'nowrap' }}>En students</th>
+                        <th style={{ padding: '6px 10px', fontWeight: 700 }}>Acción</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map(r => {
+                        const ok = r.existsInAssignments && r.existsInStudents;
+                        const onlyStudent = r.existsInStudents && !r.existsInAssignments;
+                        const busy = busyKey === rowKey(r);
+                        return (
+                          <tr key={rowKey(r)} style={{ borderTop: '1px solid var(--border)', background: ok ? 'transparent' : 'rgba(234,88,12,0.05)' }}>
+                            <td style={{ padding: '8px 10px', color: 'var(--text-primary)', fontWeight: 600 }}>{r.teacherName}</td>
+                            <td style={{ padding: '8px 10px', color: 'var(--text-primary)' }}>
+                              {r.studentNameInGrid}
+                              <div style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>{r.slots.map(s => `${s.day} ${s.hour}`).join(' · ')}</div>
+                            </td>
+                            <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>{r.existsInAssignments ? '✅ Sí' : '❌ No'}</td>
+                            <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>{r.existsInStudents ? '✅ Sí' : '❌ No'}</td>
+                            <td style={{ padding: '8px 10px' }}>
+                              {ok ? (
+                                <span style={{ color: '#1E9E3A', fontWeight: 700 }}>✅ OK</span>
+                              ) : onlyStudent ? (
+                                <button onClick={() => crearAssignmentAuto(r)} disabled={busy}
+                                  style={{ padding: '5px 12px', borderRadius: 7, border: 'none', background: busy ? 'var(--bg-surface-3)' : '#1E9E3A', color: busy ? 'var(--text-muted)' : 'white', cursor: busy ? 'not-allowed' : 'pointer', fontSize: 12, fontWeight: 700, fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
+                                  {busy ? '...' : 'Crear assignment'}
+                                </button>
+                              ) : (
+                                <button onClick={() => setModalRow(r)}
+                                  style={{ padding: '5px 12px', borderRadius: 7, border: 'none', background: '#FFC400', color: '#1a1a1a', cursor: 'pointer', fontSize: 12, fontWeight: 700, fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
+                                  Crear todo
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )
+          )}
+        </div>
+      )}
+
+      {modalRow && (() => {
+        const t = teachers.find(x => x.id === modalRow.teacherId);
+        if (!t) return null;
+        return (
+          <CrearVinculoModal
+            studentName={modalRow.studentNameInGrid}
+            teacher={t}
+            slots={modalRow.slots as AssignedSlot[]}
+            onClose={() => setModalRow(null)}
+            onDone={handleModalDone}
+          />
+        );
+      })()}
+    </div>
+  );
+}
+
 function AuditPanel() {
   const { students, reloadAll } = useTeachers();
   const router = useRouter();
@@ -2301,6 +2470,7 @@ function AdminContent() {
           </div>
 
           <AuditPanel />
+          <SyncPanel />
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 16, marginTop: 16 }}>
             <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>

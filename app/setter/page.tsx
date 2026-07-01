@@ -6,7 +6,8 @@ import { AuthGuard } from '@/components/AuthGuard';
 import { PullToRefresh } from '@/components/PullToRefresh';
 import { LastUpdated } from '@/components/LastUpdated';
 import { VisualCalendar, buildGridFromTeacher, cellKey, HOURS_ES, getWeekDates, formatWeekRange } from '@/components/VisualCalendar';
-import { dbCheckStudentExists, dbSetStudentProduct, dbGetAssignmentsByTeacher, dbGetAssignments, dbUpsertStudent, dbRepairStudentLink, dbRepairAllBrokenLinks } from '@/lib/db';
+import { dbCheckStudentExists, dbSetStudentProduct, dbGetAssignmentsByTeacher, dbGetAssignments, dbUpsertStudent, dbRepairStudentLink, dbRepairAllBrokenLinks, dbGetAllGridOccupancy, GridOccupancy } from '@/lib/db';
+import { CrearVinculoModal } from '@/components/CrearVinculoModal';
 import { detectWeeklyHours, type DetectionResult } from '@/lib/productUtils';
 import { useTeachers } from '@/lib/TeachersContext';
 import { daysOfWeek } from '@/lib/mock-data';
@@ -989,6 +990,40 @@ function SetterContent() {
     showToast(msg);
   }
 
+  // Ocupación de los calendarios (Tipo B: alumno en grid sin assignment).
+  const [gridOccupancy, setGridOccupancy] = useState<GridOccupancy[]>([]);
+  const [createLinkFor, setCreateLinkFor] = useState<{ student: Student; occ: GridOccupancy; teacher: Teacher } | null>(null);
+
+  function refreshOccupancy() {
+    dbGetAllGridOccupancy().then(setGridOccupancy).catch(() => {});
+  }
+  useEffect(() => { refreshOccupancy(); }, [unassignedStudents.length]);
+
+  const occByName = useMemo(() => {
+    const m = new Map<string, GridOccupancy>();
+    for (const o of gridOccupancy) {
+      const k = o.studentName.trim().toLowerCase();
+      if (!m.has(k)) m.set(k, o);
+    }
+    return m;
+  }, [gridOccupancy]);
+
+  // Tipo B: el alumno aparece en el grid de un profesor pero no tiene assignment.
+  function typeBFor(s: Student): { occ: GridOccupancy; teacher: Teacher } | null {
+    const occ = occByName.get(s.name.trim().toLowerCase());
+    if (!occ) return null;
+    const teacher = teachers.find(t => t.id === occ.teacherId);
+    if (!teacher) return null;
+    return { occ, teacher };
+  }
+
+  async function handleCreateLinkDone(msg: string) {
+    setCreateLinkFor(null);
+    await reloadAll();
+    refreshOccupancy();
+    showToast(msg);
+  }
+
   function addSlotFilter() {
     setSlotFilters(prev => [...prev, { id: Date.now().toString(), day: 'Lunes', hour: '14:00' }]);
   }
@@ -1354,8 +1389,10 @@ function SetterContent() {
                     const daysWaiting = Math.floor((Date.now() - new Date(s.createdAt).getTime()) / 86400000);
                     const urgent = daysWaiting > 3;
                     const broken = brokenLinks[s.id];
+                    const tb = !broken ? typeBFor(s) : null; // Tipo B: en calendario sin assignment
+                    const borderColor = broken ? 'rgba(234,88,12,0.4)' : tb ? 'rgba(255,196,0,0.5)' : urgent ? 'rgba(239,68,68,0.3)' : 'var(--border)';
                     return (
-                      <div key={s.id} style={{ background: 'var(--bg-surface)', border: `1px solid ${broken ? 'rgba(234,88,12,0.4)' : urgent ? 'rgba(239,68,68,0.3)' : 'var(--border)'}`, borderRadius: 12, padding: '14px 18px', display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+                      <div key={s.id} style={{ background: 'var(--bg-surface)', border: `1px solid ${borderColor}`, borderRadius: 12, padding: '14px 18px', display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
                         <div style={{ width: 40, height: 40, borderRadius: '50%', background: urgent ? 'rgba(239,68,68,0.1)' : 'var(--bg-surface-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, fontWeight: 700, color: urgent ? '#ef4444' : 'var(--text-secondary)', flexShrink: 0 }}>
                           {s.name.charAt(0).toUpperCase()}
                         </div>
@@ -1365,17 +1402,27 @@ function SetterContent() {
                           <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 3 }}>
                             Plan: <b>{s.plan || '—'}</b> · Nivel: <b>{s.level}</b>
                           </div>
-                          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
-                            Registrado hace {daysWaiting} día{daysWaiting !== 1 ? 's' : ''}
-                          </div>
+                          {tb ? (
+                            <div style={{ fontSize: 11, color: '#8a6d00', marginTop: 2 }}>
+                              📅 En el calendario de <b>{tb.teacher.name}</b>: {tb.occ.slots.map(sl => `${sl.day} ${sl.hour}`).join(' · ')}
+                            </div>
+                          ) : (
+                            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+                              Registrado hace {daysWaiting} día{daysWaiting !== 1 ? 's' : ''}
+                            </div>
+                          )}
                         </div>
                         {broken ? (
                           <span style={{ padding: '3px 10px', borderRadius: 20, background: 'rgba(234,88,12,0.1)', border: '1px solid rgba(234,88,12,0.4)', color: '#ea580c', fontSize: 11, fontWeight: 700, flexShrink: 0 }}>
                             ⚠️ Vínculo roto — tiene asignación
                           </span>
-                        ) : urgent && (
+                        ) : tb ? (
+                          <span style={{ padding: '3px 10px', borderRadius: 20, background: 'rgba(255,196,0,0.12)', border: '1px solid rgba(255,196,0,0.5)', color: '#8a6d00', fontSize: 11, fontWeight: 700, flexShrink: 0 }}>
+                            🟡 En calendario sin assignment
+                          </span>
+                        ) : (
                           <span style={{ padding: '3px 10px', borderRadius: 20, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.35)', color: '#ef4444', fontSize: 11, fontWeight: 700, flexShrink: 0 }}>
-                            ⚠️ {daysWaiting} días sin asignar
+                            🔴 {urgent ? `${daysWaiting} días sin asignar` : 'Sin profesor asignado'}
                           </span>
                         )}
                         <div style={{ display: 'flex', gap: 8, flexShrink: 0, flexWrap: 'wrap' }}>
@@ -1383,6 +1430,12 @@ function SetterContent() {
                             <button onClick={() => repairOne(s, broken)}
                               style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: '#FFC400', color: '#1a1a1a', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
                               🔧 Reparar
+                            </button>
+                          )}
+                          {tb && (
+                            <button onClick={() => setCreateLinkFor({ student: s, occ: tb.occ, teacher: tb.teacher })}
+                              style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: '#FFC400', color: '#1a1a1a', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
+                              🔗 Crear vínculo
                             </button>
                           )}
                           <button onClick={() => { setSearchName(''); setSpecialtyFilter(''); setActiveTab('search'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
@@ -1466,6 +1519,19 @@ function SetterContent() {
           existingStudents={students}
           onClose={() => setCreateAssign(null)}
           onAssigned={(a, s) => { handleAssigned(a, s); setCreateAssign(null); }}
+        />
+      )}
+
+      {createLinkFor && (
+        <CrearVinculoModal
+          studentName={createLinkFor.student.name}
+          teacher={createLinkFor.teacher}
+          slots={createLinkFor.occ.slots}
+          defaultEmail={createLinkFor.student.email}
+          defaultLevel={createLinkFor.student.level}
+          defaultPlan={createLinkFor.student.plan || 'Inglés general'}
+          onClose={() => setCreateLinkFor(null)}
+          onDone={handleCreateLinkDone}
         />
       )}
 
