@@ -6,7 +6,7 @@ import { AuthGuard } from '@/components/AuthGuard';
 import { PullToRefresh } from '@/components/PullToRefresh';
 import { LastUpdated } from '@/components/LastUpdated';
 import { VisualCalendar, buildGridFromTeacher, cellKey, HOURS_ES, getWeekDates, formatWeekRange } from '@/components/VisualCalendar';
-import { dbCheckStudentExists, dbSetStudentProduct } from '@/lib/db';
+import { dbCheckStudentExists, dbSetStudentProduct, dbGetAssignmentsByTeacher, dbGetAssignments, dbUpsertStudent, dbRepairStudentLink, dbRepairAllBrokenLinks } from '@/lib/db';
 import { detectWeeklyHours, type DetectionResult } from '@/lib/productUtils';
 import { useTeachers } from '@/lib/TeachersContext';
 import { daysOfWeek } from '@/lib/mock-data';
@@ -171,17 +171,18 @@ function EmailTrigger({ assignment }: { assignment: Assignment }) {
 const DAY_ORDER = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 
 function AssignModal({
-  teacher, initialSlots, teacherGrid, existingStudents, onClose, onConfirm,
+  teacher, initialSlots, teacherGrid, existingStudents, initialStudentId, onClose, onConfirm,
 }: {
   teacher: Teacher;
   initialSlots: AssignedSlot[];
   teacherGrid: Grid;
   existingStudents: Student[];
+  initialStudentId?: string;
   onClose: () => void;
   onConfirm: (a: Assignment, s: Student) => void;
 }) {
   const [tab, setTab] = useState<'existing' | 'new'>('existing');
-  const [selectedExisting, setSelectedExisting] = useState('');
+  const [selectedExisting, setSelectedExisting] = useState(initialStudentId ?? '');
   const [newStudent, setNewStudent] = useState({ name: '', email: '', level: 'B1' });
 
   const availableSlots = useMemo<AssignedSlot[]>(() => {
@@ -747,6 +748,169 @@ function AgendaSemanal({ assignments }: { assignments: Assignment[] }) {
   );
 }
 
+// ─── Vincular Modal (reparar vínculo roto manualmente) ────────────────────────
+function VincularModal({
+  student, teachers, assignments, onClose, onRepaired, onCreateNew,
+}: {
+  student: Student;
+  teachers: Teacher[];
+  assignments: Assignment[];
+  onClose: () => void;
+  onRepaired: (msg: string) => Promise<void> | void;
+  onCreateNew: (teacher: Teacher) => void;
+}) {
+  const [search, setSearch] = useState('');
+  const [selectedTeacher, setSelectedTeacher] = useState<Teacher | null>(null);
+  const [teacherAssignments, setTeacherAssignments] = useState<Assignment[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [repairing, setRepairing] = useState(false);
+
+  const filteredTeachers = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return teachers.filter(t => !q || t.name.toLowerCase().includes(q) || t.email.toLowerCase().includes(q));
+  }, [teachers, search]);
+
+  const studentCount = (t: Teacher) => assignments.filter(a => a.teacherId === t.id).length;
+
+  async function selectTeacher(t: Teacher) {
+    setSelectedTeacher(t);
+    setTeacherAssignments(null);
+    setLoading(true);
+    try { setTeacherAssignments(await dbGetAssignmentsByTeacher(t.id)); }
+    catch { setTeacherAssignments([]); }
+    finally { setLoading(false); }
+  }
+
+  async function useAssignment(a: Assignment) {
+    setRepairing(true);
+    try {
+      // Asegurar que el alumno exista en `students`, luego reparar el vínculo.
+      await dbUpsertStudent(student);
+      await dbRepairStudentLink(student.id, student.email, student.name, a.id);
+      await onRepaired('✅ Vínculo reparado correctamente');
+    } finally { setRepairing(false); }
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(6px)', zIndex: 70, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 18, width: '100%', maxWidth: 520, maxHeight: '92vh', overflowY: 'auto', padding: 26 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 18 }}>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 18, color: 'var(--text-primary)' }}>🔗 Vincular alumno</div>
+            <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 3 }}>{student.name} · {student.email}</div>
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 22, cursor: 'pointer' }}>✕</button>
+        </div>
+
+        <div style={{ background: 'rgba(255,196,0,0.08)', border: '1px solid rgba(255,196,0,0.35)', borderRadius: 9, padding: '9px 13px', marginBottom: 16, fontSize: 12, color: '#8a6d00', lineHeight: 1.5 }}>
+          Usá esta opción si el alumno <b>ya tiene una asignación en Supabase</b> pero aparece como "sin asignar" por un vínculo roto. Seleccioná el profesor y reparalo.
+        </div>
+
+        {/* PASO 1 — Seleccionar profesor */}
+        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>1 · Seleccionar profesor</div>
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar profesor por nombre..." style={{ width: '100%', marginBottom: 10 }} />
+        <div style={{ maxHeight: 210, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 18 }}>
+          {filteredTeachers.length === 0 ? (
+            <div style={{ fontSize: 13, color: 'var(--text-muted)', textAlign: 'center', padding: '14px 0' }}>Ningún profesor coincide.</div>
+          ) : filteredTeachers.map(t => {
+            const active = selectedTeacher?.id === t.id;
+            return (
+              <button key={t.id} onClick={() => selectTeacher(t)}
+                style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '9px 12px', borderRadius: 10, border: `1.5px solid ${active ? '#1E9E3A' : 'var(--border)'}`, background: active ? 'rgba(30,158,58,0.08)' : 'var(--bg-surface-2)', cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit' }}>
+                <div style={{ width: 34, height: 34, borderRadius: '50%', background: active ? 'rgba(30,158,58,0.15)' : 'var(--bg-surface-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: active ? '#1E9E3A' : 'var(--text-secondary)', flexShrink: 0 }}>{t.avatar}</div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--text-primary)' }}>{t.name}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{studentCount(t)} alumno{studentCount(t) !== 1 ? 's' : ''} · {t.email}</div>
+                </div>
+                {active && <span style={{ color: '#1E9E3A', fontSize: 16 }}>✓</span>}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* PASO 2 — Asignaciones existentes del profesor */}
+        {selectedTeacher && (
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>2 · Asignaciones de {selectedTeacher.name}</div>
+            {loading ? (
+              <div style={{ fontSize: 13, color: 'var(--text-muted)', textAlign: 'center', padding: '16px 0' }}><span className="drc-spinner-xs" /> Buscando asignaciones...</div>
+            ) : (teacherAssignments && teacherAssignments.length > 0) ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {teacherAssignments.map(a => (
+                  <div key={a.id} style={{ background: 'var(--bg-surface-2)', border: '1px solid var(--border)', borderRadius: 10, padding: '11px 14px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                    <div style={{ flex: 1, minWidth: 150 }}>
+                      <div style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--text-primary)' }}>{a.studentName}</div>
+                      <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', marginTop: 2 }}>
+                        {a.slots.map(sl => `${sl.day} ${sl.hour}`).join(' · ') || '—'}
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>
+                        {a.startDate ? `Inicio: ${fmtDate(a.startDate)}` : 'Sin fecha de inicio'}{a.studentEmail ? ` · ${a.studentEmail}` : ''}
+                      </div>
+                    </div>
+                    <button onClick={() => useAssignment(a)} disabled={repairing}
+                      style={{ padding: '8px 14px', borderRadius: 8, border: 'none', background: repairing ? 'var(--bg-surface-3)' : '#1E9E3A', color: repairing ? 'var(--text-muted)' : 'white', fontWeight: 700, fontSize: 12.5, cursor: repairing ? 'not-allowed' : 'pointer', flexShrink: 0 }}>
+                      {repairing ? 'Reparando...' : 'Usar esta asignación'}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ background: 'var(--bg-surface-2)', border: '1px dashed var(--border)', borderRadius: 10, padding: '16px', textAlign: 'center' }}>
+                <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 12 }}>No se encontraron asignaciones previas para este profesor</div>
+                <button onClick={() => onCreateNew(selectedTeacher)}
+                  style={{ padding: '9px 18px', borderRadius: 8, border: 'none', background: '#1E9E3A', color: 'white', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
+                  Crear nueva asignación
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Carga la grilla del profesor y abre el AssignModal precargado con el alumno.
+function LinkCreateAssign({
+  teacher, student, existingStudents, onClose, onAssigned,
+}: {
+  teacher: Teacher;
+  student: Student;
+  existingStudents: Student[];
+  onClose: () => void;
+  onAssigned: (a: Assignment, s: Student) => void;
+}) {
+  const { getTeacherGrid } = useTeachers();
+  const baseGrid = useMemo(() => buildGridFromTeacher(teacher.timeSlots, teacher.upcomingClasses), [teacher]);
+  const [grid, setGrid] = useState<Grid | null>(null);
+
+  useEffect(() => {
+    getTeacherGrid(teacher.id).then(g => setGrid(Object.keys(g).length > 0 ? g : baseGrid));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teacher.id]);
+
+  if (!grid) {
+    return (
+      <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(6px)', zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ color: 'white', fontSize: 14 }}>Cargando calendario...</div>
+      </div>
+    );
+  }
+
+  return (
+    <AssignModal
+      teacher={teacher}
+      initialSlots={[]}
+      teacherGrid={grid}
+      existingStudents={existingStudents}
+      initialStudentId={student.id}
+      onClose={onClose}
+      onConfirm={onAssigned}
+    />
+  );
+}
+
 // ─── Setter Content ───────────────────────────────────────────────────────────
 function SetterContent() {
   const { teachers, students, assignments, unassignedStudents, addStudent, addAssignment, reloadAll } = useTeachers();
@@ -761,6 +925,69 @@ function SetterContent() {
   const [calendarTeacher, setCalendarTeacher] = useState<Teacher | null>(null);
   const [emailAssignment, setEmailAssignment] = useState<Assignment | null>(null);
   const [activeTab, setActiveTab] = useState<'search' | 'unassigned' | 'agenda' | 'history'>('search');
+
+  // Vinculación manual de alumnos "sin asignar".
+  const [linkStudent, setLinkStudent] = useState<Student | null>(null);
+  const [createAssign, setCreateAssign] = useState<{ teacher: Teacher; student: Student } | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const [brokenLinks, setBrokenLinks] = useState<Record<string, Assignment>>({});
+  const [verifying, setVerifying] = useState(false);
+  const [repairingAll, setRepairingAll] = useState(false);
+
+  function showToast(msg: string) {
+    setToast(msg);
+    setTimeout(() => setToast(t => (t === msg ? null : t)), 3500);
+  }
+
+  // Diagnóstico: busca, para cada alumno sin asignar, una assignment cuyo
+  // student_email coincida (aunque el student_id difiera) → vínculo roto.
+  async function verifyBrokenLinks() {
+    setVerifying(true);
+    try {
+      const all = await dbGetAssignments();
+      const byEmail = new Map<string, Assignment>();
+      for (const a of all) {
+        const k = (a.studentEmail ?? '').trim().toLowerCase();
+        if (k && !byEmail.has(k)) byEmail.set(k, a);
+      }
+      const found: Record<string, Assignment> = {};
+      for (const s of unassignedStudents) {
+        const k = (s.email ?? '').trim().toLowerCase();
+        const hit = k ? byEmail.get(k) : undefined;
+        if (hit) found[s.id] = hit;
+      }
+      setBrokenLinks(found);
+      const n = Object.keys(found).length;
+      showToast(n > 0 ? `⚠️ ${n} vínculo${n !== 1 ? 's' : ''} roto${n !== 1 ? 's' : ''} encontrado${n !== 1 ? 's' : ''}` : '✅ No se encontraron vínculos rotos');
+    } finally {
+      setVerifying(false);
+    }
+  }
+
+  async function repairOne(student: Student, a: Assignment) {
+    await dbRepairStudentLink(student.id, student.email, student.name, a.id);
+    await reloadAll();
+    setBrokenLinks(prev => { const n = { ...prev }; delete n[student.id]; return n; });
+    showToast('✅ Vínculo reparado correctamente');
+  }
+
+  async function repairAll() {
+    setRepairingAll(true);
+    try {
+      const n = await dbRepairAllBrokenLinks();
+      await reloadAll();
+      setBrokenLinks({});
+      showToast(`✅ ${n} vínculo${n !== 1 ? 's' : ''} reparado${n !== 1 ? 's' : ''}`);
+    } finally {
+      setRepairingAll(false);
+    }
+  }
+
+  async function handleLinkRepaired(msg: string) {
+    await reloadAll();
+    setLinkStudent(null);
+    showToast(msg);
+  }
 
   function addSlotFilter() {
     setSlotFilters(prev => [...prev, { id: Date.now().toString(), day: 'Lunes', hour: '14:00' }]);
@@ -1091,11 +1318,27 @@ function SetterContent() {
 
         {activeTab === 'unassigned' && (
           <div>
-            <div style={{ marginBottom: 16 }}>
-              <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)' }}>📋 Alumnos sin asignar</div>
-              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3 }}>
-                Alumnos registrados que todavía no tienen ningún profesor asignado. Ordenados por antigüedad.
+            <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)' }}>📋 Alumnos sin asignar</div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3 }}>
+                  Alumnos registrados que todavía no tienen ningún profesor asignado. Ordenados por antigüedad.
+                </div>
               </div>
+              {unassignedStudents.length > 0 && (
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <button onClick={verifyBrokenLinks} disabled={verifying}
+                    style={{ padding: '8px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface-2)', color: 'var(--text-primary)', fontWeight: 600, fontSize: 12.5, cursor: verifying ? 'not-allowed' : 'pointer' }}>
+                    {verifying ? 'Verificando...' : '🔍 Verificar vínculos rotos'}
+                  </button>
+                  {Object.keys(brokenLinks).length > 0 && (
+                    <button onClick={repairAll} disabled={repairingAll}
+                      style={{ padding: '8px 14px', borderRadius: 8, border: 'none', background: '#FFC400', color: '#1a1a1a', fontWeight: 700, fontSize: 12.5, cursor: repairingAll ? 'not-allowed' : 'pointer' }}>
+                      {repairingAll ? 'Reparando...' : `🔧 Reparar todos (${Object.keys(brokenLinks).length})`}
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
 
             {unassignedStudents.length === 0 ? (
@@ -1110,8 +1353,9 @@ function SetterContent() {
                   .map(s => {
                     const daysWaiting = Math.floor((Date.now() - new Date(s.createdAt).getTime()) / 86400000);
                     const urgent = daysWaiting > 3;
+                    const broken = brokenLinks[s.id];
                     return (
-                      <div key={s.id} style={{ background: 'var(--bg-surface)', border: `1px solid ${urgent ? 'rgba(239,68,68,0.3)' : 'var(--border)'}`, borderRadius: 12, padding: '14px 18px', display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+                      <div key={s.id} style={{ background: 'var(--bg-surface)', border: `1px solid ${broken ? 'rgba(234,88,12,0.4)' : urgent ? 'rgba(239,68,68,0.3)' : 'var(--border)'}`, borderRadius: 12, padding: '14px 18px', display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
                         <div style={{ width: 40, height: 40, borderRadius: '50%', background: urgent ? 'rgba(239,68,68,0.1)' : 'var(--bg-surface-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, fontWeight: 700, color: urgent ? '#ef4444' : 'var(--text-secondary)', flexShrink: 0 }}>
                           {s.name.charAt(0).toUpperCase()}
                         </div>
@@ -1125,15 +1369,31 @@ function SetterContent() {
                             Registrado hace {daysWaiting} día{daysWaiting !== 1 ? 's' : ''}
                           </div>
                         </div>
-                        {urgent && (
+                        {broken ? (
+                          <span style={{ padding: '3px 10px', borderRadius: 20, background: 'rgba(234,88,12,0.1)', border: '1px solid rgba(234,88,12,0.4)', color: '#ea580c', fontSize: 11, fontWeight: 700, flexShrink: 0 }}>
+                            ⚠️ Vínculo roto — tiene asignación
+                          </span>
+                        ) : urgent && (
                           <span style={{ padding: '3px 10px', borderRadius: 20, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.35)', color: '#ef4444', fontSize: 11, fontWeight: 700, flexShrink: 0 }}>
                             ⚠️ {daysWaiting} días sin asignar
                           </span>
                         )}
-                        <button onClick={() => { setSearchName(''); setSpecialtyFilter(''); setActiveTab('search'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
-                          style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: '#1E9E3A', color: 'white', fontWeight: 700, fontSize: 13, cursor: 'pointer', flexShrink: 0 }}>
-                          Asignar profesor →
-                        </button>
+                        <div style={{ display: 'flex', gap: 8, flexShrink: 0, flexWrap: 'wrap' }}>
+                          {broken && (
+                            <button onClick={() => repairOne(s, broken)}
+                              style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: '#FFC400', color: '#1a1a1a', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
+                              🔧 Reparar
+                            </button>
+                          )}
+                          <button onClick={() => { setSearchName(''); setSpecialtyFilter(''); setActiveTab('search'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                            style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: '#1E9E3A', color: 'white', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
+                            Asignar profesor →
+                          </button>
+                          <button onClick={() => setLinkStudent(s)}
+                            style={{ padding: '8px 16px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface-2)', color: 'var(--text-primary)', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
+                            🔗 Vincular
+                          </button>
+                        </div>
                       </div>
                     );
                   })}
@@ -1187,6 +1447,33 @@ function SetterContent() {
       )}
 
       {emailAssignment && <EmailModal assignment={emailAssignment} onClose={() => setEmailAssignment(null)} />}
+
+      {linkStudent && (
+        <VincularModal
+          student={linkStudent}
+          teachers={teachers}
+          assignments={assignments}
+          onClose={() => setLinkStudent(null)}
+          onRepaired={handleLinkRepaired}
+          onCreateNew={(t) => { setCreateAssign({ teacher: t, student: linkStudent }); setLinkStudent(null); }}
+        />
+      )}
+
+      {createAssign && (
+        <LinkCreateAssign
+          teacher={createAssign.teacher}
+          student={createAssign.student}
+          existingStudents={students}
+          onClose={() => setCreateAssign(null)}
+          onAssigned={(a, s) => { handleAssigned(a, s); setCreateAssign(null); }}
+        />
+      )}
+
+      {toast && (
+        <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', zIndex: 90, background: 'var(--text-primary)', color: 'var(--bg-surface)', padding: '11px 20px', borderRadius: 10, fontSize: 13.5, fontWeight: 600, boxShadow: '0 6px 24px rgba(0,0,0,0.25)', maxWidth: '90vw', textAlign: 'center' }}>
+          {toast}
+        </div>
+      )}
       </PullToRefresh>
     </div>
   );

@@ -385,6 +385,51 @@ export async function dbSyncStudentAssignments(): Promise<number> {
   return fixes.length;
 }
 
+// Busca TODAS las assignments cuyo student_email coincide con el email dado
+// (trim + lower), SIN importar el student_id. Sirve para el flujo manual de
+// "Vincular alumno": encontrar asignaciones ya creadas en Supabase para un
+// alumno que aparece como "sin asignar" por un student_id roto.
+export async function dbFindAssignmentsByEmail(email: string): Promise<Assignment[]> {
+  const target = normKey(email);
+  if (!target) return [];
+  const all = await dbGetAssignments();
+  return all.filter(a => normKey(a.studentEmail) === target);
+}
+
+// Repara el vínculo de UNA assignment concreta: la reapunta al alumno real
+// (id + email + nombre correctos de la tabla students).
+export async function dbRepairStudentLink(
+  studentId: string, studentEmail: string, studentName: string, assignmentId: string,
+): Promise<void> {
+  await supabase.from('assignments').update({
+    student_id:    studentId,
+    student_email: studentEmail,
+    student_name:  studentName,
+  }).eq('id', assignmentId);
+}
+
+// Repara TODOS los vínculos rotos de una vez: para cada assignment cuyo
+// student_email matchea un alumno pero el student_id difiere, corrige el
+// student_id (+ nombre). Devuelve la cantidad de assignments reparadas.
+export async function dbRepairAllBrokenLinks(): Promise<number> {
+  const [students, assignments] = await Promise.all([dbGetStudents(), dbGetAssignments()]);
+  const byEmail = new Map(students.filter(s => s.email).map(s => [normKey(s.email), s]));
+
+  const fixes: Array<{ id: string; studentId: string; studentName: string }> = [];
+  for (const a of assignments) {
+    const match = byEmail.get(normKey(a.studentEmail));
+    if (match && match.id !== a.studentId) {
+      fixes.push({ id: a.id, studentId: match.id, studentName: match.name });
+    }
+  }
+  if (fixes.length > 0) {
+    await Promise.all(fixes.map(f =>
+      supabase.from('assignments').update({ student_id: f.studentId, student_name: f.studentName }).eq('id', f.id)
+    ));
+  }
+  return fixes.length;
+}
+
 // ── AUDIT: vínculos alumnos ↔ assignments ─────────────────────────────────────
 
 export interface AuditResult {
