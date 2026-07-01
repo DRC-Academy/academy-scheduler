@@ -2120,6 +2120,109 @@ function SyncPanel() {
   );
 }
 
+// Sincronización masiva de planes con WooCommerce. Recorre TODOS los alumnos en
+// lotes de 5 (delay 500ms entre lotes) para no sobrecargar la API de WooCommerce
+// ni exceder timeouts serverless, mostrando progreso real.
+function PlanSyncPanel() {
+  const { students, reloadAll } = useTeachers();
+  const [confirming, setConfirming] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [result, setResult] = useState<{ updated: number; unchanged: number; notFound: number } | null>(null);
+
+  const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+  async function run() {
+    setConfirming(false);
+    setRunning(true);
+    setResult(null);
+    const withEmail = students.filter(s => s.email?.trim());
+    setProgress({ done: 0, total: withEmail.length });
+    let updated = 0, unchanged = 0, notFound = 0;
+    try {
+      for (let i = 0; i < withEmail.length; i += 5) {
+        const batch = withEmail.slice(i, i + 5).map(s => ({ id: s.id, email: s.email, plan: s.plan, level: s.level }));
+        try {
+          const res = await fetch('/api/admin/sync-student-plans', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ students: batch }),
+          });
+          const data = await res.json();
+          updated   += data.updated   ?? 0;
+          unchanged += data.unchanged ?? 0;
+          notFound  += data.notFound  ?? 0;
+        } catch {
+          notFound += batch.length;
+        }
+        setProgress({ done: Math.min(i + 5, withEmail.length), total: withEmail.length });
+        if (i + 5 < withEmail.length) await sleep(500);
+      }
+      setResult({ updated, unchanged, notFound });
+      await reloadAll();
+    } finally {
+      setRunning(false);
+      setProgress(null);
+    }
+  }
+
+  return (
+    <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '16px 18px', marginTop: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>🔄 Sincronizar planes con WooCommerce</div>
+          <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', marginTop: 3, lineHeight: 1.5 }}>
+            Actualiza el plan de todos los alumnos con el producto real de WooCommerce. Puede tardar varios minutos.
+          </div>
+        </div>
+        <button onClick={() => setConfirming(true)} disabled={running}
+          style={{ padding: '9px 16px', borderRadius: 8, border: 'none', background: running ? 'var(--bg-surface-3)' : '#FFC400', color: running ? 'var(--text-muted)' : '#1a1a1a', cursor: running ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
+          {running ? 'Sincronizando...' : 'Sincronizar planes'}
+        </button>
+      </div>
+
+      {progress && (
+        <div style={{ marginTop: 14 }}>
+          <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', marginBottom: 6 }}>
+            Sincronizando... {progress.done}/{progress.total} alumnos
+          </div>
+          <div style={{ height: 8, borderRadius: 5, background: 'var(--bg-surface-3)', overflow: 'hidden' }}>
+            <div style={{ height: '100%', width: `${progress.total ? (progress.done / progress.total) * 100 : 0}%`, background: '#1E9E3A', transition: 'width 0.2s' }} />
+          </div>
+        </div>
+      )}
+
+      {result && (
+        <div style={{ marginTop: 14, fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
+          ✅ {result.updated} plan{result.updated !== 1 ? 'es' : ''} actualizado{result.updated !== 1 ? 's' : ''} · {result.unchanged} sin cambios · {result.notFound} no encontrado{result.notFound !== 1 ? 's' : ''} en WooCommerce
+        </div>
+      )}
+
+      {confirming && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)', zIndex: 90, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+          <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 14, padding: 24, width: '100%', maxWidth: 420 }}>
+            <div style={{ fontSize: 24, marginBottom: 10 }}>⚠️</div>
+            <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)', marginBottom: 8 }}>Sincronizar planes</div>
+            <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 20, lineHeight: 1.6 }}>
+              Esto actualizará el plan de todos los alumnos con los datos reales de WooCommerce. ¿Continuar?
+            </div>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button onClick={() => setConfirming(false)}
+                style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
+                Cancelar
+              </button>
+              <button onClick={run}
+                style={{ flex: 1, padding: '10px', borderRadius: 8, border: 'none', background: '#1E9E3A', color: 'white', cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+                Sí, continuar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AuditPanel() {
   const { students, reloadAll } = useTeachers();
   const router = useRouter();
@@ -2471,6 +2574,7 @@ function AdminContent() {
 
           <AuditPanel />
           <SyncPanel />
+          <PlanSyncPanel />
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 16, marginTop: 16 }}>
             <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>

@@ -1481,6 +1481,29 @@ export async function dbCheckStudentExists(email: string): Promise<import('@/typ
   };
 }
 
+// Busca un alumno por email (match tolerante ilike). Devuelve el Student COMPLETO
+// (incl. nivel, plan y datos de producto WooCommerce) para el autocompletado de
+// los formularios de asignación. Null si no existe.
+export async function dbGetStudentByEmail(email: string): Promise<Student | null> {
+  const trimmed = email.trim();
+  if (!trimmed) return null;
+  const { data } = await supabase.from('students').select('*').ilike('email', trimmed).limit(1).maybeSingle();
+  if (!data) return null;
+  return {
+    id:                data.id,
+    name:              data.name,
+    email:             data.email,
+    phone:             data.phone ?? undefined,
+    level:             data.level,
+    plan:              data.plan,
+    notes:             data.notes ?? undefined,
+    manualActiveUntil: data.manual_active_until ?? undefined,
+    productType:       data.product_type ?? undefined,
+    productName:       data.product_name ?? undefined,
+    createdAt:         data.created_at,
+  };
+}
+
 export async function dbUpdateAssignmentSlots(
   assignmentId: string,
   slots: Array<{ day: string; hour: string }>,

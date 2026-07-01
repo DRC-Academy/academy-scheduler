@@ -8,6 +8,7 @@ import { useTeachers } from '@/lib/TeachersContext';
 import { useAuth } from '@/lib/AuthContext';
 import { DAYS, cellKey } from '@/components/VisualCalendar';
 import { dbCheckStudentExists, dbSetStudentManualActive, dbActivateOneTimeAccess } from '@/lib/db';
+import { classifyPlan, planBadgeStyle } from '@/lib/productUtils';
 import { Student, Grid, Assignment } from '@/types';
 
 // Detecta viewport mobile (< breakpoint). Alterna tabla (desktop) ↔ cards (mobile).
@@ -658,6 +659,23 @@ function StudentsContent() {
     return info?.productName || s.productName || s.plan || '—';
   }
 
+  // Plan real + badge de clasificación (📝 Exámenes / ⚡ Intensivo / 💬 general).
+  function renderPlan(s: DisplayStudent) {
+    const text = planFor(s);
+    const cls = classifyPlan({ studentPlan: s.plan ?? null, productName: text === '—' ? null : text });
+    const st = planBadgeStyle(cls.type);
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        <span>{text}</span>
+        {text !== '—' && (
+          <span title={cls.displayName} style={{ fontSize: 11, fontWeight: 700, padding: '1px 7px', borderRadius: 9, background: st.bg, color: st.color, whiteSpace: 'nowrap' }}>
+            {cls.badge.split(' ')[0]}
+          </span>
+        )}
+      </span>
+    );
+  }
+
   function renderSubBadge(student: DisplayStudent) {
     const e = student.email?.trim().toLowerCase();
     if (!e) return <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>—</span>;
@@ -847,7 +865,7 @@ function StudentsContent() {
 
                   {/* Datos — label gris + valor oscuro */}
                   <CardRow label="Nivel">{s.level || '—'}</CardRow>
-                  <CardRow label="Plan">{planFor(s)}</CardRow>
+                  <CardRow label="Plan">{renderPlan(s)}</CardRow>
                   <CardRow label="Profesor">{profes || '—'}</CardRow>
                   <CardRow label="Horarios">{horarios || '—'}</CardRow>
                   <div style={{ display: 'flex', gap: 8, fontSize: 13, lineHeight: 1.5, marginBottom: 4, alignItems: 'center' }}>
@@ -922,7 +940,7 @@ function StudentsContent() {
                           <td style={{ padding: '12px 14px', minWidth: 70, textAlign: 'center' }}>
                             <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 20, background: 'rgba(167,139,250,0.15)', color: '#a78bfa', fontWeight: 600 }}>{s.level || '—'}</span>
                           </td>
-                          <td style={{ padding: '12px 14px', fontSize: 12, color: 'var(--text-secondary)', minWidth: 140, wordBreak: 'break-word', whiteSpace: 'normal' }}>{planFor(s)}</td>
+                          <td style={{ padding: '12px 14px', fontSize: 12, color: 'var(--text-secondary)', minWidth: 140, wordBreak: 'break-word', whiteSpace: 'normal' }}>{renderPlan(s)}</td>
                           <td style={{ padding: '12px 14px', minWidth: 100 }}>
                             {studentAssignments.length === 0 ? (
                               <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>—</span>

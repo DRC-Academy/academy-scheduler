@@ -8,7 +8,9 @@ import { LastUpdated } from '@/components/LastUpdated';
 import { VisualCalendar, buildGridFromTeacher, cellKey, HOURS_ES, getWeekDates, formatWeekRange } from '@/components/VisualCalendar';
 import { dbCheckStudentExists, dbSetStudentProduct, dbGetAssignmentsByTeacher, dbGetAssignments, dbUpsertStudent, dbRepairStudentLink, dbRepairAllBrokenLinks, dbGetAllGridOccupancy, GridOccupancy } from '@/lib/db';
 import { CrearVinculoModal } from '@/components/CrearVinculoModal';
-import { detectWeeklyHours, type DetectionResult } from '@/lib/productUtils';
+import { StudentAutofillCard } from '@/components/StudentAutofillCard';
+import { useStudentAutofill } from '@/lib/useStudentAutofill';
+import { planBadgeStyle } from '@/lib/productUtils';
 import { useTeachers } from '@/lib/TeachersContext';
 import { daysOfWeek } from '@/lib/mock-data';
 import { Teacher, SlotFilter, Grid, Assignment, Student, AssignedSlot } from '@/types';
@@ -209,11 +211,6 @@ function AssignModal({
   const [duplicateStudent, setDuplicateStudent] = useState<Student | null>(null);
   const [checkingEmail, setCheckingEmail] = useState(false);
 
-  // Detección automática de horas semanales desde WooCommerce.
-  const [detection, setDetection] = useState<DetectionResult | null>(null);
-  const [productInfo, setProductInfo] = useState<{ fullName: string | null; productType: string | null } | null>(null);
-  const [detecting, setDetecting] = useState(false);
-
   useEffect(() => {
     setSlots(prev => prev.length > weeklyHours ? prev.slice(0, weeklyHours) : prev);
   }, [weeklyHours]);
@@ -223,25 +220,25 @@ function AssignModal({
     ? (existingStudents.find(s => s.id === selectedExisting)?.email ?? '')
     : newStudent.email).trim().toLowerCase();
 
+  // Autocompletado desde WooCommerce + tabla students.
+  const autofill = useStudentAutofill(currentEmail);
+  const { woo, detection } = autofill;
+  const detecting = autofill.loading;
+  const productInfo = woo ? { fullName: woo.productFullName, productType: woo.productType } : null;
+
+  // Precarga de campos al llegar datos nuevos (cuando cambia el email). Nombre y
+  // fecha solo se rellenan si están vacíos, para no pisar ediciones manuales.
   useEffect(() => {
-    if (!currentEmail || !currentEmail.includes('@')) { setDetection(null); setProductInfo(null); return; }
-    let cancelled = false;
-    setDetecting(true);
-    const timer = setTimeout(async () => {
-      try {
-        const res = await fetch(`/api/check-subscription?email=${encodeURIComponent(currentEmail)}&full=1`);
-        const data = await res.json();
-        const det = await detectWeeklyHours(data.productName ?? '', data.productVariation ?? null, data.metaData ?? null, data.hoursFromApi ?? null);
-        if (cancelled) return;
-        setProductInfo({ fullName: data.productFullName ?? data.productName ?? null, productType: data.productType ?? null });
-        setDetection(det);
-        if (det.confidence === 'high' && det.hours != null) setWeeklyHours(Math.min(5, Math.max(1, det.hours)));
-      } catch { if (!cancelled) { setDetection(null); setProductInfo(null); } }
-      finally { if (!cancelled) setDetecting(false); }
-    }, 450);
-    return () => { cancelled = true; clearTimeout(timer); };
+    if (detection?.confidence === 'high' && detection.hours != null) {
+      setWeeklyHours(Math.min(5, Math.max(1, detection.hours)));
+    }
+    if (tab === 'new') {
+      if (autofill.name)  setNewStudent(p => (p.name.trim() ? p : { ...p, name: autofill.name! }));
+      if (autofill.level) setNewStudent(p => ({ ...p, level: autofill.level! }));
+    }
+    if (autofill.startDate) setStartDate(prev => prev || autofill.startDate!);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentEmail]);
+  }, [autofill.name, autofill.level, autofill.startDate, autofill.detection, tab]);
 
   function addSlot() {
     const used = new Set(slots.map(s => `${s.day}_${s.hour}`));
@@ -387,10 +384,10 @@ function AssignModal({
           </div>
         )}
 
-        {/* Producto detectado en WooCommerce */}
-        {(detecting || productInfo?.fullName) && (
-          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 14, marginTop: -6 }}>
-            {detecting ? <><span className="drc-spinner-xs" /> Consultando producto...</> : <>📦 {productInfo?.fullName}</>}
+        {/* Resumen de autocompletado (WooCommerce + tabla students) */}
+        {(detecting || autofill.existing || productInfo?.fullName) && (
+          <div style={{ marginBottom: 14, marginTop: -6 }}>
+            <StudentAutofillCard data={autofill} currentLevel={studentLevel} />
           </div>
         )}
 
@@ -482,6 +479,16 @@ function AssignModal({
               <option value="">Seleccionar plan...</option>
               {PLANES.map(p => <option key={p}>{p}</option>)}
             </select>
+            {productInfo?.fullName && (
+              <div style={{ fontSize: 11.5, color: '#1E9E3A', marginTop: 5, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                <span>📦 Se usará: <b>{productInfo.fullName}</b></span>
+                {autofill.classification && (
+                  <span style={{ fontSize: 10.5, fontWeight: 700, padding: '1px 7px', borderRadius: 9, background: planBadgeStyle(autofill.classification.type).bg, color: planBadgeStyle(autofill.classification.type).color }}>
+                    {autofill.classification.badge}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
           <div><label>Objetivo</label>
             <select value={objetivo} onChange={e => setObjetivo(e.target.value)}>

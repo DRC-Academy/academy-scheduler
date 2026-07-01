@@ -40,6 +40,53 @@ export function classifyPlan(fields: {
   return { type: 'general', financeType: 'general', badge: '💬 Inglés general', displayName: 'Inglés general' };
 }
 
+// ── Detección de nivel (A1–C2) ────────────────────────────────────────────────
+// Deriva el nivel del alumno desde el nombre/variación del producto WooCommerce
+// y, con prioridad, desde el meta_data de la orden. Devuelve null si no se detecta
+// (el setter lo completa manualmente).
+//
+// Orden IMPORTANTE: los niveles más altos/específicos van primero para que
+// "upper-intermediate" caiga en B2 (por "upper") antes que en B1 ("intermediate").
+const LEVEL_PATTERNS: Array<{ level: string; keywords: string[] }> = [
+  { level: 'C2', keywords: ['c2', 'cpe', 'proficiency'] },
+  { level: 'C1', keywords: ['c1', 'cae', 'advanced', 'avanzado'] },
+  { level: 'B2', keywords: ['b2', 'fce', 'first', 'upper-intermediate', 'upper'] },
+  { level: 'B1', keywords: ['b1', 'pet', 'preliminary', 'intermediate', 'intermedio'] },
+  { level: 'A2', keywords: ['a2', 'elementary', 'basico', 'básico'] },
+  { level: 'A1', keywords: ['a1', 'beginner', 'principiante'] },
+];
+
+// Match tolerante: los códigos de nivel (a1, b2…) exigen límites de palabra para
+// no matchear dentro de otra palabra; el resto usa "contiene".
+function hasLevelToken(text: string, kw: string): boolean {
+  if (/^[abc][12]$/.test(kw)) return new RegExp(`\\b${kw}\\b`, 'i').test(text);
+  return text.includes(kw);
+}
+
+function matchLevel(text?: string | null): string | null {
+  const t = (text ?? '').toLowerCase();
+  if (!t.trim()) return null;
+  for (const { level, keywords } of LEVEL_PATTERNS) {
+    if (keywords.some(kw => hasLevelToken(t, kw))) return level;
+  }
+  return null;
+}
+
+export function detectLevel(productFullName?: string | null, metaData?: any[] | null): string | null {
+  // PRIORIDAD 1 — meta_data de WooCommerce (campo nivel/level/pa_nivel).
+  if (Array.isArray(metaData)) {
+    for (const m of metaData) {
+      const key = String(m?.key ?? m?.display_key ?? '').toLowerCase();
+      if (key.includes('nivel') || key.includes('level')) {
+        const fromMeta = matchLevel(String(m?.display_value ?? m?.value ?? ''));
+        if (fromMeta) return fromMeta;
+      }
+    }
+  }
+  // PRIORIDAD 2 — nombre del producto + variación (regex).
+  return matchLevel(productFullName);
+}
+
 // Estilo del badge de categoría según el tipo clasificado.
 export function planBadgeStyle(type: PlanClassification['type']): { color: string; bg: string } {
   switch (type) {

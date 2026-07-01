@@ -4,7 +4,7 @@
 // ante un error de conexión devuelve { active: null } para que el profesor decida.
 
 import { supabase } from '@/lib/supabase';
-import { parseHoursFromText, parseHoursFromMeta } from '@/lib/productUtils';
+import { parseHoursFromText, parseHoursFromMeta, detectLevel } from '@/lib/productUtils';
 
 // Productos de PAGO ÚNICO (case-insensitive, match por "contiene"). Cualquier
 // otro producto se considera de suscripción recurrente.
@@ -38,6 +38,9 @@ interface SubResult {
   manualActiveUntil: string | null;
   metaData: any[];                // meta_data crudo del line_item
   phone: string | null;
+  billingName: string | null;            // nombre del cliente (billing) para autocompletar
+  subscriptionStartDate: string | null;  // 'YYYY-MM-DD' — inicio de la suscripción / compra
+  detectedLevel: string | null;          // nivel A1–C2 detectado del producto/meta
 }
 
 interface RichProduct {
@@ -47,6 +50,8 @@ interface RichProduct {
   hours: number | null;
   metaData: any[];
   productType: ProductType;
+  billingName: string | null;
+  orderDate: string | null;       // 'YYYY-MM-DD' — fecha de compra (fallback de inicio)
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -66,12 +71,28 @@ const ERROR_RESULT: SubResult = {
   active: null, status: 'error', endDate: null, daysRemaining: null,
   planName: null, productName: null, productVariation: null, productFullName: null,
   productType: null, hoursFromApi: null, manualActiveUntil: null, metaData: [], phone: null,
+  billingName: null, subscriptionStartDate: null, detectedLevel: null,
 };
+
+// Convierte una fecha WooCommerce (ISO / 'YYYY-MM-DD HH:mm:ss') a 'YYYY-MM-DD'.
+function toDateStr(raw: unknown): string | null {
+  const d = parseWcDate(raw);
+  if (!d) return null;
+  return new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+}
+
+// Nombre del cliente a partir del objeto billing (first + last).
+function billingNameFrom(billing: any): string | null {
+  const first = String(billing?.first_name ?? '').trim();
+  const last  = String(billing?.last_name ?? '').trim();
+  const full = `${first} ${last}`.trim();
+  return full || null;
+}
 
 // Cache en memoria (por instancia serverless): 5 min por email.
 const TTL_MS = 5 * 60 * 1000;
 const productCache = new Map<string, { product: RichProduct; ts: number }>();
-const subCache     = new Map<string, { result: { active: boolean; status: string; endDate: string | null; daysRemaining: number | null; phone: string | null; planName: string | null }; ts: number }>();
+const subCache     = new Map<string, { result: { active: boolean; status: string; endDate: string | null; daysRemaining: number | null; phone: string | null; planName: string | null; startDate: string | null }; ts: number }>();
 
 const MAX_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 500;
@@ -141,9 +162,13 @@ async function fetchLastProduct(c: { base: string; ck: string; cs: string }, ema
     `${c.base}/wp-json/wc/v3/orders?search=${encodeURIComponent(email)}&per_page=1&orderby=date&order=desc` +
     `&consumer_key=${encodeURIComponent(c.ck)}&consumer_secret=${encodeURIComponent(c.cs)}`;
   const arr = await fetchWoo(url, email, 'orders');
-  const li = arr[0]?.line_items?.[0];
+  const order = arr[0];
+  const li = order?.line_items?.[0];
+  const billingName = billingNameFrom(order?.billing);
+  // Fecha de compra: pago completado → pagado → creación (fallback de inicio).
+  const orderDate = toDateStr(firstNonEmpty(order?.date_completed, order?.date_paid, order?.date_created));
   const name = (typeof li?.name === 'string' && li.name.trim()) ? li.name.trim() : null;
-  if (!name) return { name: null, variation: null, fullName: null, hours: null, metaData: [], productType: null };
+  if (!name) return { name: null, variation: null, fullName: null, hours: null, metaData: [], productType: null, billingName, orderDate };
 
   const metaData = Array.isArray(li?.meta_data) ? li.meta_data : [];
   const variation = li?.variation_id ? variationFromMeta(metaData) : variationFromMeta(metaData);
@@ -154,7 +179,7 @@ async function fetchLastProduct(c: { base: string; ck: string; cs: string }, ema
   const hours = parseHoursFromMeta(metaData) ?? parseHoursFromText(variation) ?? parseHoursFromText(name) ?? parseHoursFromText(broad);
 
   const productType: ProductType = isOneTimeProduct(name) ? 'one_time' : 'subscription';
-  return { name, variation, fullName, hours, metaData, productType };
+  return { name, variation, fullName, hours, metaData, productType, billingName, orderDate };
 }
 
 // Estado de la suscripción recurrente (como antes).
@@ -164,11 +189,18 @@ async function fetchSubStatus(c: { base: string; ck: string; cs: string }, email
     `&consumer_key=${encodeURIComponent(c.ck)}&consumer_secret=${encodeURIComponent(c.cs)}`;
   const subs = await fetchWoo(url, email, 'subscriptions');
   if (subs.length === 0) {
-    return { active: false, status: 'not_found', endDate: null, daysRemaining: null, phone: null, planName: null };
+    return { active: false, status: 'not_found', endDate: null, daysRemaining: null, phone: null, planName: null, startDate: null };
   }
-  const chosen = subs.find(s => s?.status === 'active') ?? subs[0];
+  // Más reciente por start_date; se prioriza una activa si existe.
+  const byRecent = [...subs].sort((a, b) => {
+    const da = parseWcDate(a?.start_date)?.getTime() ?? 0;
+    const db = parseWcDate(b?.start_date)?.getTime() ?? 0;
+    return db - da;
+  });
+  const chosen = byRecent.find(s => s?.status === 'active') ?? byRecent[0];
   const status = String(chosen?.status ?? 'cancelled');
   const endDate = parseWcDate(firstNonEmpty(chosen?.end_date, chosen?.next_payment_date));
+  const startDate = toDateStr(firstNonEmpty(chosen?.start_date, chosen?.date_created));
   const planName = (Array.isArray(chosen?.line_items) && typeof chosen.line_items[0]?.name === 'string') ? chosen.line_items[0].name : null;
   const phone = (typeof chosen?.billing?.phone === 'string' && chosen.billing.phone.trim()) ? chosen.billing.phone.trim() : null;
   return {
@@ -176,7 +208,7 @@ async function fetchSubStatus(c: { base: string; ck: string; cs: string }, email
     status,
     endDate: endDate ? endDate.toISOString() : null,
     daysRemaining: endDate ? daysFromNow(endDate) : null,
-    phone, planName,
+    phone, planName, startDate,
   };
 }
 
@@ -237,12 +269,17 @@ export async function GET(request: Request): Promise<Response> {
   const productFullName  = rich?.fullName ?? productName;
   const hoursFromApi     = rich?.hours ?? null;
   const metaData         = rich?.metaData ?? [];
+  const billingName      = rich?.billingName ?? null;
+  const orderDate        = rich?.orderDate ?? null;     // fallback de fecha de inicio
+  const detectedLevel    = detectLevel(productFullName, metaData);
 
   // Constructor de respuesta con todos los campos de producto ya resueltos.
+  // subscriptionStartDate por defecto = fecha de compra; la suscripción la refina.
   const make = (o: Partial<SubResult>): SubResult => ({
     active: false, status: 'error', endDate: null, daysRemaining: null,
     planName: productName, productName, productVariation, productFullName,
     productType, hoursFromApi, manualActiveUntil: null, metaData, phone: null,
+    billingName, subscriptionStartDate: orderDate, detectedLevel,
     ...o,
   });
 
@@ -278,5 +315,6 @@ export async function GET(request: Request): Promise<Response> {
 
   return Response.json(make({
     active: sub.active, status: sub.status, endDate: sub.endDate, daysRemaining: sub.daysRemaining, phone: sub.phone,
+    subscriptionStartDate: sub.startDate ?? orderDate,
   }));
 }

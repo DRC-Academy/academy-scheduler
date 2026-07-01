@@ -9,7 +9,9 @@ import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
 import { calcCurrentClassNumber, dbCheckStudentExists, dbSetStudentProduct, dbEnsureStudentAndAssignment } from '@/lib/db';
 import { classCategoryBadge } from '@/lib/finance';
-import { detectWeeklyHours, type DetectionResult } from '@/lib/productUtils';
+import { planBadgeStyle } from '@/lib/productUtils';
+import { StudentAutofillCard } from '@/components/StudentAutofillCard';
+import { useStudentAutofill } from '@/lib/useStudentAutofill';
 import { Grid, Teacher, Assignment, ScoringEvent, Student, AppNotification } from '@/types';
 
 // ─── Specialty constants ──────────────────────────────────────────────────────
@@ -95,26 +97,20 @@ function AssignStudentModal({
   const [duplicateStudent, setDuplicateStudent] = useState<{ id: string; name: string; email: string; level: string } | null>(null);
   const [checkingEmail, setCheckingEmail] = useState(false);
 
-  // Detección de producto/horas desde WooCommerce (alumno nuevo, por email).
-  const [detection, setDetection] = useState<DetectionResult | null>(null);
-  const [productInfo, setProductInfo] = useState<{ fullName: string | null; productType: string | null } | null>(null);
+  // Autocompletado desde WooCommerce + tabla students (alumno nuevo, por email).
+  const autofill = useStudentAutofill(newEmail, tab === 'new');
+  const { woo, detection } = autofill;
+  const productInfo = woo ? { fullName: woo.productFullName, productType: woo.productType } : null;
+
+  // Precarga de campos al llegar datos nuevos (cuando cambia el email). Nombre y
+  // fecha solo se rellenan si están vacíos, para no pisar ediciones manuales.
   useEffect(() => {
-    const email = newEmail.trim().toLowerCase();
-    if (tab !== 'new' || !email.includes('@')) { setDetection(null); setProductInfo(null); return; }
-    let cancelled = false;
-    const timer = setTimeout(async () => {
-      try {
-        const res = await fetch(`/api/check-subscription?email=${encodeURIComponent(email)}&full=1`);
-        const data = await res.json();
-        const det = await detectWeeklyHours(data.productName ?? '', data.productVariation ?? null, data.metaData ?? null, data.hoursFromApi ?? null);
-        if (cancelled) return;
-        setProductInfo({ fullName: data.productFullName ?? data.productName ?? null, productType: data.productType ?? null });
-        setDetection(det);
-      } catch { if (!cancelled) { setDetection(null); setProductInfo(null); } }
-    }, 450);
-    return () => { cancelled = true; clearTimeout(timer); };
+    if (tab !== 'new') return;
+    if (autofill.name)  setNewName(prev => (prev.trim() ? prev : autofill.name!));
+    if (autofill.level) setNewLevel(autofill.level!);
+    if (autofill.startDate) setStartDate(prev => (prev && prev !== today ? prev : autofill.startDate!));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [newEmail, tab]);
+  }, [autofill.name, autofill.level, autofill.startDate, tab]);
 
   // Compute cells available for slot picking: all libre cells + clicked cell
   const libreCells: Array<{ day: string; hour: string }> = [];
@@ -326,16 +322,24 @@ function AssignStudentModal({
                   </select>
                 </div>
               </div>
-              {(productInfo?.fullName || detection) && (
-                <div style={{ background: 'var(--bg-surface-2)', border: '1px solid var(--border)', borderRadius: 9, padding: '9px 12px', fontSize: 11.5, lineHeight: 1.45 }}>
-                  {productInfo?.fullName && <div style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>📦 {productInfo.fullName}</div>}
-                  {detection && (
-                    <div style={{ marginTop: productInfo?.fullName ? 4 : 0, color: detection.confidence === 'high' ? '#1E9E3A' : '#ea580c' }}>
-                      {detection.confidence === 'high' && detection.hours != null
-                        ? `✅ El producto sugiere ${detection.hours}h/sem — seleccioná ${detection.hours} horario${detection.hours === 1 ? '' : 's'} (${detection.source})`
-                        : detection.message}
-                    </div>
+              {productInfo?.fullName && (
+                <div style={{ fontSize: 11.5, color: '#1E9E3A', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                  <span>📦 Se usará: <b>{productInfo.fullName}</b></span>
+                  {autofill.classification && (
+                    <span style={{ fontSize: 10.5, fontWeight: 700, padding: '1px 7px', borderRadius: 9, background: planBadgeStyle(autofill.classification.type).bg, color: planBadgeStyle(autofill.classification.type).color }}>
+                      {autofill.classification.badge}
+                    </span>
                   )}
+                </div>
+              )}
+              {(autofill.loading || autofill.existing || productInfo?.fullName) && (
+                <StudentAutofillCard data={autofill} currentLevel={newLevel} />
+              )}
+              {detection && productInfo?.fullName && (
+                <div style={{ fontSize: 11.5, lineHeight: 1.45, color: detection.confidence === 'high' ? '#1E9E3A' : '#ea580c' }}>
+                  {detection.confidence === 'high' && detection.hours != null
+                    ? `🕐 El producto sugiere ${detection.hours}h/sem — seleccioná ${detection.hours} horario${detection.hours === 1 ? '' : 's'}`
+                    : detection.message}
                 </div>
               )}
               <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
