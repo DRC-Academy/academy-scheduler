@@ -16,6 +16,7 @@
 //     nunca suma al total, independientemente de logs/capturas).
 
 import { Assignment, ClassJoinLog, ClassRecord, FinanceRate, ScoringEvent, FinancePayment, Student, ClassRecordType, FinanceManualApproval } from '@/types';
+import { classifyPlan, planBadgeStyle } from '@/lib/productUtils';
 
 const DAY_NAMES_BY_JSDAY = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 
@@ -203,10 +204,11 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     const hasMeetLink = !!(a?.meetLink && a.meetLink.trim());
 
     // Plan: productName de WooCommerce (principal) → assignments.plan → objetivo
-    // → students.plan → 'Inglés general'.
+    // → students.plan → 'Inglés general'. La tarifa (planType) usa classifyPlan.
     const plan = firstNonEmpty(stu?.productName, a?.plan, a?.objetivo, stu?.plan) || 'Inglés general';
-    const planType: 'general' | 'examenes' =
-      `${stu?.productName ?? ''} ${a?.plan ?? ''} ${a?.objetivo ?? ''} ${stu?.plan ?? ''}`.toLowerCase().includes('examen') ? 'examenes' : 'general';
+    const planType = classifyPlan({
+      productName: stu?.productName, assignmentPlan: a?.plan, assignmentObjetivo: a?.objetivo, studentPlan: stu?.plan,
+    }).financeType;
 
     const start = a?.startDate ?? firstDateByStudent.get(nkey(c.studentName));
     const antiquityDays = start ? Math.max(0, daysBetween(start, c.date)) : 0;
@@ -332,18 +334,12 @@ export function ingresoBadge(row: { hasJoinLog: boolean; punctuality?: string; h
   return { label: '❌ No utilizó', color: 'var(--text-muted)', bg: 'var(--bg-surface-3)' };
 }
 
-// Categoría simplificada para el profesor según el producto (productName) o el
-// plan/objetivo del alumno: Exámenes / Intensivo / Inglés general.
-export function classCategoryBadge(productName?: string | null):
+// Categoría simplificada para el profesor. Wrapper de classifyPlan (única fuente
+// de verdad). Acepta un texto libre (plan/objetivo/producto combinados).
+export function classCategoryBadge(text?: string | null):
   { label: string; color: string; bg: string } {
-  const n = (productName ?? '').toLowerCase();
-  if (n.includes('examen') || n.includes('fce') || n.includes('pet') || n.includes('cae') || n.includes('preparacion de examenes')) {
-    return { label: '📝 Exámenes', color: '#2563eb', bg: 'rgba(37,99,235,0.1)' };
-  }
-  if (n.includes('intensivo')) {
-    return { label: '⚡ Intensivo', color: '#ea580c', bg: 'rgba(249,115,22,0.12)' };
-  }
-  return { label: '💬 Inglés general', color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)' };
+  const c = classifyPlan({ productName: text });
+  return { label: c.badge, ...planBadgeStyle(c.type) };
 }
 
 // Badge del tipo de clase — null para 'normal'. Faltas/cancelaciones son cobrables.

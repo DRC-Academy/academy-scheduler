@@ -11,7 +11,7 @@ import { useAuth } from '@/lib/AuthContext';
 import { mockAlerts } from '@/lib/mock-data';
 import { Teacher, Grid, Assignment, ScoringEvent, ScoringEventType } from '@/types';
 import { EVENT_POINTS, EVENT_EUROS, calcCurrentClassNumber, dbUpdateAssignmentStartDate, dbGetAllNotifications,
-  dbAuditStudentAssignments, dbRelinkAssignment, dbSyncAssignmentName, dbMergeDuplicateStudents, AuditResult } from '@/lib/db';
+  dbAuditStudentAssignments, dbRelinkAssignment, dbSyncAssignmentName, dbMergeDuplicateStudents, dbSyncStudentAssignments, AuditResult } from '@/lib/db';
 import { useRouter } from 'next/navigation';
 import { AppNotification, ClassJoinLog } from '@/types';
 
@@ -1964,6 +1964,8 @@ function AuditPanel() {
   const [relinkSearch, setRelinkSearch] = useState('');
   const [mergeFor, setMergeFor] = useState<AuditResult['duplicateEmails'][number] | null>(null);
   const [mergeKeepId, setMergeKeepId] = useState('');
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<string | null>(null);
 
   useEffect(() => { setReviewed(loadReviewed()); }, []);
 
@@ -1971,6 +1973,20 @@ function AuditPanel() {
     setRunning(true);
     try { setResult(await dbAuditStudentAssignments()); }
     finally { setRunning(false); }
+  }
+
+  async function runSync() {
+    setSyncing(true);
+    setSyncMsg(null);
+    try {
+      const fixed = await dbSyncStudentAssignments();
+      await reloadAll();
+      setSyncMsg(fixed > 0 ? `✅ ${fixed} vínculo${fixed === 1 ? '' : 's'} corregido${fixed === 1 ? '' : 's'}` : '✅ Todo sincronizado — no había vínculos rotos');
+    } catch {
+      setSyncMsg('⚠️ No se pudo sincronizar. Reintentá.');
+    } finally {
+      setSyncing(false);
+    }
   }
 
   async function withBusy(key: string, fn: () => Promise<void>) {
@@ -2033,6 +2049,10 @@ function AuditPanel() {
               style={{ padding: '9px 16px', borderRadius: 8, border: 'none', background: '#1E9E3A', color: 'white', cursor: running ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
               {running ? 'Ejecutando...' : '▶ Ejecutar auditoría'}
             </button>
+            <button onClick={runSync} disabled={syncing}
+              style={{ padding: '9px 16px', borderRadius: 8, border: 'none', background: '#FFC400', color: '#1a1a1a', cursor: syncing ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+              {syncing ? 'Sincronizando...' : '🔄 Sincronizar vínculos'}
+            </button>
             {result && (
               <button onClick={exportCsv}
                 style={{ padding: '9px 16px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface-2)', color: 'var(--text-primary)', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
@@ -2040,6 +2060,9 @@ function AuditPanel() {
               </button>
             )}
           </div>
+          {syncMsg && (
+            <div style={{ margin: '-6px 0 14px', fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{syncMsg}</div>
+          )}
 
           {!result ? (
             <div style={{ fontSize: 13, color: 'var(--text-muted)', padding: '8px 0' }}>Ejecutá la auditoría para detectar inconsistencias entre alumnos y asignaciones.</div>

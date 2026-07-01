@@ -8,6 +8,7 @@ import { getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
 import { calculateTeacherFinance, TeacherFinanceResult, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge, SUBSCRIPTION_STATUS_OPTIONS } from '@/lib/finance';
+import { classifyPlan } from '@/lib/productUtils';
 import { Assignment } from '@/types';
 
 // ─── Finance helpers ──────────────────────────────────────────────────────────
@@ -143,7 +144,7 @@ function StudentDetailTable({ result, assignments, classRecords, onApproveReview
                 <Fragment key={name}>
                   <tr style={{ borderTop: '1px solid var(--border)', cursor: 'pointer' }} onClick={() => setOpenStudent(isOpen ? null : name)}>
                     <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 600 }}>{isOpen ? '▾ ' : '▸ '}{name}</td>
-                    <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>{rows[0]?.plan || asgn?.plan || 'Inglés general'}</td>
+                    <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>{classifyPlan({ assignmentPlan: asgn?.plan || rows[0]?.plan, assignmentObjetivo: asgn?.objetivo }).displayName}</td>
                     <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>{asgn?.startDate ? finDateShort(asgn.startDate) : '—'}</td>
                     <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>{antiquity}d</td>
                     <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', color: 'var(--text-primary)' }}>€{rate.toFixed(2)}</td>

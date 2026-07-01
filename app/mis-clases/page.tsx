@@ -9,6 +9,7 @@ import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
 import { calculateTeacherFinance, recordVerification, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge } from '@/lib/finance';
 import { dbGetAssignmentsByTeacher } from '@/lib/db';
+import { classifyPlan } from '@/lib/productUtils';
 import { Teacher, Assignment, ClassRecordType, ClassRecord } from '@/types';
 
 // Etiquetas singular/plural por tipo de falta (para los mensajes de límite).
@@ -314,7 +315,7 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
       const plan = asgn?.plan || rows[0]?.plan || '';
       const level = asgn?.studentLevel ?? '';
       const startDate = asgn?.startDate;
-      const planTypeLabel = /examen/i.test(`${plan} ${asgn?.objetivo ?? ''}`) ? 'Exámenes' : 'Inglés general';
+      const planTypeLabel = classifyPlan({ assignmentPlan: plan, assignmentObjetivo: asgn?.objetivo }).displayName;
 
       const nuevoRows = rows.filter(r => r.antiquityDays < 30);
       const antiguoRows = rows.filter(r => r.antiquityDays >= 30);

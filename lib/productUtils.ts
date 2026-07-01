@@ -3,6 +3,52 @@
 
 import { supabase } from '@/lib/supabase';
 
+// ── Clasificación de plan (ÚNICA fuente de verdad) ────────────────────────────
+export interface PlanClassification {
+  type: 'examenes' | 'intensivo' | 'general';
+  financeType: 'examenes' | 'general';
+  badge: string;
+  displayName: string;
+}
+
+export function classifyPlan(fields: {
+  assignmentPlan?: string | null;
+  assignmentObjetivo?: string | null;
+  studentPlan?: string | null;
+  productName?: string | null;
+}): PlanClassification {
+  const allText = Object.values(fields).filter(Boolean).join(' ').toLowerCase();
+
+  const isExamen =
+    allText.includes('examen') ||
+    allText.includes('examenes') ||
+    allText.includes('fce') ||
+    allText.includes('pet') ||
+    allText.includes('cae') ||
+    allText.includes('ielts') ||
+    allText.includes('aptis') ||
+    allText.includes('cambridge') ||
+    allText.includes('certificado') ||
+    /b[12].*examen|examen.*b[12]/i.test(allText) ||
+    allText.includes('preparacion') ||
+    allText.includes('preparación');
+
+  const isIntensivo = allText.includes('intensivo');
+
+  if (isExamen) return { type: 'examenes', financeType: 'examenes', badge: '📝 Exámenes', displayName: 'Exámenes' };
+  if (isIntensivo) return { type: 'intensivo', financeType: 'general', badge: '⚡ Intensivo', displayName: 'Intensivo' };
+  return { type: 'general', financeType: 'general', badge: '💬 Inglés general', displayName: 'Inglés general' };
+}
+
+// Estilo del badge de categoría según el tipo clasificado.
+export function planBadgeStyle(type: PlanClassification['type']): { color: string; bg: string } {
+  switch (type) {
+    case 'examenes':  return { color: '#2563eb', bg: 'rgba(37,99,235,0.1)' };
+    case 'intensivo': return { color: '#ea580c', bg: 'rgba(249,115,22,0.12)' };
+    default:          return { color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)' };
+  }
+}
+
 export interface DetectionResult {
   hours: number | null;
   method: 'api' | 'regex_variation' | 'regex_name' | 'mapping' | 'manual';

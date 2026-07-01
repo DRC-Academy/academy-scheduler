@@ -312,11 +312,23 @@ export async function dbGetAssignments(): Promise<Assignment[]> {
 // Normaliza para comparaciones tolerantes (trim + lower).
 const normKey = (x: unknown): string => String(x ?? '').trim().toLowerCase();
 
-// Trae students + assignments de forma consistente y auto-corrige los
-// student_id de assignments que no apuntan a ningún alumno real (matcheando por
-// email y, como último recurso, por nombre). Persiste la corrección en la BD
-// para que no vuelva a ocurrir.
+// Trae students + assignments de forma consistente. Usa la función RPC
+// `get_students_with_assignments` (LEFT JOIN robusto en PostgreSQL por
+// student_id O email) para obtener el mapeo correcto assignment→student, y
+// mantiene TODOS los campos de la assignment (el RPC no trae created_at ni
+// manual_class_adjustment). Auto-corrige y persiste los student_id huérfanos.
 export async function dbGetAllStudentsWithAssignments(): Promise<{ students: Student[]; assignments: Assignment[] }> {
+  // Mapeo autoritativo assignment_id → student.id desde el RPC (join en SQL).
+  const rpcMap = new Map<string, string>();
+  try {
+    const { data, error } = await supabase.rpc('get_students_with_assignments');
+    if (!error && Array.isArray(data)) {
+      for (const r of data as any[]) {
+        if (r?.assignment_id && r?.id) rpcMap.set(String(r.assignment_id), String(r.id));
+      }
+    }
+  } catch { /* RPC no disponible → fallback al self-heal por JS */ }
+
   const [students, rawAssignments] = await Promise.all([dbGetStudents(), dbGetAssignments()]);
 
   const byId    = new Map(students.map(s => [s.id, s]));
@@ -326,19 +338,23 @@ export async function dbGetAllStudentsWithAssignments(): Promise<{ students: Stu
   const fixes: Array<{ assignmentId: string; studentId: string }> = [];
 
   const assignments = rawAssignments.map(a => {
-    if (byId.has(a.studentId)) return a; // ya apunta a un alumno válido
-    // Orphan: resolver por email → nombre (criterio principal id ya falló).
-    const match =
-      (a.studentEmail && byEmail.get(normKey(a.studentEmail))) ||
-      byName.get(normKey(a.studentName));
-    if (match && match.id !== a.studentId) {
-      fixes.push({ assignmentId: a.id, studentId: match.id });
-      return { ...a, studentId: match.id, studentName: match.name, studentEmail: match.email };
+    // student.id correcto: RPC (join por id O email) → self-heal por email/nombre.
+    let sid = a.studentId;
+    const rpcSid = rpcMap.get(a.id);
+    if (rpcSid && byId.has(rpcSid)) {
+      sid = rpcSid;
+    } else if (!byId.has(a.studentId)) {
+      const match = (a.studentEmail && byEmail.get(normKey(a.studentEmail))) || byName.get(normKey(a.studentName));
+      if (match) sid = match.id;
+    }
+    if (sid !== a.studentId && byId.has(sid)) {
+      fixes.push({ assignmentId: a.id, studentId: sid });
+      return { ...a, studentId: sid };
     }
     return a;
   });
 
-  // Persistir las correcciones (best-effort; no bloquea si alguna falla).
+  // Persistir las correcciones (best-effort).
   if (fixes.length > 0) {
     console.log(`[dbGetAllStudentsWithAssignments] Corrigiendo ${fixes.length} student_id huérfano(s)`);
     await Promise.all(fixes.map(f =>
@@ -347,6 +363,26 @@ export async function dbGetAllStudentsWithAssignments(): Promise<{ students: Stu
   }
 
   return { students, assignments };
+}
+
+// Sincroniza manualmente los vínculos: corrige los student_id de assignments que
+// no apuntan a un alumno real, matcheando por email. Devuelve cuántos corrigió.
+export async function dbSyncStudentAssignments(): Promise<number> {
+  const [students, assignments] = await Promise.all([dbGetStudents(), dbGetAssignments()]);
+  const byId    = new Map(students.map(s => [s.id, s]));
+  const byEmail = new Map(students.filter(s => s.email).map(s => [normKey(s.email), s]));
+  const byName  = new Map(students.map(s => [normKey(s.name), s]));
+
+  const fixes: Array<{ id: string; studentId: string }> = [];
+  for (const a of assignments) {
+    if (byId.has(a.studentId)) continue; // ya válido
+    const match = (a.studentEmail && byEmail.get(normKey(a.studentEmail))) || byName.get(normKey(a.studentName));
+    if (match && match.id !== a.studentId) fixes.push({ id: a.id, studentId: match.id });
+  }
+  if (fixes.length > 0) {
+    await Promise.all(fixes.map(f => supabase.from('assignments').update({ student_id: f.studentId }).eq('id', f.id)));
+  }
+  return fixes.length;
 }
 
 // ── AUDIT: vínculos alumnos ↔ assignments ─────────────────────────────────────

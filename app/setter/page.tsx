@@ -212,8 +212,6 @@ function AssignModal({
   const [productInfo, setProductInfo] = useState<{ fullName: string | null; productType: string | null } | null>(null);
   const [detecting, setDetecting] = useState(false);
 
-  const todayISO = new Date().toISOString().split('T')[0];
-
   useEffect(() => {
     setSlots(prev => prev.length > weeklyHours ? prev.slice(0, weeklyHours) : prev);
   }, [weeklyHours]);
@@ -493,7 +491,7 @@ function AssignModal({
             <textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="Info adicional sobre el alumno..." rows={2} style={{ resize: 'vertical' }} />
           </div>
           <div><label>Fecha de inicio *</label>
-            <input type="date" value={startDate} min={todayISO} onChange={e => setStartDate(e.target.value)} style={{ maxWidth: 200 }} />
+            <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} style={{ maxWidth: 200 }} />
           </div>
         </div>
 

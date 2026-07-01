@@ -59,9 +59,13 @@ function ContadorContent() {
   const myAssignments = teacher ? assignments.filter(a => a.teacherId === teacher.id) : [];
 
   // Alumnos solo-grilla (celdas ocupado sin assignment en DB).
-  const assignedNames = new Set(myAssignments.map(a => a.studentName));
+  // Normalizamos el nombre (trim/lowercase/espacios) para NO marcar como
+  // "sin registro de inicio" a un alumno que sí tiene assignment con fecha
+  // pero cuyo nombre en la grilla difiere por mayúsculas o espacios.
+  const normName = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ');
+  const assignedNames = new Set(myAssignments.map(a => normName(a.studentName)));
   const gridOcupado = Object.entries(grid)
-    .filter(([, cell]) => cell.state === 'ocupado' && cell.student && !assignedNames.has(cell.student))
+    .filter(([, cell]) => cell.state === 'ocupado' && cell.student && !assignedNames.has(normName(cell.student)))
     .map(([key, cell]) => { const [day, hour] = key.split('_'); return { day, hour, student: cell.student! }; });
   const legacyMap = new Map<string, { student: string; slots: { day: string; hour: string }[] }>();
   for (const c of gridOcupado) {
