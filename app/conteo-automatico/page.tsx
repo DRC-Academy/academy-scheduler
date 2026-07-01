@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { NavBar } from '@/components/NavBar';
 import { AuthGuard } from '@/components/AuthGuard';
 import { PullToRefresh } from '@/components/PullToRefresh';
@@ -8,7 +8,7 @@ import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
 import { calcCurrentClassNumber } from '@/lib/db';
 import { classCategoryBadge } from '@/lib/finance';
-import { Assignment, Grid } from '@/types';
+import { Assignment, Grid, Student } from '@/types';
 
 // Estima la fecha de un milestone de clase según la fecha de inicio y los días/semana.
 function estimateMilestoneDate(startDate: string, milestone: number, slotsPerWeek: number): string {
@@ -21,7 +21,7 @@ function estimateMilestoneDate(startDate: string, milestone: number, slotsPerWee
 
 function ContadorContent() {
   const { user } = useAuth();
-  const { teachers, assignments, getTeacherGrid, reloadAll, updateAssignmentAdjustment, updateAssignmentStartDate } = useTeachers();
+  const { teachers, students, assignments, getTeacherGrid, reloadAll, updateAssignmentAdjustment, updateAssignmentStartDate } = useTeachers();
 
   const teacher = teachers.find(t => t.id === user?.teacherId) ?? teachers[0];
 
@@ -57,6 +57,19 @@ function ContadorContent() {
   }
 
   const myAssignments = teacher ? assignments.filter(a => a.teacherId === teacher.id) : [];
+
+  // Lookup de alumnos para clasificar el plan con TODOS los campos (única fuente).
+  const studentByEmail = useMemo(() => {
+    const m = new Map<string, Student>();
+    for (const s of students) {
+      if (s.email) m.set(s.email.trim().toLowerCase(), s);
+      m.set(`name:${s.name.trim().toLowerCase()}`, s);
+    }
+    return m;
+  }, [students]);
+  const studentForAssignment = (a: Assignment): Student | undefined =>
+    (a.studentEmail && studentByEmail.get(a.studentEmail.trim().toLowerCase())) ||
+    studentByEmail.get(`name:${a.studentName.trim().toLowerCase()}`);
 
   // Alumnos solo-grilla (celdas ocupado sin assignment en DB).
   // Normalizamos el nombre (trim/lowercase/espacios) para NO marcar como
@@ -119,9 +132,18 @@ function ContadorContent() {
                                 <div>
                                   <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
                                     <span style={{ fontWeight: 600, fontSize: 15, color: 'var(--text-primary)' }}>{a.studentName}</span>
-                                    {(() => { const cat = classCategoryBadge(a.plan || a.objetivo); return (
-                                      <span style={{ fontSize: 10, padding: '1px 9px', borderRadius: 10, background: cat.bg, color: cat.color, fontWeight: 700 }}>{cat.label}</span>
-                                    ); })()}
+                                    {(() => {
+                                      const stu = studentForAssignment(a);
+                                      const cat = classCategoryBadge({
+                                        assignmentPlan: a.plan,
+                                        assignmentObjetivo: a.objetivo,
+                                        studentPlan: stu?.plan,
+                                        productName: stu?.productName,
+                                      });
+                                      return (
+                                        <span style={{ fontSize: 10, padding: '1px 9px', borderRadius: 10, background: cat.bg, color: cat.color, fontWeight: 700 }}>{cat.label}</span>
+                                      );
+                                    })()}
                                   </div>
                                   <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
                                     {a.slots.map(sl => `${sl.day} ${sl.hour}`).join(' · ')}

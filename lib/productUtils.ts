@@ -19,25 +19,20 @@ export function classifyPlan(fields: {
 }): PlanClassification {
   const allText = Object.values(fields).filter(Boolean).join(' ').toLowerCase();
 
+  const EXAM_KEYWORDS = [
+    'examen', 'examenes', 'fce', 'pet', 'cae', 'ielts', 'aptis',
+    'cambridge', 'certificado', 'preparacion', 'preparación',
+    'first certificate', 'advanced', 'proficiency',
+  ];
   const isExamen =
-    allText.includes('examen') ||
-    allText.includes('examenes') ||
-    allText.includes('fce') ||
-    allText.includes('pet') ||
-    allText.includes('cae') ||
-    allText.includes('ielts') ||
-    allText.includes('aptis') ||
-    allText.includes('cambridge') ||
-    allText.includes('certificado') ||
-    /b[12].*examen|examen.*b[12]/i.test(allText) ||
-    allText.includes('preparacion') ||
-    allText.includes('preparación');
+    EXAM_KEYWORDS.some(k => allText.includes(k)) ||
+    /b[12].*examen|examen.*b[12]/i.test(allText);
 
   const isIntensivo = allText.includes('intensivo');
 
-  if (isExamen) return { type: 'examenes', financeType: 'examenes', badge: '📝 Exámenes', displayName: 'Exámenes' };
-  if (isIntensivo) return { type: 'intensivo', financeType: 'general', badge: '⚡ Intensivo', displayName: 'Intensivo' };
-  return { type: 'general', financeType: 'general', badge: '💬 Inglés general', displayName: 'Inglés general' };
+  if (isExamen)                return { type: 'examenes',  financeType: 'examenes', badge: '📝 Exámenes',       displayName: 'Exámenes' };
+  if (isIntensivo && !isExamen) return { type: 'intensivo', financeType: 'general',  badge: '⚡ Intensivo',      displayName: 'Intensivo' };
+  return                              { type: 'general',    financeType: 'general',  badge: '💬 Inglés general', displayName: 'Inglés general' };
 }
 
 // ── Detección de nivel (A1–C2) ────────────────────────────────────────────────

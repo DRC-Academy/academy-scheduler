@@ -1,5 +1,6 @@
 'use client';
 import { useState, useMemo, useEffect, type ReactNode } from 'react';
+import { useRouter } from 'next/navigation';
 import { NavBar } from '@/components/NavBar';
 import { AuthGuard } from '@/components/AuthGuard';
 import { PullToRefresh } from '@/components/PullToRefresh';
@@ -21,6 +22,18 @@ function useIsMobile(breakpoint = 1024): boolean {
     return () => window.removeEventListener('resize', check);
   }, [breakpoint]);
   return isMobile;
+}
+
+// Ítem del menú de tres puntos de cada card de alumno.
+function MenuItem({ children, onClick, danger }: { children: ReactNode; onClick: () => void; danger?: boolean }) {
+  return (
+    <button onClick={onClick}
+      style={{ display: 'flex', alignItems: 'center', width: '100%', gap: 8, padding: '9px 12px', borderRadius: 7, border: 'none', background: 'transparent', color: danger ? '#dc2626' : 'var(--text-primary)', cursor: 'pointer', fontSize: 13, fontWeight: 500, fontFamily: 'inherit', textAlign: 'left' }}
+      onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-surface-2)')}
+      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+      {children}
+    </button>
+  );
 }
 
 const LEVELS = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
@@ -550,6 +563,9 @@ function StudentsContent() {
   const [verifyingSubs, setVerifyingSubs] = useState(false);
   const [subProgress, setSubProgress] = useState<{ done: number; total: number } | null>(null);
   const [refreshing, setRefreshing] = useState<Set<string>>(new Set());
+  const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
+  const [visibleCount, setVisibleCount] = useState(50);
+  const router = useRouter();
 
   // Merge students from both sources: students table + assignments.
   // Una assignment ya representada por un alumno de la tabla (por id, email o
@@ -652,28 +668,19 @@ function StudentsContent() {
     return list;
   }, [allStudents, search, subFilter, subInfo]);
 
+  const visible = filtered.slice(0, visibleCount);
+
+  // Abre WhatsApp con el teléfono del alumno (solo dígitos).
+  function openWhatsApp(phone?: string) {
+    const digits = (phone ?? '').replace(/\D/g, '');
+    if (digits) window.open(`https://wa.me/${digits}`, '_blank');
+  }
+
   // Plan a mostrar: productName de WooCommerce (principal) → producto persistido
   // → plan local (fallback).
   function planFor(s: DisplayStudent): string {
     const info = subInfo[s.email?.trim().toLowerCase() ?? ''];
     return info?.productName || s.productName || s.plan || '—';
-  }
-
-  // Plan real + badge de clasificación (📝 Exámenes / ⚡ Intensivo / 💬 general).
-  function renderPlan(s: DisplayStudent) {
-    const text = planFor(s);
-    const cls = classifyPlan({ studentPlan: s.plan ?? null, productName: text === '—' ? null : text });
-    const st = planBadgeStyle(cls.type);
-    return (
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-        <span>{text}</span>
-        {text !== '—' && (
-          <span title={cls.displayName} style={{ fontSize: 11, fontWeight: 700, padding: '1px 7px', borderRadius: 9, background: st.bg, color: st.color, whiteSpace: 'nowrap' }}>
-            {cls.badge.split(' ')[0]}
-          </span>
-        )}
-      </span>
-    );
   }
 
   function renderSubBadge(student: DisplayStudent) {
@@ -764,43 +771,42 @@ function StudentsContent() {
   }
 
   const isMobile = useIsMobile(768);
-
-  const thStyle = (minWidth: number, align: 'left' | 'center' | 'right' = 'left') => ({
-    padding: '11px 14px', textAlign: align,
-    fontSize: 11, fontWeight: 600, color: 'var(--text-muted)',
-    textTransform: 'uppercase' as const, letterSpacing: '0.04em',
-    whiteSpace: 'nowrap' as const,
-    minWidth: `${minWidth}px`,
-  });
-
-  // Etiqueta gris + valor oscuro (filas de las cards mobile).
-  const CardRow = ({ label, children }: { label: string; children: ReactNode }) => (
-    <div style={{ display: 'flex', gap: 8, fontSize: 13, lineHeight: 1.5, marginBottom: 4 }}>
-      <span style={{ color: 'var(--text-muted)', fontWeight: 600, flexShrink: 0, minWidth: 78 }}>{label}</span>
-      <span style={{ color: 'var(--text-primary)', wordBreak: 'break-word', minWidth: 0 }}>{children}</span>
-    </div>
-  );
+  const twoCols = !useIsMobile(1400); // 2 columnas en pantallas anchas
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }}>
       <NavBar />
       <PullToRefresh onRefresh={reloadAll}>
-      <div style={{ maxWidth: 1200, margin: '0 auto', padding: '32px 20px 48px' }}>
+      <div style={{ maxWidth: twoCols ? 1400 : 900, margin: '0 auto', padding: '32px 20px 48px' }}>
         <LastUpdated />
-        <div style={{ marginBottom: 24 }}>
-          <h1 style={{ fontSize: 24, fontWeight: 700, color: 'var(--text-primary)', margin: '0 0 4px' }}>Alumnos</h1>
-          <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0 }}>Todos los alumnos registrados y asignados.</p>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 12, flexWrap: 'wrap', marginBottom: 24 }}>
+          <div>
+            <h1 style={{ fontSize: 24, fontWeight: 700, color: 'var(--text-primary)', margin: '0 0 4px' }}>Alumnos</h1>
+            <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0 }}>Todos los alumnos registrados y asignados.</p>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>
+              {filtered.length === allStudents.length
+                ? `${allStudents.length} alumno${allStudents.length !== 1 ? 's' : ''}`
+                : `${filtered.length} de ${allStudents.length} alumnos`}
+            </div>
+            {verifyingSubs && (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+                <span className="drc-spinner-xs" /> Verificando... {subProgress ? `${subProgress.done}/${subProgress.total}` : ''}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Search — ancho completo en mobile, acotado en desktop */}
         <div style={{ marginBottom: 12 }}>
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar por nombre o email..."
+          <input value={search} onChange={e => { setSearch(e.target.value); setVisibleCount(50); }} placeholder="Buscar por nombre o email..."
             style={{ width: '100%', maxWidth: isMobile ? '100%' : 360 }} />
         </div>
 
         {/* Subscription filter — chips con scroll horizontal en mobile */}
         <div style={{
-          display: 'flex', gap: 8, alignItems: 'center', marginBottom: verifyingSubs ? 8 : 16,
+          display: 'flex', gap: 8, alignItems: 'center', marginBottom: 20,
           ...(isMobile
             ? { flexWrap: 'nowrap' as const, overflowX: 'auto' as const, paddingBottom: 4, WebkitOverflowScrolling: 'touch' as const }
             : { flexWrap: 'wrap' as const }),
@@ -812,17 +818,12 @@ function StudentsContent() {
             { id: 'pending',    label: 'Pendiente cancelar' },
             { id: 'unverified', label: 'Sin verificar' },
           ] as const).map(chip => (
-            <button key={chip.id} onClick={() => setSubFilter(chip.id)}
+            <button key={chip.id} onClick={() => { setSubFilter(chip.id); setVisibleCount(50); }}
               style={{ flexShrink: 0, padding: '6px 14px', borderRadius: 20, border: `1.5px solid ${subFilter === chip.id ? '#1E9E3A' : 'var(--border)'}`, background: subFilter === chip.id ? 'rgba(30,158,58,0.1)' : 'transparent', color: subFilter === chip.id ? '#1E9E3A' : 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, fontWeight: subFilter === chip.id ? 700 : 500, fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
               {chip.label}
             </button>
           ))}
         </div>
-        {verifyingSubs && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-muted)', marginBottom: 16 }}>
-            <span className="drc-spinner-xs" /> Verificando suscripciones...{subProgress ? ` ${subProgress.done}/${subProgress.total}` : ''}
-          </div>
-        )}
 
         {allStudents.length === 0 ? (
           <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '48px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 14 }}>
@@ -830,162 +831,100 @@ function StudentsContent() {
             No hay alumnos registrados todavía.<br />
             <span style={{ fontSize: 12 }}>Los alumnos se agregan cuando un setter realiza una asignación.</span>
           </div>
-        ) : isMobile ? (
-          /* ───── MOBILE: cards independientes ───── */
-          <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-              <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>Listado</span>
-              <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                {filtered.length === allStudents.length
-                  ? `${allStudents.length} alumno${allStudents.length !== 1 ? 's' : ''}`
-                  : `${filtered.length} de ${allStudents.length} alumnos`}
-              </span>
-            </div>
-
-            {filtered.length === 0 ? (
-              <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '32px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
-                Sin resultados para &quot;{search}&quot;
-              </div>
-            ) : filtered.map(s => {
-              const studentAssignments = assignmentsForStudent(s);
-              const horarios = studentAssignments.flatMap(a => a.slots.map(sl => `${sl.day} ${sl.hour}`)).join(', ');
-              const profes = studentAssignments.map(a => a.teacherName).join(', ');
-              return (
-                <div key={s.id} style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: 16, marginBottom: 12 }}>
-                  {/* Avatar + nombre + email */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 12 }}>
-                    <div style={{ width: 38, height: 38, borderRadius: '50%', background: 'rgba(59,130,246,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, color: '#93c5fd', flexShrink: 0 }}>
-                      {s.name.split(' ').map(p => p[0]).join('').toUpperCase().slice(0, 2)}
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--text-primary)', wordBreak: 'break-word' }}>{s.name}</div>
-                      <div style={{ fontSize: 12, color: 'var(--text-muted)', wordBreak: 'break-word' }}>{s.email || '—'}</div>
-                    </div>
-                  </div>
-
-                  {/* Datos — label gris + valor oscuro */}
-                  <CardRow label="Nivel">{s.level || '—'}</CardRow>
-                  <CardRow label="Plan">{renderPlan(s)}</CardRow>
-                  <CardRow label="Profesor">{profes || '—'}</CardRow>
-                  <CardRow label="Horarios">{horarios || '—'}</CardRow>
-                  <div style={{ display: 'flex', gap: 8, fontSize: 13, lineHeight: 1.5, marginBottom: 4, alignItems: 'center' }}>
-                    <span style={{ color: 'var(--text-muted)', fontWeight: 600, flexShrink: 0, minWidth: 78 }}>Suscripción</span>
-                    <span style={{ minWidth: 0 }}>{s.email ? renderSubBadge(s) : '—'}</span>
-                  </div>
-
-                  {/* Botones 50/50, altura táctil */}
-                  <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
-                    {s.inStudentsTable && (
-                      <button onClick={() => handleEditClick(s)}
-                        style={{ flex: 1, padding: '11px', minHeight: 44, borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
-                        Editar
-                      </button>
-                    )}
-                    <button onClick={() => setDeletingStudent(s)}
-                      style={{ flex: 1, padding: '11px', minHeight: 44, borderRadius: 8, border: '1px solid rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.08)', color: '#ef4444', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
-                      Eliminar
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
+        ) : filtered.length === 0 ? (
+          <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '32px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
+            Sin resultados para &quot;{search}&quot;
           </div>
         ) : (
-          /* ───── DESKTOP: tabla con scroll horizontal ───── */
-          <div>
-            {/* Header del listado — FUERA del contenedor de scroll (sin overflow) */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0 4px', marginBottom: 12 }}>
-              <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>Listado</span>
-              <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                {filtered.length === allStudents.length
-                  ? `${allStudents.length} alumno${allStudents.length !== 1 ? 's' : ''}`
-                  : `${filtered.length} de ${allStudents.length} alumnos`}
-              </span>
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: twoCols ? '1fr 1fr' : '1fr', gap: 12, alignItems: 'start' }}>
+              {visible.map(s => {
+                const studentAssignments = assignmentsForStudent(s);
+                const horarios = studentAssignments.flatMap(a => a.slots.map(sl => `${sl.day} ${sl.hour}`)).join(', ');
+                const profes = studentAssignments.map(a => a.teacherName).join(', ');
+                const hasTeacher = studentAssignments.length > 0;
+                const planText = planFor(s);
+                const cls = classifyPlan({ studentPlan: s.plan ?? null, productName: planText === '—' ? null : planText });
+                const clsStyle = planBadgeStyle(cls.type);
+                const menuOpen = menuOpenId === s.id;
+                const hasPhone = !!s.phone?.trim();
+                return (
+                  <div key={s.id} style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 14, padding: 16 }}>
+                    {/* Fila superior: avatar + nombre/email + badge suscripción + ⋮ */}
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 11 }}>
+                      <div style={{ width: 42, height: 42, borderRadius: '50%', background: 'rgba(30,158,58,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 700, color: '#1E9E3A', flexShrink: 0 }}>
+                        {s.name.split(' ').map(p => p[0]).join('').toUpperCase().slice(0, 2)}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--text-primary)', wordBreak: 'break-word' }}>{s.name}</div>
+                        <div style={{ fontSize: 12, color: 'var(--text-muted)', wordBreak: 'break-word' }}>{s.email || '—'}</div>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                        {s.email && <div style={{ maxWidth: 200 }}>{renderSubBadge(s)}</div>}
+                        {/* Menú tres puntos */}
+                        <div style={{ position: 'relative', flexShrink: 0 }}>
+                          <button onClick={() => setMenuOpenId(menuOpen ? null : s.id)} title="Acciones"
+                            style={{ width: 32, height: 32, borderRadius: 8, border: '1px solid var(--border)', background: menuOpen ? 'var(--bg-surface-3)' : 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 18, lineHeight: 1, fontFamily: 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            ⋮
+                          </button>
+                          {menuOpen && (
+                            <>
+                              <div onClick={() => setMenuOpenId(null)} style={{ position: 'fixed', inset: 0, zIndex: 30 }} />
+                              <div style={{ position: 'absolute', top: 36, right: 0, zIndex: 31, minWidth: 190, background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.18)', overflow: 'hidden', padding: 4 }}>
+                                {s.inStudentsTable && (
+                                  <MenuItem onClick={() => { setMenuOpenId(null); handleEditClick(s); }}>✏️ Editar</MenuItem>
+                                )}
+                                {!hasTeacher && (
+                                  <MenuItem onClick={() => { setMenuOpenId(null); router.push('/setter'); }}>🔗 Vincular</MenuItem>
+                                )}
+                                {hasPhone && (
+                                  <MenuItem onClick={() => { setMenuOpenId(null); openWhatsApp(s.phone); }}>📱 Enviar WhatsApp</MenuItem>
+                                )}
+                                <MenuItem danger onClick={() => { setMenuOpenId(null); setDeletingStudent(s); }}>🗑️ Eliminar</MenuItem>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Fila secundaria: nivel · plan + clasificación */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', fontSize: 12.5, color: 'var(--text-secondary)', marginTop: 12 }}>
+                      <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{s.level || 'Sin nivel'}</span>
+                      <span style={{ color: 'var(--text-muted)' }}>·</span>
+                      <span style={{ wordBreak: 'break-word', minWidth: 0 }}>{planText}</span>
+                      {planText !== '—' && (
+                        <span title={cls.displayName} style={{ fontSize: 10.5, fontWeight: 700, padding: '1px 8px', borderRadius: 10, background: clsStyle.bg, color: clsStyle.color, whiteSpace: 'nowrap' }}>
+                          {cls.badge}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Fila terciaria: profesor · horarios, o "sin profesor" */}
+                    <div style={{ fontSize: 12.5, marginTop: 6 }}>
+                      {hasTeacher ? (
+                        <span style={{ color: 'var(--text-secondary)' }}>
+                          <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{profes}</span>
+                          {horarios && <> · {horarios}</>}
+                        </span>
+                      ) : (
+                        <span style={{ color: '#dc2626', fontWeight: 600 }}>Sin profesor asignado</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
 
-            {filtered.length === 0 ? (
-              <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '32px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
-                Sin resultados para &quot;{search}&quot;
-              </div>
-            ) : (
-              /* ÚNICO contenedor que maneja el overflow entre la tabla y la página */
-              <div style={{ width: '100%', overflowX: 'auto', WebkitOverflowScrolling: 'touch', border: '1px solid var(--border)', borderRadius: 12 }}>
-                <table style={{ width: '100%', minWidth: 1200, borderCollapse: 'collapse' }}>
-                  <thead>
-                    <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface-2)' }}>
-                      <th style={thStyle(160)}>Nombre</th>
-                      <th style={thStyle(200)}>Email</th>
-                      <th style={thStyle(70, 'center')}>Nivel</th>
-                      <th style={thStyle(140)}>Plan</th>
-                      <th style={thStyle(100)}>Profesor</th>
-                      <th style={thStyle(160)}>Suscripción</th>
-                      <th style={thStyle(180)}>Horarios</th>
-                      <th style={thStyle(190)}>Acciones</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filtered.map(s => {
-                      const studentAssignments = assignmentsForStudent(s);
-                      return (
-                        <tr key={s.id} style={{ borderBottom: '1px solid var(--border)' }}>
-                          <td style={{ padding: '12px 14px', minWidth: 160 }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-                              <div style={{ width: 30, height: 30, borderRadius: '50%', background: 'rgba(59,130,246,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: '#93c5fd', flexShrink: 0 }}>
-                                {s.name.split(' ').map(p => p[0]).join('').toUpperCase().slice(0, 2)}
-                              </div>
-                              <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)', wordBreak: 'break-word' }}>{s.name}</span>
-                            </div>
-                          </td>
-                          <td style={{ padding: '12px 14px', fontSize: 12, color: 'var(--text-secondary)', minWidth: 200, wordBreak: 'break-word', whiteSpace: 'normal' }}>{s.email || '—'}</td>
-                          <td style={{ padding: '12px 14px', minWidth: 70, textAlign: 'center' }}>
-                            <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 20, background: 'rgba(167,139,250,0.15)', color: '#a78bfa', fontWeight: 600 }}>{s.level || '—'}</span>
-                          </td>
-                          <td style={{ padding: '12px 14px', fontSize: 12, color: 'var(--text-secondary)', minWidth: 140, wordBreak: 'break-word', whiteSpace: 'normal' }}>{renderPlan(s)}</td>
-                          <td style={{ padding: '12px 14px', minWidth: 100 }}>
-                            {studentAssignments.length === 0 ? (
-                              <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>—</span>
-                            ) : (
-                              <div>{studentAssignments.map((a, i) => (
-                                <div key={i} style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 1, wordBreak: 'break-word' }}>{a.teacherName}</div>
-                              ))}</div>
-                            )}
-                          </td>
-                          <td style={{ padding: '12px 14px', minWidth: 160 }}>
-                            {renderSubBadge(s)}
-                          </td>
-                          <td style={{ padding: '12px 14px', minWidth: 180 }}>
-                            {studentAssignments.length === 0 ? (
-                              <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>—</span>
-                            ) : (
-                              <div>{studentAssignments.map((a, i) => (
-                                <div key={i} style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 1, whiteSpace: 'normal', wordBreak: 'break-word' }}>
-                                  {a.slots.map(sl => `${sl.day} ${sl.hour}`).join(', ')}
-                                </div>
-                              ))}</div>
-                            )}
-                          </td>
-                          <td style={{ padding: '12px 14px', minWidth: 190 }}>
-                            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-start', flexWrap: 'nowrap' }}>
-                              {s.inStudentsTable && (
-                                <button onClick={() => handleEditClick(s)}
-                                  style={{ padding: '8px 14px', borderRadius: 7, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', fontFamily: 'inherit', minHeight: 38 }}>
-                                  Editar
-                                </button>
-                              )}
-                              <button onClick={() => setDeletingStudent(s)}
-                                style={{ padding: '8px 14px', borderRadius: 7, border: '1px solid rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.08)', color: '#ef4444', cursor: 'pointer', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', fontFamily: 'inherit', minHeight: 38 }}>
-                                Eliminar
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+            {filtered.length > visibleCount && (
+              <div style={{ display: 'flex', justifyContent: 'center', marginTop: 20 }}>
+                <button onClick={() => setVisibleCount(c => c + 50)}
+                  style={{ padding: '10px 24px', borderRadius: 10, border: '1.5px solid #1E9E3A', background: 'rgba(30,158,58,0.08)', color: '#1E9E3A', cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+                  Cargar más ({filtered.length - visibleCount} restantes)
+                </button>
               </div>
             )}
-          </div>
+          </>
         )}
       </div>
 

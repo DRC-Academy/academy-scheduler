@@ -82,9 +82,10 @@ function firstNonEmpty(...vals: Array<string | undefined>): string {
   return '';
 }
 
-// 'examen' en plan u objetivo → 'examenes'; cualquier otro caso → 'general'.
+// Tipo de plan para finanzas. Delega en classifyPlan (ÚNICA fuente de verdad)
+// para no duplicar la lógica de detección de exámenes.
 export function resolvePlanType(plan: string, objetivo?: string): 'general' | 'examenes' {
-  return `${plan ?? ''} ${objetivo ?? ''}`.toLowerCase().includes('examen') ? 'examenes' : 'general';
+  return classifyPlan({ assignmentPlan: plan, assignmentObjetivo: objetivo }).financeType;
 }
 
 function findRate(rates: FinanceRate[], planType: 'general' | 'examenes', tier: 'nuevo' | 'antiguo'): number {
@@ -334,11 +335,19 @@ export function ingresoBadge(row: { hasJoinLog: boolean; punctuality?: string; h
   return { label: '❌ No utilizó', color: 'var(--text-muted)', bg: 'var(--bg-surface-3)' };
 }
 
-// Categoría simplificada para el profesor. Wrapper de classifyPlan (única fuente
-// de verdad). Acepta un texto libre (plan/objetivo/producto combinados).
-export function classCategoryBadge(text?: string | null):
-  { label: string; color: string; bg: string } {
-  const c = classifyPlan({ productName: text });
+// Categoría simplificada para el profesor. Wrapper de classifyPlan (ÚNICA fuente
+// de verdad). Acepta los campos completos (plan + objetivo + plan/producto del
+// alumno) o, por compatibilidad, un único texto libre.
+export function classCategoryBadge(
+  input?: {
+    assignmentPlan?: string | null;
+    assignmentObjetivo?: string | null;
+    studentPlan?: string | null;
+    productName?: string | null;
+  } | string | null,
+): { label: string; color: string; bg: string } {
+  const fields = (typeof input === 'string' || input == null) ? { productName: input } : input;
+  const c = classifyPlan(fields);
   return { label: c.badge, ...planBadgeStyle(c.type) };
 }
 

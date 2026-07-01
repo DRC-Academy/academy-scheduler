@@ -967,9 +967,10 @@ function classesForDate(myAssignments: Assignment[], date: Date): TodayClass[] {
 }
 
 // ─── Teacher Upcoming Classes Tab ─────────────────────────────────────────────
-function TeacherUpcomingTab({ teacher, myAssignments, updateMeetLink, logClassJoin }: {
+function TeacherUpcomingTab({ teacher, myAssignments, students, updateMeetLink, logClassJoin }: {
   teacher: Teacher;
   myAssignments: Assignment[];
+  students: Student[];
   updateMeetLink: (assignmentId: string, link: string) => Promise<void>;
   logClassJoin: (teacherId: string, teacherName: string, studentName: string, scheduledDate: string, scheduledTime: string, subscriptionStatus?: string, enteredWithoutActive?: boolean, subscriptionDaysRemaining?: number | null) => Promise<void>;
 }) {
@@ -982,6 +983,20 @@ function TeacherUpcomingTab({ teacher, myAssignments, updateMeetLink, logClassJo
   const [checkingKey, setCheckingKey] = useState<string | null>(null);
   const [subModal, setSubModal] = useState<{ c: TodayClass; status: string; daysRemaining: number | null; endDate: string | null } | null>(null);
   const [subInfo, setSubInfo] = useState<Record<string, SubInfo>>({});
+
+  // Lookup de alumnos por email/nombre para clasificar el plan con TODOS los campos
+  // (plan + objetivo de la assignment + plan/producto del alumno).
+  const studentByEmail = useMemo(() => {
+    const m = new Map<string, Student>();
+    for (const s of students) {
+      if (s.email) m.set(s.email.trim().toLowerCase(), s);
+      m.set(`name:${s.name.trim().toLowerCase()}`, s);
+    }
+    return m;
+  }, [students]);
+  const studentForAssignment = (a: Assignment): Student | undefined =>
+    (a.studentEmail && studentByEmail.get(a.studentEmail.trim().toLowerCase())) ||
+    studentByEmail.get(`name:${a.studentName.trim().toLowerCase()}`);
 
   // Live "now" — set on mount (avoids SSR hydration mismatch) and refreshed every
   // minute so each class's state (pasada / en curso / próxima) updates on its own.
@@ -1167,9 +1182,18 @@ function TeacherUpcomingTab({ teacher, myAssignments, updateMeetLink, logClassJo
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
               <span style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)' }}>{c.studentName}</span>
-              {(() => { const cat = classCategoryBadge(c.plan); return (
-                <span style={{ fontSize: 10, padding: '1px 9px', borderRadius: 10, background: cat.bg, color: cat.color, fontWeight: 700 }}>{cat.label}</span>
-              ); })()}
+              {(() => {
+                const stu = studentForAssignment(c.assignment);
+                const cat = classCategoryBadge({
+                  assignmentPlan: c.assignment.plan,
+                  assignmentObjetivo: c.assignment.objetivo,
+                  studentPlan: stu?.plan,
+                  productName: stu?.productName,
+                });
+                return (
+                  <span style={{ fontSize: 10, padding: '1px 9px', borderRadius: 10, background: cat.bg, color: cat.color, fontWeight: 700 }}>{cat.label}</span>
+                );
+              })()}
               {inProgress && (
                 <span className="upcoming-live-badge" style={{ fontSize: 10, padding: '1px 9px', borderRadius: 10, background: 'rgba(220,38,38,0.12)', border: '1px solid rgba(220,38,38,0.4)', color: '#dc2626', fontWeight: 700 }}>
                   🔴 En curso
@@ -1412,7 +1436,7 @@ function TeacherUpcomingTab({ teacher, myAssignments, updateMeetLink, logClassJo
 // ─── Teacher Content ──────────────────────────────────────────────────────────
 function TeacherContent() {
   const { user } = useAuth();
-  const { teachers, assignments, scoringEvents, notifications, getTeacherGrid, updateTeacherGrid, addStudent, addAssignment, updateAssignmentStartDate, updateAssignmentSlots, reloadAll, updateTeacherSpecialties, loadNotifications, markNotificationRead, updateMeetLink, logClassJoin } = useTeachers();
+  const { teachers, students, assignments, scoringEvents, notifications, getTeacherGrid, updateTeacherGrid, addStudent, addAssignment, updateAssignmentStartDate, updateAssignmentSlots, reloadAll, updateTeacherSpecialties, loadNotifications, markNotificationRead, updateMeetLink, logClassJoin } = useTeachers();
   const [activeTab, setActiveTab] = useState<'calendar' | 'upcoming' | 'scoring' | 'notifications'>('calendar');
   const [showSpecialtiesModal, setShowSpecialtiesModal] = useState(false);
   const [specialtiesDraft, setSpecialtiesDraft] = useState<string[]>([]);
@@ -1822,6 +1846,7 @@ function TeacherContent() {
           <TeacherUpcomingTab
             teacher={teacher}
             myAssignments={myAssignments}
+            students={students}
             updateMeetLink={updateMeetLink}
             logClassJoin={logClassJoin}
           />
