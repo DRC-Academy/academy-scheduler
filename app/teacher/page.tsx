@@ -351,6 +351,11 @@ function AssignStudentModal({
                   Fecha de inicio *
                 </label>
                 <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} style={{ width: '100%' }} />
+                {newEmail.includes('@') && !autofill.loading && (
+                  autofill.startDate
+                    ? <div style={{ fontSize: 11, color: '#1E9E3A', marginTop: 4 }}>📅 Detectada desde WooCommerce — inicio de suscripción</div>
+                    : <div style={{ fontSize: 11, color: '#ea580c', marginTop: 4 }}>⚠️ Fecha no detectada — completá manualmente</div>
+                )}
               </div>
               {(() => {
                 const canCreate = !!newName.trim() && allSlotsValid && !!startDate && !checkingEmail;
@@ -1201,6 +1206,16 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, updateMeetLink, 
             <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
               {c.plan || 'Clase'}{c.level ? ` · ${c.level}` : ''}
             </div>
+            {c.assignment.startDate && (() => {
+              const sd = new Date(c.assignment.startDate + 'T00:00:00');
+              if (isNaN(sd.getTime())) return null;
+              const dias = Math.max(0, Math.floor((Date.now() - sd.getTime()) / 86_400_000));
+              return (
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>
+                  Desde: {sd.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })} · {dias} día{dias !== 1 ? 's' : ''}
+                </div>
+              );
+            })()}
             {(() => {
               const sb = subBadgeFor(subEmailForAssignment(c.assignment));
               if (!sb) return null;

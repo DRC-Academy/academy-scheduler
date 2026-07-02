@@ -538,6 +538,11 @@ function AssignModal({
           </div>
           <div><label>Fecha de inicio *</label>
             <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} style={{ maxWidth: 200 }} />
+            {currentEmail.includes('@') && !detecting && (
+              autofill.startDate
+                ? <div style={{ fontSize: 11.5, color: '#1E9E3A', marginTop: 4 }}>📅 Detectada desde WooCommerce — inicio de suscripción</div>
+                : <div style={{ fontSize: 11.5, color: '#ea580c', marginTop: 4 }}>⚠️ Fecha no detectada — completá manualmente</div>
+            )}
           </div>
         </div>
 

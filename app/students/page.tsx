@@ -768,6 +768,17 @@ function StudentsContent() {
                 const profes = studentAssignments.map(a => a.teacherName).join(', ');
                 const hasTeacher = studentAssignments.length > 0;
                 const planText = planFor(s);
+                // Fecha de inicio de suscripción: la de la asignación (sincronizada
+                // con WooCommerce). Se muestra con la antigüedad en días.
+                const startDateStr = studentAssignments.find(a => a.startDate)?.startDate ?? null;
+                const startDateInfo = (() => {
+                  if (!startDateStr) return null;
+                  const d = new Date(startDateStr + 'T00:00:00');
+                  if (isNaN(d.getTime())) return null;
+                  const dias = Math.max(0, Math.floor((Date.now() - d.getTime()) / 86_400_000));
+                  const fecha = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+                  return { fecha, dias };
+                })();
                 const cls = classifyPlan({ studentPlan: s.plan ?? null, productName: planText === '—' ? null : planText });
                 const clsStyle = planBadgeStyle(cls.type);
                 const menuOpen = menuOpenId === s.id;
@@ -835,6 +846,15 @@ function StudentsContent() {
                         <span style={{ color: '#dc2626', fontWeight: 600 }}>Sin profesor asignado</span>
                       )}
                     </div>
+
+                    {/* Fila de suscripción: inicio + antigüedad (sincronizado con WooCommerce) */}
+                    {startDateInfo && (
+                      <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 6 }}>
+                        📅 Inicio de suscripción: <b style={{ color: 'var(--text-primary)' }}>{startDateInfo.fecha}</b>
+                        <span style={{ color: 'var(--text-muted)' }}> · </span>
+                        ⏱️ Antigüedad: <b style={{ color: 'var(--text-primary)' }}>{startDateInfo.dias} día{startDateInfo.dias !== 1 ? 's' : ''}</b>
+                      </div>
+                    )}
                   </div>
                 );
               })}

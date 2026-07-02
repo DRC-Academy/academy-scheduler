@@ -2223,6 +2223,181 @@ function PlanSyncPanel() {
   );
 }
 
+// Sincronización de la fecha de inicio (start_date) de las asignaciones con la
+// fecha real de suscripción/compra en WooCommerce. Recorre las asignaciones en
+// lotes de 5 (delay 500ms) llamando a /api/admin/sync-start-dates. El botón
+// combinado corre además la sincronización de planes en la misma pasada.
+const sleepMs = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+type DateSyncResult = { updated: number; notFound: number; errors: number; total: number };
+type PlanSyncResult = { updated: number; unchanged: number; notFound: number };
+
+function StartDateSyncPanel() {
+  const { assignments, students, reloadAll } = useTeachers();
+  const [choosing, setChoosing] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number; label: string } | null>(null);
+  const [dateResult, setDateResult] = useState<DateSyncResult | null>(null);
+  const [planResult, setPlanResult] = useState<PlanSyncResult | null>(null);
+
+  // Sincroniza start_date de las asignaciones. mode 'empty' → solo las que no
+  // tienen fecha; mode 'all' (force) → todas las asignaciones con email.
+  async function runDateSync(mode: 'empty' | 'all', labelPrefix = ''): Promise<DateSyncResult> {
+    const candidates = assignments.filter(a => a.studentEmail?.trim() && (mode === 'all' || !a.startDate));
+    const acc: DateSyncResult = { updated: 0, notFound: 0, errors: 0, total: candidates.length };
+    setProgress({ done: 0, total: candidates.length, label: `${labelPrefix}Fechas` });
+    for (let i = 0; i < candidates.length; i += 5) {
+      const batch = candidates.slice(i, i + 5).map(a => ({ id: a.id, email: a.studentEmail }));
+      try {
+        const res = await fetch('/api/admin/sync-start-dates', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ assignments: batch }),
+        });
+        const data = await res.json();
+        acc.updated  += data.updated  ?? 0;
+        acc.notFound += data.notFound ?? 0;
+        acc.errors   += data.errors   ?? 0;
+      } catch {
+        acc.errors += batch.length;
+      }
+      setProgress({ done: Math.min(i + 5, candidates.length), total: candidates.length, label: `${labelPrefix}Fechas` });
+      if (i + 5 < candidates.length) await sleepMs(500);
+    }
+    return acc;
+  }
+
+  async function runPlanSync(labelPrefix = ''): Promise<PlanSyncResult> {
+    const withEmail = students.filter(s => s.email?.trim());
+    const acc: PlanSyncResult = { updated: 0, unchanged: 0, notFound: 0 };
+    setProgress({ done: 0, total: withEmail.length, label: `${labelPrefix}Planes` });
+    for (let i = 0; i < withEmail.length; i += 5) {
+      const batch = withEmail.slice(i, i + 5).map(s => ({ id: s.id, email: s.email, plan: s.plan, level: s.level }));
+      try {
+        const res = await fetch('/api/admin/sync-student-plans', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ students: batch }),
+        });
+        const data = await res.json();
+        acc.updated   += data.updated   ?? 0;
+        acc.unchanged += data.unchanged ?? 0;
+        acc.notFound  += data.notFound  ?? 0;
+      } catch {
+        acc.notFound += batch.length;
+      }
+      setProgress({ done: Math.min(i + 5, withEmail.length), total: withEmail.length, label: `${labelPrefix}Planes` });
+      if (i + 5 < withEmail.length) await sleepMs(500);
+    }
+    return acc;
+  }
+
+  async function startDateSync(mode: 'empty' | 'all') {
+    setChoosing(false);
+    setRunning(true);
+    setDateResult(null);
+    setPlanResult(null);
+    try {
+      const r = await runDateSync(mode);
+      setDateResult(r);
+      await reloadAll();
+    } finally {
+      setRunning(false);
+      setProgress(null);
+    }
+  }
+
+  async function startCombinedSync() {
+    setRunning(true);
+    setDateResult(null);
+    setPlanResult(null);
+    try {
+      const p = await runPlanSync('1/2 · ');
+      setPlanResult(p);
+      const d = await runDateSync('empty', '2/2 · ');
+      setDateResult(d);
+      await reloadAll();
+    } finally {
+      setRunning(false);
+      setProgress(null);
+    }
+  }
+
+  const noDateCount = assignments.filter(a => a.studentEmail?.trim() && !a.startDate).length;
+
+  return (
+    <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '16px 18px', marginTop: 16 }}>
+      <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>🔄 Sincronización con WooCommerce</div>
+      <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', marginTop: 3, lineHeight: 1.5 }}>
+        Trae la fecha real de inicio de suscripción de cada alumno. {noDateCount > 0 ? `${noDateCount} asignación${noDateCount !== 1 ? 'es' : ''} sin fecha.` : 'Todas las asignaciones tienen fecha.'}
+      </div>
+
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 14 }}>
+        <button onClick={() => setChoosing(true)} disabled={running}
+          style={{ padding: '9px 16px', borderRadius: 8, border: 'none', background: running ? 'var(--bg-surface-3)' : '#FFC400', color: running ? 'var(--text-muted)' : '#1a1a1a', cursor: running ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+          📅 Sincronizar fechas de inicio
+        </button>
+        <button onClick={startCombinedSync} disabled={running}
+          style={{ padding: '9px 16px', borderRadius: 8, border: '1px solid var(--border)', background: running ? 'var(--bg-surface-3)' : 'var(--bg-surface-2)', color: running ? 'var(--text-muted)' : 'var(--text-primary)', cursor: running ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+          🔄 Sincronizar planes y fechas
+        </button>
+      </div>
+
+      {progress && (
+        <div style={{ marginTop: 14 }}>
+          <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', marginBottom: 6 }}>
+            {progress.label} · Procesando... {progress.done}/{progress.total} alumnos
+          </div>
+          <div style={{ height: 8, borderRadius: 5, background: 'var(--bg-surface-3)', overflow: 'hidden' }}>
+            <div style={{ height: '100%', width: `${progress.total ? (progress.done / progress.total) * 100 : 0}%`, background: '#1E9E3A', transition: 'width 0.2s' }} />
+          </div>
+        </div>
+      )}
+
+      {(dateResult || planResult) && !running && (
+        <div style={{ marginTop: 14, fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', lineHeight: 1.7 }}>
+          {planResult && (
+            <div>🗂️ Planes: ✅ {planResult.updated} actualizado{planResult.updated !== 1 ? 's' : ''} · {planResult.unchanged} sin cambios · {planResult.notFound} no encontrado{planResult.notFound !== 1 ? 's' : ''}</div>
+          )}
+          {dateResult && (<>
+            <div>✅ {dateResult.updated} fecha{dateResult.updated !== 1 ? 's' : ''} actualizada{dateResult.updated !== 1 ? 's' : ''}</div>
+            <div>❓ {dateResult.notFound} alumno{dateResult.notFound !== 1 ? 's' : ''} no encontrado{dateResult.notFound !== 1 ? 's' : ''} en WooCommerce</div>
+            <div>⚠️ {dateResult.errors} error{dateResult.errors !== 1 ? 'es' : ''}</div>
+          </>)}
+        </div>
+      )}
+
+      {choosing && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)', zIndex: 90, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+          <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 14, padding: 24, width: '100%', maxWidth: 440 }}>
+            <div style={{ fontSize: 24, marginBottom: 10 }}>📅</div>
+            <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)', marginBottom: 8 }}>Sincronizar fechas de inicio</div>
+            <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 20, lineHeight: 1.6 }}>
+              Elegí qué asignaciones actualizar con la fecha real de WooCommerce.
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <button onClick={() => startDateSync('empty')}
+                style={{ padding: '12px 14px', borderRadius: 9, border: '1px solid rgba(30,158,58,0.4)', background: 'rgba(30,158,58,0.08)', color: 'var(--text-primary)', cursor: 'pointer', fontSize: 13.5, fontWeight: 700, fontFamily: 'inherit', textAlign: 'left' }}>
+                Solo alumnos sin fecha <span style={{ color: '#1E9E3A' }}>(recomendado, más rápido)</span>
+                <div style={{ fontWeight: 500, fontSize: 12, color: 'var(--text-secondary)', marginTop: 3 }}>{noDateCount} asignación{noDateCount !== 1 ? 'es' : ''}</div>
+              </button>
+              <button onClick={() => startDateSync('all')}
+                style={{ padding: '12px 14px', borderRadius: 9, border: '1px solid var(--border)', background: 'var(--bg-surface-2)', color: 'var(--text-primary)', cursor: 'pointer', fontSize: 13.5, fontWeight: 700, fontFamily: 'inherit', textAlign: 'left' }}>
+                Todos los alumnos
+                <div style={{ fontWeight: 500, fontSize: 12, color: 'var(--text-secondary)', marginTop: 3 }}>Puede tardar varios minutos · reescribe fechas existentes</div>
+              </button>
+            </div>
+            <button onClick={() => setChoosing(false)}
+              style={{ width: '100%', marginTop: 14, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
+              Cancelar
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AuditPanel() {
   const { students, reloadAll } = useTeachers();
   const router = useRouter();
@@ -2575,6 +2750,7 @@ function AdminContent() {
           <AuditPanel />
           <SyncPanel />
           <PlanSyncPanel />
+          <StartDateSyncPanel />
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 16, marginTop: 16 }}>
             <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
