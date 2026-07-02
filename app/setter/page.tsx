@@ -84,43 +84,80 @@ function addDays(iso: string, days: number): string {
   return d.toISOString().split('T')[0];
 }
 
+// "2026-07-02" → "Miércoles 2 de julio de 2026" (día de semana capitalizado, sin coma).
+function fmtLongDate(iso: string): string {
+  if (!iso) return '';
+  const d = new Date(iso.length <= 10 ? iso + 'T00:00:00' : iso);
+  if (isNaN(d.getTime())) return '';
+  const s = d.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  const noComma = s.replace(',', '');
+  return noComma.charAt(0).toUpperCase() + noComma.slice(1);
+}
+
+// Un slot → "• Lunes 16:00h - 17:00h" (hora fin = inicio + 1h). Tolera "16" o "16:00".
+function slotLine(s: AssignedSlot): string {
+  const startH = parseInt(s.hour, 10);
+  const start = `${String(startH).padStart(2, '0')}:00`;
+  const end = `${String(startH + 1).padStart(2, '0')}:00`;
+  return `• ${s.day} ${start}h - ${end}h`;
+}
+
+// Limpia el nombre del plan: corta metadatos de horario (todo tras " · ") y colapsa
+// duplicados tipo "3h semanales — 3h semanales" → "3h semanales".
+function cleanPlanName(raw: string): string {
+  if (!raw) return '';
+  let s = raw.split('·')[0].trim();          // descarta "· 16:00 · Lunes, miércoles..."
+  s = s.replace(/\s*—\s*/g, ' - ');          // em-dash → guion espaciado uniforme
+  const parts = s.split(/\s+-\s+/).map(p => p.trim()).filter(Boolean);
+  const dedup: string[] = [];
+  for (const p of parts) {
+    if (!dedup.some(d => d.toLowerCase() === p.toLowerCase())) dedup.push(p);
+  }
+  return dedup.join(' - ');
+}
+
 // ─── Email Modal ──────────────────────────────────────────────────────────────
 function EmailModal({ assignment, onClose }: { assignment: Assignment; onClose: () => void }) {
   const [sent, setSent] = useState(false);
 
-  const slotsText = assignment.slots.length === 1
-    ? `${assignment.slots[0].day} · ${assignment.slots[0].hour}h - ${String(parseInt(assignment.slots[0].hour) + 1).padStart(2,'0')}:00h (Hora España)`
-    : assignment.slots.map(s => `${s.day} ${s.hour}h`).join(' y ') + ' (Hora España)';
-
   const now = new Date();
-  const dateStr = now.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' });
   const greeting = now.getHours() < 13 ? 'Buenos días' : now.getHours() < 20 ? 'Buenas tardes' : 'Buenas noches';
 
-  const firstSlot = assignment.slots[0];
-  const firstSlotLabel = firstSlot
-    ? `${firstSlot.day} ${now.toLocaleDateString('es-ES', { day: 'numeric', month: 'long' })}`
-    : '—';
-
+  // Fecha de inicio: viene de assignment.startDate (precargada desde WooCommerce
+  // subscriptionStartDate, o la seleccionada en el formulario). Una sola vez.
+  const startDateLong = fmtLongDate(assignment.startDate ?? '');
   const renewalStr = assignment.startDate ? fmtDate(addDays(assignment.startDate, 30)) : null;
-  const firstName = assignment.studentName.split(' ')[0];
 
-  const emailSubject = `Info ${assignment.studentName}`;
+  // Horarios: todos los slots como lista con viñeta, ordenados por día y hora.
+  const orderedSlots = [...assignment.slots].sort((a, b) => {
+    const d = (DAY_INDEX[a.day] ?? 99) - (DAY_INDEX[b.day] ?? 99);
+    return d !== 0 ? d : parseInt(a.hour, 10) - parseInt(b.hour, 10);
+  });
+  const scheduleBlock = orderedSlots.map(slotLine).join('\n');
+
+  const planName = cleanPlanName(assignment.plan);
+  const objetivo = assignment.objetivo?.trim() || 'Mejorar su nivel de inglés';
+
+  const emailSubject = `Nueva asignación: ${assignment.studentName} - ${planName}`;
   const emailBody = `${greeting} ${assignment.teacherName.split(' ')[0]}!
 
-A continuación te envío la info de ${assignment.studentName} para su clase del ${firstSlotLabel}
+A continuación te envío la información de ${assignment.studentName} para comenzar sus clases.
 
-Recuerda enviarle el correo de presentación y el correo con los datos de la sesión
+Recuerda enviarle el correo de presentación y el correo con los datos de la sesión.
 
-${assignment.slots.map(s =>
-  `Cita: ${s.day} ${dateStr.split(',')[1]?.trim() ?? ''}\nHora: ${s.hour}h - ${String(parseInt(s.hour)+1).padStart(2,'0')}:00  (Hora España).`
-).join('\n')}
-Email de contacto: ${assignment.studentEmail}
-Objetivo: ${firstName} ${assignment.objetivo ? `necesita ${assignment.objetivo.toLowerCase()}` : 'quiere mejorar su nivel'}
-Nivel: ${assignment.studentLevel}
-Disponibilidad siguientes sesiones: ${slotsText}
-Recuerda pedir que te confirmen que han recibido el email.
+📅 Fecha de inicio: ${startDateLong}
 
-${firstName} ha comprado su plan ${assignment.plan} de ${assignment.weeklyHours}h semanal${renewalStr ? ` y renueva el ${renewalStr}` : ''}.`;
+🕐 Horario semanal (Hora España):
+${scheduleBlock}
+
+📧 Email de contacto: ${assignment.studentEmail}
+🎯 Objetivo: ${objetivo}
+📊 Nivel: ${assignment.studentLevel}
+📦 Plan: ${planName}
+
+${assignment.studentName} ha comprado su plan ${planName}${renewalStr ? ` y renueva el ${renewalStr}` : ''}.
+
+Recuerda pedir que te confirmen que han recibido el email.`;
 
   const mailtoLink = `mailto:${assignment.teacherEmail}?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
 
