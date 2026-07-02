@@ -22,6 +22,7 @@ import {
 } from '@/lib/db';
 import type { AffectedTeacher } from '@/lib/db';
 import { calculateTeacherFinance } from '@/lib/finance';
+import { checkSubscription } from '@/lib/useSubscriptionStatus';
 
 interface TeachersContextType {
   teachers: Teacher[];
@@ -428,11 +429,8 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     const email = students.find(s => s.name.trim().toLowerCase() === studentName.trim().toLowerCase())?.email;
     let subscriptionStatus = 'error';
     if (email) {
-      try {
-        const res = await fetch(`/api/check-subscription?email=${encodeURIComponent(email)}`);
-        const data = await res.json();
-        subscriptionStatus = data?.status ?? 'error';
-      } catch { subscriptionStatus = 'error'; }
+      // Fuente única de verdad (cache compartido con Alumnos / Próximas clases).
+      subscriptionStatus = (await checkSubscription(email)).status;
     }
     // Las faltas/cancelaciones no llevan captura: se guarda screenshot_url vacío.
     const url = screenshotFile ? await dbUploadClassScreenshot(screenshotFile, teacherId) : '';

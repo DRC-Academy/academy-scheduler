@@ -10,6 +10,7 @@ import { useAuth } from '@/lib/AuthContext';
 import { DAYS, cellKey } from '@/components/VisualCalendar';
 import { dbCheckStudentExists, dbSetStudentManualActive, dbActivateOneTimeAccess } from '@/lib/db';
 import { classifyPlan, planBadgeStyle } from '@/lib/productUtils';
+import { checkSubscription, clearSubscriptionCache, subBadge, subCategory, type SubscriptionInfo, type SubCategory } from '@/lib/useSubscriptionStatus';
 import { Student, Grid, Assignment } from '@/types';
 
 // Detecta viewport mobile (< breakpoint). Alterna tabla (desktop) ↔ cards (mobile).
@@ -67,86 +68,8 @@ function buildWhatsAppLink(phone: string, studentName: string): string {
 }
 
 // ── Subscription / one-time access status (WooCommerce) ───────────────────────
-interface SubInfo {
-  active: boolean | null;
-  status: string;
-  daysRemaining: number | null;
-  endDate: string | null;
-  productType: 'subscription' | 'one_time' | null;
-  productName: string | null;
-  manualActiveUntil: string | null;
-  fetchedAt: number;
-}
-type SubCategory = 'active' | 'inactive' | 'pending' | 'unverified';
-
-async function fetchSubInfo(email: string): Promise<SubInfo> {
-  try {
-    const res = await fetch(`/api/check-subscription?email=${encodeURIComponent(email)}`);
-    const data = await res.json();
-    return {
-      active:            data.active ?? null,
-      status:            data.status ?? 'error',
-      daysRemaining:     data.daysRemaining ?? null,
-      endDate:           data.endDate ?? null,
-      productType:       data.productType ?? null,
-      productName:       data.productName ?? null,
-      manualActiveUntil: data.manualActiveUntil ?? null,
-      fetchedAt:         Date.now(),
-    };
-  } catch {
-    return { active: null, status: 'error', daysRemaining: null, endDate: null, productType: null, productName: null, manualActiveUntil: null, fetchedAt: Date.now() };
-  }
-}
-
-function subCategory(info: SubInfo | undefined): SubCategory {
-  if (!info) return 'unverified';
-  if (info.active === true) return 'active';                                    // active / manual_active / manual_override
-  if (info.status === 'pending-cancel') return 'pending';
-  if (info.active === null || info.status === 'error' || info.status === 'not_found') return 'unverified';
-  return 'inactive';   // cancelled, expired, on-hold, one_time_no_access (expirado o sin activar)
-}
-
-// Formatea 'YYYY-MM-DD' (o ISO) como 'DD/MM'.
-function shortDate(iso: string | null): string {
-  if (!iso) return '';
-  const d = new Date(iso.length <= 10 ? iso + 'T00:00:00' : iso);
-  if (isNaN(d.getTime())) return '';
-  return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`;
-}
-
-function subBadge(info: SubInfo | undefined): { label: string; color: string; bg: string; spin?: boolean } {
-  if (!info) return { label: '...', color: 'var(--text-muted)', bg: 'var(--bg-surface-3)', spin: true };
-  const green  = { color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)' };
-  const red    = { color: '#dc2626', bg: 'rgba(239,68,68,0.1)' };
-  const gray   = { color: 'var(--text-muted)', bg: 'var(--bg-surface-3)' };
-
-  // PAGO ÚNICO
-  if (info.productType === 'one_time') {
-    if (info.status === 'manual_active' && info.manualActiveUntil) {
-      return { label: `🎯 Activo hasta ${shortDate(info.manualActiveUntil)}`, ...green };
-    }
-    if (info.manualActiveUntil) return { label: '❌ Expirado', ...red }; // tenía fecha y ya pasó
-    return { label: '⚪ Sin activar', ...gray };
-  }
-
-  // SUSCRIPCIÓN (y desconocido)
-  if (info.status === 'manual_override') {
-    const tail = info.manualActiveUntil ? ` hasta ${shortDate(info.manualActiveUntil)}` : (info.endDate ? ` hasta ${shortDate(info.endDate)}` : '');
-    return { label: `✅ Activa (manual${tail})`, ...green };
-  }
-  switch (info.status) {
-    case 'active':         return { label: '✅ Activa', ...green };
-    case 'pending-cancel': {
-      const d = info.daysRemaining;
-      const tail = d != null && d > 0 ? ` (${d} día${d === 1 ? '' : 's'})` : '';
-      return { label: `⏳ Pendiente cancelar${tail}`, color: '#b45309', bg: 'rgba(255,196,0,0.15)' };
-    }
-    case 'on-hold':        return { label: '⚠️ En espera', color: '#ea580c', bg: 'rgba(249,115,22,0.12)' };
-    case 'cancelled':      return { label: '❌ Cancelada', ...red };
-    case 'expired':        return { label: '❌ Expirada', ...red };
-    default:               return { label: '❓ Sin verificar', ...gray }; // error / not_found
-  }
-}
+// La lógica vive en lib/useSubscriptionStatus.ts (fuente única de verdad,
+// compartida con la pestaña "Próximas clases" del profesor).
 
 // ── Duplicate Email Modal ─────────────────────────────────────────────────────
 function DuplicateEmailModal({
@@ -559,7 +482,7 @@ function StudentsContent() {
   const [activatingStudent, setActivatingStudent] = useState<DisplayStudent | null>(null);
   const [accessStudent, setAccessStudent] = useState<DisplayStudent | null>(null);
   const [subFilter, setSubFilter] = useState<'all' | SubCategory>('all');
-  const [subInfo, setSubInfo] = useState<Record<string, SubInfo>>({});
+  const [subInfo, setSubInfo] = useState<Record<string, SubscriptionInfo>>({});
   const [verifyingSubs, setVerifyingSubs] = useState(false);
   const [subProgress, setSubProgress] = useState<{ done: number; total: number } | null>(null);
   const [refreshing, setRefreshing] = useState<Set<string>>(new Set());
@@ -627,7 +550,7 @@ function StudentsContent() {
       for (let i = 0; i < subEmails.length; i += BATCH_SIZE) {
         if (cancelled) return;
         const batch = subEmails.slice(i, i + BATCH_SIZE);
-        const results = await Promise.all(batch.map(async e => [e, await fetchSubInfo(e)] as const));
+        const results = await Promise.all(batch.map(async e => [e, await checkSubscription(e)] as const));
         if (cancelled) return;
         setSubInfo(prev => {
           const next = { ...prev };
@@ -651,7 +574,8 @@ function StudentsContent() {
     const e = email?.trim().toLowerCase();
     if (!e || refreshing.has(e)) return;
     setRefreshing(prev => new Set(prev).add(e));
-    const info = await fetchSubInfo(e);
+    // force=true → ignora el cache de 5 min y refresca la fuente única compartida.
+    const info = await checkSubscription(e, true);
     setSubInfo(prev => ({ ...prev, [e]: info }));
     setRefreshing(prev => { const n = new Set(prev); n.delete(e); return n; });
   }
@@ -951,6 +875,7 @@ function StudentsContent() {
           student={deletingStudent}
           onConfirm={async () => {
             const studentName = deletingStudent.name;
+            clearSubscriptionCache(deletingStudent.email); // el alumno ya no existe: invalida su estado cacheado
             const affected = await deleteStudent(deletingStudent.id, studentName, user?.username);
             // Aviso por email a los profesores afectados (server-side via API).
             const recipients = affected
