@@ -855,6 +855,10 @@ function ScoringTab() {
   const [showProfeDelMes, setShowProfeDelMes]       = useState(false);
   const [showProfeDelTrimestre, setShowProfeDelTrimestre] = useState(false);
   const [resetting, setResetting]                   = useState<'monthly' | 'quarterly' | null>(null);
+  // Criterio de orden del ranking. 'score' = orden por defecto; 'retention' =
+  // ordena por margen de retención (con dirección desc/asc).
+  const [rankSort, setRankSort]                     = useState<'score' | 'retention'>('score');
+  const [retDir, setRetDir]                         = useState<'desc' | 'asc'>('desc');
 
   const MEDALS = ['🥇', '🥈', '🥉'];
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
@@ -903,6 +907,16 @@ function ScoringTab() {
 
     return { t, totalScore, totalEuros: manualEuros, currentLevel, activeStudents, retentionPct, monthlyEuros, faltasInjust, faltasJust, upsellsTotal, monthsOnPlatform, isBlocked };
   }).sort((a, b) => b.totalScore - a.totalScore);
+
+  // Filas de la tabla del ranking, reordenadas según el criterio elegido. Cuando
+  // se ordena por retención se desempata por score para un orden estable.
+  const rankRows = useMemo(() => {
+    if (rankSort !== 'retention') return scored;
+    return [...scored].sort((a, b) => {
+      const diff = retDir === 'desc' ? b.retentionPct - a.retentionPct : a.retentionPct - b.retentionPct;
+      return diff !== 0 ? diff : b.totalScore - a.totalScore;
+    });
+  }, [scored, rankSort, retDir]);
 
   const selectedData   = selectedTeacherId ? scored.find(s => s.t.id === selectedTeacherId) : null;
   const selectedEvents = selectedTeacherId ? scoringEvents.filter(e => e.teacherId === selectedTeacherId) : [];
@@ -1039,6 +1053,10 @@ function ScoringTab() {
             <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
               Score = eventos manuales + alumnos×10 + horas×2 + bonus retención
             </div>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+              💡 Hacé clic en <b>Score</b> o <b>Retención</b> para reordenar la tabla
+              {rankSort === 'retention' && <span style={{ color: '#1E9E3A', fontWeight: 600 }}> — ordenado por retención {retDir === 'desc' ? '(mayor a menor)' : '(menor a mayor)'}</span>}
+            </div>
           </div>
           <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
             {[
@@ -1059,13 +1077,42 @@ function ScoringTab() {
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface-2)' }}>
-                {['Pos.', 'Nombre', 'Nivel', 'Score', 'Alumnos', 'Retención', '€ mes', ''].map(h => (
-                  <th key={h} style={{ padding: '10px 12px', textAlign: 'left', fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>{h}</th>
-                ))}
+                {['Pos.', 'Nombre', 'Nivel', 'Score', 'Alumnos', 'Retención', '€ mes', ''].map(h => {
+                  const thStyle = { padding: '10px 12px', textAlign: 'left' as const, fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase' as const, letterSpacing: '0.04em', whiteSpace: 'nowrap' as const };
+                  if (h === 'Score') {
+                    const active = rankSort === 'score';
+                    return (
+                      <th key={h} style={thStyle}>
+                        <button onClick={() => setRankSort('score')} title="Ordenar por score"
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: 'none', border: 'none', padding: 0, cursor: 'pointer', font: 'inherit', textTransform: 'inherit', letterSpacing: 'inherit', color: active ? '#1E9E3A' : 'var(--text-muted)', fontWeight: active ? 700 : 600 }}>
+                          {h}<span style={{ fontSize: 9 }}>{active ? '▼' : '↕'}</span>
+                        </button>
+                      </th>
+                    );
+                  }
+                  if (h === 'Retención') {
+                    const active = rankSort === 'retention';
+                    return (
+                      <th key={h} style={thStyle}>
+                        <button
+                          onClick={() => {
+                            if (rankSort !== 'retention') { setRankSort('retention'); setRetDir('desc'); }
+                            else setRetDir(d => (d === 'desc' ? 'asc' : 'desc'));
+                          }}
+                          title="Ordenar por margen de retención"
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: 'none', border: 'none', padding: 0, cursor: 'pointer', font: 'inherit', textTransform: 'inherit', letterSpacing: 'inherit', color: active ? '#1E9E3A' : 'var(--text-muted)', fontWeight: active ? 700 : 600 }}>
+                          {h}<span style={{ fontSize: 9 }}>{active ? (retDir === 'desc' ? '▼' : '▲') : '↕'}</span>
+                        </button>
+                      </th>
+                    );
+                  }
+                  return <th key={h} style={thStyle}>{h}</th>;
+                })}
               </tr>
             </thead>
             <tbody>
-              {scored.map(({ t, totalScore, currentLevel, activeStudents, retentionPct, monthlyEuros, isBlocked }, idx) => {
+              {rankRows.map(({ t, totalScore, currentLevel, activeStudents, retentionPct, monthlyEuros, isBlocked }, idx) => {
+                const showMedal = rankSort === 'score' && idx < 3;
                 const info = LEVEL_INFO[(currentLevel as 1|2|3)];
                 const isSelected = selectedTeacherId === t.id;
                 const nextThreshold = currentLevel === 1 ? 150 : currentLevel === 2 ? 300 : 300;
@@ -1086,8 +1133,8 @@ function ScoringTab() {
                         : idx === 0 ? 'rgba(255,196,0,0.03)' : 'transparent',
                       cursor: 'pointer', transition: 'background 0.1s',
                     }}>
-                    <td style={{ padding: '12px 12px', fontSize: idx < 3 ? 22 : 13, fontWeight: idx >= 3 ? 600 : 400, color: 'var(--text-muted)' }}>
-                      {idx < 3 ? MEDALS[idx] : `#${idx + 1}`}
+                    <td style={{ padding: '12px 12px', fontSize: showMedal ? 22 : 13, fontWeight: showMedal ? 400 : 600, color: 'var(--text-muted)' }}>
+                      {showMedal ? MEDALS[idx] : `#${idx + 1}`}
                     </td>
                     <td style={{ padding: '12px 12px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
