@@ -10,7 +10,6 @@ import { useTeachers } from '@/lib/TeachersContext';
 import { calculateTeacherFinance, recordVerification, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge } from '@/lib/finance';
 import { dbGetAssignmentsByTeacher } from '@/lib/db';
 import { classifyPlan } from '@/lib/productUtils';
-import { MILESTONES, MILESTONE_SLIDES, MILESTONE_TITLES } from '@/lib/milestones';
 import { Teacher, Assignment, ClassRecordType, ClassRecord } from '@/types';
 
 // Etiquetas singular/plural por tipo de falta (para los mensajes de límite).
@@ -270,82 +269,6 @@ function AttachScreenshotModal({ studentName, date, hour, onClose, onSaved }: {
   );
 }
 
-// Sección desplegable con las diapositivas de presentación por hito (1/15/30/50).
-// Estado abierto/cerrado persistido en localStorage. Cerrada por defecto.
-function ClassMaterialsSection() {
-  const [open, setOpen] = useState(false);
-  const [copied, setCopied] = useState<number | null>(null);
-
-  // Leer preferencia guardada tras el montaje (evita mismatch de hidratación).
-  useEffect(() => {
-    try { if (localStorage.getItem('materials_section_open') === '1') setOpen(true); }
-    catch {}
-  }, []);
-
-  function toggle() {
-    setOpen(prev => {
-      const next = !prev;
-      try { localStorage.setItem('materials_section_open', next ? '1' : '0'); } catch {}
-      return next;
-    });
-  }
-
-  async function copyLink(m: number) {
-    const url = MILESTONE_SLIDES[m];
-    try {
-      await navigator.clipboard.writeText(url);
-    } catch {
-      // Fallback para navegadores sin Clipboard API.
-      const ta = document.createElement('textarea');
-      ta.value = url; ta.style.position = 'fixed'; ta.style.opacity = '0';
-      document.body.appendChild(ta); ta.select();
-      try { document.execCommand('copy'); } catch {}
-      document.body.removeChild(ta);
-    }
-    setCopied(m);
-    setTimeout(() => setCopied(c => (c === m ? null : c)), 2000);
-  }
-
-  return (
-    <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
-      {/* Cabecera */}
-      <button onClick={toggle}
-        style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '16px 18px', border: 'none', background: 'transparent', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
-        <div>
-          <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--text-primary)' }}>📊 Materiales de clase</div>
-          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>Diapositivas de presentación por hito</div>
-        </div>
-        <span style={{ fontSize: 14, color: 'var(--text-muted)', transition: 'transform 0.3s ease', transform: open ? 'rotate(180deg)' : 'rotate(0deg)' }}>▼</span>
-      </button>
-
-      {/* Contenido colapsable */}
-      <div style={{ maxHeight: open ? 1200 : 0, overflow: 'hidden', transition: 'max-height 0.3s ease' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12, padding: '4px 18px 18px' }}>
-          {MILESTONES.map(m => {
-            const info = MILESTONE_TITLES[m];
-            return (
-              <div key={m} style={{ background: 'white', borderRadius: 12, borderLeft: '4px solid #FFC400', boxShadow: '0 1px 4px rgba(0,0,0,0.08)', padding: 16 }}>
-                <div style={{ fontSize: 20, fontWeight: 700, color: '#1E9E3A' }}>🎯 Clase {m} — {info.title}</div>
-                <div style={{ fontSize: 12.5, color: '#6b7280', marginTop: 4, marginBottom: 14 }}>{info.description}</div>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <button onClick={() => window.open(MILESTONE_SLIDES[m], '_blank', 'noopener,noreferrer')}
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 8, border: 'none', background: '#1E9E3A', color: 'white', cursor: 'pointer', fontSize: 12.5, fontWeight: 700, fontFamily: 'inherit' }}>
-                    📊 Abrir presentación
-                  </button>
-                  <button onClick={() => copyLink(m)}
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface-2)', color: copied === m ? '#1E9E3A' : 'var(--text-secondary)', cursor: 'pointer', fontSize: 12.5, fontWeight: 600, fontFamily: 'inherit' }}>
-                    {copied === m ? '✅ Copiado' : '🔗 Copiar enlace'}
-                  </button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignments: Assignment[] }) {
   const {
     students, classRecords, classJoinLogs, financeRates, financePayments, scoringEvents, manualApprovals,
@@ -448,9 +371,6 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      {/* Materiales de clase (diapositivas por hito) */}
-      <ClassMaterialsSection />
-
       {/* Header: mes + añadir */}
       <div style={{ ...card, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
         <div>

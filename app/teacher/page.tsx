@@ -13,7 +13,7 @@ import { planBadgeStyle } from '@/lib/productUtils';
 import { StudentAutofillCard } from '@/components/StudentAutofillCard';
 import { useStudentAutofill } from '@/lib/useStudentAutofill';
 import { checkSubscription, subBadge, type SubscriptionInfo } from '@/lib/useSubscriptionStatus';
-import { isMilestone, getMilestoneSlides, getMilestoneCopy } from '@/lib/milestones';
+import { isMilestone, getMilestoneSlides, getMilestoneCopy, MILESTONES, MILESTONE_SLIDES, MILESTONE_TITLES } from '@/lib/milestones';
 import { Grid, Teacher, Assignment, ScoringEvent, Student, AppNotification } from '@/types';
 
 // ─── Specialty constants ──────────────────────────────────────────────────────
@@ -952,6 +952,82 @@ function classesForDate(myAssignments: Assignment[], date: Date): TodayClass[] {
   return list.sort((x, y) => parseInt(x.hour) - parseInt(y.hour));
 }
 
+// ─── Materiales de clase (diapositivas por hito) ──────────────────────────────
+// Desplegable discreto dentro de "Próximas clases". Cerrado por defecto; su
+// estado se recuerda en localStorage. Pensado para tener los materiales a mano
+// sin ocupar espacio ni distraer del flujo de clases.
+function ClassMaterialsSection() {
+  const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState<number | null>(null);
+
+  useEffect(() => {
+    try { if (localStorage.getItem('materials_section_open') === '1') setOpen(true); }
+    catch {}
+  }, []);
+
+  function toggle() {
+    setOpen(prev => {
+      const next = !prev;
+      try { localStorage.setItem('materials_section_open', next ? '1' : '0'); } catch {}
+      return next;
+    });
+  }
+
+  async function copyLink(m: number) {
+    const url = MILESTONE_SLIDES[m];
+    try {
+      await navigator.clipboard.writeText(url);
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = url; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); } catch {}
+      document.body.removeChild(ta);
+    }
+    setCopied(m);
+    setTimeout(() => setCopied(c => (c === m ? null : c)), 2000);
+  }
+
+  return (
+    <div style={{ border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden', marginBottom: 16, background: 'var(--bg-surface-2)' }}>
+      {/* Cabecera discreta */}
+      <button onClick={toggle}
+        style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '10px 14px', border: 'none', background: 'transparent', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)' }}>
+          📊 Materiales de clase
+          <span style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-muted)' }}>· Diapositivas por hito</span>
+        </span>
+        <span style={{ fontSize: 12, color: 'var(--text-muted)', transition: 'transform 0.3s ease', transform: open ? 'rotate(180deg)' : 'rotate(0deg)' }}>▼</span>
+      </button>
+
+      {/* Contenido colapsable */}
+      <div style={{ maxHeight: open ? 1200 : 0, overflow: 'hidden', transition: 'max-height 0.3s ease' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 10, padding: '4px 14px 14px' }}>
+          {MILESTONES.map(m => {
+            const info = MILESTONE_TITLES[m];
+            return (
+              <div key={m} style={{ background: 'var(--bg-surface)', borderRadius: 10, borderLeft: '4px solid #FFC400', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', padding: 14 }}>
+                <div style={{ fontSize: 16, fontWeight: 700, color: '#1E9E3A' }}>🎯 Clase {m} — {info.title}</div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3, marginBottom: 12 }}>{info.description}</div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <button onClick={() => window.open(MILESTONE_SLIDES[m], '_blank', 'noopener,noreferrer')}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 12px', borderRadius: 8, border: 'none', background: '#1E9E3A', color: 'white', cursor: 'pointer', fontSize: 12, fontWeight: 700, fontFamily: 'inherit' }}>
+                    📊 Abrir presentación
+                  </button>
+                  <button onClick={() => copyLink(m)}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface-3)', color: copied === m ? '#1E9E3A' : 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, fontWeight: 600, fontFamily: 'inherit' }}>
+                    {copied === m ? '✅ Copiado' : '🔗 Copiar enlace'}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Teacher Upcoming Classes Tab ─────────────────────────────────────────────
 function TeacherUpcomingTab({ teacher, myAssignments, students, updateMeetLink, logClassJoin }: {
   teacher: Teacher;
@@ -1317,6 +1393,9 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, updateMeetLink, 
       <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 16 }}>
         Definí el enlace de Meet/Zoom de cada alumno una sola vez. Se reutiliza siempre para esa persona.
       </div>
+
+      {/* Materiales de clase (diapositivas por hito) — desplegable discreto */}
+      <ClassMaterialsSection />
 
       {/* Missing links banner */}
       {missingLinks.length > 0 && (
