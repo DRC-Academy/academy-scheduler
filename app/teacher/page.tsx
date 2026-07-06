@@ -13,6 +13,7 @@ import { planBadgeStyle } from '@/lib/productUtils';
 import { StudentAutofillCard } from '@/components/StudentAutofillCard';
 import { useStudentAutofill } from '@/lib/useStudentAutofill';
 import { checkSubscription, subBadge, type SubscriptionInfo } from '@/lib/useSubscriptionStatus';
+import { isMilestone, getMilestoneSlides, getMilestoneCopy } from '@/lib/milestones';
 import { Grid, Teacher, Assignment, ScoringEvent, Student, AppNotification } from '@/types';
 
 // ─── Specialty constants ──────────────────────────────────────────────────────
@@ -968,6 +969,9 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, updateMeetLink, 
   const [checkingKey, setCheckingKey] = useState<string | null>(null);
   const [subModal, setSubModal] = useState<{ c: TodayClass; status: string; daysRemaining: number | null; endDate: string | null } | null>(null);
   const [subInfo, setSubInfo] = useState<Record<string, SubscriptionInfo>>({});
+  // Disclaimer de hito: se muestra ANTES del flujo de suscripción cuando la clase
+  // a la que se va a ingresar es la 1, 15, 30 o 50.
+  const [milestoneModal, setMilestoneModal] = useState<{ c: TodayClass; classNumber: number } | null>(null);
 
   // Lookup de alumnos por email/nombre para clasificar el plan con TODOS los campos
   // (plan + objetivo de la assignment + plan/producto del alumno).
@@ -1108,9 +1112,22 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, updateMeetLink, 
     setJoined(prev => new Set([...prev, c.key]));
   }
 
+  // Punto de entrada del botón "Ingresar a clase". Si la clase a la que se va a
+  // ingresar es un hito (1/15/30/50), muestra primero el disclaimer de hito; al
+  // confirmar continúa con el flujo normal (verificación de suscripción + Meet).
+  function handleJoin(c: TodayClass) {
+    if (!c.meetLink || checkingKey) return;
+    const nextClass = calcCurrentClassNumber(c.assignment) + 1;
+    if (isMilestone(nextClass)) {
+      setMilestoneModal({ c, classNumber: nextClass });
+      return;
+    }
+    proceedJoin(c);
+  }
+
   // Verifies the student's WooCommerce subscription before joining. Reuses the
   // in-memory result from tab load; only re-fetches if it's older than 5 min.
-  async function handleJoin(c: TodayClass) {
+  async function proceedJoin(c: TodayClass) {
     if (!c.meetLink || checkingKey) return;
     const email = subEmailForAssignment(c.assignment);
     // Log temporal de diagnóstico: confirma qué email se usa vs. las dos fuentes.
@@ -1256,6 +1273,18 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, updateMeetLink, 
                   ✏️ Cambiar enlace
                 </button>
               </div>
+              {/* Botón de diapositivas cuando la PRÓXIMA clase es un hito */}
+              {!passed && (() => {
+                const nextClass = calcCurrentClassNumber(c.assignment) + 1;
+                const slides = isMilestone(nextClass) ? getMilestoneSlides(nextClass) : null;
+                if (!slides) return null;
+                return (
+                  <button onClick={() => window.open(slides, '_blank', 'noopener,noreferrer')}
+                    style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, padding: '9px 16px', borderRadius: 8, border: 'none', background: '#FFC400', color: '#1f2937', cursor: 'pointer', fontSize: 13, fontWeight: 800, fontFamily: 'inherit', boxShadow: '0 2px 8px rgba(255,196,0,0.35)' }}>
+                    🎯 Clase {nextClass} — 📊 Ver diapositivas
+                  </button>
+                );
+              })()}
             </>
           ) : (
             <>
@@ -1392,6 +1421,44 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, updateMeetLink, 
           </div>
         </div>
       )}
+
+      {/* Milestone disclaimer (clase hito 1/15/30/50) */}
+      {milestoneModal && (() => {
+        const { c, classNumber } = milestoneModal;
+        const slides = getMilestoneSlides(classNumber);
+        const copy = getMilestoneCopy(classNumber, c.studentName) ?? '';
+        return (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 85, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+            onClick={e => { if (e.target === e.currentTarget) setMilestoneModal(null); }}>
+            <div style={{ background: '#F7F7F5', border: '2px solid #FFC400', borderRadius: 16, padding: 26, width: '100%', maxWidth: 440 }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 6 }}>
+                <span style={{ fontSize: 24, fontWeight: 800, color: '#1E9E3A' }}>🎯 Clase {classNumber}</span>
+              </div>
+              <div style={{ fontSize: 14, color: '#374151', fontWeight: 600, marginBottom: 14 }}>
+                con {c.studentName}
+              </div>
+              <div style={{ fontSize: 14, color: '#374151', lineHeight: 1.6, marginBottom: 18 }}>
+                {copy}
+              </div>
+              {slides && (
+                <a href={slides} target="_blank" rel="noopener noreferrer"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '9px 16px', borderRadius: 8, border: '1.5px solid #1E9E3A', background: 'white', color: '#1E9E3A', cursor: 'pointer', fontSize: 13, fontWeight: 700, textDecoration: 'none', marginBottom: 20 }}>
+                  📊 Ver diapositivas de clase {classNumber}
+                </a>
+              )}
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button onClick={() => setMilestoneModal(null)} style={{ flex: 1, padding: '11px', borderRadius: 8, border: '1px solid var(--border)', background: 'white', color: '#6b7280', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
+                  Cancelar
+                </button>
+                <button onClick={() => { setMilestoneModal(null); proceedJoin(c); }}
+                  style={{ flex: 2, padding: '11px', borderRadius: 8, border: 'none', background: '#1E9E3A', color: 'white', cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+                  ✅ Entendido — Ingresar a clase
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Inactive subscription disclaimer */}
       {subModal && (() => {

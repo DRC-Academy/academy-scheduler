@@ -8,6 +8,7 @@ import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
 import { calcCurrentClassNumber } from '@/lib/db';
 import { classCategoryBadge } from '@/lib/finance';
+import { MILESTONES, isMilestone, getMilestoneSlides } from '@/lib/milestones';
 import { Assignment, Grid, Student } from '@/types';
 
 // Estima la fecha de un milestone de clase según la fecha de inicio y los días/semana.
@@ -117,13 +118,15 @@ function ContadorContent() {
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                       {myAssignments.map(a => {
                         const classNum = calcCurrentClassNumber(a);
-                        const barPct   = Math.min(100, (classNum / 30) * 100);
+                        const barPct   = Math.min(100, (classNum / 50) * 100);
                         const slotsPerWeek = a.slots.length;
                         const est15 = a.startDate ? estimateMilestoneDate(a.startDate, 15, slotsPerWeek) : null;
                         const est30 = a.startDate ? estimateMilestoneDate(a.startDate, 30, slotsPerWeek) : null;
+                        const atMilestone = isMilestone(classNum);
+                        const milestoneSlides = atMilestone ? getMilestoneSlides(classNum) : null;
 
                         return (
-                          <div key={a.id} style={{ background: 'var(--bg-surface-2)', border: `1px solid ${classNum >= 30 ? '#1E9E3A' : classNum >= 15 ? '#FFC400' : 'var(--border)'}`, borderRadius: 12, padding: '16px 20px' }}>
+                          <div key={a.id} style={{ background: 'var(--bg-surface-2)', border: `1px solid ${atMilestone ? '#FFC400' : classNum >= 30 ? '#1E9E3A' : classNum >= 15 ? '#FFC400' : 'var(--border)'}`, boxShadow: atMilestone ? '0 0 0 3px rgba(255,196,0,0.18)' : 'none', borderRadius: 12, padding: '16px 20px' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
                               <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
                                 <div style={{ width: 42, height: 42, borderRadius: '50%', background: 'rgba(30,158,58,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 17, fontWeight: 700, color: '#1E9E3A', flexShrink: 0 }}>
@@ -155,22 +158,37 @@ function ContadorContent() {
                                 <div style={{ fontSize: 18, fontWeight: 800, color: classNum >= 30 ? '#1E9E3A' : classNum >= 15 ? '#b45309' : 'var(--text-primary)' }}>
                                   Clase {classNum}
                                 </div>
-                                {classNum >= 30 && <div style={{ fontSize: 11, color: '#1E9E3A', fontWeight: 700 }}>🏆 Milestone</div>}
-                                {classNum >= 15 && classNum < 30 && <div style={{ fontSize: 11, color: '#b45309', fontWeight: 700 }}>🎯 Milestone</div>}
+                                {atMilestone ? (
+                                  <span style={{ display: 'inline-block', marginTop: 3, fontSize: 11, padding: '2px 9px', borderRadius: 10, background: '#FFC400', color: '#1f2937', fontWeight: 800 }}>🎯 Hito clase {classNum}</span>
+                                ) : (<>
+                                  {classNum >= 30 && <div style={{ fontSize: 11, color: '#1E9E3A', fontWeight: 700 }}>🏆 Milestone</div>}
+                                  {classNum >= 15 && classNum < 30 && <div style={{ fontSize: 11, color: '#b45309', fontWeight: 700 }}>🎯 Milestone</div>}
+                                </>)}
+                                {milestoneSlides && (
+                                  <div style={{ marginTop: 6 }}>
+                                    <button onClick={() => window.open(milestoneSlides, '_blank', 'noopener,noreferrer')}
+                                      style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 7, border: '1px solid #b8860b', background: 'rgba(255,196,0,0.15)', color: '#92400e', cursor: 'pointer', fontSize: 11, fontWeight: 700, fontFamily: 'inherit' }}>
+                                      📊 Ver diapositivas
+                                    </button>
+                                  </div>
+                                )}
                               </div>
                             </div>
 
-                            {/* Progress bar */}
+                            {/* Progress bar con marcadores de hito (1/15/30/50) */}
                             <div style={{ position: 'relative', marginBottom: 6 }}>
                               <div style={{ height: 10, borderRadius: 5, background: '#e5e7eb', overflow: 'hidden' }}>
                                 <div style={{ width: `${barPct}%`, height: '100%', background: classNum >= 30 ? '#1E9E3A' : classNum >= 15 ? '#FFC400' : '#3b82f6', borderRadius: 5, transition: 'width 0.4s ease' }} />
                               </div>
-                              <div style={{ position: 'absolute', left: '50%', top: 0, width: 2, height: 10, background: '#FFC400', transform: 'translateX(-50%)', zIndex: 2, pointerEvents: 'none' }} />
+                              {MILESTONES.map(m => (
+                                <div key={m} title={`Hito clase ${m} — Diapositivas disponibles`}
+                                  style={{ position: 'absolute', left: `${(m / 50) * 100}%`, top: '50%', width: 12, height: 12, background: '#FFC400', border: '1.5px solid #b8860b', transform: 'translate(-50%, -50%) rotate(45deg)', borderRadius: 2, zIndex: 2, cursor: 'help', opacity: classNum >= m ? 1 : 0.65 }} />
+                              ))}
                             </div>
                             <div style={{ position: 'relative', height: 15, fontSize: 10, color: 'var(--text-muted)', marginBottom: 10 }}>
-                              <span style={{ position: 'absolute', left: 0 }}>Clase 1</span>
-                              <span style={{ position: 'absolute', left: '50%', transform: 'translateX(-50%)' }}>15</span>
-                              <span style={{ position: 'absolute', right: 0 }}>30</span>
+                              {MILESTONES.map(m => (
+                                <span key={m} style={{ position: 'absolute', left: `${(m / 50) * 100}%`, transform: 'translateX(-50%)' }}>{m}</span>
+                              ))}
                             </div>
 
                             {/* Estimated dates */}
