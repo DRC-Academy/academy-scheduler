@@ -280,3 +280,22 @@ create table if not exists finance_payments (
 -- Para bases ya existentes (las tablas se crearon antes de añadir aprobaciones):
 alter table finance_payments add column if not exists approved_overrides jsonb default '[]'::jsonb;
 alter table finance_payments disable row level security;
+
+-- ── BAJAS DE ALUMNOS (churn) ────────────────────────────────────────────────
+-- Historial de alumnos que se dieron de baja. Se registra en dbDeleteStudent
+-- ANTES de borrar el alumno (que hoy no deja rastro) para poder calcular una
+-- retención real: retención = activos / (activos + bajas de la ventana).
+-- `reason`: 'manual' (admin) | 'webhook' (suscripción cancelada) | otro.
+create table if not exists student_dropouts (
+  id           text primary key,
+  teacher_id   text not null,
+  student_id   text,
+  student_name text not null,
+  start_date   text,           -- inicio del alumno con el profe (si se conocía)
+  dropped_at   timestamptz default now(),
+  reason       text,           -- 'manual' | 'webhook'
+  created_by   text
+);
+create index if not exists idx_student_dropouts_teacher on student_dropouts(teacher_id);
+create index if not exists idx_student_dropouts_dropped_at on student_dropouts(dropped_at);
+alter table student_dropouts disable row level security;

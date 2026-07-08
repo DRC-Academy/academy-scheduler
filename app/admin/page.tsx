@@ -882,11 +882,14 @@ function ScoringTab() {
     const manualEuros    = te.reduce((s, e) => s + e.euros, 0);
     const activeStudents = ta.length;
     const monthlyHours   = t.weeklyLoad * 4;
-    const retained       = ta.filter(a => {
+    // Retención churn-aware: se prefiere el valor persistido (activos vs. bajas,
+    // calculado en dbRecalculateTeacherScore). Respaldo por antigüedad solo si
+    // aún no se recalculó para este profesor.
+    const retainedByAge  = ta.filter(a => {
       const date = a.startDate ? new Date(a.startDate) : new Date(a.createdAt);
       return date < thirtyDaysAgo;
     }).length;
-    const retentionPct   = activeStudents > 0 ? (retained / activeStudents) * 100 : 100;
+    const retentionPct   = t.retentionRate ?? (activeStudents > 0 ? (retainedByAge / activeStudents) * 100 : 100);
 
     let autoPoints = activeStudents * 10 + monthlyHours * 2;
     if (retentionPct >= 85)                               autoPoints += 50;

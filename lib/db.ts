@@ -915,13 +915,21 @@ export async function dbDeleteStudent(studentId: string, studentName: string, cr
   const firstName = studentName.split(' ')[0];
 
   const [byId, byName] = await Promise.all([
-    supabase.from('assignments').select('teacher_id').eq('student_id', studentId),
-    supabase.from('assignments').select('teacher_id').eq('student_name', studentName),
+    supabase.from('assignments').select('teacher_id, start_date, created_at').eq('student_id', studentId),
+    supabase.from('assignments').select('teacher_id, start_date, created_at').eq('student_name', studentName),
   ]);
 
+  // Fecha de inicio conocida por profesor (la más antigua entre sus assignments
+  // con este alumno) — se guarda en el registro de baja para poder auditar.
   const teacherIds = new Set<string>();
+  const startByTeacher = new Map<string, string>();
   for (const row of [...(byId.data ?? []), ...(byName.data ?? [])]) {
     teacherIds.add(row.teacher_id);
+    const start = row.start_date ?? row.created_at ?? undefined;
+    if (start) {
+      const cur = startByTeacher.get(row.teacher_id);
+      if (!cur || start < cur) startByTeacher.set(row.teacher_id, start);
+    }
   }
 
   // Datos de contacto de los profesores afectados (para el aviso por email).
@@ -944,6 +952,26 @@ export async function dbDeleteStudent(studentId: string, studentName: string, cr
     `assignments: ${byId.data?.length ?? 0} por id + ${byName.data?.length ?? 0} por nombre → ` +
     `profesores afectados: [${[...teacherIds].join(', ')}]`
   );
+
+  // Registrar la baja (churn) ANTES de borrar el alumno. Sin esto la baja no
+  // dejaría rastro y la retención no podría contarla. `reason`: 'webhook' si lo
+  // dispara el sistema (suscripción cancelada), 'manual' si lo hace un admin.
+  if (teacherIds.size > 0) {
+    const now = new Date().toISOString();
+    const reason = createdBy === 'sistema' ? 'webhook' : 'manual';
+    const dropoutRows = [...teacherIds].map((tid, i) => ({
+      id:           `drop_${Date.now()}_${i}`,
+      teacher_id:   tid,
+      student_id:   studentId,
+      student_name: studentName,
+      start_date:   startByTeacher.get(tid) ?? null,
+      dropped_at:   now,
+      reason,
+      created_by:   createdBy ?? null,
+    }));
+    const { error: dropErr } = await supabase.from('student_dropouts').insert(dropoutRows);
+    if (dropErr) console.error('[dbDeleteStudent] Error al registrar la baja (churn):', dropErr);
+  }
 
   // Notificar a cada profesor afectado antes de limpiar (manual o vía webhook).
   if (createdBy && teacherIds.size > 0) {
@@ -1014,6 +1042,11 @@ export async function dbDeleteStudent(studentId: string, studentName: string, cr
   await supabase.from('students').delete().eq('id', studentId);
 
   console.log(`[dbDeleteStudent] Alumno "${studentName}" eliminado correctamente (historial de clases/finanzas preservado)`);
+
+  // Refrescar retención/score/bloqueo de los profesores afectados: ahora que la
+  // baja quedó registrada, su tasa de retención cambia.
+  await Promise.all([...teacherIds].map(tid => dbRecalculateTeacherScore(tid)));
+
   return affectedTeachers;
 }
 
@@ -1054,32 +1087,48 @@ export const EVENT_EUROS: Record<string, number> = {
 
 // ── RETENTION RATE ────────────────────────────────────────────────────────────
 
+// Ventana (en días) sobre la que se cuentan las bajas para la retención. Una
+// baja fuera de esta ventana ya no penaliza (la retención mira el pasado reciente).
+export const RETENTION_WINDOW_DAYS = 90;
+
+// Fórmula única de retención (churn-aware). `retained` = alumnos activos hoy;
+// `dropouts` = bajas dentro de la ventana. Sin datos (0 y 0) devuelve 100 para
+// no penalizar a un profesor nuevo o sin actividad reciente.
+//   retención = retained / (retained + dropouts) × 100
+export function retentionRateFromCounts(retained: number, dropouts: number): number {
+  const denom = retained + dropouts;
+  if (denom === 0) return 100;
+  return (retained / denom) * 100;
+}
+
+// Cuenta las bajas de un profesor dentro de la ventana de retención.
+export async function dbGetDropoutCount(teacherId: string): Promise<number> {
+  const since = new Date(Date.now() - RETENTION_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const { count } = await supabase
+    .from('student_dropouts')
+    .select('id', { count: 'exact', head: true })
+    .eq('teacher_id', teacherId)
+    .gte('dropped_at', since);
+  return count ?? 0;
+}
+
 export async function calcRetentionRate(teacherId: string): Promise<number> {
-  const { data } = await supabase
-    .from('assignments')
-    .select('created_at, start_date')
-    .eq('teacher_id', teacherId);
-
-  const assignments = data ?? [];
-  const activeStudents = assignments.length;
-  if (activeStudents === 0) return 100;
-
-  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-  const retained = assignments.filter((a: any) => {
-    const date = a.start_date ? new Date(a.start_date) : new Date(a.created_at);
-    return date < thirtyDaysAgo;
-  }).length;
-
-  return (retained / activeStudents) * 100;
+  const [{ data }, dropouts] = await Promise.all([
+    supabase.from('assignments').select('id').eq('teacher_id', teacherId),
+    dbGetDropoutCount(teacherId),
+  ]);
+  const activeStudents = (data ?? []).length;
+  return retentionRateFromCounts(activeStudents, dropouts);
 }
 
 // ── SCORE RECALCULATION ───────────────────────────────────────────────────────
 
 async function dbRecalculateTeacherScore(teacherId: string): Promise<void> {
-  const [evRes, asRes, calRes] = await Promise.all([
+  const [evRes, asRes, calRes, dropouts] = await Promise.all([
     supabase.from('scoring_events').select('points, euros').eq('teacher_id', teacherId),
-    supabase.from('assignments').select('created_at, start_date').eq('teacher_id', teacherId),
+    supabase.from('assignments').select('id').eq('teacher_id', teacherId),
     supabase.from('teacher_calendars').select('grid').eq('teacher_id', teacherId).single(),
+    dbGetDropoutCount(teacherId),
   ]);
 
   const manualPoints = (evRes.data ?? []).reduce((s: number, e: any) => s + (e.points ?? 0), 0);
@@ -1091,12 +1140,8 @@ async function dbRecalculateTeacherScore(teacherId: string): Promise<void> {
   const ocupado = Object.values(grid).filter(c => c.state === 'ocupado').length;
   const monthlyHours = ocupado * 4;
 
-  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-  const retained = as.filter((a: any) => {
-    const date = a.start_date ? new Date(a.start_date) : new Date(a.created_at);
-    return date < thirtyDaysAgo;
-  }).length;
-  const ret = activeStudents > 0 ? (retained / activeStudents) * 100 : 100;
+  // Retención churn-aware: activos vs. bajas de la ventana (ver retentionRateFromCounts).
+  const ret = retentionRateFromCounts(activeStudents, dropouts);
 
   let auto = activeStudents * 10 + monthlyHours * 2;
   if (ret >= 85)                              auto += 50;

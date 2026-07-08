@@ -460,9 +460,11 @@ function TeacherScoringTab({ teacher, myAssignments, myEvents }: {
   const manualPoints   = myEvents.reduce((s, e) => s + e.points, 0);
   const activeStudents = myAssignments.length;
   const monthlyHours   = teacher.weeklyLoad * 4;
+  // Retención churn-aware: valor persistido (activos vs. bajas de la ventana),
+  // con respaldo por antigüedad si aún no se recalculó para este profesor.
   const thirtyDaysAgo  = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-  const retained       = myAssignments.filter(a => new Date(a.createdAt) < thirtyDaysAgo).length;
-  const retentionPct   = activeStudents > 0 ? (retained / activeStudents) * 100 : 0;
+  const retainedByAge  = myAssignments.filter(a => new Date(a.createdAt) < thirtyDaysAgo).length;
+  const retentionPct   = teacher.retentionRate ?? (activeStudents > 0 ? (retainedByAge / activeStudents) * 100 : 0);
 
   let autoPoints = activeStudents * 10 + monthlyHours * 2;
   if (retentionPct > 85)                           autoPoints += 50;
