@@ -715,6 +715,31 @@ function TeacherScoringTab({ teacher, myAssignments, myEvents }: {
   );
 }
 
+// Normaliza un nombre para comparaciones tolerantes (sin acentos, minúsculas).
+function stripAccentsLower(s: string): string {
+  return (s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase();
+}
+
+// Extrae el nombre del alumno del cuerpo de la notificación de nuevo alumno
+// ("Se te asignó {nombre}. ...").
+function studentNameFromNotifBody(body: string): string {
+  const m = body.match(/se te asign[oó]\s+(.+?)\./i);
+  return m ? m[1].trim() : '';
+}
+
+// Resuelve la assignment referida por una notificación de nuevo alumno con un
+// match tolerante (acentos/mayúsculas/espacios), como el resto del sistema.
+function resolveAssignmentForNotif(body: string, myAssignments: Assignment[]): Assignment | undefined {
+  const parsed = stripAccentsLower(studentNameFromNotifBody(body));
+  const bodyNorm = stripAccentsLower(body);
+  return myAssignments.find(a => {
+    const an = stripAccentsLower(a.studentName);
+    if (!an) return false;
+    if (parsed && (an === parsed || parsed.includes(an) || an.includes(parsed))) return true;
+    return bodyNorm.includes(an);
+  });
+}
+
 // ─── Notifications Tab (teacher) ─────────────────────────────────────────────
 function TeacherNotificationsTab({ teacher, myAssignments, students, notifications, loadNotifications, markNotificationRead, updateMeetLink }: {
   teacher: Teacher;
@@ -825,10 +850,10 @@ function TeacherNotificationsTab({ teacher, myAssignments, students, notificatio
         </div>
       ) : notifications.map(n => {
         const isRead = n.readBy.includes(teacher.id);
-        // Para notificaciones de nuevo alumno, buscamos la assignment por el
-        // nombre incluido en el cuerpo ("Se te asignó {nombre}.").
+        // Solo en la notificación de nuevo alumno mostramos "Enviar presentación".
+        // La assignment se resuelve con match tolerante (acentos/mayúsculas).
         const asgn = n.type === 'new_assignment'
-          ? myAssignments.find(a => n.body.includes(a.studentName))
+          ? resolveAssignmentForNotif(n.body, myAssignments)
           : undefined;
         const sent = asgn ? isSent(asgn.studentName) : false;
         return (
@@ -1107,32 +1132,58 @@ function PresentationModal({ assignment, teacher, students, updateMeetLink, onCl
   const [subject, setSubject]   = useState(`¡Bienvenido/a a DRC Academy, ${assignment.studentName}!`);
   const [body, setBody]         = useState(() => buildPresentationBody(assignment, teacher, student, assignment.meetLink ?? ''));
   const [toast, setToast]       = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);   // borrador abierto → pedir confirmación de envío
   const lastGenRef = useRef(body);
 
   // Si el usuario no editó el cuerpo, se regenera al cambiar el enlace de Meet.
+  // Se captura el valor previo generado ANTES de mutar el ref, porque el updater
+  // de setBody lee el ref al ejecutarse (tras la mutación) y la comparación fallaría.
   useEffect(() => {
+    const prevGen = lastGenRef.current;
     const regenerated = buildPresentationBody(assignment, teacher, student, meetLink);
-    setBody(prev => (prev === lastGenRef.current ? regenerated : prev));
     lastGenRef.current = regenerated;
+    setBody(prev => (prev === prevGen ? regenerated : prev));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [meetLink, student]);
 
+  // Guarda el enlace de Meet en la assignment (acción real, independiente del envío).
+  async function saveMeetIfAny() {
+    if (!meetLink.trim()) return;
+    try { await updateMeetLink(assignment.id, meetLink.trim()); setToast('✅ Enlace de Meet guardado'); }
+    catch { setToast('⚠️ No se pudo guardar el enlace'); }
+  }
+
+  // Abre el borrador en el gestor de correo (mailto). No marca "enviada": mailto
+  // solo abre un borrador y no hay forma de saber si se envió → se pide confirmación.
   async function handleOpenMail() {
     const mailto = `mailto:${toEmail.trim()}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
     window.location.href = mailto;
-    // Guardar el enlace de Meet en la assignment (lo reutiliza "Ingresar a clase").
-    let savedMeet = false;
-    if (meetLink.trim()) {
-      try { await updateMeetLink(assignment.id, meetLink.trim()); savedMeet = true; }
-      catch { setToast('⚠️ No se pudo guardar el enlace'); }
+    await saveMeetIfAny();
+    setConfirming(true);
+  }
+
+  // Respaldo si no hay cliente de correo de escritorio: copiar el email al portapapeles.
+  async function handleCopy() {
+    const text = `Para: ${toEmail.trim()}\nAsunto: ${subject}\n\n${body}`;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); } catch {}
+      document.body.removeChild(ta);
     }
+    await saveMeetIfAny();
+    setToast('📋 Email copiado — pegalo en Gmail');
+    setConfirming(true);
+  }
+
+  // El profesor confirma que efectivamente envió el correo → recién ahí se marca.
+  function handleConfirmSent() {
     onSent(assignment.studentName);
-    if (savedMeet) {
-      setToast('✅ Enlace de Meet guardado');
-      setTimeout(onClose, 1200);
-    } else {
-      setTimeout(onClose, 300);
-    }
+    setToast('✅ Presentación marcada como enviada');
+    setTimeout(onClose, 900);
   }
 
   const fieldLabel: CSSProperties = { display: 'block', fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 6 };
@@ -1170,15 +1221,42 @@ function PresentationModal({ assignment, teacher, students, updateMeetLink, onCl
           Podés editar el texto antes de enviarlo. Los cambios aquí no se guardan automáticamente.
         </div>
 
-        <div style={{ display: 'flex', gap: 10 }}>
-          <button onClick={onClose} style={{ flex: 1, padding: '11px', borderRadius: 8, border: '1px solid #d1d5db', background: 'white', color: '#6b7280', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <button onClick={onClose} style={{ flex: '1 1 90px', padding: '11px', borderRadius: 8, border: '1px solid #d1d5db', background: 'white', color: '#6b7280', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
             Cancelar
           </button>
+          <button onClick={handleCopy} disabled={!toEmail.trim()}
+            style={{ flex: '1 1 120px', padding: '11px', borderRadius: 8, border: '1.5px solid #1E9E3A', background: 'white', color: '#1E9E3A', cursor: toEmail.trim() ? 'pointer' : 'not-allowed', opacity: toEmail.trim() ? 1 : 0.5, fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+            📋 Copiar email
+          </button>
           <button onClick={handleOpenMail} disabled={!toEmail.trim()}
-            style={{ flex: 2, padding: '11px', borderRadius: 8, border: 'none', background: toEmail.trim() ? '#1E9E3A' : '#d1d5db', color: 'white', cursor: toEmail.trim() ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 800, fontFamily: 'inherit' }}>
+            style={{ flex: '2 1 180px', padding: '11px', borderRadius: 8, border: 'none', background: toEmail.trim() ? '#1E9E3A' : '#d1d5db', color: 'white', cursor: toEmail.trim() ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 800, fontFamily: 'inherit' }}>
             📧 Abrir en gestor de correo
           </button>
         </div>
+
+        {/* Confirmación de envío: mailto solo abre un borrador, no se puede detectar
+            el envío real → se marca "enviada" únicamente si el profesor lo confirma. */}
+        {confirming && (
+          <div style={{ marginTop: 16, padding: '14px 16px', borderRadius: 10, border: '1.5px solid #1E9E3A', background: 'rgba(30,158,58,0.08)' }}>
+            <div style={{ fontSize: 13.5, fontWeight: 700, color: '#166534', marginBottom: 6 }}>
+              ¿Enviaste el correo a {assignment.studentName}?
+            </div>
+            <div style={{ fontSize: 11.5, color: '#4b5563', marginBottom: 12, lineHeight: 1.5 }}>
+              Si no se abrió tu gestor de correo, usá “📋 Copiar email” y pegá el texto en Gmail. El estado se marca como enviado solo cuando lo confirmes.
+            </div>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button onClick={() => setConfirming(false)}
+                style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid #d1d5db', background: 'white', color: '#6b7280', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
+                Todavía no
+              </button>
+              <button onClick={handleConfirmSent}
+                style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: '#1E9E3A', color: 'white', cursor: 'pointer', fontSize: 13, fontWeight: 800, fontFamily: 'inherit' }}>
+                ✅ Sí, lo envié
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {toast && (
