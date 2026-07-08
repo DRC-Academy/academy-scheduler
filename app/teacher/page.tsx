@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef, type CSSProperties } from 'react';
 import { NavBar } from '@/components/NavBar';
 import { AuthGuard } from '@/components/AuthGuard';
 import { PullToRefresh } from '@/components/PullToRefresh';
@@ -9,7 +9,7 @@ import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
 import { calcCurrentClassNumber, dbCheckStudentExists, dbSetStudentProduct, dbEnsureStudentAndAssignment } from '@/lib/db';
 import { classCategoryBadge } from '@/lib/finance';
-import { planBadgeStyle } from '@/lib/productUtils';
+import { planBadgeStyle, classifyPlan } from '@/lib/productUtils';
 import { StudentAutofillCard } from '@/components/StudentAutofillCard';
 import { useStudentAutofill } from '@/lib/useStudentAutofill';
 import { checkSubscription, subBadge, type SubscriptionInfo } from '@/lib/useSubscriptionStatus';
@@ -716,14 +716,18 @@ function TeacherScoringTab({ teacher, myAssignments, myEvents }: {
 }
 
 // ─── Notifications Tab (teacher) ─────────────────────────────────────────────
-function TeacherNotificationsTab({ teacher, myAssignments, notifications, loadNotifications, markNotificationRead }: {
+function TeacherNotificationsTab({ teacher, myAssignments, students, notifications, loadNotifications, markNotificationRead, updateMeetLink }: {
   teacher: Teacher;
   myAssignments: Assignment[];
+  students: Student[];
   notifications: AppNotification[];
   loadNotifications: (userId: string, role: string) => Promise<void>;
   markNotificationRead: (notifId: string, userId: string) => Promise<void>;
+  updateMeetLink: (assignmentId: string, link: string) => Promise<void>;
 }) {
   const today = new Date();
+  const [presentationModal, setPresentationModal] = useState<Assignment | null>(null);
+  const { isSent, markSent } = usePresentationSent(teacher.id);
 
   useEffect(() => {
     loadNotifications(teacher.id, 'teacher');
@@ -821,24 +825,47 @@ function TeacherNotificationsTab({ teacher, myAssignments, notifications, loadNo
         </div>
       ) : notifications.map(n => {
         const isRead = n.readBy.includes(teacher.id);
+        // Para notificaciones de nuevo alumno, buscamos la assignment por el
+        // nombre incluido en el cuerpo ("Se te asignó {nombre}.").
+        const asgn = n.type === 'new_assignment'
+          ? myAssignments.find(a => n.body.includes(a.studentName))
+          : undefined;
+        const sent = asgn ? isSent(asgn.studentName) : false;
         return (
           <div key={n.id} style={{ ...cardStyle, background: isRead ? 'var(--bg-surface)' : 'rgba(30,158,58,0.04)', border: `1.5px solid ${isRead ? 'var(--border)' : 'rgba(30,158,58,0.3)'}` }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-              <span style={{ fontSize: 22, marginTop: 2 }}>📢</span>
+              <span style={{ fontSize: 22, marginTop: 2 }}>{n.type === 'new_assignment' ? '📚' : '📢'}</span>
               <div style={{ flex: 1 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
                   <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)' }}>{n.title}</div>
                   {!isRead && <span style={{ fontSize: 10, padding: '1px 7px', borderRadius: 10, background: 'rgba(30,158,58,0.15)', border: '1px solid rgba(30,158,58,0.3)', color: '#1E9E3A', fontWeight: 700 }}>NUEVO</span>}
+                  {asgn && sent && <span style={{ fontSize: 10, padding: '1px 7px', borderRadius: 10, background: 'rgba(30,158,58,0.12)', border: '1px solid rgba(30,158,58,0.3)', color: '#1E9E3A', fontWeight: 700 }}>📧 Presentación enviada</span>}
                 </div>
                 <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: 6 }}>{n.body}</div>
                 <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
                   {new Date(n.createdAt).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
                 </div>
+                {asgn && (
+                  <button onClick={() => setPresentationModal(asgn)} style={presentationBtnStyle(sent)}>
+                    {sent ? '📧 Reenviar presentación' : '📧 Enviar presentación al alumno'}
+                  </button>
+                )}
               </div>
             </div>
           </div>
         );
       })}
+
+      {presentationModal && (
+        <PresentationModal
+          assignment={presentationModal}
+          teacher={teacher}
+          students={students}
+          updateMeetLink={updateMeetLink}
+          onClose={() => setPresentationModal(null)}
+          onSent={markSent}
+        />
+      )}
     </div>
   );
 }
@@ -954,6 +981,215 @@ function classesForDate(myAssignments: Assignment[], date: Date): TodayClass[] {
   return list.sort((x, y) => parseInt(x.hour) - parseInt(y.hour));
 }
 
+// ─── Email de presentación (nuevo alumno) ─────────────────────────────────────
+const MEET_PLACEHOLDER = '[PENDIENTE - completar enlace de Meet]';
+
+// Descripción amigable del plan para el cuerpo del email.
+function planDescription(a: Assignment, student?: Student): string {
+  const c = classifyPlan({
+    assignmentPlan:     a.plan,
+    assignmentObjetivo: a.objetivo,
+    studentPlan:        student?.plan,
+    productName:        student?.productName,
+  });
+  if (c.financeType === 'examenes') return 'nuestra preparación para el examen';
+  if (c.type === 'intensivo')       return 'nuestro programa intensivo';
+  return 'el aprendizaje del inglés';
+}
+
+// Primera clase del alumno: la fecha más próxima (a partir de start_date, o de
+// hoy si no hay) que cae en alguno de sus slots recurrentes, con hora inicio/fin.
+function firstClassInfo(a: Assignment): { dateLabel: string; horaInicio: string; horaFin: string } | null {
+  if (!a.slots || a.slots.length === 0) return null;
+  const start = a.startDate ? new Date(a.startDate + 'T00:00:00') : new Date();
+  if (isNaN(start.getTime())) return null;
+  let best: { date: Date; hour: string } | null = null;
+  for (const slot of a.slots) {
+    const dow = DAY_NAMES_BY_JSDAY.indexOf(slot.day);
+    if (dow < 0) continue;
+    const d = new Date(start);
+    d.setDate(d.getDate() + ((dow - d.getDay() + 7) % 7));
+    const better = !best || d.getTime() < best.date.getTime() ||
+      (d.getTime() === best.date.getTime() && parseInt(slot.hour) < parseInt(best.hour));
+    if (better) best = { date: d, hour: slot.hour };
+  }
+  if (!best) return null;
+  const h = parseInt(best.hour);
+  const weekday = best.date.toLocaleDateString('es-ES', { weekday: 'long' });
+  const month   = best.date.toLocaleDateString('es-ES', { month: 'long' });
+  return {
+    dateLabel:  `${weekday} ${best.date.getDate()} de ${month}`,   // "lunes 7 de julio"
+    horaInicio: `${String(h).padStart(2, '0')}:00`,
+    horaFin:    `${String(h + 1).padStart(2, '0')}:00`,
+  };
+}
+
+// Cuerpo del email con los campos dinámicos ya reemplazados.
+function buildPresentationBody(a: Assignment, teacher: Teacher, student: Student | undefined, meetLink: string): string {
+  const info  = firstClassInfo(a);
+  const fecha = info ? info.dateLabel : '[fecha de la primera clase]';
+  const hIni  = info ? info.horaInicio : '[hora]';
+  const hFin  = info ? info.horaFin : '[hora]';
+  const link  = meetLink.trim() || MEET_PLACEHOLDER;
+  return `¡Buenos días, ${a.studentName}!
+
+¡Es un verdadero gusto saludarte! Mi nombre es ${teacher.name}, y he sido afortunada de ser elegida como tu profesora por DRC Academy.
+
+Será un gusto conocerte para nuestra primera clase el ${fecha} de ${hIni} a ${hFin}hs.
+
+¡Juntos, continuaremos la travesía en ${planDescription(a, student)} y nos divertiremos en el proceso!
+
+A través del siguiente link, podrás ingresar a nuestra clase vía Meet.
+(usaremos el mismo para todas nuestras posteriores clases 🙂)
+
+${link}
+
+Si pudieras confirmar recepción de éste email, ¡te agradeceré mucho!
+
+¡Te envío un gran saludo!
+${teacher.name}`;
+}
+
+// Marca en localStorage qué presentaciones ya se enviaron (por alumno) para el
+// badge "Presentación enviada" y el estado del botón (Enviar / Reenviar).
+function usePresentationSent(teacherId: string) {
+  const [sent, setSent] = useState<Set<string>>(new Set());
+  // localStorage no está disponible en SSR: se lee tras montar (sync desde un
+  // sistema externo, patrón usado en el resto del archivo).
+  useEffect(() => {
+    try {
+      const prefix = `presentation_sent_${teacherId}_`;
+      const found = new Set<string>();
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith(prefix) && localStorage.getItem(k) === '1') found.add(k.slice(prefix.length));
+      }
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setSent(found);
+    } catch {}
+  }, [teacherId]);
+  const markSent = (studentName: string) => {
+    try { localStorage.setItem(`presentation_sent_${teacherId}_${studentName}`, '1'); } catch {}
+    setSent(prev => new Set(prev).add(studentName));
+  };
+  return { isSent: (name: string) => sent.has(name), markSent };
+}
+
+// Estilo del botón "Enviar/Reenviar presentación" (verde si nuevo, gris si ya se envió).
+function presentationBtnStyle(sent: boolean): CSSProperties {
+  const base: CSSProperties = {
+    display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 8,
+    padding: '8px 14px', borderRadius: 8, cursor: 'pointer', fontSize: 12.5, fontFamily: 'inherit',
+  };
+  return sent
+    ? { ...base, border: '1px solid var(--border)', background: 'var(--bg-surface-3)', color: 'var(--text-muted)', fontWeight: 600 }
+    : { ...base, border: 'none', background: '#1E9E3A', color: 'white', fontWeight: 700 };
+}
+
+// Modal "Email de presentación" — enlace de Meet + email editable con mailto.
+function PresentationModal({ assignment, teacher, students, updateMeetLink, onClose, onSent }: {
+  assignment: Assignment;
+  teacher: Teacher;
+  students: Student[];
+  updateMeetLink: (assignmentId: string, link: string) => Promise<void>;
+  onClose: () => void;
+  onSent: (studentName: string) => void;
+}) {
+  // Lookup del alumno (email real + plan/producto) para clasificar y prellenar.
+  const student = useMemo(() => {
+    const byEmail = assignment.studentEmail?.trim().toLowerCase();
+    return (byEmail ? students.find(s => s.email?.trim().toLowerCase() === byEmail) : undefined)
+        ?? students.find(s => s.name.trim().toLowerCase() === assignment.studentName.trim().toLowerCase());
+  }, [students, assignment]);
+
+  const [meetLink, setMeetLink] = useState(assignment.meetLink ?? '');
+  const [toEmail, setToEmail]   = useState(student?.email ?? assignment.studentEmail ?? '');
+  const [subject, setSubject]   = useState(`¡Bienvenido/a a DRC Academy, ${assignment.studentName}!`);
+  const [body, setBody]         = useState(() => buildPresentationBody(assignment, teacher, student, assignment.meetLink ?? ''));
+  const [toast, setToast]       = useState<string | null>(null);
+  const lastGenRef = useRef(body);
+
+  // Si el usuario no editó el cuerpo, se regenera al cambiar el enlace de Meet.
+  useEffect(() => {
+    const regenerated = buildPresentationBody(assignment, teacher, student, meetLink);
+    setBody(prev => (prev === lastGenRef.current ? regenerated : prev));
+    lastGenRef.current = regenerated;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [meetLink, student]);
+
+  async function handleOpenMail() {
+    const mailto = `mailto:${toEmail.trim()}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    window.location.href = mailto;
+    // Guardar el enlace de Meet en la assignment (lo reutiliza "Ingresar a clase").
+    let savedMeet = false;
+    if (meetLink.trim()) {
+      try { await updateMeetLink(assignment.id, meetLink.trim()); savedMeet = true; }
+      catch { setToast('⚠️ No se pudo guardar el enlace'); }
+    }
+    onSent(assignment.studentName);
+    if (savedMeet) {
+      setToast('✅ Enlace de Meet guardado');
+      setTimeout(onClose, 1200);
+    } else {
+      setTimeout(onClose, 300);
+    }
+  }
+
+  const fieldLabel: CSSProperties = { display: 'block', fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 6 };
+  const lightInput: CSSProperties = { width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #d1d5db', background: 'white', color: '#111827', fontSize: 13, fontFamily: 'inherit', boxSizing: 'border-box' };
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 90, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div style={{ background: '#F7F7F5', border: '2px solid #1E9E3A', borderRadius: 16, padding: 24, width: '100%', maxWidth: 560, maxHeight: '90vh', overflowY: 'auto' }}>
+        <div style={{ fontWeight: 800, fontSize: 17, color: '#1E9E3A', marginBottom: 6 }}>
+          📧 Email de presentación — {assignment.studentName}
+        </div>
+        <div style={{ height: 3, width: 48, background: '#FFC400', borderRadius: 2, marginBottom: 18 }} />
+
+        {/* Enlace de Meet (primero) */}
+        <label style={fieldLabel}>🔗 Enlace de Meet para este alumno</label>
+        <input value={meetLink} onChange={e => setMeetLink(e.target.value)} placeholder="https://meet.google.com/xxx-xxxx-xxx" style={lightInput} />
+        <div style={{ fontSize: 11, color: '#6b7280', margin: '5px 0 16px', lineHeight: 1.5 }}>
+          Este enlace quedará guardado y se usará en el botón “Ingresar a clase” de Próximas clases.
+        </div>
+
+        {/* Para */}
+        <label style={fieldLabel}>Para (email del alumno)</label>
+        <input value={toEmail} onChange={e => setToEmail(e.target.value)} placeholder="alumno@email.com" style={{ ...lightInput, marginBottom: 16 }} />
+
+        {/* Asunto */}
+        <label style={fieldLabel}>Asunto</label>
+        <input value={subject} onChange={e => setSubject(e.target.value)} style={{ ...lightInput, marginBottom: 16 }} />
+
+        {/* Cuerpo */}
+        <label style={fieldLabel}>Cuerpo del email</label>
+        <textarea value={body} onChange={e => setBody(e.target.value)} rows={14} style={{ ...lightInput, resize: 'vertical', minHeight: 260, lineHeight: 1.5 }} />
+
+        <div style={{ fontSize: 11, color: '#6b7280', margin: '9px 0 18px', lineHeight: 1.5 }}>
+          Podés editar el texto antes de enviarlo. Los cambios aquí no se guardan automáticamente.
+        </div>
+
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button onClick={onClose} style={{ flex: 1, padding: '11px', borderRadius: 8, border: '1px solid #d1d5db', background: 'white', color: '#6b7280', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
+            Cancelar
+          </button>
+          <button onClick={handleOpenMail} disabled={!toEmail.trim()}
+            style={{ flex: 2, padding: '11px', borderRadius: 8, border: 'none', background: toEmail.trim() ? '#1E9E3A' : '#d1d5db', color: 'white', cursor: toEmail.trim() ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 800, fontFamily: 'inherit' }}>
+            📧 Abrir en gestor de correo
+          </button>
+        </div>
+      </div>
+
+      {toast && (
+        <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', background: '#1E9E3A', color: 'white', padding: '10px 22px', borderRadius: 24, fontSize: 14, fontWeight: 700, zIndex: 95, boxShadow: '0 4px 16px rgba(0,0,0,0.25)' }}>
+          {toast}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Materiales de clase (diapositivas por hito) ──────────────────────────────
 // Desplegable discreto dentro de "Próximas clases". Cerrado por defecto; su
 // estado se recuerda en localStorage. Pensado para tener los materiales a mano
@@ -1039,6 +1275,8 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, updateMeetLink, 
   logClassJoin: (teacherId: string, teacherName: string, studentName: string, scheduledDate: string, scheduledTime: string, subscriptionStatus?: string, enteredWithoutActive?: boolean, subscriptionDaysRemaining?: number | null) => Promise<void>;
 }) {
   const [linkModal, setLinkModal] = useState<{ assignment: Assignment; value: string } | null>(null);
+  const [presentationModal, setPresentationModal] = useState<Assignment | null>(null);
+  const { isSent, markSent } = usePresentationSent(teacher.id);
   const [savingLink, setSavingLink] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [showNextDays, setShowNextDays] = useState(false);
@@ -1368,10 +1606,15 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, updateMeetLink, 
             <>
               <div style={{ fontSize: 12, color: passed ? 'var(--text-muted)' : '#b45309', marginBottom: passed ? 0 : 8, fontWeight: 600 }}>⚠️ Sin enlace definido</div>
               {!passed && (
-                <button onClick={() => setLinkModal({ assignment: c.assignment, value: '' })}
-                  style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', borderRadius: 8, border: '1px solid rgba(30,158,58,0.4)', background: 'rgba(30,158,58,0.08)', color: '#1E9E3A', cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
-                  🔗 Definir enlace
-                </button>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <button onClick={() => setLinkModal({ assignment: c.assignment, value: '' })}
+                    style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', borderRadius: 8, border: '1px solid rgba(30,158,58,0.4)', background: 'rgba(30,158,58,0.08)', color: '#1E9E3A', cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+                    🔗 Definir enlace
+                  </button>
+                  <button onClick={() => setPresentationModal(c.assignment)} style={{ ...presentationBtnStyle(isSent(c.studentName)), marginTop: 0 }}>
+                    {isSent(c.studentName) ? '📧 Reenviar presentación' : '📧 Enviar presentación'}
+                  </button>
+                </div>
               )}
             </>
           )}
@@ -1573,6 +1816,18 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, updateMeetLink, 
           </div>
         );
       })()}
+
+      {/* Presentation email modal */}
+      {presentationModal && (
+        <PresentationModal
+          assignment={presentationModal}
+          teacher={teacher}
+          students={students}
+          updateMeetLink={updateMeetLink}
+          onClose={() => setPresentationModal(null)}
+          onSent={markSent}
+        />
+      )}
 
       {/* Toast */}
       {toast && (
@@ -2018,9 +2273,11 @@ function TeacherContent() {
             <TeacherNotificationsTab
               teacher={teacher}
               myAssignments={myAssignments}
+              students={students}
               notifications={notifications}
               loadNotifications={loadNotifications}
               markNotificationRead={markNotificationRead}
+              updateMeetLink={updateMeetLink}
             />
           </div>
         )}
