@@ -4,7 +4,7 @@ import { NavBar } from '@/components/NavBar';
 import { AuthGuard } from '@/components/AuthGuard';
 import { PullToRefresh } from '@/components/PullToRefresh';
 import { LastUpdated } from '@/components/LastUpdated';
-import { VisualCalendar, DAYS, cellKey, getSpainParts } from '@/components/VisualCalendar';
+import { VisualCalendar, DAYS, cellKey, getSpainParts, type RecuperacionData } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
 import { calcCurrentClassNumber, dbCheckStudentExists, dbSetStudentProduct, dbEnsureStudentAndAssignment } from '@/lib/db';
@@ -14,7 +14,7 @@ import { StudentAutofillCard } from '@/components/StudentAutofillCard';
 import { useStudentAutofill } from '@/lib/useStudentAutofill';
 import { checkSubscription, subBadge, type SubscriptionInfo } from '@/lib/useSubscriptionStatus';
 import { isMilestone, getMilestoneSlides, getMilestoneCopy, MILESTONES, MILESTONE_SLIDES, MILESTONE_TITLES } from '@/lib/milestones';
-import { Grid, Teacher, Assignment, ScoringEvent, Student, AppNotification } from '@/types';
+import { Grid, Teacher, Assignment, ScoringEvent, Student, AppNotification, ClassRecord } from '@/types';
 
 // ─── Specialty constants ──────────────────────────────────────────────────────
 const ALL_SPECIALTIES = ['Adultos', 'Niños', 'Exámenes'] as const;
@@ -1344,14 +1344,84 @@ function ClassMaterialsSection() {
   );
 }
 
+// ─── Modal "Reprogramar clase" (punto 2) ──────────────────────────────────────
+const RESCHEDULE_REASONS = [
+  { id: 'alumno_antic', label: 'El alumno avisó con anticipación' },
+  { id: 'alumno_hora',  label: 'El alumno avisó sobre la hora' },
+  { id: 'profesor',     label: 'Yo (el profesor) necesito cambiarla' },
+] as const;
+type RescheduleReason = typeof RESCHEDULE_REASONS[number]['id'];
+
+function RescheduleModal({ studentName, currentDate, currentHour, saving, onConfirm, onClose }: {
+  studentName: string; currentDate: string; currentHour: string; saving: boolean;
+  onConfirm: (data: { reason: RescheduleReason; reasonLabel: string; newDate: string; newTime: string }) => void;
+  onClose: () => void;
+}) {
+  const [reason, setReason] = useState<RescheduleReason>('alumno_antic');
+  const [newDate, setNewDate] = useState('');
+  const [newTime, setNewTime] = useState(currentHour || '');
+  const canConfirm = !!newDate && !!newTime && !saving;
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 85, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+      onClick={e => { if (e.target === e.currentTarget && !saving) onClose(); }}>
+      <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 14, padding: 24, width: '100%', maxWidth: 420 }}>
+        <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)', marginBottom: 4 }}>📅 Reprogramar clase</div>
+        <div style={{ fontSize: 12.5, color: 'var(--text-muted)', marginBottom: 16 }}>{studentName} — {fmtDateDMY(currentDate)} {currentHour}</div>
+
+        <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 8 }}>¿Qué pasó con esta clase?</label>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginBottom: 16 }}>
+          {RESCHEDULE_REASONS.map(r => (
+            <button key={r.id} onClick={() => setReason(r.id)}
+              style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '9px 12px', borderRadius: 9, textAlign: 'left', fontFamily: 'inherit', cursor: 'pointer',
+                border: `1.5px solid ${reason === r.id ? '#1E9E3A' : 'var(--border)'}`,
+                background: reason === r.id ? 'rgba(30,158,58,0.08)' : 'var(--bg-surface-2)',
+                color: 'var(--text-primary)', fontSize: 13 }}>
+              <span>{reason === r.id ? '🔘' : '⚪'}</span>{r.label}
+            </button>
+          ))}
+        </div>
+        {reason === 'alumno_hora' && (
+          <div style={{ fontSize: 11.5, color: '#b45309', background: 'rgba(255,196,0,0.12)', border: '1px solid rgba(255,196,0,0.4)', borderRadius: 8, padding: '8px 12px', marginBottom: 14, lineHeight: 1.5 }}>
+            ⏰ Se registrará como cancelación sobre la hora (cobrable, hasta 2 por alumno).
+          </div>
+        )}
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 18 }}>
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>Nueva fecha</label>
+            <input type="date" value={newDate} onChange={e => setNewDate(e.target.value)} style={{ width: '100%' }} />
+          </div>
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>Nueva hora 🇪🇸</label>
+            <input type="time" value={newTime} onChange={e => setNewTime(e.target.value)} style={{ width: '100%' }} />
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button onClick={onClose} disabled={saving} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: saving ? 'not-allowed' : 'pointer', fontSize: 13, fontFamily: 'inherit' }}>Cancelar</button>
+          <button onClick={() => canConfirm && onConfirm({ reason, reasonLabel: RESCHEDULE_REASONS.find(r => r.id === reason)!.label, newDate, newTime })} disabled={!canConfirm}
+            style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: canConfirm ? '#1E9E3A' : 'var(--bg-surface-3)', color: canConfirm ? 'white' : 'var(--text-muted)', cursor: canConfirm ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+            {saving ? 'Guardando...' : 'Reprogramar ✓'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Teacher Upcoming Classes Tab ─────────────────────────────────────────────
-function TeacherUpcomingTab({ teacher, myAssignments, students, updateMeetLink, logClassJoin }: {
+function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, updateMeetLink, logClassJoin, addRescheduleRecord }: {
   teacher: Teacher;
   myAssignments: Assignment[];
   students: Student[];
+  classRecords: ClassRecord[];
   updateMeetLink: (assignmentId: string, link: string) => Promise<void>;
   logClassJoin: (teacherId: string, teacherName: string, studentName: string, scheduledDate: string, scheduledTime: string, subscriptionStatus?: string, enteredWithoutActive?: boolean, subscriptionDaysRemaining?: number | null) => Promise<void>;
+  addRescheduleRecord: (p: { teacherId: string; teacherName: string; studentName: string; originalDate: string; originalTime?: string; newDate: string; newTime?: string; classType: 'reprogramada' | 'cancelacion_hora'; comment: string }) => Promise<void>;
 }) {
+  const [rescheduleModal, setRescheduleModal] = useState<{ c: TodayClass; date: string } | null>(null);
+  const [savingReschedule, setSavingReschedule] = useState(false);
   const [linkModal, setLinkModal] = useState<{ assignment: Assignment; value: string } | null>(null);
   const [presentationModal, setPresentationModal] = useState<Assignment | null>(null);
   const { isSent, markSent } = usePresentationSent(teacher.id);
@@ -1481,9 +1551,40 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, updateMeetLink, 
     d.setDate(refDate.getDate() + offset);
     return {
       label: d.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' }),
+      iso: isoDateLocal(d),
       classes: classesForDate(myAssignments, d),
     };
   });
+
+  // Reprogramación (punto 2): ¿esta clase (alumno + fecha) fue reprogramada?
+  function rescheduledFor(studentName: string, date: string): string | null {
+    const nk = (x: string) => x.trim().toLowerCase();
+    const rec = classRecords.find(r =>
+      r.teacherId === teacher.id && !!r.rescheduledTo &&
+      nk(r.studentName) === nk(studentName) && r.classDate === date,
+    );
+    return rec?.rescheduledTo ?? null;
+  }
+
+  async function handleRescheduleConfirm(data: { reason: RescheduleReason; reasonLabel: string; newDate: string; newTime: string }) {
+    if (!rescheduleModal) return;
+    const { c, date } = rescheduleModal;
+    setSavingReschedule(true);
+    try {
+      const classType = data.reason === 'alumno_hora' ? 'cancelacion_hora' : 'reprogramada';
+      const comment = `Reprogramada para ${data.newDate}${data.newTime ? ` ${data.newTime}` : ''} — Motivo: ${data.reasonLabel}`;
+      await addRescheduleRecord({
+        teacherId: teacher.id, teacherName: teacher.name, studentName: c.studentName,
+        originalDate: date, originalTime: c.hour,
+        newDate: data.newDate, newTime: data.newTime || undefined,
+        classType, comment,
+      });
+      setRescheduleModal(null);
+      showToast(`📅 Clase reprogramada para ${fmtDateDMY(data.newDate)}`);
+    } finally {
+      setSavingReschedule(false);
+    }
+  }
 
   async function handleSaveLink() {
     if (!linkModal) return;
@@ -1564,11 +1665,12 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, updateMeetLink, 
     showToast('✅ Ingreso registrado');
   }
 
-  function ClassRow({ c, status }: { c: TodayClass; status: ClassStatus }) {
+  function ClassRow({ c, status, date }: { c: TodayClass; status: ClassStatus; date: string }) {
     const passed     = status === 'passed';
     const inProgress = status === 'inprogress';
     const isNext     = status === 'next';
     const highlight  = inProgress || isNext;
+    const rescheduledTo = rescheduledFor(c.studentName, date);
 
     return (
       <div style={{
@@ -1639,6 +1741,19 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, updateMeetLink, 
             })()}
           </div>
           <div style={{ fontSize: 18, fontWeight: 800, color: passed ? 'var(--text-muted)' : highlight ? '#1E9E3A' : 'var(--text-primary)', flexShrink: 0 }}>{c.hour}</div>
+        </div>
+
+        {/* Reprogramación (punto 2): badge + botón */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+          {rescheduledTo && (
+            <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 10px', borderRadius: 10, background: 'rgba(255,196,0,0.15)', border: '1px solid rgba(255,196,0,0.5)', color: '#b38600' }}>
+              📅 Reprogramada para {fmtDateDMY(rescheduledTo)}
+            </span>
+          )}
+          <button onClick={() => setRescheduleModal({ c, date })}
+            style={{ padding: '5px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface-3)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, fontWeight: 600, fontFamily: 'inherit' }}>
+            📅 Reprogramar
+          </button>
         </div>
 
         {/* Link area */}
@@ -1751,7 +1866,7 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, updateMeetLink, 
               </button>
               {showPastToday && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
-                  {pastClasses.map(c => <ClassRow key={c.key} c={c} status="passed" />)}
+                  {pastClasses.map(c => <ClassRow key={c.key} c={c} status="passed" date={todayIso} />)}
                 </div>
               )}
             </div>
@@ -1763,7 +1878,7 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, updateMeetLink, 
               No quedan más clases por hoy.
             </div>
           ) : (
-            currentClasses.map(c => <ClassRow key={c.key} c={c} status={rowStatus(c)} />)
+            currentClasses.map(c => <ClassRow key={c.key} c={c} status={rowStatus(c)} date={todayIso} />)
           )}
         </div>
       )}
@@ -1784,7 +1899,7 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, updateMeetLink, 
                   <div style={{ fontSize: 13, color: 'var(--text-muted)', padding: '8px 0' }}>Sin clases.</div>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    {nd.classes.map(c => <ClassRow key={c.key} c={c} status="future" />)}
+                    {nd.classes.map(c => <ClassRow key={c.key} c={c} status="future" date={nd.iso} />)}
                   </div>
                 )}
               </div>
@@ -1907,6 +2022,18 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, updateMeetLink, 
         />
       )}
 
+      {/* Reschedule modal (punto 2) */}
+      {rescheduleModal && (
+        <RescheduleModal
+          studentName={rescheduleModal.c.studentName}
+          currentDate={rescheduleModal.date}
+          currentHour={rescheduleModal.c.hour}
+          saving={savingReschedule}
+          onConfirm={handleRescheduleConfirm}
+          onClose={() => setRescheduleModal(null)}
+        />
+      )}
+
       {/* Toast */}
       {toast && (
         <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', background: '#1E9E3A', color: 'white', padding: '10px 22px', borderRadius: 24, fontSize: 14, fontWeight: 700, zIndex: 90, boxShadow: '0 4px 16px rgba(0,0,0,0.25)' }}>
@@ -1917,10 +2044,61 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, updateMeetLink, 
   );
 }
 
+// ─── Mini modal "En recuperación" (punto 3) ───────────────────────────────────
+// Al marcar una celda como "En recuperación", pide qué alumno recupera, la fecha
+// de la clase original que se perdió y una nota opcional.
+function RecuperacionModal({ day, hour, studentNames, onConfirm, onCancel }: {
+  day: string; hour: string;
+  studentNames: string[];
+  onConfirm: (data: RecuperacionData) => void;
+  onCancel: () => void;
+}) {
+  const [student, setStudent] = useState(studentNames[0] ?? '');
+  const [customName, setCustomName] = useState('');
+  const [recoveryFor, setRecoveryFor] = useState('');
+  const [note, setNote] = useState('');
+
+  const finalName = (studentNames.length === 0 ? customName : student).trim();
+  const canConfirm = !!finalName && !!recoveryFor;
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 85, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+      onClick={e => { if (e.target === e.currentTarget) onCancel(); }}>
+      <div style={{ background: 'var(--bg-surface)', border: '2px solid #FFC400', borderRadius: 14, padding: 24, width: '100%', maxWidth: 400 }}>
+        <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)', marginBottom: 4 }}>🩹 ¿Qué alumno recupera esta clase?</div>
+        <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 16 }}>{day} · {hour} 🇪🇸</div>
+
+        <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>Alumno</label>
+        {studentNames.length === 0 ? (
+          <input value={customName} onChange={e => setCustomName(e.target.value)} placeholder="Nombre del alumno..." autoFocus style={{ width: '100%', marginBottom: 14 }} />
+        ) : (
+          <select value={student} onChange={e => setStudent(e.target.value)} style={{ width: '100%', marginBottom: 14 }}>
+            {studentNames.map(n => <option key={n} value={n}>{n}</option>)}
+          </select>
+        )}
+
+        <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>Fecha de la clase original que se recupera</label>
+        <input type="date" value={recoveryFor} onChange={e => setRecoveryFor(e.target.value)} style={{ width: '100%', marginBottom: 14 }} />
+
+        <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>Nota (opcional)</label>
+        <input value={note} onChange={e => setNote(e.target.value)} placeholder="Ej: la faltó por viaje" style={{ width: '100%', marginBottom: 18 }} />
+
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button onClick={onCancel} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit' }}>Cancelar</button>
+          <button onClick={() => canConfirm && onConfirm({ student: finalName, recoveryFor, note: note.trim() || undefined })} disabled={!canConfirm}
+            style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: canConfirm ? '#1E9E3A' : 'var(--bg-surface-3)', color: canConfirm ? 'white' : 'var(--text-muted)', cursor: canConfirm ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+            Marcar recuperación
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Teacher Content ──────────────────────────────────────────────────────────
 function TeacherContent() {
   const { user } = useAuth();
-  const { teachers, students, assignments, scoringEvents, notifications, getTeacherGrid, updateTeacherGrid, addStudent, addAssignment, updateAssignmentStartDate, updateAssignmentSlots, reloadAll, updateTeacherSpecialties, loadNotifications, markNotificationRead, updateMeetLink, logClassJoin } = useTeachers();
+  const { teachers, students, assignments, scoringEvents, notifications, classRecords, getTeacherGrid, updateTeacherGrid, addStudent, addAssignment, updateAssignmentStartDate, updateAssignmentSlots, reloadAll, updateTeacherSpecialties, loadNotifications, markNotificationRead, updateMeetLink, logClassJoin, addRecoveryClass, addRescheduleRecord } = useTeachers();
   const [activeTab, setActiveTab] = useState<'calendar' | 'upcoming' | 'scoring' | 'notifications'>('calendar');
   const [showSpecialtiesModal, setShowSpecialtiesModal] = useState(false);
   const [specialtiesDraft, setSpecialtiesDraft] = useState<string[]>([]);
@@ -1931,6 +2109,7 @@ function TeacherContent() {
   const [dismissedInSession, setDismissedInSession] = useState<Set<string>>(new Set());
   const [dismissedBonusInSession, setDismissedBonusInSession] = useState<Set<string>>(new Set());
   const [pendingOcupado, setPendingOcupado] = useState<{ day: string; hour: string; resolve: (name: string) => void } | null>(null);
+  const [pendingRecuperacion, setPendingRecuperacion] = useState<{ day: string; hour: string; resolve: (data: RecuperacionData) => void } | null>(null);
 
   const teacher = teachers.find(t => t.id === user?.teacherId) ?? teachers[0];
 
@@ -1953,6 +2132,26 @@ function TeacherContent() {
 
   function handleOcupadoNeed(day: string, hour: string, resolve: (name: string) => void, cancel: () => void) {
     setPendingOcupado({ day, hour, resolve });
+  }
+
+  function handleRecuperacionNeed(day: string, hour: string, resolve: (data: RecuperacionData) => void, cancel: () => void) {
+    setPendingRecuperacion({ day, hour, resolve });
+  }
+
+  // Confirma la recuperación: pinta la celda (via resolve) y registra la clase de
+  // recuperación (class_records, class_date = HOY) vinculada al alumno y a la
+  // fecha original. Cuenta para el pago con la tarifa normal del alumno.
+  async function handleRecuperacionConfirm(data: RecuperacionData) {
+    if (!teacher || !pendingRecuperacion) return;
+    pendingRecuperacion.resolve(data); // aplica la celda 'bloqueado' con student + recoveryFor
+    setPendingRecuperacion(null);
+    try {
+      await addRecoveryClass({
+        teacherId: teacher.id, teacherName: teacher.name, studentName: data.student,
+        recoveryDate: isoDateLocal(new Date()), originalDate: data.recoveryFor,
+        note: data.note, classTime: pendingRecuperacion.hour,
+      });
+    } catch { /* la constancia de finanzas no debe romper el marcado del grid */ }
   }
 
   async function handleAssignStudent(data: AssignConfirmData) {
@@ -2321,7 +2520,7 @@ function TeacherContent() {
             {gridLoading ? (
               <div style={{ textAlign: 'center', padding: '48px 0', color: 'var(--text-muted)' }}>Cargando calendario...</div>
             ) : (
-              <VisualCalendar mode="teacher" grid={grid} onGridChange={handleGridChange} onOcupadoNeed={handleOcupadoNeed} />
+              <VisualCalendar mode="teacher" grid={grid} onGridChange={handleGridChange} onOcupadoNeed={handleOcupadoNeed} onRecuperacionNeed={handleRecuperacionNeed} />
             )}
           </div>
         )}
@@ -2331,8 +2530,10 @@ function TeacherContent() {
             teacher={teacher}
             myAssignments={myAssignments}
             students={students}
+            classRecords={classRecords}
             updateMeetLink={updateMeetLink}
             logClassJoin={logClassJoin}
+            addRescheduleRecord={addRescheduleRecord}
           />
         )}
 
@@ -2379,6 +2580,17 @@ function TeacherContent() {
           myAssignments={myAssignments}
           onConfirm={handleAssignStudent}
           onCancel={handleAssignCancel}
+        />
+      )}
+
+      {/* Recuperación modal (triggered from calendar "En recuperación" cell) */}
+      {pendingRecuperacion && (
+        <RecuperacionModal
+          day={pendingRecuperacion.day}
+          hour={pendingRecuperacion.hour}
+          studentNames={Array.from(new Set(myAssignments.map(a => a.studentName))).sort()}
+          onConfirm={handleRecuperacionConfirm}
+          onCancel={() => setPendingRecuperacion(null)}
         />
       )}
 

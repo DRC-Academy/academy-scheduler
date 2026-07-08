@@ -19,8 +19,10 @@ import {
   dbGetClassRecords, dbUploadClassScreenshot, dbAddClassRecord, dbAttachScreenshotToClass,
   dbGetFinanceRates, dbGetFinancePayments, dbMarkPaymentPaid,
   dbGetManualApprovals, dbAddManualApproval,
+  dbChangeStudentTeacher, dbAddRescheduleRecord, dbAddRecoveryClass, dbRemoveAssignment,
 } from '@/lib/db';
-import type { AffectedTeacher } from '@/lib/db';
+import type { AffectedTeacher, ChangeTeacherParams } from '@/lib/db';
+import type { AssignedSlot } from '@/types';
 import { calculateTeacherFinance } from '@/lib/finance';
 import { checkSubscription } from '@/lib/useSubscriptionStatus';
 
@@ -77,6 +79,10 @@ interface TeachersContextType {
   markPaymentAsPaid: (teacherId: string, monthYear: string) => Promise<void>;
   approveReviewClass: (teacherId: string, studentName: string, date: string, approvedBy?: string) => Promise<void>;
   approveExceedLimitClass: (teacherId: string, studentName: string, date: string, approvedBy?: string) => Promise<void>;
+  changeStudentTeacher: (params: ChangeTeacherParams) => Promise<void>;
+  removeAssignment: (assignmentId: string, teacherId: string, studentName: string, slots: AssignedSlot[]) => Promise<void>;
+  addRescheduleRecord: (p: { teacherId: string; teacherName: string; studentName: string; originalDate: string; originalTime?: string; newDate: string; newTime?: string; classType: 'reprogramada' | 'cancelacion_hora'; comment: string }) => Promise<void>;
+  addRecoveryClass: (p: { teacherId: string; teacherName: string; studentName: string; recoveryDate: string; originalDate: string; note?: string; classTime?: string }) => Promise<void>;
 }
 
 const TeachersContext = createContext<TeachersContextType>({
@@ -121,6 +127,10 @@ const TeachersContext = createContext<TeachersContextType>({
   markPaymentAsPaid:          async () => {},
   approveReviewClass:         async () => {},
   approveExceedLimitClass:    async () => {},
+  changeStudentTeacher:       async () => {},
+  removeAssignment:           async () => {},
+  addRescheduleRecord:        async () => {},
+  addRecoveryClass:           async () => {},
 });
 
 export function TeachersProvider({ children }: { children: ReactNode }) {
@@ -491,6 +501,31 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     await approveClass(teacherId, studentName, date, 'excede_limite_aprobado', approvedBy);
   }
 
+  // Cambio de profesor (punto 1): delega en la BD y refresca todo el estado
+  // (teachers/students/assignments/grids) para reflejar la transferencia.
+  async function changeStudentTeacher(params: ChangeTeacherParams) {
+    await dbChangeStudentTeacher(params);
+    await reloadAll();
+  }
+
+  // Elimina una assignment y libera su grid (resolución de duplicados, punto 4).
+  async function removeAssignment(assignmentId: string, teacherId: string, studentName: string, slots: AssignedSlot[]) {
+    await dbRemoveAssignment(assignmentId, teacherId, studentName, slots);
+    await reloadAll();
+  }
+
+  // Constancia de clase reprogramada (punto 2).
+  async function addRescheduleRecord(p: { teacherId: string; teacherName: string; studentName: string; originalDate: string; originalTime?: string; newDate: string; newTime?: string; classType: 'reprogramada' | 'cancelacion_hora'; comment: string }) {
+    const record = await dbAddRescheduleRecord(p);
+    setClassRecords(prev => [record, ...prev]);
+  }
+
+  // Clase de recuperación vinculada al alumno (punto 3).
+  async function addRecoveryClass(p: { teacherId: string; teacherName: string; studentName: string; recoveryDate: string; originalDate: string; note?: string; classTime?: string }) {
+    const record = await dbAddRecoveryClass(p);
+    setClassRecords(prev => [record, ...prev]);
+  }
+
   return (
     <TeachersContext.Provider value={{
       teachers, students, assignments, teacherGrids, loadingTeachers,
@@ -508,6 +543,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
       updateMeetLink, logClassJoin, loadClassJoinLogs,
       loadClassRecords, loadFinanceData, registerClassRecord, attachScreenshotToClass,
       markPaymentAsPaid, approveReviewClass, approveExceedLimitClass,
+      changeStudentTeacher, removeAssignment, addRescheduleRecord, addRecoveryClass,
     }}>
       {children}
     </TeachersContext.Provider>

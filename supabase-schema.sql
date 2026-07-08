@@ -240,6 +240,11 @@ alter table class_records add column if not exists comment text;
 alter table class_records add column if not exists class_type text default 'normal';
 -- Estado de suscripción WooCommerce capturado al registrar la clase manualmente.
 alter table class_records add column if not exists subscription_status text;
+-- Reprogramación de clase (class_type='reprogramada' | 'cancelacion_hora').
+alter table class_records add column if not exists original_date date;
+alter table class_records add column if not exists rescheduled_to date;
+-- Recuperación vinculada a la fecha de la clase original (class_type='recuperacion').
+alter table class_records add column if not exists recovery_for_date date;
 alter table class_records disable row level security;
 
 -- ── FINANCE: APROBACIONES MANUALES (admin aprueba a_revisar / excede_limite) ──

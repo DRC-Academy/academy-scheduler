@@ -8,6 +8,7 @@ import { LastUpdated } from '@/components/LastUpdated';
 import { VisualCalendar, buildGridFromTeacher, cellKey, HOURS_ES, getWeekDates, formatWeekRange } from '@/components/VisualCalendar';
 import { dbCheckStudentExists, dbSetStudentProduct, dbGetAssignmentsByTeacher, dbGetAssignments, dbUpsertStudent, dbRepairStudentLink, dbRepairAllBrokenLinks, dbGetAllGridOccupancy, GridOccupancy } from '@/lib/db';
 import { CrearVinculoModal } from '@/components/CrearVinculoModal';
+import { CambiarProfesorModal } from '@/components/CambiarProfesorModal';
 import { StudentAutofillCard } from '@/components/StudentAutofillCard';
 import { useStudentAutofill } from '@/lib/useStudentAutofill';
 import { planBadgeStyle } from '@/lib/productUtils';
@@ -221,9 +222,12 @@ function AssignModal({
   onClose: () => void;
   onConfirm: (a: Assignment, s: Student) => void;
 }) {
+  const { assignments: allAssignments } = useTeachers();
   const [tab, setTab] = useState<'existing' | 'new'>('existing');
   const [selectedExisting, setSelectedExisting] = useState(initialStudentId ?? '');
   const [newStudent, setNewStudent] = useState({ name: '', email: '', level: 'B1' });
+  // Punto 4 — prevención: alumno existente ya asignado a OTRO profesor.
+  const [dupTeacherWarn, setDupTeacherWarn] = useState<{ teacherName: string } | null>(null);
 
   const availableSlots = useMemo<AssignedSlot[]>(() => {
     return Object.entries(teacherGrid)
@@ -297,6 +301,13 @@ function AssignModal({
 
   async function handleConfirm() {
     if (!canConfirm) return;
+
+    // Punto 4 — prevención: si el alumno existente ya tiene assignment con OTRO
+    // profesor, avisar antes de crear una asignación adicional.
+    if (tab === 'existing' && selectedExisting) {
+      const other = allAssignments.find(a => a.studentId === selectedExisting && a.teacherId !== teacher.id);
+      if (other) { setDupTeacherWarn({ teacherName: other.teacherName }); return; }
+    }
 
     // Check for duplicate email when creating new student
     if (tab === 'new' && newStudent.email.trim()) {
@@ -565,6 +576,35 @@ function AssignModal({
         </div>
       </div>
     </div>
+
+    {/* Duplicate-teacher warning (punto 4) */}
+    {dupTeacherWarn && (
+      <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)', zIndex: 75, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+        <div style={{ background: 'var(--bg-surface)', border: '1px solid rgba(239,68,68,0.4)', borderRadius: 14, padding: 24, width: '100%', maxWidth: 420 }}>
+          <div style={{ fontSize: 24, marginBottom: 10 }}>⚠️</div>
+          <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)', marginBottom: 8 }}>Este alumno ya tiene profesor</div>
+          <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 20, lineHeight: 1.6 }}>
+            {studentName} ya está asignado/a a <b style={{ color: 'var(--text-primary)' }}>{dupTeacherWarn.teacherName}</b>.
+            ¿Querés asignarle un profesor adicional (ej. clases con dos profes) o cambiar de profesor?
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <button
+              onClick={() => { setDupTeacherWarn(null); doConfirm(); }}
+              style={{ padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface-3)', color: 'var(--text-primary)', cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+              ➕ Asignar uno adicional
+            </button>
+            <div style={{ fontSize: 11.5, color: 'var(--text-muted)', textAlign: 'center', lineHeight: 1.5 }}>
+              Para <b>cambiar</b> de profesor (transferir), usá "🔄 Cambiar profesor" en el Historial o en Alumnos.
+            </div>
+            <button
+              onClick={() => setDupTeacherWarn(null)}
+              style={{ padding: '10px', borderRadius: 8, border: 'none', background: '#1E9E3A', color: 'white', cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+              Cancelar
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
 
     {/* Duplicate email modal */}
     {duplicateStudent && (
@@ -979,6 +1019,7 @@ function SetterContent() {
   // Vinculación manual de alumnos "sin asignar".
   const [linkStudent, setLinkStudent] = useState<Student | null>(null);
   const [createAssign, setCreateAssign] = useState<{ teacher: Teacher; student: Student } | null>(null);
+  const [changeTeacherAsg, setChangeTeacherAsg] = useState<Assignment | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [brokenLinks, setBrokenLinks] = useState<Record<string, Assignment>>({});
   const [verifying, setVerifying] = useState(false);
@@ -1526,10 +1567,14 @@ function SetterContent() {
                     ⏱ {a.weeklyHours}h/sem · {a.plan} {a.objetivo && `· 🎯 ${a.objetivo}`}
                   </div>
                 </div>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                   <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
                     {new Date(a.createdAt).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}
                   </span>
+                  <button onClick={() => setChangeTeacherAsg(a)}
+                    style={{ padding: '7px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface-2)', color: 'var(--text-primary)', cursor: 'pointer', fontSize: 12, fontWeight: 700 }}>
+                    🔄 Cambiar profesor
+                  </button>
                   <EmailTrigger assignment={a} />
                 </div>
               </div>
@@ -1549,6 +1594,15 @@ function SetterContent() {
       )}
 
       {emailAssignment && <EmailModal assignment={emailAssignment} onClose={() => setEmailAssignment(null)} />}
+
+      {changeTeacherAsg && (
+        <CambiarProfesorModal
+          student={{ id: changeTeacherAsg.studentId, name: changeTeacherAsg.studentName, email: changeTeacherAsg.studentEmail, level: changeTeacherAsg.studentLevel }}
+          currentAssignment={changeTeacherAsg}
+          onClose={() => setChangeTeacherAsg(null)}
+          onDone={(msg) => { setChangeTeacherAsg(null); showToast(msg); }}
+        />
+      )}
 
       {linkStudent && (
         <VincularModal

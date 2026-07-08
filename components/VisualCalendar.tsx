@@ -109,10 +109,15 @@ interface BaseProps {
   onWeekChange?: (offset: number) => void;
 }
 
+export interface RecuperacionData { student: string; recoveryFor: string; note?: string }
+
 interface TeacherProps extends BaseProps {
   mode: 'teacher';
   onGridChange: (grid: Grid) => void;
   onOcupadoNeed?: (day: string, hour: string, resolve: (name: string) => void, cancel: () => void) => void;
+  // "En recuperación" (bloqueado): si se provee, el consumidor abre un mini modal
+  // para elegir el alumno + fecha original; si no, se aplica sin datos (setter).
+  onRecuperacionNeed?: (day: string, hour: string, resolve: (data: RecuperacionData) => void, cancel: () => void) => void;
 }
 
 interface SetterProps extends BaseProps {
@@ -155,12 +160,13 @@ function StudentNameModal({ onConfirm, onCancel }: { onConfirm: (name: string) =
 
 // Context menu for teacher clicking a cell
 function CellMenu({
-  day, hour, current, onSelect, onClose, onOcupadoNeed,
+  day, hour, current, onSelect, onClose, onOcupadoNeed, onRecuperacionNeed,
 }: {
   day: string; hour: string; current: CellState;
-  onSelect: (state: CellState, student?: string) => void;
+  onSelect: (state: CellState, student?: string, recovery?: { recoveryFor: string; note?: string }) => void;
   onClose: () => void;
   onOcupadoNeed?: (day: string, hour: string, resolve: (name: string) => void, cancel: () => void) => void;
+  onRecuperacionNeed?: (day: string, hour: string, resolve: (data: RecuperacionData) => void, cancel: () => void) => void;
 }) {
   const [askStudent, setAskStudent] = useState(false);
 
@@ -195,6 +201,11 @@ function CellMenu({
               } else {
                 setAskStudent(true);
               }
+              return;
+            }
+            if (opt.state === 'bloqueado' && onRecuperacionNeed) {
+              onClose();
+              onRecuperacionNeed(day, hour, data => { onSelect('bloqueado', data.student, { recoveryFor: data.recoveryFor, note: data.note }); }, onClose);
               return;
             }
             onSelect(opt.state);
@@ -272,14 +283,14 @@ export function VisualCalendar(props: Props) {
     }
   }
 
-  function handleMenuSelect(day: string, hour: string, state: CellState, student?: string) {
+  function handleMenuSelect(day: string, hour: string, state: CellState, student?: string, recovery?: { recoveryFor: string; note?: string }) {
     if (props.mode !== 'teacher') return;
     const key = cellKey(day, hour);
     let newCell: Cell;
     if (state === 'bloqueado') {
       const prevCell = props.grid[key] ?? { state: 'no_work' };
       const baseState = prevCell.state === 'bloqueado' ? (prevCell.baseState ?? 'libre') : prevCell.state;
-      newCell = { state, student, weekDate: toISODateStr(weekDates[0]), baseState };
+      newCell = { state, student, weekDate: toISODateStr(weekDates[0]), baseState, recoveryFor: recovery?.recoveryFor, recoveryNote: recovery?.note };
     } else {
       newCell = { state, student };
     }
@@ -417,7 +428,8 @@ export function VisualCalendar(props: Props) {
                       onClick={() => handleCellClick(day, hour)}
                       title={
                         cell.state === 'ocupado' && cell.student ? `${cell.student} · Semanal`
-                        : cell.state === 'bloqueado' ? 'En recuperación · Puntual'
+                        : cell.state === 'bloqueado'
+                          ? `En recuperación${cell.student ? ` · ${cell.student}` : ''}${cell.recoveryFor ? ` · de la clase del ${cell.recoveryFor}` : ''}${cell.recoveryNote ? ` · ${cell.recoveryNote}` : ''}`
                         : cell.state
                       }
                       style={{
@@ -464,8 +476,10 @@ export function VisualCalendar(props: Props) {
                               </>
                             : cell.state === 'bloqueado'
                               ? <>
-                                  <div>En recuperación</div>
-                                  <div style={{ fontSize: 8, color: '#b38600', opacity: 0.8, fontWeight: 400 }}>· Puntual</div>
+                                  <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                    {cell.student ? `🩹 ${cell.student}` : 'En recuperación'}
+                                  </div>
+                                  <div style={{ fontSize: 8, color: '#b38600', opacity: 0.8, fontWeight: 400 }}>{cell.student ? 'Recuperación' : '· Puntual'}</div>
                                 </>
                               : props.mode === 'setter' ? '+ Asignar' : 'Libre'}
                         </div>
@@ -498,9 +512,10 @@ export function VisualCalendar(props: Props) {
           day={menu.day}
           hour={menu.hour}
           current={getCell(menu.day, menu.hour).state}
-          onSelect={(state, student) => handleMenuSelect(menu.day, menu.hour, state, student)}
+          onSelect={(state, student, recovery) => handleMenuSelect(menu.day, menu.hour, state, student, recovery)}
           onClose={() => setMenu(null)}
           onOcupadoNeed={props.onOcupadoNeed}
+          onRecuperacionNeed={props.onRecuperacionNeed}
         />
       )}
     </div>

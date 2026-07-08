@@ -11,6 +11,7 @@ import { DAYS, cellKey } from '@/components/VisualCalendar';
 import { dbCheckStudentExists, dbSetStudentManualActive, dbActivateOneTimeAccess } from '@/lib/db';
 import { classifyPlan, planBadgeStyle } from '@/lib/productUtils';
 import { checkSubscription, clearSubscriptionCache, subBadge, subCategory, type SubscriptionInfo, type SubCategory } from '@/lib/useSubscriptionStatus';
+import { CambiarProfesorModal } from '@/components/CambiarProfesorModal';
 import { Student, Grid, Assignment } from '@/types';
 
 // Detecta viewport mobile (< breakpoint). Alterna tabla (desktop) ↔ cards (mobile).
@@ -481,6 +482,7 @@ function StudentsContent() {
   const [deletingStudent, setDeletingStudent] = useState<DisplayStudent | null>(null);
   const [activatingStudent, setActivatingStudent] = useState<DisplayStudent | null>(null);
   const [accessStudent, setAccessStudent] = useState<DisplayStudent | null>(null);
+  const [changeTeacher, setChangeTeacher] = useState<{ student: DisplayStudent; assignment: Assignment } | null>(null);
   const [subFilter, setSubFilter] = useState<'all' | SubCategory>('all');
   const [subInfo, setSubInfo] = useState<Record<string, SubscriptionInfo>>({});
   const [verifyingSubs, setVerifyingSubs] = useState(false);
@@ -809,6 +811,9 @@ function StudentsContent() {
                                 {s.inStudentsTable && (
                                   <MenuItem onClick={() => { setMenuOpenId(null); handleEditClick(s); }}>✏️ Editar</MenuItem>
                                 )}
+                                {hasTeacher && (
+                                  <MenuItem onClick={() => { setMenuOpenId(null); setChangeTeacher({ student: s, assignment: studentAssignments[0] }); }}>🔄 Cambiar de profesor</MenuItem>
+                                )}
                                 {!hasTeacher && (
                                   <MenuItem onClick={() => { setMenuOpenId(null); router.push('/setter'); }}>🔗 Vincular</MenuItem>
                                 )}
@@ -925,6 +930,15 @@ function StudentsContent() {
             await refreshOne(activatingStudent.email);
           }}
           onCancel={() => setActivatingStudent(null)}
+        />
+      )}
+
+      {changeTeacher && (
+        <CambiarProfesorModal
+          student={{ id: changeTeacher.student.id, name: changeTeacher.student.name, email: changeTeacher.student.email, level: changeTeacher.student.level }}
+          currentAssignment={changeTeacher.assignment}
+          onClose={() => setChangeTeacher(null)}
+          onDone={() => setChangeTeacher(null)}
         />
       )}
 

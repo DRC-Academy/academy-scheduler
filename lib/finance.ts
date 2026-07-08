@@ -182,6 +182,9 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     c.log = l;
   }
   for (const r of myRecords) {
+    // 'reprogramada' es solo una constancia de una clase movida: NO cuenta para el
+    // pago (la clase se contará cuando efectivamente se dé). Se ignora acá.
+    if (r.classType === 'reprogramada') continue;
     if (!inMonth(r.classDate)) continue;
     let c = findCand(r.studentName, r.classDate, 1);
     if (!c) { c = { studentName: r.studentName, date: r.classDate }; cands.push(c); }

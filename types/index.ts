@@ -145,6 +145,8 @@ export interface Cell {
   student?: string;
   weekDate?: string;     // 'bloqueado' cells: Monday ISO date of the specific week (YYYY-MM-DD)
   baseState?: CellState; // 'bloqueado' cells: state to revert to in other weeks
+  recoveryFor?: string;  // 'bloqueado' (En recuperación) cells: 'YYYY-MM-DD' de la clase original que se recupera
+  recoveryNote?: string; // 'bloqueado' cells: nota opcional del profesor sobre la recuperación
 }
 
 export type Grid = Record<string, Cell>;
@@ -203,7 +205,9 @@ export interface AppNotification {
 // ── FINANCE ───────────────────────────────────────────────────────────────────
 
 // Tipo de clase registrada por el profesor.
-export type ClassRecordType = 'normal' | 'falta_sin_aviso' | 'cancelacion_hora' | 'recuperacion';
+// 'reprogramada' = constancia de una clase movida a otra fecha; NO cuenta para el
+// pago (la clase se contará cuando efectivamente se dé). Ver lib/finance.ts.
+export type ClassRecordType = 'normal' | 'falta_sin_aviso' | 'cancelacion_hora' | 'recuperacion' | 'reprogramada';
 
 // Captura de pantalla de una clase dada, subida por el profesor.
 export interface ClassRecord {
@@ -217,6 +221,9 @@ export interface ClassRecord {
   comment?: string;        // comentario opcional del profesor
   classType?: ClassRecordType; // 'normal' por defecto
   subscriptionStatus?: string; // estado WooCommerce al momento de registrar la clase
+  originalDate?: string;       // 'reprogramada'/'cancelacion_hora': fecha original de la clase movida
+  rescheduledTo?: string;      // 'reprogramada': nueva fecha a la que se movió la clase
+  recoveryForDate?: string;    // 'recuperacion': fecha de la clase original que se recupera
   createdAt: string;
 }
 

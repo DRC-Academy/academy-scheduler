@@ -1123,7 +1123,7 @@ export async function calcRetentionRate(teacherId: string): Promise<number> {
 
 // ── SCORE RECALCULATION ───────────────────────────────────────────────────────
 
-async function dbRecalculateTeacherScore(teacherId: string): Promise<void> {
+export async function dbRecalculateTeacherScore(teacherId: string): Promise<void> {
   const [evRes, asRes, calRes, dropouts] = await Promise.all([
     supabase.from('scoring_events').select('points, euros').eq('teacher_id', teacherId),
     supabase.from('assignments').select('id').eq('teacher_id', teacherId),
@@ -1895,6 +1895,9 @@ function mapClassRecord(row: any): import('@/types').ClassRecord {
     comment:       row.comment ?? undefined,
     classType:     row.class_type ?? 'normal',
     subscriptionStatus: row.subscription_status ?? undefined,
+    originalDate:   row.original_date ?? undefined,
+    rescheduledTo:  row.rescheduled_to ?? undefined,
+    recoveryForDate: row.recovery_for_date ?? undefined,
     createdAt:     row.created_at,
   };
 }
@@ -1958,6 +1961,213 @@ export async function dbAddClassRecord(
   const { error } = await supabase.from('class_records').insert({ ...base, subscription_status: subscriptionStatus ?? null });
   if (error) await supabase.from('class_records').insert(base);
   return { id, teacherId, teacherName, studentName, classDate, classTime, screenshotUrl, classType, comment, subscriptionStatus, createdAt };
+}
+
+// Registra la constancia de una clase REPROGRAMADA (o cancelación sobre la hora que
+// se reprograma). class_date = fecha original; rescheduled_to = nueva fecha. Las de
+// tipo 'reprogramada' NO cuentan para el pago (ver lib/finance.ts); las de tipo
+// 'cancelacion_hora' sí son cobrables (hasta 2 por alumno). Resiliente si la BD no
+// tiene aún las columnas original_date/rescheduled_to.
+export async function dbAddRescheduleRecord(p: {
+  teacherId: string; teacherName: string; studentName: string;
+  originalDate: string; originalTime?: string;
+  newDate: string; newTime?: string;
+  classType: 'reprogramada' | 'cancelacion_hora';
+  comment: string;
+}): Promise<import('@/types').ClassRecord> {
+  const id        = `cr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const createdAt = new Date().toISOString();
+  const base = {
+    id, teacher_id: p.teacherId, teacher_name: p.teacherName, student_name: p.studentName,
+    class_date: p.originalDate, class_time: p.originalTime ?? null,
+    screenshot_url: '', class_type: p.classType, comment: p.comment, created_at: createdAt,
+  };
+  const { error } = await supabase.from('class_records').insert({ ...base, original_date: p.originalDate, rescheduled_to: p.newDate });
+  if (error) await supabase.from('class_records').insert(base);
+  return {
+    id, teacherId: p.teacherId, teacherName: p.teacherName, studentName: p.studentName,
+    classDate: p.originalDate, classTime: p.originalTime, screenshotUrl: '', classType: p.classType,
+    comment: p.comment, originalDate: p.originalDate, rescheduledTo: p.newDate, createdAt,
+  };
+}
+
+// Registra una clase de RECUPERACIÓN vinculada al alumno y a la fecha original que
+// se recupera. class_date = fecha de HOY (cuando se recupera). Cuenta para el pago
+// con la tarifa normal del alumno (igual que una clase normal). Resiliente si la BD
+// no tiene aún la columna recovery_for_date.
+export async function dbAddRecoveryClass(p: {
+  teacherId: string; teacherName: string; studentName: string;
+  recoveryDate: string; originalDate: string; note?: string; classTime?: string;
+}): Promise<import('@/types').ClassRecord> {
+  const id        = `cr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const createdAt = new Date().toISOString();
+  const comment   = `Recuperación de clase del ${p.originalDate}${p.note ? ` — ${p.note}` : ''}`;
+  const base = {
+    id, teacher_id: p.teacherId, teacher_name: p.teacherName, student_name: p.studentName,
+    class_date: p.recoveryDate, class_time: p.classTime ?? null,
+    screenshot_url: '', class_type: 'recuperacion', comment, created_at: createdAt,
+  };
+  const { error } = await supabase.from('class_records').insert({ ...base, recovery_for_date: p.originalDate });
+  if (error) await supabase.from('class_records').insert(base);
+  return {
+    id, teacherId: p.teacherId, teacherName: p.teacherName, studentName: p.studentName,
+    classDate: p.recoveryDate, classTime: p.classTime, screenshotUrl: '', classType: 'recuperacion',
+    comment, recoveryForDate: p.originalDate, createdAt,
+  };
+}
+
+// ── CAMBIO DE PROFESOR / DUPLICADOS ────────────────────────────────────────────
+
+const _nk = (x: unknown): string => String(x ?? '').trim().toLowerCase();
+
+// ¿La celda 'ocupado' pertenece a este alumno? (match tolerante por nombre/first name).
+function _cellIsStudent(cellStudent: string | undefined, studentName: string): boolean {
+  const cs = _nk(cellStudent);
+  if (!cs) return false;
+  const full  = _nk(studentName);
+  const first = _nk(studentName.split(' ')[0]);
+  return cs === full || cs === first || full.startsWith(cs) || cs.startsWith(first);
+}
+
+export interface ChangeTeacherParams {
+  assignmentId: string;
+  studentName: string;
+  studentEmail: string;
+  weeklyHours: number;
+  from: { id: string; name: string; email: string };
+  to:   { id: string; name: string; email: string };
+  oldSlots: AssignedSlot[];
+  newSlots: AssignedSlot[];
+  reason: 'alumno' | 'profesor' | 'reorg';
+}
+
+// Transfiere un alumno de un profesor a otro (punto 1). Libera las celdas del
+// profesor anterior, ocupa las del nuevo, reapunta la assignment (mantiene
+// student_id/start_date), registra el evento de scoring según el motivo y notifica
+// a ambos profesores. Recalcula el score de ambos.
+export async function dbChangeStudentTeacher(p: ChangeTeacherParams): Promise<void> {
+  // 1) Liberar celdas del profesor ANTERIOR (por slots exactos o por nombre).
+  const oldGrid = await dbGetTeacherGrid(p.from.id);
+  const updatedOld: Grid = { ...oldGrid };
+  const oldKeys = new Set(p.oldSlots.map(s => `${s.day}_${s.hour}`));
+  let cleared = 0;
+  for (const key of Object.keys(updatedOld)) {
+    const cell = updatedOld[key];
+    if (cell.state !== 'ocupado') continue;
+    if (oldKeys.has(key) || _cellIsStudent(cell.student, p.studentName)) {
+      updatedOld[key] = { state: 'libre', student: undefined };
+      cleared++;
+    }
+  }
+  if (cleared > 0) await dbSaveTeacherGrid(p.from.id, updatedOld);
+
+  // 2) Ocupar celdas del profesor NUEVO con el nombre del alumno.
+  const newGrid = await dbGetTeacherGrid(p.to.id);
+  const updatedNew: Grid = { ...newGrid };
+  for (const s of p.newSlots) {
+    updatedNew[`${s.day}_${s.hour}`] = { state: 'ocupado', student: p.studentName };
+  }
+  await dbSaveTeacherGrid(p.to.id, updatedNew);
+
+  // 3) Reapuntar la assignment al nuevo profesor + nuevos horarios.
+  await supabase.from('assignments').update({
+    teacher_id:   p.to.id,
+    teacher_name: p.to.name,
+    teacher_email: p.to.email,
+    slots:        p.newSlots,
+    weekly_hours: p.weeklyHours,
+    availability: p.newSlots.map(s => `${s.day} ${s.hour}`).join(', '),
+  }).eq('id', p.assignmentId);
+
+  // 4) Evento de scoring para el profesor anterior según el motivo del cambio.
+  if (p.reason !== 'reorg') {
+    const eventType = p.reason === 'alumno' ? 'cambio_por_alumno' : 'cambio_por_profesor';
+    await dbAddScoringEvent({
+      teacherId:   p.from.id,
+      teacherName: p.from.name,
+      eventType:   eventType as ScoringEvent['eventType'],
+      points:      EVENT_POINTS[eventType],
+      euros:       0,
+      note:        `Cambio de profesor — ${p.studentName} transferido a ${p.to.name}`,
+      createdBy:   'sistema',
+      studentRef:  p.studentName,
+    });
+  }
+
+  // 5) Notificar al profesor NUEVO (misma notificación que una asignación nueva).
+  await dbNotifyNewAssignment(p.to.id, p.studentName, p.studentEmail);
+
+  // 6) Notificar al profesor ANTERIOR.
+  await supabase.from('notifications').insert({
+    id:          `notif_transfer_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    target_user: p.from.id,
+    target_role: null,
+    title:       'ℹ️ Alumno transferido',
+    body:        `${p.studentName} fue transferido a otro profesor.`,
+    type:        'student_transferred',
+    read_by:     [],
+    created_at:  new Date().toISOString(),
+    created_by:  'sistema',
+  });
+
+  // Recalcular el score/retención de ambos (el anterior perdió, el nuevo ganó).
+  await Promise.all([dbRecalculateTeacherScore(p.from.id), dbRecalculateTeacherScore(p.to.id)]);
+}
+
+// Elimina una assignment y libera las celdas del alumno en el grid del profesor.
+// Usado por la resolución de duplicados (punto 4: "Mantener solo con X").
+export async function dbRemoveAssignment(
+  assignmentId: string, teacherId: string, studentName: string, slots: AssignedSlot[],
+): Promise<void> {
+  await supabase.from('assignments').delete().eq('id', assignmentId);
+  const grid = await dbGetTeacherGrid(teacherId);
+  const updated: Grid = { ...grid };
+  const keys = new Set(slots.map(s => `${s.day}_${s.hour}`));
+  let changed = false;
+  for (const key of Object.keys(updated)) {
+    const cell = updated[key];
+    if (cell.state !== 'ocupado') continue;
+    if (keys.has(key) || _cellIsStudent(cell.student, studentName)) {
+      updated[key] = { state: 'libre', student: undefined };
+      changed = true;
+    }
+  }
+  if (changed) await dbSaveTeacherGrid(teacherId, updated);
+  await dbRecalculateTeacherScore(teacherId);
+}
+
+export interface DuplicateAssignmentGroup {
+  key: string;
+  studentId: string;
+  studentName: string;
+  studentEmail: string;
+  assignments: Array<{ assignmentId: string; teacherId: string; teacherName: string; slots: AssignedSlot[]; startDate?: string }>;
+}
+
+// Detecta alumnos asignados a MÁS DE UN profesor (punto 4). Función pura: opera
+// sobre las assignments ya cargadas en memoria (sin llamadas a la base).
+export function findDuplicateTeacherAssignments(assignments: Assignment[]): DuplicateAssignmentGroup[] {
+  const groups = new Map<string, Assignment[]>();
+  for (const a of assignments) {
+    const key = a.studentId || _nk(a.studentEmail) || _nk(a.studentName);
+    if (!key) continue;
+    const arr = groups.get(key);
+    if (arr) arr.push(a); else groups.set(key, [a]);
+  }
+  const out: DuplicateAssignmentGroup[] = [];
+  for (const [key, arr] of groups) {
+    const teacherIds = new Set(arr.map(a => a.teacherId));
+    if (teacherIds.size > 1) {
+      out.push({
+        key,
+        studentId:    arr[0].studentId,
+        studentName:  arr[0].studentName,
+        studentEmail: arr[0].studentEmail,
+        assignments:  arr.map(a => ({ assignmentId: a.id, teacherId: a.teacherId, teacherName: a.teacherName, slots: a.slots, startDate: a.startDate })),
+      });
+    }
+  }
+  return out;
 }
 
 // ── FINANCE: APROBACIONES MANUALES ────────────────────────────────────────────

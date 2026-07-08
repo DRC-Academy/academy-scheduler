@@ -12,7 +12,9 @@ import { mockAlerts } from '@/lib/mock-data';
 import { Teacher, Grid, Assignment, ScoringEvent, ScoringEventType } from '@/types';
 import { EVENT_POINTS, EVENT_EUROS, calcCurrentClassNumber, dbUpdateAssignmentStartDate, dbGetAllNotifications,
   dbAuditStudentAssignments, dbRelinkAssignment, dbSyncAssignmentName, dbMergeDuplicateStudents, dbSyncStudentAssignments,
-  dbDiagnoseAllCalendars, dbSyncAllCalendarsToAssignments, dbCreateFullLink, CalendarDiagnosisAllRow, AuditResult } from '@/lib/db';
+  dbDiagnoseAllCalendars, dbSyncAllCalendarsToAssignments, dbCreateFullLink, CalendarDiagnosisAllRow, AuditResult,
+  findDuplicateTeacherAssignments, type DuplicateAssignmentGroup } from '@/lib/db';
+import { CambiarProfesorModal } from '@/components/CambiarProfesorModal';
 import { CrearVinculoModal } from '@/components/CrearVinculoModal';
 import { useRouter } from 'next/navigation';
 import { AppNotification, ClassJoinLog, AssignedSlot } from '@/types';
@@ -2709,6 +2711,132 @@ function AuditPanel() {
   );
 }
 
+// ─── Alerta de alumnos con múltiples profesores (punto 4) ─────────────────────
+const DUP_REVIEWED_KEY = 'dup_teachers_reviewed';
+
+function DuplicatesBanner() {
+  const { assignments, teachers, removeAssignment } = useTeachers();
+  const [open, setOpen] = useState(false);
+  const [reviewed, setReviewed] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const [changeFor, setChangeFor] = useState<{ group: DuplicateAssignmentGroup } | null>(null);
+
+  // Marcados como "revisado" (localStorage) para no volver a alertar.
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(DUP_REVIEWED_KEY);
+      if (raw) setReviewed(new Set(JSON.parse(raw)));
+    } catch {}
+  }, []);
+
+  const allDuplicates = useMemo(() => findDuplicateTeacherAssignments(assignments), [assignments]);
+  const duplicates = allDuplicates.filter(d => !reviewed.has(d.key));
+
+  function markReviewed(key: string) {
+    setReviewed(prev => {
+      const next = new Set(prev).add(key);
+      try { localStorage.setItem(DUP_REVIEWED_KEY, JSON.stringify([...next])); } catch {}
+      return next;
+    });
+  }
+
+  // "Mantener solo con [teacher]": elimina las demás assignments del alumno.
+  async function keepOnly(group: DuplicateAssignmentGroup, keepAssignmentId: string) {
+    setBusy(true);
+    try {
+      for (const a of group.assignments) {
+        if (a.assignmentId === keepAssignmentId) continue;
+        await removeAssignment(a.assignmentId, a.teacherId, group.studentName, a.slots);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (duplicates.length === 0) return null;
+
+  const changeGroupAssignment = changeFor
+    ? assignments.find(a => a.id === changeFor.group.assignments[0].assignmentId)
+    : null;
+
+  return (
+    <>
+      <div style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.4)', borderRadius: 12, padding: '14px 18px', marginBottom: 18, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, minWidth: 220, fontSize: 13.5, color: '#dc2626', fontWeight: 600, lineHeight: 1.5 }}>
+          ⚠️ {duplicates.length} alumno{duplicates.length !== 1 ? 's' : ''} asignado{duplicates.length !== 1 ? 's' : ''} a múltiples profesores — esto puede causar errores en finanzas y calendarios.
+        </div>
+        <button onClick={() => setOpen(true)}
+          style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: '#dc2626', color: 'white', fontWeight: 700, fontSize: 13, cursor: 'pointer', flexShrink: 0 }}>
+          Ver y resolver →
+        </button>
+      </div>
+
+      {open && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(6px)', zIndex: 90, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+          onClick={e => { if (e.target === e.currentTarget && !busy) setOpen(false); }}>
+          <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 18, width: '100%', maxWidth: 620, maxHeight: '92vh', overflowY: 'auto', padding: 26 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 18, color: 'var(--text-primary)' }}>⚠️ Alumnos con múltiples profesores</div>
+                <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', marginTop: 3 }}>Resolvé cada caso para evitar errores en finanzas y calendarios.</div>
+              </div>
+              <button onClick={() => setOpen(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 22, cursor: 'pointer' }}>✕</button>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              {duplicates.map(group => (
+                <div key={group.key} style={{ background: 'var(--bg-surface-2)', border: '1px solid var(--border)', borderRadius: 12, padding: '14px 16px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+                    <div style={{ width: 36, height: 36, borderRadius: '50%', background: 'rgba(30,158,58,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, color: '#1E9E3A', flexShrink: 0 }}>
+                      {group.studentName.split(' ').map(p => p[0]).join('').toUpperCase().slice(0, 2)}
+                    </div>
+                    <div style={{ fontWeight: 700, fontSize: 14.5, color: 'var(--text-primary)' }}>{group.studentName}</div>
+                  </div>
+                  <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', marginBottom: 12, lineHeight: 1.6 }}>
+                    Asignada a: {group.assignments.map((a, i) => (
+                      <span key={a.assignmentId}>
+                        {i > 0 && ' y '}
+                        <b style={{ color: 'var(--text-primary)' }}>{a.teacherName}</b> ({a.slots.map(s => `${s.day} ${s.hour}`).join(', ') || '—'})
+                      </span>
+                    ))}
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                    {group.assignments.map(a => (
+                      <button key={a.assignmentId} onClick={() => keepOnly(group, a.assignmentId)} disabled={busy}
+                        style={{ padding: '9px 12px', borderRadius: 8, border: '1px solid rgba(30,158,58,0.4)', background: 'rgba(30,158,58,0.08)', color: '#1E9E3A', fontWeight: 700, fontSize: 12.5, cursor: busy ? 'not-allowed' : 'pointer', textAlign: 'left', fontFamily: 'inherit' }}>
+                        ✓ Mantener solo con {a.teacherName} (elimina las demás y libera su grid)
+                      </button>
+                    ))}
+                    <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
+                      <button onClick={() => markReviewed(group.key)} disabled={busy}
+                        style={{ flex: '1 1 180px', padding: '9px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface-3)', color: 'var(--text-secondary)', fontWeight: 600, fontSize: 12.5, cursor: busy ? 'not-allowed' : 'pointer', fontFamily: 'inherit' }}>
+                        Ambas son correctas (tiene clases con las dos)
+                      </button>
+                      <button onClick={() => setChangeFor({ group })} disabled={busy}
+                        style={{ flex: '1 1 150px', padding: '9px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', fontWeight: 600, fontSize: 12.5, cursor: busy ? 'not-allowed' : 'pointer', fontFamily: 'inherit' }}>
+                        🔄 Usar "Cambiar de profesor"
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {changeFor && changeGroupAssignment && (
+        <CambiarProfesorModal
+          student={{ id: changeGroupAssignment.studentId, name: changeGroupAssignment.studentName, email: changeGroupAssignment.studentEmail, level: changeGroupAssignment.studentLevel }}
+          currentAssignment={changeGroupAssignment}
+          onClose={() => setChangeFor(null)}
+          onDone={() => setChangeFor(null)}
+        />
+      )}
+    </>
+  );
+}
+
 // ─── Admin Content ────────────────────────────────────────────────────────────
 function AdminContent() {
   const { teachers, assignments, students, addTeacher, loadingTeachers, getTeacherGrid, updateTeacherGrid, checkAndRunResets, reloadAll, updateTeacherInfo } = useTeachers();
@@ -2755,6 +2883,8 @@ function AdminContent() {
       <PullToRefresh onRefresh={reloadAll}>
       <div style={{ maxWidth: 1200, margin: '0 auto', padding: '28px 24px' }}>
         <LastUpdated />
+
+        <DuplicatesBanner />
 
         <div className="admin-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24, flexWrap: 'wrap', gap: 12 }}>
           <div>
