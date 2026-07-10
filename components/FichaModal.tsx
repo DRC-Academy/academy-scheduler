@@ -17,7 +17,17 @@ interface Props {
 interface Profile {
   ai_ficha: string | null;
   ai_status: string | null;
-  form_responses: Record<string, unknown> | null;
+  form_responses: Record<string, unknown> | string | null;
+}
+
+// La columna form_responses puede ser jsonb (objeto) o text (string JSON),
+// según cómo se creó la tabla. Normalizamos a objeto en ambos casos.
+function asResponses(v: Record<string, unknown> | string | null | undefined): Record<string, unknown> {
+  if (!v) return {};
+  if (typeof v === 'string') {
+    try { return JSON.parse(v) as Record<string, unknown>; } catch { return {}; }
+  }
+  return v;
 }
 
 export default function FichaModal({ studentName, studentId, formTokenId, onClose }: Props) {
@@ -74,7 +84,7 @@ export default function FichaModal({ studentName, studentId, formTokenId, onClos
             )}
 
             <div style={{ fontWeight: 700, fontSize: 14, color: '#374151', margin: '18px 0 10px' }}>📝 Respuestas del alumno</div>
-            <RawResponses responses={profile.form_responses ?? {}} />
+            <RawResponses responses={asResponses(profile.form_responses)} />
           </>
         )}
       </div>
