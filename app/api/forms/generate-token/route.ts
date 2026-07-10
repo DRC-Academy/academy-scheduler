@@ -68,7 +68,17 @@ export async function POST(request: Request): Promise<Response> {
 
   if (error) {
     console.error('[generate-token] Error al insertar el token:', error);
-    return Response.json({ error: 'No se pudo generar el link. Intentá de nuevo.' }, { status: 500 });
+    // PGRST205 = la tabla no existe todavía (falta correr la migración SQL).
+    if (error.code === 'PGRST205') {
+      return Response.json(
+        { error: 'La tabla form_tokens no existe. Ejecutá supabase-form-tokens.sql en el SQL editor de Supabase.' },
+        { status: 500 },
+      );
+    }
+    return Response.json(
+      { error: `No se pudo generar el link: ${error.message}` },
+      { status: 500 },
+    );
   }
 
   const formUrl = `${publicBase(request)}/formulario/${token}`;
