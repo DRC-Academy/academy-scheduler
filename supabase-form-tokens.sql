@@ -29,6 +29,18 @@ create table if not exists form_tokens (
 
 alter table form_tokens disable row level security;
 
+-- Por si la tabla ya existía sin todas las columnas (p. ej. se corrió antes una
+-- versión previa del DDL): agregamos las que falten. Idempotente.
+alter table form_tokens add column if not exists student_id    text;
+alter table form_tokens add column if not exists student_email text;
+alter table form_tokens add column if not exists teacher_id    text;
+alter table form_tokens add column if not exists assignment_id text;
+alter table form_tokens add column if not exists plan          text;
+alter table form_tokens add column if not exists level         text;
+alter table form_tokens add column if not exists status        text default 'pending';
+alter table form_tokens add column if not exists expires_at    timestamptz default (now() + interval '30 days');
+alter table form_tokens add column if not exists completed_at  timestamptz;
+
 create index if not exists idx_form_tokens_token      on form_tokens (token);
 create index if not exists idx_form_tokens_student     on form_tokens (student_id);
 create index if not exists idx_form_tokens_status      on form_tokens (status);
