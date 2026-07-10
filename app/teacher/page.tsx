@@ -16,7 +16,7 @@ import { checkSubscription, subBadge, type SubscriptionInfo } from '@/lib/useSub
 import { isMilestone, getMilestoneSlides, getMilestoneCopy, MILESTONES, MILESTONE_SLIDES, MILESTONE_TITLES } from '@/lib/milestones';
 import { Grid, Teacher, Assignment, ScoringEvent, Student, AppNotification, ClassRecord } from '@/types';
 import FormStatusBadge from '@/components/FormStatusBadge';
-import { fetchFormTokensIndex, lookupToken, type FormTokenInfo } from '@/lib/formClient';
+import { fetchFormTokensIndex, lookupToken, getOrCreateFormLink, type FormTokenInfo } from '@/lib/formClient';
 
 // Índice de tokens de formulario (por id/nombre de alumno). Se pasa a los tabs.
 type FormIndex = { byId: Map<string, FormTokenInfo>; byName: Map<string, FormTokenInfo> };
@@ -908,6 +908,7 @@ function TeacherNotificationsTab({ teacher, myAssignments, students, notificatio
           updateMeetLink={updateMeetLink}
           onClose={() => setPresentationModal(null)}
           onSent={markSent}
+          onFormTokenReady={refreshFormIndex}
         />
       )}
     </div>
@@ -1069,12 +1070,21 @@ function firstClassInfo(a: Assignment): { dateLabel: string; horaInicio: string;
 }
 
 // Cuerpo del email con los campos dinámicos ya reemplazados.
-function buildPresentationBody(a: Assignment, teacher: Teacher, student: Student | undefined, meetLink: string): string {
+function buildPresentationBody(a: Assignment, teacher: Teacher, student: Student | undefined, meetLink: string, formUrl?: string): string {
   const info  = firstClassInfo(a);
   const fecha = info ? info.dateLabel : '[fecha de la primera clase]';
   const hIni  = info ? info.horaInicio : '[hora]';
   const hFin  = info ? info.horaFin : '[hora]';
   const link  = meetLink.trim() || MEET_PLACEHOLDER;
+  // Sección del formulario inicial (se incluye solo si ya hay link generado).
+  const formBlock = formUrl?.trim()
+    ? `
+
+Y antes de nuestro primer encuentro, me encantaría conocerte un poquito mejor 💚 Te dejo este breve formulario (son solo 10 minutos) para preparar una clase 100% tuya desde el minuto uno:
+
+${formUrl.trim()}
+`
+    : '';
   return `¡Buenos días, ${a.studentName}!
 
 ¡Es un verdadero gusto saludarte! Mi nombre es ${teacher.name}, y he sido afortunada de ser elegida como tu profesora por DRC Academy.
@@ -1086,7 +1096,7 @@ Será un gusto conocerte para nuestra primera clase el ${fecha} de ${hIni} a ${h
 A través del siguiente link, podrás ingresar a nuestra clase vía Meet.
 (usaremos el mismo para todas nuestras posteriores clases 🙂)
 
-${link}
+${link}${formBlock}
 
 Si pudieras confirmar recepción de éste email, ¡te agradeceré mucho!
 
@@ -1131,13 +1141,14 @@ function presentationBtnStyle(sent: boolean): CSSProperties {
 }
 
 // Modal "Email de presentación" — enlace de Meet + email editable con mailto.
-function PresentationModal({ assignment, teacher, students, updateMeetLink, onClose, onSent }: {
+function PresentationModal({ assignment, teacher, students, updateMeetLink, onClose, onSent, onFormTokenReady }: {
   assignment: Assignment;
   teacher: Teacher;
   students: Student[];
   updateMeetLink: (assignmentId: string, link: string) => Promise<void>;
   onClose: () => void;
   onSent: (studentName: string) => void;
+  onFormTokenReady?: () => void;
 }) {
   // Lookup del alumno (email real + plan/producto) para clasificar y prellenar.
   const student = useMemo(() => {
@@ -1149,21 +1160,44 @@ function PresentationModal({ assignment, teacher, students, updateMeetLink, onCl
   const [meetLink, setMeetLink] = useState(assignment.meetLink ?? '');
   const [toEmail, setToEmail]   = useState(student?.email ?? assignment.studentEmail ?? '');
   const [subject, setSubject]   = useState(`¡Bienvenido/a a DRC Academy, ${assignment.studentName}!`);
-  const [body, setBody]         = useState(() => buildPresentationBody(assignment, teacher, student, assignment.meetLink ?? ''));
+  const [formUrl, setFormUrl]   = useState('');   // link del formulario inicial (se resuelve al abrir)
+  const [body, setBody]         = useState(() => buildPresentationBody(assignment, teacher, student, assignment.meetLink ?? '', ''));
   const [toast, setToast]       = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);   // borrador abierto → pedir confirmación de envío
   const lastGenRef = useRef(body);
 
-  // Si el usuario no editó el cuerpo, se regenera al cambiar el enlace de Meet.
-  // Se captura el valor previo generado ANTES de mutar el ref, porque el updater
-  // de setBody lee el ref al ejecutarse (tras la mutación) y la comparación fallaría.
+  // Al abrir, resolvemos el link del formulario inicial (reutiliza token vigente
+  // o genera uno) para incluirlo en el mismo correo de presentación.
+  useEffect(() => {
+    let cancelled = false;
+    getOrCreateFormLink({
+      studentId: assignment.studentId || undefined,
+      studentName: assignment.studentName,
+      studentEmail: student?.email ?? assignment.studentEmail ?? undefined,
+      teacherId: teacher.id,
+      teacherName: teacher.name,
+      assignmentId: assignment.id,
+      plan: assignment.plan ?? undefined,
+      level: assignment.studentLevel ?? undefined,
+    }).then(url => {
+      if (cancelled) return;
+      setFormUrl(url);
+      onFormTokenReady?.();
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Si el usuario no editó el cuerpo, se regenera al cambiar el enlace de Meet o
+  // al resolverse el link del formulario. Se captura el valor previo generado
+  // ANTES de mutar el ref, porque el updater de setBody lee el ref al ejecutarse.
   useEffect(() => {
     const prevGen = lastGenRef.current;
-    const regenerated = buildPresentationBody(assignment, teacher, student, meetLink);
+    const regenerated = buildPresentationBody(assignment, teacher, student, meetLink, formUrl);
     lastGenRef.current = regenerated;
     setBody(prev => (prev === prevGen ? regenerated : prev));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [meetLink, student]);
+  }, [meetLink, student, formUrl]);
 
   // Guarda el enlace de Meet en la assignment (acción real, independiente del envío).
   async function saveMeetIfAny() {
@@ -2048,6 +2082,7 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, up
           updateMeetLink={updateMeetLink}
           onClose={() => setPresentationModal(null)}
           onSent={markSent}
+          onFormTokenReady={refreshFormIndex}
         />
       )}
 

@@ -85,6 +85,20 @@ export async function generateFormToken(payload: GenerateTokenPayload): Promise<
   return { token: data.token, formUrl: data.formUrl };
 }
 
+// Devuelve el link del formulario para un alumno: reutiliza un token vigente
+// (pendiente o ya completado → mismo link) y solo genera uno nuevo si no hay
+// ninguno o el anterior expiró. Pensado para incrustar el link en el correo de
+// presentación del profesor.
+export async function getOrCreateFormLink(payload: GenerateTokenPayload): Promise<string> {
+  const index = await fetchFormTokensIndex();
+  const existing = lookupToken(index, { id: payload.studentId, name: payload.studentName });
+  if (existing && formStateOf(existing) !== 'expired') {
+    return buildFormUrl(existing.token);
+  }
+  const { formUrl } = await generateFormToken(payload);
+  return formUrl;
+}
+
 // Email pre-armado para enviarle el formulario al alumno.
 export function buildFormEmail(studentName: string, teacherName: string, url: string): { subject: string; body: string } {
   const subject = 'Antes de tu primera clase — DRC Academy 🎓';
