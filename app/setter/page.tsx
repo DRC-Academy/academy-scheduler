@@ -15,6 +15,10 @@ import { planBadgeStyle } from '@/lib/productUtils';
 import { useTeachers } from '@/lib/TeachersContext';
 import { daysOfWeek } from '@/lib/mock-data';
 import { Teacher, SlotFilter, Grid, Assignment, Student, AssignedSlot } from '@/types';
+import FormStatusBadge from '@/components/FormStatusBadge';
+import { fetchFormTokensIndex, lookupToken, type FormTokenInfo } from '@/lib/formClient';
+
+type FormIndex = { byId: Map<string, FormTokenInfo>; byName: Map<string, FormTokenInfo> };
 
 // ─── Specialty constants ──────────────────────────────────────────────────────
 const ALL_SPECIALTIES = ['Adultos', 'Niños', 'Exámenes'] as const;
@@ -1024,6 +1028,9 @@ function SetterContent() {
   const [brokenLinks, setBrokenLinks] = useState<Record<string, Assignment>>({});
   const [verifying, setVerifying] = useState(false);
   const [repairingAll, setRepairingAll] = useState(false);
+  const [formIndex, setFormIndex] = useState<FormIndex>({ byId: new Map(), byName: new Map() });
+  const refreshFormIndex = () => { fetchFormTokensIndex().then(setFormIndex).catch(() => {}); };
+  useEffect(() => { refreshFormIndex(); }, []);
 
   function showToast(msg: string) {
     setToast(msg);
@@ -1576,6 +1583,14 @@ function SetterContent() {
                     🔄 Cambiar profesor
                   </button>
                   <EmailTrigger assignment={a} />
+                  <FormStatusBadge
+                    student={{ id: a.studentId, name: a.studentName, email: a.studentEmail }}
+                    teacher={{ id: a.teacherId, name: a.teacherName }}
+                    assignment={{ id: a.id, plan: a.plan, level: a.studentLevel }}
+                    info={lookupToken(formIndex, { id: a.studentId, name: a.studentName })}
+                    onRefresh={refreshFormIndex}
+                    compact
+                  />
                 </div>
               </div>
             ))}

@@ -15,6 +15,12 @@ import { useStudentAutofill } from '@/lib/useStudentAutofill';
 import { checkSubscription, subBadge, type SubscriptionInfo } from '@/lib/useSubscriptionStatus';
 import { isMilestone, getMilestoneSlides, getMilestoneCopy, MILESTONES, MILESTONE_SLIDES, MILESTONE_TITLES } from '@/lib/milestones';
 import { Grid, Teacher, Assignment, ScoringEvent, Student, AppNotification, ClassRecord } from '@/types';
+import FormStatusBadge from '@/components/FormStatusBadge';
+import { fetchFormTokensIndex, lookupToken, type FormTokenInfo } from '@/lib/formClient';
+
+// Índice de tokens de formulario (por id/nombre de alumno). Se pasa a los tabs.
+type FormIndex = { byId: Map<string, FormTokenInfo>; byName: Map<string, FormTokenInfo> };
+const EMPTY_FORM_INDEX: FormIndex = { byId: new Map(), byName: new Map() };
 
 // ─── Specialty constants ──────────────────────────────────────────────────────
 const ALL_SPECIALTIES = ['Adultos', 'Niños', 'Exámenes'] as const;
@@ -741,13 +747,15 @@ function resolveAssignmentForNotif(body: string, myAssignments: Assignment[]): A
 }
 
 // ─── Notifications Tab (teacher) ─────────────────────────────────────────────
-function TeacherNotificationsTab({ teacher, myAssignments, students, notifications, loadNotifications, markNotificationRead, updateMeetLink }: {
+function TeacherNotificationsTab({ teacher, myAssignments, students, notifications, loadNotifications, markNotificationRead, updateMeetLink, formIndex, refreshFormIndex }: {
   teacher: Teacher;
   myAssignments: Assignment[];
   students: Student[];
   notifications: AppNotification[];
   loadNotifications: (userId: string, role: string) => Promise<void>;
   markNotificationRead: (notifId: string, userId: string) => Promise<void>;
+  formIndex: FormIndex;
+  refreshFormIndex: () => void;
   updateMeetLink: (assignmentId: string, link: string) => Promise<void>;
 }) {
   const today = new Date();
@@ -874,6 +882,17 @@ function TeacherNotificationsTab({ teacher, myAssignments, students, notificatio
                   <button onClick={() => setPresentationModal(asgn)} style={presentationBtnStyle(sent)}>
                     {sent ? '📧 Reenviar presentación' : '📧 Enviar presentación al alumno'}
                   </button>
+                )}
+                {asgn && (
+                  <div style={{ marginTop: 8 }}>
+                    <FormStatusBadge
+                      student={{ id: asgn.studentId, name: asgn.studentName, email: asgn.studentEmail }}
+                      teacher={{ id: teacher.id, name: teacher.name }}
+                      assignment={{ id: asgn.id, plan: asgn.plan, level: asgn.studentLevel }}
+                      info={lookupToken(formIndex, { id: asgn.studentId, name: asgn.studentName })}
+                      onRefresh={refreshFormIndex}
+                    />
+                  </div>
                 )}
               </div>
             </div>
@@ -1411,7 +1430,7 @@ function RescheduleModal({ studentName, currentDate, currentHour, saving, onConf
 }
 
 // ─── Teacher Upcoming Classes Tab ─────────────────────────────────────────────
-function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, updateMeetLink, logClassJoin, addRescheduleRecord }: {
+function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, updateMeetLink, logClassJoin, addRescheduleRecord, formIndex, refreshFormIndex }: {
   teacher: Teacher;
   myAssignments: Assignment[];
   students: Student[];
@@ -1419,6 +1438,8 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, up
   updateMeetLink: (assignmentId: string, link: string) => Promise<void>;
   logClassJoin: (teacherId: string, teacherName: string, studentName: string, scheduledDate: string, scheduledTime: string, subscriptionStatus?: string, enteredWithoutActive?: boolean, subscriptionDaysRemaining?: number | null) => Promise<void>;
   addRescheduleRecord: (p: { teacherId: string; teacherName: string; studentName: string; originalDate: string; originalTime?: string; newDate: string; newTime?: string; classType: 'reprogramada' | 'cancelacion_hora'; comment: string }) => Promise<void>;
+  formIndex: FormIndex;
+  refreshFormIndex: () => void;
 }) {
   const [rescheduleModal, setRescheduleModal] = useState<{ c: TodayClass; date: string } | null>(null);
   const [savingReschedule, setSavingReschedule] = useState(false);
@@ -1754,6 +1775,14 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, up
             style={{ padding: '5px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface-3)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, fontWeight: 600, fontFamily: 'inherit' }}>
             📅 Reprogramar
           </button>
+          <FormStatusBadge
+            student={{ id: c.assignment.studentId, name: c.studentName, email: c.assignment.studentEmail }}
+            teacher={{ id: teacher.id, name: teacher.name }}
+            assignment={{ id: c.assignment.id, plan: c.assignment.plan, level: c.assignment.studentLevel }}
+            info={lookupToken(formIndex, { id: c.assignment.studentId, name: c.studentName })}
+            onRefresh={refreshFormIndex}
+            compact
+          />
         </div>
 
         {/* Link area */}
@@ -2110,6 +2139,10 @@ function TeacherContent() {
   const [dismissedBonusInSession, setDismissedBonusInSession] = useState<Set<string>>(new Set());
   const [pendingOcupado, setPendingOcupado] = useState<{ day: string; hour: string; resolve: (name: string) => void } | null>(null);
   const [pendingRecuperacion, setPendingRecuperacion] = useState<{ day: string; hour: string; resolve: (data: RecuperacionData) => void } | null>(null);
+  const [formIndex, setFormIndex] = useState<FormIndex>(EMPTY_FORM_INDEX);
+
+  const refreshFormIndex = () => { fetchFormTokensIndex().then(setFormIndex).catch(() => {}); };
+  useEffect(() => { refreshFormIndex(); }, []);
 
   const teacher = teachers.find(t => t.id === user?.teacherId) ?? teachers[0];
 
@@ -2534,6 +2567,8 @@ function TeacherContent() {
             updateMeetLink={updateMeetLink}
             logClassJoin={logClassJoin}
             addRescheduleRecord={addRescheduleRecord}
+            formIndex={formIndex}
+            refreshFormIndex={refreshFormIndex}
           />
         )}
 
@@ -2557,6 +2592,8 @@ function TeacherContent() {
               loadNotifications={loadNotifications}
               markNotificationRead={markNotificationRead}
               updateMeetLink={updateMeetLink}
+              formIndex={formIndex}
+              refreshFormIndex={refreshFormIndex}
             />
           </div>
         )}
