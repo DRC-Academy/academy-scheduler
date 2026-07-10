@@ -27,12 +27,21 @@ export default function FichaModal({ studentName, studentId, formTokenId, onClos
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      let q = supabase.from('student_profiles').select('ai_ficha, ai_status, form_responses');
-      // Preferimos por student_id; si no hay, por el token que completó el form.
-      const { data } = studentId
-        ? await q.eq('student_id', studentId).order('updated_at', { ascending: false }).limit(1).maybeSingle()
-        : await q.eq('form_token_id', formTokenId ?? '__none__').limit(1).maybeSingle();
-      if (!cancelled) { setProfile((data as Profile) ?? null); setLoading(false); }
+      const cols = 'ai_ficha, ai_status, form_responses';
+      // Preferimos por student_id; si no aparece, caemos al token que completó el
+      // formulario (cubre fichas guardadas sin vincular al alumno).
+      let data: Profile | null = null;
+      if (studentId) {
+        const r = await supabase.from('student_profiles').select(cols)
+          .eq('student_id', studentId).order('updated_at', { ascending: false }).limit(1).maybeSingle();
+        data = (r.data as Profile) ?? null;
+      }
+      if (!data && formTokenId) {
+        const r = await supabase.from('student_profiles').select(cols)
+          .eq('form_token_id', formTokenId).limit(1).maybeSingle();
+        data = (r.data as Profile) ?? null;
+      }
+      if (!cancelled) { setProfile(data); setLoading(false); }
     })();
     return () => { cancelled = true; };
   }, [studentId, formTokenId]);

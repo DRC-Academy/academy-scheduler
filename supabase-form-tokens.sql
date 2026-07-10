@@ -51,6 +51,7 @@ create index if not exists idx_form_tokens_status      on form_tokens (status);
 create table if not exists student_profiles (
   id             text primary key,                 -- = student_id del alumno
   student_id     text references students(id),
+  student_name   text,
   form_token_id  text references form_tokens(id),
   form_responses jsonb,
   ai_ficha       text,
@@ -62,6 +63,7 @@ create table if not exists student_profiles (
 alter table student_profiles disable row level security;
 
 -- Por si la tabla ya existía sin estas columnas (migración parcial previa):
+alter table student_profiles add column if not exists student_name   text;
 alter table student_profiles add column if not exists form_token_id  text;
 alter table student_profiles add column if not exists form_responses jsonb;
 alter table student_profiles add column if not exists ai_ficha       text;

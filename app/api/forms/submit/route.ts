@@ -76,16 +76,27 @@ export async function POST(request: Request): Promise<Response> {
   });
 
   // 4) Crear/actualizar la ficha del alumno.
-  const profileId = tk.student_id || `sp_${tk.id}`;
-  const { error: profErr } = await supabase.from('student_profiles').upsert({
-    id:             profileId,
-    student_id:     tk.student_id || null,
+  const baseRow = {
+    student_name:   tk.student_name,   // la tabla puede tener student_name NOT NULL
     form_token_id:  tk.id,
     form_responses: responses,
     ai_ficha:       ficha.ficha,
     ai_status:      ficha.status,
     updated_at:     now,
-  }, { onConflict: 'id' });
+  };
+  let profErr = (await supabase.from('student_profiles').upsert(
+    { id: tk.student_id || `sp_${tk.id}`, student_id: tk.student_id || null, ...baseRow },
+    { onConflict: 'id' },
+  )).error;
+
+  // Si falla por la FK de student_id (el alumno no existe en 'students', p. ej.
+  // un vínculo por nombre), guardamos la ficha SIN vincular para no perderla.
+  if (profErr?.code === '23503') {
+    profErr = (await supabase.from('student_profiles').upsert(
+      { id: `sp_${tk.id}`, student_id: null, ...baseRow },
+      { onConflict: 'id' },
+    )).error;
+  }
   if (profErr) {
     // La ficha no se pudo guardar, pero el token ya quedó completado. Registramos
     // y seguimos: el alumno no debe ver un error después de enviar sus respuestas.
