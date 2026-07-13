@@ -45,7 +45,7 @@ export function cancellationEmailTemplate(
             <td style="padding:16px 40px 32px 40px; font-size:15px; line-height:1.65; color:#1A1A1A;">
               <p style="margin:0 0 16px 0;">Hola ${t},</p>
               <p style="margin:0 0 16px 0;">Te escribimos para informarte que <strong>${s}</strong> ha cancelado su plan con la academia.</p>
-              <p style="margin:0 0 16px 0;">Por este motivo, ya no continuará con sus clases y fue removido automáticamente de tu calendario en DRC Gestión.</p>
+              <p style="margin:0 0 16px 0;">Por este motivo, ya no continuará con sus clases y ha sido eliminado automáticamente de tu calendario en DRC Gestión.</p>
               <p style="margin:0 0 16px 0;">Si tenías algún material o seguimiento pendiente con este alumno, te recomendamos guardarlo antes de continuar.</p>
               <p style="margin:0 0 16px 0;">¡Gracias por tu dedicación y por acompañar a cada alumno en su proceso! Si en algún momento <strong>${s}</strong> decide retomar sus clases, te avisaremos para que puedas continuar con él/ella.</p>
               <p style="margin:16px 0 0 0;">Un saludo,<br />El equipo de DRC Academy 🌍</p>

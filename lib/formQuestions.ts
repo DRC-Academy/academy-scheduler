@@ -22,16 +22,16 @@ export const SKILL_LEVELS = ['Muy bajo', 'Básico', 'Intermedio', 'Bueno', 'Muy 
 export const FORM_QUESTIONS: FormQuestion[] = [
   {
     id: 'q1_dedicas',
-    section: '💼 Sobre vos',
-    title: '¿A qué te dedicás?',
-    hint: 'Cuanto más específico/a, mejor — saber en qué trabajás me ayuda a que los ejemplos sean relevantes para tu vida real.',
+    section: '💼 Sobre ti',
+    title: '¿A qué te dedicas?',
+    hint: 'Cuanto más específico/a, mejor — saber en qué trabajas me ayuda a que los ejemplos sean relevantes para tu vida real.',
     type: 'short',
     required: true,
   },
   {
     id: 'q2_objetivo',
     section: '🎯 Tu objetivo',
-    title: '¿Por qué querés mejorar tu inglés ahora? ¿Qué cambia en tu vida cuando lo logres?',
+    title: '¿Por qué quieres mejorar tu inglés ahora? ¿Qué cambia en tu vida cuando lo logres?',
     hint: 'Esta es la pregunta más importante. Tu respuesta me ayuda a mantener la motivación y diseñar clases que realmente importen.',
     type: 'long',
     required: true,
@@ -39,7 +39,7 @@ export const FORM_QUESTIONS: FormQuestion[] = [
   {
     id: 'q3_pausa',
     section: '📚 Tu historia con el inglés',
-    title: '¿Cuánto tiempo hace que no estudiás inglés regularmente?',
+    title: '¿Cuánto tiempo llevas sin estudiar inglés regularmente?',
     type: 'radio',
     options: [
       'Llevo estudiando sin pausa',
@@ -53,29 +53,29 @@ export const FORM_QUESTIONS: FormQuestion[] = [
   {
     id: 'q4_como_estudiaste',
     section: '📚 Tu historia con el inglés',
-    title: '¿Cómo estudiaste inglés antes? (podés marcar más de uno)',
+    title: '¿Cómo has estudiado inglés antes? (puedes marcar más de uno)',
     type: 'checkbox',
     options: [
       'Academia o instituto',
       'Clases particulares',
       'App (Duolingo, Babbel, etc.)',
-      'Por mi cuenta (series, libros, videos)',
-      'En el trabajo o en el exterior',
-      'Nunca estudié formalmente',
+      'Por mi cuenta (series, libros, vídeos)',
+      'En el trabajo o en el extranjero',
+      'Nunca he estudiado formalmente',
     ],
     required: true,
   },
   {
     id: 'q5_intentos',
     section: '📚 Tu historia con el inglés',
-    title: '¿Intentaste mejorar tu inglés antes y no lo lograste? ¿Qué pasó?',
+    title: '¿Has intentado mejorar tu inglés antes y no lo has conseguido? ¿Qué pasó?',
     hint: 'No es obligatoria, pero si algo no funcionó antes me ayuda a no repetirlo.',
     type: 'long',
     required: false,
   },
   {
     id: 'q6_nivel',
-    section: '🧠 Cómo aprendés',
+    section: '🧠 Cómo aprendes',
     title: '¿Cómo es tu nivel en cada habilidad?',
     type: 'matrix',
     rows: ['Hablar', 'Escuchar', 'Leer', 'Escribir'],
@@ -84,23 +84,23 @@ export const FORM_QUESTIONS: FormQuestion[] = [
   },
   {
     id: 'q7_cuesta',
-    section: '🧠 Cómo aprendés',
+    section: '🧠 Cómo aprendes',
     title: '¿Qué es lo que más te cuesta del inglés?',
     type: 'long',
     required: true,
   },
   {
     id: 'q8_disfrutas',
-    section: '🧠 Cómo aprendés',
-    title: '¿Qué es lo que mejor hacés o más disfrutás?',
+    section: '🧠 Cómo aprendes',
+    title: '¿Qué es lo que mejor haces o más disfrutas?',
     type: 'long',
     required: true,
   },
   {
     id: 'q9_errores',
-    section: '🧠 Cómo aprendés',
-    title: '¿Cómo te sentís cuando cometés errores al hablar?',
-    hint: 'Esto me ayuda a saber cómo manejamos las correcciones en clase.',
+    section: '🧠 Cómo aprendes',
+    title: '¿Cómo te sientes cuando cometes errores al hablar?',
+    hint: 'Esto me ayuda a saber cómo gestionamos las correcciones en clase.',
     type: 'radio',
     options: [
       'Me bloqueo y prefiero no hablar',
@@ -113,7 +113,7 @@ export const FORM_QUESTIONS: FormQuestion[] = [
   {
     id: 'q10_uso',
     section: '🌍 El inglés en tu vida',
-    title: '¿Usás el inglés fuera de las clases? (podés marcar más de uno)',
+    title: '¿Usas el inglés fuera de las clases? (puedes marcar más de uno)',
     type: 'checkbox',
     options: [
       'En el trabajo (reuniones, emails, presentaciones)',
@@ -128,7 +128,7 @@ export const FORM_QUESTIONS: FormQuestion[] = [
   {
     id: 'q11_practica',
     section: '🌍 El inglés en tu vida',
-    title: '¿Podés practicar inglés entre clases? ¿Cuánto tiempo por semana tenés disponible?',
+    title: '¿Puedes practicar inglés entre clases? ¿Cuánto tiempo por semana tienes disponible?',
     hint: 'No hay respuesta buena ni mala — esto me ayuda a calibrar qué reforzamos entre clases.',
     type: 'short',
     required: true,

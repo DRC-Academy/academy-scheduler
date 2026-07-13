@@ -1080,27 +1080,26 @@ function buildPresentationBody(a: Assignment, teacher: Teacher, student: Student
   const formBlock = formUrl?.trim()
     ? `
 
-Y antes de nuestro primer encuentro, me encantaría conocerte un poquito mejor 💚 Te dejo este breve formulario (son solo 10 minutos) para preparar una clase 100% tuya desde el minuto uno:
+Y antes de nuestro primer encuentro, me gustaría conocerte un poco mejor 💚 Te dejo este breve formulario (son solo 10 minutos) para preparar una clase 100% tuya desde el primer minuto:
 
 ${formUrl.trim()}
 `
     : '';
   return `¡Buenos días, ${a.studentName}!
 
-¡Es un verdadero gusto saludarte! Mi nombre es ${teacher.name}, y he sido afortunada de ser elegida como tu profesora por DRC Academy.
+¡Es un placer saludarte! Mi nombre es ${teacher.name} y he sido elegida como tu profesora en DRC Academy.
 
-Será un gusto conocerte para nuestra primera clase el ${fecha} de ${hIni} a ${hFin}hs.
+Será un gusto conocerte en nuestra primera clase el ${fecha} de ${hIni} a ${hFin}h.
 
-¡Juntos, continuaremos la travesía en ${planDescription(a, student)} y nos divertiremos en el proceso!
+¡Juntos continuaremos con ${planDescription(a, student)} y nos divertiremos en el proceso!
 
-A través del siguiente link, podrás ingresar a nuestra clase vía Meet.
-(usaremos el mismo para todas nuestras posteriores clases 🙂)
+A través del siguiente enlace podrás acceder a nuestra clase por Meet. (Usaremos el mismo para todas nuestras clases 🙂)
 
 ${link}${formBlock}
 
-Si pudieras confirmar recepción de éste email, ¡te agradeceré mucho!
+Si pudieras confirmar que has recibido este email, ¡te lo agradecería mucho!
 
-¡Te envío un gran saludo!
+¡Un saludo!
 ${teacher.name}`;
 }
 
@@ -1228,7 +1227,7 @@ function PresentationModal({ assignment, teacher, students, updateMeetLink, onCl
       document.body.removeChild(ta);
     }
     await saveMeetIfAny();
-    setToast('📋 Email copiado — pegalo en Gmail');
+    setToast('📋 Email copiado — pégalo en Gmail');
     setConfirming(true);
   }
 
@@ -1271,7 +1270,7 @@ function PresentationModal({ assignment, teacher, students, updateMeetLink, onCl
         <textarea value={body} onChange={e => setBody(e.target.value)} rows={14} style={{ ...lightInput, resize: 'vertical', minHeight: 260, lineHeight: 1.5 }} />
 
         <div style={{ fontSize: 11, color: '#6b7280', margin: '9px 0 18px', lineHeight: 1.5 }}>
-          Podés editar el texto antes de enviarlo. Los cambios aquí no se guardan automáticamente.
+          Puedes editar el texto antes de enviarlo. Los cambios aquí no se guardan automáticamente.
         </div>
 
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
@@ -1293,10 +1292,10 @@ function PresentationModal({ assignment, teacher, students, updateMeetLink, onCl
         {confirming && (
           <div style={{ marginTop: 16, padding: '14px 16px', borderRadius: 10, border: '1.5px solid #1E9E3A', background: 'rgba(30,158,58,0.08)' }}>
             <div style={{ fontSize: 13.5, fontWeight: 700, color: '#166534', marginBottom: 6 }}>
-              ¿Enviaste el correo a {assignment.studentName}?
+              ¿Has enviado el correo a {assignment.studentName}?
             </div>
             <div style={{ fontSize: 11.5, color: '#4b5563', marginBottom: 12, lineHeight: 1.5 }}>
-              Si no se abrió tu gestor de correo, usá “📋 Copiar email” y pegá el texto en Gmail. El estado se marca como enviado solo cuando lo confirmes.
+              Si no se abrió tu gestor de correo, usa “📋 Copiar email” y pega el texto en Gmail. El estado se marca como enviado solo cuando lo confirmes.
             </div>
             <div style={{ display: 'flex', gap: 10 }}>
               <button onClick={() => setConfirming(false)}
