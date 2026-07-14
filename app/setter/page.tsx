@@ -1189,9 +1189,17 @@ function SetterContent() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchMode, calendarTeacher, dayOnly, hourOnly, slotFilters]);
 
-  function handleAssigned(a: Assignment, s: Student) {
-    addAssignment(a);
-    addStudent(s);
+  async function handleAssigned(a: Assignment, s: Student) {
+    // El alumno PRIMERO (la assignment tiene FK a students), y con manejo de
+    // error: si el guardado falla, no seguimos como si se hubiera asignado.
+    try {
+      await addStudent(s);
+      await addAssignment(a);
+    } catch (e) {
+      console.error('[setter handleAssigned] no se pudo asignar:', e);
+      alert('No se pudo guardar la asignación: ' + (e instanceof Error ? e.message : String(e)));
+      return;
+    }
     setCalendarTeacher(null);
     setEmailAssignment(a);
   }

@@ -284,7 +284,7 @@ function AssignStudentModal({
                     <div style={{ flex: 1 }}>
                       <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{a.studentName}</div>
                       <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                        {a.studentLevel} · {a.slots.length} h/sem · {a.slots.map(s => `${s.day} ${s.hour}`).join(', ')}
+                        {a.studentLevel} · {(a.slots ?? []).length} h/sem · {(a.slots ?? []).map(s => `${s.day} ${s.hour}`).join(', ')}
                       </div>
                     </div>
                     <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Editar →</span>
@@ -1010,7 +1010,7 @@ function classesForDate(myAssignments: Assignment[], date: Date): TodayClass[] {
   const dayName = dayNameFromDate(date);
   const list: TodayClass[] = [];
   for (const a of myAssignments) {
-    for (const slot of a.slots) {
+    for (const slot of a.slots ?? []) {
       if (slot.day !== dayName) continue;
       list.push({
         key:         `${a.id}_${slot.hour}`,
@@ -2225,76 +2225,78 @@ function TeacherContent() {
     if (!teacher || !pendingOcupado) return;
     let finalName = data.studentName;
 
-    if (data.isNew && data.newStudentData) {
-      const newStudent: Student = {
-        id: crypto.randomUUID(),
-        name: data.newStudentData.name,
-        email: data.newStudentData.email,
-        level: data.newStudentData.level,
-        plan: data.newStudentData.plan,
-        createdAt: new Date().toISOString(),
-      };
-      await addStudent(newStudent);
-      // Persistir tipo de producto detectado (best-effort).
-      if (data.newStudentData.productType !== undefined) {
-        dbSetStudentProduct(newStudent.id, data.newStudentData.productType ?? null, data.newStudentData.plan).catch(() => {});
-      }
-
-      const newAssignment: Assignment = {
-        id: crypto.randomUUID(),
-        teacherId: teacher.id,
-        teacherName: teacher.name,
-        teacherEmail: teacher.email,
-        studentId: newStudent.id,
-        studentName: newStudent.name,
-        studentEmail: newStudent.email,
-        studentLevel: newStudent.level,
-        slots: data.slots,
-        objetivo: data.newStudentData.plan,
-        plan: data.newStudentData.plan,
-        weeklyHours: data.slots.length,
-        availability: data.slots.map(s => `${s.day} ${s.hour}`).join(', '),
-        notes: '',
-        startDate: data.startDate,
-        createdAt: new Date().toISOString(),
-      };
-      await addAssignment(newAssignment);
-      finalName = newStudent.name;
-    } else if (data.existingAssignment) {
-      await updateAssignmentSlots(data.existingAssignment.id, data.slots, data.slots.length);
-      if (data.startDate && data.startDate !== data.existingAssignment.startDate) {
-        await updateAssignmentStartDate(data.existingAssignment.id, data.startDate);
-      }
-    } else if (data.useExistingStudent) {
-      // Existing student record, new assignment for this teacher
-      const es = data.useExistingStudent;
-      const newAssignment: Assignment = {
-        id: crypto.randomUUID(),
-        teacherId: teacher.id,
-        teacherName: teacher.name,
-        teacherEmail: teacher.email,
-        studentId: es.id,
-        studentName: es.name,
-        studentEmail: es.email,
-        studentLevel: es.level,
-        slots: data.slots,
-        objetivo: '',
-        plan: '',
-        weeklyHours: data.slots.length,
-        availability: data.slots.map(s => `${s.day} ${s.hour}`).join(', '),
-        notes: '',
-        startDate: data.startDate,
-        createdAt: new Date().toISOString(),
-      };
-      await addAssignment(newAssignment);
-      finalName = es.name;
-    }
-
-    // PREVENCIÓN: garantizar que el alumno y su assignment existan y estén
-    // correctamente vinculados ANTES de pintar la celda 'ocupado', para que
-    // grid ↔ students ↔ assignments queden siempre en sincronía desde el origen.
-    // Idempotente: si ya existen (creados arriba), no duplica.
+    // Todo el guardado en base va dentro de un try: si algo falla, NO pintamos
+    // la celda del grid, para que calendario ↔ students ↔ assignments queden
+    // siempre coordinados (nunca un alumno en el calendario sin su asignación).
     try {
+      if (data.isNew && data.newStudentData) {
+        const newStudent: Student = {
+          id: crypto.randomUUID(),
+          name: data.newStudentData.name,
+          email: data.newStudentData.email,
+          level: data.newStudentData.level,
+          plan: data.newStudentData.plan,
+          createdAt: new Date().toISOString(),
+        };
+        await addStudent(newStudent);
+        // Persistir tipo de producto detectado (best-effort).
+        if (data.newStudentData.productType !== undefined) {
+          dbSetStudentProduct(newStudent.id, data.newStudentData.productType ?? null, data.newStudentData.plan).catch(() => {});
+        }
+
+        const newAssignment: Assignment = {
+          id: crypto.randomUUID(),
+          teacherId: teacher.id,
+          teacherName: teacher.name,
+          teacherEmail: teacher.email,
+          studentId: newStudent.id,
+          studentName: newStudent.name,
+          studentEmail: newStudent.email,
+          studentLevel: newStudent.level,
+          slots: data.slots,
+          objetivo: data.newStudentData.plan,
+          plan: data.newStudentData.plan,
+          weeklyHours: data.slots.length,
+          availability: data.slots.map(s => `${s.day} ${s.hour}`).join(', '),
+          notes: '',
+          startDate: data.startDate,
+          createdAt: new Date().toISOString(),
+        };
+        await addAssignment(newAssignment);
+        finalName = newStudent.name;
+      } else if (data.existingAssignment) {
+        await updateAssignmentSlots(data.existingAssignment.id, data.slots, data.slots.length);
+        if (data.startDate && data.startDate !== data.existingAssignment.startDate) {
+          await updateAssignmentStartDate(data.existingAssignment.id, data.startDate);
+        }
+      } else if (data.useExistingStudent) {
+        // Existing student record, new assignment for this teacher
+        const es = data.useExistingStudent;
+        const newAssignment: Assignment = {
+          id: crypto.randomUUID(),
+          teacherId: teacher.id,
+          teacherName: teacher.name,
+          teacherEmail: teacher.email,
+          studentId: es.id,
+          studentName: es.name,
+          studentEmail: es.email,
+          studentLevel: es.level,
+          slots: data.slots,
+          objetivo: '',
+          plan: '',
+          weeklyHours: data.slots.length,
+          availability: data.slots.map(s => `${s.day} ${s.hour}`).join(', '),
+          notes: '',
+          startDate: data.startDate,
+          createdAt: new Date().toISOString(),
+        };
+        await addAssignment(newAssignment);
+        finalName = es.name;
+      }
+
+      // PREVENCIÓN / red de seguridad idempotente: garantiza que el alumno y su
+      // assignment existan y estén bien vinculados. Ahora participa del try, así
+      // que si el guardado real falla, se corta ANTES de pintar la celda.
       const ensureEmail = data.isNew ? data.newStudentData?.email
         : data.useExistingStudent?.email ?? data.existingAssignment?.studentEmail;
       const ensureLevel = data.isNew ? data.newStudentData?.level
@@ -2305,12 +2307,21 @@ function TeacherContent() {
         plan: data.isNew ? data.newStudentData?.plan : undefined,
         slots: data.slots, startDate: data.startDate,
       });
-    } catch { /* best-effort: nunca bloquea la asignación */ }
+    } catch (e) {
+      console.error('[handleAssignStudent] no se pudo guardar la asignación:', e);
+      alert(
+        'No se pudo guardar la asignación en la base de datos, así que la celda NO se marcó ' +
+        '(para mantener el calendario y las asignaciones coordinados). Volvé a intentarlo.\n\n' +
+        'Detalle técnico: ' + (e instanceof Error ? e.message : String(e))
+      );
+      setPendingOcupado(null);
+      return;
+    }
 
-    // Update grid for all new slots and revert removed slots to libre
+    // Update grid — SOLO si el guardado en base fue exitoso.
     const updatedGrid = { ...grid };
     if (data.existingAssignment) {
-      for (const old of data.existingAssignment.slots) {
+      for (const old of data.existingAssignment.slots ?? []) {
         if (!data.slots.some(s => s.day === old.day && s.hour === old.hour)) {
           updatedGrid[cellKey(old.day, old.hour)] = { state: 'libre' };
         }
@@ -2354,7 +2365,7 @@ function TeacherContent() {
     const classNum = calcCurrentClassNumber(a);
     for (const milestone of [15, 30] as const) {
       if (classNum >= milestone && !hasSeenBanner(teacher.id, a.studentName, milestone) && !dismissedInSession.has(`${a.studentName}_${milestone}`)) {
-        visibleBanners.push({ studentName: a.studentName, milestone, startDate: a.startDate, slotsPerWeek: a.slots.length });
+        visibleBanners.push({ studentName: a.studentName, milestone, startDate: a.startDate, slotsPerWeek: (a.slots ?? []).length });
         break;
       }
     }

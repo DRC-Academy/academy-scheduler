@@ -266,15 +266,27 @@ export async function dbActivateOneTimeAccess(
 }
 
 export async function dbUpsertStudent(student: Student): Promise<void> {
-  await supabase.from('students').upsert({
-    id:         student.id,
-    name:       student.name,
-    email:      student.email,
-    phone:      student.phone ?? null,
-    level:      student.level,
-    plan:       student.plan ?? 'Plan Individual',
-    notes:      student.notes ?? null,
-  }, { onConflict: 'email' });
+  const email = (student.email ?? '').trim();
+  const row = {
+    id:    student.id,
+    name:  student.name,
+    // Email vacío → null: '' como clave de conflicto fusiona alumnos DISTINTOS
+    // que casualmente no tienen email (y rompe la FK de la assignment cuando el
+    // id nuevo no llega a insertarse). Postgres permite múltiples NULL.
+    email: email || null,
+    phone: student.phone ?? null,
+    level: student.level,
+    plan:  student.plan ?? 'Plan Individual',
+    notes: student.notes ?? null,
+  };
+  // Con email deduplicamos por email; sin email, por id.
+  const { error } = email
+    ? await supabase.from('students').upsert(row, { onConflict: 'email' })
+    : await supabase.from('students').upsert(row, { onConflict: 'id' });
+  if (error) {
+    console.error('[dbUpsertStudent] upsert en students falló:', error);
+    throw new Error(`No se pudo guardar el alumno: ${error.message}`);
+  }
 }
 
 // ── ASSIGNMENTS ───────────────────────────────────────────────────────────────
@@ -593,10 +605,14 @@ export async function dbCreateFullLink(params: {
   }
   if (!studentId) {
     studentId = crypto.randomUUID();
-    await supabase.from('students').insert({
+    const { error } = await supabase.from('students').insert({
       id: studentId, name: nameTrim, email: emailTrim,
       level: params.level, plan: params.plan,
     });
+    if (error) {
+      console.error('[dbCreateFullLink] INSERT en students falló:', error);
+      throw new Error(`No se pudo crear el alumno: ${error.message}`);
+    }
   } else {
     await supabase.from('students').update({
       email: emailTrim || undefined, level: params.level, plan: params.plan,
@@ -622,14 +638,16 @@ export async function dbCreateFullLink(params: {
     weekly_hours: params.weeklyHours, start_date: params.startDate || null,
     availability: params.slots.map(s => `${s.day} ${s.hour}`).join(', '),
   };
-  if (asgId) {
-    await supabase.from('assignments').update(payload).eq('id', asgId);
-  } else {
-    await supabase.from('assignments').insert({
-      id: crypto.randomUUID(),
-      teacher_id: params.teacherId, teacher_name: params.teacherName, teacher_email: params.teacherEmail,
-      objetivo: '', notes: '', manual_class_adjustment: 0, ...payload,
-    });
+  const { error: linkErr } = asgId
+    ? await supabase.from('assignments').update(payload).eq('id', asgId)
+    : await supabase.from('assignments').insert({
+        id: crypto.randomUUID(),
+        teacher_id: params.teacherId, teacher_name: params.teacherName, teacher_email: params.teacherEmail,
+        objetivo: '', notes: '', manual_class_adjustment: 0, ...payload,
+      });
+  if (linkErr) {
+    console.error('[dbCreateFullLink] guardado de assignment falló:', linkErr);
+    throw new Error(`No se pudo guardar la asignación: ${linkErr.message}`);
   }
 }
 
@@ -657,7 +675,11 @@ export async function dbEnsureStudentAndAssignment(params: {
   if (!student) {
     const id = crypto.randomUUID();
     const rec = { id, name: nameTrim, email: emailTrim, level: params.studentLevel ?? 'B1', plan: params.plan ?? '' };
-    await supabase.from('students').insert(rec);
+    const { error: stuErr } = await supabase.from('students').insert(rec);
+    if (stuErr) {
+      console.error('[dbEnsureStudentAndAssignment] INSERT en students falló:', stuErr);
+      throw new Error(`No se pudo crear el alumno: ${stuErr.message}`);
+    }
     student = rec;
   }
 
@@ -679,7 +701,7 @@ export async function dbEnsureStudentAndAssignment(params: {
     return; // ya existe y está bien vinculada
   }
 
-  await supabase.from('assignments').insert({
+  const { error: asgErr } = await supabase.from('assignments').insert({
     id: crypto.randomUUID(),
     teacher_id: params.teacherId, teacher_name: params.teacherName, teacher_email: params.teacherEmail,
     student_id: student.id, student_name: student.name, student_email: student.email, student_level: student.level,
@@ -687,6 +709,10 @@ export async function dbEnsureStudentAndAssignment(params: {
     availability: params.slots.map(s => `${s.day} ${s.hour}`).join(', '), notes: '',
     start_date: params.startDate ?? null, manual_class_adjustment: 0,
   });
+  if (asgErr) {
+    console.error('[dbEnsureStudentAndAssignment] INSERT en assignments falló:', asgErr);
+    throw new Error(`No se pudo guardar la asignación: ${asgErr.message}`);
+  }
 }
 
 // Sincronización masiva: para cada profesor, crea automáticamente la assignment
@@ -874,7 +900,7 @@ export async function dbGetAssignmentsByTeacher(teacherId: string): Promise<Assi
 }
 
 export async function dbAddAssignment(a: Assignment): Promise<void> {
-  await supabase.from('assignments').insert({
+  const { error } = await supabase.from('assignments').insert({
     id:                     a.id,
     teacher_id:             a.teacherId,
     teacher_name:           a.teacherName,
@@ -892,6 +918,14 @@ export async function dbAddAssignment(a: Assignment): Promise<void> {
     start_date:             a.startDate ?? null,
     manual_class_adjustment: a.manualClassAdjustment ?? 0,
   });
+  // CRÍTICO: no tragar el error. Si el INSERT falla (RLS / FK / columna
+  // requerida), hay que lanzarlo — de lo contrario la asignación "parece"
+  // creada (estado local + notificación + celda del grid) pero no existe en la
+  // base, y desaparece al recargar. Lanzar mantiene grid ↔ assignments en sync.
+  if (error) {
+    console.error('[dbAddAssignment] INSERT en assignments falló:', error);
+    throw new Error(`No se pudo guardar la asignación: ${error.message}`);
+  }
 }
 
 export async function dbUpdateAssignmentAdjustment(assignmentId: string, newAdjustment: number): Promise<void> {
@@ -1397,10 +1431,11 @@ export function calcCurrentClassNumber(assignment: {
   const startJsDay  = startLocal.getDay();
 
   // Full weeks × slots per week
-  let count = fullWeeks * assignment.slots.length;
+  const slots = assignment.slots ?? [];
+  let count = fullWeeks * slots.length;
 
   // Add slots from the current partial week that have already occurred
-  for (const slot of assignment.slots) {
+  for (const slot of slots) {
     const slotJsDay = DAY_TO_JSDAY[slot.day] ?? -1;
     if (slotJsDay === -1) continue;
 
