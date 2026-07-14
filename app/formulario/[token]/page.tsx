@@ -192,10 +192,10 @@ function WelcomeInner({ token }: { token: TokenRow }) {
   return (
     <div className="drc-f-screen">
       <span className="drc-f-chip">⏱ 10 minutos</span>
-      <h1>¡Hola, {token.student_name}! 👋</h1>
-      <p>Antes de tu primera clase con <b>{token.teacher_name}</b>, me gustaría conocerte un poco mejor.</p>
-      <p>Estas preguntas me ayudan a preparar una clase 100% tuya desde el primer minuto.</p>
-      <p className="drc-f-muted">Son solo 10 minutos — ¡merece la pena! 😊</p>
+      <h1>Hola, {token.student_name}. 👋</h1>
+      <p>Soy Diego, el director de DRC Academy. Antes de tu primera clase con <b>{token.teacher_name}</b> quiero conocerte un poco, y luego le paso a tu profe lo que me cuentes.</p>
+      <p>Con esto <b>{token.teacher_name}</b> prepara una clase pensada para ti desde el primer minuto, y no una clase igual para todos.</p>
+      <p className="drc-f-muted">Son once preguntas y no te llevará más de diez minutos. Respóndeme con sinceridad, que va directo a manos de tu profe.</p>
     </div>
   );
 }
@@ -204,8 +204,8 @@ function ReviewInner({ teacherName }: { teacherName: string }) {
   return (
     <div className="drc-f-screen center">
       <div className="drc-f-big">🎉</div>
-      <h1>¡Ya está!</h1>
-      <p>Has respondido todas las preguntas. Cuando quieras, envía tus respuestas y {teacherName} preparará tu primera clase.</p>
+      <h1>Ya está.</h1>
+      <p>Has llegado al final. Cuando quieras, envíame tus respuestas y se las paso a {teacherName} para que prepare tu primera clase.</p>
     </div>
   );
 }
@@ -403,10 +403,10 @@ function ThankYouScreen({ studentName, teacherName }: { studentName: string; tea
       <div className="drc-f-content">
         <div className="drc-f-screen center drc-f-anim">
           <div className="drc-f-big">🎉</div>
-          <h1>¡Gracias, {studentName}!</h1>
-          <p>Ya estoy preparando tu primera clase.</p>
-          <p>¡Hasta pronto! 😊</p>
-          <p className="drc-f-sig">— {teacherName}</p>
+          <h1>Gracias, {studentName}.</h1>
+          <p>Ya tengo todo lo que necesitaba. Se lo hago llegar a {teacherName} para que prepare tu primera clase y empieces con buen pie.</p>
+          <p>Nos vemos muy pronto.</p>
+          <p className="drc-f-sig">Diego Ruiz. Director de DRC Academy.</p>
         </div>
       </div>
     </Shell>
@@ -435,8 +435,8 @@ function AlreadyDoneScreen() {
       <div className="drc-f-content">
         <div className="drc-f-screen center drc-f-anim">
           <div className="drc-f-big">✅</div>
-          <h1>¡Ya has completado este formulario!</h1>
-          <p className="drc-f-muted">Gracias por tus respuestas. Tu profesor ya las tiene. 😊</p>
+          <h1>Ya has completado el formulario.</h1>
+          <p className="drc-f-muted">Gracias por tus respuestas. Ya las tengo y se las he pasado a tu profe. Nos vemos en clase.</p>
         </div>
       </div>
     </Shell>
@@ -462,7 +462,7 @@ function Shell({ children }: { children: React.ReactNode }) {
       <FormStyles />
       <div className="drc-f-stage">
         <div className="drc-f-card">{children}</div>
-        <div className="drc-f-footer">DRC Academy — Plataforma de gestión interna</div>
+        <div className="drc-f-footer">DRC Academy · Plataforma de gestión interna</div>
       </div>
     </div>
   );
