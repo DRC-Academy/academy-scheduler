@@ -14,6 +14,8 @@ import { StudentAutofillCard } from '@/components/StudentAutofillCard';
 import { useStudentAutofill } from '@/lib/useStudentAutofill';
 import { checkSubscription, subBadge, type SubscriptionInfo } from '@/lib/useSubscriptionStatus';
 import { isMilestone, getMilestoneSlides, getMilestoneCopy, MILESTONES, MILESTONE_SLIDES, MILESTONE_TITLES } from '@/lib/milestones';
+import { RETENTION_BONUS_DAYS, retentionDaysActive, retentionStartDate, retentionBonusDate, hasRetentionBonus } from '@/lib/retention';
+import { resolveGender, g } from '@/lib/gender';
 import { Grid, Teacher, Assignment, ScoringEvent, Student, AppNotification, ClassRecord } from '@/types';
 import FormStatusBadge from '@/components/FormStatusBadge';
 import { fetchFormTokensIndex, lookupToken, getOrCreateFormLink, type FormTokenInfo } from '@/lib/formClient';
@@ -507,15 +509,14 @@ function TeacherScoringTab({ teacher, myAssignments, myEvents }: {
 
   // Retention progress per student
   const studentProgress = myAssignments.map(a => {
-    const start      = new Date(a.startDate ?? a.createdAt);
-    const daysActive = Math.floor((today.getTime() - start.getTime()) / (24 * 60 * 60 * 1000));
-    const pct        = Math.min(100, (daysActive / 180) * 100);
-    const hasBonus   = myEvents.some(e => e.eventType === 'bonus_retencion' && e.studentRef === a.studentName);
-    return { a, daysActive, pct, hasBonus, start };
+    const daysActive = retentionDaysActive(a, today);
+    const pct        = Math.min(100, (daysActive / RETENTION_BONUS_DAYS) * 100);
+    const hasBonus   = hasRetentionBonus(myEvents, a.studentName);
+    return { a, daysActive, pct, hasBonus, start: retentionStartDate(a) };
   }).sort((a, b) => b.daysActive - a.daysActive);
 
-  const availableBonuses = studentProgress.filter(s => s.daysActive >= 180 && !s.hasBonus);
-  const nextBonus        = studentProgress.filter(s => s.daysActive < 180).sort((a, b) => b.daysActive - a.daysActive)[0];
+  const availableBonuses = studentProgress.filter(s => s.daysActive >= RETENTION_BONUS_DAYS && !s.hasBonus);
+  const nextBonus        = studentProgress.filter(s => s.daysActive < RETENTION_BONUS_DAYS).sort((a, b) => b.daysActive - a.daysActive)[0];
 
   const currentReqs = currentLevel === 1
     ? [
@@ -783,15 +784,14 @@ function TeacherNotificationsTab({ teacher, myAssignments, students, notificatio
     .filter(({ classNum }) => classNum < 15 && (15 - classNum) <= 3)
     .map(({ a, classNum }) => ({ name: a.studentName, classNum, faltanClases: 15 - classNum }));
 
-  // Section B: near 6 months (≤15 days or already there)
+  // Section B: near 6 months (≤15 days or already there).
+  // Fuente única (lib/retention.ts): ya NO se descartan las asignaciones sin
+  // startDate (antes `.filter(a => a.startDate)` las dejaba fuera del bono).
   const near6m = myAssignments
-    .filter(a => a.startDate)
     .map(a => {
-      const start     = new Date(a.startDate! + 'T00:00:00');
-      const daysActive = Math.floor((today.getTime() - start.getTime()) / 86400000);
-      const daysTo6m   = Math.max(0, 180 - daysActive);
-      const bonusDate  = new Date(start.getTime() + 180 * 86400000);
-      return { a, daysActive, daysTo6m, bonusDate, bonusAvailable: daysActive >= 180 };
+      const daysActive = retentionDaysActive(a, today);
+      const daysTo6m   = Math.max(0, RETENTION_BONUS_DAYS - daysActive);
+      return { a, daysActive, daysTo6m, bonusDate: retentionBonusDate(a), bonusAvailable: daysActive >= RETENTION_BONUS_DAYS };
     })
     .filter(({ daysTo6m, bonusAvailable }) => bonusAvailable || daysTo6m <= 15);
 
@@ -1076,6 +1076,8 @@ function buildPresentationBody(a: Assignment, teacher: Teacher, student: Student
   const hIni  = info ? info.horaInicio : '[hora]';
   const hFin  = info ? info.horaFin : '[hora]';
   const link  = meetLink.trim() || MEET_PLACEHOLDER;
+  // Género del profe para "elegido/a" y "profesor/a" (dato explícito o detectado por nombre).
+  const tg    = resolveGender(teacher.gender, teacher.name);
   // Sección del formulario inicial (se incluye solo si ya hay link generado).
   const formBlock = formUrl?.trim()
     ? `
@@ -1087,7 +1089,7 @@ ${formUrl.trim()}
     : '';
   return `¡Buenos días, ${a.studentName}!
 
-¡Es un placer saludarte! Mi nombre es ${teacher.name} y he sido elegida como tu profesora en DRC Academy.
+¡Es un placer saludarte! Mi nombre es ${teacher.name} y he sido ${g(tg, 'elegido', 'elegida', 'elegido/a')} como tu ${g(tg, 'profesor', 'profesora', 'profesor/a')} en DRC Academy.
 
 Será un gusto conocerte en nuestra primera clase el ${fecha} de ${hIni} a ${hFin}h.
 
@@ -2371,18 +2373,14 @@ function TeacherContent() {
     }
   }
 
-  // check6MonthBonusBanners: revisa antigüedad en meses desde start_date, independiente de clases
+  // check6MonthBonusBanners: fuente única (lib/retention.ts). Ya NO descarta las
+  // asignaciones sin start_date, y mide días de continuidad como el resto.
   type BonusBannerEntry = { studentName: string; assignmentId: string };
   const visibleBonusBanners: BonusBannerEntry[] = [];
   const today6m = new Date();
   for (const a of myAssignments) {
-    if (!a.startDate) continue;
-    const startDate6m = new Date(a.startDate + 'T00:00:00');
-    const monthsElapsed =
-      (today6m.getFullYear() - startDate6m.getFullYear()) * 12 +
-      (today6m.getMonth() - startDate6m.getMonth());
     if (
-      monthsElapsed >= 6 &&
+      retentionDaysActive(a, today6m) >= RETENTION_BONUS_DAYS &&
       !hasSeenBonusBanner(teacher.id, a.studentName, a.id) &&
       !dismissedBonusInSession.has(`${a.studentName}_${a.id}`)
     ) {

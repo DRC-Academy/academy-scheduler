@@ -113,6 +113,7 @@ export async function dbGetTeachers(): Promise<Teacher[]> {
       name:                row.name,
       email:               row.email,
       notificationEmail:   row.notification_email ?? undefined,
+      gender:              row.gender ?? undefined,
       avatar:              row.avatar,
       status,
       weeklyLoad,
@@ -200,6 +201,7 @@ export async function dbGetStudents(): Promise<Student[]> {
     name:              row.name,
     email:             row.email,
     phone:             row.phone ?? undefined,
+    gender:            row.gender ?? undefined,
     level:             row.level,
     plan:              row.plan,
     notes:             row.notes ?? undefined,
@@ -635,7 +637,7 @@ export async function dbCreateFullLink(params: {
   const payload = {
     student_id: studentId, student_name: nameTrim, student_email: emailTrim,
     student_level: params.level, slots: params.slots, plan: params.plan,
-    weekly_hours: params.weeklyHours, start_date: params.startDate || null,
+    weekly_hours: params.weeklyHours, start_date: params.startDate || new Date().toISOString().slice(0, 10),
     availability: params.slots.map(s => `${s.day} ${s.hour}`).join(', '),
   };
   const { error: linkErr } = asgId
@@ -707,7 +709,7 @@ export async function dbEnsureStudentAndAssignment(params: {
     student_id: student.id, student_name: student.name, student_email: student.email, student_level: student.level,
     slots: params.slots, objetivo: '', plan: params.plan ?? student.plan ?? '', weekly_hours: params.slots.length,
     availability: params.slots.map(s => `${s.day} ${s.hour}`).join(', '), notes: '',
-    start_date: params.startDate ?? null, manual_class_adjustment: 0,
+    start_date: params.startDate ?? new Date().toISOString().slice(0, 10), manual_class_adjustment: 0,
   });
   if (asgErr) {
     console.error('[dbEnsureStudentAndAssignment] INSERT en assignments falló:', asgErr);
@@ -915,7 +917,10 @@ export async function dbAddAssignment(a: Assignment): Promise<void> {
     weekly_hours:           a.weeklyHours,
     availability:           a.availability,
     notes:                  a.notes,
-    start_date:             a.startDate ?? null,
+    // Default a hoy si viene vacío: el reloj del bono de retención (6 meses) se
+    // mide desde start_date. Sin fecha, la asignación quedaba fuera de la
+    // detección del bono. Ver lib/retention.ts.
+    start_date:             a.startDate ?? new Date().toISOString().slice(0, 10),
     manual_class_adjustment: a.manualClassAdjustment ?? 0,
   });
   // CRÍTICO: no tragar el error. Si el INSERT falla (RLS / FK / columna

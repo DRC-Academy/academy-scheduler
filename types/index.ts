@@ -35,6 +35,7 @@ export interface Teacher {
   name: string;
   email: string;
   notificationEmail?: string;    // correo donde llegan los avisos (si vacío, se usa email)
+  gender?: 'male' | 'female';    // opcional; si falta se detecta por nombre (lib/gender.ts)
   avatar: string;
   status: TeacherStatus;
   weeklyLoad: number;
@@ -68,6 +69,7 @@ export interface Student {
   name: string;
   email: string;
   phone?: string;
+  gender?: 'male' | 'female';    // opcional; si falta se detecta por nombre (lib/gender.ts)
   level: string;
   plan: string;
   assignedTeacher?: string;
