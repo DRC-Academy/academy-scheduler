@@ -65,6 +65,12 @@ export async function GET(request: Request): Promise<Response> {
   const now = Date.now();
   const createdAtIso = new Date(now).toISOString();
 
+  // Ventana de recencia: solo alertamos por asignaciones recientes. Cubre con
+  // margen el último umbral (24 h) sin nagear por asignaciones viejas ni inundar
+  // con el backfill de las que ya existían antes de esta función (esas siguen
+  // viéndose como "fuera de tiempo" en los badges de la UI, pero no generan push).
+  const ALERT_WINDOW_HOURS = 96;
+
   // Construir las alertas candidatas (con id determinista por assignment + etapa).
   interface Candidate {
     id: string;
@@ -78,6 +84,7 @@ export async function GET(request: Request): Promise<Response> {
 
   for (const a of pending) {
     const h = hoursSinceAssigned(a.created_at, now);
+    if (h > ALERT_WINDOW_HOURS) continue;   // asignación vieja → no genera alertas
     const { fecha, hora } = fmtAssignedAt(a.created_at);
 
     // 4 h → recordatorio al profe.
