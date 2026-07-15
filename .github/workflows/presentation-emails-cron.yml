@@ -1,0 +1,30 @@
+name: Cron emails de presentación
+
+# Reemplaza al cron de Vercel (el plan Hobby no permite crons por hora).
+# Pega cada hora al endpoint /api/cron/check-presentation-emails, que envía las
+# alertas de emails de presentación pendientes (4h/12h/24h).
+#
+# Requiere dos secrets del repo (Settings → Secrets and variables → Actions):
+#   · PRESENTATION_CRON_URL  → URL completa del endpoint en producción, p. ej.
+#       https://TU-APP.vercel.app/api/cron/check-presentation-emails
+#   · CRON_SECRET            → el MISMO valor que configures como env var CRON_SECRET
+#       en Vercel (protege el endpoint para que solo lo dispare este workflow).
+
+on:
+  schedule:
+    - cron: '0 * * * *'   # cada hora en punto (UTC)
+  workflow_dispatch: {}    # permite dispararlo a mano desde la pestaña Actions
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Llamar al endpoint del cron
+        run: |
+          curl --fail --silent --show-error --location \
+            --max-time 60 --retry 2 --retry-delay 10 \
+            --header "Authorization: Bearer ${CRON_SECRET}" \
+            "${CRON_URL}"
+        env:
+          CRON_URL: ${{ secrets.PRESENTATION_CRON_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
