@@ -19,7 +19,6 @@ import { resolveGender, g } from '@/lib/gender';
 import { Grid, Teacher, Assignment, ScoringEvent, Student, AppNotification, ClassRecord } from '@/types';
 import FormStatusBadge from '@/components/FormStatusBadge';
 import { fetchFormTokensIndex, lookupToken, getOrCreateFormLink, type FormTokenInfo } from '@/lib/formClient';
-import { getPresentationEmailStatus } from '@/lib/presentationEmailUtils';
 
 // Índice de tokens de formulario (por id/nombre de alumno). Se pasa a los tabs.
 type FormIndex = { byId: Map<string, FormTokenInfo>; byName: Map<string, FormTokenInfo> };
@@ -446,7 +445,6 @@ const EVENT_LABELS: Record<string, string> = {
   bonus_puntualidad:  'Bonus puntualidad',
   review_trustpilot:  'Reseña Trustpilot',
   bonus_feedback:     'Bonus feedback',
-  email_presentacion_tardio: '📧 Email de presentación tardío',
 };
 
 const MOTIVATIONAL: Record<number, string> = {
@@ -885,7 +883,6 @@ function TeacherNotificationsTab({ teacher, myAssignments, students, notificatio
                     {sent ? '📧 Reenviar presentación' : '📧 Enviar presentación al alumno'}
                   </button>
                 )}
-                {asgn && <PresentationEmailBadge assignment={asgn} />}
                 {asgn && (
                   <div style={{ marginTop: 8 }}>
                     <FormStatusBadge
@@ -1144,55 +1141,6 @@ function presentationBtnStyle(sent: boolean): CSSProperties {
     : { ...base, border: 'none', background: '#1E9E3A', color: 'white', fontWeight: 700 };
 }
 
-// Convierte un color hex (#RRGGBB) en rgba con la opacidad dada.
-function hexToRgba(hex: string, alpha: number): string {
-  const h = hex.replace('#', '');
-  const r = parseInt(h.slice(0, 2), 16);
-  const g2 = parseInt(h.slice(2, 4), 16);
-  const b = parseInt(h.slice(4, 6), 16);
-  return `rgba(${r}, ${g2}, ${b}, ${alpha})`;
-}
-
-// Badge dinámico del seguimiento del email de presentación. Se actualiza solo
-// cada minuto (reloj propio) y toma TODO el estado visual de la fuente única
-// lib/presentationEmailUtils.getPresentationEmailStatus.
-function PresentationEmailBadge({ assignment }: { assignment: Assignment }) {
-  const [now, setNow] = useState<number | null>(null);
-  useEffect(() => {
-    setNow(Date.now());
-    const id = setInterval(() => setNow(Date.now()), 60000);
-    return () => clearInterval(id);
-  }, []);
-
-  // Antes del montaje usamos createdAt como referencia estable (evita el desajuste
-  // de hidratación de usar Date.now() en el render del servidor).
-  const st = getPresentationEmailStatus(assignment, now ?? new Date(assignment.createdAt).getTime());
-  const animClass = st.pulse ? 'pres-email-badge-pulse' : st.blink ? 'pres-email-badge-blink' : '';
-  const textColor = st.badgeColor === '#FFC400' ? '#8a6d00' : st.badgeColor;
-
-  return (
-    <div style={{ marginTop: 8 }}>
-      <span
-        className={animClass}
-        style={{
-          display: 'inline-flex', alignItems: 'center', gap: 6,
-          padding: '5px 11px', borderRadius: 999, fontSize: 12, fontWeight: 700,
-          color: textColor,
-          background: hexToRgba(st.badgeColor, 0.12),
-          border: `1.5px solid ${hexToRgba(st.badgeColor, 0.42)}`,
-        }}
-      >
-        {st.badgeText}
-      </span>
-      {st.subtextMessage && (
-        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, lineHeight: 1.45, maxWidth: 340 }}>
-          {st.subtextMessage}
-        </div>
-      )}
-    </div>
-  );
-}
-
 // Modal "Email de presentación" — enlace de Meet + email editable con mailto.
 function PresentationModal({ assignment, teacher, students, updateMeetLink, onClose, onSent, onFormTokenReady }: {
   assignment: Assignment;
@@ -1203,8 +1151,6 @@ function PresentationModal({ assignment, teacher, students, updateMeetLink, onCl
   onSent: (studentName: string) => void;
   onFormTokenReady?: () => void;
 }) {
-  const { markPresentationSent } = useTeachers();
-
   // Lookup del alumno (email real + plan/producto) para clasificar y prellenar.
   const student = useMemo(() => {
     const byEmail = assignment.studentEmail?.trim().toLowerCase();
@@ -1267,9 +1213,6 @@ function PresentationModal({ assignment, teacher, students, updateMeetLink, onCl
     const mailto = `mailto:${toEmail.trim()}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
     window.location.href = mailto;
     await saveMeetIfAny();
-    // Registra el envío del email de presentación (persiste en la asignación y,
-    // si pasaron más de 24 h desde la asignación, aplica -5 al scoring). Best-effort.
-    markPresentationSent(assignment.id).catch(() => {});
     setConfirming(true);
   }
 
@@ -1931,11 +1874,6 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, up
                 </div>
               )}
             </>
-          )}
-
-          {/* Seguimiento del email de presentación (solo alumnos nuevos pendientes) */}
-          {!passed && !c.assignment.presentationEmailSent && (
-            <PresentationEmailBadge assignment={c.assignment} />
           )}
         </div>
       </div>

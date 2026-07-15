@@ -105,8 +105,6 @@ export interface Assignment {
   createdAt: string;
   manualClassAdjustment?: number;
   meetLink?: string;
-  presentationEmailSent?: boolean;    // email de bienvenida enviado al alumno
-  presentationEmailSentAt?: string;   // ISO en que se marcó como enviado
 }
 
 export interface ClassJoinLog {
@@ -169,8 +167,7 @@ export type ScoringEventType =
   | 'upsell' | 'bonus_retencion' | 'bonus_puntualidad'
   | 'review_trustpilot' | 'bonus_feedback'
   | 'cambio_por_alumno' | 'cambio_por_profesor'
-  | 'profe_del_mes' | 'profe_del_trimestre'
-  | 'email_presentacion_tardio';
+  | 'profe_del_mes' | 'profe_del_trimestre';
 
 export interface ScoringEvent {
   id: string;
