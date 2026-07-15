@@ -70,6 +70,7 @@ interface TeachersContextType {
   markNotificationRead: (notifId: string, userId: string) => Promise<void>;
   markAllNotificationsRead: (userId: string, role: string) => Promise<void>;
   updateMeetLink: (assignmentId: string, link: string) => Promise<void>;
+  markPresentationSent: (assignmentId: string) => Promise<{ hoursElapsed: number; sentOnTime: boolean }>;
   logClassJoin: (teacherId: string, teacherName: string, studentName: string, scheduledDate: string, scheduledTime: string, subscriptionStatus?: string, enteredWithoutActive?: boolean, subscriptionDaysRemaining?: number | null) => Promise<void>;
   loadClassJoinLogs: () => Promise<void>;
   loadClassRecords: () => Promise<void>;
@@ -118,6 +119,7 @@ const TeachersContext = createContext<TeachersContextType>({
   markNotificationRead:       async () => {},
   markAllNotificationsRead:   async () => {},
   updateMeetLink:             async () => {},
+  markPresentationSent:       async () => ({ hoursElapsed: 0, sentOnTime: true }),
   logClassJoin:               async () => {},
   loadClassJoinLogs:          async () => {},
   loadClassRecords:           async () => {},
@@ -391,6 +393,20 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     setAssignments(prev => prev.map(a => a.id === assignmentId ? { ...a, meetLink: trimmed || undefined } : a));
   }
 
+  // Marca el email de presentación como enviado (persiste vía API que además
+  // penaliza el scoring si pasaron más de 24 h) y refleja el estado localmente
+  // para que los badges cambien a "enviado" sin recargar.
+  async function markPresentationSent(assignmentId: string) {
+    const res = await fetch(`/api/assignments/${assignmentId}/presentation-sent`, { method: 'PATCH' });
+    if (!res.ok) throw new Error('No se pudo marcar el email de presentación como enviado');
+    const data = await res.json().catch(() => ({} as { hoursElapsed?: number; sentOnTime?: boolean }));
+    const nowIso = new Date().toISOString();
+    setAssignments(prev => prev.map(a => a.id === assignmentId
+      ? { ...a, presentationEmailSent: true, presentationEmailSentAt: a.presentationEmailSentAt ?? nowIso }
+      : a));
+    return { hoursElapsed: data.hoursElapsed ?? 0, sentOnTime: data.sentOnTime !== false };
+  }
+
   async function logClassJoin(
     teacherId: string,
     teacherName: string,
@@ -540,7 +556,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
       reloadAll, loadClassCounts, incrementClassCount,
       updateAssignmentAdjustment, updateAssignmentStartDate, updateAssignmentSlots,
       sendNotification, loadNotifications, markNotificationRead, markAllNotificationsRead,
-      updateMeetLink, logClassJoin, loadClassJoinLogs,
+      updateMeetLink, markPresentationSent, logClassJoin, loadClassJoinLogs,
       loadClassRecords, loadFinanceData, registerClassRecord, attachScreenshotToClass,
       markPaymentAsPaid, approveReviewClass, approveExceedLimitClass,
       changeStudentTeacher, removeAssignment, addRescheduleRecord, addRecoveryClass,
