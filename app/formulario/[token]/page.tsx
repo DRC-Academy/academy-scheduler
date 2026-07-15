@@ -191,11 +191,11 @@ function FormFlow({ token }: { token: TokenRow }) {
 function WelcomeInner({ token }: { token: TokenRow }) {
   return (
     <div className="drc-f-screen">
-      <span className="drc-f-chip">⏱ 10 minutos</span>
+      <span className="drc-f-chip">⏱ 5 minutos</span>
       <h1>Hola, {token.student_name}. 👋</h1>
-      <p>Soy Diego, el director de DRC Academy. Antes de tu primera clase con <b>{token.teacher_name}</b> quiero conocerte un poco, y luego le paso a tu profe lo que me cuentes.</p>
-      <p>Con esto <b>{token.teacher_name}</b> prepara una clase pensada para ti desde el primer minuto, y no una clase igual para todos.</p>
-      <p className="drc-f-muted">Son once preguntas y no te llevará más de diez minutos. Respóndeme con sinceridad, que va directo a manos de tu profe.</p>
+      <p>Soy Diego, el director de DRC Academy. Antes de tu primera clase con <b>{token.teacher_name}</b> me gustaría conocerte un poco.</p>
+      <p>Con esto prepararemos una clase pensada para ti desde el primer minuto.</p>
+      <p className="drc-f-muted">Son once preguntas y solo te llevará cinco minutos. Responde con sinceridad, para que podamos personalizar tu clase.</p>
     </div>
   );
 }
