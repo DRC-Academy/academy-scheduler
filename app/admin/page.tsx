@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, Fragment } from 'react';
 import { NavBar } from '@/components/NavBar';
 import { StatusBadge } from '@/components/StatusBadge';
 import { AuthGuard } from '@/components/AuthGuard';
@@ -16,6 +16,7 @@ import { EVENT_POINTS, EVENT_EUROS, calcCurrentClassNumber, dbUpdateAssignmentSt
   findDuplicateTeacherAssignments, type DuplicateAssignmentGroup } from '@/lib/db';
 import { CambiarProfesorModal } from '@/components/CambiarProfesorModal';
 import { CrearVinculoModal } from '@/components/CrearVinculoModal';
+import { getPresentationEmailStatus } from '@/lib/presentationEmailUtils';
 import { useRouter } from 'next/navigation';
 import { AppNotification, ClassJoinLog, AssignedSlot } from '@/types';
 
@@ -279,6 +280,7 @@ const EVENT_LABELS: Record<string, string> = {
   cambio_por_profesor: 'Profesor abandonó alumno',
   profe_del_mes:       '🏆 Profe del Mes',
   profe_del_trimestre: '🏆 Profe del Trimestre',
+  email_presentacion_tardio: 'Email de presentación tardío',
 };
 
 const EVENT_ICONS: Record<string, string> = {
@@ -296,7 +298,52 @@ const EVENT_ICONS: Record<string, string> = {
   cambio_por_profesor: '⚠️',
   profe_del_mes:       '🏆',
   profe_del_trimestre: '🏆',
+  email_presentacion_tardio: '📧',
 };
+
+// ─── Seguimiento del email de presentación (resumen para el admin) ────────────
+interface PresentationPending {
+  studentName: string;
+  hours: number;
+  statusKind: 'on_time' | 'warning' | 'at_risk' | 'overdue';
+  statusLabel: string;
+}
+interface TeacherPresentationSummary {
+  pending: PresentationPending[];
+  overdueCount: number;
+  badge: { text: string; color: string; bg: string; border: string };
+}
+
+const PRES_STATUS_LABEL: Record<string, string> = {
+  on_time: '🟢 A tiempo',
+  warning: '🟡 A tiempo',
+  at_risk: '⏰ En riesgo',
+  overdue: '🔴 Fuera de tiempo',
+};
+
+// Resume el estado del email de presentación de las asignaciones de un profesor.
+// Usa la fuente única lib/presentationEmailUtils para clasificar cada pendiente.
+function teacherPresentationSummary(teacherAssignments: Assignment[], now: number): TeacherPresentationSummary {
+  const pending: PresentationPending[] = [];
+  for (const a of teacherAssignments) {
+    if (a.presentationEmailSent) continue;
+    const st = getPresentationEmailStatus(a, now);
+    if (st.status === 'sent') continue;
+    pending.push({ studentName: a.studentName, hours: st.hoursElapsed, statusKind: st.status, statusLabel: PRES_STATUS_LABEL[st.status] ?? '' });
+  }
+  pending.sort((x, y) => y.hours - x.hours);
+  const overdueCount = pending.filter(p => p.statusKind === 'overdue').length;
+
+  let badge: TeacherPresentationSummary['badge'];
+  if (pending.length === 0) {
+    badge = { text: '✅ Al día', color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)', border: 'rgba(30,158,58,0.3)' };
+  } else if (overdueCount > 0) {
+    badge = { text: `🔴 ${overdueCount} pendiente${overdueCount !== 1 ? 's' : ''} (+24h)`, color: '#ef4444', bg: 'rgba(239,68,68,0.1)', border: 'rgba(239,68,68,0.4)' };
+  } else {
+    badge = { text: `⚠️ ${pending.length} pendiente${pending.length !== 1 ? 's' : ''} (<24h)`, color: '#b8860b', bg: 'rgba(255,196,0,0.14)', border: 'rgba(255,196,0,0.5)' };
+  }
+  return { pending, overdueCount, badge };
+}
 
 // ─── Stars display ────────────────────────────────────────────────────────────
 function Stars({ level, size = 14 }: { level: number; size?: number }) {
@@ -1047,6 +1094,23 @@ function ScoringTab() {
               {resetting === 'quarterly' ? '⏳ Reseteando...' : 'Forzar reset trimestral'}
             </button>
           </div>
+        </div>
+      </div>
+
+      {/* ── Tabla de puntos del sistema ── */}
+      <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '16px 20px', marginBottom: 16 }}>
+        <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)', marginBottom: 12 }}>📋 Tabla de puntos del sistema</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 8 }}>
+          {Object.entries(EVENT_POINTS).map(([key, pts]) => (
+            <div key={key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '7px 11px', borderRadius: 8, background: 'var(--bg-surface-2)' }}>
+              <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                {EVENT_ICONS[key] ?? '📌'} {EVENT_LABELS[key] ?? key}{key === 'email_presentacion_tardio' ? ' (>24h)' : ''}
+              </span>
+              <span style={{ fontSize: 12, fontWeight: 800, color: pts >= 0 ? '#1E9E3A' : '#ef4444', whiteSpace: 'nowrap' }}>
+                {pts > 0 ? '+' : ''}{pts} puntos
+              </span>
+            </div>
+          ))}
         </div>
       </div>
 
@@ -2848,6 +2912,15 @@ function AdminContent() {
   const [specialtyFilter, setSpecialtyFilter] = useState<string>('');
   const [editingStartDate, setEditingStartDate] = useState<Record<string, string>>({});
   const [savingStartDate, setSavingStartDate] = useState<Set<string>>(new Set());
+  const [emailDetail, setEmailDetail] = useState<string | null>(null);   // profe con el detalle de emails abierto
+
+  // Referencia temporal para el estado de los emails de presentación (no requiere
+  // reloj vivo en admin: se recalcula al recargar / cambiar de pestaña).
+  const nowMs = Date.now();
+  const presPendingStatuses = assignments.filter(a => !a.presentationEmailSent).map(a => getPresentationEmailStatus(a, nowMs));
+  const presOnTimeCount  = presPendingStatuses.filter(s => s.status === 'on_time' || s.status === 'warning').length;
+  const presAtRiskCount  = presPendingStatuses.filter(s => s.status === 'at_risk').length;
+  const presOverdueCount = presPendingStatuses.filter(s => s.status === 'overdue').length;
 
   // Check for resets on load
   useEffect(() => {
@@ -2927,6 +3000,29 @@ function AdminContent() {
             ))}
           </div>
 
+          {/* Resumen de emails de presentación */}
+          <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px', marginBottom: 22 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+              <span style={{ fontSize: 18 }}>📧</span>
+              <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>Emails de presentación</span>
+              <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-muted)' }}>
+                {presPendingStatuses.length} pendiente{presPendingStatuses.length !== 1 ? 's' : ''}
+              </span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
+              {[
+                { label: 'Pendientes a tiempo', value: presOnTimeCount,  icon: '✅', color: '#1E9E3A', bg: 'rgba(30,158,58,0.08)',  border: 'rgba(30,158,58,0.3)' },
+                { label: 'En riesgo (>12h)',    value: presAtRiskCount,  icon: '⚠️', color: '#b8860b', bg: 'rgba(255,196,0,0.12)',  border: 'rgba(255,196,0,0.5)' },
+                { label: 'Fuera de tiempo (>24h)', value: presOverdueCount, icon: '🔴', color: '#ef4444', bg: 'rgba(239,68,68,0.08)', border: 'rgba(239,68,68,0.35)' },
+              ].map(c => (
+                <div key={c.label} style={{ background: c.bg, border: `1px solid ${c.border}`, borderRadius: 10, padding: '12px 14px' }}>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: c.color }}>{c.icon} {c.value}</div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginTop: 2 }}>{c.label}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
           <AuditPanel />
           <SyncPanel />
           <PlanSyncPanel />
@@ -3002,7 +3098,7 @@ function AdminContent() {
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}>
                     <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)' }}>
-                      {['Nombre', 'Especialidades', 'Estado', 'Nivel', 'Carga', 'Cupos', ''].map(h => (
+                      {['Nombre', 'Especialidades', 'Estado', 'Nivel', 'Carga', 'Cupos', '📧 Emails', ''].map(h => (
                         <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{h}</th>
                       ))}
                     </tr>
@@ -3014,8 +3110,11 @@ function AdminContent() {
                       const loadPct = t.maxWeeklyLoad > 0 ? Math.round((t.weeklyLoad / t.maxWeeklyLoad) * 100) : 0;
                       const loadColor = loadPct >= 90 ? '#ef4444' : loadPct >= 70 ? '#f59e0b' : '#1E9E3A';
                       const isBlocked = t.isBlocked ?? false;
+                      const presSum = teacherPresentationSummary(assignments.filter(a => a.teacherId === t.id), nowMs);
+                      const emailOpen = emailDetail === t.id;
                       return (
-                        <tr key={t.id} style={{ borderBottom: '1px solid var(--border)', background: isBlocked ? 'rgba(239,68,68,0.02)' : selectedTeacher === t.id ? 'var(--bg-surface-2)' : 'transparent' }}>
+                        <Fragment key={t.id}>
+                        <tr style={{ borderBottom: '1px solid var(--border)', background: isBlocked ? 'rgba(239,68,68,0.02)' : selectedTeacher === t.id ? 'var(--bg-surface-2)' : 'transparent' }}>
                           <td style={{ padding: '11px 14px' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                               <div style={{ width: 30, height: 30, borderRadius: '50%', background: isBlocked ? 'rgba(239,68,68,0.1)' : 'var(--bg-surface-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: isBlocked ? '#ef4444' : 'var(--text-secondary)', flexShrink: 0 }}>{t.avatar}</div>
@@ -3049,6 +3148,14 @@ function AdminContent() {
                             <span style={{ fontSize: 13, color: t.freeSpots > 0 ? '#1E9E3A' : 'var(--text-muted)', fontWeight: 600 }}>{t.freeSpots}</span>
                           </td>
                           <td style={{ padding: '11px 14px' }}>
+                            <button
+                              onClick={() => { if (presSum.pending.length > 0) setEmailDetail(emailOpen ? null : t.id); }}
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 9px', borderRadius: 20, background: presSum.badge.bg, border: `1px solid ${presSum.badge.border}`, color: presSum.badge.color, fontSize: 11, fontWeight: 700, cursor: presSum.pending.length > 0 ? 'pointer' : 'default', fontFamily: 'inherit' }}>
+                              {presSum.badge.text}
+                              {presSum.pending.length > 0 && <span style={{ opacity: 0.7 }}>{emailOpen ? '▲' : '▼'}</span>}
+                            </button>
+                          </td>
+                          <td style={{ padding: '11px 14px' }}>
                             <div style={{ display: 'flex', gap: 6 }}>
                               <button onClick={() => setEditTeacher(t)} style={{ padding: '5px 10px', borderRadius: 7, border: '1px solid rgba(30,158,58,0.35)', background: 'rgba(30,158,58,0.07)', color: '#1E9E3A', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>
                                 Editar
@@ -3059,6 +3166,21 @@ function AdminContent() {
                             </div>
                           </td>
                         </tr>
+                        {emailOpen && presSum.pending.length > 0 && (
+                          <tr style={{ background: 'var(--bg-surface-2)' }}>
+                            <td colSpan={8} style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)' }}>
+                              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 6 }}>{t.name} — Email pendiente:</div>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                {presSum.pending.map((p, i) => (
+                                  <div key={i} style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                                    {p.studentName} · Asignada hace {p.hours}h · <span style={{ fontWeight: 700, color: p.statusKind === 'overdue' ? '#ef4444' : p.statusKind === 'at_risk' ? '#f97316' : '#b8860b' }}>{p.statusLabel}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                        </Fragment>
                       );
                     })}
                   </tbody>
@@ -3073,6 +3195,7 @@ function AdminContent() {
                 .map(t => {
                 const isBlocked = t.isBlocked ?? false;
                 const teacherAssignments = assignments.filter(a => a.teacherId === t.id);
+                const presSum = teacherPresentationSummary(teacherAssignments, nowMs);
                 return (
                   <div key={t.id} style={{ background: 'var(--bg-surface)', border: `1px solid ${isBlocked ? 'rgba(239,68,68,0.25)' : 'var(--border)'}`, borderRadius: 12, padding: 14, opacity: isBlocked ? 0.9 : 1 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
@@ -3088,7 +3211,19 @@ function AdminContent() {
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10, alignItems: 'center' }}>
                       <StatusBadge status={t.status} />
                       {isBlocked ? <LevelBadge level={t.currentLevel ?? 1} blocked /> : <LevelBadge level={t.currentLevel ?? 1} />}
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 9px', borderRadius: 20, background: presSum.badge.bg, border: `1px solid ${presSum.badge.border}`, color: presSum.badge.color, fontSize: 11, fontWeight: 700 }}>
+                        {presSum.badge.text}
+                      </span>
                     </div>
+                    {presSum.pending.length > 0 && (
+                      <div style={{ marginBottom: 10, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                        {presSum.pending.map((p, i) => (
+                          <div key={i} style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                            📧 {p.studentName} · hace {p.hours}h · <span style={{ fontWeight: 700, color: p.statusKind === 'overdue' ? '#ef4444' : p.statusKind === 'at_risk' ? '#f97316' : '#b8860b' }}>{p.statusLabel}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                     <div style={{ display: 'flex', gap: 8 }}>
                       <button onClick={() => setEditTeacher(t)} style={{ flex: 1, padding: '8px', borderRadius: 8, border: '1px solid rgba(30,158,58,0.35)', background: 'rgba(30,158,58,0.07)', color: '#1E9E3A', cursor: 'pointer', fontSize: 12, fontWeight: 700, fontFamily: 'inherit' }}>
                         Editar

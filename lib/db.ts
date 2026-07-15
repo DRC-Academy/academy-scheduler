@@ -320,6 +320,8 @@ export async function dbGetAssignments(): Promise<Assignment[]> {
     createdAt:             row.created_at,
     manualClassAdjustment: row.manual_class_adjustment ?? 0,
     meetLink:              row.meet_link ?? undefined,
+    presentationEmailSent:   row.presentation_email_sent ?? false,
+    presentationEmailSentAt: row.presentation_email_sent_at ?? undefined,
   }));
 }
 
@@ -898,6 +900,8 @@ export async function dbGetAssignmentsByTeacher(teacherId: string): Promise<Assi
     createdAt:             row.created_at,
     manualClassAdjustment: row.manual_class_adjustment ?? 0,
     meetLink:              row.meet_link ?? undefined,
+    presentationEmailSent:   row.presentation_email_sent ?? false,
+    presentationEmailSentAt: row.presentation_email_sent_at ?? undefined,
   }));
 }
 
@@ -1117,6 +1121,7 @@ export const EVENT_POINTS: Record<string, number> = {
   cambio_por_profesor: -20,
   profe_del_mes:        50,
   profe_del_trimestre: 100,
+  email_presentacion_tardio: -5,
 };
 
 export const EVENT_EUROS: Record<string, number> = {
@@ -1547,6 +1552,8 @@ export async function dbGetTeacherStudents(teacherId: string): Promise<Assignmen
       createdAt:             row.created_at,
       manualClassAdjustment: row.manual_class_adjustment ?? 0,
       meetLink:              row.meet_link ?? undefined,
+      presentationEmailSent:   row.presentation_email_sent ?? false,
+      presentationEmailSentAt: row.presentation_email_sent_at ?? undefined,
     }));
 }
 
