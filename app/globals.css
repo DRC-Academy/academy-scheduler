@@ -1,34 +1,106 @@
 @import url('https://fonts.googleapis.com/css2?family=Radio+Canada:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&display=swap');
 @import "tailwindcss";
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   DESIGN TOKENS — fuente única del sistema visual.
+   Regla: ningún valor visual se escribe a mano en un componente. Si no existe
+   como token, se agrega acá primero.
+   Contraste: todo color usado como TEXTO cumple WCAG AA (4.5:1) sobre su fondo.
+   ═══════════════════════════════════════════════════════════════════════════ */
 :root {
-  /* DRC Academy Brand Colors */
+  /* ── TIPOGRAFÍA ── 6 tamaños. Antes había 30 (incl. medios píxeles). ────── */
+  --fs-display: 28px;  --lh-display: 1.25;  /* título de página · números KPI */
+  --fs-title:   18px;  --lh-title:   1.35;  /* título de sección */
+  --fs-body:    14px;  --lh-body:    1.5;   /* cuerpo — default */
+  --fs-sm:      13px;  --lh-sm:      1.45;  /* celdas de tabla, texto denso */
+  --fs-caption: 12px;  --lh-caption: 1.4;   /* labels, timestamps */
+  --fs-micro:   11px;  --lh-micro:   1.3;   /* solo badges/pills */
+
+  /* ── PESO ── 3. Antes 5, con 700 como default de facto. ────────────────── */
+  --fw-regular:  400;
+  --fw-medium:   500;  /* headers de tabla, énfasis sutil */
+  --fw-semibold: 600;  /* ÚNICO peso fuerte para jerarquía */
+
+  /* ── SPACING ── base 4. ────────────────────────────────────────────────── */
+  --space-1:  4px;
+  --space-2:  8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+
+  /* ── RADIOS ── 4. Antes 17. ────────────────────────────────────────────── */
+  --radius-sm:   6px;    /* inputs, botones chicos */
+  --radius-md:  10px;    /* cards, botones */
+  --radius-lg:  14px;    /* modales */
+  --radius-pill: 999px;  /* pills, chips */
+
+  /* ── SOMBRA ── una sola, y solo para lo que flota sobre la página.
+     Las cards NO llevan sombra: borde + fondo alcanza. ────────────────────── */
+  --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.12);
+
+  /* ── NEUTROS ── el 90% de la UI. ───────────────────────────────────────── */
+  --bg-base:        #F7F7F5;
+  --bg-surface:     #FFFFFF;
+  --bg-surface-2:   #F0F0ED;
+  --bg-surface-3:   #E8E8E4;
+  --border:         #E0E0DA;
+  --border-light:   #D0D0CA;
+  --text-primary:   #1A1A1A;  /* 17.4:1 sobre blanco */
+  --text-secondary: #4A4A4A;  /*  8.9:1 */
+  --text-muted:     #6E6E66;  /*  5.1:1 — era #888880 (3.6:1): fallaba AA */
+
+  /* ── ACENTO ── UNO. Acciones, links, estado activo. ─────────────────────
+     #167A2D (5.5:1) y no el #1E9E3A de marca (3.5:1), que falla AA tanto como
+     texto como de fondo de botón con texto blanco. ────────────────────────── */
+  --accent:        #167A2D;
+  --accent-hover:  #105F22;
+  --accent-soft:   rgba(22, 122, 45, 0.10);
+  --accent-border: rgba(22, 122, 45, 0.30);
+
+  /* ── MARCA ── solo logo y texto ≥24px. NUNCA como color de texto chico. ── */
+  --brand-green:  #1E9E3A;  /* 3.5:1 */
+  --brand-yellow: #FFC400;  /* 1.6:1 */
+
+  /* ── SEMÁNTICOS ── 3 estados con significado, y nada más.
+     Color decorativo: no existe. ─────────────────────────────────────────── */
+  --ok:            #167A2D;            /* ok / enviado / disponible */
+  --ok-soft:       #EAF5EC;
+  --ok-border:     rgba(22, 122, 45, 0.30);
+  --warn:          #B45309;            /* pendiente / atención */
+  --warn-soft:     #FFF6E0;
+  --warn-border:   rgba(255, 196, 0, 0.45);
+  --danger:        #C81E1E;            /* error / atrasado */
+  --danger-soft:   #FDECEC;
+  --danger-border: rgba(200, 30, 30, 0.30);
+
+  /* ── CALENDARIO ── categorías, no estados: nada acá es un error, así que no
+     hay rojo. "Ocupado" es relleno neutro (es un hecho: hay clase), y contrasta
+     con "No work", que es una celda vacía con borde tenue. ────────────────── */
+  --cal-free-bg:        var(--ok-soft);
+  --cal-free-border:    var(--ok-border);
+  --cal-free-text:      var(--ok);
+  --cal-busy-bg:        #DCDCD4;
+  --cal-busy-border:    #B8B8AE;
+  --cal-busy-text:      var(--text-primary);
+  --cal-recovery-bg:    var(--warn-soft);
+  --cal-recovery-border: var(--warn-border);
+  --cal-recovery-text:  var(--warn);
+  --cal-nowork-bg:      transparent;
+  --cal-nowork-border:  var(--border);
+  --cal-nowork-text:    var(--text-muted);
+
+  /* ═══ LEGACY ═══════════════════════════════════════════════════════════════
+     Referenciadas por los estilos inline que quedan. Se eliminan a medida que
+     las pantallas migran a los componentes base. NO usar en código nuevo. ─── */
   --green:          #1E9E3A;
   --green-dark:     #167a2d;
   --green-light:    rgba(30, 158, 58, 0.1);
   --yellow:         #FFC400;
   --yellow-dark:    #e6b000;
-
-  /* Backgrounds */
-  --bg-base:        #F7F7F5;
-  --bg-surface:     #FFFFFF;
-  --bg-surface-2:   #F0F0ED;
-  --bg-surface-3:   #E8E8E4;
-
-  /* Borders */
-  --border:         #E0E0DA;
-  --border-light:   #D0D0CA;
-
-  /* Text */
-  --text-primary:   #1A1A1A;
-  --text-secondary: #4A4A4A;
-  --text-muted:     #888880;
-
-  /* Accent (use green as primary) */
   --accent-blue:    #1E9E3A;
   --accent-blue-dim: rgba(30, 158, 58, 0.15);
-
-  /* Status colors */
   --status-available:    #1E9E3A;
   --status-available-bg: rgba(30, 158, 58, 0.12);
   --status-almost:       #FFC400;
@@ -47,6 +119,9 @@ body {
   background-color: var(--bg-base);
   color: var(--text-primary);
   font-family: 'Radio Canada', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  font-weight: var(--fw-regular);
   -webkit-font-smoothing: antialiased;
   margin: 0;
 }
@@ -57,28 +132,28 @@ body {
 
 input, select, textarea {
   background: var(--bg-surface);
-  border: 1.5px solid var(--border);
-  border-radius: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
   color: var(--text-primary);
-  padding: 10px 14px;
-  font-size: 14px;
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
   outline: none;
   width: 100%;
   transition: border-color 0.15s;
   font-family: 'Radio Canada', sans-serif;
 }
-input:focus, select:focus, textarea:focus { border-color: var(--green); }
+input:focus, select:focus, textarea:focus { border-color: var(--accent); }
 input::placeholder { color: var(--text-muted); }
 select option { background: var(--bg-surface); color: var(--text-primary); }
 
 label {
   display: block;
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--fs-caption);
+  line-height: var(--lh-caption);
+  font-weight: var(--fw-medium);
   color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin-bottom: 6px;
+  margin-bottom: var(--space-1);
 }
 
 /* ─── Mobile utilities (hidden on desktop) ──────────────────────────────── */
