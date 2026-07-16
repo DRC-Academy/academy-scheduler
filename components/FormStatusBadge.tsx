@@ -18,13 +18,13 @@ interface Props {
   student: { id?: string | null; name: string; email?: string | null };
   info?: FormTokenInfo | null;
   compact?: boolean;
-  // Aceptados por compatibilidad con los llamadores; ya no se usan para enviar.
+  // El envío ya no vive acá, pero sí se usan como contexto para la ficha IA.
   teacher?: { id: string; name: string };
   assignment?: { id?: string | null; plan?: string | null; level?: string | null };
   onRefresh?: () => void;
 }
 
-export default function FormStatusBadge({ student, info, compact }: Props) {
+export default function FormStatusBadge({ student, info, compact, teacher, assignment }: Props) {
   const [fichaOpen, setFichaOpen] = useState(false);
   const state = formStateOf(info);
   if (state === 'none') return null;
@@ -67,6 +67,9 @@ export default function FormStatusBadge({ student, info, compact }: Props) {
           studentName={student.name}
           studentId={student.id}
           formTokenId={info?.id}
+          teacher={teacher}
+          plan={assignment?.plan}
+          level={assignment?.level}
           onClose={() => setFichaOpen(false)}
         />
       )}

@@ -4,6 +4,7 @@ import { NavBar } from '@/components/NavBar';
 import { AuthGuard } from '@/components/AuthGuard';
 import { PullToRefresh } from '@/components/PullToRefresh';
 import { LastUpdated } from '@/components/LastUpdated';
+import AiStudentPanel from '@/components/ai/AiStudentPanel';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
 import { calcCurrentClassNumber } from '@/lib/db';
@@ -228,6 +229,17 @@ function ContadorContent() {
                                 </span>
                               )}
                             </div>
+
+                            {/* Ficha IA + transcripciones (sólo si el alumno tiene ficha) */}
+                            <AiStudentPanel
+                              studentName={a.studentName}
+                              studentId={studentForAssignment(a)?.id}
+                              teacherId={teacher.id}
+                              teacherName={teacher.name}
+                              plan={a.plan ?? studentForAssignment(a)?.plan}
+                              level={a.studentLevel}
+                              classNumber={classNum}
+                            />
                           </div>
                         );
                       })}

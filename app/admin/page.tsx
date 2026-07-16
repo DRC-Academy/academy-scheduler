@@ -21,6 +21,7 @@ import { ALL_SPECIALTIES } from '@/lib/specialties';
 import { SpecialtyChip, ToggleChip } from '@/components/ui';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { AppNotification, ClassJoinLog, AssignedSlot } from '@/types';
+import AiRiskTab from '@/components/ai/AiRiskTab';
 
 // ─── Edit Teacher Modal ───────────────────────────────────────────────────────
 function EditTeacherModal({ teacher, onClose, onSave }: {
@@ -2932,7 +2933,7 @@ function DuplicatesBanner() {
 }
 
 // ─── Admin Content ────────────────────────────────────────────────────────────
-const ADMIN_TABS = ['overview', 'teachers', 'emails', 'scoring', 'tracking', 'classlog', 'notifications'] as const;
+const ADMIN_TABS = ['overview', 'teachers', 'emails', 'scoring', 'tracking', 'classlog', 'ai', 'notifications'] as const;
 type AdminTab = typeof ADMIN_TABS[number];
 
 function AdminContent() {
@@ -2990,6 +2991,7 @@ function AdminContent() {
     { id: 'scoring',        label: '⭐ Scoring' },
     { id: 'tracking',       label: '📈 Seguimiento' },
     { id: 'classlog',       label: '📊 Registro de clases' },
+    { id: 'ai',             label: '🤖 IA y Riesgo' },
     { id: 'notifications',  label: '🔔 Notificaciones' },
   ] as const;
 
@@ -3412,6 +3414,9 @@ function AdminContent() {
 
         {/* CLASS LOG TAB */}
         {activeTab === 'classlog' && <ClassLogTab />}
+
+        {/* AI & RISK TAB */}
+        {activeTab === 'ai' && <AiRiskTab teachers={teachers} assignments={assignments} />}
 
         {/* NOTIFICATIONS TAB */}
         {activeTab === 'notifications' && <NotificationsAdminTab />}

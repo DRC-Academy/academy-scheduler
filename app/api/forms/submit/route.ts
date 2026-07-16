@@ -76,11 +76,13 @@ export async function POST(request: Request): Promise<Response> {
   });
 
   // 4) Crear/actualizar la ficha del alumno.
+  // La ficha estructurada va a ai_ficha_json; ai_ficha (markdown) queda para las
+  // fichas generadas por la versión anterior del módulo.
   const baseRow = {
     student_name:   tk.student_name,   // la tabla puede tener student_name NOT NULL
     form_token_id:  tk.id,
     form_responses: responses,
-    ai_ficha:       ficha.ficha,
+    ai_ficha_json:  ficha.data,
     ai_status:      ficha.status,
     updated_at:     now,
   };
@@ -97,6 +99,21 @@ export async function POST(request: Request): Promise<Response> {
       { onConflict: 'id' },
     )).error;
   }
+  // PGRST204 = la columna no existe (falta correr supabase-ai-module.sql).
+  // Reintentamos sin la ficha: las respuestas del alumno son irreemplazables
+  // (no va a volver a rellenar el formulario), la ficha se regenera después.
+  if (profErr?.code === 'PGRST204') {
+    console.error(
+      '[submit] Falta la columna ai_ficha_json: ejecutá supabase-ai-module.sql en el SQL editor de Supabase. ' +
+      'Guardando las respuestas sin la ficha para no perderlas.',
+    );
+    const { ai_ficha_json: _omit, ...rowSinFicha } = baseRow;
+    profErr = (await supabase.from('student_profiles').upsert(
+      { id: tk.student_id || `sp_${tk.id}`, student_id: tk.student_id || null, ...rowSinFicha },
+      { onConflict: 'id' },
+    )).error;
+  }
+
   if (profErr) {
     // La ficha no se pudo guardar, pero el token ya quedó completado. Registramos
     // y seguimos: el alumno no debe ver un error después de enviar sus respuestas.

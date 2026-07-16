@@ -103,17 +103,17 @@ export async function getOrCreateFormLink(payload: GenerateTokenPayload): Promis
 export function buildFormEmail(studentName: string, teacherName: string, url: string): { subject: string; body: string } {
   const subject = 'Antes de tu primera clase — DRC Academy 🎓';
   const body =
-`¡Hola ${studentName}! 👋
+`¡Hola ${studentName}!
 
-Antes de nuestra primera clase, me gustaría conocerte un poco mejor para preparar algo que realmente sea tuyo.
+Antes de nuestra primera clase, me gustaría conocerte un poco mejor para preparar algo que sea realmente tuyo.
 
-Te dejo este formulario de 10 minutos:
+Te dejo este formulario, son solo 10 minutos:
 
 ${url}
 
-Ya sé tu nivel y tu horario — estas preguntas son para entender cómo aprendés y qué necesitás, así la primera clase arranca desde el minuto uno.
+Ya conozco tu nivel y tu horario — estas preguntas son para entender cómo aprendes y qué necesitas.
 
-¡Nos vemos pronto! 😊
+¡Hasta pronto! 😊
 ${teacherName}`;
   return { subject, body };
 }
