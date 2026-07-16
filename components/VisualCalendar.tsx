@@ -46,13 +46,13 @@ export function getSpainParts(now: Date): { hour: number; minute: number; dateSt
 
 export type { Grid, Cell, CellState };
 
-// Fuente ÚNICA del color de los 4 estados del calendario. La leyenda y los
-// contadores tienen que salir de acá (CAL_STATE_META) y no repintarse a mano:
-// antes la leyenda decía que Ocupado era azul mientras la grilla lo pintaba rojo.
+// Fuente ÚNICA del color de los 4 estados del calendario. La leyenda, los
+// contadores, el menú de celda y los stats del profe salen de acá
+// (CAL_STATE_META) y no se repintan a mano: antes había CINCO fuentes que se
+// contradecían — la leyenda decía que Ocupado era azul, la grilla lo pintaba
+// rojo y el menú de celda, verde.
 //
-// Son categorías, no estados semánticos: una agenda llena no es un error, es el
-// objetivo del profe. Por eso no hay rojo. "Ocupado" es relleno neutro (hay
-// clase) y contrasta contra "No work", que es la celda vacía.
+// Los colores viven en los tokens --cal-* de globals.css.
 export function stateColor(state: CellState) {
   switch (state) {
     case 'libre':     return { bg: 'var(--cal-free-bg)',      border: 'var(--cal-free-border)',     text: 'var(--cal-free-text)' };
@@ -66,7 +66,7 @@ export function stateColor(state: CellState) {
 // punto; `outline` marca la categoría vacía (No work), que se dibuja sin relleno.
 export const CAL_STATE_META: Record<CellState, { label: string; desc: string; dotColor: string; outline?: boolean }> = {
   libre:     { label: 'Libre',           desc: 'Disponible para clases',        dotColor: 'var(--cal-free-text)' },
-  ocupado:   { label: 'Ocupado',         desc: 'Clase con alumno',              dotColor: 'var(--cal-busy-border)' },
+  ocupado:   { label: 'Ocupado',         desc: 'Clase con alumno',              dotColor: 'var(--cal-busy-text)' },
   bloqueado: { label: 'En recuperación', desc: 'Clase de recuperación o ajuste', dotColor: 'var(--cal-recovery-text)' },
   no_work:   { label: 'No work',         desc: 'No trabajás ese horario',       dotColor: 'transparent', outline: true },
 };

@@ -75,15 +75,17 @@
   --danger-soft:   #FDECEC;
   --danger-border: rgba(200, 30, 30, 0.30);
 
-  /* ── CALENDARIO ── categorías, no estados: nada acá es un error, así que no
-     hay rojo. "Ocupado" es relleno neutro (es un hecho: hay clase), y contrasta
-     con "No work", que es una celda vacía con borde tenue. ────────────────── */
+  /* ── CALENDARIO ── paleta propia de los 4 estados de celda. Es la ÚNICA
+     excepción a "color solo donde comunica estado": acá el color ES el dato, y
+     el calendario se lee de un vistazo por color, no por texto.
+     Rojo = Ocupado por decisión de producto (indica que el hueco está tomado).
+     El contraste contra "No work" (celda vacía) es evidente. ──────────────── */
   --cal-free-bg:        var(--ok-soft);
   --cal-free-border:    var(--ok-border);
   --cal-free-text:      var(--ok);
-  --cal-busy-bg:        #DCDCD4;
-  --cal-busy-border:    #B8B8AE;
-  --cal-busy-text:      var(--text-primary);
+  --cal-busy-bg:        #FDECEC;
+  --cal-busy-border:    rgba(200, 30, 30, 0.35);
+  --cal-busy-text:      #C81E1E;      /* 5.7:1 — el #ef4444 previo daba 3.8:1 */
   --cal-recovery-bg:    var(--warn-soft);
   --cal-recovery-border: var(--warn-border);
   --cal-recovery-text:  var(--warn);
