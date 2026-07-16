@@ -1,11 +1,11 @@
 'use client';
-import { useState, useEffect, useMemo, Fragment } from 'react';
+import { useState, useEffect, useMemo, Fragment, Suspense } from 'react';
 import { NavBar } from '@/components/NavBar';
 import { StatusBadge } from '@/components/StatusBadge';
 import { AuthGuard } from '@/components/AuthGuard';
 import { PullToRefresh } from '@/components/PullToRefresh';
 import { LastUpdated } from '@/components/LastUpdated';
-import { DAYS, HOURS_ES, stateColor, VisualCalendar, buildGridFromTeacher, getSpainParts } from '@/components/VisualCalendar';
+import { VisualCalendar, buildGridFromTeacher, getSpainParts } from '@/components/VisualCalendar';
 import { useTeachers } from '@/lib/TeachersContext';
 import { useAuth } from '@/lib/AuthContext';
 import { mockAlerts } from '@/lib/mock-data';
@@ -16,8 +16,8 @@ import { EVENT_POINTS, EVENT_EUROS, calcCurrentClassNumber, dbUpdateAssignmentSt
   findDuplicateTeacherAssignments, type DuplicateAssignmentGroup } from '@/lib/db';
 import { CambiarProfesorModal } from '@/components/CambiarProfesorModal';
 import { CrearVinculoModal } from '@/components/CrearVinculoModal';
-import { getPresentationEmailStatus } from '@/lib/presentationEmailUtils';
-import { useRouter } from 'next/navigation';
+import { getPresentationEmailStatus, hoursSinceAssigned, type PresentationEmailStatusKind } from '@/lib/presentationEmailUtils';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { AppNotification, ClassJoinLog, AssignedSlot } from '@/types';
 
 // ─── Specialty constants ──────────────────────────────────────────────────────
@@ -315,10 +315,20 @@ interface TeacherPresentationSummary {
 }
 
 const PRES_STATUS_LABEL: Record<string, string> = {
+  sent:    '✅ Enviado',
   on_time: '🟢 A tiempo',
   warning: '🟡 A tiempo',
   at_risk: '⏰ En riesgo',
   overdue: '🔴 Fuera de tiempo',
+};
+
+// Paleta por estado, en el mismo formato que SPECIALTY_STYLE.
+const PRES_STATUS_STYLE: Record<string, { color: string; bg: string; border: string }> = {
+  sent:    { color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)',  border: 'rgba(30,158,58,0.3)' },
+  on_time: { color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)',  border: 'rgba(30,158,58,0.3)' },
+  warning: { color: '#b8860b', bg: 'rgba(255,196,0,0.14)', border: 'rgba(255,196,0,0.5)' },
+  at_risk: { color: '#f97316', bg: 'rgba(249,115,22,0.1)', border: 'rgba(249,115,22,0.4)' },
+  overdue: { color: '#ef4444', bg: 'rgba(239,68,68,0.1)',  border: 'rgba(239,68,68,0.4)' },
 };
 
 // Resume el estado del email de presentación de las asignaciones de un profesor.
@@ -441,98 +451,148 @@ function NewTeacherModal({ onClose, onSave }: { onClose: () => void; onSave: (t:
   );
 }
 
-// ─── Weekly overview grid ─────────────────────────────────────────────────────
-function WeeklyOverview({ teachers }: { teachers: Teacher[] }) {
-  const [hoveredCell, setHoveredCell] = useState<string | null>(null);
+// ─── Emails de presentación (pestaña) ─────────────────────────────────────────
+// Sustituye a la antigua grilla de cobertura semanal. Lista las asignaciones con
+// el estado del email de bienvenida; los pendientes van arriba ordenados por
+// mayor retraso, que son los que hay que perseguir.
 
-  const coverageMap: Record<string, string[]> = {};
-  for (const t of teachers) {
-    for (const slot of t.timeSlots) {
-      const fromH = parseInt(slot.from);
-      const toH   = parseInt(slot.to);
-      for (let h = fromH; h < toH; h++) {
-        const hour = `${h.toString().padStart(2, '0')}:00`;
-        const key  = `${slot.day}_${hour}`;
-        if (!coverageMap[key]) coverageMap[key] = [];
-        coverageMap[key].push(t.name);
-      }
-    }
-  }
+// "5h" / "3 días": pasadas 48 h el retraso en horas deja de leerse.
+function formatDelay(hours: number): string {
+  const h = Math.floor(Math.max(0, hours));
+  return h < 48 ? `${h}h` : `${Math.floor(h / 24)} días`;
+}
 
-  function coverageColor(count: number): string {
-    if (count === 0) return 'transparent';
-    if (count === 1) return 'rgba(239,68,68,0.25)';
-    if (count === 2) return 'rgba(245,158,11,0.25)';
-    if (count <= 4)  return 'rgba(30,158,58,0.2)';
-    return 'rgba(30,158,58,0.4)';
-  }
+interface EmailRow {
+  id: string;
+  studentName: string;
+  teacherName: string;
+  sent: boolean;
+  statusKind: PresentationEmailStatusKind;
+  statusLabel: string;
+  delayHours: number;
+  createdAt: string;
+}
 
-  function coverageBorder(count: number): string {
-    if (count === 0) return 'rgba(200,200,195,0.3)';
-    if (count === 1) return 'rgba(239,68,68,0.4)';
-    if (count === 2) return 'rgba(245,158,11,0.4)';
-    return 'rgba(30,158,58,0.4)';
-  }
+function PresentationEmailsTab({ assignments, nowMs }: { assignments: Assignment[]; nowMs: number }) {
+  const [filter, setFilter] = useState<'pending' | 'sent' | 'all'>('pending');
+
+  const rows = useMemo<EmailRow[]>(() => {
+    const mapped = assignments.map(a => {
+      const st = getPresentationEmailStatus(a, nowMs);
+      return {
+        id: a.id,
+        studentName: a.studentName,
+        teacherName: a.teacherName,
+        sent: st.status === 'sent',
+        statusKind: st.status,
+        statusLabel: PRES_STATUS_LABEL[st.status] ?? '',
+        delayHours: hoursSinceAssigned(a.createdAt, nowMs),
+        createdAt: a.createdAt,
+      };
+    });
+    // Pendientes primero (mayor retraso arriba); los enviados, por recencia.
+    mapped.sort((x, y) => {
+      if (x.sent !== y.sent) return x.sent ? 1 : -1;
+      if (!x.sent) return y.delayHours - x.delayHours;
+      return new Date(y.createdAt).getTime() - new Date(x.createdAt).getTime();
+    });
+    return mapped;
+  }, [assignments, nowMs]);
+
+  const pendingCount = rows.filter(r => !r.sent).length;
+  const overdueCount = rows.filter(r => r.statusKind === 'overdue').length;
+  const visible = rows.filter(r => filter === 'all' || (filter === 'pending' ? !r.sent : r.sent));
+
+  const filters = [
+    { id: 'pending', label: `Pendientes${pendingCount > 0 ? ` (${pendingCount})` : ''}` },
+    { id: 'sent',    label: 'Enviados' },
+    { id: 'all',     label: 'Todos' },
+  ] as const;
 
   return (
     <div>
-      <div style={{ display: 'flex', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
-        {[
-          { label: 'Sin cobertura', color: 'rgba(239,68,68,0.4)' },
-          { label: '1 profe', color: 'rgba(239,68,68,0.25)' },
-          { label: '2 profes', color: 'rgba(245,158,11,0.25)' },
-          { label: '3–4 profes', color: 'rgba(30,158,58,0.2)' },
-          { label: '5+ profes', color: 'rgba(30,158,58,0.4)' },
-        ].map(l => (
-          <div key={l.label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <div style={{ width: 14, height: 14, borderRadius: 3, background: l.color, border: '1px solid rgba(0,0,0,0.05)' }} />
-            <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{l.label}</span>
-          </div>
-        ))}
-        <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 'auto' }}>Hover para ver quién está disponible</span>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
+        {filters.map(f => {
+          const active = filter === f.id;
+          return (
+            <button key={f.id} onClick={() => setFilter(f.id)}
+              style={{ padding: '4px 12px', borderRadius: 20, border: `1.5px solid ${active ? '#1E9E3A' : 'var(--border)'}`, background: active ? 'rgba(30,158,58,0.1)' : 'transparent', color: active ? '#1E9E3A' : 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, fontWeight: active ? 700 : 500, fontFamily: 'inherit' }}>
+              {f.label}
+            </button>
+          );
+        })}
+        {overdueCount > 0 && (
+          <span style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 700, color: '#ef4444' }}>
+            🔴 {overdueCount} fuera de tiempo
+          </span>
+        )}
       </div>
 
-      <div style={{ overflowX: 'auto', borderRadius: 10, border: '1px solid var(--border)' }}>
-        <table style={{ borderCollapse: 'collapse', minWidth: 600, width: '100%' }}>
-          <thead>
-            <tr>
-              <th style={{ padding: '8px 10px', fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', background: 'var(--bg-surface-2)', borderBottom: '1px solid var(--border)', textAlign: 'left', position: 'sticky', left: 0, zIndex: 2, minWidth: 72 }}>Hora</th>
-              {DAYS.map(day => (
-                <th key={day} style={{ padding: '8px 6px', fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', background: 'var(--bg-surface-2)', borderBottom: '1px solid var(--border)', textAlign: 'center', minWidth: 90 }}>{day}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {HOURS_ES.map(hour => (
-              <tr key={hour} style={{ borderBottom: '1px solid rgba(200,200,195,0.4)' }}>
-                <td style={{ padding: '4px 10px', fontSize: 11, color: 'var(--text-secondary)', background: 'var(--bg-surface-2)', position: 'sticky', left: 0, zIndex: 1, borderRight: '1px solid var(--border)', fontWeight: 600 }}>{hour}</td>
-                {DAYS.map(day => {
-                  const key = `${day}_${hour}`;
-                  const names = coverageMap[key] ?? [];
-                  const count = names.length;
-                  const isHovered = hoveredCell === key;
-                  return (
-                    <td key={day}
-                      onMouseEnter={() => setHoveredCell(key)}
-                      onMouseLeave={() => setHoveredCell(null)}
-                      style={{ height: 36, padding: '2px 4px', background: isHovered && count > 0 ? 'rgba(30,158,58,0.15)' : coverageColor(count), border: `1px solid ${coverageBorder(count)}`, textAlign: 'center', verticalAlign: 'middle', cursor: count > 0 ? 'pointer' : 'default', transition: 'background 0.1s', position: 'relative' }}>
-                      {count > 0 && (
-                        <span style={{ fontSize: 11, fontWeight: 700, color: count === 1 ? '#ef4444' : count === 2 ? '#f59e0b' : '#1E9E3A' }}>{count}</span>
-                      )}
-                      {isHovered && count > 0 && (
-                        <div style={{ position: 'absolute', bottom: '110%', left: '50%', transform: 'translateX(-50%)', background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', zIndex: 10, minWidth: 140, maxWidth: 200, boxShadow: '0 8px 24px rgba(0,0,0,0.15)', whiteSpace: 'nowrap' }}>
-                          <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', marginBottom: 5, textTransform: 'uppercase' }}>{day} {hour}</div>
-                          {names.map(n => <div key={n} style={{ fontSize: 11, color: 'var(--text-primary)', padding: '1px 0' }}>• {n}</div>)}
-                        </div>
-                      )}
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      {visible.length === 0 ? (
+        <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '32px 14px', textAlign: 'center', fontSize: 13, color: 'var(--text-muted)' }}>
+          {filter === 'pending' ? '✅ No hay emails de presentación pendientes.' : 'No hay asignaciones que mostrar.'}
+        </div>
+      ) : (
+        <>
+          {/* Desktop: table */}
+          <div className="desk-only" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+            <div style={{ overflowX: 'auto', maxHeight: 500, overflowY: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}>
+                  <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)' }}>
+                    {['Alumno', 'Profesor', 'Estado', 'Retraso', 'Asignada'].map(h => (
+                      <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {visible.map(r => {
+                    const st = PRES_STATUS_STYLE[r.statusKind];
+                    return (
+                      <tr key={r.id} style={{ borderBottom: '1px solid var(--border)' }}>
+                        <td style={{ padding: '11px 14px', fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{r.studentName}</td>
+                        <td style={{ padding: '11px 14px', fontSize: 13, color: 'var(--text-secondary)' }}>{r.teacherName}</td>
+                        <td style={{ padding: '11px 14px' }}>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 9px', borderRadius: 20, background: st.bg, border: `1px solid ${st.border}`, color: st.color, fontSize: 11, fontWeight: 700 }}>
+                            {r.statusLabel}
+                          </span>
+                        </td>
+                        <td style={{ padding: '11px 14px', fontSize: 13, fontWeight: r.sent ? 400 : 700, color: r.sent ? 'var(--text-muted)' : st.color }}>
+                          {r.sent ? '—' : formatDelay(r.delayHours)}
+                        </td>
+                        <td style={{ padding: '11px 14px', fontSize: 12, color: 'var(--text-muted)' }}>
+                          {new Date(r.createdAt).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' })}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Mobile: cards */}
+          <div className="mob-only" style={{ flexDirection: 'column', gap: 10 }}>
+            {visible.map(r => {
+              const st = PRES_STATUS_STYLE[r.statusKind];
+              return (
+                <div key={r.id} style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: 14 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                    <div style={{ flex: 1, minWidth: 0, fontWeight: 700, fontSize: 14, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.studentName}</div>
+                    {!r.sent && <span style={{ fontSize: 13, fontWeight: 700, color: st.color, flexShrink: 0 }}>{formatDelay(r.delayHours)}</span>}
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 9 }}>
+                    {r.teacherName} · asignada el {new Date(r.createdAt).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}
+                  </div>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 9px', borderRadius: 20, background: st.bg, border: `1px solid ${st.border}`, color: st.color, fontSize: 11, fontWeight: 700 }}>
+                    {r.statusLabel}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -2902,11 +2962,24 @@ function DuplicatesBanner() {
 }
 
 // ─── Admin Content ────────────────────────────────────────────────────────────
+const ADMIN_TABS = ['overview', 'teachers', 'emails', 'scoring', 'tracking', 'classlog', 'notifications'] as const;
+type AdminTab = typeof ADMIN_TABS[number];
+
 function AdminContent() {
   const { teachers, assignments, students, addTeacher, loadingTeachers, getTeacherGrid, updateTeacherGrid, checkAndRunResets, reloadAll, updateTeacherInfo } = useTeachers();
   const [selectedTeacher, setSelectedTeacher] = useState<string | null>(null);
   const [showNewTeacher, setShowNewTeacher] = useState(false);
-  const [activeTab, setActiveTab] = useState<'overview' | 'teachers' | 'weekly' | 'scoring' | 'tracking' | 'classlog' | 'notifications'>('overview');
+  const [activeTab, setActiveTab] = useState<AdminTab>('overview');
+
+  // El campanario del header navega a /admin?tab=notifications. Sincronizamos la
+  // pestaña con la URL (sistema externo) para aterrizar en Avisos; la pestaña
+  // sigue siendo estado local para que cambiarla no cueste un round-trip de red.
+  const searchParams = useSearchParams();
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => {
+    const t = searchParams.get('tab');
+    if (t && (ADMIN_TABS as readonly string[]).includes(t)) setActiveTab(t as AdminTab);
+  }, [searchParams]);
   const [editCalendarTeacher, setEditCalendarTeacher] = useState<Teacher | null>(null);
   const [editTeacher, setEditTeacher] = useState<Teacher | null>(null);
   const [specialtyFilter, setSpecialtyFilter] = useState<string>('');
@@ -2943,7 +3016,7 @@ function AdminContent() {
   const tabs = [
     { id: 'overview',       label: '📊 Resumen' },
     { id: 'teachers',       label: '👨‍🏫 Profesores' },
-    { id: 'weekly',         label: '📅 Cobertura' },
+    { id: 'emails',         label: '📧 Emails' },
     { id: 'scoring',        label: '⭐ Scoring' },
     { id: 'tracking',       label: '📈 Seguimiento' },
     { id: 'classlog',       label: '📊 Registro de clases' },
@@ -3353,13 +3426,13 @@ function AdminContent() {
         )}
 
         {/* WEEKLY VIEW TAB */}
-        {activeTab === 'weekly' && (
+        {activeTab === 'emails' && (
           <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '20px' }}>
             <div style={{ marginBottom: 16 }}>
-              <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)' }}>Cobertura semanal</div>
-              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3 }}>Cantidad de profesores disponibles por horario.</div>
+              <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)' }}>Emails de presentación</div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3 }}>Estado del email de bienvenida por alumno. Los pendientes con más retraso, arriba.</div>
             </div>
-            <WeeklyOverview teachers={teachers} />
+            <PresentationEmailsTab assignments={assignments} nowMs={nowMs} />
           </div>
         )}
 
@@ -3407,7 +3480,10 @@ function AdminContent() {
 export default function AdminPage() {
   return (
     <AuthGuard allowedRoles={['admin']}>
-      <AdminContent />
+      {/* AdminContent lee ?tab= con useSearchParams: requiere un boundary. */}
+      <Suspense>
+        <AdminContent />
+      </Suspense>
     </AuthGuard>
   );
 }

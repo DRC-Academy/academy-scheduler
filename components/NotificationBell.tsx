@@ -150,10 +150,19 @@ export function NotificationBell() {
     })));
   }
 
-  function goToAll() {
+  // Lleva a la sección de avisos del rol. El `?tab=notifications` es lo que hace
+  // que se aterrice en la pestaña correcta: sin él las páginas abren en su
+  // pestaña por defecto (calendario / resumen) y el aviso queda sin verse.
+  function goToNotifications() {
     setOpen(false);
-    if (role === 'teacher')  router.push('/teacher');
-    else if (role === 'admin') router.push('/admin');
+    if (role === 'teacher')     router.push('/teacher?tab=notifications');
+    else if (role === 'admin')  router.push('/admin?tab=notifications');
+  }
+
+  // Click en un aviso: marcarlo leído y llevar a la sección de avisos.
+  function openNotification(notifId: string, isRead: boolean) {
+    if (!isRead) markOne(notifId);
+    goToNotifications();
   }
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -290,14 +299,14 @@ export function NotificationBell() {
                   return (
                     <button
                       key={n.id}
-                      onClick={() => { if (!isRead) markOne(n.id); }}
+                      onClick={() => openNotification(n.id, isRead)}
                       style={{
                         width: '100%', textAlign: 'left',
                         padding: '11px 16px',
                         borderBottom: '1px solid var(--border)',
                         background: isRead ? 'transparent' : 'rgba(30,158,58,0.045)',
                         border: 'none',
-                        cursor: isRead ? 'default' : 'pointer',
+                        cursor: 'pointer',
                         display: 'flex', gap: 10, alignItems: 'flex-start',
                         fontFamily: 'inherit',
                         transition: 'background 0.12s',
@@ -349,7 +358,7 @@ export function NotificationBell() {
 
             {/* Panel footer */}
             {notifications.length > 0 && (
-              <button onClick={goToAll} style={{
+              <button onClick={goToNotifications} style={{
                 padding: '11px',
                 borderTop: '1px solid var(--border)',
                 background: 'var(--bg-surface-2)',

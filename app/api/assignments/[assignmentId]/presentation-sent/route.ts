@@ -1,5 +1,6 @@
 // Marca el email de presentación de una asignación como enviado.
-// Lo llama el panel del profesor al abrir el borrador en el gestor de correo.
+// Lo llama el panel del profesor cuando el profesor confirma explícitamente el
+// envío ("Marcar como enviado"). Nunca al copiar el borrador: copiar no es enviar.
 //
 // Efectos:
 //   · assignments.presentation_email_sent = true, presentation_email_sent_at = now()

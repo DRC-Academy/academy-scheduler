@@ -1,5 +1,6 @@
 'use client';
-import { useState, useEffect, useMemo, useRef, type CSSProperties } from 'react';
+import { useState, useEffect, useMemo, useRef, Suspense, type CSSProperties } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { NavBar } from '@/components/NavBar';
 import { AuthGuard } from '@/components/AuthGuard';
 import { PullToRefresh } from '@/components/PullToRefresh';
@@ -797,68 +798,97 @@ function TeacherNotificationsTab({ teacher, myAssignments, students, notificatio
     })
     .filter(({ daysTo6m, bonusAvailable }) => bonusAvailable || daysTo6m <= 15);
 
-  const cardStyle = { borderRadius: 12, padding: '16px 20px', marginBottom: 10 };
+  const cardStyle = { borderRadius: 12, padding: '13px 16px', marginBottom: 8 };
+
+  // ── Lista unificada ─────────────────────────────────────────────────────────
+  // Antes esto eran tres secciones fijas con subtítulo, que se pintaban aunque
+  // estuvieran vacías ("Ningún alumno está a…"). Ahora es una sola lista plana
+  // ordenada por urgencia, y lo que no tiene contenido simplemente no aparece.
+  //
+  // Prioridad (menor = más arriba):
+  //   0 bono disponible  · dinero sobre la mesa, accionable ya
+  //   1 aviso sin leer   · info nueva; incluye alumno nuevo (email a 24 h)
+  //   2 cerca de clase 15
+  //   3 cerca de 6 meses
+  //   4 aviso ya leído   · archivo
+  // Desempate dentro de cada grupo: menos clases/días restantes, o más reciente.
+  const avisos = [
+    ...near15.map(d => ({
+      kind: 'near15' as const, key: `n15_${d.name}`, priority: 2, sort: d.faltanClases, data: d,
+    })),
+    ...near6m.map(d => ({
+      kind: 'near6m' as const, key: `n6m_${d.a.id}`,
+      priority: d.bonusAvailable ? 0 : 3,
+      sort: d.bonusAvailable ? -d.daysActive : d.daysTo6m,
+      data: d,
+    })),
+    ...notifications.map(n => ({
+      kind: 'notif' as const, key: n.id,
+      priority: n.readBy.includes(teacher.id) ? 4 : 1,
+      sort: -new Date(n.createdAt).getTime(),
+      data: n,
+    })),
+  ].sort((x, y) => x.priority - y.priority || x.sort - y.sort);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
 
-      {/* Section A */}
-      <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)', marginBottom: 6, marginTop: 4 }}>🎬 Alumnos cerca de clase 15</div>
-      {near15.length === 0 ? (
-        <div style={{ ...cardStyle, background: 'var(--bg-surface)', border: '1px solid var(--border)', fontSize: 13, color: 'var(--text-muted)', textAlign: 'center', padding: '20px' }}>
-          Ningún alumno está a 3 clases o menos de la clase 15.
+      {avisos.length === 0 && (
+        <div style={{ ...cardStyle, background: 'var(--bg-surface)', border: '1px solid var(--border)', textAlign: 'center', padding: '40px 20px' }}>
+          <div style={{ fontSize: 30, marginBottom: 8 }}>🔔</div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-secondary)' }}>No hay avisos por el momento</div>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3 }}>Te avisaremos cuando haya novedades</div>
         </div>
-      ) : near15.map(item => (
-        <div key={item.name} style={{ ...cardStyle, background: 'rgba(255,196,0,0.1)', border: '1.5px solid rgba(255,196,0,0.5)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ fontSize: 24 }}>🎬</span>
-            <div>
-              <div style={{ fontWeight: 700, fontSize: 14, color: '#92400E' }}>{item.name}</div>
-              <div style={{ fontSize: 13, color: '#b45309', marginTop: 2 }}>
-                Clase actual: <b>{item.classNum}</b> · Faltan <b>{item.faltanClases}</b> {item.faltanClases === 1 ? 'clase' : 'clases'} para la clase 15
-              </div>
-            </div>
-          </div>
-        </div>
-      ))}
+      )}
 
-      {/* Section B */}
-      <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)', marginBottom: 6, marginTop: 10 }}>🎁 Alumnos cerca de 6 meses</div>
-      {near6m.length === 0 ? (
-        <div style={{ ...cardStyle, background: 'var(--bg-surface)', border: '1px solid var(--border)', fontSize: 13, color: 'var(--text-muted)', textAlign: 'center', padding: '20px' }}>
-          Ningún alumno está a 15 días o menos de cumplir 6 meses.
-        </div>
-      ) : near6m.map(item => (
-        <div key={item.a.id} style={{ ...cardStyle, background: item.bonusAvailable ? 'rgba(255,196,0,0.12)' : 'rgba(249,115,22,0.07)', border: `1.5px solid ${item.bonusAvailable ? '#D97706' : 'rgba(249,115,22,0.35)'}` }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ fontSize: 24 }}>🎁</span>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontWeight: 700, fontSize: 14, color: '#92400E' }}>{item.a.studentName}</div>
-              <div style={{ fontSize: 13, color: '#b45309', marginTop: 2 }}>
-                Inicio: {new Date(item.a.startDate! + 'T00:00:00').toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' })}
-                {' · '}
-                {item.bonusAvailable
-                  ? <span style={{ fontWeight: 700 }}>¡Cumplió 6 meses! Solicitar bono</span>
-                  : <>Cumple 6 meses el <b>{item.bonusDate.toLocaleDateString('es-ES', { day: 'numeric', month: 'long' })}</b> · Faltan <b>{item.daysTo6m}</b> días</>
-                }
-              </div>
-              {item.bonusAvailable && (
-                <div style={{ marginTop: 6, fontSize: 12, background: 'rgba(255,196,0,0.2)', border: '1px solid #D97706', borderRadius: 7, padding: '5px 10px', color: '#92400E', fontWeight: 600 }}>
-                  🎁 Bono disponible — escribir a <span style={{ fontWeight: 700 }}>pagos@drcacademy.com</span>
+      {avisos.map(av => {
+        if (av.kind === 'near15') {
+          const item = av.data;
+          return (
+            <div key={av.key} style={{ ...cardStyle, background: 'rgba(255,196,0,0.1)', border: '1.5px solid rgba(255,196,0,0.5)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontSize: 22 }}>🎬</span>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 14, color: '#92400E' }}>{item.name}</div>
+                  <div style={{ fontSize: 13, color: '#b45309', marginTop: 2 }}>
+                    Clase actual: <b>{item.classNum}</b> · Faltan <b>{item.faltanClases}</b> {item.faltanClases === 1 ? 'clase' : 'clases'} para la clase 15
+                  </div>
                 </div>
-              )}
+              </div>
             </div>
-          </div>
-        </div>
-      ))}
+          );
+        }
 
-      {/* Section C */}
-      <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)', marginBottom: 6, marginTop: 10 }}>📢 Avisos y circulares</div>
-      {notifications.length === 0 ? (
-        <div style={{ ...cardStyle, background: 'var(--bg-surface)', border: '1px solid var(--border)', fontSize: 13, color: 'var(--text-muted)', textAlign: 'center', padding: '20px' }}>
-          No hay avisos por el momento.
-        </div>
-      ) : notifications.map(n => {
+        if (av.kind === 'near6m') {
+          const item = av.data;
+          return (
+            <div key={av.key} style={{ ...cardStyle, background: item.bonusAvailable ? 'rgba(255,196,0,0.12)' : 'rgba(249,115,22,0.07)', border: `1.5px solid ${item.bonusAvailable ? '#D97706' : 'rgba(249,115,22,0.35)'}` }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontSize: 22 }}>🎁</span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, color: '#92400E' }}>{item.a.studentName}</div>
+                  <div style={{ fontSize: 13, color: '#b45309', marginTop: 2 }}>
+                    {/* startDate puede faltar: retention.ts ya no descarta esas asignaciones. */}
+                    {item.a.startDate && (
+                      <>Inicio: {new Date(item.a.startDate + 'T00:00:00').toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' })}{' · '}</>
+                    )}
+                    {item.bonusAvailable
+                      ? <span style={{ fontWeight: 700 }}>¡Cumplió 6 meses! Solicitar bono</span>
+                      : <>Cumple 6 meses el <b>{item.bonusDate.toLocaleDateString('es-ES', { day: 'numeric', month: 'long' })}</b> · Faltan <b>{item.daysTo6m}</b> días</>
+                    }
+                  </div>
+                  {item.bonusAvailable && (
+                    <div style={{ marginTop: 6, fontSize: 12, background: 'rgba(255,196,0,0.2)', border: '1px solid #D97706', borderRadius: 7, padding: '5px 10px', color: '#92400E', fontWeight: 600 }}>
+                      🎁 Bono disponible — escribir a <span style={{ fontWeight: 700 }}>pagos@drcacademy.com</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        const n = av.data;
         const isRead = n.readBy.includes(teacher.id);
         // Solo en la notificación de nuevo alumno mostramos "Enviar presentación".
         // La assignment se resuelve con match tolerante (acentos/mayúsculas).
@@ -867,9 +897,9 @@ function TeacherNotificationsTab({ teacher, myAssignments, students, notificatio
           : undefined;
         const sent = asgn ? isSent(asgn.studentName) : false;
         return (
-          <div key={n.id} style={{ ...cardStyle, background: isRead ? 'var(--bg-surface)' : 'rgba(30,158,58,0.04)', border: `1.5px solid ${isRead ? 'var(--border)' : 'rgba(30,158,58,0.3)'}` }}>
+          <div key={av.key} style={{ ...cardStyle, background: isRead ? 'var(--bg-surface)' : 'rgba(30,158,58,0.04)', border: `1.5px solid ${isRead ? 'var(--border)' : 'rgba(30,158,58,0.3)'}` }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-              <span style={{ fontSize: 22, marginTop: 2 }}>{n.type === 'new_assignment' ? '📚' : '📢'}</span>
+              <span style={{ fontSize: 20, marginTop: 2 }}>{n.type === 'new_assignment' ? '📚' : '📢'}</span>
               <div style={{ flex: 1 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
                   <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)' }}>{n.title}</div>
@@ -1193,7 +1223,12 @@ function PresentationEmailBadge({ assignment }: { assignment: Assignment }) {
   );
 }
 
-// Modal "Email de presentación" — enlace de Meet + email editable con mailto.
+// Modal "Email de presentación" — enlace de Meet + email editable para copiar.
+//
+// No se ofrece "abrir en gestor de correo": mailto: depende de que el sistema
+// operativo tenga un cliente registrado y falla en silencio cuando no lo hay
+// (el caso normal con Gmail en el navegador), sin forma de detectarlo desde JS.
+// El flujo es copiar el texto y pegarlo en el webmail.
 function PresentationModal({ assignment, teacher, students, updateMeetLink, onClose, onSent, onFormTokenReady }: {
   assignment: Assignment;
   teacher: Teacher;
@@ -1218,7 +1253,7 @@ function PresentationModal({ assignment, teacher, students, updateMeetLink, onCl
   const [formUrl, setFormUrl]   = useState('');   // link del formulario inicial (se resuelve al abrir)
   const [body, setBody]         = useState(() => buildPresentationBody(assignment, teacher, student, assignment.meetLink ?? '', ''));
   const [toast, setToast]       = useState<string | null>(null);
-  const [confirming, setConfirming] = useState(false);   // borrador abierto → pedir confirmación de envío
+  const [marking, setMarking]   = useState(false);   // PATCH de "marcar enviado" en vuelo
   const lastGenRef = useRef(body);
 
   // Al abrir, resolvemos el link del formulario inicial (reutiliza token vigente
@@ -1261,19 +1296,8 @@ function PresentationModal({ assignment, teacher, students, updateMeetLink, onCl
     catch { setToast('⚠️ No se pudo guardar el enlace'); }
   }
 
-  // Abre el borrador en el gestor de correo (mailto). No marca "enviada": mailto
-  // solo abre un borrador y no hay forma de saber si se envió → se pide confirmación.
-  async function handleOpenMail() {
-    const mailto = `mailto:${toEmail.trim()}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-    window.location.href = mailto;
-    await saveMeetIfAny();
-    // Registra el envío del email de presentación (persiste en la asignación y,
-    // si pasaron más de 24 h desde la asignación, aplica -5 al scoring). Best-effort.
-    markPresentationSent(assignment.id).catch(() => {});
-    setConfirming(true);
-  }
-
-  // Respaldo si no hay cliente de correo de escritorio: copiar el email al portapapeles.
+  // Copia el email al portapapeles para pegarlo en el webmail. NO marca nada:
+  // copiar no es enviar, y no hay forma de saber si el profesor llegó a enviarlo.
   async function handleCopy() {
     const text = `Para: ${toEmail.trim()}\nAsunto: ${subject}\n\n${body}`;
     try {
@@ -1287,14 +1311,25 @@ function PresentationModal({ assignment, teacher, students, updateMeetLink, onCl
     }
     await saveMeetIfAny();
     setToast('📋 Email copiado — pégalo en Gmail');
-    setConfirming(true);
   }
 
-  // El profesor confirma que efectivamente envió el correo → recién ahí se marca.
-  function handleConfirmSent() {
-    onSent(assignment.studentName);
-    setToast('✅ Presentación marcada como enviada');
-    setTimeout(onClose, 900);
+  // ÚNICA vía por la que el email pasa a "enviado": el profesor lo afirma
+  // explícitamente. Persiste en la asignación (y aplica -5 al scoring si pasaron
+  // más de 24 h desde la asignación) y refleja el estado local del badge.
+  // No es best-effort: si el PATCH falla hay que decirlo, porque si no el profesor
+  // cree que quedó registrado y el aviso le sigue corriendo.
+  async function handleMarkSent() {
+    setMarking(true);
+    try {
+      await markPresentationSent(assignment.id);
+      await saveMeetIfAny();
+      onSent(assignment.studentName);
+      setToast('✅ Presentación marcada como enviada');
+      setTimeout(onClose, 900);
+    } catch {
+      setToast('⚠️ No se pudo marcar como enviada — inténtalo de nuevo');
+      setMarking(false);
+    }
   }
 
   const fieldLabel: CSSProperties = { display: 'block', fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 6 };
@@ -1340,34 +1375,15 @@ function PresentationModal({ assignment, teacher, students, updateMeetLink, onCl
             style={{ flex: '1 1 120px', padding: '11px', borderRadius: 8, border: '1.5px solid #1E9E3A', background: 'white', color: '#1E9E3A', cursor: toEmail.trim() ? 'pointer' : 'not-allowed', opacity: toEmail.trim() ? 1 : 0.5, fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
             📋 Copiar email
           </button>
-          <button onClick={handleOpenMail} disabled={!toEmail.trim()}
-            style={{ flex: '2 1 180px', padding: '11px', borderRadius: 8, border: 'none', background: toEmail.trim() ? '#1E9E3A' : '#d1d5db', color: 'white', cursor: toEmail.trim() ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 800, fontFamily: 'inherit' }}>
-            📧 Abrir en gestor de correo
+          <button onClick={handleMarkSent} disabled={marking}
+            style={{ flex: '2 1 180px', padding: '11px', borderRadius: 8, border: 'none', background: marking ? '#d1d5db' : '#1E9E3A', color: 'white', cursor: marking ? 'wait' : 'pointer', fontSize: 13, fontWeight: 800, fontFamily: 'inherit' }}>
+            {marking ? 'Marcando…' : '✅ Marcar como enviado'}
           </button>
         </div>
 
-        {/* Confirmación de envío: mailto solo abre un borrador, no se puede detectar
-            el envío real → se marca "enviada" únicamente si el profesor lo confirma. */}
-        {confirming && (
-          <div style={{ marginTop: 16, padding: '14px 16px', borderRadius: 10, border: '1.5px solid #1E9E3A', background: 'rgba(30,158,58,0.08)' }}>
-            <div style={{ fontSize: 13.5, fontWeight: 700, color: '#166534', marginBottom: 6 }}>
-              ¿Has enviado el correo a {assignment.studentName}?
-            </div>
-            <div style={{ fontSize: 11.5, color: '#4b5563', marginBottom: 12, lineHeight: 1.5 }}>
-              Si no se abrió tu gestor de correo, usa “📋 Copiar email” y pega el texto en Gmail. El estado se marca como enviado solo cuando lo confirmes.
-            </div>
-            <div style={{ display: 'flex', gap: 10 }}>
-              <button onClick={() => setConfirming(false)}
-                style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid #d1d5db', background: 'white', color: '#6b7280', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
-                Todavía no
-              </button>
-              <button onClick={handleConfirmSent}
-                style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: '#1E9E3A', color: 'white', cursor: 'pointer', fontSize: 13, fontWeight: 800, fontFamily: 'inherit' }}>
-                ✅ Sí, lo envié
-              </button>
-            </div>
-          </div>
-        )}
+        <div style={{ fontSize: 11, color: '#6b7280', marginTop: 10, lineHeight: 1.5 }}>
+          Copia el email y pégalo en Gmail. Cuando lo hayas enviado de verdad, pulsa “✅ Marcar como enviado”: copiarlo no lo marca por sí solo.
+        </div>
       </div>
 
       {toast && (
@@ -2223,10 +2239,23 @@ function RecuperacionModal({ day, hour, studentNames, onConfirm, onCancel }: {
 }
 
 // ─── Teacher Content ──────────────────────────────────────────────────────────
+const TEACHER_TABS = ['calendar', 'upcoming', 'scoring', 'notifications'] as const;
+type TeacherTab = typeof TEACHER_TABS[number];
+
 function TeacherContent() {
   const { user } = useAuth();
   const { teachers, students, assignments, scoringEvents, notifications, classRecords, getTeacherGrid, updateTeacherGrid, addStudent, addAssignment, updateAssignmentStartDate, updateAssignmentSlots, reloadAll, updateTeacherSpecialties, loadNotifications, markNotificationRead, updateMeetLink, logClassJoin, addRecoveryClass, addRescheduleRecord } = useTeachers();
-  const [activeTab, setActiveTab] = useState<'calendar' | 'upcoming' | 'scoring' | 'notifications'>('calendar');
+  const [activeTab, setActiveTab] = useState<TeacherTab>('calendar');
+
+  // El campanario del header navega a /teacher?tab=notifications. Sincronizamos
+  // la pestaña con la URL (sistema externo) para aterrizar en Avisos; la pestaña
+  // sigue siendo estado local para que cambiarla no cueste un round-trip de red.
+  const searchParams = useSearchParams();
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => {
+    const t = searchParams.get('tab');
+    if (t && (TEACHER_TABS as readonly string[]).includes(t)) setActiveTab(t as TeacherTab);
+  }, [searchParams]);
   const [showSpecialtiesModal, setShowSpecialtiesModal] = useState(false);
   const [specialtiesDraft, setSpecialtiesDraft] = useState<string[]>([]);
   const [savingSpecialties, setSavingSpecialties] = useState(false);
@@ -2744,7 +2773,10 @@ function TeacherContent() {
 export default function TeacherPage() {
   return (
     <AuthGuard allowedRoles={['teacher', 'admin']}>
-      <TeacherContent />
+      {/* TeacherContent lee ?tab= con useSearchParams: requiere un boundary. */}
+      <Suspense>
+        <TeacherContent />
+      </Suspense>
     </AuthGuard>
   );
 }
