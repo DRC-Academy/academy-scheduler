@@ -3,6 +3,8 @@
 export { T, TONE, type Tone } from './tokens';
 export { Button, type ButtonVariant, type ButtonSize } from './Button';
 export { Badge, Dot } from './Badge';
+export { SpecialtyChip } from './SpecialtyChip';
+export { ToggleChip } from './ToggleChip';
 export { Card } from './Card';
 export { SectionHeader } from './SectionHeader';
 export { TableWrap, THead, TR, TD, CardList } from './Table';

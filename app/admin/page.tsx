@@ -17,32 +17,10 @@ import { EVENT_POINTS, EVENT_EUROS, calcCurrentClassNumber, dbUpdateAssignmentSt
 import { CambiarProfesorModal } from '@/components/CambiarProfesorModal';
 import { CrearVinculoModal } from '@/components/CrearVinculoModal';
 import { getPresentationEmailStatus, hoursSinceAssigned, type PresentationEmailStatusKind } from '@/lib/presentationEmailUtils';
+import { ALL_SPECIALTIES } from '@/lib/specialties';
+import { SpecialtyChip, ToggleChip } from '@/components/ui';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { AppNotification, ClassJoinLog, AssignedSlot } from '@/types';
-
-// ─── Specialty constants ──────────────────────────────────────────────────────
-const ALL_SPECIALTIES = ['Adultos', 'Niños', 'Exámenes'] as const;
-
-const SPECIALTY_STYLE: Record<string, { color: string; bg: string; border: string }> = {
-  Adultos:   { color: '#2563eb', bg: 'rgba(59,130,246,0.1)',    border: 'rgba(59,130,246,0.35)' },
-  Niños:     { color: '#ea580c', bg: 'rgba(249,115,22,0.1)',    border: 'rgba(249,115,22,0.35)' },
-  Exámenes:  { color: '#7c3aed', bg: 'rgba(139,92,246,0.1)',    border: 'rgba(139,92,246,0.35)' },
-};
-
-function SpecialtyChip({ specialty }: { specialty: string }) {
-  const s = SPECIALTY_STYLE[specialty] ?? { color: '#6b7280', bg: 'rgba(107,114,128,0.1)', border: 'rgba(107,114,128,0.3)' };
-  return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center',
-      padding: '2px 8px', borderRadius: 12,
-      background: s.bg, border: `1px solid ${s.border}`,
-      color: s.color, fontSize: 10, fontWeight: 700,
-      whiteSpace: 'nowrap',
-    }}>
-      {specialty}
-    </span>
-  );
-}
 
 // ─── Edit Teacher Modal ───────────────────────────────────────────────────────
 function EditTeacherModal({ teacher, onClose, onSave }: {
@@ -104,18 +82,10 @@ function EditTeacherModal({ teacher, onClose, onSave }: {
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               {ALL_SPECIALTIES.map(s => {
                 const active = form.specialties.includes(s);
-                const st = SPECIALTY_STYLE[s];
                 return (
-                  <button key={s} onClick={() => toggleSpecialty(s)} style={{
-                    padding: '6px 14px', borderRadius: 20,
-                    border: `2px solid ${active ? st.border : 'var(--border)'}`,
-                    background: active ? st.bg : 'transparent',
-                    color: active ? st.color : '#6b7280',
-                    cursor: 'pointer', fontSize: 13, fontWeight: active ? 700 : 500,
-                    fontFamily: 'inherit', transition: 'all 0.12s',
-                  }}>
+                  <ToggleChip key={s} active={active} onClick={() => toggleSpecialty(s)} style={{ padding: '6px 14px', fontSize: 'var(--fs-sm)' }}>
                     {s}
-                  </button>
+                  </ToggleChip>
                 );
               })}
             </div>
@@ -3155,12 +3125,10 @@ function AdminContent() {
               <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)' }}>Filtrar por especialidad:</span>
               {(['', ...ALL_SPECIALTIES] as string[]).map(sp => {
                 const active = specialtyFilter === sp;
-                const st = sp ? SPECIALTY_STYLE[sp] : null;
                 return (
-                  <button key={sp || 'all'} onClick={() => setSpecialtyFilter(sp)}
-                    style={{ padding: '4px 12px', borderRadius: 20, border: `1.5px solid ${active ? (st?.border ?? '#1E9E3A') : 'var(--border)'}`, background: active ? (st?.bg ?? 'rgba(30,158,58,0.1)') : 'transparent', color: active ? (st?.color ?? '#1E9E3A') : 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, fontWeight: active ? 700 : 500, fontFamily: 'inherit' }}>
+                  <ToggleChip key={sp || 'all'} active={active} onClick={() => setSpecialtyFilter(sp)}>
                     {sp || 'Todas'}
-                  </button>
+                  </ToggleChip>
                 );
               })}
             </div>

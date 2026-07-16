@@ -21,34 +21,12 @@ import { Grid, Teacher, Assignment, ScoringEvent, Student, AppNotification, Clas
 import FormStatusBadge from '@/components/FormStatusBadge';
 import { fetchFormTokensIndex, lookupToken, getOrCreateFormLink, type FormTokenInfo } from '@/lib/formClient';
 import { getPresentationEmailStatus } from '@/lib/presentationEmailUtils';
+import { ALL_SPECIALTIES } from '@/lib/specialties';
+import { SpecialtyChip, ToggleChip } from '@/components/ui';
 
 // Índice de tokens de formulario (por id/nombre de alumno). Se pasa a los tabs.
 type FormIndex = { byId: Map<string, FormTokenInfo>; byName: Map<string, FormTokenInfo> };
 const EMPTY_FORM_INDEX: FormIndex = { byId: new Map(), byName: new Map() };
-
-// ─── Specialty constants ──────────────────────────────────────────────────────
-const ALL_SPECIALTIES = ['Adultos', 'Niños', 'Exámenes'] as const;
-
-const SPECIALTY_STYLE: Record<string, { color: string; bg: string; border: string }> = {
-  Adultos:   { color: '#2563eb', bg: 'rgba(59,130,246,0.1)',    border: 'rgba(59,130,246,0.35)' },
-  Niños:     { color: '#ea580c', bg: 'rgba(249,115,22,0.1)',    border: 'rgba(249,115,22,0.35)' },
-  Exámenes:  { color: '#7c3aed', bg: 'rgba(139,92,246,0.1)',    border: 'rgba(139,92,246,0.35)' },
-};
-
-function SpecialtyChip({ specialty }: { specialty: string }) {
-  const s = SPECIALTY_STYLE[specialty] ?? { color: '#6b7280', bg: 'rgba(107,114,128,0.1)', border: 'rgba(107,114,128,0.3)' };
-  return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center',
-      padding: '2px 9px', borderRadius: 12,
-      background: s.bg, border: `1px solid ${s.border}`,
-      color: s.color, fontSize: 11, fontWeight: 700,
-      whiteSpace: 'nowrap',
-    }}>
-      {specialty}
-    </span>
-  );
-}
 
 // ── localStorage helpers for milestone banner persistence ─────────────────────
 function hasSeenBanner(teacherId: string, studentName: string, milestone: number): boolean {
@@ -2626,12 +2604,15 @@ function TeacherContent() {
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 20 }}>
                 {ALL_SPECIALTIES.map(s => {
                   const active = specialtiesDraft.includes(s);
-                  const st = SPECIALTY_STYLE[s];
                   return (
-                    <button key={s} onClick={() => setSpecialtiesDraft(prev => active ? prev.filter(x => x !== s) : [...prev, s])}
-                      style={{ padding: '8px 18px', borderRadius: 20, border: `2px solid ${active ? st.border : 'var(--border)'}`, background: active ? st.bg : 'transparent', color: active ? st.color : 'var(--text-secondary)', cursor: 'pointer', fontSize: 14, fontWeight: active ? 700 : 500, fontFamily: 'inherit', transition: 'all 0.12s' }}>
+                    <ToggleChip
+                      key={s}
+                      active={active}
+                      onClick={() => setSpecialtiesDraft(prev => active ? prev.filter(x => x !== s) : [...prev, s])}
+                      style={{ padding: '8px 18px', fontSize: 'var(--fs-body)' }}
+                    >
                       {s}
-                    </button>
+                    </ToggleChip>
                   );
                 })}
               </div>
