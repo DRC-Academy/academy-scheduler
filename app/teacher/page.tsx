@@ -5,7 +5,7 @@ import { NavBar } from '@/components/NavBar';
 import { AuthGuard } from '@/components/AuthGuard';
 import { PullToRefresh } from '@/components/PullToRefresh';
 import { LastUpdated } from '@/components/LastUpdated';
-import { VisualCalendar, DAYS, cellKey, getSpainParts, type RecuperacionData } from '@/components/VisualCalendar';
+import { VisualCalendar, DAYS, cellKey, getSpainParts, CAL_STATE_META, type RecuperacionData } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
 import { calcCurrentClassNumber, dbCheckStudentExists, dbSetStudentProduct, dbEnsureStudentAndAssignment } from '@/lib/db';
@@ -2595,17 +2595,25 @@ function TeacherContent() {
               </span>
             </div>
           </div>
+          {/* Los números no llevan color propio: el punto ya identifica el estado,
+              y el color sale de la misma fuente que pinta la grilla. */}
           <div className="teacher-profile-stats" style={{ display: 'flex', gap: 20 }}>
-            {[
-              { label: 'Libre',          count: freeCount,    color: '#4ade80' },
-              { label: 'Ocupado',        count: ocupadoCount, color: '#93c5fd' },
-              { label: 'En recuperación', count: bloqCount,   color: '#fbbf24' },
-            ].map(s => (
-              <div key={s.label} style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: 20, fontWeight: 700, color: s.color }}>{s.count}</div>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{s.label}</div>
-              </div>
-            ))}
+            {([
+              { state: 'libre'     as const, count: freeCount },
+              { state: 'ocupado'   as const, count: ocupadoCount },
+              { state: 'bloqueado' as const, count: bloqCount },
+            ]).map(s => {
+              const meta = CAL_STATE_META[s.state];
+              return (
+                <div key={s.state} style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: 'var(--fs-title)', fontWeight: 'var(--fw-semibold)', color: 'var(--text-primary)' }}>{s.count}</div>
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 'var(--fs-micro)', color: 'var(--text-muted)' }}>
+                    <span aria-hidden style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', background: meta.outline ? 'transparent' : meta.dotColor, border: meta.outline ? '1.5px solid var(--border-light)' : 'none' }} />
+                    {meta.label}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
 
@@ -2667,21 +2675,23 @@ function TeacherContent() {
               </div>
             </div>
 
-            <div className="states-legend" style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-              {[
-                { icon: '⬜', label: 'No work',          desc: 'No trabajás ese horario' },
-                { icon: '🟢', label: 'Libre',            desc: 'Disponible para clases' },
-                { icon: '🔵', label: 'Ocupado',          desc: 'Clase con alumno' },
-                { icon: '🩹', label: 'En recuperación',  desc: 'Clase de recuperación o ajuste' },
-              ].map(s => (
-                <div key={s.label} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px', background: 'var(--bg-surface-2)', borderRadius: 8, border: '1px solid var(--border)' }}>
-                  <span>{s.icon}</span>
-                  <div>
-                    <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-primary)' }}>{s.label}</div>
-                    <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{s.desc}</div>
+            {/* Leyenda: punto de color, no emoji. Los colores salen de CAL_STATE_META,
+                la misma fuente que pinta las celdas, así no pueden divergir. */}
+            <div className="states-legend" style={{ display: 'flex', gap: 'var(--space-4)', marginBottom: 'var(--space-4)', flexWrap: 'wrap' }}>
+              {(['no_work', 'libre', 'ocupado', 'bloqueado'] as const).map(state => {
+                const meta = CAL_STATE_META[state];
+                return (
+                  <div key={state} style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                    <span aria-hidden style={{
+                      display: 'inline-block', flexShrink: 0, width: 9, height: 9, borderRadius: '50%',
+                      background: meta.outline ? 'transparent' : meta.dotColor,
+                      border: meta.outline ? '1.5px solid var(--border-light)' : 'none',
+                    }} />
+                    <span style={{ fontSize: 'var(--fs-caption)', color: 'var(--text-primary)' }}>{meta.label}</span>
+                    <span style={{ fontSize: 'var(--fs-caption)', color: 'var(--text-muted)' }}>{meta.desc}</span>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
 
             {gridLoading ? (

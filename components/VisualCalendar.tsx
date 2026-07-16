@@ -1,6 +1,7 @@
 'use client';
 import { useState, useCallback, useEffect } from 'react';
 import { Grid, Cell, CellState } from '@/types';
+import { Button } from '@/components/ui';
 
 export const DAYS = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 export const HOURS_ES = Array.from({ length: 14 }, (_, i) => `${(i + 9).toString().padStart(2, '0')}:00`);
@@ -45,14 +46,30 @@ export function getSpainParts(now: Date): { hour: number; minute: number; dateSt
 
 export type { Grid, Cell, CellState };
 
+// Fuente ÚNICA del color de los 4 estados del calendario. La leyenda y los
+// contadores tienen que salir de acá (CAL_STATE_META) y no repintarse a mano:
+// antes la leyenda decía que Ocupado era azul mientras la grilla lo pintaba rojo.
+//
+// Son categorías, no estados semánticos: una agenda llena no es un error, es el
+// objetivo del profe. Por eso no hay rojo. "Ocupado" es relleno neutro (hay
+// clase) y contrasta contra "No work", que es la celda vacía.
 export function stateColor(state: CellState) {
   switch (state) {
-    case 'libre':     return { bg: 'rgba(30,158,58,0.12)',  border: 'rgba(30,158,58,0.4)',   text: '#167a2d' };
-    case 'ocupado':   return { bg: 'rgba(239,68,68,0.12)',  border: 'rgba(239,68,68,0.4)',   text: '#dc2626' };
-    case 'bloqueado': return { bg: 'rgba(255,196,0,0.15)',  border: 'rgba(255,196,0,0.5)',   text: '#b38600' };
-    case 'no_work':   return { bg: 'transparent',           border: 'rgba(200,200,195,0.6)', text: 'var(--text-muted)' };
+    case 'libre':     return { bg: 'var(--cal-free-bg)',      border: 'var(--cal-free-border)',     text: 'var(--cal-free-text)' };
+    case 'ocupado':   return { bg: 'var(--cal-busy-bg)',      border: 'var(--cal-busy-border)',     text: 'var(--cal-busy-text)' };
+    case 'bloqueado': return { bg: 'var(--cal-recovery-bg)',  border: 'var(--cal-recovery-border)', text: 'var(--cal-recovery-text)' };
+    case 'no_work':   return { bg: 'var(--cal-nowork-bg)',    border: 'var(--cal-nowork-border)',   text: 'var(--cal-nowork-text)' };
   }
 }
+
+// Metadatos de cada estado para leyendas y contadores. `dotColor` es el color del
+// punto; `outline` marca la categoría vacía (No work), que se dibuja sin relleno.
+export const CAL_STATE_META: Record<CellState, { label: string; desc: string; dotColor: string; outline?: boolean }> = {
+  libre:     { label: 'Libre',           desc: 'Disponible para clases',        dotColor: 'var(--cal-free-text)' },
+  ocupado:   { label: 'Ocupado',         desc: 'Clase con alumno',              dotColor: 'var(--cal-busy-border)' },
+  bloqueado: { label: 'En recuperación', desc: 'Clase de recuperación o ajuste', dotColor: 'var(--cal-recovery-text)' },
+  no_work:   { label: 'No work',         desc: 'No trabajás ese horario',       dotColor: 'transparent', outline: true },
+};
 
 export function buildGridFromTeacher(
   timeSlots: Array<{ day: string; from: string; to: string }>,
@@ -146,12 +163,11 @@ function StudentNameModal({ onConfirm, onCancel }: { onConfirm: (name: string) =
           autoFocus
           onKeyDown={e => { if (e.key === 'Enter' && name.trim()) onConfirm(name.trim()); }}
         />
-        <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
-          <button onClick={onCancel} style={{ flex: 1, padding: '9px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13 }}>Cancelar</button>
-          <button onClick={() => name.trim() && onConfirm(name.trim())} disabled={!name.trim()}
-            style={{ flex: 2, padding: '9px', borderRadius: 8, border: 'none', background: name.trim() ? '#1E9E3A' : 'var(--bg-surface-3)', color: name.trim() ? 'white' : 'var(--text-muted)', cursor: name.trim() ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 700 }}>
+        <div style={{ display: 'flex', gap: 'var(--space-2)', marginTop: 'var(--space-4)' }}>
+          <Button variant="secondary" onClick={onCancel} style={{ flex: 1 }}>Cancelar</Button>
+          <Button variant="primary" onClick={() => name.trim() && onConfirm(name.trim())} disabled={!name.trim()} style={{ flex: 2 }}>
             Marcar como Ocupado
-          </button>
+          </Button>
         </div>
       </div>
     </div>
@@ -177,19 +193,19 @@ function CellMenu({
     />;
   }
 
-  const options: Array<{ state: CellState; label: string; sub?: string; color: string; icon: string }> = [
-    { state: 'libre',     label: 'Libre',            color: '#4ade80',          icon: '🟢' },
-    { state: 'ocupado',   label: 'Ocupado',          color: '#1E9E3A',          icon: '🔵' },
-    { state: 'bloqueado', label: 'En recuperación',  sub: 'Clase de recuperación o ajuste', color: '#FFC400', icon: '🩹' },
-    { state: 'no_work',   label: 'No work',          color: 'var(--text-muted)', icon: '⬜' },
+  const options: Array<{ state: CellState; sub?: string }> = [
+    { state: 'libre' },
+    { state: 'ocupado' },
+    { state: 'bloqueado', sub: CAL_STATE_META.bloqueado.desc },
+    { state: 'no_work' },
   ];
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 70, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
       onClick={onClose}>
-      <div style={{ background: 'var(--bg-surface)', border: '1px solid #35405a', borderRadius: 12, padding: 8, minWidth: 200, boxShadow: '0 16px 48px rgba(0,0,0,0.5)' }}
+      <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 'var(--space-2)', minWidth: 210, boxShadow: 'var(--shadow-overlay)' }}
         onClick={e => e.stopPropagation()}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', padding: '4px 10px 8px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+        <div style={{ fontSize: 'var(--fs-caption)', fontWeight: 'var(--fw-medium)', color: 'var(--text-muted)', padding: '4px 10px 8px' }}>
           {day} · {hour} 🇪🇸 / {toAR(hour)} 🇦🇷
         </div>
         {options.map(opt => (
@@ -211,19 +227,25 @@ function CellMenu({
             onSelect(opt.state);
             onClose();
           }} style={{
-            display: 'flex', alignItems: 'center', gap: 10, width: '100%',
-            padding: '9px 12px', borderRadius: 8, border: 'none', cursor: 'pointer',
-            background: current === opt.state ? 'var(--bg-surface-3)' : 'transparent',
-            color: current === opt.state ? opt.color : 'var(--text-secondary)',
-            fontSize: 13, fontWeight: current === opt.state ? 700 : 400,
-            textAlign: 'left',
+            display: 'flex', alignItems: 'center', gap: 'var(--space-3)', width: '100%',
+            padding: '9px 12px', borderRadius: 'var(--radius-sm)', border: 'none', cursor: 'pointer',
+            background: current === opt.state ? 'var(--bg-surface-2)' : 'transparent',
+            color: 'var(--text-primary)',
+            fontSize: 'var(--fs-sm)',
+            fontWeight: current === opt.state ? 'var(--fw-semibold)' : 'var(--fw-regular)',
+            textAlign: 'left', fontFamily: 'inherit',
           }}>
-            <span>{opt.icon}</span>
+            {/* Punto del mismo color que va a tomar la celda. */}
+            <span aria-hidden style={{
+              display: 'inline-block', flexShrink: 0, width: 9, height: 9, borderRadius: '50%',
+              background: CAL_STATE_META[opt.state].outline ? 'transparent' : CAL_STATE_META[opt.state].dotColor,
+              border: CAL_STATE_META[opt.state].outline ? '1.5px solid var(--border-light)' : 'none',
+            }} />
             <div>
-              <div>{opt.label}</div>
-              {opt.sub && <div style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 400 }}>{opt.sub}</div>}
+              <div>{CAL_STATE_META[opt.state].label}</div>
+              {opt.sub && <div style={{ fontSize: 'var(--fs-micro)', color: 'var(--text-muted)', fontWeight: 'var(--fw-regular)' }}>{opt.sub}</div>}
             </div>
-            {current === opt.state && <span style={{ marginLeft: 'auto', fontSize: 11, color: opt.color }}>actual</span>}
+            {current === opt.state && <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-micro)', color: 'var(--text-muted)' }}>actual</span>}
           </button>
         ))}
       </div>
@@ -334,17 +356,21 @@ export function VisualCalendar(props: Props) {
       </div>
 
       {/* Stats */}
-      <div style={{ display: 'flex', gap: 14, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
-        {[
-          { label: 'Libre',     count: libre,     color: '#1E9E3A' },
-          { label: 'Ocupado',   count: ocupado,   color: '#dc2626' },
-          { label: 'En recuperación', count: bloqueado, color: '#FFC400' },
-          { label: 'No work',   count: noWork,    color: 'var(--text-muted)' },
-        ].map(s => (
-          <div key={s.label} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-            <div style={{ width: 9, height: 9, borderRadius: 2, background: s.color, flexShrink: 0 }} />
-            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-              {s.label}: <b style={{ color: s.color }}>{s.count}</b>
+      <div style={{ display: 'flex', gap: 'var(--space-4)', marginBottom: 'var(--space-3)', flexWrap: 'wrap', alignItems: 'center' }}>
+        {([
+          { state: 'libre'     as const, count: libre },
+          { state: 'ocupado'   as const, count: ocupado },
+          { state: 'bloqueado' as const, count: bloqueado },
+          { state: 'no_work'   as const, count: noWork },
+        ]).map(s => (
+          <div key={s.state} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+            <div aria-hidden style={{
+              width: 9, height: 9, borderRadius: '50%', flexShrink: 0,
+              background: CAL_STATE_META[s.state].outline ? 'transparent' : CAL_STATE_META[s.state].dotColor,
+              border: CAL_STATE_META[s.state].outline ? '1.5px solid var(--border-light)' : 'none',
+            }} />
+            <span style={{ fontSize: 'var(--fs-caption)', color: 'var(--text-secondary)' }}>
+              {CAL_STATE_META[s.state].label}: <b style={{ fontWeight: 'var(--fw-semibold)', color: 'var(--text-primary)' }}>{s.count}</b>
             </span>
           </div>
         ))}
@@ -472,14 +498,14 @@ export function VisualCalendar(props: Props) {
                                 <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                   {cell.student || 'Ocupado'}
                                 </div>
-                                <div style={{ fontSize: 8, color: '#dc2626', opacity: 0.8, fontWeight: 400 }}>· Semanal</div>
+                                <div style={{ fontSize: 8, color: 'var(--text-muted)', fontWeight: 400 }}>· Semanal</div>
                               </>
                             : cell.state === 'bloqueado'
                               ? <>
                                   <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                    {cell.student ? `🩹 ${cell.student}` : 'En recuperación'}
+                                    {cell.student || 'En recuperación'}
                                   </div>
-                                  <div style={{ fontSize: 8, color: '#b38600', opacity: 0.8, fontWeight: 400 }}>{cell.student ? 'Recuperación' : '· Puntual'}</div>
+                                  <div style={{ fontSize: 8, color: 'var(--warn)', opacity: 0.9, fontWeight: 400 }}>{cell.student ? 'Recuperación' : '· Puntual'}</div>
                                 </>
                               : props.mode === 'setter' ? '+ Asignar' : 'Libre'}
                         </div>
@@ -497,13 +523,13 @@ export function VisualCalendar(props: Props) {
       </div>
 
       {props.mode === 'teacher' && (
-        <div style={{ marginTop: 10, fontSize: 11, color: 'var(--text-muted)' }}>
-          ✏️ Clic en cualquier celda para elegir: Libre · Ocupado · En recuperación · No work
+        <div style={{ marginTop: 'var(--space-3)', fontSize: 'var(--fs-caption)', color: 'var(--text-muted)' }}>
+          Clic en cualquier celda para cambiar su estado.
         </div>
       )}
       {props.mode === 'setter' && (
-        <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-muted)' }}>
-          📌 El horario asignado se repetirá <strong>todas las semanas</strong> de forma automática.
+        <div style={{ marginTop: 'var(--space-2)', fontSize: 'var(--fs-caption)', color: 'var(--text-muted)' }}>
+          El horario asignado se repetirá <strong style={{ fontWeight: 'var(--fw-semibold)' }}>todas las semanas</strong> de forma automática.
         </div>
       )}
 
