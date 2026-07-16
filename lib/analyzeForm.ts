@@ -79,3 +79,6 @@ export async function generateFicha(input: FichaInput): Promise<FichaResult> {
     timeoutMs: 90_000,
   });
 }
+
+// Re-exportamos el mapeo a columnas para que lo usen los endpoints que guardan.
+export { fichaToColumns } from '@/lib/aiTypes';

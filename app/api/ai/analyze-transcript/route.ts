@@ -1,36 +1,32 @@
 // Analiza la transcripción de una clase y devuelve el informe pedagógico + la
 // señal de riesgo de baja.
 //
-// Si se pasa `persist: true`, además:
-//   · guarda el análisis en class_analyses,
-//   · actualiza risk_signal en student_profiles,
-//   · notifica al admin si el riesgo es 'amarillo' o 'rojo'.
-// La persistencia se hace acá (y no en el cliente) para que el análisis y sus
-// efectos viajen juntos: si la IA responde, el registro queda sí o sí.
+// El análisis y el guardado están SEPARADOS a propósito: el profesor puede
+// regenerar o editar antes de guardar (paso 3 del flujo "Registrar clase dada").
+//   · POST { transcript, ... }            → sólo analiza, no guarda.
+//   · POST { save: true, analysis, ... }  → guarda el análisis (posiblemente editado).
 
 import { supabase } from '@/lib/supabase';
-import { analyzeTranscript, type TranscriptIA } from '@/lib/analyzeTranscript';
+import { analyzeTranscript } from '@/lib/analyzeTranscript';
+import { isRiskSignal, type TranscriptIA } from '@/lib/aiTypes';
 
 interface Body {
   transcript?: string;
   studentProfile?: Record<string, unknown> | null;
   classHistory?: unknown[] | null;
   classNumber?: number | null;
+  classDate?: string | null;
   studentName?: string;
   teacherName?: string;
   plan?: string;
   level?: string;
-  // Persistencia (opcional)
-  persist?: boolean;
+  // Guardado
+  save?: boolean;
+  analysis?: TranscriptIA;
   studentId?: string | null;
   teacherId?: string | null;
-  profileId?: string | null;   // id de la fila de student_profiles a actualizar
+  profileId?: string | null;
 }
-
-const RISK_LABEL: Record<string, string> = {
-  amarillo: '🟡 Atención',
-  rojo:     '🔴 Riesgo de baja',
-};
 
 export async function POST(request: Request): Promise<Response> {
   let body: Body;
@@ -40,11 +36,22 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ error: 'JSON inválido' }, { status: 400 });
   }
 
-  const transcript = body.transcript?.trim();
   const studentName = body.studentName?.trim();
-  if (!transcript || !studentName) {
-    return Response.json({ error: 'Faltan datos (transcript, studentName).' }, { status: 400 });
+  if (!studentName) return Response.json({ error: 'Falta studentName.' }, { status: 400 });
+
+  // ── Guardar un análisis ya revisado por el profesor ──
+  if (body.save) {
+    if (!body.analysis || !body.transcript?.trim()) {
+      return Response.json({ error: 'Faltan datos (analysis, transcript).' }, { status: 400 });
+    }
+    const saved = await persistAnalysis(body, body.analysis, body.transcript.trim(), studentName);
+    if (saved.error) return Response.json({ error: saved.error }, { status: 500 });
+    return Response.json({ saved: true, analysisId: saved.id });
   }
+
+  // ── Analizar ──
+  const transcript = body.transcript?.trim();
+  if (!transcript) return Response.json({ error: 'Falta la transcripción.' }, { status: 400 });
 
   const result = await analyzeTranscript({
     transcript,
@@ -53,6 +60,7 @@ export async function POST(request: Request): Promise<Response> {
     plan: body.plan,
     level: body.level,
     classNumber: body.classNumber,
+    classDate: body.classDate,
     studentProfile: body.studentProfile,
     classHistory: body.classHistory,
   });
@@ -63,64 +71,108 @@ export async function POST(request: Request): Promise<Response> {
       { status: 502 },
     );
   }
-
-  const analysis = result.data;
-  if (body.persist) {
-    await persistAnalysis(body, analysis, transcript);
-  }
-
-  return Response.json({ analysis, status: result.status });
+  return Response.json({ analysis: result.data, status: result.status });
 }
 
-// Guarda el análisis y sus efectos. No lanza: si algo falla lo registramos, pero
-// el profesor ya tiene su informe y no queremos perdérselo por un error de BD.
-async function persistAnalysis(body: Body, analysis: TranscriptIA, transcript: string): Promise<void> {
+// Guarda en class_analyses, actualiza la ficha del alumno y avisa al admin si hay riesgo.
+// Ojo con el esquema real: el timestamp es `analyzed_at` y NO existe `teacher_name`.
+async function persistAnalysis(
+  body: Body, a: TranscriptIA, transcript: string, studentName: string,
+): Promise<{ id?: string; error?: string }> {
   const now = new Date().toISOString();
-  const studentName = body.studentName!.trim();
+  const id = `ca_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const risk = isRiskSignal(a.riskSignal) ? a.riskSignal : 'verde';
 
   const { error: insErr } = await supabase.from('class_analyses').insert({
-    id:               `ca_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    id,
     student_id:       body.studentId || null,
-    student_name:     studentName,
     teacher_id:       body.teacherId || null,
-    teacher_name:     body.teacherName?.trim() || null,
+    student_name:     studentName,
     class_number:     body.classNumber ?? null,
-    transcript,
-    class_summary:    analysis.classSummary,
-    errors_detected:  analysis.errorsDetected,
-    progress_notes:   analysis.progressNotes,
-    topics_covered:   analysis.topicsCovered,
-    risk_signal:      analysis.riskSignal,
-    risk_explanation: analysis.riskExplanation,
-    next_class_guide: analysis.nextClassGuide,
-    created_at:       now,
+    class_date:       body.classDate || null,
+    class_title:      a.classTitle,
+    transcript,                       // NOT NULL en la base
+    class_summary:    a.classSummary,
+    errors_detected:  a.errorsDetected,
+    progress_notes:   a.progressNotes,
+    topics_covered:   a.topicsCovered,
+    next_class_guide: a.nextClassGuide,
+    risk_signal:      risk,
+    risk_explanation: a.riskExplanation,
+    analyzed_at:      now,
   });
-  if (insErr) console.error('[analyze-transcript] Error al guardar class_analyses:', insErr);
-
-  // Señal de riesgo en la ficha del alumno.
-  const target = body.profileId
-    ? supabase.from('student_profiles').update({ risk_signal: analysis.riskSignal, updated_at: now }).eq('id', body.profileId)
-    : body.studentId
-      ? supabase.from('student_profiles').update({ risk_signal: analysis.riskSignal, updated_at: now }).eq('student_id', body.studentId)
-      : null;
-  if (target) {
-    const { error } = await target;
-    if (error) console.error('[analyze-transcript] Error al actualizar risk_signal:', error);
+  if (insErr) {
+    console.error('[analyze-transcript] Error al guardar class_analyses:', insErr);
+    return { error: `No se pudo guardar el análisis: ${insErr.message}` };
   }
 
-  // Aviso al admin si hay riesgo.
-  if (analysis.riskSignal === 'amarillo' || analysis.riskSignal === 'rojo') {
-    const { error } = await supabase.from('notifications').insert({
-      id:          `notif_risk_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-      target_user: null,
-      target_role: 'admin',
-      title:       `${RISK_LABEL[analysis.riskSignal]} — ${studentName}`,
-      body:        `${analysis.riskExplanation}${body.teacherName ? ` (Profesor/a: ${body.teacherName})` : ''}`,
-      type:        analysis.riskSignal === 'rojo' ? 'ai_risk_red' : 'ai_risk_yellow',
-      read_by:     [],
-      created_at:  now,
-      created_by:  'ia',
-    });
-    if (error) console.error('[analyze-transcript] Error al crear la notificación de riesgo:', error);
+  // Ficha del alumno: riesgo, progreso y contadores.
+  const profileId = await resolveProfileId(body, studentName);
+  if (profileId) {
+    const total = await countAnalyses(body.studentId, studentName);
+    const { error } = await supabase.from('student_profiles').update({
+      risk_signal:            risk,
+      risk_explanation:       a.riskExplanation,
+      risk_updated_at:        now,
+      progress_score:         clampScore(a.progressScore),
+      total_classes_analyzed: total,
+      last_class_analyzed_at: body.classDate || now,
+      updated_at:             now,
+    }).eq('id', profileId);
+    if (error) console.error('[analyze-transcript] Error al actualizar la ficha:', error);
   }
+
+  if (risk === 'amarillo' || risk === 'rojo') {
+    await notifyAdmin(risk, studentName, body, a);
+  }
+  return { id };
+}
+
+async function resolveProfileId(body: Body, studentName: string): Promise<string | null> {
+  if (body.profileId) return body.profileId;
+  if (body.studentId) {
+    const { data } = await supabase.from('student_profiles').select('id').eq('student_id', body.studentId).maybeSingle();
+    if (data) return data.id;
+  }
+  const { data } = await supabase.from('student_profiles').select('id').ilike('student_name', studentName).maybeSingle();
+  return data?.id ?? null;
+}
+
+async function countAnalyses(studentId: string | null | undefined, studentName: string): Promise<number> {
+  const q = supabase.from('class_analyses').select('*', { count: 'exact', head: true });
+  const { count } = studentId ? await q.eq('student_id', studentId) : await q.ilike('student_name', studentName);
+  return count ?? 0;
+}
+
+const clampScore = (n: number): number =>
+  Number.isFinite(n) ? Math.min(10, Math.max(1, Math.round(n))) : 5;
+
+async function notifyAdmin(
+  risk: 'amarillo' | 'rojo', studentName: string, body: Body, a: TranscriptIA,
+): Promise<void> {
+  const teacher = body.teacherName?.trim() || 'sin asignar';
+  const clase = body.classNumber != null ? `Clase ${body.classNumber} analizada` : 'Clase analizada';
+
+  const notif = risk === 'rojo'
+    ? {
+        title: `🔴 ALERTA — ${studentName} en riesgo de baja`,
+        body:  `Profesor: ${teacher} · Acción recomendada: contactar al alumno esta semana.\n\nMotivo: ${a.riskExplanation}`,
+        type:  'ai_risk_red',
+      }
+    : {
+        title: `⚠️ ${studentName} — Señal de atención`,
+        body:  `Profesor: ${teacher} · ${clase}\nMotivo: ${a.riskExplanation}`,
+        type:  'ai_risk_yellow',
+      };
+
+  const { error } = await supabase.from('notifications').insert({
+    id:          `notif_risk_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    target_user: null,
+    target_role: 'admin',
+    ...notif,
+    read_by:     [],
+    created_at:  new Date().toISOString(),
+    created_by:  'ia',
+  });
+  if (error) console.error('[analyze-transcript] Error al crear la notificación de riesgo:', error);
 }

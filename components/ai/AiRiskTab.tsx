@@ -3,13 +3,16 @@
 // Pestaña "🤖 IA y Riesgo" del panel de admin.
 //
 //   · Cards con el reparto de alumnos por señal de riesgo.
-//   · Tabla de alertas (🔴 y 🟡) con acción por alumno.
+//   · Tabla de alertas (🔴 y 🟡) con el motivo completo y acción por alumno.
 //   · Tabla por profesor: analizados, % de uso del módulo y riesgo promedio.
+//   · Al abrir un alumno: su ficha completa, igual que la ve el profesor.
 
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { fetchAllClassAnalyses, fetchRiskProfiles, type ClassAnalysisRow } from '@/lib/aiClient';
-import { RISK_META, isRiskSignal, type RiskSignal } from '@/lib/aiTypes';
-import { RiskBadge, TranscriptAnalysisView } from '@/components/ai/FichaView';
+import { RISK_META, isRiskSignal, type RiskSignal, type StudentProfileRow } from '@/lib/aiTypes';
+import { RiskBadge, DRC, formatDate } from '@/components/ai/FichaView';
+import AiStudentPanel from '@/components/ai/AiStudentPanel';
+import { Modal, ModalHeader } from '@/components/ai/modalUi';
 import type { Assignment, Teacher } from '@/types';
 
 interface Props {
@@ -17,21 +20,26 @@ interface Props {
   assignments: Assignment[];
 }
 
-interface RiskProfile {
-  id: string;
-  student_id: string | null;
-  student_name: string | null;
-  risk_signal: string | null;
-  updated_at: string | null;
+interface Row {
+  profileId: string;
+  studentId: string | null;
+  studentName: string;
+  risk: RiskSignal;
+  riskExplanation: string | null;
+  teacherId: string | null;
+  teacherName: string;
+  lastClassAt: string | null;
+  classNumber: number | null;
 }
 
 const norm = (s: string) => s.trim().toLowerCase();
+const RISK_SCORE: Record<RiskSignal, number> = { verde: 1, amarillo: 2, rojo: 3 };
 
 export default function AiRiskTab({ teachers, assignments }: Props) {
-  const [profiles, setProfiles] = useState<RiskProfile[]>([]);
+  const [profiles, setProfiles] = useState<StudentProfileRow[]>([]);
   const [analyses, setAnalyses] = useState<ClassAnalysisRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [detail, setDetail] = useState<ClassAnalysisRow | null>(null);
+  const [detail, setDetail] = useState<Row | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -42,41 +50,42 @@ export default function AiRiskTab({ teachers, assignments }: Props) {
     return () => { cancelled = true; };
   }, []);
 
-  // Último análisis por alumno: es el que manda para el estado actual.
+  // Último análisis por alumno (ya vienen ordenados por analyzed_at desc).
   const latestByStudent = useMemo(() => {
     const m = new Map<string, ClassAnalysisRow>();
-    for (const a of analyses) {           // ya vienen ordenados por fecha desc
-      const key = a.student_id || `name:${norm(a.student_name)}`;
-      if (!m.has(key)) m.set(key, a);
+    for (const a of analyses) {
+      for (const key of [a.student_id, `name:${norm(a.student_name)}`]) {
+        if (key && !m.has(key)) m.set(key, a);
+      }
     }
     return m;
   }, [analyses]);
 
-  // Profesor asignado a cada alumno (para atribuir el riesgo).
   const teacherOfStudent = useMemo(() => {
     const m = new Map<string, string>();
     for (const a of assignments) m.set(norm(a.studentName), a.teacherId);
     return m;
   }, [assignments]);
 
-  const rows = useMemo(() => {
-    return profiles
-      .filter(p => isRiskSignal(p.risk_signal) && p.student_name)
-      .map(p => {
-        const key = p.student_id || `name:${norm(p.student_name!)}`;
-        const last = latestByStudent.get(key) ?? latestByStudent.get(`name:${norm(p.student_name!)}`);
-        const teacherId = last?.teacher_id || teacherOfStudent.get(norm(p.student_name!)) || null;
-        const teacher = teachers.find(t => t.id === teacherId);
-        return {
-          profileId:   p.id,
-          studentName: p.student_name!,
-          risk:        p.risk_signal as RiskSignal,
-          teacherName: teacher?.name ?? last?.teacher_name ?? '—',
-          lastClassAt: last?.created_at ?? p.updated_at ?? null,
-          lastAnalysis: last ?? null,
-        };
-      });
-  }, [profiles, latestByStudent, teacherOfStudent, teachers]);
+  const rows: Row[] = useMemo(() => profiles
+    .filter(p => p.student_name)
+    .map(p => {
+      const name = p.student_name!;
+      const last = (p.student_id && latestByStudent.get(p.student_id)) || latestByStudent.get(`name:${norm(name)}`);
+      const teacherId = last?.teacher_id || p.teacher_id || teacherOfStudent.get(norm(name)) || null;
+      const teacher = teachers.find(t => t.id === teacherId);
+      return {
+        profileId:   p.id,
+        studentId:   p.student_id,
+        studentName: name,
+        risk:        isRiskSignal(p.risk_signal) ? p.risk_signal : 'verde',
+        riskExplanation: p.risk_explanation,
+        teacherId,
+        teacherName: teacher?.name ?? '—',
+        lastClassAt: last?.class_date ?? last?.analyzed_at ?? p.last_class_analyzed_at ?? null,
+        classNumber: last?.class_number ?? null,
+      };
+    }), [profiles, latestByStudent, teacherOfStudent, teachers]);
 
   const counts: Record<RiskSignal, number> = {
     verde:    rows.filter(r => r.risk === 'verde').length,
@@ -84,50 +93,38 @@ export default function AiRiskTab({ teachers, assignments }: Props) {
     rojo:     rows.filter(r => r.risk === 'rojo').length,
   };
 
-  // Alertas: sólo lo que requiere acción, rojo primero.
   const alerts = rows
     .filter(r => r.risk === 'rojo' || r.risk === 'amarillo')
-    .sort((a, b) => (a.risk === b.risk ? 0 : a.risk === 'rojo' ? -1 : 1));
+    .sort((a, b) => RISK_SCORE[b.risk] - RISK_SCORE[a.risk]);
 
-  // Por profesor: alumnos asignados vs. alumnos con al menos un análisis.
-  const perTeacher = useMemo(() => {
-    const RISK_SCORE: Record<RiskSignal, number> = { verde: 1, amarillo: 2, rojo: 3 };
-    return teachers.map(t => {
-      const myStudents = assignments.filter(a => a.teacherId === t.id).map(a => norm(a.studentName));
-      const unique = Array.from(new Set(myStudents));
-      const analyzed = unique.filter(name =>
-        analyses.some(a => a.teacher_id === t.id && norm(a.student_name) === name),
-      );
-      const risks = rows
-        .filter(r => r.teacherName === t.name && isRiskSignal(r.risk))
-        .map(r => RISK_SCORE[r.risk]);
-      const avg = risks.length ? risks.reduce((x, y) => x + y, 0) / risks.length : null;
-      return {
-        id: t.id,
-        name: t.name,
-        total: unique.length,
-        analyzed: analyzed.length,
-        usage: unique.length ? Math.round((analyzed.length / unique.length) * 100) : 0,
-        avgRisk: avg,
-      };
-    }).sort((a, b) => (b.avgRisk ?? 0) - (a.avgRisk ?? 0));
-  }, [teachers, assignments, analyses, rows]);
+  const perTeacher = useMemo(() => teachers.map(t => {
+    const unique = Array.from(new Set(assignments.filter(a => a.teacherId === t.id).map(a => norm(a.studentName))));
+    const analyzed = unique.filter(n => analyses.some(a => norm(a.student_name) === n));
+    const risks = rows.filter(r => r.teacherId === t.id).map(r => RISK_SCORE[r.risk]);
+    return {
+      id: t.id,
+      name: t.name,
+      total: unique.length,
+      analyzed: analyzed.length,
+      usage: unique.length ? Math.round((analyzed.length / unique.length) * 100) : 0,
+      avgRisk: risks.length ? risks.reduce((x, y) => x + y, 0) / risks.length : null,
+    };
+  }).sort((a, b) => (b.avgRisk ?? 0) - (a.avgRisk ?? 0)), [teachers, assignments, analyses, rows]);
 
   if (loading) {
     return <div style={{ textAlign: 'center', padding: '48px 0', color: 'var(--text-muted)', fontSize: 14 }}>Cargando datos de IA…</div>;
   }
 
-  if (rows.length === 0 && analyses.length === 0) {
+  if (rows.length === 0) {
     return (
       <div style={card}>
         <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-muted)' }}>
           <div style={{ fontSize: 34, marginBottom: 10 }}>🤖</div>
           <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 4 }}>
-            Todavía no hay clases analizadas
+            Todavía no hay fichas de alumnos
           </div>
           <div style={{ fontSize: 12.5, lineHeight: 1.5 }}>
-            Las señales de riesgo aparecen cuando los profesores suben transcripciones
-            desde la ficha del alumno, en Mis alumnos.
+            Aparecen cuando los alumnos completan el formulario inicial.
           </div>
         </div>
       </div>
@@ -136,7 +133,6 @@ export default function AiRiskTab({ teachers, assignments }: Props) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-      {/* Cards de riesgo */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
         {(['verde', 'amarillo', 'rojo'] as const).map(r => (
           <div key={r} style={{ ...card, borderColor: RISK_META[r].border, background: RISK_META[r].bg }}>
@@ -156,47 +152,67 @@ export default function AiRiskTab({ teachers, assignments }: Props) {
             Ningún alumno en riesgo ahora mismo. 🎉
           </div>
         ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={table}>
-              <thead>
-                <tr>
-                  <th style={th}>Alumno</th>
-                  <th style={th}>Profesor</th>
-                  <th style={th}>Riesgo</th>
-                  <th style={th}>Última clase</th>
-                  <th style={th}>Acción</th>
-                </tr>
-              </thead>
-              <tbody>
-                {alerts.map(r => (
-                  <tr key={r.profileId}>
-                    <td style={{ ...td, fontWeight: 700, color: 'var(--text-primary)' }}>{r.studentName}</td>
-                    <td style={td}>{r.teacherName}</td>
-                    <td style={td}><RiskBadge risk={r.risk} compact /></td>
-                    <td style={td}>
-                      {r.lastClassAt
-                        ? new Date(r.lastClassAt).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' })
-                        : '—'}
-                    </td>
-                    <td style={td}>
-                      <button
-                        onClick={() => setDetail(r.lastAnalysis)}
-                        disabled={!r.lastAnalysis}
-                        style={{
-                          ...(r.risk === 'rojo' ? interveneBtn : detailBtn),
-                          opacity: r.lastAnalysis ? 1 : 0.45,
-                          cursor: r.lastAnalysis ? 'pointer' : 'not-allowed',
-                        }}
-                      >
-                        {r.risk === 'rojo' ? '⚡ Intervenir' : '👁️ Ver detalle'}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {alerts.map(r => (
+              <div key={r.profileId} style={{
+                border: `1px solid ${RISK_META[r.risk].border}`, background: RISK_META[r.risk].bg,
+                borderRadius: 10, padding: '12px 14px',
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, flexWrap: 'wrap' }}>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <span style={{ fontWeight: 800, fontSize: 14, color: 'var(--text-primary)' }}>{r.studentName}</span>
+                      <RiskBadge risk={r.risk} compact />
+                    </div>
+                    <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 3 }}>
+                      Profesor: {r.teacherName}
+                      {r.classNumber != null && ` · Clase ${r.classNumber}`}
+                      {r.lastClassAt && ` · ${formatDate(r.lastClassAt)}`}
+                    </div>
+                  </div>
+                  <button onClick={() => setDetail(r)} style={r.risk === 'rojo' ? interveneBtn : detailBtn}>
+                    {r.risk === 'rojo' ? '⚡ Intervenir' : '👁️ Ver detalle'}
+                  </button>
+                </div>
+                {/* El motivo completo, para que el admin entienda por qué sin abrir nada. */}
+                {r.riskExplanation && (
+                  <div style={{
+                    marginTop: 10, padding: '9px 11px', borderRadius: 8, background: 'rgba(255,255,255,0.65)',
+                    fontSize: 12.5, color: RISK_META[r.risk].color, lineHeight: 1.55, whiteSpace: 'pre-wrap',
+                  }}>
+                    {r.riskExplanation}
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
         )}
+      </div>
+
+      {/* Todos los alumnos */}
+      <div style={card}>
+        <div style={sectionTitle}>👥 Todos los alumnos ({rows.length})</div>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={table}>
+            <thead>
+              <tr>
+                <th style={th}>Alumno</th><th style={th}>Profesor</th><th style={th}>Riesgo</th>
+                <th style={th}>Última clase</th><th style={th}>Acción</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(r => (
+                <tr key={r.profileId}>
+                  <td style={{ ...td, fontWeight: 700, color: 'var(--text-primary)' }}>{r.studentName}</td>
+                  <td style={td}>{r.teacherName}</td>
+                  <td style={td}><RiskBadge risk={r.risk} compact /></td>
+                  <td style={td}>{r.lastClassAt ? formatDate(r.lastClassAt) : '—'}</td>
+                  <td style={td}><button onClick={() => setDetail(r)} style={detailBtn}>📋 Ver ficha</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       {/* Por profesor */}
@@ -206,10 +222,8 @@ export default function AiRiskTab({ teachers, assignments }: Props) {
           <table style={table}>
             <thead>
               <tr>
-                <th style={th}>Profesor</th>
-                <th style={th}>Analizados</th>
-                <th style={th}>% uso módulo IA</th>
-                <th style={th}>Riesgo promedio</th>
+                <th style={th}>Profesor</th><th style={th}>Analizados</th>
+                <th style={th}>% uso módulo IA</th><th style={th}>Riesgo promedio</th>
               </tr>
             </thead>
             <tbody>
@@ -220,7 +234,7 @@ export default function AiRiskTab({ teachers, assignments }: Props) {
                   <td style={td}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <div style={{ flex: 1, minWidth: 60, height: 7, borderRadius: 4, background: '#e5e7eb', overflow: 'hidden' }}>
-                        <div style={{ width: `${t.usage}%`, height: '100%', background: t.usage >= 60 ? '#1E9E3A' : t.usage >= 30 ? '#FFC400' : '#ef4444' }} />
+                        <div style={{ width: `${t.usage}%`, height: '100%', background: t.usage >= 60 ? DRC.green : t.usage >= 30 ? DRC.yellow : '#ef4444' }} />
                       </div>
                       <span style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 700 }}>{t.usage}%</span>
                     </div>
@@ -233,12 +247,30 @@ export default function AiRiskTab({ teachers, assignments }: Props) {
         </div>
       </div>
 
-      {detail && <DetailModal a={detail} onClose={() => setDetail(null)} />}
+      {detail && (
+        <Modal onClose={() => setDetail(null)} maxWidth={760}>
+          <ModalHeader
+            title={`📋 ${detail.studentName}`}
+            subtitle={`Profesor: ${detail.teacherName}`}
+            onClose={() => setDetail(null)}
+          />
+          {/* Sólo lectura: el admin ve todo, pero no registra clases por el profesor. */}
+          <AiStudentPanel
+            studentName={detail.studentName}
+            studentId={detail.studentId}
+            teacherId={detail.teacherId}
+            teacherName={detail.teacherName}
+            classNumber={detail.classNumber}
+            alwaysOpen
+            canEdit={false}
+          />
+        </Modal>
+      )}
     </div>
   );
 }
 
-// 1 = verde, 3 = rojo. Mostramos el valor y el color del tramo más cercano.
+// 1 = verde, 3 = rojo.
 function AvgRisk({ value }: { value: number }) {
   const bucket: RiskSignal = value >= 2.5 ? 'rojo' : value >= 1.5 ? 'amarillo' : 'verde';
   const m = RISK_META[bucket];
@@ -249,47 +281,11 @@ function AvgRisk({ value }: { value: number }) {
   );
 }
 
-function DetailModal({ a, onClose }: { a: ClassAnalysisRow; onClose: () => void }) {
-  const risk = isRiskSignal(a.risk_signal) ? a.risk_signal : 'verde';
-  return (
-    <div style={overlay} onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={modal}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
-          <div>
-            <div style={{ fontWeight: 800, fontSize: 17, color: '#1E9E3A' }}>{a.student_name}</div>
-            <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
-              {a.class_number ? `Clase ${a.class_number} · ` : ''}
-              {a.teacher_name ?? '—'} ·{' '}
-              {new Date(a.created_at).toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' })}
-            </div>
-          </div>
-          <button onClick={onClose} style={{ border: 'none', background: 'transparent', fontSize: 22, cursor: 'pointer', color: '#6b7280', lineHeight: 1 }} aria-label="Cerrar">×</button>
-        </div>
-        <TranscriptAnalysisView
-          a={{
-            classSummary:    a.class_summary ?? '',
-            errorsDetected:  a.errors_detected ?? '',
-            progressNotes:   a.progress_notes ?? '',
-            topicsCovered:   a.topics_covered ?? '',
-            riskSignal:      risk,
-            riskExplanation: a.risk_explanation ?? '',
-            nextClassGuide:  (a.next_class_guide as never) ?? { priority: '', warmUp: '', mainFocus: '', activity: '', notes: '' },
-          }}
-        />
-      </div>
-    </div>
-  );
-}
-
 const card: CSSProperties = {
   background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px',
 };
-const sectionTitle: CSSProperties = {
-  fontWeight: 700, fontSize: 15, color: 'var(--text-primary)', marginBottom: 12,
-};
-const table: CSSProperties = {
-  width: '100%', borderCollapse: 'collapse', fontSize: 13,
-};
+const sectionTitle: CSSProperties = { fontWeight: 700, fontSize: 15, color: 'var(--text-primary)', marginBottom: 12 };
+const table: CSSProperties = { width: '100%', borderCollapse: 'collapse', fontSize: 13 };
 const th: CSSProperties = {
   textAlign: 'left', padding: '8px 10px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase',
   letterSpacing: '0.05em', color: 'var(--text-muted)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap',
@@ -298,18 +294,10 @@ const td: CSSProperties = {
   padding: '10px', borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)', verticalAlign: 'middle',
 };
 const interveneBtn: CSSProperties = {
-  padding: '5px 11px', borderRadius: 7, border: '1.5px solid #dc2626', background: 'rgba(239,68,68,0.1)',
-  color: '#dc2626', fontSize: 11.5, fontWeight: 700, fontFamily: 'inherit', whiteSpace: 'nowrap',
+  padding: '6px 12px', borderRadius: 7, border: '1.5px solid #dc2626', background: 'white',
+  color: '#dc2626', fontSize: 11.5, fontWeight: 700, fontFamily: 'inherit', whiteSpace: 'nowrap', cursor: 'pointer',
 };
 const detailBtn: CSSProperties = {
-  padding: '5px 11px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--bg-surface-3)',
-  color: 'var(--text-secondary)', fontSize: 11.5, fontWeight: 600, fontFamily: 'inherit', whiteSpace: 'nowrap',
-};
-const overlay: CSSProperties = {
-  position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(4px)',
-  zIndex: 120, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
-};
-const modal: CSSProperties = {
-  background: '#F7F7F5', border: '2px solid #1E9E3A', borderRadius: 16, padding: 24,
-  width: '100%', maxWidth: 640, maxHeight: '90vh', overflowY: 'auto',
+  padding: '6px 12px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--bg-surface-3)',
+  color: 'var(--text-secondary)', fontSize: 11.5, fontWeight: 600, fontFamily: 'inherit', whiteSpace: 'nowrap', cursor: 'pointer',
 };
