@@ -5,8 +5,9 @@
 
 import { useState, type CSSProperties } from 'react';
 import {
-  RISK_META, asObject, isRiskSignal,
+  RISK_META, asObject, isRiskSignal, isConversacionGuiada,
   type ClassAnalysisRow, type FichaIA, type NextClassIA, type TranscriptIA, type RiskSignal,
+  type GeneratedClassIA, type ConversacionGuiadaIA,
 } from '@/lib/aiTypes';
 
 export const DRC = {
@@ -50,31 +51,55 @@ export function RiskBadge({ risk, compact }: { risk: RiskSignal; compact?: boole
 }
 
 // ═══ SECCIÓN A — Perfil del alumno ════════════════════════════════════════════
-const PROFILE_CARDS: Array<{ icon: string; label: string; key: keyof FichaIA; wide?: boolean }> = [
-  { icon: '🎯', label: 'Objetivo',             key: 'personalObjective' },
-  { icon: '💼', label: 'Perfil',               key: 'occupation' },
-  { icon: '🧠', label: 'Estilo de aprendizaje', key: 'learningStyle' },
-  { icon: '✅', label: 'Puntos fuertes',        key: 'strongPoints' },
-  { icon: '⚠️', label: 'Áreas a trabajar',      key: 'weakPoints' },
-  { icon: '🔍', label: 'Diagnóstico inicial',   key: 'initialDiagnosis', wide: true },
-  { icon: '📚', label: 'Foco recomendado',      key: 'recommendedFocus', wide: true },
+const PROFILE_CARDS: Array<{ label: string; key: keyof FichaIA; wide?: boolean }> = [
+  { label: 'Objetivo',              key: 'personalObjective' },
+  { label: 'Perfil',                key: 'occupation' },
+  { label: 'Estilo de aprendizaje', key: 'learningStyle' },
+  { label: 'Puntos fuertes',        key: 'strongPoints' },
+  { label: 'Áreas a trabajar',      key: 'weakPoints' },
+  { label: 'Diagnóstico inicial',   key: 'initialDiagnosis', wide: true },
+  { label: 'Foco recomendado',      key: 'recommendedFocus', wide: true },
 ];
 
+const DOMAIN_LABEL: Record<string, string> = { social: 'Social', laboral: 'Laboral', educacional: 'Educacional' };
+
 export function ProfileCards({ ficha }: { ficha: FichaIA }) {
+  const eyebrow: CSSProperties = {
+    fontSize: 11, fontWeight: 800, color: DRC.green, textTransform: 'uppercase', letterSpacing: '0.06em',
+    borderLeft: `3px solid ${DRC.green}`, paddingLeft: 8, marginBottom: 6,
+  };
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 10 }}>
-      {PROFILE_CARDS.map(c => {
-        const value = ficha[c.key];
-        if (!value?.trim()) return null;
-        return (
-          <div key={c.key} style={{ ...panelBox, gridColumn: c.wide ? '1 / -1' : undefined, padding: '13px 15px' }}>
-            <div style={{ fontSize: 11.5, fontWeight: 800, color: DRC.green, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 5 }}>
-              {c.icon} {c.label}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {ficha.domain && (
+        <div>
+          <span style={{ display: 'inline-block', fontSize: 11, fontWeight: 700, color: DRC.greenDark, background: 'rgba(30,158,58,0.1)', border: `1px solid ${DRC.green}`, borderRadius: 20, padding: '3px 12px' }}>
+            Dominio · {DOMAIN_LABEL[ficha.domain] ?? ficha.domain}
+          </span>
+        </div>
+      )}
+
+      {ficha.priorities?.length > 0 && (
+        <div style={{ ...panelBox, padding: '13px 15px', background: 'rgba(30,158,58,0.06)' }}>
+          <div style={eyebrow}>Prioridades del diagnóstico</div>
+          <div style={{ fontSize: 11.5, color: '#6b7280', marginBottom: 6 }}>De más a menos importante — base para elegir el objetivo de cada clase.</div>
+          <ol style={{ margin: 0, paddingLeft: 20, fontSize: 13.5, color: '#374151', lineHeight: 1.6 }}>
+            {ficha.priorities.map((p, i) => <li key={i} style={{ marginBottom: 3 }}>{p}</li>)}
+          </ol>
+        </div>
+      )}
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 10 }}>
+        {PROFILE_CARDS.map(c => {
+          const value = ficha[c.key];
+          if (typeof value !== 'string' || !value.trim()) return null;
+          return (
+            <div key={c.key} style={{ ...panelBox, gridColumn: c.wide ? '1 / -1' : undefined, padding: '13px 15px' }}>
+              <div style={eyebrow}>{c.label}</div>
+              <div style={{ fontSize: 13.5, color: '#374151', lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>{value}</div>
             </div>
-            <div style={{ fontSize: 13.5, color: '#374151', lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>{value}</div>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -87,7 +112,7 @@ export function StatusSummary({
   lastClassAt: string | null;
   progressScore: number;
   risk: RiskSignal | null;
-  nextClass: NextClassIA | null;
+  nextClass: GeneratedClassIA | null;
 }) {
   return (
     <div style={{ ...panelBox, padding: '16px 18px' }}>
@@ -283,57 +308,166 @@ export function Section({ icon, title, children, defaultOpen = true }: {
 }
 
 // ── Clase generada ────────────────────────────────────────────────────────────
-export function NextClassView({ nc }: { nc: NextClassIA }) {
+// Misma lengua visual que el PDF: fases NUMERADAS en metodología aplicada (la
+// secuencia input→práctica→producción es un orden real), cards ETIQUETADAS sin
+// número en conversación guiada, y la sección del profesor separada (ámbar).
+export function NextClassView({ nc }: { nc: GeneratedClassIA }) {
+  if (isConversacionGuiada(nc)) return <ConversacionGuiadaView nc={nc} />;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       {nc.objectives?.length > 0 && (
-        <Section icon="🎯" title="Objetivos">
+        <LabeledCard label="Objetivos de la clase" lead>
           <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13.5, color: '#374151', lineHeight: 1.6 }}>
             {nc.objectives.map((o, i) => <li key={i}>{o}</li>)}
           </ul>
-        </Section>
+        </LabeledCard>
       )}
-      <BlockSection icon="🔥" block={nc.warmUp} fallback="Warm-up" />
-      <BlockSection icon="📚" block={nc.mainContent} fallback="Contenido principal" />
-      <BlockSection icon="✍️" block={nc.practiceActivity} fallback="Práctica" />
-      <BlockSection icon="🎯" block={nc.closing} fallback="Cierre" />
-      <Section icon="📌" title="Notas para el profesor">
-        <div style={{ padding: '10px 12px', borderRadius: 8, background: 'rgba(255,196,0,0.12)', border: '1px solid rgba(255,196,0,0.4)', fontSize: 13, color: '#78350f', lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>
-          {nc.teacherNotes}
-        </div>
-        {nc.connectionToPrevious && (
-          <div style={{ marginTop: 10 }}>
-            <Field label="Conexión con la clase anterior" value={nc.connectionToPrevious} />
-          </div>
-        )}
-      </Section>
+      <PhaseCard n={1} fallback="Warm-up" block={nc.warmUp} />
+      <PhaseCard n={2} fallback="Contenido principal" block={nc.mainContent} />
+      <PhaseCard n={3} fallback="Práctica" block={nc.practiceActivity} />
+      <PhaseCard n={4} fallback="Cierre" block={nc.closing} />
+      {nc.challenge && <ChallengeSection challenge={nc.challenge} />}
+      <TeacherSection teacherNotes={nc.teacherNotes} connectionToPrevious={nc.connectionToPrevious} />
     </div>
   );
 }
 
-function BlockSection({ icon, block, fallback }: { icon: string; block?: { title: string; duration: string; content: string }; fallback: string }) {
+// Modo conversación guiada: sin fases; habilidad preparada + tópicos + preguntas.
+function ConversacionGuiadaView({ nc }: { nc: ConversacionGuiadaIA }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ fontSize: 12.5, color: '#6b7280', fontStyle: 'italic' }}>
+        Conversación guiada — charla continua. El tópico lo elige el alumno; sostené la habilidad preparada y corregí en vivo sin cortar el flujo.
+      </div>
+      <LabeledCard label="Habilidad a trabajar">
+        <Body text={nc.skillObjective} />
+        {nc.priorityAddressed && (
+          <div style={{ marginTop: 8, fontSize: 12.5, color: '#6b7280', fontStyle: 'italic' }}>Prioridad del diagnóstico · {nc.priorityAddressed}</div>
+        )}
+      </LabeledCard>
+      {nc.suggestedOpeners?.length > 0 && (
+        <LabeledCard label="Aperturas de tópico">
+          <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13.5, color: '#374151', lineHeight: 1.6 }}>
+            {nc.suggestedOpeners.map((o, i) => <li key={i}>{o}</li>)}
+          </ul>
+        </LabeledCard>
+      )}
+      {nc.guidingQuestions?.length > 0 && (
+        <LabeledCard label="Preguntas dirigidas">
+          <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13.5, color: '#374151', lineHeight: 1.6 }}>
+            {nc.guidingQuestions.map((q, i) => <li key={i}>{q}</li>)}
+          </ul>
+        </LabeledCard>
+      )}
+      {nc.correctionFocus && (
+        <LabeledCard label="Foco de corrección">
+          <Body text={nc.correctionFocus} />
+        </LabeledCard>
+      )}
+      {nc.challenge && <ChallengeSection challenge={nc.challenge} />}
+      <TeacherSection teacherNotes={nc.teacherNotes} connectionToPrevious={nc.connectionToPrevious} />
+    </div>
+  );
+}
+
+const numChip: CSSProperties = {
+  flex: '0 0 auto', width: 22, height: 22, borderRadius: '50%', background: DRC.green, color: '#fff',
+  fontSize: 12.5, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center',
+};
+
+// Fase numerada (metodología aplicada).
+function PhaseCard({ n, fallback, block }: { n: number; fallback: string; block?: { title: string; duration: string; content: string } }) {
   if (!block) return null;
   return (
-    <Section icon={icon} title={`${block.title || fallback}${block.duration ? ` (${block.duration})` : ''}`}>
+    <div style={{ ...panelBox, padding: '13px 15px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 8 }}>
+        <span style={numChip}>{n}</span>
+        <span style={{ fontSize: 14, fontWeight: 800, color: '#111827' }}>{block.title || fallback}</span>
+        {block.duration && <span style={{ marginLeft: 'auto', fontSize: 11.5, fontWeight: 600, color: '#9ca3af' }}>{block.duration}</span>}
+      </div>
       <Body text={block.content} />
-    </Section>
+    </div>
+  );
+}
+
+// Card con header etiquetado (barra verde), para conversación guiada y objetivos.
+function LabeledCard({ label, lead, children }: { label: string; lead?: boolean; children: React.ReactNode }) {
+  return (
+    <div style={{ ...panelBox, padding: '13px 15px', background: lead ? 'rgba(30,158,58,0.06)' : 'white' }}>
+      <div style={{ fontSize: 12, fontWeight: 800, color: '#111827', borderLeft: `3px solid ${DRC.green}`, paddingLeft: 9, marginBottom: 8 }}>{label}</div>
+      {children}
+    </div>
+  );
+}
+
+// Desafío para llevarse — destacado en verde, mirando al alumno.
+function ChallengeSection({ challenge }: { challenge: string }) {
+  return (
+    <div style={{ background: DRC.green, color: 'white', borderRadius: 10, padding: '12px 15px' }}>
+      <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.1em', opacity: 0.9, marginBottom: 4 }}>🏆 Tu desafío</div>
+      <div style={{ fontSize: 13.5, lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>{challenge}</div>
+    </div>
+  );
+}
+
+// Bloque "Para el profesor" separado del material del alumno (borde punteado ámbar).
+function TeacherSection({ teacherNotes, connectionToPrevious }: { teacherNotes: string; connectionToPrevious: string }) {
+  if (!teacherNotes && !connectionToPrevious) return null;
+  return (
+    <div style={{ marginTop: 4, paddingTop: 14, borderTop: '2px dashed rgba(235,212,138,0.9)' }}>
+      <div style={{ display: 'inline-block', fontSize: 10.5, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.1em', color: '#7A5B00', background: 'rgba(255,196,0,0.18)', border: '1px solid rgba(235,212,138,0.9)', borderRadius: 5, padding: '2px 9px', marginBottom: 10 }}>Para el profesor</div>
+      {connectionToPrevious && (
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 800, color: '#111827', marginBottom: 3 }}>Conexión con la clase anterior</div>
+          <Body text={connectionToPrevious} />
+        </div>
+      )}
+      {teacherNotes && (
+        <div>
+          <div style={{ fontSize: 12.5, fontWeight: 800, color: '#111827', marginBottom: 3 }}>Notas</div>
+          <Body text={teacherNotes} />
+        </div>
+      )}
+    </div>
   );
 }
 
 /** Texto plano de la clase, para copiar al portapapeles. */
-export function nextClassToText(nc: NextClassIA, studentName: string): string {
+export function nextClassToText(nc: GeneratedClassIA, studentName: string): string {
+  const header = [
+    `${nc.classTitle}`,
+    `Clase ${nc.classNumber} — ${studentName}${nc.duration ? ` · ${nc.duration}` : ''}`,
+    '='.repeat(50),
+  ];
+
+  if (isConversacionGuiada(nc)) {
+    const list = (title: string, items: string[]) =>
+      items?.length ? `\n${title}\n${items.map(i => `  • ${i}`).join('\n')}\n` : '';
+    return [
+      ...header,
+      '\n💬 CONVERSACIÓN GUIADA — charla continua; el tópico lo elige el alumno.',
+      `\n🎯 HABILIDAD A TRABAJAR\n${'-'.repeat(50)}\n${nc.skillObjective}`,
+      nc.priorityAddressed ? `\nPrioridad del diagnóstico: ${nc.priorityAddressed}` : '',
+      list('🗣️ APERTURAS DE TÓPICO', nc.suggestedOpeners),
+      list('❓ PREGUNTAS DIRIGIDAS', nc.guidingQuestions),
+      `\n✏️ FOCO DE CORRECCIÓN\n${'-'.repeat(50)}\n${nc.correctionFocus}`,
+      nc.challenge ? `\n🏆 TU DESAFÍO\n${'-'.repeat(50)}\n${nc.challenge}` : '',
+      `\n📌 NOTAS PARA EL PROFESOR\n${'-'.repeat(50)}\n${nc.teacherNotes}`,
+      nc.connectionToPrevious ? `\n🔗 CONEXIÓN CON LA CLASE ANTERIOR\n${nc.connectionToPrevious}` : '',
+    ].filter(Boolean).join('\n');
+  }
+
   const block = (icon: string, b?: { title: string; duration: string; content: string }) =>
     b ? `\n${icon} ${b.title.toUpperCase()}${b.duration ? ` (${b.duration})` : ''}\n${'-'.repeat(50)}\n${b.content}\n` : '';
 
   return [
-    `${nc.classTitle}`,
-    `Clase ${nc.classNumber} — ${studentName}${nc.duration ? ` · ${nc.duration}` : ''}`,
-    '='.repeat(50),
+    ...header,
     nc.objectives?.length ? `\n🎯 OBJETIVOS\n${nc.objectives.map(o => `  • ${o}`).join('\n')}\n` : '',
     block('🔥', nc.warmUp),
     block('📚', nc.mainContent),
     block('✍️', nc.practiceActivity),
     block('🎯', nc.closing),
+    nc.challenge ? `\n🏆 TU DESAFÍO\n${'-'.repeat(50)}\n${nc.challenge}` : '',
     `\n📌 NOTAS PARA EL PROFESOR\n${'-'.repeat(50)}\n${nc.teacherNotes}`,
     nc.connectionToPrevious ? `\n🔗 CONEXIÓN CON LA CLASE ANTERIOR\n${nc.connectionToPrevious}` : '',
   ].filter(Boolean).join('\n');

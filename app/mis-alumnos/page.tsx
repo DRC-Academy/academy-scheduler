@@ -11,7 +11,7 @@ import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
 import { calcCurrentClassNumber } from '@/lib/db';
 import { loadStudentBundles, norm, type StudentBundle } from '@/lib/misAlumnos';
-import type { NextClassIA } from '@/lib/aiTypes';
+import type { GeneratedClassIA } from '@/lib/aiTypes';
 import StudentCard from '@/components/alumnos/StudentCard';
 import { PAGE_CSS, Toast, cardStyle } from '@/components/alumnos/ui';
 
@@ -54,7 +54,7 @@ function MisAlumnosContent() {
 
   // La clase generada ya viene persistida del endpoint: actualizamos el estado
   // local para no tener que recargar toda la página.
-  function setLocalNextClass(key: string, nc: NextClassIA) {
+  function setLocalNextClass(key: string, nc: GeneratedClassIA) {
     setBundles(prev => prev.map(b => {
       const bKey = b.assignment.studentId || `name:${norm(b.assignment.studentName)}`;
       if (bKey !== key || !b.profile) return b;

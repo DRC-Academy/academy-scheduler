@@ -11,7 +11,7 @@ import {
   fetchStudentProfile, fetchClassAnalyses, regenerateFicha, analysisFromRow, riskOf,
   type ClassAnalysisRow, type StudentProfileRow,
 } from '@/lib/aiClient';
-import { asObject, fichaFromRow, type NextClassIA } from '@/lib/aiTypes';
+import { asObject, fichaFromRow, type GeneratedClassIA } from '@/lib/aiTypes';
 import {
   ProfileCards, StatusSummary, ClassTimeline, FichaMarkdown, RiskBadge, DRC, panelBox,
 } from '@/components/ai/FichaView';
@@ -66,7 +66,7 @@ export default function AiStudentPanel({
   }, [load]);
 
   const ficha        = fichaFromRow(profile);
-  const nextClass    = asObject<NextClassIA>(profile?.next_class_content);
+  const nextClass    = asObject<GeneratedClassIA>(profile?.next_class_content);
   const risk         = riskOf(profile);
   const lastAnalysis = analyses[0] ? analysisFromRow(analyses[0]) : null;
   const totalClasses = analyses.length || profile?.total_classes_analyzed || 0;
@@ -114,7 +114,7 @@ export default function AiStudentPanel({
     <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 18 }}>
       {/* ═══ SECCIÓN A — Perfil ═══ */}
       <section>
-        <SectionTitle>📋 Perfil del alumno</SectionTitle>
+        <SectionTitle>Perfil del alumno</SectionTitle>
         {ficha ? (
           <ProfileCards ficha={ficha} />
         ) : profile.ai_ficha ? (
@@ -147,7 +147,7 @@ export default function AiStudentPanel({
 
       {/* ═══ SECCIÓN B — Seguimiento ═══ */}
       <section>
-        <SectionTitle>📚 Seguimiento clase a clase</SectionTitle>
+        <SectionTitle>Seguimiento clase a clase</SectionTitle>
 
         <StatusSummary
           totalClasses={totalClasses}
@@ -187,8 +187,8 @@ export default function AiStudentPanel({
 
         {/* Línea de tiempo */}
         <div style={{ marginTop: 14 }}>
-          <div style={{ fontSize: 12.5, fontWeight: 800, color: '#374151', marginBottom: 8 }}>
-            🗂 Historial ({analyses.length})
+          <div style={{ fontSize: 11, fontWeight: 800, color: DRC.green, textTransform: 'uppercase', letterSpacing: '0.06em', borderLeft: `3px solid ${DRC.green}`, paddingLeft: 8, marginBottom: 8 }}>
+            Historial · {analyses.length}
           </div>
           <ClassTimeline rows={analyses} />
         </div>
@@ -266,7 +266,7 @@ function historyItem(r: ClassAnalysisRow) {
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return (
-    <div style={{ fontSize: 14.5, fontWeight: 800, color: '#111827', marginBottom: 10, letterSpacing: '-0.2px' }}>
+    <div style={{ fontSize: 14, fontWeight: 800, color: '#111827', borderLeft: `3px solid ${DRC.green}`, paddingLeft: 9, marginBottom: 12, letterSpacing: '-0.2px' }}>
       {children}
     </div>
   );

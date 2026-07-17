@@ -1,11 +1,22 @@
 // Generación de una clase completa, lista para usar.
 //
-// Cubre los dos casos con el mismo prompt:
+// Cubre los dos casos con el mismo flujo:
 //   · Clase 1 → sin lastAnalysis ni historial (equivale a la "primera clase").
 //   · Clase N → con el análisis de la clase anterior y el historial reciente.
+//
+// Y los dos MODOS del avatar:
+//   · Metodología aplicada → fases input→práctica→producción (NextClassIA).
+//   · Conversación guiada (B1+) → charla continua guiada (ConversacionGuiadaIA).
 
 import { askClaudeJson, type AiResult } from '@/lib/anthropic';
-import type { FichaIA, NextClassIA, TranscriptIA } from '@/lib/aiTypes';
+import {
+  resolveAvatar, buildAvatarBlock, METHODOLOGY_CORE, FORMAT_STANDARDS,
+  COMMON_ERRORS, CONVERSACION_GUIADA_MECANICA, PROGRAM_PHASE,
+} from '@/lib/drcMethodology';
+import type {
+  AvatarDomain, ClassType, FichaIA, GeneratedClassIA, NextClassIA,
+  ConversacionGuiadaIA, TranscriptIA,
+} from '@/lib/aiTypes';
 
 export type { NextClassIA, ClassBlock } from '@/lib/aiTypes';
 
@@ -18,9 +29,11 @@ export interface NextClassInput {
   studentProfile: FichaIA | Record<string, unknown>;
   lastAnalysis?: TranscriptIA | Record<string, unknown> | null;
   classHistory?: unknown[] | null;
+  domain?: AvatarDomain | null;         // si no viene, se toma de la ficha o 'social'
+  classType?: ClassType | null;         // tipo pedido; si no es viable, cae a metodología aplicada
 }
 
-export type NextClassResult = AiResult<NextClassIA>;
+export type NextClassResult = AiResult<GeneratedClassIA>;
 
 const BLOCK_SCHEMA = {
   type: 'object',
@@ -33,15 +46,17 @@ const BLOCK_SCHEMA = {
   },
 } as const;
 
+// ── Schema modo metodología aplicada ──────────────────────────────────────────
 export const NEXT_CLASS_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   required: [
-    'classNumber', 'classTitle', 'duration', 'objectives',
-    'warmUp', 'mainContent', 'practiceActivity', 'closing',
+    'classType', 'classNumber', 'classTitle', 'duration', 'objectives',
+    'warmUp', 'mainContent', 'practiceActivity', 'closing', 'challenge',
     'teacherNotes', 'connectionToPrevious',
   ],
   properties: {
+    classType:        { type: 'string', enum: ['metodologia_aplicada'] },
     classNumber:      { type: 'integer' },
     classTitle:       { type: 'string', description: 'Título motivador con emoji.' },
     duration:         { type: 'string', description: 'p. ej. "60 minutos".' },
@@ -50,60 +65,108 @@ export const NEXT_CLASS_SCHEMA = {
     mainContent:      BLOCK_SCHEMA,
     practiceActivity: BLOCK_SCHEMA,
     closing:          BLOCK_SCHEMA,
+    challenge:        { type: 'string', description: 'Desafío para llevarse: UNA tarea real y concreta que el alumno hace ANTES de la próxima clase, en su vida/trabajo real, dirigida en segunda persona ("Esta semana, en tu próxima reunión, ..."). Aplica lo trabajado hoy en un uso auténtico — NO un ejercicio mecánico ni de relleno. Copy-paste ready para el alumno.' },
     teacherNotes:     { type: 'string', description: 'Máximo 3 notas breves para el profesor.' },
     connectionToPrevious: { type: 'string', description: 'Cómo conecta con la clase anterior. Si es la clase 1, explica el punto de partida.' },
   },
 } as const;
 
-const SYSTEM_PROMPT = `Eres un experto en didáctica del inglés que aplica la metodología DRC Academy. Operas en España y escribes en español de España.
+// ── Schema modo conversación guiada ───────────────────────────────────────────
+export const CONVERSACION_GUIADA_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: [
+    'classType', 'classNumber', 'classTitle', 'duration', 'skillObjective',
+    'priorityAddressed', 'suggestedOpeners', 'guidingQuestions', 'correctionFocus',
+    'challenge', 'teacherNotes', 'connectionToPrevious',
+  ],
+  properties: {
+    classType:         { type: 'string', enum: ['conversacion_guiada'] },
+    classNumber:       { type: 'integer' },
+    classTitle:        { type: 'string', description: 'Título motivador con emoji.' },
+    duration:          { type: 'string', description: 'p. ej. "60 minutos".' },
+    skillObjective:    { type: 'string', description: 'La habilidad preparada de antemano que se sostiene pase lo que pase con el tópico (ej. "usar past simple para narrar experiencias sin trabarse").' },
+    priorityAddressed: { type: 'string', description: 'Cuál de las prioridades del diagnóstico trabaja esta clase.' },
+    suggestedOpeners:  { type: 'array', items: { type: 'string' }, description: 'Aperturas de tópico relevantes al alumno para arrancar. El tópico final lo elige el alumno.' },
+    guidingQuestions:  { type: 'array', items: { type: 'string' }, description: 'Preguntas dirigidas para sostener y profundizar la charla mientras se trabaja la habilidad.' },
+    correctionFocus:   { type: 'string', description: 'Qué errores/patrones corregir en vivo, sin cortar el flujo de la conversación.' },
+    challenge:         { type: 'string', description: 'Desafío para llevarse: UNA tarea real de speaking/uso que el alumno hace ANTES de la próxima clase, en su vida/trabajo real, en segunda persona (ej. "Grabá un audio de 1 minuto contando... y traelo la próxima clase"). Aplica la habilidad trabajada en un uso auténtico, no un ejercicio mecánico.' },
+    teacherNotes:      { type: 'string', description: 'Máximo 3 notas breves para el profesor.' },
+    connectionToPrevious: { type: 'string', description: 'Cómo conecta con la clase anterior. Si es la clase 1, explica el punto de partida.' },
+  },
+} as const;
 
-METODOLOGÍA DRC:
-- Descubrimiento inductivo: muestras ejemplos en contexto y el alumno descubre el patrón.
-- Centrado en el alumno y su contexto real (trabajo, objetivos).
-- Input → producción: primero comprensión, luego speaking/writing.
-- Copywriting educativo: títulos con emojis, instrucciones en segunda persona directa, sin notas internas ni respuestas incluidas.
+function buildSystemPrompt(classType: ClassType, avatarBlock: string): string {
+  const common = `Eres un experto en didáctica del inglés general que opera en España y escribe en español de España.
 
-ERRORES A EVITAR:
-- Listas de vocabulario sueltas (siempre en contexto).
-- Respuestas dentro del material.
-- Hablar del alumno en tercera persona.
-- Warm-ups genéricos o infantiles.
-- Explicaciones gramaticales extensas antes de los ejemplos.
+${METHODOLOGY_CORE}
 
-CONTEXTO:
-Tienes acceso al análisis de la última clase, el historial del alumno y su perfil completo.
-Tu objetivo es generar una clase completamente personalizada que:
-1. Retome los puntos débiles de la clase anterior.
-2. Progrese lógicamente en el programa.
-3. Use el contexto real del alumno.
-4. Esté lista para usar sin modificaciones.
+${avatarBlock}
 
-El contenido de cada bloque lo lee el alumno durante la clase: escríbelo listo para copiar y pegar. Lo único dirigido al profesor son teacherNotes y connectionToPrevious.`;
+${PROGRAM_PHASE}
 
-function buildUserPrompt(input: NextClassInput): string {
+${FORMAT_STANDARDS}
+
+${COMMON_ERRORS}
+
+Tenés acceso al análisis de la última clase, el historial del alumno y su perfil completo. Generá una clase personalizada que retome los puntos débiles de la clase anterior, progrese lógicamente en el programa según la fase, y use el contexto real del alumno.
+
+Incluí SIEMPRE un "challenge" (desafío para llevarse): una única tarea real y concreta que el alumno hace entre esta clase y la próxima, aplicando lo trabajado hoy en su vida/trabajo real (Principio de tareas y proyectos reales). En segunda persona y accionable; nunca un ejercicio mecánico de relleno.`;
+
+  if (classType === 'conversacion_guiada') {
+    return `${common}
+
+${CONVERSACION_GUIADA_MECANICA}
+
+Para esta clase de conversación guiada: elegí el objetivo de habilidad de la lista de PRIORIDADES del diagnóstico del alumno (empezá por lo más importante que aún no esté resuelto). No generes fases de input/práctica/producción: entregá la habilidad preparada, aperturas de tópico, preguntas dirigidas y el foco de corrección. teacherNotes y connectionToPrevious son lo único dirigido al profesor.`;
+  }
+
+  return `${common}
+
+El contenido de cada bloque lo lee el alumno durante la clase: escribilo listo para copiar y pegar, respetando el balance de secuencia del nivel indicado arriba. Lo único dirigido al profesor son teacherNotes y connectionToPrevious.`;
+}
+
+function buildUserPrompt(input: NextClassInput, classType: ClassType): string {
   const last = input.lastAnalysis
     ? `\n\nANÁLISIS DE LA ÚLTIMA CLASE:\n${JSON.stringify(input.lastAnalysis, null, 2)}`
     : '\n\nANÁLISIS DE LA ÚLTIMA CLASE: (no hay: esta es la primera clase del alumno)';
   const history = input.classHistory?.length
     ? `\n\nHISTORIAL RECIENTE:\n${JSON.stringify(input.classHistory, null, 2)}`
     : '';
+  const cierre = classType === 'conversacion_guiada'
+    ? `Devolvé classType = "conversacion_guiada" y classNumber = ${input.classNumber}.`
+    : `Asegurate de abordar los errores detectados en la última clase y continuar la progresión del programa. Devolvé classType = "metodologia_aplicada" y classNumber = ${input.classNumber}.`;
 
-  return `Genera la clase ${input.classNumber} para ${input.studentName}${input.level ? `, nivel ${input.level}` : ''}${input.plan ? `, plan ${input.plan}` : ''}.
+  return `Generá la clase ${input.classNumber} para ${input.studentName}${input.level ? `, nivel ${input.level}` : ''}${input.plan ? `, plan ${input.plan}` : ''}.
 
-PERFIL DEL ALUMNO:
+PERFIL DEL ALUMNO (incluye la lista de prioridades del diagnóstico):
 ${JSON.stringify(input.studentProfile, null, 2)}${last}${history}
 
-Asegúrate de abordar los errores detectados en la última clase y continuar la progresión del programa. Devuelve classNumber = ${input.classNumber}.`;
+${cierre}`;
 }
 
 export async function generateNextClass(input: NextClassInput): Promise<NextClassResult> {
-  return askClaudeJson<NextClassIA>({
-    label: 'generate-next-class',
-    system: SYSTEM_PROMPT,
-    prompt: buildUserPrompt(input),
-    schema: NEXT_CLASS_SCHEMA as unknown as Record<string, unknown>,
+  // Dominio: el pedido, si no el de la ficha, si no 'social'.
+  const fichaDomain = (input.studentProfile as Partial<FichaIA>)?.domain ?? null;
+  const avatar = resolveAvatar({
+    level: input.level,
+    domain: input.domain ?? fichaDomain,
+    requestedClassType: input.classType,
+  });
+
+  const isConversacion = avatar.classType === 'conversacion_guiada';
+  const schema = isConversacion ? CONVERSACION_GUIADA_SCHEMA : NEXT_CLASS_SCHEMA;
+
+  return askClaudeJson<GeneratedClassIA>({
+    label: isConversacion ? 'generate-next-class:conversacion' : 'generate-next-class',
+    system: buildSystemPrompt(avatar.classType, buildAvatarBlock(avatar)),
+    prompt: buildUserPrompt(input, avatar.classType),
+    schema: schema as unknown as Record<string, unknown>,
     maxTokens: 16000,
     effort: 'high',
     timeoutMs: 180_000,
   });
 }
+
+// Re-exports de tipos por si algún consumidor los necesita del mismo módulo.
+export type { GeneratedClassIA, ConversacionGuiadaIA };

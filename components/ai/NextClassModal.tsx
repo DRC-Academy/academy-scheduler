@@ -5,7 +5,9 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { generateNextClassClient, saveNextClass } from '@/lib/aiClient';
-import type { FichaIA, NextClassIA, TranscriptIA } from '@/lib/aiTypes';
+import { isConversacionGuiada, type ClassType, type FichaIA, type GeneratedClassIA, type TranscriptIA } from '@/lib/aiTypes';
+import { viableClassTypes, normalizeLevel } from '@/lib/drcMethodology';
+import { printClassPdf } from '@/lib/classDoc';
 import { NextClassView, nextClassToText, DRC } from '@/components/ai/FichaView';
 import { Modal, ModalHeader, primaryBtn, ghostBtn, outlineBtn, errBox, okBox } from '@/components/ai/modalUi';
 
@@ -19,8 +21,8 @@ interface Props {
   classHistory?: unknown[] | null;
   plan?: string | null;
   level?: string | null;
-  cached?: NextClassIA | null;
-  onSaved: (nc: NextClassIA) => void;
+  cached?: GeneratedClassIA | null;
+  onSaved: (nc: GeneratedClassIA) => void;
   onClose: () => void;
 }
 
@@ -32,24 +34,34 @@ const SPINNER_MSGS = [
 ];
 
 export default function NextClassModal(props: Props) {
-  const [nextClass, setNextClass] = useState<NextClassIA | null>(props.cached ?? null);
+  const [nextClass, setNextClass] = useState<GeneratedClassIA | null>(props.cached ?? null);
   const [loading, setLoading] = useState(!props.cached);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [marked, setMarked] = useState(false);
   const [saving, setSaving] = useState(false);
+  // Tipo de clase del avatar. Conversación guiada solo es elegible en B1+.
+  const [classType, setClassType] = useState<ClassType>(
+    isConversacionGuiada(props.cached) ? 'conversacion_guiada' : 'metodologia_aplicada',
+  );
+  const viable = viableClassTypes(normalizeLevel(props.level), props.ficha.domain);
+  const canChooseType = viable.includes('conversacion_guiada');
 
-  const params = {
-    profileId: props.profileId,
-    studentName: props.studentName,
-    teacherName: props.teacherName,
-    classNumber: props.classNumber,
-    studentProfile: props.ficha,
-    lastAnalysis: props.lastAnalysis ?? null,
-    classHistory: props.classHistory ?? null,
-    plan: props.plan,
-    level: props.level,
-  };
+  function buildParams(ct: ClassType) {
+    return {
+      profileId: props.profileId,
+      studentName: props.studentName,
+      teacherName: props.teacherName,
+      classNumber: props.classNumber,
+      studentProfile: props.ficha,
+      lastAnalysis: props.lastAnalysis ?? null,
+      classHistory: props.classHistory ?? null,
+      plan: props.plan,
+      level: props.level,
+      domain: props.ficha.domain,
+      classType: ct,
+    };
+  }
 
   // Generación automática al abrir (sin setState síncrono dentro del efecto).
   useEffect(() => {
@@ -57,7 +69,7 @@ export default function NextClassModal(props: Props) {
     let cancelled = false;
     (async () => {
       try {
-        const nc = await generateNextClassClient(params);
+        const nc = await generateNextClassClient(buildParams(classType));
         if (!cancelled) setNextClass(nc);
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : 'No se pudo generar la clase.');
@@ -69,17 +81,34 @@ export default function NextClassModal(props: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function regenerate() {
+  async function regenerate(ct: ClassType = classType) {
     setLoading(true);
     setError(null);
     setMarked(false);
     try {
-      setNextClass(await generateNextClassClient(params));
+      setNextClass(await generateNextClassClient(buildParams(ct)));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No se pudo generar la clase.');
     } finally {
       setLoading(false);
     }
+  }
+
+  // Cambiar de tipo de clase regenera con el nuevo modo.
+  async function switchType(ct: ClassType) {
+    if (ct === classType || loading) return;
+    setClassType(ct);
+    await regenerate(ct);
+  }
+
+  function downloadPdf() {
+    if (!nextClass) return;
+    printClassPdf(nextClass, {
+      studentName: props.studentName,
+      teacherName: props.teacherName,
+      level: props.level,
+      classTypeLabel: isConversacionGuiada(nextClass) ? 'Conversación guiada' : 'Metodología aplicada',
+    });
   }
 
   async function copy() {
@@ -126,6 +155,27 @@ export default function NextClassModal(props: Props) {
         locked={loading || saving}
       />
 
+      {canChooseType && (
+        <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: '#6b7280' }}>Tipo de clase:</span>
+          {([
+            ['metodologia_aplicada', '📚 Metodología aplicada'],
+            ['conversacion_guiada', '💬 Conversación guiada'],
+          ] as const).map(([ct, label]) => (
+            <button key={ct} onClick={() => switchType(ct)} disabled={loading || saving}
+              style={{
+                padding: '6px 12px', borderRadius: 8, fontSize: 12.5, fontWeight: classType === ct ? 700 : 500,
+                fontFamily: 'inherit', cursor: loading || saving ? 'not-allowed' : 'pointer',
+                border: `1.5px solid ${classType === ct ? DRC.green : '#d1d5db'}`,
+                background: classType === ct ? 'rgba(30,158,58,0.1)' : 'transparent',
+                color: classType === ct ? DRC.greenDark : '#6b7280', opacity: loading || saving ? 0.6 : 1,
+              }}>
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+
       {loading ? (
         <RotatingSpinner />
       ) : error && !nextClass ? (
@@ -133,7 +183,7 @@ export default function NextClassModal(props: Props) {
           <div style={errBox}>⚠️ {error}</div>
           <div style={{ display: 'flex', gap: 8, marginTop: 14, justifyContent: 'flex-end' }}>
             <button onClick={props.onClose} style={ghostBtn}>Cerrar</button>
-            <button onClick={regenerate} style={primaryBtn}>🔄 Reintentar</button>
+            <button onClick={() => regenerate()} style={primaryBtn}>🔄 Reintentar</button>
           </div>
         </>
       ) : nextClass ? (
@@ -145,10 +195,11 @@ export default function NextClassModal(props: Props) {
             <button onClick={copy} style={outlineBtn}>
               {copied ? '✅ Copiada' : '📋 Copiar clase completa'}
             </button>
+            <button onClick={downloadPdf} style={outlineBtn}>⬇️ Descargar PDF</button>
             <button onClick={markReady} disabled={saving || marked} style={{ ...outlineBtn, opacity: saving || marked ? 0.55 : 1 }}>
               {marked ? '✅ Marcada como lista' : saving ? 'Guardando…' : '✅ Marcar clase como lista'}
             </button>
-            <button onClick={regenerate} style={ghostBtn}>🔄 Regenerar</button>
+            <button onClick={() => regenerate()} style={ghostBtn}>🔄 Regenerar</button>
           </div>
 
           <NextClassView nc={nextClass} />

@@ -6,6 +6,7 @@
 // funcionando igual (las respuestas crudas quedan guardadas de todos modos).
 
 import { askClaudeJson, type AiResult } from '@/lib/anthropic';
+import { METHODOLOGY_CORE } from '@/lib/drcMethodology';
 import type { FichaIA, AiStatus } from '@/lib/aiTypes';
 
 export type { FichaIA } from '@/lib/aiTypes';
@@ -27,6 +28,7 @@ export const FICHA_SCHEMA = {
   required: [
     'initialDiagnosis', 'strongPoints', 'weakPoints', 'learningStyle',
     'personalObjective', 'occupation', 'recommendedFocus', 'firstClassSuggestion',
+    'domain', 'priorities',
   ],
   properties: {
     initialDiagnosis:     { type: 'string', description: 'Párrafo de diagnóstico general del alumno.' },
@@ -37,17 +39,26 @@ export const FICHA_SCHEMA = {
     occupation:           { type: 'string', description: 'Su trabajo o contexto de vida.' },
     recommendedFocus:     { type: 'string', description: 'Qué priorizar en las primeras clases.' },
     firstClassSuggestion: { type: 'string', description: 'Idea concreta para la primera clase.' },
+    domain: {
+      type: 'string',
+      enum: ['social', 'laboral', 'educacional'],
+      description: 'Dominio del alumno según su contexto: "laboral" si aprende sobre todo para el trabajo; "educacional" SOLO si es menor de edad en contexto escolar; "social" en cualquier otro caso (inglés general para la vida). Ante la duda, "social".',
+    },
+    priorities: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'Lista de puntos a trabajar con el alumno, ORDENADOS de más a menos importante. Cada uno es una habilidad o foco concreto (ej. "fluidez al hablar de su trabajo", "past simple vs present perfect"). Es la base para elegir el objetivo de cada clase, sobre todo en conversación guiada.',
+    },
   },
 } as const;
 
-const SYSTEM_PROMPT = `Eres un asistente pedagógico de DRC Academy, una academia de inglés online que opera en España. Tu tarea es analizar las respuestas del formulario inicial de un alumno y generar una ficha de diagnóstico inicial en español de España.
+const SYSTEM_PROMPT = `Eres un asistente pedagógico de una academia de inglés general online que opera en España. Tu tarea es analizar las respuestas del formulario inicial de un alumno y generar una ficha de diagnóstico inicial en español de España.
 
-METODOLOGÍA DRC:
-- Enfoque comunicativo centrado en el alumno.
-- El material se adapta al contexto real del alumno.
-- Descubrimiento inductivo: el alumno descubre patrones, no se le explica la gramática de forma teórica.
-- Las clases van de input a producción.
-- Vocabulario siempre en contexto, nunca en listas.
+${METHODOLOGY_CORE}
+
+Además de la ficha descriptiva, tenés que:
+- Clasificar el DOMINIO del alumno (social / laboral / educacional) según su contexto real.
+- Armar la lista de PRIORIDADES: los puntos a trabajar, ordenados de más a menos importante. Esta lista es la que el profesor consulta clase a clase (sobre todo en conversación guiada) para elegir el objetivo del día.
 
 Escribes para el profesor que va a dar la clase, no para el alumno: es una ficha de trabajo, concreta y accionable. No inventes datos que no estén en el formulario; si el alumno no respondió algo, dilo en lugar de suponerlo.`;
 

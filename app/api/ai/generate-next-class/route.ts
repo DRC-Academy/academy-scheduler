@@ -7,7 +7,7 @@
 
 import { supabase } from '@/lib/supabase';
 import { generateNextClass } from '@/lib/nextClass';
-import type { FichaIA, TranscriptIA } from '@/lib/aiTypes';
+import type { AvatarDomain, ClassType, FichaIA, TranscriptIA } from '@/lib/aiTypes';
 
 interface Body {
   studentProfile?: FichaIA | Record<string, unknown>;
@@ -18,6 +18,8 @@ interface Body {
   teacherName?: string;
   plan?: string;
   level?: string;
+  domain?: AvatarDomain | null;
+  classType?: ClassType | null;
   profileId?: string | null;
   studentId?: string | null;
 }
@@ -47,6 +49,8 @@ export async function POST(request: Request): Promise<Response> {
     studentProfile: body.studentProfile,
     lastAnalysis: body.lastAnalysis,
     classHistory: body.classHistory,
+    domain: body.domain,
+    classType: body.classType,
   });
 
   if (result.status !== 'ready' || !result.data) {

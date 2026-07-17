@@ -3,7 +3,7 @@
 // Card de alumno: colapsada (compacta) o expandida con tabs.
 
 import { useState } from 'react';
-import { asObject, fichaFromRow, isRiskSignal, type FichaIA, type NextClassIA } from '@/lib/aiTypes';
+import { asObject, fichaFromRow, isRiskSignal, type FichaIA, type GeneratedClassIA } from '@/lib/aiTypes';
 import { regenerateFicha } from '@/lib/aiClient';
 import { classCategoryBadge } from '@/lib/finance';
 import type { StudentBundle } from '@/lib/misAlumnos';
@@ -26,7 +26,7 @@ interface Props {
   classNumber: number;
   onToast: (m: string) => void;
   onRefresh: () => Promise<void>;
-  onLocalNextClass: (studentKey: string, nc: NextClassIA) => void;
+  onLocalNextClass: (studentKey: string, nc: GeneratedClassIA) => void;
   studentKey: string;
 }
 
@@ -38,7 +38,7 @@ export default function StudentCard({
   const { assignment: a, profile, analyses } = bundle;
 
   const ficha = fichaFromRow(profile);
-  const nextClass = asObject<NextClassIA>(profile?.next_class_content);
+  const nextClass = asObject<GeneratedClassIA>(profile?.next_class_content);
   const risk = profile && isRiskSignal(profile.risk_signal) ? profile.risk_signal : null;
   const plan = classCategoryBadge({
     assignmentPlan: a.plan, assignmentObjetivo: a.objetivo,

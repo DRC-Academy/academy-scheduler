@@ -7,8 +7,8 @@
 import { supabase } from '@/lib/supabase';
 import {
   asObject, isRiskSignal,
-  type ClassAnalysisRow, type FichaIA, type NextClassIA, type RiskSignal,
-  type StudentProfileRow, type TranscriptIA,
+  type AvatarDomain, type ClassType, type ClassAnalysisRow, type FichaIA,
+  type GeneratedClassIA, type RiskSignal, type StudentProfileRow, type TranscriptIA,
 } from '@/lib/aiTypes';
 
 export type { StudentProfileRow, ClassAnalysisRow } from '@/lib/aiTypes';
@@ -165,8 +165,10 @@ export async function generateNextClassClient(args: {
   classHistory?: unknown[] | null;
   plan?: string | null;
   level?: string | null;
+  domain?: AvatarDomain | null;
+  classType?: ClassType | null;
   persist?: boolean;
-}): Promise<NextClassIA> {
+}): Promise<GeneratedClassIA> {
   const res = await fetch('/api/ai/generate-next-class', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -174,11 +176,11 @@ export async function generateNextClassClient(args: {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data?.error || 'No se pudo generar la clase.');
-  return data.nextClass as NextClassIA;
+  return data.nextClass as GeneratedClassIA;
 }
 
 /** Marca la clase generada como lista (la persiste en la ficha). */
-export async function saveNextClass(profileId: string, nextClass: NextClassIA): Promise<void> {
+export async function saveNextClass(profileId: string, nextClass: GeneratedClassIA): Promise<void> {
   const now = new Date().toISOString();
   const { error } = await supabase.from('student_profiles')
     .update({ next_class_content: nextClass, next_class_generated_at: now, updated_at: now })

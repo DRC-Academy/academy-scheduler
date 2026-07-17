@@ -12,9 +12,11 @@
 
 import { useState } from 'react';
 import { analyzeTranscriptOnly, saveAnalysis, generateNextClassClient, analysisFromRow } from '@/lib/aiClient';
-import type { ClassAnalysisRow, FichaIA, NextClassIA, TranscriptIA, StudentProfileRow } from '@/lib/aiTypes';
+import type { ClassAnalysisRow, FichaIA, GeneratedClassIA, TranscriptIA, StudentProfileRow } from '@/lib/aiTypes';
 import { isRiskSignal } from '@/lib/aiTypes';
 import { ClassCard, classToText, copyText } from '@/components/alumnos/ClassContent';
+import { isConversacionGuiada } from '@/lib/aiTypes';
+import { printClassPdf } from '@/lib/classDoc';
 import {
   Collapsible, RiskDot, btnPrimary, btnSecondary, bodyTextStyle,
   cardStyle, fieldLabelStyle, DRC_GREEN,
@@ -28,12 +30,12 @@ interface Props {
   profile: StudentProfileRow | null;
   ficha: FichaIA | null;
   analyses: ClassAnalysisRow[];
-  nextClass: NextClassIA | null;
+  nextClass: GeneratedClassIA | null;
   teacherName: string;
   nextNumber: number;
   onToast: (m: string) => void;
   onRefresh: () => Promise<void>;
-  onNextClass: (nc: NextClassIA) => void;
+  onNextClass: (nc: GeneratedClassIA) => void;
 }
 
 export default function ProximaClaseTab(p: Props) {
@@ -49,7 +51,7 @@ export default function ProximaClaseTab(p: Props) {
 
   // Resultado
   const [analysis, setAnalysis] = useState<TranscriptIA | null>(null);
-  const [newClass, setNewClass] = useState<NextClassIA | null>(null);
+  const [newClass, setNewClass] = useState<GeneratedClassIA | null>(null);
   const [saving, setSaving] = useState(false);
 
   const history = p.analyses.slice(0, 3).map(h => ({
@@ -171,6 +173,15 @@ export default function ProximaClaseTab(p: Props) {
     setTimeout(() => setCopied(false), 2000);
   }
 
+  function handlePdf(nc: GeneratedClassIA) {
+    printClassPdf(nc, {
+      studentName: p.assignment.studentName,
+      teacherName: p.teacherName,
+      level: p.assignment.studentLevel,
+      classTypeLabel: isConversacionGuiada(nc) ? 'Conversación guiada' : 'Metodología aplicada',
+    });
+  }
+
   // ═══ ESTADO D — analizando ═══
   if (stage === 'analyzing') {
     return (
@@ -210,7 +221,10 @@ export default function ProximaClaseTab(p: Props) {
 
         {newClass && (
           <div style={{ marginTop: 24 }}>
-            <ClassCard nc={newClass} />
+            <ClassCard nc={newClass} level={p.assignment.studentLevel} />
+            <div style={{ marginTop: 10 }}>
+              <button onClick={() => handlePdf(newClass)} style={btnSecondary}>⬇️ PDF</button>
+            </div>
           </div>
         )}
 
@@ -272,11 +286,12 @@ export default function ProximaClaseTab(p: Props) {
   if (p.nextClass) {
     return (
       <div>
-        <ClassCard nc={p.nextClass} />
+        <ClassCard nc={p.nextClass} level={p.assignment.studentLevel} />
         {error && <div style={errStyle}>{error}</div>}
         <div className="alu-btn-row" style={{ display: 'flex', gap: 10, marginTop: 20 }}>
           <button onClick={() => setStage('registering')} style={btnPrimary}>Registrar clase dada</button>
           <button onClick={handleCopy} style={btnSecondary}>{copied ? 'Copiada' : 'Copiar clase completa'}</button>
+          <button onClick={() => handlePdf(p.nextClass!)} style={btnSecondary}>⬇️ PDF</button>
           <button
             onClick={() => generate(p.nextClass!.classNumber, lastAnalysis)}
             disabled={generating}
