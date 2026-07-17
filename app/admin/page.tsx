@@ -22,6 +22,7 @@ import { SpecialtyChip, ToggleChip } from '@/components/ui';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { AppNotification, ClassJoinLog, AssignedSlot } from '@/types';
 import AiRiskTab from '@/components/ai/AiRiskTab';
+import { triggerEmail } from '@/lib/emailClient';
 
 // ─── Edit Teacher Modal ───────────────────────────────────────────────────────
 function EditTeacherModal({ teacher, onClose, onSave }: {
@@ -137,6 +138,16 @@ function NotificationsAdminTab() {
       body: body.trim(),
       type: 'circular',
       createdBy: user?.displayName ?? 'Admin',
+    });
+    // Además del aviso in-app, la circular va por email a quien no la haya
+    // desactivado. Best-effort: si el correo falla, la notificación ya está.
+    await triggerEmail({
+      type: 'circular',
+      title: title.trim(),
+      body: body.trim(),
+      ...(targetType === 'specific'
+        ? { teacherId: targetTeacherId }
+        : { allTeachers: true }),
     });
     setTitle('');
     setBody('');

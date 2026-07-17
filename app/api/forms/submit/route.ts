@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase';
 import { formatResponsesForAI, firstUnansweredRequired, type FormResponses } from '@/lib/formQuestions';
 import { generateFicha } from '@/lib/analyzeForm';
 import { fichaToColumns } from '@/lib/aiTypes';
+import { fetchTeacher, sendFormCompletedEmail } from '@/lib/emailNotifications';
 
 interface Body {
   token?: string;
@@ -123,6 +124,11 @@ export async function POST(request: Request): Promise<Response> {
       created_by:  'formulario',
     });
     if (notifErr) console.error('[submit] Error al crear la notificación:', notifErr);
+
+    // Aviso por email al profesor. Best-effort: el alumno ya envió sus
+    // respuestas y no debe ver un error porque el correo falle.
+    const teacher = await fetchTeacher(tk.teacher_id);
+    if (teacher) await sendFormCompletedEmail(teacher, tk.student_name);
   }
 
   return Response.json({ success: true });

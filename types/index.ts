@@ -30,11 +30,31 @@ export interface UpcomingClass {
   type: string;
 }
 
+// Avisos por email del profesor. Opt-out: si falta la clave, se envía igual.
+export interface EmailPreferences {
+  new_student?: boolean;
+  form_completed?: boolean;
+  presentation_reminder?: boolean;
+  milestones?: boolean;
+  bonus?: boolean;
+  circulars?: boolean;
+}
+
+export const EMAIL_PREF_LABELS: Array<{ key: keyof EmailPreferences; label: string }> = [
+  { key: 'new_student',           label: 'Nuevo alumno asignado' },
+  { key: 'form_completed',        label: 'Formulario inicial completado' },
+  { key: 'presentation_reminder', label: 'Recordatorio email de presentación' },
+  { key: 'milestones',            label: 'Hitos de clase (15, 30, 50)' },
+  { key: 'bonus',                 label: 'Bono de 6 meses disponible' },
+  { key: 'circulars',             label: 'Circulares del equipo' },
+];
+
 export interface Teacher {
   id: string;
   name: string;
   email: string;
   notificationEmail?: string;    // correo donde llegan los avisos (si vacío, se usa email)
+  emailPreferences?: EmailPreferences;   // avisos por email; ausente = todos activados
   gender?: 'male' | 'female';    // opcional; si falta se detecta por nombre (lib/gender.ts)
   avatar: string;
   status: TeacherStatus;

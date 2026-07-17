@@ -5,6 +5,7 @@ import { AuthGuard } from '@/components/AuthGuard';
 import { PullToRefresh } from '@/components/PullToRefresh';
 import { LastUpdated } from '@/components/LastUpdated';
 import AiStudentPanel from '@/components/ai/AiStudentPanel';
+import { maybeSendMilestoneEmail } from '@/lib/milestoneEmails';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
 import { calcCurrentClassNumber } from '@/lib/db';
@@ -43,7 +44,21 @@ function ContadorContent() {
     setAdjustSaving(a.id);
     const newAdj = (a.manualClassAdjustment ?? 0) + delta;
     await updateAssignmentAdjustment(a.id, newAdj);
+    // El ajuste manual puede hacer que el alumno cruce un hito.
+    await notifyMilestone({ ...a, manualClassAdjustment: newAdj });
     setAdjustSaving(null);
+  }
+
+  // Avisa por email si el alumno acaba de alcanzar la clase 15, 30 o 50.
+  // maybeSendMilestoneEmail no hace nada si no es hito o si ya se avisó.
+  async function notifyMilestone(a: Assignment) {
+    if (!teacher) return;
+    await maybeSendMilestoneEmail({
+      assignmentId: a.id,
+      teacherId: teacher.id,
+      studentName: a.studentName,
+      classNumber: calcCurrentClassNumber(a),
+    });
   }
 
   async function handleDeductConfirmAction() {
@@ -59,6 +74,28 @@ function ContadorContent() {
   }
 
   const myAssignments = teacher ? assignments.filter(a => a.teacherId === teacher.id) : [];
+
+  // Detección automática de hitos: al cargar el conteo, avisamos por email de los
+  // alumnos que están justo en la clase 15, 30 o 50. El anti-duplicados vive en
+  // assignments.milestone_emails_sent, así que abrir la página varias veces no
+  // reenvía nada.
+  useEffect(() => {
+    if (!teacher || myAssignments.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      for (const a of myAssignments) {
+        if (cancelled) return;
+        await maybeSendMilestoneEmail({
+          assignmentId: a.id,
+          teacherId: teacher.id,
+          studentName: a.studentName,
+          classNumber: calcCurrentClassNumber(a),
+        });
+      }
+    })();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teacher?.id, myAssignments.length]);
 
   // Lookup de alumnos para clasificar el plan con TODOS los campos (única fuente).
   const studentByEmail = useMemo(() => {

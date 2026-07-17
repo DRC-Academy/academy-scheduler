@@ -19,6 +19,8 @@ import { RETENTION_BONUS_DAYS, retentionDaysActive, retentionStartDate, retentio
 import { resolveGender, g } from '@/lib/gender';
 import { Grid, Teacher, Assignment, ScoringEvent, Student, AppNotification, ClassRecord } from '@/types';
 import FormStatusBadge from '@/components/FormStatusBadge';
+import { EmailPreferencesCard } from '@/components/EmailPreferencesCard';
+import { maybeSendBonusEmail } from '@/lib/milestoneEmails';
 import { fetchFormTokensIndex, lookupToken, getOrCreateFormLink, type FormTokenInfo } from '@/lib/formClient';
 import { getPresentationEmailStatus } from '@/lib/presentationEmailUtils';
 import { ALL_SPECIALTIES } from '@/lib/specialties';
@@ -776,6 +778,26 @@ function TeacherNotificationsTab({ teacher, myAssignments, students, notificatio
     })
     .filter(({ daysTo6m, bonusAvailable }) => bonusAvailable || daysTo6m <= 15);
 
+  // Aviso por email de los bonos ya disponibles. maybeSendBonusEmail no reenvía:
+  // se anota en assignments.milestone_emails_sent con la etiqueta 'bonus6m'.
+  const bonusReady = near6m.filter(d => d.bonusAvailable);
+  useEffect(() => {
+    if (bonusReady.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      for (const d of bonusReady) {
+        if (cancelled) return;
+        await maybeSendBonusEmail({
+          assignmentId: d.a.id,
+          teacherId: teacher.id,
+          studentName: d.a.studentName,
+        });
+      }
+    })();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teacher.id, bonusReady.length]);
+
   const cardStyle = { borderRadius: 12, padding: '13px 16px', marginBottom: 8 };
 
   // ── Lista unificada ─────────────────────────────────────────────────────────
@@ -810,6 +832,8 @@ function TeacherNotificationsTab({ teacher, myAssignments, students, notificatio
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+
+      <EmailPreferencesCard teacher={teacher} />
 
       {avisos.length === 0 && (
         <div style={{ ...cardStyle, background: 'var(--bg-surface)', border: '1px solid var(--border)', textAlign: 'center', padding: '40px 20px' }}>

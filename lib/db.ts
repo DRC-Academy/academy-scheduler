@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
-import { Teacher, Student, Assignment, AppUser, Grid, TeacherStatus, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, AssignedSlot } from '@/types';
+import { triggerEmail } from './emailClient';
+import { Teacher, Student, Assignment, AppUser, Grid, TeacherStatus, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, AssignedSlot, EmailPreferences } from '@/types';
 
 // ── AUTH ─────────────────────────────────────────────────────────────────────
 
@@ -113,6 +114,7 @@ export async function dbGetTeachers(): Promise<Teacher[]> {
       name:                row.name,
       email:               row.email,
       notificationEmail:   row.notification_email ?? undefined,
+    emailPreferences:    parseEmailPrefs(row.email_preferences),
       gender:              row.gender ?? undefined,
       avatar:              row.avatar,
       status,
@@ -1647,6 +1649,25 @@ export async function dbUpdateTeacherNotificationEmail(teacherId: string, email:
     .eq('id', teacherId);
 }
 
+// email_preferences puede venir como jsonb (objeto) o como string JSON.
+function parseEmailPrefs(v: unknown): EmailPreferences | undefined {
+  if (!v) return undefined;
+  if (typeof v === 'string') {
+    try { return JSON.parse(v) as EmailPreferences; } catch { return undefined; }
+  }
+  return v as EmailPreferences;
+}
+
+// Preferencias de avisos por email del profesor.
+export async function dbUpdateTeacherEmailPreferences(
+  teacherId: string, prefs: EmailPreferences,
+): Promise<void> {
+  const { error } = await supabase.from('teachers')
+    .update({ email_preferences: prefs })
+    .eq('id', teacherId);
+  if (error) throw new Error(`No se pudieron guardar las preferencias: ${error.message}`);
+}
+
 // ── MEET LINKS ────────────────────────────────────────────────────────────────
 
 export async function dbUpdateMeetLink(assignmentId: string, link: string): Promise<void> {
@@ -1810,8 +1831,15 @@ export async function dbSendNotification(notification: {
   };
 }
 
-// Notifica a un profesor que se le asignó un nuevo alumno.
-export async function dbNotifyNewAssignment(teacherId: string, studentName: string, studentEmail: string): Promise<void> {
+// Notifica a un profesor que se le asignó un nuevo alumno: aviso in-app + email.
+// El email va por /api/emails porque RESEND_API_KEY es server-only y esta función
+// corre en el navegador. Es best-effort: si falla, la notificación in-app queda.
+export async function dbNotifyNewAssignment(
+  teacherId: string,
+  studentName: string,
+  studentEmail: string,
+  details?: { plan?: string | null; level?: string | null; slots?: Array<{ day: string; hour: string }> | null; startDate?: string | null },
+): Promise<void> {
   await supabase.from('notifications').insert({
     id:          `notif_newasgn_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
     target_user: teacherId,
@@ -1822,6 +1850,17 @@ export async function dbNotifyNewAssignment(teacherId: string, studentName: stri
     read_by:     [],
     created_at:  new Date().toISOString(),
     created_by:  'sistema',
+  });
+
+  await triggerEmail({
+    type: 'new_student',
+    teacherId,
+    studentName,
+    studentEmail,
+    plan: details?.plan,
+    level: details?.level,
+    slots: details?.slots,
+    startDate: details?.startDate,
   });
 }
 

@@ -1,6 +1,6 @@
-'use client';
+﻿'use client';
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { Teacher, Student, Assignment, Grid, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, ClassRecord, ClassRecordType, FinanceRate, FinancePayment, FinanceManualApproval } from '@/types';
+import { Teacher, Student, Assignment, Grid, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, ClassRecord, ClassRecordType, FinanceRate, FinancePayment, FinanceManualApproval, EmailPreferences } from '@/types';
 import {
   dbGetTeachers, dbAddTeacher,
   dbGetStudents, dbUpsertStudent, dbDeleteStudent, dbUpdateStudent,
@@ -12,7 +12,7 @@ import {
   dbForceMonthlyReset, dbForceQuarterlyReset,
   dbGetClassCounts, dbIncrementClassCount,
   dbUpdateAssignmentAdjustment, dbUpdateAssignmentStartDate, dbUpdateAssignmentSlots,
-  dbUpdateTeacherSpecialties, dbUpdateTeacherInfo, dbUpdateTeacherNotificationEmail,
+  dbUpdateTeacherSpecialties, dbUpdateTeacherInfo, dbUpdateTeacherNotificationEmail, dbUpdateTeacherEmailPreferences,
   dbSendNotification, dbGetNotificationsForUser, dbMarkNotificationRead, dbMarkAllNotificationsRead,
   dbUpdateMeetLink, dbLogClassJoin, dbGetClassJoinLogs, dbGetUnassignedStudents,
   dbNotifyNewAssignment,
@@ -52,6 +52,7 @@ interface TeachersContextType {
   updateTeacherRating: (teacherId: string, rating: number) => Promise<void>;
   updateTeacherSpecialties: (teacherId: string, specialties: string[]) => Promise<void>;
   updateTeacherInfo: (teacherId: string, data: { name: string; email: string; specialties: string[]; notificationEmail?: string }) => Promise<void>;
+  updateTeacherEmailPreferences: (teacherId: string, prefs: EmailPreferences) => Promise<void>;
   addScoringEvent: (event: Omit<ScoringEvent, 'id' | 'createdAt'>) => Promise<void>;
   loadScoringEvents: () => Promise<void>;
   checkAndRunResets: () => Promise<void>;
@@ -101,6 +102,7 @@ const TeachersContext = createContext<TeachersContextType>({
   updateTeacherRating:      async () => {},
   updateTeacherSpecialties: async () => {},
   updateTeacherInfo:        async () => {},
+  updateTeacherEmailPreferences: async () => {},
   addScoringEvent:          async () => {},
   loadScoringEvents:        async () => {},
   checkAndRunResets:        async () => {},
@@ -152,12 +154,12 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   const [manualApprovals, setManualApprovals] = useState<FinanceManualApproval[]>([]);
   const [lastUpdated, setLastUpdated]   = useState<Date | null>(null);
 
-  // Silent reload — no loading spinner, just swaps in fresh data.
-  // students + assignments se traen JUNTOS (consistentes, con auto-corrección de
-  // student_id) y el estado se actualiza recién cuando TODO está disponible.
+  // Silent reload â€” no loading spinner, just swaps in fresh data.
+  // students + assignments se traen JUNTOS (consistentes, con auto-correcciÃ³n de
+  // student_id) y el estado se actualiza reciÃ©n cuando TODO estÃ¡ disponible.
   //
   // GUARDA ANTI-WIPE: las funciones db devuelven [] ante un error de red. Si un
-  // refresh transitorio falla, NO debemos borrar lo que ya teníamos (eso causaba
+  // refresh transitorio falla, NO debemos borrar lo que ya tenÃ­amos (eso causaba
   // que el profesor/horarios "desaparecieran" a los segundos). Por eso teachers,
   // students y assignments solo se reemplazan si el fetch trajo datos.
   async function reloadAll() {
@@ -177,16 +179,16 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
       setLastUpdated(new Date());
     } catch (err) {
       // Nunca dejamos la UI en blanco por un error de refresh: se conserva el
-      // último estado válido y se reintenta en el próximo ciclo.
-      console.error('[reloadAll] Falló el refresh, se conserva el estado anterior:', err);
+      // Ãºltimo estado vÃ¡lido y se reintenta en el prÃ³ximo ciclo.
+      console.error('[reloadAll] FallÃ³ el refresh, se conserva el estado anterior:', err);
     }
   }
 
   useEffect(() => {
-    // Initial load — show the loading state only once
+    // Initial load â€” show the loading state only once
     setLoadingTeachers(true);
     reloadAll().finally(() => setLoadingTeachers(false));
-    // Finance data (rates/payments/records/logs) — cargado una vez al iniciar.
+    // Finance data (rates/payments/records/logs) â€” cargado una vez al iniciar.
     loadFinanceData();
 
     // Auto-refresh every 60 s, but skip if tab is hidden
@@ -242,10 +244,13 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
 
   async function addAssignment(a: Assignment) {
     await dbAddAssignment(a);
-    // Notify the teacher that received a new student (covers setter + teacher flows)
-    await dbNotifyNewAssignment(a.teacherId, a.studentName, a.studentEmail);
+    // Notify the teacher that received a new student (covers setter + teacher flows).
+    // Los detalles van al email de aviso; la notificaciÃ³n in-app no los usa.
+    await dbNotifyNewAssignment(a.teacherId, a.studentName, a.studentEmail, {
+      plan: a.plan, level: a.studentLevel, slots: a.slots, startDate: a.startDate,
+    });
     setAssignments(prev => [a, ...prev]);
-    // The student now has an assignment — drop it from the unassigned list
+    // The student now has an assignment â€” drop it from the unassigned list
     setUnassignedStudents(prev => prev.filter(s => s.id !== a.studentId && s.name !== a.studentName));
   }
 
@@ -279,6 +284,11 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     }
     const normalizedNotif = notificationEmail?.trim() ? notificationEmail.trim() : undefined;
     setTeachers(prev => prev.map(t => t.id === teacherId ? { ...t, ...info, notificationEmail: normalizedNotif } : t));
+  }
+
+  async function updateTeacherEmailPreferences(teacherId: string, prefs: EmailPreferences) {
+    await dbUpdateTeacherEmailPreferences(teacherId, prefs);
+    setTeachers(prev => prev.map(t => t.id === teacherId ? { ...t, emailPreferences: prefs } : t));
   }
 
   async function sendNotification(n: Omit<AppNotification, 'id' | 'createdAt' | 'readBy'>) {
@@ -393,12 +403,12 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     setAssignments(prev => prev.map(a => a.id === assignmentId ? { ...a, meetLink: trimmed || undefined } : a));
   }
 
-  // Marca el email de presentación como enviado (persiste vía API que además
-  // penaliza el scoring si pasaron más de 24 h) y refleja el estado localmente
+  // Marca el email de presentaciÃ³n como enviado (persiste vÃ­a API que ademÃ¡s
+  // penaliza el scoring si pasaron mÃ¡s de 24 h) y refleja el estado localmente
   // para que los badges cambien a "enviado" sin recargar.
   async function markPresentationSent(assignmentId: string) {
     const res = await fetch(`/api/assignments/${assignmentId}/presentation-sent`, { method: 'PATCH' });
-    if (!res.ok) throw new Error('No se pudo marcar el email de presentación como enviado');
+    if (!res.ok) throw new Error('No se pudo marcar el email de presentaciÃ³n como enviado');
     const data = await res.json().catch(() => ({} as { hoursElapsed?: number; sentOnTime?: boolean }));
     const nowIso = new Date().toISOString();
     setAssignments(prev => prev.map(a => a.id === assignmentId
@@ -451,14 +461,14 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     screenshotFile: File | null, classType: ClassRecordType = 'normal', comment?: string,
   ) {
     const teacherName = teachers.find(t => t.id === teacherId)?.name ?? '';
-    // Estado de suscripción al momento de registrar (no bloquea si falla).
+    // Estado de suscripciÃ³n al momento de registrar (no bloquea si falla).
     const email = students.find(s => s.name.trim().toLowerCase() === studentName.trim().toLowerCase())?.email;
     let subscriptionStatus = 'error';
     if (email) {
-      // Fuente única de verdad (cache compartido con Alumnos / Próximas clases).
+      // Fuente Ãºnica de verdad (cache compartido con Alumnos / PrÃ³ximas clases).
       subscriptionStatus = (await checkSubscription(email)).status;
     }
-    // Las faltas/cancelaciones no llevan captura: se guarda screenshot_url vacío.
+    // Las faltas/cancelaciones no llevan captura: se guarda screenshot_url vacÃ­o.
     const url = screenshotFile ? await dbUploadClassScreenshot(screenshotFile, teacherId) : '';
     const record = await dbAddClassRecord(teacherId, teacherName, studentName, date, time, url, classType, comment, subscriptionStatus);
     setClassRecords(prev => [record, ...prev]);
@@ -499,8 +509,8 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     });
   }
 
-  // Aprobación manual de una clase puntual: persiste en finance_manual_approvals
-  // y actualiza el estado local para que el cálculo se recompute al instante.
+  // AprobaciÃ³n manual de una clase puntual: persiste en finance_manual_approvals
+  // y actualiza el estado local para que el cÃ¡lculo se recompute al instante.
   async function approveClass(teacherId: string, studentName: string, date: string, reason: string, approvedBy?: string) {
     const approval = await dbAddManualApproval(teacherId, studentName, date, approvedBy || 'admin', reason);
     setManualApprovals(prev => {
@@ -524,7 +534,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     await reloadAll();
   }
 
-  // Elimina una assignment y libera su grid (resolución de duplicados, punto 4).
+  // Elimina una assignment y libera su grid (resoluciÃ³n de duplicados, punto 4).
   async function removeAssignment(assignmentId: string, teacherId: string, studentName: string, slots: AssignedSlot[]) {
     await dbRemoveAssignment(assignmentId, teacherId, studentName, slots);
     await reloadAll();
@@ -536,7 +546,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     setClassRecords(prev => [record, ...prev]);
   }
 
-  // Clase de recuperación vinculada al alumno (punto 3).
+  // Clase de recuperaciÃ³n vinculada al alumno (punto 3).
   async function addRecoveryClass(p: { teacherId: string; teacherName: string; studentName: string; recoveryDate: string; originalDate: string; note?: string; classTime?: string }) {
     const record = await dbAddRecoveryClass(p);
     setClassRecords(prev => [record, ...prev]);
@@ -549,7 +559,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
       classRecords, financeRates, financePayments, manualApprovals, lastUpdated,
       addTeacher, addStudent, deleteStudent, updateStudent, addAssignment,
       getTeacherGrid, updateTeacherGrid, updateTeacherRating,
-      updateTeacherSpecialties, updateTeacherInfo,
+      updateTeacherSpecialties, updateTeacherInfo, updateTeacherEmailPreferences,
       addScoringEvent, loadScoringEvents, checkAndRunResets,
       assignTeacherOfMonth, assignTeacherOfQuarter,
       forceMonthlyReset, forceQuarterlyReset,

@@ -18,6 +18,10 @@ import {
   PRESENTATION_AT_RISK_HOURS,
   PRESENTATION_DEADLINE_HOURS,
 } from '@/lib/presentationEmailUtils';
+import {
+  fetchTeacher, sendPresentationEmailReminder, sendPresentationEmailOverdue,
+  type TeacherLike,
+} from '@/lib/emailNotifications';
 
 export const dynamic = 'force-dynamic';
 
@@ -82,6 +86,19 @@ export async function GET(request: Request): Promise<Response> {
   }
   const candidates: Candidate[] = [];
 
+  // Emails al profesor. Se cuelgan del anti-duplicados de las notificaciones:
+  // sólo se envía el email cuya notificación se inserta AHORA (id determinista
+  // por assignment+etapa), así cada profe recibe cada aviso una única vez sin
+  // necesidad de una tabla aparte.
+  interface EmailJob {
+    notifId: string;                       // id de la notificación que lo dispara
+    kind: 'reminder' | 'overdue';
+    teacherId: string;
+    studentName: string;
+    hours: number;
+  }
+  const emailJobs: EmailJob[] = [];
+
   for (const a of pending) {
     const h = hoursSinceAssigned(a.created_at, now);
     if (h > ALERT_WINDOW_HOURS) continue;   // asignación vieja → no genera alertas
@@ -109,6 +126,15 @@ export async function GET(request: Request): Promise<Response> {
         body: `${a.teacher_name} lleva 12h sin enviar el email de presentación a ${a.student_name}. Asignado el ${fecha} a las ${hora}.`,
         type: 'presentation_email_warning',
       });
+      // A las 12 h el aviso in-app es sólo para el admin; el profe recibe el suyo
+      // por email (se dispara con la inserción de esa alerta).
+      emailJobs.push({
+        notifId: `presalert_warning_${a.id}`,
+        kind: 'reminder',
+        teacherId: a.teacher_id,
+        studentName: a.student_name,
+        hours: h,
+      });
     }
 
     // 24 h → aviso urgente al admin + aviso al profe.
@@ -129,11 +155,18 @@ export async function GET(request: Request): Promise<Response> {
         body: `No enviaste el email de presentación a ${a.student_name} en las primeras 24 horas. Cuando lo envíes se descontarán -5 puntos de tu scoring.`,
         type: 'presentation_email_overdue_teacher',
       });
+      emailJobs.push({
+        notifId: `presalert_overdue_teacher_${a.id}`,
+        kind: 'overdue',
+        teacherId: a.teacher_id,
+        studentName: a.student_name,
+        hours: h,
+      });
     }
   }
 
   if (candidates.length === 0) {
-    return Response.json({ ok: true, pending: pending.length, inserted: 0 });
+    return Response.json({ ok: true, pending: pending.length, inserted: 0, emailed: 0 });
   }
 
   // Anti-duplicados: descartar las alertas ya emitidas.
@@ -143,7 +176,7 @@ export async function GET(request: Request): Promise<Response> {
   const toInsert = candidates.filter(c => !already.has(c.id));
 
   if (toInsert.length === 0) {
-    return Response.json({ ok: true, pending: pending.length, inserted: 0 });
+    return Response.json({ ok: true, pending: pending.length, inserted: 0, emailed: 0 });
   }
 
   const rows = toInsert.map(c => ({
@@ -168,5 +201,37 @@ export async function GET(request: Request): Promise<Response> {
     return Response.json({ error: 'Error al insertar notificaciones' }, { status: 500 });
   }
 
-  return Response.json({ ok: true, pending: pending.length, inserted: rows.length });
+  const emailed = await sendPendingEmails(emailJobs.filter(j => !already.has(j.notifId)));
+
+  return Response.json({ ok: true, pending: pending.length, inserted: rows.length, emailed });
+}
+
+/**
+ * Envía los emails de las alertas recién insertadas. Los profesores se cachean:
+ * un profe con varios alumnos pendientes aparece en varios jobs y no hace falta
+ * releerlo de la base cada vez.
+ */
+async function sendPendingEmails(jobs: Array<{
+  kind: 'reminder' | 'overdue'; teacherId: string; studentName: string; hours: number;
+}>): Promise<number> {
+  if (jobs.length === 0) return 0;
+  const cache = new Map<string, TeacherLike | null>();
+  let sent = 0;
+
+  for (const j of jobs) {
+    try {
+      if (!cache.has(j.teacherId)) cache.set(j.teacherId, await fetchTeacher(j.teacherId));
+      const teacher = cache.get(j.teacherId);
+      if (!teacher) continue;
+
+      const ok = j.kind === 'reminder'
+        ? await sendPresentationEmailReminder(teacher, j.studentName, j.hours)
+        : await sendPresentationEmailOverdue(teacher, j.studentName);
+      if (ok) sent++;
+    } catch (err) {
+      // Un email fallido no debe abortar el resto del cron.
+      console.error('[cron presentation-emails] Fallo al enviar email:', err);
+    }
+  }
+  return sent;
 }
