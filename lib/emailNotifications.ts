@@ -323,14 +323,75 @@ export async function sendBonusAvailableEmail(teacher: TeacherLike, studentName:
 }
 
 // ═══ J) Circular del admin ════════════════════════════════════════════════════
-export async function sendCircularEmail(
-  teacher: TeacherLike, notification: { title: string; body: string },
-): Promise<boolean> {
-  const html = baseEmailTemplate(
+function circularHtml(teacher: TeacherLike, notification: { title: string; body: string }): string {
+  return baseEmailTemplate(
     p(`Hola ${esc(teacher.name)},`) +
     p(esc(notification.body).replace(/\n/g, '<br />')) +
     p('Este mensaje ha sido enviado por el equipo de DRC Academy.'),
     notification.title,
   );
-  return send('sendCircularEmail', teacher, 'circulars', notification.title, html);
+}
+
+export async function sendCircularEmail(
+  teacher: TeacherLike, notification: { title: string; body: string },
+): Promise<boolean> {
+  return send('sendCircularEmail', teacher, 'circulars', notification.title, circularHtml(teacher, notification));
+}
+
+/**
+ * Circular a varios profesores en UNA sola petición (Resend batch, máx. 100).
+ *
+ * Enviar uno a uno en paralelo choca con el rate limit de Resend (2 req/s): las
+ * peticiones que lo exceden vuelven con `rate_limit_exceeded` y esos profesores
+ * se quedan sin el correo. El batch va en una única llamada.
+ */
+export async function sendCircularBatch(
+  teachers: TeacherLike[], notification: { title: string; body: string },
+): Promise<number> {
+  const destinatarios = teachers
+    .map(t => ({ teacher: t, to: destinationFor(t) }))
+    .filter(({ teacher, to }) => {
+      if (!to) {
+        console.error(`[EMAIL] circular: ${teacher.name} no tiene email de destino.`);
+        return false;
+      }
+      if (!wantsEmail(teacher, 'circulars')) {
+        console.log(`[EMAIL] circular: omitido — ${teacher.name} desactivó las circulares.`);
+        return false;
+      }
+      return true;
+    });
+
+  if (destinatarios.length === 0) return 0;
+
+  console.log('[EMAIL] Enviando circular en batch:', {
+    total: destinatarios.length,
+    subject: notification.title,
+    resendKeyExists: Boolean(process.env.RESEND_API_KEY),
+    usingPlaceholder: !hasResendKey(),
+  });
+
+  try {
+    const { data, error } = await resend.batch.send(
+      destinatarios.map(({ teacher, to }) => ({
+        from: FROM,
+        to,
+        subject: notification.title,
+        html: circularHtml(teacher, notification),
+      })),
+    );
+
+    if (error) {
+      console.error('[EMAIL] circular: Resend devolvió error en el batch:', {
+        name: error.name, message: error.message,
+      });
+      return 0;
+    }
+    const enviados = data?.data?.length ?? destinatarios.length;
+    console.log(`[EMAIL] circular: ${enviados} email(s) aceptados por Resend.`);
+    return enviados;
+  } catch (err) {
+    console.error('[EMAIL] circular: excepción en el batch:', err);
+    return 0;
+  }
 }

@@ -11,7 +11,7 @@
 import { supabase } from '@/lib/supabase';
 import {
   fetchTeacher, normalizePrefs, sendNewStudentEmail, sendMilestoneEmail, sendCircularEmail,
-  sendBonusAvailableEmail, type MilestoneNumber, type TeacherLike,
+  sendCircularBatch, sendBonusAvailableEmail, type MilestoneNumber, type TeacherLike,
 } from '@/lib/emailNotifications';
 
 interface Body {
@@ -103,7 +103,15 @@ export async function POST(request: Request): Promise<Response> {
   return Response.json({ sent });
 }
 
-/** Envía la circular a todos los profesores. Devuelve cuántos salieron. */
+/**
+ * Envía la circular a todos los profesores. Devuelve cuántos salieron.
+ *
+ * Usa resend.batch.send(): UNA petición con todos los correos. La versión
+ * anterior mandaba tandas de 5 en paralelo y Resend limita a 2 peticiones por
+ * segundo, así que las que excedían el límite volvían con `rate_limit_exceeded`
+ * y esos profesores no recibían nada. El batch no tiene ese problema y además
+ * es una sola llamada (cabe de sobra: el límite del batch son 100 emails).
+ */
 async function sendCircularToAll(notification: { title: string; body: string }): Promise<number> {
   const { data, error } = await supabase
     .from('teachers')
@@ -120,20 +128,5 @@ async function sendCircularToAll(notification: { title: string; body: string }):
     emailPreferences: normalizePrefs(t.email_preferences),
   }));
 
-  // En tandas: 30 envíos a la vez pueden chocar con el rate limit de Resend, y
-  // secuencial tardaría demasiado para una request.
-  const CHUNK = 5;
-  let sent = 0;
-  for (let i = 0; i < teachers.length; i += CHUNK) {
-    const results = await Promise.all(
-      teachers.slice(i, i + CHUNK).map(t =>
-        sendCircularEmail(t, notification).catch(err => {
-          console.error(`[api/emails] Circular fallida para ${t.name}:`, err);
-          return false;
-        }),
-      ),
-    );
-    sent += results.filter(Boolean).length;
-  }
-  return sent;
+  return sendCircularBatch(teachers, notification);
 }
