@@ -7,7 +7,7 @@
 // Todas las funciones son best-effort: capturan sus errores y devuelven
 // true/false. Un fallo de email NUNCA debe romper el flujo que lo invoca.
 
-import { resend } from '@/lib/resend';
+import { resend, hasResendKey } from '@/lib/resend';
 import { supabase } from '@/lib/supabase';
 import { MILESTONE_SLIDES } from '@/lib/milestones';
 
@@ -143,20 +143,41 @@ async function send(
 ): Promise<boolean> {
   const to = destinationFor(teacher);
   if (!to) {
-    console.error(`[${label}] El profesor ${teacher.name} no tiene email de destino.`);
+    console.error(`[EMAIL] ${label}: el profesor ${teacher.name} no tiene email de destino.`);
     return false;
   }
-  if (!wantsEmail(teacher, pref)) return false;   // el profe desactivó este aviso
+  if (!wantsEmail(teacher, pref)) {
+    console.log(`[EMAIL] ${label}: omitido — ${teacher.name} desactivó "${pref}".`);
+    return false;
+  }
+
+  const key = process.env.RESEND_API_KEY;
+  console.log('[EMAIL] Intentando enviar email:', {
+    label,
+    to,
+    subject,
+    from: FROM,
+    resendKeyExists: Boolean(key),
+    resendKeyPrefix: key?.substring(0, 10),
+    usingPlaceholder: !hasResendKey(),
+  });
 
   try {
-    const { error } = await resend.emails.send({ from: FROM, to, subject, html });
+    // Ojo: el SDK de Resend NO lanza en errores de API (clave inválida, dominio
+    // sin verificar, rate limit): los devuelve en `error`. Un try/catch a secas
+    // los daría por enviados. Por eso se comprueba `error` explícitamente.
+    const { data, error } = await resend.emails.send({ from: FROM, to, subject, html });
+
     if (error) {
-      console.error(`[${label}] Resend error:`, error);
+      console.error(`[EMAIL] ${label}: Resend devolvió error:`, {
+        name: error.name, message: error.message, to,
+      });
       return false;
     }
+    console.log(`[EMAIL] ${label}: enviado correctamente:`, { id: data?.id, to });
     return true;
   } catch (err) {
-    console.error(`[${label}] Fallo al enviar el email:`, err);
+    console.error(`[EMAIL] ${label}: excepción al enviar:`, err);
     return false;
   }
 }

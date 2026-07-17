@@ -88,13 +88,22 @@ export async function POST(req: Request): Promise<Response> {
     // 7) Aviso por email a cada profesor afectado (notificationEmail || email).
     //    El envío NO debe romper el flujo: sendCancellationEmail captura errores.
     let emailSent = false;
+    console.log(`[EMAIL] Cancelación de ${studentName}: ${affectedTeachers.length} profesor(es) a avisar.`);
     for (const t of affectedTeachers) {
       const to = t.notificationEmail || t.email;
       const ok = await sendCancellationEmail(to, t.name, studentName);
       if (ok) emailSent = true;
     }
 
-    await supabase.from('webhook_logs').update({ processed: true, email_sent: emailSent }).eq('id', logId);
+    // `email_sent` no existe como columna en webhook_logs: este update fallaba
+    // con 42703 y, como supabase-js devuelve el error en vez de lanzarlo y nadie
+    // lo miraba, el fallo pasaba inadvertido. Guardamos sólo lo que existe y
+    // dejamos el resultado del envío en los logs.
+    const { error: logErr } = await supabase
+      .from('webhook_logs').update({ processed: true }).eq('id', logId);
+    if (logErr) console.error('[webhook cancelled] No se pudo marcar el log:', logErr);
+    console.log(`[EMAIL] Cancelación de ${studentName}: algún email enviado = ${emailSent}`);
+
     return new Response('ok', { status: 200 });
   } catch (err: any) {
     // Loggear el error pero responder 200 igual (evita reintentos infinitos).
