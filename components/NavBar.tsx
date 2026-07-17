@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/AuthContext';
 import { NotificationBell } from '@/components/NotificationBell';
-import { Search, Users, Calendar, Wallet, ChartColumn, Settings, Menu, X } from 'lucide-react';
+import { Search, Users, Calendar, Wallet, ChartColumn, Settings, Menu, X, GraduationCap } from 'lucide-react';
 import { Button } from '@/components/ui';
 
 // Íconos lucide en vez de emojis: /mis-clases y /finanzas usaban los dos el mismo
@@ -13,6 +13,7 @@ const navItems = [
   { href: '/setter',            label: 'Buscar',            icon: Search,      roles: ['setter', 'admin'] },
   { href: '/students',          label: 'Alumnos',           icon: Users,       roles: ['setter', 'admin'] },
   { href: '/teacher',           label: 'Calendario',        icon: Calendar,    roles: ['teacher'] },
+  { href: '/mis-alumnos',       label: 'Alumnos',           icon: GraduationCap, roles: ['teacher'] },
   { href: '/mis-clases',        label: 'Mis clases',        icon: Wallet,      roles: ['teacher'] },
   { href: '/conteo-automatico', label: 'Conteo automático', icon: ChartColumn, roles: ['teacher'] },
   { href: '/admin',             label: 'Admin',             icon: Settings,    roles: ['admin'] },
