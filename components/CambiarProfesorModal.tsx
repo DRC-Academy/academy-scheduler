@@ -1,6 +1,7 @@
 'use client';
 import { useState, useMemo, useEffect, type CSSProperties } from 'react';
 import { useTeachers } from '@/lib/TeachersContext';
+import { AssignmentEmailModal } from '@/components/AssignmentEmailModal';
 import { Teacher, Assignment, AssignedSlot, Grid } from '@/types';
 
 // Modal "Cambiar de profesor" (punto 1). Wizard de 4 pasos reutilizable desde
@@ -65,6 +66,10 @@ export function CambiarProfesorModal({
   const [reason, setReason] = useState<Reason>('alumno');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  // Paso 2 (post-confirmación): email de asignación pre-armado para el nuevo
+  // profesor. Cuando está seteado, el wizard se reemplaza por el modal de email.
+  const [sentAssignment, setSentAssignment] = useState<Assignment | null>(null);
+  const [doneMsg, setDoneMsg] = useState('');
 
   const currentSlots = sortSlots(currentAssignment.slots);
 
@@ -121,6 +126,7 @@ export function CambiarProfesorModal({
     if (!newTeacher || !fromTeacher || !slotsComplete || saving) return;
     setSaving(true);
     setError('');
+    const newSlots = sortSlots(selectedSlots);
     try {
       await changeStudentTeacher({
         assignmentId: currentAssignment.id,
@@ -130,10 +136,25 @@ export function CambiarProfesorModal({
         from: { id: fromTeacher.id, name: fromTeacher.name, email: fromTeacher.email },
         to:   { id: newTeacher.id, name: newTeacher.name, email: newTeacher.email },
         oldSlots: currentAssignment.slots,
-        newSlots: sortSlots(selectedSlots),
+        newSlots,
         reason,
+        plan:      currentAssignment.plan,
+        level:     currentAssignment.studentLevel,
+        startDate: currentAssignment.startDate,
       });
-      onDone(`✅ ${currentAssignment.studentName} transferido a ${newTeacher.name}`);
+      // Paso 2: armar el email de asignación para el NUEVO profesor. El "Para" usa
+      // notification_email si existe, si no el email de login. El resto (plan,
+      // nivel, objetivo, fecha de inicio) se arrastra de la assignment original.
+      setSentAssignment({
+        ...currentAssignment,
+        teacherId:    newTeacher.id,
+        teacherName:  newTeacher.name,
+        teacherEmail: newTeacher.notificationEmail?.trim() || newTeacher.email,
+        slots:        newSlots,
+        weeklyHours,
+        availability: newSlots.map(s => `${s.day} ${s.hour}`).join(', '),
+      });
+      setDoneMsg(`✅ ${currentAssignment.studentName} transferido a ${newTeacher.name}`);
     } catch {
       setError('No se pudo completar el cambio. Reintentá.');
       setSaving(false);
@@ -144,6 +165,20 @@ export function CambiarProfesorModal({
 
   const labelStyle = { fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' as const, letterSpacing: '0.05em', marginBottom: 8 };
   const stepDots = [1, 2, 3, 4] as const;
+
+  // PASO 2 (post-confirmación) — email de asignación para el nuevo profesor.
+  // Al cerrar/omitir se dispara onDone (cierra el flujo y avisa al caller).
+  if (sentAssignment) {
+    return (
+      <AssignmentEmailModal
+        assignment={sentAssignment}
+        title="📧 Notificar al nuevo profesor"
+        banner="Cambio realizado correctamente. Ahora puedes notificar al nuevo profesor."
+        skipLabel="Omitir por ahora"
+        onClose={() => onDone(doneMsg)}
+      />
+    );
+  }
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(6px)', zIndex: 95, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}

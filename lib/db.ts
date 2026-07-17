@@ -2125,6 +2125,11 @@ export interface ChangeTeacherParams {
   oldSlots: AssignedSlot[];
   newSlots: AssignedSlot[];
   reason: 'alumno' | 'profesor' | 'reorg';
+  // Datos del alumno arrastrados desde la assignment, para el aviso por email al
+  // nuevo profesor (Resend) — mismo contenido que una asignación nueva.
+  plan?: string | null;
+  level?: string | null;
+  startDate?: string | null;
 }
 
 // Transfiere un alumno de un profesor a otro (punto 1). Libera las celdas del
@@ -2156,6 +2161,10 @@ export async function dbChangeStudentTeacher(p: ChangeTeacherParams): Promise<vo
   await dbSaveTeacherGrid(p.to.id, updatedNew);
 
   // 3) Reapuntar la assignment al nuevo profesor + nuevos horarios.
+  //    Se reinicia el email de presentación: created_at = ahora (el contador de
+  //    24 h se ancla en created_at, ver getPresentationEmailStatus) y se borra el
+  //    estado de enviado, para que el NUEVO profesor tenga sus 24 h completas para
+  //    presentarse sin penalización de scoring.
   await supabase.from('assignments').update({
     teacher_id:   p.to.id,
     teacher_name: p.to.name,
@@ -2163,6 +2172,9 @@ export async function dbChangeStudentTeacher(p: ChangeTeacherParams): Promise<vo
     slots:        p.newSlots,
     weekly_hours: p.weeklyHours,
     availability: p.newSlots.map(s => `${s.day} ${s.hour}`).join(', '),
+    presentation_email_sent:    false,
+    presentation_email_sent_at: null,
+    created_at:                 new Date().toISOString(),
   }).eq('id', p.assignmentId);
 
   // 4) Evento de scoring para el profesor anterior según el motivo del cambio.
@@ -2180,8 +2192,11 @@ export async function dbChangeStudentTeacher(p: ChangeTeacherParams): Promise<vo
     });
   }
 
-  // 5) Notificar al profesor NUEVO (misma notificación que una asignación nueva).
-  await dbNotifyNewAssignment(p.to.id, p.studentName, p.studentEmail);
+  // 5) Notificar al profesor NUEVO (misma notificación + email Resend que una
+  //    asignación nueva), con los datos del alumno y los horarios recién asignados.
+  await dbNotifyNewAssignment(p.to.id, p.studentName, p.studentEmail, {
+    plan: p.plan, level: p.level, slots: p.newSlots, startDate: p.startDate,
+  });
 
   // 6) Notificar al profesor ANTERIOR.
   await supabase.from('notifications').insert({

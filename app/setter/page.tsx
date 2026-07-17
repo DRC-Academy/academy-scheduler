@@ -9,6 +9,7 @@ import { VisualCalendar, buildGridFromTeacher, cellKey, HOURS_ES, getWeekDates, 
 import { dbCheckStudentExists, dbSetStudentProduct, dbGetAssignmentsByTeacher, dbGetAssignments, dbUpsertStudent, dbRepairStudentLink, dbRepairAllBrokenLinks, dbGetAllGridOccupancy, GridOccupancy } from '@/lib/db';
 import { CrearVinculoModal } from '@/components/CrearVinculoModal';
 import { CambiarProfesorModal } from '@/components/CambiarProfesorModal';
+import { AssignmentEmailModal } from '@/components/AssignmentEmailModal';
 import { StudentAutofillCard } from '@/components/StudentAutofillCard';
 import { useStudentAutofill } from '@/lib/useStudentAutofill';
 import { planBadgeStyle } from '@/lib/productUtils';
@@ -89,125 +90,15 @@ function addDays(iso: string, days: number): string {
   return d.toISOString().split('T')[0];
 }
 
-// "2026-07-02" → "Miércoles 2 de julio de 2026" (día de semana capitalizado, sin coma).
-function fmtLongDate(iso: string): string {
-  if (!iso) return '';
-  const d = new Date(iso.length <= 10 ? iso + 'T00:00:00' : iso);
-  if (isNaN(d.getTime())) return '';
-  const s = d.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-  const noComma = s.replace(',', '');
-  return noComma.charAt(0).toUpperCase() + noComma.slice(1);
-}
-
-// Un slot → "• Lunes 16:00h - 17:00h" (hora fin = inicio + 1h). Tolera "16" o "16:00".
-function slotLine(s: AssignedSlot): string {
-  const startH = parseInt(s.hour, 10);
-  const start = `${String(startH).padStart(2, '0')}:00`;
-  const end = `${String(startH + 1).padStart(2, '0')}:00`;
-  return `• ${s.day} ${start}h - ${end}h`;
-}
-
-// Limpia el nombre del plan: corta metadatos de horario (todo tras " · ") y colapsa
-// duplicados tipo "3h semanales — 3h semanales" → "3h semanales".
-function cleanPlanName(raw: string): string {
-  if (!raw) return '';
-  let s = raw.split('·')[0].trim();          // descarta "· 16:00 · Lunes, miércoles..."
-  s = s.replace(/\s*—\s*/g, ' - ');          // em-dash → guion espaciado uniforme
-  const parts = s.split(/\s+-\s+/).map(p => p.trim()).filter(Boolean);
-  const dedup: string[] = [];
-  for (const p of parts) {
-    if (!dedup.some(d => d.toLowerCase() === p.toLowerCase())) dedup.push(p);
-  }
-  return dedup.join(' - ');
-}
-
-// ─── Email Modal ──────────────────────────────────────────────────────────────
-function EmailModal({ assignment, onClose }: { assignment: Assignment; onClose: () => void }) {
-  const [sent, setSent] = useState(false);
-
-  const now = new Date();
-  const greeting = now.getHours() < 13 ? 'Buenos días' : now.getHours() < 20 ? 'Buenas tardes' : 'Buenas noches';
-
-  // Fecha de inicio: viene de assignment.startDate (precargada desde WooCommerce
-  // subscriptionStartDate, o la seleccionada en el formulario). Una sola vez.
-  const startDateLong = fmtLongDate(assignment.startDate ?? '');
-  const renewalStr = assignment.startDate ? fmtDate(addDays(assignment.startDate, 30)) : null;
-
-  // Horarios: todos los slots como lista con viñeta, ordenados por día y hora.
-  const orderedSlots = [...assignment.slots].sort((a, b) => {
-    const d = (DAY_INDEX[a.day] ?? 99) - (DAY_INDEX[b.day] ?? 99);
-    return d !== 0 ? d : parseInt(a.hour, 10) - parseInt(b.hour, 10);
-  });
-  const scheduleBlock = orderedSlots.map(slotLine).join('\n');
-
-  const planName = cleanPlanName(assignment.plan);
-  const objetivo = assignment.objetivo?.trim() || 'Mejorar su nivel de inglés';
-
-  const emailSubject = `Nueva asignación: ${assignment.studentName} - ${planName}`;
-  const emailBody = `${greeting} ${assignment.teacherName.split(' ')[0]}!
-
-A continuación te envío la información de ${assignment.studentName} para comenzar sus clases.
-
-Recuerda enviarle el correo de presentación y el correo con los datos de la sesión.
-
-📅 Fecha de inicio: ${startDateLong}
-
-🕐 Horario semanal (Hora España):
-${scheduleBlock}
-
-📧 Email de contacto: ${assignment.studentEmail}
-🎯 Objetivo: ${objetivo}
-📊 Nivel: ${assignment.studentLevel}
-📦 Plan: ${planName}
-
-${assignment.studentName} ha comprado su plan ${planName}${renewalStr ? ` y renueva el ${renewalStr}` : ''}.
-
-Recuerda pedir que te confirmen que han recibido el email.`;
-
-  const mailtoLink = `mailto:${assignment.teacherEmail}?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
-
-  function copyBody() { navigator.clipboard.writeText(emailBody).catch(() => {}); }
-
-  return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(6px)', zIndex: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
-      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 18, width: '100%', maxWidth: 560, maxHeight: '90vh', overflowY: 'auto', padding: 28 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
-          <div>
-            <div style={{ fontWeight: 700, fontSize: 18, color: 'var(--text-primary)' }}>📧 Enviar email al profesor</div>
-            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 3 }}>Para: {assignment.teacherEmail}</div>
-          </div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 22, cursor: 'pointer' }}>✕</button>
-        </div>
-        <div style={{ marginBottom: 12 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>Asunto</div>
-          <div style={{ background: 'var(--bg-surface-2)', borderRadius: 8, padding: '9px 13px', fontSize: 13, color: 'var(--text-primary)', border: '1px solid var(--border)', fontWeight: 600 }}>{emailSubject}</div>
-        </div>
-        <div style={{ marginBottom: 18 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>Cuerpo del email</div>
-          <div style={{ background: 'var(--bg-surface-2)', borderRadius: 10, padding: '14px 16px', fontSize: 13, color: 'var(--text-primary)', whiteSpace: 'pre-wrap', lineHeight: 1.7, border: '1px solid var(--border)', maxHeight: 340, overflowY: 'auto' }}>{emailBody}</div>
-        </div>
-        <div style={{ display: 'flex', gap: 10 }}>
-          <button onClick={copyBody} style={{ flex: 1, padding: '11px', borderRadius: 9, border: '1px solid var(--border)', background: 'var(--bg-surface-3)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>📋 Copiar cuerpo</button>
-          <a href={mailtoLink} onClick={() => setSent(true)}
-            style={{ flex: 2, padding: '11px', borderRadius: 9, border: 'none', background: sent ? '#1E9E3A' : '#1E9E3A', color: 'white', cursor: 'pointer', fontSize: 13, fontWeight: 700, textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}>
-            {sent ? '✓ Email abierto' : '📧 Abrir en cliente de email'}
-          </a>
-        </div>
-        <div style={{ marginTop: 10, fontSize: 11, color: 'var(--text-muted)', textAlign: 'center' }}>
-          Se abre tu cliente de correo con el email prellenado
-        </div>
-      </div>
-    </div>
-  );
-}
-
+// ─── Email Trigger ────────────────────────────────────────────────────────────
+// El cuerpo del email de asignación vive en components/AssignmentEmailModal.tsx
+// (fuente única, compartida con el flujo de cambio de profesor).
 function EmailTrigger({ assignment }: { assignment: Assignment }) {
   const [show, setShow] = useState(false);
   return (
     <>
       <button onClick={() => setShow(true)} style={{ padding: '7px 14px', borderRadius: 8, border: 'none', background: '#1E9E3A', color: 'white', cursor: 'pointer', fontSize: 12, fontWeight: 700 }}>📧 Email</button>
-      {show && <EmailModal assignment={assignment} onClose={() => setShow(false)} />}
+      {show && <AssignmentEmailModal assignment={assignment} onClose={() => setShow(false)} />}
     </>
   );
 }
@@ -1623,7 +1514,7 @@ function SetterContent() {
         />
       )}
 
-      {emailAssignment && <EmailModal assignment={emailAssignment} onClose={() => setEmailAssignment(null)} />}
+      {emailAssignment && <AssignmentEmailModal assignment={emailAssignment} onClose={() => setEmailAssignment(null)} />}
 
       {changeTeacherAsg && (
         <CambiarProfesorModal
