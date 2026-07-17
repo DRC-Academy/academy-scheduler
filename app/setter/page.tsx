@@ -243,6 +243,11 @@ function AssignModal({
       });
   }, [teacherGrid]);
 
+  // Diagnóstico: confirma cuántos slots libres se leyeron del grid del profesor.
+  useEffect(() => {
+    console.log('Slots libres encontrados:', availableSlots.length, availableSlots);
+  }, [availableSlots]);
+
   const [slots, setSlots] = useState<AssignedSlot[]>(() =>
     initialSlots.filter(s => availableSlots.some(as => as.day === s.day && as.hour === s.hour))
   );
@@ -662,7 +667,9 @@ function TeacherCalendarModal({
   const [assignCell, setAssignCell] = useState<AssignedSlot | null>(null);
 
   useEffect(() => {
-    getTeacherGrid(teacher.id).then(g => {
+    // force=true: leer la disponibilidad viva del profesor, no un snapshot
+    // cacheado. Así aparecen los slots que el profesor acaba de marcar libre.
+    getTeacherGrid(teacher.id, true).then(g => {
       setGrid(Object.keys(g).length > 0 ? g : baseGrid);
       setLoadingGrid(false);
     });
@@ -980,7 +987,7 @@ function LinkCreateAssign({
   const [grid, setGrid] = useState<Grid | null>(null);
 
   useEffect(() => {
-    getTeacherGrid(teacher.id).then(g => setGrid(Object.keys(g).length > 0 ? g : baseGrid));
+    getTeacherGrid(teacher.id, true).then(g => setGrid(Object.keys(g).length > 0 ? g : baseGrid));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [teacher.id]);
 

@@ -47,7 +47,7 @@ interface TeachersContextType {
   deleteStudent: (studentId: string, studentName: string, createdBy?: string) => Promise<AffectedTeacher[]>;
   updateStudent: (student: Student) => Promise<void>;
   addAssignment: (a: Assignment) => Promise<void>;
-  getTeacherGrid: (teacherId: string) => Promise<Grid>;
+  getTeacherGrid: (teacherId: string, force?: boolean) => Promise<Grid>;
   updateTeacherGrid: (teacherId: string, grid: Grid) => Promise<void>;
   updateTeacherRating: (teacherId: string, rating: number) => Promise<void>;
   updateTeacherSpecialties: (teacherId: string, specialties: string[]) => Promise<void>;
@@ -254,8 +254,11 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     setUnassignedStudents(prev => prev.filter(s => s.id !== a.studentId && s.name !== a.studentName));
   }
 
-  async function getTeacherGrid(teacherId: string): Promise<Grid> {
-    if (teacherGrids[teacherId]) return teacherGrids[teacherId];
+  // force=true saltea el caché y trae el grid vivo de Supabase. Lo usa el setter
+  // al abrir el formulario de asignación: si el profesor acaba de marcar celdas
+  // como 'libre', esos slots deben aparecer sin esperar al reloadAll de 60 s.
+  async function getTeacherGrid(teacherId: string, force = false): Promise<Grid> {
+    if (!force && teacherGrids[teacherId]) return teacherGrids[teacherId];
     const grid = await dbGetTeacherGrid(teacherId);
     setTeacherGrids(prev => ({ ...prev, [teacherId]: grid }));
     return grid;
