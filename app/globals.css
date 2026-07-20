@@ -758,6 +758,111 @@ label {
   .mcf-btn-sm { min-height: 44px; }
 }
 
+/* ── Página del alumno (/mis-alumnos/[studentId]) y progreso público ──────────
+   Branding DRC: verde #1E9E3A, amarillo #FFC400, fondo #F7F7F5. */
+.sp {
+  --sp-green:  #1E9E3A;
+  --sp-yellow: #FFC400;
+  --sp-t1: #1a1c1a;
+  --sp-t2: #5f6360;
+  --sp-t3: #8b8e88;
+  font-variant-numeric: tabular-nums;
+  max-width: 1100px; margin: 0 auto; padding: 24px 16px 56px;
+  color: var(--sp-t1);
+}
+.sp-back {
+  display: inline-flex; align-items: center; gap: 7px; border: none; background: transparent;
+  padding: 6px 0; font-family: inherit; font-size: 13.5px; font-weight: 500;
+  color: var(--sp-t2); cursor: pointer; text-decoration: none;
+}
+.sp-back:hover { color: var(--sp-t1); }
+.sp-name { font-size: 24px; font-weight: 700; letter-spacing: -0.015em; margin: 10px 0 0; }
+.sp-sub { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13.5px; color: var(--sp-t2); margin-top: 5px; }
+
+/* Fila de datos rápidos */
+.sp-quick {
+  display: grid; grid-template-columns: repeat(5, 1fr); gap: 1px;
+  background: var(--border); border: 1px solid var(--border);
+  border-radius: 12px; overflow: hidden; margin: 18px 0 22px;
+}
+.sp-quick > div { background: #fff; padding: 12px 16px; }
+.sp-quick-label { font-size: 11px; font-weight: 600; color: var(--sp-t3); text-transform: uppercase; letter-spacing: 0.08em; }
+.sp-quick-value { font-size: 14px; font-weight: 600; margin-top: 4px; }
+
+/* Cards */
+.sp-card {
+  background: #fff; border: 1px solid var(--border); border-radius: 12px;
+  padding: 20px 24px; box-shadow: 0 1px 2px rgba(16,24,16,0.03);
+}
+.sp-card-title {
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--sp-t2); margin-bottom: 12px;
+}
+.sp-body { font-size: 14px; line-height: 1.7; white-space: pre-wrap; }
+.sp-objective { border-left: 4px solid var(--sp-green); }
+.sp-metric { font-size: 28px; font-weight: 700; color: var(--sp-green); line-height: 1.1; }
+.sp-metric-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--sp-t2); margin-top: 6px; }
+.sp-badge-yellow {
+  display: inline-block; background: var(--sp-yellow); color: #4a3800;
+  font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 999px;
+  text-transform: uppercase; letter-spacing: 0.05em;
+}
+
+/* Listas de puntos fuertes / áreas a trabajar */
+.sp-list { display: flex; flex-direction: column; gap: 9px; margin: 0; padding: 0; list-style: none; }
+.sp-list li { display: grid; grid-template-columns: 16px minmax(0,1fr); gap: 9px; font-size: 14px; line-height: 1.6; }
+.sp-li-mark { color: var(--sp-green); font-weight: 700; line-height: 1.6; }
+.sp-li-mark.is-error { color: #dc2626; }
+
+/* Layout de dos columnas del tab Perfil */
+.sp-cols { display: grid; grid-template-columns: 40fr 60fr; gap: 16px; align-items: start; }
+.sp-col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.sp-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+
+/* Feed de seguimiento */
+.sp-feed { display: flex; flex-direction: column; gap: 12px; }
+.sp-feed-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.sp-feed-title { font-size: 14px; font-weight: 600; }
+.sp-feed-date { font-size: 12.5px; color: var(--sp-t3); font-weight: 400; }
+.sp-clamp {
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+
+/* Acordeón */
+.sp-acc { border-top: 1px solid var(--border); }
+.sp-acc-trigger {
+  width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  background: transparent; border: none; padding: 11px 0; cursor: pointer;
+  font-family: inherit; font-size: 13.5px; font-weight: 600; color: var(--sp-t1); text-align: left;
+}
+.sp-acc-caret { color: var(--sp-t3); font-size: 11px; transition: transform 0.2s; }
+.sp-acc-caret.is-open { transform: rotate(90deg); }
+.sp-acc-panel {
+  overflow: hidden; animation: sp-acc-in 0.2s ease-out;
+  padding-bottom: 12px;
+}
+@keyframes sp-acc-in { from { opacity: 0; max-height: 0; } to { opacity: 1; max-height: 1200px; } }
+
+.sp-empty { text-align: center; padding: 44px 20px; color: var(--sp-t3); font-size: 14px; }
+.sp-linkbox {
+  display: block; width: 100%; box-sizing: border-box;
+  background: #F7F7F5; border: 1px solid var(--border); border-radius: 8px;
+  padding: 11px 13px; font-family: inherit; font-size: 12.5px; color: var(--sp-t2);
+  word-break: break-all;
+}
+
+@media (max-width: 820px) {
+  .sp { padding: 16px 12px 48px; }
+  .sp-name { font-size: 21px; }
+  .sp-quick { grid-template-columns: 1fr 1fr; }
+  .sp-cols { grid-template-columns: 1fr; }
+  .sp-metrics { grid-template-columns: 1fr 1fr; }
+  .sp-card { padding: 16px; }
+  .sp-btn-row { flex-direction: column; align-items: stretch; }
+  .sp-btn-row > button, .sp-btn-row > a { width: 100%; min-height: 44px; justify-content: center; }
+  .sp-acc-trigger { min-height: 44px; }
+}
+
 /* ── Calendario semanal (VisualCalendar, todos los modos) ─────────────────────
    Los colores de estado NO se declaran acá: salen de los tokens --cal-*, que
    son la fuente única que ya usaban la grilla, la leyenda y el menú de celda.

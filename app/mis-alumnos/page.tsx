@@ -9,11 +9,9 @@ import { AuthGuard } from '@/components/AuthGuard';
 import { PullToRefresh } from '@/components/PullToRefresh';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
-import { calcCurrentClassNumber } from '@/lib/db';
 import { loadStudentBundles, norm, type StudentBundle } from '@/lib/misAlumnos';
-import type { GeneratedClassIA } from '@/lib/aiTypes';
 import StudentCard from '@/components/alumnos/StudentCard';
-import { PAGE_CSS, Toast, cardStyle } from '@/components/alumnos/ui';
+import { PAGE_CSS, cardStyle } from '@/components/alumnos/ui';
 
 function MisAlumnosContent() {
   const { user } = useAuth();
@@ -23,7 +21,6 @@ function MisAlumnosContent() {
   const [bundles, setBundles] = useState<StudentBundle[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
-  const [toast, setToast] = useState<string | null>(null);
 
   const myAssignments = useMemo(
     () => (teacher ? assignments.filter(a => a.teacherId === teacher.id) : []),
@@ -46,21 +43,6 @@ function MisAlumnosContent() {
     })();
     return () => { cancelled = true; };
   }, [teacher, myAssignments]);
-
-  function showToast(m: string) {
-    setToast(m);
-    setTimeout(() => setToast(null), 3200);
-  }
-
-  // La clase generada ya viene persistida del endpoint: actualizamos el estado
-  // local para no tener que recargar toda la página.
-  function setLocalNextClass(key: string, nc: GeneratedClassIA) {
-    setBundles(prev => prev.map(b => {
-      const bKey = b.assignment.studentId || `name:${norm(b.assignment.studentName)}`;
-      if (bKey !== key || !b.profile) return b;
-      return { ...b, profile: { ...b.profile, next_class_content: nc } };
-    }));
-  }
 
   const filtered = query.trim()
     ? bundles.filter(b => norm(b.assignment.studentName).includes(norm(query)))
@@ -111,25 +93,13 @@ function MisAlumnosContent() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               {filtered.map(b => {
                 const key = b.assignment.studentId || `name:${norm(b.assignment.studentName)}`;
-                return (
-                  <StudentCard
-                    key={b.assignment.id}
-                    bundle={b}
-                    studentKey={key}
-                    teacherName={teacher.name}
-                    classNumber={calcCurrentClassNumber(b.assignment)}
-                    onToast={showToast}
-                    onRefresh={load}
-                    onLocalNextClass={setLocalNextClass}
-                  />
-                );
+                return <StudentCard key={b.assignment.id} bundle={b} studentKey={key} />;
               })}
             </div>
           )}
         </div>
       </PullToRefresh>
 
-      {toast && <Toast message={toast} />}
     </div>
   );
 }

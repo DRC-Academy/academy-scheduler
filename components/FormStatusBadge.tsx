@@ -10,9 +10,9 @@
 //   · completado   → badge verde "✅ completado" + "📋 Ver ficha"
 //   · expirado     → badge naranja "⚠️ link expirado"
 
-import { useState, type CSSProperties } from 'react';
+import Link from 'next/link';
+import type { CSSProperties } from 'react';
 import { formStateOf, type FormTokenInfo } from '@/lib/formClient';
-import FichaModal from '@/components/FichaModal';
 
 interface Props {
   student: { id?: string | null; name: string; email?: string | null };
@@ -24,10 +24,14 @@ interface Props {
   onRefresh?: () => void;
 }
 
-export default function FormStatusBadge({ student, info, compact, teacher, assignment }: Props) {
-  const [fichaOpen, setFichaOpen] = useState(false);
+export default function FormStatusBadge({ student, info, compact, assignment }: Props) {
   const state = formStateOf(info);
   if (state === 'none') return null;
+
+  // "Ver ficha" ya no abre un popup: lleva a la página completa del alumno.
+  // Se abre en pestaña nueva para no perder el contexto de la lista.
+  const routeId = student.id || assignment?.id || '';
+  const fichaHref = routeId ? `/mis-alumnos/${encodeURIComponent(routeId)}` : null;
 
   const btn: CSSProperties = {
     display: 'inline-flex', alignItems: 'center', gap: 5, padding: compact ? '4px 9px' : '6px 12px',
@@ -52,7 +56,11 @@ export default function FormStatusBadge({ student, info, compact, teacher, assig
           <span style={{ ...badge, background: 'rgba(30,158,58,0.14)', border: '1px solid rgba(30,158,58,0.4)', color: '#166534' }}>
             ✅ Formulario completado
           </span>
-          <button onClick={() => setFichaOpen(true)} style={btn}>📋 Ver ficha</button>
+          {fichaHref && (
+            <Link href={fichaHref} target="_blank" rel="noopener noreferrer" style={{ ...btn, textDecoration: 'none' }}>
+              Ver ficha →
+            </Link>
+          )}
         </>
       )}
 
@@ -62,17 +70,6 @@ export default function FormStatusBadge({ student, info, compact, teacher, assig
         </span>
       )}
 
-      {fichaOpen && (
-        <FichaModal
-          studentName={student.name}
-          studentId={student.id}
-          formTokenId={info?.id}
-          teacher={teacher}
-          plan={assignment?.plan}
-          level={assignment?.level}
-          onClose={() => setFichaOpen(false)}
-        />
-      )}
     </span>
   );
 }
