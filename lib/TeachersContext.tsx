@@ -16,14 +16,14 @@ import {
   dbSendNotification, dbGetNotificationsForUser, dbMarkNotificationRead, dbMarkAllNotificationsRead,
   dbUpdateMeetLink, dbLogClassJoin, dbGetClassJoinLogs, dbGetUnassignedStudents,
   dbNotifyNewAssignment,
-  dbGetClassRecords, dbUploadClassScreenshot, dbAddClassRecord, dbAttachScreenshotToClass,
+  dbGetClassRecords, dbGetClassTranscripts, dbUploadClassScreenshot, dbAddClassRecord, dbAttachScreenshotToClass,
   dbGetFinanceRates, dbGetFinancePayments, dbMarkPaymentPaid,
   dbGetManualApprovals, dbAddManualApproval,
   dbChangeStudentTeacher, dbAddRescheduleRecord, dbAddRecoveryClass, dbRemoveAssignment,
 } from '@/lib/db';
 import type { AffectedTeacher, ChangeTeacherParams } from '@/lib/db';
 import type { AssignedSlot } from '@/types';
-import { calculateTeacherFinance } from '@/lib/finance';
+import { calculateTeacherFinance, type ClassTranscriptRef } from '@/lib/finance';
 import { checkSubscription } from '@/lib/useSubscriptionStatus';
 
 interface TeachersContextType {
@@ -38,6 +38,8 @@ interface TeachersContextType {
   unassignedStudents: Student[];
   classJoinLogs: ClassJoinLog[];
   classRecords: ClassRecord[];
+  /** Transcripciones: segundo factor de verificación de finanzas. */
+  classAnalyses: ClassTranscriptRef[];
   financeRates: FinanceRate[];
   financePayments: FinancePayment[];
   manualApprovals: FinanceManualApproval[];
@@ -90,7 +92,7 @@ interface TeachersContextType {
 const TeachersContext = createContext<TeachersContextType>({
   teachers: [], students: [], assignments: [], teacherGrids: {},
   loadingTeachers: true, scoringEvents: [], classCounts: [], notifications: [],
-  unassignedStudents: [], classJoinLogs: [], classRecords: [],
+  unassignedStudents: [], classJoinLogs: [], classRecords: [], classAnalyses: [],
   financeRates: [], financePayments: [], manualApprovals: [], lastUpdated: null,
   addTeacher:               async () => {},
   addStudent:               async () => {},
@@ -149,6 +151,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   const [unassignedStudents, setUnassignedStudents] = useState<Student[]>([]);
   const [classJoinLogs, setClassJoinLogs] = useState<ClassJoinLog[]>([]);
   const [classRecords, setClassRecords] = useState<ClassRecord[]>([]);
+  const [classAnalyses, setClassAnalyses] = useState<ClassTranscriptRef[]>([]);
   const [financeRates, setFinanceRates] = useState<FinanceRate[]>([]);
   const [financePayments, setFinancePayments] = useState<FinancePayment[]>([]);
   const [manualApprovals, setManualApprovals] = useState<FinanceManualApproval[]>([]);
@@ -445,18 +448,20 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   }
 
   async function loadFinanceData() {
-    const [rates, payments, records, logs, approvals] = await Promise.all([
+    const [rates, payments, records, logs, approvals, analyses] = await Promise.all([
       dbGetFinanceRates(),
       dbGetFinancePayments(),
       dbGetClassRecords(),
       dbGetClassJoinLogs(),
       dbGetManualApprovals(),
+      dbGetClassTranscripts(),
     ]);
     setFinanceRates(rates);
     setFinancePayments(payments);
     setClassRecords(records);
     setClassJoinLogs(logs);
     setManualApprovals(approvals);
+    setClassAnalyses(analyses);
   }
 
   async function registerClassRecord(
@@ -497,7 +502,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     const existing = financePayments.find(p => p.teacherId === teacherId && p.monthYear === monthYear) ?? null;
     const result = calculateTeacherFinance({
       teacherId, teacherName, monthYear,
-      assignments, joinLogs: classJoinLogs, classRecords, rates: financeRates,
+      assignments, joinLogs: classJoinLogs, classRecords, classAnalyses, rates: financeRates,
       scoringEvents, students, manualApprovals, payment: existing,
     });
     const saved = await dbMarkPaymentPaid(teacherId, teacherName, monthYear, {
@@ -559,7 +564,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     <TeachersContext.Provider value={{
       teachers, students, assignments, teacherGrids, loadingTeachers,
       scoringEvents, classCounts, notifications, unassignedStudents, classJoinLogs,
-      classRecords, financeRates, financePayments, manualApprovals, lastUpdated,
+      classRecords, classAnalyses, financeRates, financePayments, manualApprovals, lastUpdated,
       addTeacher, addStudent, deleteStudent, updateStudent, addAssignment,
       getTeacherGrid, updateTeacherGrid, updateTeacherRating,
       updateTeacherSpecialties, updateTeacherInfo, updateTeacherEmailPreferences,

@@ -2011,6 +2011,23 @@ export async function dbGetClassRecords(): Promise<import('@/types').ClassRecord
   return (data as any[]).map(mapClassRecord);
 }
 
+/**
+ * Transcripciones para el cálculo de finanzas (SEGUNDO FACTOR de verificación).
+ * Se traen solo las columnas necesarias: el texto completo del transcript puede
+ * ser enorme y acá únicamente interesa si existe y no está vacío.
+ */
+export async function dbGetClassTranscripts(): Promise<import('@/lib/finance').ClassTranscriptRef[]> {
+  const { data, error } = await supabase
+    .from('class_analyses')
+    .select('teacher_id, student_name, class_date, analyzed_at, transcript')
+    .order('analyzed_at', { ascending: false });
+  if (error || !data) {
+    if (error) console.error('[db] Error al leer class_analyses para finanzas:', error);
+    return [];
+  }
+  return data as unknown as import('@/lib/finance').ClassTranscriptRef[];
+}
+
 // Sube la captura al bucket público "class-screenshots" y devuelve su URL pública.
 export async function dbUploadClassScreenshot(file: File, teacherId: string): Promise<string> {
   const ext  = (file.name.split('.').pop() || 'jpg').toLowerCase();

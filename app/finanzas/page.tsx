@@ -30,27 +30,19 @@ const FIN_STATUS_STYLE: Record<string, { label: string; color: string; bg: strin
   no_cobrable:        { label: 'No cobrable',       color: 'var(--text-muted)', bg: 'var(--bg-surface-3)' },
 };
 
-function ClassDetailRows({ result, studentName, classRecords, onApproveReview, onApproveExceed }: {
+function ClassDetailRows({ result, studentName, onApproveReview, onApproveExceed }: {
   result: TeacherFinanceResult;
   studentName: string;
-  classRecords: import('@/types').ClassRecord[];
   onApproveReview: (date: string) => void;
   onApproveExceed: (date: string) => void;
 }) {
   const rows = result.rows.filter(r => r.studentName === studentName);
-  function screenshotUrl(date: string): string | null {
-    const rec = classRecords.find(r =>
-      r.teacherId === result.teacherId && r.studentName === studentName &&
-      Math.abs((new Date(r.classDate + 'T00:00:00').getTime() - new Date(date + 'T00:00:00').getTime()) / 86400000) <= 1
-    );
-    return rec?.screenshotUrl ?? null;
-  }
   return (
     <div style={{ overflowX: 'auto', background: 'var(--bg-surface-2)', borderTop: '1px solid var(--border)' }}>
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5, minWidth: 640 }}>
         <thead>
           <tr style={{ textAlign: 'left' }}>
-            {['Fecha', 'Ingresó', 'Captura', 'Suscripción', 'Tarifa', 'Estado', ''].map((h, i) => (
+            {['Fecha', 'Ingresó', 'Transcript', 'Suscripción', 'Tarifa', 'Estado', ''].map((h, i) => (
               <th key={i} style={{ padding: '7px 14px', fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>{h}</th>
             ))}
           </tr>
@@ -62,15 +54,17 @@ function ClassDetailRows({ result, studentName, classRecords, onApproveReview, o
             const ct = classTypeBadge(r.classType);
             const sub = subscriptionBadge(r.subscriptionStatus);
             const subDiffer = r.subAtJoin && r.subAtRecord && r.subAtJoin !== r.subAtRecord;
-            const url = screenshotUrl(r.date);
             return (
               <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
                 <td style={{ padding: '7px 14px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>{finDateShort(r.date)}</td>
                 <td style={{ padding: '7px 14px', whiteSpace: 'nowrap' }}>
                   <span style={{ fontSize: 10.5, padding: '2px 8px', borderRadius: 10, background: ing.bg, color: ing.color, fontWeight: 700 }}>{ing.label}</span>
                 </td>
+                {/* Transcript: segundo factor de verificación. */}
                 <td style={{ padding: '7px 14px', whiteSpace: 'nowrap' }}>
-                  {url ? <a href={url} target="_blank" rel="noopener noreferrer" style={{ color: '#1E9E3A', fontWeight: 600, textDecoration: 'none' }}>📷 Ver</a> : '—'}
+                  {r.hasTranscript
+                    ? <span style={{ fontSize: 10.5, padding: '2px 8px', borderRadius: 10, background: '#eaf5ec', color: '#1f7a3d', fontWeight: 700 }}>Subido</span>
+                    : <span style={{ fontSize: 10.5, padding: '2px 8px', borderRadius: 10, background: '#fdf3e7', color: '#9a6516', fontWeight: 700 }}>No subido</span>}
                 </td>
                 <td style={{ padding: '7px 14px', whiteSpace: 'nowrap' }}>
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
@@ -103,10 +97,9 @@ function ClassDetailRows({ result, studentName, classRecords, onApproveReview, o
   );
 }
 
-function StudentDetailTable({ result, assignments, classRecords, onApproveReview, onApproveExceed }: {
+function StudentDetailTable({ result, assignments, onApproveReview, onApproveExceed }: {
   result: TeacherFinanceResult;
   assignments: Assignment[];
-  classRecords: import('@/types').ClassRecord[];
   onApproveReview: (studentName: string, date: string) => void;
   onApproveExceed: (studentName: string, date: string) => void;
 }) {
@@ -160,7 +153,7 @@ function StudentDetailTable({ result, assignments, classRecords, onApproveReview
                     <tr>
                       <td colSpan={8} style={{ padding: 0 }}>
                         <ClassDetailRows
-                          result={result} studentName={name} classRecords={classRecords}
+                          result={result} studentName={name}
                           onApproveReview={date => onApproveReview(name, date)}
                           onApproveExceed={date => onApproveExceed(name, date)}
                         />
@@ -361,7 +354,7 @@ function FinanceTab() {
                         <tr>
                           <td colSpan={8} style={{ padding: '0 14px 14px' }}>
                             <StudentDetailTable
-                              result={r} assignments={assignments} classRecords={classRecords}
+                              result={r} assignments={assignments}
                               onApproveReview={(student, date) => approveReviewClass(r.teacherId, student, date, approvedBy)}
                               onApproveExceed={(student, date) => approveExceedLimitClass(r.teacherId, student, date, approvedBy)}
                             />
@@ -381,21 +374,97 @@ function FinanceTab() {
 }
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
+// Explica las dos condiciones que hacen pagable una clase. Solo informativo.
+function HowItWorksModal({ onClose }: { onClose: () => void }) {
+  return (
+    <div
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div style={{ background: '#fff', borderRadius: 16, width: '100%', maxWidth: 520, maxHeight: '88vh', overflowY: 'auto', padding: 26, fontFamily: "'Public Sans', system-ui, sans-serif" }}>
+        <div style={{ fontSize: 18, fontWeight: 700, color: '#1a1c1a', marginBottom: 6 }}>
+          Cómo se aprueba una clase para el pago
+        </div>
+        <p style={{ fontSize: 13.5, color: '#5f6360', lineHeight: 1.65, margin: '0 0 18px' }}>
+          Para que una clase sea considerada <b>pagable</b> deben cumplirse DOS condiciones:
+        </p>
+
+        <ol style={{ margin: '0 0 18px', paddingLeft: 20, display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <li>
+            <div style={{ fontSize: 14, fontWeight: 600, color: '#1a1c1a' }}>Acceso mediante el botón</div>
+            <div style={{ fontSize: 13.5, color: '#5f6360', lineHeight: 1.6, marginTop: 3 }}>
+              El profesor debe haber accedido a la clase con el botón &laquo;Ingresar a clase&raquo; en
+              &laquo;Mis clases&raquo;. El acceso queda registrado automáticamente con la hora exacta.
+            </div>
+          </li>
+          <li>
+            <div style={{ fontSize: 14, fontWeight: 600, color: '#1a1c1a' }}>Transcript subido</div>
+            <div style={{ fontSize: 13.5, color: '#5f6360', lineHeight: 1.6, marginTop: 3 }}>
+              El profesor debe haber subido el transcript de la clase en &laquo;Mis clases&raquo; →
+              &laquo;Añadir clase&raquo;. Es el texto que genera Fathom al finalizar la sesión.
+            </div>
+          </li>
+        </ol>
+
+        <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#8b8e88', marginBottom: 8 }}>
+          Estados posibles
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 18 }}>
+          {[
+            { dot: '#16a34a', label: 'Pagable', desc: 'ambas condiciones cumplidas' },
+            { dot: '#e0912f', label: 'A revisar', desc: 'solo una condición cumplida — el admin puede aprobarla manualmente' },
+            { dot: '#a4a7a1', label: 'No incluida', desc: 'ninguna condición cumplida' },
+          ].map(s => (
+            <div key={s.label} style={{ display: 'grid', gridTemplateColumns: '9px 1fr', gap: 10, alignItems: 'start' }}>
+              <span style={{ width: 9, height: 9, borderRadius: '50%', background: s.dot, marginTop: 6 }} />
+              <span style={{ fontSize: 13.5, color: '#5f6360', lineHeight: 1.55 }}>
+                <b style={{ color: '#1a1c1a' }}>{s.label}</b> — {s.desc}
+              </span>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ fontSize: 12.5, color: '#9a6516', background: '#fdf3e7', border: '1px solid #f2e2c9', borderRadius: 10, padding: '10px 13px', lineHeight: 1.6, marginBottom: 18 }}>
+          Las clases de tipo &laquo;Falta sin aviso&raquo; y &laquo;Cancelación sobre la hora&raquo; tienen
+          reglas propias y no requieren transcript.
+        </div>
+
+        <button
+          onClick={onClose}
+          style={{ width: '100%', padding: '11px', borderRadius: 10, border: 'none', background: '#1E9E3A', color: '#fff', fontFamily: 'inherit', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}
+        >
+          Entendido
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function FinanzasContent() {
   const { reloadAll } = useTeachers();
+  const [howOpen, setHowOpen] = useState(false);
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }}>
       <NavBar />
       <PullToRefresh onRefresh={reloadAll}>
         <div style={{ maxWidth: 1200, margin: '0 auto', padding: '32px 20px 48px' }}>
           <LastUpdated />
-          <div style={{ marginBottom: 24 }}>
-            <h1 style={{ fontSize: 24, fontWeight: 700, color: 'var(--text-primary)', margin: '0 0 4px' }}>💰 Finanzas</h1>
-            <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0 }}>Gestión de pagos a profesores</p>
+          <div style={{ marginBottom: 24, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+            <div>
+              <h1 style={{ fontSize: 24, fontWeight: 700, color: 'var(--text-primary)', margin: '0 0 4px' }}>Finanzas</h1>
+              <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0 }}>Gestión de pagos a profesores</p>
+            </div>
+            <button
+              onClick={() => setHowOpen(true)}
+              style={{ border: '1px solid var(--border)', background: 'var(--bg-surface)', borderRadius: 9, padding: '8px 14px', fontFamily: 'inherit', fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)', cursor: 'pointer', minHeight: 40 }}
+            >
+              ¿Cómo se aprueba una clase?
+            </button>
           </div>
           <FinanceTab />
         </div>
       </PullToRefresh>
+      {howOpen && <HowItWorksModal onClose={() => setHowOpen(false)} />}
     </div>
   );
 }

@@ -10,6 +10,7 @@ import { useTeachers } from '@/lib/TeachersContext';
 import { calculateTeacherFinance, recordVerification, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge } from '@/lib/finance';
 import { dbGetAssignmentsByTeacher } from '@/lib/db';
 import { classifyPlan } from '@/lib/productUtils';
+import { analyzeTranscriptOnly, saveAnalysis } from '@/lib/aiClient';
 import { Teacher, Assignment, ClassRecordType, ClassRecord } from '@/types';
 
 // Etiquetas singular/plural por tipo de falta (para los mensajes de límite).
@@ -19,11 +20,11 @@ const FALTA_TYPE_LABELS: Record<string, { sing: string; plural: string }> = {
 };
 
 // Opciones del selector "Tipo de clase".
-const CLASS_TYPE_OPTIONS: Array<{ value: ClassRecordType; label: string; needsCapture: boolean }> = [
-  { value: 'normal',           label: 'Clase normal',                needsCapture: true },
-  { value: 'falta_sin_aviso',  label: 'Falta del alumno sin aviso',  needsCapture: false },
-  { value: 'cancelacion_hora', label: 'Cancelación sobre la hora',    needsCapture: false },
-  { value: 'recuperacion',     label: 'Clase de recuperación',        needsCapture: true },
+const CLASS_TYPE_OPTIONS: Array<{ value: ClassRecordType; label: string; needsTranscript: boolean }> = [
+  { value: 'normal',           label: 'Clase normal',                needsTranscript: true },
+  { value: 'falta_sin_aviso',  label: 'Falta del alumno sin aviso',  needsTranscript: false },
+  { value: 'cancelacion_hora', label: 'Cancelación sobre la hora',    needsTranscript: false },
+  { value: 'recuperacion',     label: 'Clase de recuperación',        needsTranscript: true },
 ];
 
 // Las etiquetas de ingresoBadge / classTypeBadge / subscriptionBadge vienen con
@@ -66,7 +67,7 @@ function AddClassModal({ teacher, myAssignments, classRecords, onClose, onSaved 
   myAssignments: Assignment[];
   classRecords: ClassRecord[];
   onClose: () => void;
-  onSaved: (studentName: string, date: string, time: string | undefined, file: File | null, classType: ClassRecordType, comment: string) => Promise<void>;
+  onSaved: (studentName: string, date: string, time: string | undefined, transcript: string, classType: ClassRecordType, comment: string) => Promise<void>;
 }) {
   const studentOptions = useMemo(() => {
     const seen = new Set<string>();
@@ -81,13 +82,13 @@ function AddClassModal({ teacher, myAssignments, classRecords, onClose, onSaved 
   const [studentName, setStudentName] = useState(studentOptions[0] ?? '');
   const [date, setDate] = useState(todayIso);
   const [time, setTime] = useState('');
-  const [file, setFile] = useState<File | null>(null);
+  const [transcript, setTranscript] = useState('');
   const [classType, setClassType] = useState<ClassRecordType>('normal');
   const [comment, setComment] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
-  const needsCapture = CLASS_TYPE_OPTIONS.find(o => o.value === classType)?.needsCapture ?? true;
+  const needsTranscript = CLASS_TYPE_OPTIONS.find(o => o.value === classType)?.needsTranscript ?? true;
   const isFaltaType = classType === 'falta_sin_aviso' || classType === 'cancelacion_hora';
 
   // Cuántos registros de ESE tipo ya tiene el alumno (acumulativo, todo el historial).
@@ -114,16 +115,17 @@ function AddClassModal({ teacher, myAssignments, classRecords, onClose, onSaved 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [studentName, date]);
 
-  // Normal/recuperación: captura obligatoria. Falta/cancelación: comentario
-  // obligatorio y bloqueado si ya llegó al límite de 2 de ese tipo.
+  // Normal/recuperación: TRANSCRIPT obligatorio (segundo factor de verificación).
+  // Falta/cancelación: comentario obligatorio y bloqueado al llegar a 2 de ese tipo.
+  const words = transcript.trim() ? transcript.trim().split(/\s+/).length : 0;
   const canSave = !!studentName && !!date && !saving && !limitReached &&
-    (needsCapture ? !!file : !!comment.trim());
+    (needsTranscript ? words >= 30 : !!comment.trim());
 
   async function handleSave() {
     if (!canSave) return;
     setSaving(true); setError('');
     try {
-      await onSaved(studentName, date, time || undefined, needsCapture ? file : null, classType, comment.trim());
+      await onSaved(studentName, date, time || undefined, needsTranscript ? transcript.trim() : '', classType, comment.trim());
       onClose();
     } catch (e: any) {
       setError(e?.message ?? 'No se pudo guardar el registro.');
@@ -179,23 +181,33 @@ function AddClassModal({ teacher, myAssignments, classRecords, onClose, onSaved 
                   <input type="time" value={time} onChange={e => setTime(e.target.value)} style={inputStyle} />
                 </div>
               </div>
-              {needsCapture ? (
+              {needsTranscript ? (
                 <div>
-                  <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>Captura de pantalla <span style={{ color: '#ef4444' }}>*</span></label>
-                  <input type="file" accept="image/*" onChange={e => setFile(e.target.files?.[0] ?? null)} style={{ ...inputStyle, padding: '7px 10px' }} />
-                  {file && <div style={{ fontSize: 11, color: '#1E9E3A', marginTop: 5 }}>{file.name}</div>}
+                  <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>
+                    Transcript de la clase <span style={{ color: '#ef4444' }}>*</span>
+                  </label>
+                  <textarea
+                    value={transcript}
+                    onChange={e => { setTranscript(e.target.value); setError(''); }}
+                    rows={6}
+                    placeholder="Pegá acá el texto que genera Fathom al terminar la sesión..."
+                    style={{ ...inputStyle, resize: 'vertical', lineHeight: 1.5 }}
+                  />
+                  <div style={{ fontSize: 11, color: words >= 30 ? '#1E9E3A' : '#6b7280', marginTop: 5 }}>
+                    {words} palabras{words < 30 ? ' · mínimo 30' : ''}
+                  </div>
                 </div>
               ) : (
                 <div style={{ fontSize: 11.5, color: '#b45309', background: 'rgba(255,196,0,0.1)', border: '1px solid rgba(255,196,0,0.3)', borderRadius: 8, padding: '8px 10px', lineHeight: 1.5 }}>
-                  Este tipo de clase <b>SÍ genera cobro</b> (tarifa normal del alumno), pero solo se permite hasta 2 veces. Llevás <b>{typeCount}</b> de 2 registradas.
+                  Este tipo de clase <b>SÍ genera cobro</b> (tarifa normal del alumno), pero solo se permite hasta 2 veces. Llevás <b>{typeCount}</b> de 2 registradas. No requiere transcript.
                 </div>
               )}
               <div>
                 <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>
-                  Comentario {needsCapture ? '(opcional)' : <span style={{ color: '#ef4444' }}>*</span>}
+                  Comentario {needsTranscript ? '(opcional)' : <span style={{ color: '#ef4444' }}>*</span>}
                 </label>
                 <textarea value={comment} onChange={e => setComment(e.target.value)} rows={2}
-                  placeholder={needsCapture ? 'Ej: el alumno llegó tarde...' : 'Detallá el motivo (obligatorio)'}
+                  placeholder={needsTranscript ? 'Ej: el alumno llegó tarde...' : 'Detallá el motivo (obligatorio)'}
                   style={{ ...inputStyle, resize: 'vertical' }} />
               </div>
               {error && <div style={{ fontSize: 12, color: '#ef4444' }}>{error}</div>}
@@ -213,80 +225,15 @@ function AddClassModal({ teacher, myAssignments, classRecords, onClose, onSaved 
   );
 }
 
-// Modal "Adjuntar captura" a una clase puntual existente.
-function AttachScreenshotModal({ studentName, date, hour, onClose, onSaved }: {
-  studentName: string;
-  date: string;
-  hour: string;
-  onClose: () => void;
-  onSaved: (file: File, comment: string) => Promise<void>;
-}) {
-  const [file, setFile] = useState<File | null>(null);
-  const [comment, setComment] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
-
-  const canSave = !!file && !saving;
-
-  async function handleSave() {
-    if (!file) return;
-    setSaving(true); setError('');
-    try {
-      await onSaved(file, comment.trim());
-      onClose();
-    } catch (e: any) {
-      setError(e?.message ?? 'No se pudo guardar la captura.');
-      setSaving(false);
-    }
-  }
-
-  const inputStyle = { width: '100%', padding: '9px 12px', borderRadius: 8, border: '1.5px solid var(--border)', fontSize: 13, background: 'white', color: '#111827', fontFamily: 'inherit', boxSizing: 'border-box' as const };
-
-  return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(6px)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
-      onClick={e => { if (e.target === e.currentTarget && !saving) onClose(); }}>
-      <div style={{ background: '#F7F7F5', border: '1px solid var(--border)', borderRadius: 16, width: '100%', maxWidth: 420, padding: 26 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-          <div style={{ fontWeight: 700, fontSize: 16, color: '#111827' }}>Adjuntar captura</div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: '#6b7280' }}>✕</button>
-        </div>
-        <div style={{ fontSize: 12.5, color: '#6b7280', marginBottom: 16 }}>
-          <b style={{ color: '#111827' }}>{studentName}</b> — {finShortDate(date)}{hour ? ` ${hour}` : ''}
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <div>
-            <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>Captura de pantalla <span style={{ color: '#ef4444' }}>*</span></label>
-            <input type="file" accept="image/*" onChange={e => setFile(e.target.files?.[0] ?? null)} style={{ ...inputStyle, padding: '7px 10px' }} />
-            {file && <div style={{ fontSize: 11, color: '#1E9E3A', marginTop: 5 }}>{file.name}</div>}
-          </div>
-          <div>
-            <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>Comentario (opcional)</label>
-            <textarea value={comment} onChange={e => setComment(e.target.value)} rows={2} placeholder="Ej: Clase de recuperación, el alumno llegó tarde..." style={{ ...inputStyle, resize: 'vertical' }} />
-          </div>
-          {error && <div style={{ fontSize: 12, color: '#ef4444' }}>{error}</div>}
-          <div style={{ display: 'flex', gap: 10, marginTop: 2 }}>
-            <button onClick={onClose} disabled={saving} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#6b7280', cursor: saving ? 'not-allowed' : 'pointer', fontSize: 14, fontFamily: 'inherit' }}>Cancelar</button>
-            <button onClick={handleSave} disabled={!canSave} style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: canSave ? '#1E9E3A' : '#d1d5db', color: 'white', cursor: canSave ? 'pointer' : 'not-allowed', fontSize: 14, fontWeight: 700, fontFamily: 'inherit' }}>
-              {saving ? 'Guardando...' : 'Guardar'}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignments: Assignment[] }) {
   const {
     students, classRecords, classJoinLogs, financeRates, financePayments, scoringEvents, manualApprovals,
-    registerClassRecord, attachScreenshotToClass,
+    registerClassRecord, loadFinanceData,
   } = useTeachers();
 
   const [monthYear, setMonthYear] = useState(currentMonthYear());
   const [showAdd, setShowAdd] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  // Clase a la que se le va a adjuntar una captura desde la tabla.
-  const [attachTarget, setAttachTarget] = useState<{ studentName: string; date: string; hour: string } | null>(null);
 
   // Registros (capturas) del profesor para el mes seleccionado.
   const monthRecords = useMemo(
@@ -361,6 +308,39 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
     setExpanded(prev => { const n = new Set(prev); n.has(name) ? n.delete(name) : n.add(name); return n; });
   }
 
+  /**
+   * Guardar una clase desde "Añadir clase":
+   *   1) el registro en class_records (tipo, hora, comentario) — igual que antes,
+   *      pero SIN captura: se pasa null al parámetro de archivo.
+   *   2) si el tipo requiere transcript, se analiza y se guarda en class_analyses,
+   *      que es el segundo factor de verificación del cálculo de finanzas.
+   * El análisis es una llamada a la IA: tarda y tiene coste, por eso solo se
+   * dispara para clases normales/recuperación.
+   */
+  async function handleAddClass(
+    studentName: string, date: string, time: string | undefined,
+    transcript: string, classType: ClassRecordType, comment: string,
+  ) {
+    await registerClassRecord(teacher.id, studentName, date, time, null, classType, comment);
+
+    if (!transcript.trim()) return;
+    const asgn = myAssignments.find(a => a.studentName === studentName);
+    const base = {
+      transcript: transcript.trim(),
+      studentName,
+      teacherName: teacher.name,
+      studentId: asgn?.studentId ?? null,
+      teacherId: teacher.id,
+      plan: asgn?.plan ?? null,
+      level: asgn?.studentLevel ?? null,
+      classDate: date,
+    };
+    // El endpoint separa analizar de guardar: primero el análisis, luego el alta.
+    const analysis = await analyzeTranscriptOnly(base);
+    await saveAnalysis({ ...base, analysis });
+    await loadFinanceData();
+  }
+
   // Registro (captura) asociado a una clase (alumno + fecha ±1 día), si existe.
   function recordFor(name: string, date: string) {
     return classRecords.find(r =>
@@ -368,12 +348,13 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
     ) ?? null;
   }
 
-  // Alertas de clases a revisar (qué falta). `hour` y `needsCapture` se arrastran
-  // desde la misma fila para poder abrir el modal de captura ya existente.
+  // Alertas de clases a revisar: se indica exactamente cuál de los dos factores
+  // falta (ingreso por el botón Meet o transcript).
   const reviewAlerts = finance.rows.filter(r => r.status === 'a_revisar').map(r => ({
     studentName: r.studentName, date: r.date, hour: r.hour,
-    needsCapture: !r.hasScreenshot,
-    missing: !r.hasScreenshot ? 'registrar con captura' : 'ingresar con el botón Meet',
+    missing: !r.hasTranscript
+      ? 'subir transcript en Añadir clase'
+      : 'ingresar con el botón Meet',
   }));
 
   return (
@@ -476,7 +457,7 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                         <table className="mcf-table">
                           <thead>
                             <tr>
-                              {['Fecha', 'Hora', 'Ingreso', 'Captura', 'Suscripción', 'Tarifa', 'Acción'].map(h => (
+                              {['Fecha', 'Hora', 'Ingreso', 'Transcript', 'Suscripción', 'Tarifa', 'Acción'].map(h => (
                                 <th key={h}>{h}</th>
                               ))}
                             </tr>
@@ -488,7 +469,7 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                               const ct = classTypeBadge(r.classType);
                               const isFalta = r.classType === 'falta_sin_aviso' || r.classType === 'cancelacion_hora';
                               const isExcede = r.status === 'excede_limite' || r.status === 'excede_limite_tipo';
-                              const complete = r.hasJoinLog && r.hasScreenshot;
+                              const complete = r.hasJoinLog && r.hasTranscript;
                               const sub = subscriptionBadge(r.subscriptionStatus);
                               const subDiffer = r.subAtJoin && r.subAtRecord && r.subAtJoin !== r.subAtRecord;
                               return (
@@ -518,13 +499,13 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                                       {ct && <span className="mcf-tag" style={{ background: ct.bg, color: ct.color }}>{plainLabel(ct.label)}</span>}
                                     </span>
                                   </td>
-                                  {/* Captura */}
+                                  {/* Transcript — segundo factor de verificación */}
                                   <td>
                                     {isFalta
                                       ? <span style={{ color: '#a4a7a1' }}>—</span>
-                                      : r.hasScreenshot
-                                        ? <a href={rec?.screenshotUrl} target="_blank" rel="noopener noreferrer" className="mcf-tag" style={{ background: '#eaf5ec', color: '#1f7a3d', textDecoration: 'none' }}>Ver</a>
-                                        : <span className="mcf-tag" style={{ background: '#fdf3e7', color: '#9a6516' }}>Sin cargar</span>}
+                                      : r.hasTranscript
+                                        ? <span className="mcf-tag" style={{ background: '#eaf5ec', color: '#1f7a3d' }}>Subido</span>
+                                        : <span className="mcf-tag" style={{ background: '#fdf3e7', color: '#9a6516' }}>Sin subir</span>}
                                   </td>
                                   {/* Suscripción */}
                                   <td>
@@ -546,11 +527,8 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                                       r.status === 'excede_limite_tipo'
                                         ? <span className="mcf-tag" style={{ background: '#fdf3e7', color: '#9a6516' }}>Supera 2 · revisión admin</span>
                                         : <span style={{ color: '#1f7a3d', fontWeight: 600 }}>Cobrable</span>
-                                    ) : !r.hasScreenshot ? (
-                                      <button className="mcf-btn mcf-btn-ghost mcf-btn-sm"
-                                        onClick={() => setAttachTarget({ studentName: g.name, date: r.date, hour: r.hour })}>
-                                        Adjuntar captura
-                                      </button>
+                                    ) : !r.hasTranscript ? (
+                                      <span style={{ color: '#9a6516' }}>Falta transcript</span>
                                     ) : complete ? (
                                       <span style={{ color: '#1f7a3d', fontWeight: 600 }}>Completo</span>
                                     ) : (
@@ -621,12 +599,9 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                       <div className="mcf-review-who">{a.studentName} · {finShortDate(a.date)}</div>
                       <div className="mcf-review-note">Falta: {a.missing}</div>
                     </div>
-                    {a.needsCapture && (
-                      <button className="mcf-btn mcf-btn-ghost mcf-btn-sm"
-                        onClick={() => setAttachTarget({ studentName: a.studentName, date: a.date, hour: a.hour })}>
-                        Resolver
-                      </button>
-                    )}
+                    {/* Ya no hay acción de "adjuntar" acá: el transcript se sube
+                        desde "Añadir clase", y el ingreso solo se puede registrar
+                        durante la clase con el botón Meet. */}
                   </div>
                 ))}
               </div>
@@ -641,19 +616,10 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
           myAssignments={myAssignments}
           classRecords={classRecords}
           onClose={() => setShowAdd(false)}
-          onSaved={(studentName, date, time, file, classType, comment) => registerClassRecord(teacher.id, studentName, date, time, file, classType, comment)}
+          onSaved={handleAddClass}
         />
       )}
 
-      {attachTarget && (
-        <AttachScreenshotModal
-          studentName={attachTarget.studentName}
-          date={attachTarget.date}
-          hour={attachTarget.hour}
-          onClose={() => setAttachTarget(null)}
-          onSaved={(file, comment) => attachScreenshotToClass(teacher.id, attachTarget.studentName, attachTarget.date, attachTarget.hour || undefined, file, comment || undefined)}
-        />
-      )}
     </>
   );
 }

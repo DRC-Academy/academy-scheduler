@@ -41,7 +41,9 @@ export interface ClassFinanceRow {
   status: ClassFinanceStatus;
   classType: ClassRecordType;
   hasJoinLog: boolean;
-  hasScreenshot: boolean;  // captura REAL (tipo normal/recuperacion con screenshot)
+  // Segundo factor de verificación. Desde el cambio de sistema es el TRANSCRIPT
+  // (class_analyses.transcript no vacío), no la captura de pantalla.
+  hasTranscript: boolean;  // solo aplica a tipo normal/recuperacion
   hasMeetLink: boolean;    // la assignment del alumno tiene meet_link definido
   punctuality?: 'on_time' | 'late' | 'very_late';
   manuallyApproved: boolean;
@@ -99,6 +101,28 @@ function slotHourForDate(a: Assignment | undefined, dateIso: string): string {
   return (a.slots ?? []).find(s => s.day === dayName)?.hour ?? '';
 }
 
+/**
+ * Fila de class_analyses tal como llega de Supabase (snake_case). Se declara
+ * acá con los campos MÍNIMOS que usa el cálculo para no acoplar finance.ts al
+ * módulo de IA: cualquier ClassAnalysisRow encaja estructuralmente.
+ */
+export interface ClassTranscriptRef {
+  teacher_id?: string | null;
+  student_name: string;
+  class_date?: string | null;
+  analyzed_at?: string | null;
+  transcript?: string | null;
+}
+
+/** Fecha efectiva de un análisis: class_date y, si falta, el día de analyzed_at. */
+function analysisDate(t: ClassTranscriptRef): string {
+  return (t.class_date || (t.analyzed_at ?? '').slice(0, 10) || '');
+}
+
+function hasText(t: ClassTranscriptRef): boolean {
+  return !!t.transcript && t.transcript.trim().length > 0;
+}
+
 export interface CalcInput {
   teacherId: string;
   teacherName: string;
@@ -106,6 +130,8 @@ export interface CalcInput {
   assignments: Assignment[];         // se filtran por teacher adentro
   joinLogs: ClassJoinLog[];
   classRecords: ClassRecord[];
+  /** Transcripciones: SEGUNDO FACTOR de verificación (reemplaza a la captura). */
+  classAnalyses?: ClassTranscriptRef[];
   rates: FinanceRate[];
   scoringEvents: ScoringEvent[];
   students?: Student[];              // para el fallback de plan
@@ -117,12 +143,15 @@ export interface CalcInput {
 export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult {
   const {
     teacherId, teacherName, monthYear, assignments, joinLogs, classRecords,
-    rates, scoringEvents, students = [], manualApprovals = [], payment,
+    classAnalyses = [], rates, scoringEvents, students = [], manualApprovals = [], payment,
   } = input;
 
   const myAssignments = assignments.filter(a => a.teacherId === teacherId);
   const myLogs = joinLogs.filter(l => l.teacherId === teacherId);
   const myRecords = classRecords.filter(r => r.teacherId === teacherId);
+  // Solo análisis CON texto: una fila sin transcript no verifica nada.
+  const myAnalyses = classAnalyses.filter(t =>
+    t.teacher_id === teacherId && hasText(t) && analysisDate(t));
 
   // Índices por nombre (normalizado).
   const asgnByName = new Map<string, Assignment>();
@@ -151,6 +180,7 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
   };
   for (const l of myLogs) noteFirst(l.studentName, l.scheduledDate);
   for (const r of myRecords) noteFirst(r.studentName, r.classDate);
+  for (const t of myAnalyses) noteFirst(t.student_name, analysisDate(t));
 
   // Faltas/cancelaciones cobrables: las primeras 2 de CADA tipo por alumno
   // (acumulativo de TODO el historial, ordenadas por fecha de creación).
@@ -170,7 +200,10 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
   // Candidatos (alumno + fecha) del mes: provienen de los logs y los records
   // (las únicas fuentes de "esta clase ocurrió"). Un record se fusiona con un
   // candidato del mismo alumno a ±1 día (tolerancia captura subida un día corrido).
-  interface Cand { studentName: string; date: string; log?: ClassJoinLog; record?: ClassRecord; }
+  interface Cand {
+    studentName: string; date: string;
+    log?: ClassJoinLog; record?: ClassRecord; transcript?: ClassTranscriptRef;
+  }
   const cands: Cand[] = [];
   const findCand = (student: string, date: string, tol: number) =>
     cands.find(c => nkey(c.studentName) === nkey(student) && Math.abs(daysBetween(c.date, date)) <= tol);
@@ -190,6 +223,16 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     if (!c) { c = { studentName: r.studentName, date: r.classDate }; cands.push(c); }
     if (!c.record) c.record = r;
   }
+  // El transcript es TERCERA fuente de candidatos: una clase con transcript pero
+  // sin ingreso ni record debe aparecer como 'a_revisar', no desaparecer del
+  // conteo. Misma tolerancia de ±1 día que los records.
+  for (const t of myAnalyses) {
+    const d = analysisDate(t);
+    if (!inMonth(d)) continue;
+    let c = findCand(t.student_name, d, 1);
+    if (!c) { c = { studentName: t.student_name, date: d }; cands.push(c); }
+    if (!c.transcript) c.transcript = t;
+  }
 
   // Construir las filas.
   const rows: ClassFinanceRow[] = [];
@@ -204,7 +247,9 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     const punctuality = log?.punctuality;
     const isNormalType = classType === 'normal' || classType === 'recuperacion';
     const isFaltaType  = classType === 'falta_sin_aviso' || classType === 'cancelacion_hora';
-    const isCapture = !!record && isNormalType && !!record.screenshotUrl;
+    // Segundo factor: transcript con texto. Las faltas/cancelaciones tienen sus
+    // propias reglas y no lo requieren (igual que antes con la captura).
+    const isTranscript = !!c.transcript && isNormalType;
     const hasMeetLink = !!(a?.meetLink && a.meetLink.trim());
 
     // Plan: productName de WooCommerce (principal) → assignments.plan → objetivo
@@ -236,12 +281,12 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     } else if (approved) {
       status = 'pagable';
     } else {
-      status = (join && isCapture) ? 'pagable' : 'a_revisar';
+      status = (join && isTranscript) ? 'pagable' : 'a_revisar';
     }
 
     rows.push({
       date: c.date, hour, studentName: c.studentName, plan, weeklyHours, antiquityDays, rate, status,
-      classType, hasJoinLog: join, hasScreenshot: isCapture, hasMeetLink, punctuality, manuallyApproved: approved,
+      classType, hasJoinLog: join, hasTranscript: isTranscript, hasMeetLink, punctuality, manuallyApproved: approved,
       subscriptionStatus, subAtJoin, subAtRecord,
     });
   }
