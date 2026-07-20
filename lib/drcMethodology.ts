@@ -54,9 +54,9 @@ REGLAS DURAS vs HERRAMIENTAS:
 - Herramientas (a criterio, no obligatorias): los ejercicios tradicionales son válidos cuando se necesita una progresión más escalada, especialmente en la fase de input; la conversación guiada se prefiere si surge naturalmente pero no se impone.`;
 
 // Estándares de formato del MATERIAL DE CLASE (lo que el alumno ve). Reglas duras.
-export const FORMAT_STANDARDS = `ESTÁNDARES DE FORMATO DEL MATERIAL (el alumno lo lee durante la clase; copy-paste ready):
+export const FORMAT_STANDARDS = `ESTÁNDARES DE FORMATO DEL MATERIAL (el alumno lo lee durante la clase; copy-paste ready). El material va SIEMPRE EN INGLÉS:
 - Títulos motivadores, con emojis.
-- Instrucciones claras y directas, dirigidas al alumno en SEGUNDA persona ("Vas a...", "Usá..."). Nunca en tercera persona ("El alumno deberá...").
+- Instrucciones claras y directas, dirigidas al alumno en SEGUNDA persona ("You are going to...", "Use..."). Nunca en tercera persona ("The student should...").
 - Vocabulario SIEMPRE en contexto (texto, diálogo, caso real), nunca como lista suelta.
 - Gramática presentada a través de ejemplos en contexto para que el alumno descubra el patrón; las reglas básicas necesarias y las excepciones SÍ se explican directamente cuando corresponde (la prohibición es sobre la extensión y el momento, no sobre que exista explicación).
 - SIN notas internas ("Nota para el profesor: ..."). SIN answer keys ni respuestas dentro del material.`;
@@ -66,9 +66,9 @@ export const COMMON_ERRORS = `ERRORES A EVITAR (chequeo rápido antes de entrega
 1. Listas de vocabulario sueltas (ej. "Deadline, Meeting, Report..."). → Presentar el vocabulario dentro de un texto/diálogo/caso y pedir que identifique las palabras de una categoría.
 2. Answer keys / respuestas correctas con explicación después de un ejercicio. → Prohibido: es una nota interna dentro de material del alumno.
 3. Ejercicios mecánicos excesivos sin contexto (series de "fill in the blank" desconectadas). → Transformar situaciones reales del alumno en la consigna. (Ejercicios tradicionales SÍ se permiten para escalar la progresión, sobre todo en input; eso no es lo mismo que un ejercicio mecánico sin propósito.)
-4. Hablar del alumno en tercera persona ("El alumno practicará...", "David debería..."). → Siempre segunda persona directa ("Vas a practicar...", "Usá esto en tu próxima reunión...").
+4. Hablar del alumno en tercera persona ("The student will practise...", "David should..."). → Siempre segunda persona directa en inglés ("You are going to practise...", "Use this in your next meeting...").
 5. Explicaciones metalingüísticas extensas antes de que el alumno use la estructura. → Mostrar ejemplos en contexto y dejar que descubra el patrón; explicar solo lo básico necesario, en el momento justo.
-6. Warm-ups genéricos o infantiles ("¿Cuál es tu color favorito?" a un adulto). → Preguntas conversacionales relevantes a la vida real y adulta del alumno.`;
+6. Warm-ups genéricos o infantiles ("What's your favourite colour?" a un adulto). → Preguntas conversacionales relevantes a la vida real y adulta del alumno.`;
 
 // Cómo funciona la conversación guiada (B1+). Se inyecta solo en ese modo.
 export const CONVERSACION_GUIADA_MECANICA = `MODO CONVERSACIÓN GUIADA:
