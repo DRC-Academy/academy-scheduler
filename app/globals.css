@@ -1192,6 +1192,142 @@ label {
   .vc-hide-mobile { display: none !important; }
 }
 
+/* ── Admin → Resumen ─────────────────────────────────────────────────────────
+   Cifras monocromas: el color solo aparece donde comunica estado (conflictos,
+   emails fuera de plazo, severidad de alerta). */
+.adm {
+  font-family: 'Public Sans', system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  max-width: 1200px; margin: 0 auto; padding: 24px 16px 56px;
+  color: #1a1c1a;
+}
+.adm-card {
+  background: #fff; border: 1px solid #e6e7e2; border-radius: 14px;
+  box-shadow: 0 1px 2px rgba(16,24,16,0.04);
+}
+.adm-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; display: inline-block; }
+
+/* Banner crítico — franja calmada, no rojo saturado */
+.adm-banner {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  background: #fbeceb; border: 1px solid #f2c9c4; border-radius: 14px;
+  padding: 13px 16px; margin-bottom: 16px; font-size: 13.5px; color: #c73a28;
+}
+.adm-banner-btn {
+  margin-left: auto; border: 1px solid #f2c9c4; background: #fff; color: #c73a28;
+  border-radius: 9px; padding: 8px 14px; font-family: inherit;
+  font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap;
+}
+.adm-banner-btn:hover { background: #fdf5f4; }
+
+/* Cabecera */
+.adm-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap; margin-bottom: 18px;
+}
+.adm-title { font-size: 24px; font-weight: 700; letter-spacing: -0.015em; margin: 0; }
+.adm-sub { font-size: 13.5px; color: #5f6360; margin: 4px 0 0; }
+.adm-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 9px 16px; border-radius: 10px; font-family: inherit;
+  font-size: 13.5px; font-weight: 600; cursor: pointer; white-space: nowrap;
+}
+.adm-btn-primary { border: none; background: #16a34a; color: #fff; }
+.adm-btn-primary:hover { background: #15803d; }
+.adm-btn-primary:disabled { background: #cfd3cd; cursor: not-allowed; }
+.adm-btn-ghost { border: 1px solid #e6e7e2; background: #fff; color: #5f6360; }
+.adm-btn-ghost:hover { background: #f4f5f2; color: #1a1c1a; }
+.adm-btn-ghost:disabled { color: #a4a7a1; cursor: not-allowed; }
+
+/* Tabs con subrayado verde */
+.adm-tabs {
+  display: flex; gap: 2px; overflow-x: auto;
+  border-bottom: 1px solid #e6e7e2; margin-bottom: 20px;
+}
+.adm-tab {
+  flex: 0 0 auto; padding: 10px 16px; border: none; background: transparent;
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+  font-family: inherit; font-size: 13.5px; font-weight: 500; color: #5f6360;
+  cursor: pointer; white-space: nowrap;
+}
+.adm-tab:hover { color: #1a1c1a; }
+.adm-tab.is-active { color: #15803d; font-weight: 600; border-bottom-color: #16a34a; }
+
+/* KPIs monocromos */
+.adm-kpis { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin-bottom: 18px; }
+.adm-kpi { padding: 16px 18px; }
+.adm-kpi-label {
+  font-size: 10.5px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.08em; color: #8b8e88;
+}
+.adm-kpi-value {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 26px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15; margin-top: 8px;
+}
+.adm-kpi-value.is-alert { color: #c73a28; }
+.adm-kpi-sub { font-size: 12px; color: #a4a7a1; margin-top: 3px; }
+
+/* Emails de presentación */
+.adm-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.adm-tile { border-radius: 12px; padding: 13px 15px; border: 1px solid; }
+.adm-tile.is-ok    { background: #eef6ef; border-color: #dcecde; }
+.adm-tile.is-warn  { background: #fdf3e7; border-color: #f2e2c9; }
+.adm-tile.is-alert { background: #fbeceb; border-color: #f2c9c4; }
+.adm-tile-value { display: flex; align-items: center; gap: 8px; font-size: 22px; font-weight: 700; }
+.adm-tile.is-ok .adm-tile-value    { color: #2f7a42; }
+.adm-tile.is-warn .adm-tile-value  { color: #9a6516; }
+.adm-tile.is-alert .adm-tile-value { color: #c73a28; }
+.adm-tile-label { font-size: 12px; color: #5f6360; margin-top: 3px; }
+
+/* Paneles de herramientas colapsables */
+.adm-tools { display: flex; flex-direction: column; gap: 10px; margin: 18px 0; }
+.adm-tool { overflow: hidden; }
+.adm-tool-head {
+  width: 100%; display: flex; align-items: center; gap: 12px;
+  padding: 14px 18px; border: none; background: transparent;
+  cursor: pointer; font-family: inherit; text-align: left;
+}
+.adm-tool-head:hover { background: #fafbf9; }
+.adm-tool-head:focus-visible { outline: 2px solid #16a34a; outline-offset: -2px; }
+.adm-tool-title { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; }
+.adm-tool-desc { font-size: 12.5px; color: #8b8e88; font-weight: 400; margin-top: 2px; }
+.adm-tool-caret { color: #8b8e88; font-size: 11px; transition: transform 0.25s ease; flex-shrink: 0; }
+.adm-tool-caret.is-open { transform: rotate(180deg); }
+.adm-tool-body { padding: 0 18px 18px; }
+
+/* Fila inferior */
+.adm-bottom { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+.adm-sec-head {
+  padding: 14px 18px; border-bottom: 1px solid #e6e7e2;
+  font-size: 14px; font-weight: 600;
+}
+.adm-list { padding: 6px 18px 14px; }
+.adm-alert { display: grid; grid-template-columns: 9px 1fr; gap: 11px; align-items: start; padding: 11px 0; }
+.adm-alert + .adm-alert { border-top: 1px solid #e6e7e2; }
+.adm-alert-text { font-size: 13px; line-height: 1.5; color: #5f6360; }
+.adm-row {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 12px; padding: 11px 0;
+}
+.adm-row + .adm-row { border-top: 1px solid #e6e7e2; }
+.adm-row-name { font-size: 13.5px; font-weight: 600; }
+.adm-row-meta { font-size: 12px; color: #8b8e88; margin-top: 2px; }
+.adm-row-teacher { color: #2f7a42; font-weight: 600; }
+.adm-row-time { font-size: 12px; color: #a4a7a1; white-space: nowrap; }
+.adm-empty { text-align: center; padding: 28px 0; color: #8b8e88; font-size: 13.5px; }
+
+@media (max-width: 900px) {
+  .adm { padding: 16px 12px 48px; }
+  .adm-title { font-size: 21px; }
+  .adm-kpis { grid-template-columns: repeat(2, 1fr); }
+  .adm-tiles { grid-template-columns: 1fr; }
+  .adm-bottom { grid-template-columns: 1fr; }
+  .adm-tab { min-height: 44px; }
+  .adm-btn { min-height: 44px; }
+  .adm-tool-head { min-height: 44px; }
+  .adm-banner-btn { min-height: 44px; margin-left: 0; width: 100%; }
+}
+
 /* ── Materiales de clase (panel colapsable por hito) ──────────────────────────
    Un solo markup para las dos vistas: en escritorio .cm-item ES la tarjeta
    (badge arriba); en móvil .cm-item pasa a ser una fila [riel | tarjeta] y el

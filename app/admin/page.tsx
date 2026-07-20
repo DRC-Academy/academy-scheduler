@@ -4,7 +4,6 @@ import { NavBar } from '@/components/NavBar';
 import { StatusBadge } from '@/components/StatusBadge';
 import { AuthGuard } from '@/components/AuthGuard';
 import { PullToRefresh } from '@/components/PullToRefresh';
-import { LastUpdated } from '@/components/LastUpdated';
 import { VisualCalendar, buildGridFromTeacher, getSpainParts } from '@/components/VisualCalendar';
 import { useTeachers } from '@/lib/TeachersContext';
 import { useAuth } from '@/lib/AuthContext';
@@ -2179,7 +2178,7 @@ function SyncPanel() {
     <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', marginTop: 16 }}>
       <button onClick={() => setOpen(o => !o)}
         style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 18px', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
-        <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>🔄 Sincronización calendario ↔ asignaciones</span>
+        <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>Estado actual</span>
         <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>{open ? '▲' : '▼'}</span>
       </button>
 
@@ -2194,8 +2193,8 @@ function SyncPanel() {
               {analyzing ? 'Analizando...' : '🔍 Analizar desconexiones'}
             </button>
             <button onClick={syncAllAuto} disabled={syncing}
-              style={{ padding: '9px 16px', borderRadius: 8, border: 'none', background: '#FFC400', color: '#1a1a1a', cursor: syncing ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
-              {syncing ? 'Sincronizando...' : '⚡ Sincronizar todos automáticamente'}
+              style={{ padding: '9px 16px', borderRadius: 8, border: 'none', background: '#fff', color: '#5f6360', cursor: syncing ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
+              {syncing ? 'Sincronizando...' : 'Sincronizar todos automáticamente'}
             </button>
           </div>
 
@@ -2244,7 +2243,7 @@ function SyncPanel() {
                                 </button>
                               ) : (
                                 <button onClick={() => setModalRow(r)}
-                                  style={{ padding: '5px 12px', borderRadius: 7, border: 'none', background: '#FFC400', color: '#1a1a1a', cursor: 'pointer', fontSize: 12, fontWeight: 700, fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
+                                  style={{ padding: '5px 12px', borderRadius: 7, border: 'none', background: '#fff', color: '#5f6360', cursor: 'pointer', fontSize: 12, fontWeight: 600, fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
                                   Crear todo
                                 </button>
                               )}
@@ -2328,7 +2327,7 @@ function PlanSyncPanel() {
     <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '16px 18px', marginTop: 16 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <div>
-          <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>🔄 Sincronizar planes con WooCommerce</div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>Planes</div>
           <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', marginTop: 3, lineHeight: 1.5 }}>
             Actualiza el plan de todos los alumnos con el producto real de WooCommerce. Puede tardar varios minutos.
           </div>
@@ -2485,7 +2484,7 @@ function StartDateSyncPanel() {
 
   return (
     <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '16px 18px', marginTop: 16 }}>
-      <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>🔄 Sincronización con WooCommerce</div>
+      <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>Fechas de inicio</div>
       <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', marginTop: 3, lineHeight: 1.5 }}>
         Trae la fecha real de inicio de suscripción de cada alumno. {noDateCount > 0 ? `${noDateCount} asignación${noDateCount !== 1 ? 'es' : ''} sin fecha.` : 'Todas las asignaciones tienen fecha.'}
       </div>
@@ -2493,11 +2492,11 @@ function StartDateSyncPanel() {
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 14 }}>
         <button onClick={() => setChoosing(true)} disabled={running}
           style={{ padding: '9px 16px', borderRadius: 8, border: 'none', background: running ? 'var(--bg-surface-3)' : '#FFC400', color: running ? 'var(--text-muted)' : '#1a1a1a', cursor: running ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
-          📅 Sincronizar fechas de inicio
+          Sincronizar fechas de inicio
         </button>
         <button onClick={startCombinedSync} disabled={running}
           style={{ padding: '9px 16px', borderRadius: 8, border: '1px solid var(--border)', background: running ? 'var(--bg-surface-3)' : 'var(--bg-surface-2)', color: running ? 'var(--text-muted)' : 'var(--text-primary)', cursor: running ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
-          🔄 Sincronizar planes y fechas
+          Sincronizar planes y fechas
         </button>
       </div>
 
@@ -2643,7 +2642,7 @@ function AuditPanel() {
     <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', marginTop: 16 }}>
       <button onClick={() => setOpen(o => !o)}
         style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 18px', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
-        <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>🔍 Auditoría de vínculos</span>
+        <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>Estado actual</span>
         <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>{open ? '▲' : '▼'}</span>
       </button>
 
@@ -2655,7 +2654,7 @@ function AuditPanel() {
               {running ? 'Ejecutando...' : '▶ Ejecutar auditoría'}
             </button>
             <button onClick={runSync} disabled={syncing}
-              style={{ padding: '9px 16px', borderRadius: 8, border: 'none', background: '#FFC400', color: '#1a1a1a', cursor: syncing ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+              style={{ padding: '9px 16px', borderRadius: 8, border: 'none', background: '#fff', color: '#5f6360', cursor: syncing ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
               {syncing ? 'Sincronizando...' : '🔄 Sincronizar vínculos'}
             </button>
             {result && (
@@ -2867,14 +2866,12 @@ function DuplicatesBanner() {
 
   return (
     <>
-      <div style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.4)', borderRadius: 12, padding: '14px 18px', marginBottom: 18, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        <div style={{ flex: 1, minWidth: 220, fontSize: 13.5, color: '#dc2626', fontWeight: 600, lineHeight: 1.5 }}>
-          ⚠️ {duplicates.length} alumno{duplicates.length !== 1 ? 's' : ''} asignado{duplicates.length !== 1 ? 's' : ''} a múltiples profesores — esto puede causar errores en finanzas y calendarios.
-        </div>
-        <button onClick={() => setOpen(true)}
-          style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: '#dc2626', color: 'white', fontWeight: 700, fontSize: 13, cursor: 'pointer', flexShrink: 0 }}>
-          Ver y resolver →
-        </button>
+      <div className="adm-banner">
+        <span className="adm-dot" style={{ background: '#dc4a38' }} />
+        <span style={{ flex: 1, minWidth: 200, lineHeight: 1.5 }}>
+          {duplicates.length} alumno{duplicates.length !== 1 ? 's' : ''} asignado{duplicates.length !== 1 ? 's' : ''} a múltiples profesores — puede causar errores en finanzas y calendarios.
+        </span>
+        <button className="adm-banner-btn" onClick={() => setOpen(true)}>Ver y resolver</button>
       </div>
 
       {open && (
@@ -2944,6 +2941,26 @@ function DuplicatesBanner() {
 }
 
 // ─── Admin Content ────────────────────────────────────────────────────────────
+// Contenedor colapsable para las herramientas del resumen. Cerrado por defecto:
+// son acciones de mantenimiento puntuales, no información de consulta diaria.
+function AdminTool({ title, desc, children }: {
+  title: string; desc: string; children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="adm-card adm-tool">
+      <button className="adm-tool-head" aria-expanded={open} onClick={() => setOpen(o => !o)}>
+        <span className="adm-tool-title">
+          {title}
+          <span className="adm-tool-desc" style={{ display: 'block' }}>{desc}</span>
+        </span>
+        <span aria-hidden className={`adm-tool-caret${open ? ' is-open' : ''}`}>▼</span>
+      </button>
+      {open && <div className="adm-tool-body">{children}</div>}
+    </div>
+  );
+}
+
 const ADMIN_TABS = ['overview', 'teachers', 'emails', 'scoring', 'tracking', 'classlog', 'ai', 'notifications'] as const;
 type AdminTab = typeof ADMIN_TABS[number];
 
@@ -2988,49 +3005,49 @@ function AdminContent() {
   const conflicts       = mockAlerts.filter(a => a.type === 'conflict').length;
   const blockedCount    = teachers.filter(t => t.isBlocked).length;
 
-  const alertColors  = { high: '#ef4444', medium: '#f59e0b', low: '#6b7280' };
-  const alertBgs     = { high: 'rgba(239,68,68,0.07)', medium: 'rgba(245,158,11,0.07)', low: 'rgba(107,114,128,0.07)' };
-  const alertBorders = { high: 'rgba(239,68,68,0.2)', medium: 'rgba(245,158,11,0.2)', low: 'rgba(107,114,128,0.2)' };
-  const alertIcons   = { conflict: '⚠️', coverage: '📉', warning: 'ℹ️' };
+  // Punto de severidad de cada alerta (ya no se usan fondos ni iconos).
+  const alertColors = { high: '#dc4a38', medium: '#e0912f', low: '#8b8e88' };
 
   const teacher = selectedTeacher ? teachers.find(t => t.id === selectedTeacher) : null;
 
   const tabs = [
-    { id: 'overview',       label: '📊 Resumen' },
-    { id: 'teachers',       label: '👨‍🏫 Profesores' },
-    { id: 'emails',         label: '📧 Emails' },
-    { id: 'scoring',        label: '⭐ Scoring' },
-    { id: 'tracking',       label: '📈 Seguimiento' },
-    { id: 'classlog',       label: '📊 Registro de clases' },
-    { id: 'ai',             label: '🤖 IA y Riesgo' },
-    { id: 'notifications',  label: '🔔 Notificaciones' },
+    { id: 'overview',       label: 'Resumen' },
+    { id: 'teachers',       label: 'Profesores' },
+    { id: 'emails',         label: 'Emails' },
+    { id: 'scoring',        label: 'Scoring' },
+    { id: 'tracking',       label: 'Seguimiento' },
+    { id: 'classlog',       label: 'Registro de clases' },
+    { id: 'ai',             label: 'IA y Riesgo' },
+    { id: 'notifications',  label: 'Notificaciones' },
   ] as const;
 
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }}>
+    <div style={{ minHeight: '100vh', background: '#f4f5f2' }}>
       <NavBar />
       <PullToRefresh onRefresh={reloadAll}>
-      <div style={{ maxWidth: 1200, margin: '0 auto', padding: '28px 24px' }}>
-        <LastUpdated />
-
+      <div className="adm">
         <DuplicatesBanner />
 
-        <div className="admin-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24, flexWrap: 'wrap', gap: 12 }}>
+        <div className="adm-head">
           <div>
-            <h1 style={{ fontSize: 24, fontWeight: 700, color: 'var(--text-primary)', margin: '0 0 4px' }}>Admin</h1>
-            <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0 }}>
+            <h1 className="adm-title">Admin</h1>
+            <p className="adm-sub">
               {teachers.length} profesores · {students.length} alumnos · {assignments.length} asignaciones
-              {blockedCount > 0 && <span style={{ color: '#ef4444', fontWeight: 700 }}> · {blockedCount} bloqueado{blockedCount !== 1 ? 's' : ''}</span>}
+              {blockedCount > 0 && (
+                <span style={{ color: '#c73a28', fontWeight: 600 }}> · {blockedCount} bloqueado{blockedCount !== 1 ? 's' : ''}</span>
+              )}
             </p>
           </div>
-          <button className="admin-header-btn" onClick={() => setShowNewTeacher(true)} style={{ padding: '9px 18px', borderRadius: 9, border: 'none', background: '#1E9E3A', color: 'white', fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>
-            ＋ Nuevo profesor
+          <button className="adm-btn adm-btn-primary" onClick={() => setShowNewTeacher(true)}>
+            Nuevo profesor
           </button>
         </div>
 
-        <div className="tabs-scroll" style={{ display: 'flex', gap: 4, marginBottom: 22, background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 4 }}>
+        <div className="adm-tabs" role="tablist">
           {tabs.map(tab => (
-            <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ flex: 1, padding: '8px 12px', borderRadius: 7, border: 'none', background: activeTab === tab.id ? '#1E9E3A' : 'transparent', color: activeTab === tab.id ? 'white' : 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontWeight: activeTab === tab.id ? 700 : 500, transition: 'all 0.12s' }}>
+            <button key={tab.id} role="tab" aria-selected={activeTab === tab.id}
+              className={`adm-tab${activeTab === tab.id ? ' is-active' : ''}`}
+              onClick={() => setActiveTab(tab.id)}>
               {tab.label}
             </button>
           ))}
@@ -3038,89 +3055,120 @@ function AdminContent() {
 
         {/* OVERVIEW TAB */}
         {activeTab === 'overview' && (<>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 14, marginBottom: 22 }}>
+          {/* KPIs monocromos: color solo en los que comunican estado. */}
+          <div className="adm-kpis">
             {[
-              { icon: '👨‍🏫', label: 'Activos',       value: activeTeachers,    sub: `de ${teachers.length}`,   color: '#1E9E3A' },
-              { icon: '📚', label: 'Clases semana', value: totalClasses,      sub: 'confirmadas',             color: '#1E9E3A' },
-              { icon: '🪑', label: 'Cupos libres',  value: totalFreeSpots,    sub: 'disponibles',             color: '#a78bfa' },
-              { icon: '⚠️', label: 'Conflictos',    value: conflicts,         sub: conflicts > 0 ? 'atención' : 'ok', color: conflicts > 0 ? '#ef4444' : '#1E9E3A' },
-              { icon: '👤', label: 'Alumnos',       value: students.length,   sub: 'registrados',             color: '#f59e0b' },
-              { icon: '🔴', label: 'Bloqueados',    value: blockedCount,      sub: 'baja retención',          color: blockedCount > 0 ? '#ef4444' : '#1E9E3A' },
+              { label: 'Activos',       value: activeTeachers,  sub: `de ${teachers.length}`, alert: false },
+              { label: 'Clases semana', value: totalClasses,    sub: 'confirmadas',           alert: false },
+              { label: 'Cupos libres',  value: totalFreeSpots,  sub: 'disponibles',           alert: false },
+              { label: 'Conflictos',    value: conflicts,       sub: conflicts > 0 ? 'requieren atención' : 'sin conflictos', alert: conflicts > 0 },
+              { label: 'Alumnos',       value: students.length, sub: 'registrados',           alert: false },
+              { label: 'Bloqueados',    value: blockedCount,    sub: 'baja retención',        alert: blockedCount > 0 },
             ].map(s => (
-              <div key={s.label} style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px' }}>
-                <div style={{ fontSize: 22, marginBottom: 10 }}>{s.icon}</div>
-                <div style={{ fontSize: 26, fontWeight: 700, color: s.color }}>{s.value}</div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginTop: 3 }}>{s.label}</div>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>{s.sub}</div>
+              <div key={s.label} className="adm-card adm-kpi">
+                <div className="adm-kpi-label">{s.label}</div>
+                <div className={`adm-kpi-value${s.alert ? ' is-alert' : ''}`}>
+                  {s.alert && <span className="adm-dot" style={{ background: '#dc4a38' }} />}
+                  {s.value}
+                </div>
+                <div className="adm-kpi-sub">{s.sub}</div>
               </div>
             ))}
           </div>
 
-          {/* Resumen de emails de presentación */}
-          <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px', marginBottom: 22 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
-              <span style={{ fontSize: 18 }}>📧</span>
-              <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>Emails de presentación</span>
-              <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-muted)' }}>
+          {/* Emails de presentación */}
+          <div className="adm-card" style={{ padding: '18px 20px', marginBottom: 18 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+              <span style={{ fontSize: 14, fontWeight: 600 }}>Emails de presentación</span>
+              <span style={{ marginLeft: 'auto', fontSize: 12.5, color: '#8b8e88' }}>
                 {presPendingStatuses.length} pendiente{presPendingStatuses.length !== 1 ? 's' : ''}
               </span>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
+            <div className="adm-tiles">
               {[
-                { label: 'Pendientes a tiempo', value: presOnTimeCount,  icon: '✅', color: '#1E9E3A', bg: 'rgba(30,158,58,0.08)',  border: 'rgba(30,158,58,0.3)' },
-                { label: 'En riesgo (>12h)',    value: presAtRiskCount,  icon: '⚠️', color: '#b8860b', bg: 'rgba(255,196,0,0.12)',  border: 'rgba(255,196,0,0.5)' },
-                { label: 'Fuera de tiempo (>24h)', value: presOverdueCount, icon: '🔴', color: '#ef4444', bg: 'rgba(239,68,68,0.08)', border: 'rgba(239,68,68,0.35)' },
+                { label: 'Pendientes a tiempo',    value: presOnTimeCount,  tone: 'is-ok',    dot: '#16a34a' },
+                { label: 'En riesgo (>12h)',       value: presAtRiskCount,  tone: 'is-warn',  dot: '#e0912f' },
+                { label: 'Fuera de tiempo (>24h)', value: presOverdueCount, tone: 'is-alert', dot: '#dc4a38' },
               ].map(c => (
-                <div key={c.label} style={{ background: c.bg, border: `1px solid ${c.border}`, borderRadius: 10, padding: '12px 14px' }}>
-                  <div style={{ fontSize: 22, fontWeight: 800, color: c.color }}>{c.icon} {c.value}</div>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginTop: 2 }}>{c.label}</div>
+                <div key={c.label} className={`adm-tile ${c.tone}`}>
+                  <div className="adm-tile-value">
+                    <span className="adm-dot" style={{ background: c.dot }} />
+                    {c.value}
+                  </div>
+                  <div className="adm-tile-label">{c.label}</div>
                 </div>
               ))}
             </div>
           </div>
 
-          <AuditPanel />
-          <SyncPanel />
-          <PlanSyncPanel />
-          <StartDateSyncPanel />
+          {/* Herramientas de sincronización y auditoría — colapsadas por defecto */}
+          <div className="adm-tools">
+            <AdminTool
+              title="Auditoría de vínculos"
+              desc="Revisa la coherencia entre alumnos, asignaciones y fichas."
+            >
+              <AuditPanel />
+            </AdminTool>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 16, marginTop: 16 }}>
-            <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
-              <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)' }}>
-                <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>Alertas</span>
-              </div>
-              <div style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {blockedCount > 0 && (
-                  <div style={{ background: 'rgba(239,68,68,0.07)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 8, padding: '10px 12px', display: 'flex', gap: 8 }}>
-                    <span>🔴</span>
-                    <span style={{ fontSize: 12, color: '#ef4444', lineHeight: 1.4 }}>
-                      {blockedCount} profesor{blockedCount !== 1 ? 'es' : ''} bloqueado{blockedCount !== 1 ? 's' : ''} por baja retención — no pueden recibir nuevos alumnos
-                    </span>
-                  </div>
+            <AdminTool
+              title="Sincronización calendario ↔ asignaciones"
+              desc="Detecta alumnos en el calendario sin assignment ni registro."
+            >
+              <SyncPanel />
+            </AdminTool>
+
+            {/* Los dos paneles de Woo viven juntos: son la misma tarea. */}
+            <AdminTool
+              title="Sincronización con WooCommerce"
+              desc="Actualiza planes y fechas de inicio con los datos reales de Woo."
+            >
+              <PlanSyncPanel />
+              <StartDateSyncPanel />
+            </AdminTool>
+          </div>
+
+          <div className="adm-bottom">
+            <div className="adm-card">
+              <div className="adm-sec-head">Alertas</div>
+              <div className="adm-list">
+                {blockedCount === 0 && mockAlerts.length === 0 ? (
+                  <div className="adm-empty">Sin alertas.</div>
+                ) : (
+                  <>
+                    {blockedCount > 0 && (
+                      <div className="adm-alert">
+                        <span className="adm-dot" style={{ background: '#dc4a38', marginTop: 4 }} />
+                        <span className="adm-alert-text">
+                          {blockedCount} profesor{blockedCount !== 1 ? 'es' : ''} bloqueado{blockedCount !== 1 ? 's' : ''} por baja retención — no pueden recibir nuevos alumnos
+                        </span>
+                      </div>
+                    )}
+                    {mockAlerts.map(alert => (
+                      <div key={alert.id} className="adm-alert">
+                        <span className="adm-dot" style={{ background: alertColors[alert.severity], marginTop: 4 }} />
+                        <span className="adm-alert-text">{alert.message}</span>
+                      </div>
+                    ))}
+                  </>
                 )}
-                {mockAlerts.map(alert => (
-                  <div key={alert.id} style={{ background: alertBgs[alert.severity], border: `1px solid ${alertBorders[alert.severity]}`, borderRadius: 8, padding: '10px 12px', display: 'flex', gap: 8 }}>
-                    <span>{alertIcons[alert.type]}</span>
-                    <span style={{ fontSize: 12, color: alertColors[alert.severity], lineHeight: 1.4 }}>{alert.message}</span>
-                  </div>
-                ))}
               </div>
             </div>
 
-            <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
-              <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)' }}>
-                <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>Asignaciones recientes</span>
-              </div>
-              <div style={{ padding: '12px 14px' }}>
+            <div className="adm-card">
+              <div className="adm-sec-head">Asignaciones recientes</div>
+              <div className="adm-list">
                 {assignments.length === 0 ? (
-                  <div style={{ textAlign: 'center', padding: '20px 0', color: 'var(--text-muted)', fontSize: 13 }}>Sin asignaciones todavía.</div>
+                  <div className="adm-empty">Sin asignaciones todavía.</div>
                 ) : assignments.slice(0, 6).map(a => (
-                  <div key={a.id} style={{ padding: '8px 0', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                    <div>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{a.studentName}</div>
-                      <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{a.teacherName} · {a.slots.map(s => `${s.day} ${s.hour}`).join(' · ')} · {a.weeklyHours}h/sem</div>
+                  <div key={a.id} className="adm-row">
+                    <div style={{ minWidth: 0 }}>
+                      <div className="adm-row-name">{a.studentName}</div>
+                      <div className="adm-row-meta">
+                        <span className="adm-row-teacher">{a.teacherName}</span>
+                        {' · '}{a.slots.map(s => `${s.day} ${s.hour}`).join(' · ')} · {a.weeklyHours}h/sem
+                      </div>
                     </div>
-                    <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+                    <span className="adm-row-time">
                       {new Date(a.createdAt).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}
                     </span>
                   </div>
