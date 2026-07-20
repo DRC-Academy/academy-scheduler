@@ -1433,44 +1433,63 @@ function ClassMaterialsSection() {
   }
 
   return (
-    <div style={{ border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden', marginBottom: 16, background: 'var(--bg-surface-2)' }}>
-      {/* Cabecera discreta */}
-      <button onClick={toggle}
-        style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '10px 14px', border: 'none', background: 'transparent', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)' }}>
-          📊 Materiales de clase
-          <span style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-muted)' }}>· Diapositivas por hito</span>
+    <div className="cm">
+      <button className="cm-head" onClick={toggle} aria-expanded={open} aria-controls="cm-panel">
+        <span style={{ flex: 1, minWidth: 0 }}>
+          <span className="cm-title" style={{ display: 'block' }}>Materiales de clase</span>
+          <span className="cm-sub">Presentaciones organizadas por hito de la trayectoria del alumno</span>
         </span>
-        <span style={{ fontSize: 12, color: 'var(--text-muted)', transition: 'transform 0.3s ease', transform: open ? 'rotate(180deg)' : 'rotate(0deg)' }}>▼</span>
+        <span className="cm-chip">{MILESTONES.length} hitos</span>
+        <span aria-hidden className={`cm-caret${open ? ' is-open' : ''}`}>▼</span>
       </button>
 
       {/* Contenido colapsable */}
-      <div style={{ maxHeight: open ? 1200 : 0, overflow: 'hidden', transition: 'max-height 0.3s ease' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 10, padding: '4px 14px 14px' }}>
-          {MILESTONES.map(m => {
+      <div id="cm-panel" className="cm-panel" style={{ maxHeight: open ? 1600 : 0 }}>
+        <ol className="cm-list">
+          {MILESTONES.map((m, i) => {
             const info = MILESTONE_TITLES[m];
+            const c = MILESTONE_COLORS[i % MILESTONE_COLORS.length];
+            const vars = {
+              '--cm-base': c.base, '--cm-soft': c.soft,
+              '--cm-border': c.border, '--cm-text': c.text,
+            } as CSSProperties;
             return (
-              <div key={m} style={{ background: 'var(--bg-surface)', borderRadius: 10, borderLeft: '4px solid #FFC400', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', padding: 14 }}>
-                <div style={{ fontSize: 16, fontWeight: 700, color: '#1E9E3A' }}>🎯 Clase {m} — {info.title}</div>
-                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3, marginBottom: 12 }}>{info.description}</div>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <button onClick={() => window.open(MILESTONE_SLIDES[m], '_blank', 'noopener,noreferrer')}
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 12px', borderRadius: 8, border: 'none', background: '#1E9E3A', color: 'white', cursor: 'pointer', fontSize: 12, fontWeight: 700, fontFamily: 'inherit' }}>
-                    📊 Abrir presentación
-                  </button>
-                  <button onClick={() => copyLink(m)}
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface-3)', color: copied === m ? '#1E9E3A' : 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, fontWeight: 600, fontFamily: 'inherit' }}>
-                    {copied === m ? '✅ Copiado' : '🔗 Copiar enlace'}
-                  </button>
+              <li key={m} className="cm-item" style={vars}>
+                <div className="cm-badge">
+                  <span className="cm-badge-label">CLASE</span>
+                  <span className="cm-badge-num">{m}</span>
                 </div>
-              </div>
+                <div className="cm-body">
+                  <span className="cm-tag">{info.title}</span>
+                  <span className="cm-desc">{info.description}</span>
+                  <div className="cm-actions">
+                    <button className="cm-btn cm-btn-primary"
+                      onClick={() => window.open(MILESTONE_SLIDES[m], '_blank', 'noopener,noreferrer')}>
+                      Abrir presentación
+                    </button>
+                    <button className={`cm-btn cm-btn-ghost${copied === m ? ' is-copied' : ''}`}
+                      onClick={() => copyLink(m)}>
+                      {copied === m ? 'Copiado' : 'Copiar enlace'}
+                    </button>
+                  </div>
+                </div>
+              </li>
             );
           })}
-        </div>
+        </ol>
       </div>
     </div>
   );
 }
+
+// Un tono por hito, misma saturación/luminosidad. Se indexa por POSICIÓN en
+// MILESTONES (hito 1..4), no por número de clase.
+const MILESTONE_COLORS = [
+  { base: '#16a34a', soft: '#eef6ef', border: '#dcecde', text: '#2f7a42' },
+  { base: '#0f766e', soft: '#eaf4f2', border: '#d3e8e4', text: '#0f766e' },
+  { base: '#2563eb', soft: '#eef2fb', border: '#d6e0f6', text: '#3b5b9e' },
+  { base: '#7c3aed', soft: '#f2edfb', border: '#e2d6f6', text: '#6d34c9' },
+] as const;
 
 // ─── Modal "Reprogramar clase" (punto 2) ──────────────────────────────────────
 const RESCHEDULE_REASONS = [
