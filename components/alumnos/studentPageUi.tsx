@@ -27,15 +27,16 @@ export function toBullets(text: string | null | undefined): string[] {
   return parts.length > 1 ? parts.map(s => s.replace(/[.;]$/, '')) : [raw];
 }
 
-export function BulletList({ items, variant = 'ok' }: { items: string[]; variant?: 'ok' | 'error' }) {
+export function BulletList({ items, variant = 'ok' }: {
+  items: string[]; variant?: 'ok' | 'warn' | 'error';
+}) {
   if (items.length === 0) return null;
+  const mark = variant === 'error' ? '✕' : '•';
   return (
     <ul className="sp-list">
       {items.map((t, i) => (
         <li key={i}>
-          <span className={`sp-li-mark${variant === 'error' ? ' is-error' : ''}`} aria-hidden>
-            {variant === 'error' ? '✕' : '·'}
-          </span>
+          <span className={`sp-li-mark is-${variant}`} aria-hidden>{mark}</span>
           <span>{t}</span>
         </li>
       ))}

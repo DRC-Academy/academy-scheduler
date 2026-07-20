@@ -17,6 +17,7 @@ import { calcCurrentClassNumber } from '@/lib/db';
 import { loadStudentBundles, norm, type StudentBundle } from '@/lib/misAlumnos';
 import { regenerateFicha } from '@/lib/aiClient';
 import { getProgressLink } from '@/lib/progressClient';
+import { getOrCreateFormLink } from '@/lib/formClient';
 import { classCategoryBadge } from '@/lib/finance';
 import { FORM_QUESTIONS } from '@/lib/formQuestions';
 import {
@@ -28,7 +29,7 @@ import {
   Accordion, BulletList, ClampText, ProgressCompare, toBullets,
 } from '@/components/alumnos/studentPageUi';
 import {
-  Avatar, RiskDot, Tabs, Toast, btnPrimary, btnSecondary, formatDate, relativeDays,
+  RiskDot, RISK_TEXT, Tabs, Toast, btnPrimary, btnSecondary, formatDate, relativeDays,
   PAGE_CSS,
 } from '@/components/alumnos/ui';
 
@@ -87,15 +88,26 @@ function StudentPageContent() {
     return () => { cancelled = true; };
   }, [teacher, myAssignments]);
 
+  // Lista alfabética: es la que ordena la navegación anterior/siguiente.
+  const ordered = useMemo(
+    () => [...bundles].sort((x, y) =>
+      x.assignment.studentName.localeCompare(y.assignment.studentName, 'es')),
+    [bundles],
+  );
+
   // El alumno de la URL: por student_id, por id de assignment o por nombre.
-  const bundle = useMemo(() => {
+  const index = useMemo(() => {
     const id = decodeURIComponent(routeId ?? '');
-    return bundles.find(b =>
+    return ordered.findIndex(b =>
       b.assignment.studentId === id ||
       b.assignment.id === id ||
       norm(b.assignment.studentName) === norm(id.replace(/^name:/, '')),
-    ) ?? null;
-  }, [bundles, routeId]);
+    );
+  }, [ordered, routeId]);
+
+  const bundle = index >= 0 ? ordered[index] : null;
+  const prev = index > 0 ? ordered[index - 1] : null;
+  const next = index >= 0 && index < ordered.length - 1 ? ordered[index + 1] : null;
 
   function showToast(m: string) {
     setToast(m);
@@ -130,47 +142,86 @@ function StudentPageContent() {
   const antiquity = daysSince(startIso);
   const mainSlot = a.slots?.[0] ? `${a.slots[0].day} ${a.slots[0].hour}` : '—';
 
-  return (
-    <div className="sp">
-      {/* ── Cabecera ── */}
-      <Link href="/mis-alumnos" className="sp-back">← Volver a mis alumnos</Link>
+  const initials = a.studentName.trim().split(/\s+/).slice(0, 2).map(w => w[0]?.toUpperCase() ?? '').join('');
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginTop: 8 }}>
-        <Avatar name={a.studentName} />
-        <div style={{ minWidth: 0 }}>
-          <h1 className="sp-name">{a.studentName}</h1>
-          <div className="sp-sub">
-            <span>{[a.studentLevel, plan.label].filter(Boolean).join(' · ')}</span>
-            {risk && <RiskDot risk={risk} size={10} />}
+  return (
+    <>
+      {/* ── Navegación entre alumnos ── */}
+      <nav className="spnav">
+        <div className="spnav-inner">
+          <Link href="/mis-alumnos" className="spnav-back" aria-label="Volver a mis alumnos">
+            <span aria-hidden>←</span>
+            <span className="spnav-back-label">Volver</span>
+          </Link>
+
+          <div className="spnav-pager">
+            <Link
+              href={prev ? hrefFor(prev) : '#'}
+              className="spnav-btn"
+              aria-disabled={!prev}
+              tabIndex={prev ? undefined : -1}
+              title={prev?.assignment.studentName}
+              aria-label={prev ? `Alumno anterior: ${prev.assignment.studentName}` : 'No hay alumno anterior'}
+            >
+              <span aria-hidden>←</span>
+              <span className="spnav-btn-name">{prev?.assignment.studentName ?? '—'}</span>
+            </Link>
+
+            <span className="spnav-count">{index + 1} de {ordered.length}</span>
+
+            <Link
+              href={next ? hrefFor(next) : '#'}
+              className="spnav-btn"
+              aria-disabled={!next}
+              tabIndex={next ? undefined : -1}
+              title={next?.assignment.studentName}
+              aria-label={next ? `Alumno siguiente: ${next.assignment.studentName}` : 'No hay alumno siguiente'}
+            >
+              <span className="spnav-btn-name">{next?.assignment.studentName ?? '—'}</span>
+              <span aria-hidden>→</span>
+            </Link>
           </div>
         </div>
-      </div>
+      </nav>
 
-      {/* ── Datos rápidos ── */}
-      <div className="sp-quick">
-        <div>
-          <div className="sp-quick-label">Inicio</div>
-          <div className="sp-quick-value">{startIso ? formatDate(startIso) : '—'}</div>
+      <div className="sp">
+        {/* ── Cabecera del alumno ── */}
+        <div className="sp-head">
+          <div className="sp-avatar" aria-hidden>{initials || '?'}</div>
+          <div style={{ minWidth: 0 }}>
+            <h1 className="sp-name">{a.studentName}</h1>
+            <div className="sp-sub">
+              <span>{[a.studentLevel, plan.label].filter(Boolean).join(' · ')}</span>
+              {risk && <RiskDot risk={risk} size={10} />}
+            </div>
+            <div className="sp-sub" style={{ color: 'var(--sp-t3)', fontSize: 12.5 }}>
+              Profesor: {teacher.name}
+              {startIso && ` · Desde: ${formatDate(startIso)}`}
+            </div>
+          </div>
         </div>
-        <div>
-          <div className="sp-quick-label">Antigüedad</div>
-          <div className="sp-quick-value">{antiquity != null ? `${antiquity} días` : '—'}</div>
-        </div>
-        <div>
-          <div className="sp-quick-label">Clases</div>
-          <div className="sp-quick-value">{classNumber}</div>
-        </div>
-        <div>
-          <div className="sp-quick-label">Horas/sem</div>
-          <div className="sp-quick-value">{a.slots?.length ?? 0}</div>
-        </div>
-        <div>
-          <div className="sp-quick-label">Próxima</div>
-          <div className="sp-quick-value">{mainSlot}</div>
-        </div>
-      </div>
 
-      <Tabs tabs={TABS} active={tab} onChange={setTab} />
+        {/* ── Métricas rápidas ── */}
+        <div className="sp-quick">
+          <div>
+            <div className="sp-quick-label">Clases</div>
+            <div className="sp-quick-value">{classNumber}</div>
+          </div>
+          <div>
+            <div className="sp-quick-label">Antigüedad</div>
+            <div className="sp-quick-value">{antiquity != null ? `${antiquity} días` : '—'}</div>
+          </div>
+          <div>
+            <div className="sp-quick-label">Horas/sem</div>
+            <div className="sp-quick-value">{a.slots?.length ?? 0}h</div>
+          </div>
+          <div>
+            <div className="sp-quick-label">Próxima</div>
+            <div className="sp-quick-value">{mainSlot}</div>
+          </div>
+        </div>
+
+        <Tabs tabs={TABS} active={tab} onChange={setTab} />
 
       {tab === 'perfil' && (
         <PerfilTab
@@ -209,9 +260,15 @@ function StudentPageContent() {
         />
       )}
 
-      {toast && <Toast message={toast} />}
-    </div>
+        {toast && <Toast message={toast} />}
+      </div>
+    </>
   );
+}
+
+/** URL de la ficha de un alumno (mismo criterio que StudentCard). */
+function hrefFor(b: StudentBundle): string {
+  return `/mis-alumnos/${encodeURIComponent(b.assignment.studentId || b.assignment.id)}`;
 }
 
 // ═══ TAB PERFIL ═══════════════════════════════════════════════════════════════
@@ -231,6 +288,30 @@ function PerfilTab({ bundle, ficha, risk, teacher, onToast, onRefresh }: {
   const responses = asObject<Record<string, unknown>>(profile?.form_responses) ?? {};
   const hasResponses = Object.keys(responses).length > 0;
 
+  // Reutiliza el link vigente del formulario del alumno (o crea uno) con el
+  // mismo helper que usa el email de presentación: no inventa un flujo nuevo.
+  async function handleCopyFormLink() {
+    setBusy(true);
+    try {
+      const url = await getOrCreateFormLink({
+        studentId: a.studentId || undefined,
+        studentName: a.studentName,
+        studentEmail: a.studentEmail || undefined,
+        teacherId: teacher.id,
+        teacherName: teacher.name,
+        assignmentId: a.id,
+        plan: a.plan || undefined,
+        level: a.studentLevel || undefined,
+      });
+      await navigator.clipboard.writeText(url);
+      onToast('Link del formulario copiado');
+    } catch (e) {
+      onToast(e instanceof Error ? e.message : 'No se pudo generar el link.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function handleRegenerate() {
     if (!profile) return;
     setBusy(true);
@@ -248,12 +329,19 @@ function PerfilTab({ bundle, ficha, risk, teacher, onToast, onRefresh }: {
   if (!ficha) {
     return (
       <div className="sp-card sp-empty">
-        <div style={{ marginBottom: 14 }}>Este alumno todavía no tiene ficha generada.</div>
-        {profile
-          ? <button onClick={handleRegenerate} disabled={busy} style={{ ...btnPrimary, opacity: busy ? 0.6 : 1 }}>
-              {busy ? 'Generando…' : 'Generar ficha'}
-            </button>
-          : <div style={{ fontSize: 13 }}>Falta que el alumno complete el formulario inicial.</div>}
+        <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--sp-t1)', marginBottom: 6 }}>Sin ficha de IA</div>
+        <div style={{ maxWidth: 380, margin: '0 auto 18px', lineHeight: 1.6 }}>
+          Envía el formulario inicial al alumno para generar su perfil automáticamente.
+        </div>
+        <div className="sp-btn-row" style={{ display: 'inline-flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center' }}>
+          <button onClick={handleCopyFormLink} disabled={busy} style={{ ...btnPrimary, opacity: busy ? 0.6 : 1 }}>
+            {busy ? 'Generando…' : 'Copiar link del formulario'}
+          </button>
+          {/* Si ya hay respuestas guardadas, la ficha se puede generar sin esperar. */}
+          {profile && (
+            <button onClick={handleRegenerate} disabled={busy} style={btnSecondary}>Generar ficha ahora</button>
+          )}
+        </div>
       </div>
     );
   }
@@ -261,7 +349,7 @@ function PerfilTab({ bundle, ficha, risk, teacher, onToast, onRefresh }: {
   return (
     <>
       <div className="sp-cols">
-        {/* ── Columna izquierda (40%) ── */}
+        {/* ── Columna izquierda ── */}
         <div className="sp-col">
           <div className="sp-card sp-objective">
             <div className="sp-card-title">Objetivo</div>
@@ -271,14 +359,17 @@ function PerfilTab({ bundle, ficha, risk, teacher, onToast, onRefresh }: {
           <div className="sp-card">
             <div className="sp-card-title">Perfil</div>
             <Field label="Ocupación" value={ficha.occupation} />
+            <Field label="Estilo de aprendizaje" value={ficha.learningStyle} />
             <Field label="Dominio" value={DOMAIN_LABEL[ficha.domain] ?? ficha.domain} />
             <Field label="Nivel actual" value={profile?.current_level || a.studentLevel} />
           </div>
 
-          {ficha.learningStyle && (
+          {last && (
             <div className="sp-card">
-              <div className="sp-card-title">Estilo de aprendizaje</div>
-              <div className="sp-body">{ficha.learningStyle}</div>
+              <div className="sp-card-title">Estado actual</div>
+              <Field label="Foco de la última clase" value={last.topics_covered || '—'} />
+              <Field label="Última clase analizada" value={relativeDays(last.class_date ?? last.analyzed_at)} />
+              {risk && <RiskDot risk={risk} size={10} />}
             </div>
           )}
 
@@ -287,80 +378,66 @@ function PerfilTab({ bundle, ficha, risk, teacher, onToast, onRefresh }: {
           </button>
         </div>
 
-        {/* ── Columna derecha (60%) ── */}
+        {/* ── Columna derecha ── */}
         <div className="sp-col">
-          <div className="sp-card">
-            <div className="sp-card-title">Estado actual</div>
-            {last ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                <Field label="Foco actual" value={last.topics_covered || '—'} />
-                <div>
-                  <div className="sp-card-title" style={{ marginBottom: 6 }}>Señal</div>
-                  {risk ? <RiskDot risk={risk} size={10} /> : <span className="sp-body">Sin señal registrada</span>}
-                </div>
-                <Field
-                  label="Última clase analizada"
-                  value={relativeDays(last.class_date ?? last.analyzed_at)}
-                />
-              </div>
-            ) : (
-              <div className="sp-body" style={{ color: 'var(--sp-t3)' }}>Sin clases analizadas todavía.</div>
-            )}
-          </div>
-
           {ficha.strongPoints && (
             <div className="sp-card">
               <div className="sp-card-title">Puntos fuertes</div>
-              <BulletList items={toBullets(ficha.strongPoints)} />
+              <BulletList items={toBullets(ficha.strongPoints)} variant="ok" />
             </div>
           )}
 
           {ficha.weakPoints && (
             <div className="sp-card">
               <div className="sp-card-title">Áreas a trabajar</div>
-              <BulletList items={toBullets(ficha.weakPoints)} />
-            </div>
-          )}
-
-          {ficha.recommendedFocus && (
-            <div className="sp-card">
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 12 }}>
-                <span className="sp-card-title" style={{ marginBottom: 0 }}>Foco recomendado</span>
-                <span className="sp-badge-yellow">Prioridad actual</span>
-              </div>
-              <div className="sp-body">{ficha.recommendedFocus}</div>
-            </div>
-          )}
-
-          {ficha.initialDiagnosis && (
-            <div className="sp-card" style={{ paddingTop: 8, paddingBottom: 8 }}>
-              <Accordion title="Diagnóstico inicial">
-                <div className="sp-body">{ficha.initialDiagnosis}</div>
-              </Accordion>
-              {hasResponses && (
-                <Accordion title="Respuestas del formulario">
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                    {FORM_QUESTIONS.map(q => {
-                      const v = responses[q.id];
-                      let text: string;
-                      if (q.type === 'checkbox' && Array.isArray(v)) text = v.length ? (v as string[]).join(', ') : '—';
-                      else if (q.type === 'matrix' && v && typeof v === 'object') {
-                        const obj = v as Record<string, string>;
-                        text = (q.rows ?? []).map(r => `${r}: ${obj[r] ?? '—'}`).join(' · ');
-                      } else text = v != null && String(v).trim() ? String(v) : '—';
-                      return (
-                        <div key={q.id}>
-                          <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 3 }}>{q.title}</div>
-                          <div className="sp-body" style={{ color: 'var(--sp-t2)' }}>{text}</div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </Accordion>
-              )}
+              <BulletList items={toBullets(ficha.weakPoints)} variant="warn" />
             </div>
           )}
         </div>
+      </div>
+
+      {/* ── Ancho completo ── */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginTop: 16 }}>
+        {ficha.recommendedFocus && (
+          <div className="sp-card">
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 12 }}>
+              <span className="sp-card-title" style={{ marginBottom: 0 }}>Foco actual</span>
+              <span className="sp-badge-yellow">Prioridad actual</span>
+            </div>
+            <div className="sp-body">{ficha.recommendedFocus}</div>
+          </div>
+        )}
+
+        {(ficha.initialDiagnosis || hasResponses) && (
+          <div className="sp-card" style={{ paddingTop: 8, paddingBottom: 8 }}>
+            {ficha.initialDiagnosis && (
+              <Accordion title="Ver diagnóstico completo">
+                <div className="sp-body">{ficha.initialDiagnosis}</div>
+              </Accordion>
+            )}
+            {hasResponses && (
+              <Accordion title="Respuestas del formulario">
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  {FORM_QUESTIONS.map(q => {
+                    const v = responses[q.id];
+                    let text: string;
+                    if (q.type === 'checkbox' && Array.isArray(v)) text = v.length ? (v as string[]).join(', ') : '—';
+                    else if (q.type === 'matrix' && v && typeof v === 'object') {
+                      const obj = v as Record<string, string>;
+                      text = (q.rows ?? []).map(r => `${r}: ${obj[r] ?? '—'}`).join(' · ');
+                    } else text = v != null && String(v).trim() ? String(v) : '—';
+                    return (
+                      <div key={q.id}>
+                        <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 3 }}>{q.title}</div>
+                        <div className="sp-body" style={{ color: 'var(--sp-t2)' }}>{text}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </Accordion>
+            )}
+          </div>
+        )}
       </div>
 
       {shareOpen && (
@@ -408,14 +485,10 @@ function SeguimientoTab({ analyses, risk, progressScore, onGoToProxima }: {
 
   return (
     <>
-      <div className="sp-metrics">
+      <div className="sp-metrics" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
         <div className="sp-card">
           <div className="sp-metric">{analyses.length}</div>
           <div className="sp-metric-label">Clases analizadas</div>
-        </div>
-        <div className="sp-card">
-          <div className="sp-metric">{progressScore != null ? `${progressScore}/10` : '—'}</div>
-          <div className="sp-metric-label">Progreso</div>
         </div>
         <div className="sp-card">
           <div className="sp-metric" style={{ fontSize: 20 }}>
@@ -427,16 +500,24 @@ function SeguimientoTab({ analyses, risk, progressScore, onGoToProxima }: {
           <div style={{ paddingTop: 4 }}>
             {risk ? <RiskDot risk={risk} size={10} /> : <span className="sp-body">—</span>}
           </div>
-          <div className="sp-metric-label">Señal actual</div>
+          <div className="sp-metric-label">
+            Señal actual{progressScore != null ? ` · progreso ${progressScore}/10` : ''}
+          </div>
         </div>
       </div>
 
-      <div className="sp-feed">
+      <div className="sp-timeline">
         {analyses.map(r => {
           const rowRisk: RiskSignal | null = isRiskSignal(r.risk_signal) ? r.risk_signal : null;
           const guide = asObject<NextClassGuide>(r.next_class_guide);
           return (
-            <div key={r.id} className="sp-card">
+            <div key={r.id} className="sp-tl-item">
+              <span
+                className="sp-tl-node"
+                aria-hidden
+                style={rowRisk ? { borderColor: RISK_TEXT[rowRisk].color } : undefined}
+              />
+              <div className="sp-card">
               <div className="sp-feed-head">
                 <div className="sp-feed-title">
                   Clase {r.class_number ?? '—'}
@@ -481,6 +562,7 @@ function SeguimientoTab({ analyses, risk, progressScore, onGoToProxima }: {
                     </div>
                   </Accordion>
                 )}
+              </div>
               </div>
             </div>
           );

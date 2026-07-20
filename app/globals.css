@@ -776,12 +776,76 @@ label {
   color: var(--sp-t2); cursor: pointer; text-decoration: none;
 }
 .sp-back:hover { color: var(--sp-t1); }
-.sp-name { font-size: 24px; font-weight: 700; letter-spacing: -0.015em; margin: 10px 0 0; }
+
+/* ── Barra de navegación entre alumnos (sticky) ── */
+.spnav {
+  position: sticky; top: 0; z-index: 30;
+  background: #fff; border-bottom: 1px solid var(--border);
+  font-family: 'Public Sans', system-ui, sans-serif;
+}
+.spnav-inner {
+  max-width: 1100px; margin: 0 auto; height: 48px;
+  display: flex; align-items: center; gap: 12px; padding: 0 16px;
+}
+.spnav-back {
+  display: inline-flex; align-items: center; gap: 7px;
+  border: none; background: transparent; padding: 6px 8px; border-radius: 8px;
+  font-family: inherit; font-size: 13.5px; font-weight: 500;
+  color: #5f6360; cursor: pointer; text-decoration: none; white-space: nowrap;
+}
+.spnav-back:hover { background: #F7F7F5; color: #1a1c1a; }
+.spnav-pager { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+.spnav-btn {
+  display: inline-flex; align-items: center; gap: 7px; max-width: 200px;
+  border: 1px solid var(--border); background: #fff; border-radius: 9px;
+  padding: 6px 11px; font-family: inherit; font-size: 13px; font-weight: 500;
+  color: #5f6360; cursor: pointer; text-decoration: none; white-space: nowrap;
+}
+.spnav-btn:hover { background: #F7F7F5; color: #1a1c1a; }
+.spnav-btn[aria-disabled='true'] { opacity: 0.4; pointer-events: none; }
+.spnav-btn-name { overflow: hidden; text-overflow: ellipsis; }
+.spnav-count {
+  font-size: 12.5px; color: #8b8e88; white-space: nowrap;
+  font-variant-numeric: tabular-nums; padding: 0 4px;
+}
+
+/* ── Timeline del tab Seguimiento ── */
+.sp-timeline { position: relative; padding-left: 26px; }
+.sp-timeline::before {
+  content: ''; position: absolute; left: 5px; top: 8px; bottom: 8px;
+  width: 2px; background: var(--border);
+}
+.sp-tl-item { position: relative; }
+.sp-tl-item + .sp-tl-item { margin-top: 12px; }
+.sp-tl-node {
+  position: absolute; left: -26px; top: 20px;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: #fff; border: 2px solid var(--border);
+}
+
+@media (max-width: 820px) {
+  .spnav-inner { gap: 8px; padding: 0 12px; }
+  .spnav-back { min-width: 44px; min-height: 44px; justify-content: center; padding: 6px; }
+  .spnav-back-label { display: none; }
+  .spnav-pager { gap: 4px; }
+  .spnav-btn { min-width: 44px; min-height: 44px; justify-content: center; padding: 6px 10px; }
+  .spnav-btn-name { display: none; }
+  .sp-timeline { padding-left: 22px; }
+  .sp-tl-node { left: -22px; }
+}
+.sp-head { display: flex; align-items: center; gap: 16px; margin-top: 4px; }
+.sp-avatar {
+  width: 56px; height: 56px; border-radius: 50%; flex-shrink: 0;
+  display: grid; place-items: center;
+  background: rgba(30,158,58,0.12); color: #1E9E3A;
+  font-size: 19px; font-weight: 600;
+}
+.sp-name { font-size: 24px; font-weight: 700; letter-spacing: -0.015em; margin: 0; }
 .sp-sub { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13.5px; color: var(--sp-t2); margin-top: 5px; }
 
 /* Fila de datos rápidos */
 .sp-quick {
-  display: grid; grid-template-columns: repeat(5, 1fr); gap: 1px;
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px;
   background: var(--border); border: 1px solid var(--border);
   border-radius: 12px; overflow: hidden; margin: 18px 0 22px;
 }
@@ -812,6 +876,8 @@ label {
 .sp-list { display: flex; flex-direction: column; gap: 9px; margin: 0; padding: 0; list-style: none; }
 .sp-list li { display: grid; grid-template-columns: 16px minmax(0,1fr); gap: 9px; font-size: 14px; line-height: 1.6; }
 .sp-li-mark { color: var(--sp-green); font-weight: 700; line-height: 1.6; }
+.sp-li-mark.is-ok { color: var(--sp-green); }
+.sp-li-mark.is-warn { color: #ea7317; }
 .sp-li-mark.is-error { color: #dc2626; }
 
 /* Layout de dos columnas del tab Perfil */
@@ -853,7 +919,9 @@ label {
 
 @media (max-width: 820px) {
   .sp { padding: 16px 12px 48px; }
-  .sp-name { font-size: 21px; }
+  .sp-name { font-size: 20px; }
+  .sp-head { gap: 12px; }
+  .sp-avatar { width: 46px; height: 46px; font-size: 16px; }
   .sp-quick { grid-template-columns: 1fr 1fr; }
   .sp-cols { grid-template-columns: 1fr; }
   .sp-metrics { grid-template-columns: 1fr 1fr; }

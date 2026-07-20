@@ -14,7 +14,7 @@ export function AuthGuard({ children, allowedRoles }: AuthGuardProps) {
   const router = useRouter();
 
   useEffect(() => {
-    // La sesión vive en sessionStorage y AuthProvider la lee en un effect, así que
+    // La sesión vive en localStorage y AuthProvider la lee en un effect, así que
     // en el primer render `user` siempre es null. Como los effects de los hijos
     // corren ANTES que los del padre, sin esta guarda expulsábamos al login en toda
     // navegación dura (F5, bookmark, link directo) aunque la sesión fuera válida.
