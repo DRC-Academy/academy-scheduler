@@ -4,7 +4,6 @@ import { useSearchParams } from 'next/navigation';
 import { NavBar } from '@/components/NavBar';
 import { AuthGuard } from '@/components/AuthGuard';
 import { PullToRefresh } from '@/components/PullToRefresh';
-import { LastUpdated } from '@/components/LastUpdated';
 import { VisualCalendar, DAYS, cellKey, getSpainParts, CAL_STATE_META, type RecuperacionData } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
@@ -2489,10 +2488,10 @@ function TeacherContent() {
   const legacyList = Array.from(legacyMap.values());
 
   const tabs = [
-    { id: 'calendar',      label: '📅 Mi calendario' },
-    { id: 'upcoming',      label: '🎥 Mis clases' },
-    { id: 'scoring',       label: '⭐ Mi Scoring' },
-    { id: 'notifications', label: '🔔 Avisos' },
+    { id: 'calendar',      label: 'Mi calendario' },
+    { id: 'upcoming',      label: 'Mis clases' },
+    { id: 'scoring',       label: 'Mi Scoring' },
+    { id: 'notifications', label: 'Avisos' },
   ] as const;
 
   // ── Header mini-stats ──────────────────────────────────────────────────────
@@ -2505,20 +2504,17 @@ function TeacherContent() {
   const todayClassesHeader = classesForDate(myAssignments, nowHeader);
   const nextClassHeader = todayClassesHeader.find(c => parseInt(c.hour) + 1 > nowHeader.getHours() + nowHeader.getMinutes() / 60);
   const nextClassLabel = nextClassHeader
-    ? `Hoy ${nextClassHeader.hour} — ${nextClassHeader.studentName}`
+    ? `Hoy ${nextClassHeader.hour} · ${nextClassHeader.studentName}`
     : 'Sin clases hoy';
 
   const headerLevel = (teacher.currentLevel as 1 | 2 | 3) ?? 1;
-  const headerLevelInfo = LEVEL_INFO[headerLevel];
-  const headerLevelStars = '⭐'.repeat(headerLevel);
   const headerLevelShort = headerLevel === 1 ? 'Junior' : headerLevel === 2 ? 'Senior' : 'Elite';
 
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }}>
+    <div style={{ minHeight: '100vh', background: '#f4f5f2' }}>
       <NavBar />
       <PullToRefresh onRefresh={reloadAll}>
-      <div style={{ maxWidth: 980, margin: '0 auto', padding: '24px 16px 48px' }}>
-        <LastUpdated />
+      <div className="thd" style={{ maxWidth: 1180, margin: '0 auto', padding: '20px 16px 48px' }}>
 
         {/* Milestone banners — clase 15 (amarillo) y clase 30 (verde), sin mencionar bonos */}
         {visibleBanners.map(banner => (
@@ -2568,49 +2564,61 @@ function TeacherContent() {
         ))}
 
         {/* Profile */}
-        <div className="teacher-profile-card" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 14, padding: '18px 22px', marginBottom: 18, display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-          <div style={{ width: 50, height: 50, borderRadius: '50%', background: 'rgba(34,197,94,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 700, color: '#4ade80', flexShrink: 0 }}>{teacher.avatar}</div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 700, fontSize: 20, color: 'var(--text-primary)' }}>{teacher.name}</div>
-            <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 2 }}>{teacher.email}</div>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginTop: 8 }}>
-              {(teacher.specialties ?? []).map(sp => <SpecialtyChip key={sp} specialty={sp} />)}
-              <button onClick={() => { setSpecialtiesDraft([...(teacher.specialties ?? [])]); setShowSpecialtiesModal(true); }}
-                style={{ padding: '2px 10px', borderRadius: 12, border: '1px dashed var(--border)', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 11, fontFamily: 'inherit' }}>
-                {(teacher.specialties ?? []).length === 0 ? '+ Mis especialidades' : '✏️ Editar'}
-              </button>
+        <div className="thd-card">
+          <div className="thd-idrow">
+            <div className="thd-avatar">{teacher.avatar}</div>
+
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <span className="thd-name">{teacher.name}</span>
+                <span className="thd-tags">
+                  {(teacher.specialties ?? []).map(sp => <SpecialtyChip key={sp} specialty={sp} />)}
+                  <span className="thd-tag" style={{ background: '#fdf3e7', color: '#9a6516' }}>
+                    Nivel {headerLevelShort}
+                  </span>
+                </span>
+              </div>
+              <div className="thd-meta">
+                {teacher.email} · {uniqueStudentCount} alumno{uniqueStudentCount !== 1 ? 's' : ''} activo{uniqueStudentCount !== 1 ? 's' : ''}
+              </div>
             </div>
 
-            {/* Mini-stats row */}
-            <div className="teacher-header-ministats" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 10, fontSize: 12, color: 'var(--text-secondary)' }}>
-              <span>🎥 Próxima clase: <b style={{ color: 'var(--text-primary)' }}>{nextClassLabel}</b></span>
-              <span style={{ color: 'var(--border)' }}>·</span>
-              <span>👥 <b style={{ color: 'var(--text-primary)' }}>{uniqueStudentCount}</b> alumno{uniqueStudentCount !== 1 ? 's' : ''} activo{uniqueStudentCount !== 1 ? 's' : ''}</span>
-              <span style={{ color: 'var(--border)' }}>·</span>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                Nivel: <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, padding: '1px 9px', borderRadius: 12, background: headerLevelInfo.bg, border: `1px solid ${headerLevelInfo.border}`, color: headerLevelInfo.color, fontWeight: 700 }}>{headerLevelStars} {headerLevelShort}</span>
-              </span>
-            </div>
+            {/* Solo edita especialidades: se nombra por lo que hace, no "Editar perfil". */}
+            <button className="thd-edit"
+              onClick={() => { setSpecialtiesDraft([...(teacher.specialties ?? [])]); setShowSpecialtiesModal(true); }}>
+              {(teacher.specialties ?? []).length === 0 ? 'Añadir especialidades' : 'Editar especialidades'}
+            </button>
           </div>
-          {/* Los números no llevan color propio: el punto ya identifica el estado,
-              y el color sale de la misma fuente que pinta la grilla. */}
-          <div className="teacher-profile-stats" style={{ display: 'flex', gap: 20 }}>
-            {([
-              { state: 'libre'     as const, count: freeCount },
-              { state: 'ocupado'   as const, count: ocupadoCount },
-              { state: 'bloqueado' as const, count: bloqCount },
-            ]).map(s => {
-              const meta = CAL_STATE_META[s.state];
-              return (
-                <div key={s.state} style={{ textAlign: 'center' }}>
-                  <div style={{ fontSize: 'var(--fs-title)', fontWeight: 'var(--fw-semibold)', color: 'var(--text-primary)' }}>{s.count}</div>
-                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 'var(--fs-micro)', color: 'var(--text-muted)' }}>
-                    <span aria-hidden style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', background: meta.outline ? 'transparent' : meta.dotColor, border: meta.outline ? '1.5px solid var(--border-light)' : 'none' }} />
-                    {meta.label}
+
+          <div className="thd-row">
+            <div className="thd-next">
+              <span className="thd-next-caret" aria-hidden>▸</span>
+              <div style={{ minWidth: 0 }}>
+                <div className="thd-next-label">Próxima clase</div>
+                <div className="thd-next-value">{nextClassLabel}</div>
+              </div>
+            </div>
+
+            {/* Los números no llevan color propio: el punto ya identifica el estado,
+                y el color sale de la misma fuente que pinta la grilla. */}
+            <div className="thd-kpis">
+              {([
+                { state: 'libre'     as const, count: freeCount },
+                { state: 'ocupado'   as const, count: ocupadoCount },
+                { state: 'bloqueado' as const, count: bloqCount },
+              ]).map(s => {
+                const meta = CAL_STATE_META[s.state];
+                return (
+                  <div key={s.state} className="thd-kpi">
+                    <div className="thd-kpi-value">{s.count}</div>
+                    <div className="thd-kpi-label">
+                      <span aria-hidden className="vc-dot" style={{ background: meta.dotColor }} />
+                      {meta.label}
+                    </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
         </div>
 
@@ -2654,48 +2662,36 @@ function TeacherContent() {
         )}
 
         {/* Tabs */}
-        <div style={{ display: 'flex', gap: 4, marginBottom: 18, background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 4 }}>
+        <div className="thd-tabs" role="tablist">
           {tabs.map(tab => (
-            <button key={tab.id} onClick={() => setActiveTab(tab.id as any)} style={{ flex: 1, padding: '7px 4px', borderRadius: 7, border: 'none', background: activeTab === tab.id ? 'var(--bg-surface-3)' : 'transparent', color: activeTab === tab.id ? 'var(--text-primary)' : 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, fontWeight: 500, whiteSpace: 'normal', textAlign: 'center', lineHeight: '1.3' }}>
+            <button key={tab.id} role="tab" aria-selected={activeTab === tab.id}
+              className={`thd-tab${activeTab === tab.id ? ' is-active' : ''}`}
+              onClick={() => setActiveTab(tab.id as any)}>
               {tab.label}
             </button>
           ))}
         </div>
 
         {activeTab === 'calendar' && (
-          <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '20px' }}>
+          <div style={{ background: '#fff', border: '1px solid #e6e7e2', borderRadius: 18, padding: 22, boxShadow: '0 1px 2px rgba(16,24,16,0.04)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
               <div>
-                <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)' }}>Mi disponibilidad semanal</div>
-                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3 }}>Hacé clic en cualquier celda para cambiar su estado. Se guarda automáticamente.</div>
+                <div style={{ fontSize: 17, fontWeight: 600, letterSpacing: '-0.01em', color: '#1a1c1a' }}>Mi disponibilidad semanal</div>
+                <div style={{ fontSize: 13, color: '#8b8e88', marginTop: 3 }}>Hacé clic en cualquier celda para cambiar su estado. Se guarda automáticamente.</div>
               </div>
-              <div style={{ fontSize: 13, fontWeight: 600, color: saveStatus === 'saved' ? '#22c55e' : saveStatus === 'saving' ? '#f59e0b' : 'var(--text-muted)' }}>
-                {saveStatus === 'saving' && '⏳ Guardando...'}
-                {saveStatus === 'saved'  && '✓ Guardado'}
-              </div>
+              {/* Estado de guardado: punto de color en vez de emoji. */}
+              {saveStatus !== 'idle' && (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12.5, fontWeight: 600, color: saveStatus === 'saved' ? '#1f7a3d' : '#9a6516' }}>
+                  <span className="vc-dot" style={{ background: saveStatus === 'saved' ? '#16a34a' : '#e0912f' }} />
+                  {saveStatus === 'saved' ? 'Guardado' : 'Guardando…'}
+                </span>
+              )}
             </div>
 
-            {/* Leyenda: punto de color, no emoji. Los colores salen de CAL_STATE_META,
-                la misma fuente que pinta las celdas, así no pueden divergir. */}
-            <div className="states-legend" style={{ display: 'flex', gap: 'var(--space-4)', marginBottom: 'var(--space-4)', flexWrap: 'wrap' }}>
-              {(['no_work', 'libre', 'ocupado', 'bloqueado'] as const).map(state => {
-                const meta = CAL_STATE_META[state];
-                return (
-                  <div key={state} style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-                    <span aria-hidden style={{
-                      display: 'inline-block', flexShrink: 0, width: 9, height: 9, borderRadius: '50%',
-                      background: meta.outline ? 'transparent' : meta.dotColor,
-                      border: meta.outline ? '1.5px solid var(--border-light)' : 'none',
-                    }} />
-                    <span style={{ fontSize: 'var(--fs-caption)', color: 'var(--text-primary)' }}>{meta.label}</span>
-                    <span style={{ fontSize: 'var(--fs-caption)', color: 'var(--text-muted)' }}>{meta.desc}</span>
-                  </div>
-                );
-              })}
-            </div>
-
+            {/* La leyenda ya no vive acá: se fusionó con los contadores en los
+                chips que renderiza VisualCalendar (una sola fila, una sola fuente). */}
             {gridLoading ? (
-              <div style={{ textAlign: 'center', padding: '48px 0', color: 'var(--text-muted)' }}>Cargando calendario...</div>
+              <div style={{ textAlign: 'center', padding: '48px 0', color: '#8b8e88' }}>Cargando calendario...</div>
             ) : (
               <VisualCalendar mode="teacher" grid={grid} onGridChange={handleGridChange} onOcupadoNeed={handleOcupadoNeed} onRecuperacionNeed={handleRecuperacionNeed} />
             )}

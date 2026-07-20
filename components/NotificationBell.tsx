@@ -11,6 +11,7 @@ import {
   dbUpsertTeacherAlerts,
 } from '@/lib/db';
 import { AppNotification } from '@/types';
+import { Bell } from 'lucide-react';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -42,7 +43,9 @@ function notifIcon(type: string): string {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export function NotificationBell() {
+// `compact` = campana de línea + punto rojo (sin contador). Es opt-in para que
+// el resto de los roles conserve la campana actual con el número.
+export function NotificationBell({ compact = false }: { compact?: boolean } = {}) {
   const { user }        = useAuth();
   const { assignments } = useTeachers();
   const router          = useRouter();
@@ -199,10 +202,17 @@ export function NotificationBell() {
             transition: 'background 0.15s',
           }}
         >
-          🔔
+          {compact ? <Bell size={19} strokeWidth={1.75} color="#5f6360" /> : '🔔'}
 
-          {/* Unread badge */}
-          {unreadCount > 0 && (
+          {/* Unread badge — punto simple en compacto, contador en el resto. */}
+          {unreadCount > 0 && (compact ? (
+            <span aria-label={`${unreadCount} sin leer`} style={{
+              position: 'absolute', top: 7, right: 8,
+              width: 8, height: 8, borderRadius: '50%',
+              background: '#ef4444', boxShadow: '0 0 0 2px #fff',
+              pointerEvents: 'none',
+            }} />
+          ) : (
             <span style={{
               position: 'absolute',
               top: 4, right: 4,
@@ -220,7 +230,7 @@ export function NotificationBell() {
             }}>
               {unreadCount > 9 ? '9+' : unreadCount}
             </span>
-          )}
+          ))}
         </button>
 
         {/* ── Dropdown panel ── */}

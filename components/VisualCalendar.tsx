@@ -65,10 +65,10 @@ export function stateColor(state: CellState) {
 // Metadatos de cada estado para leyendas y contadores. `dotColor` es el color del
 // punto; `outline` marca la categoría vacía (No work), que se dibuja sin relleno.
 export const CAL_STATE_META: Record<CellState, { label: string; desc: string; dotColor: string; outline?: boolean }> = {
-  libre:     { label: 'Libre',           desc: 'Disponible para clases',        dotColor: 'var(--cal-free-text)' },
-  ocupado:   { label: 'Ocupado',         desc: 'Clase con alumno',              dotColor: 'var(--cal-busy-text)' },
-  bloqueado: { label: 'En recuperación', desc: 'Clase de recuperación o ajuste', dotColor: 'var(--cal-recovery-text)' },
-  no_work:   { label: 'No work',         desc: 'No trabajás ese horario',       dotColor: 'transparent', outline: true },
+  libre:     { label: 'Libre',           desc: 'Disponible para clases',        dotColor: 'var(--cal-free-dot)' },
+  ocupado:   { label: 'Ocupado',         desc: 'Clase con alumno',              dotColor: 'var(--cal-busy-dot)' },
+  bloqueado: { label: 'En recuperación', desc: 'Clase de recuperación o ajuste', dotColor: 'var(--cal-recovery-dot)' },
+  no_work:   { label: 'No work',         desc: 'No trabajás ese horario',       dotColor: 'var(--cal-nowork-dot)' },
 };
 
 export function buildGridFromTeacher(
@@ -206,7 +206,7 @@ function CellMenu({
       <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 'var(--space-2)', minWidth: 210, boxShadow: 'var(--shadow-overlay)' }}
         onClick={e => e.stopPropagation()}>
         <div style={{ fontSize: 'var(--fs-caption)', fontWeight: 'var(--fw-medium)', color: 'var(--text-muted)', padding: '4px 10px 8px' }}>
-          {day} · {hour} 🇪🇸 / {toAR(hour)} 🇦🇷
+          {day} · {hour} ES / {toAR(hour)} AR
         </div>
         {options.map(opt => (
           <button key={opt.state} onClick={() => {
@@ -253,9 +253,27 @@ function CellMenu({
   );
 }
 
+// Rango compacto para el navegador: "20 – 25 Jul 2026". `formatWeekRange` (la
+// versión larga) se sigue exportando tal cual porque la usa el setter.
+function formatWeekRangeShort(dates: Date[]): string {
+  const first = dates[0];
+  const last  = dates[dates.length - 1];
+  const m1 = MONTH_NAMES_SHORT[first.getMonth()];
+  const m2 = MONTH_NAMES_SHORT[last.getMonth()];
+  return first.getMonth() === last.getMonth()
+    ? `${first.getDate()} – ${last.getDate()} ${m1} ${last.getFullYear()}`
+    : `${first.getDate()} ${m1} – ${last.getDate()} ${m2} ${last.getFullYear()}`;
+}
+
 export function VisualCalendar(props: Props) {
   const [menu, setMenu] = useState<{ day: string; hour: string } | null>(null);
   const [internalOffset, setInternalOffset] = useState(props.weekOffset ?? 0);
+  // Vista de móvil: agenda de un día o grilla semanal completa. Ambas se
+  // renderizan siempre y se alternan por CSS (evita medir el viewport en JS y
+  // el consiguiente desajuste de hidratación).
+  const [mobileView, setMobileView] = useState<'day' | 'week'>('day');
+  // null = todavía no eligió día → se muestra el de hoy si está en la semana.
+  const [dayPicked, setDayPicked] = useState<number | null>(null);
 
   // Live "now" — set on mount (avoids SSR hydration mismatch) and refreshed every
   // minute so the current-time line and dimming recalculate without a page reload.
@@ -330,85 +348,139 @@ export function VisualCalendar(props: Props) {
 
   const highlightDays = props.highlightSlots?.map(s => s.day) ?? [];
 
+  const activeDay = dayPicked ?? (todayColIndex >= 0 ? todayColIndex : 0);
+
+  // Contenido visual de una celda, compartido por la grilla y la agenda móvil.
+  function blockContent(cell: Cell) {
+    if (cell.state === 'no_work') {
+      return props.mode === 'teacher' ? <div className="vc-b-name">No work</div> : null;
+    }
+    if (cell.state === 'ocupado') {
+      return (
+        <>
+          <div className="vc-b-name">{cell.student || 'Ocupado'}</div>
+          <div className="vc-b-sub">Semanal</div>
+        </>
+      );
+    }
+    if (cell.state === 'bloqueado') {
+      return (
+        <>
+          <div className="vc-b-name">{cell.student || 'En recuperación'}</div>
+          <div className="vc-b-sub">{cell.student ? 'Recuperación' : 'Puntual'}</div>
+        </>
+      );
+    }
+    return <div className="vc-b-name">{props.mode === 'setter' ? '+ Asignar' : 'Libre'}</div>;
+  }
+
+  function cellTitle(cell: Cell) {
+    if (cell.state === 'ocupado' && cell.student) return `${cell.student} · Semanal`;
+    if (cell.state === 'bloqueado') {
+      return `En recuperación${cell.student ? ` · ${cell.student}` : ''}` +
+        `${cell.recoveryFor ? ` · de la clase del ${cell.recoveryFor}` : ''}` +
+        `${cell.recoveryNote ? ` · ${cell.recoveryNote}` : ''}`;
+    }
+    return cell.state;
+  }
+
+  function blockStyle(cell: Cell) {
+    const colors = stateColor(cell.state);
+    return { background: colors.bg, border: `1px solid ${colors.border}`, color: colors.text };
+  }
+
+  function isClickable(cell: Cell) {
+    return props.mode === 'teacher' || (props.mode === 'setter' && cell.state === 'libre');
+  }
+
   return (
     <div className="visual-calendar" style={{ userSelect: 'none' }}>
-      {/* Week navigation header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, background: 'var(--bg-surface-2)', border: '1px solid var(--border)', borderRadius: 10, padding: '8px 14px' }}>
-        <button
-          onClick={() => handleOffsetChange(offset - 1)}
-          style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 7, padding: '4px 12px', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: 16, lineHeight: 1 }}>
-          ‹
-        </button>
-        <div style={{ textAlign: 'center' }}>
-          <div className="cal-week-label" style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{weekLabel}</div>
-          {offset === 0 && <div style={{ fontSize: 10, color: '#1E9E3A', fontWeight: 600, marginTop: 1 }}>Semana actual</div>}
-          {offset !== 0 && (
-            <button onClick={() => handleOffsetChange(0)} style={{ background: 'none', border: 'none', fontSize: 10, color: 'var(--text-muted)', cursor: 'pointer', padding: 0, marginTop: 1 }}>
-              Volver a hoy
-            </button>
-          )}
-        </div>
-        <button
-          onClick={() => handleOffsetChange(offset + 1)}
-          style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 7, padding: '4px 12px', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: 16, lineHeight: 1 }}>
-          ›
-        </button>
-      </div>
-
-      {/* Stats */}
-      <div style={{ display: 'flex', gap: 'var(--space-4)', marginBottom: 'var(--space-3)', flexWrap: 'wrap', alignItems: 'center' }}>
-        {([
-          { state: 'libre'     as const, count: libre },
-          { state: 'ocupado'   as const, count: ocupado },
-          { state: 'bloqueado' as const, count: bloqueado },
-          { state: 'no_work'   as const, count: noWork },
-        ]).map(s => (
-          <div key={s.state} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-            <div aria-hidden style={{
-              width: 9, height: 9, borderRadius: '50%', flexShrink: 0,
-              background: CAL_STATE_META[s.state].outline ? 'transparent' : CAL_STATE_META[s.state].dotColor,
-              border: CAL_STATE_META[s.state].outline ? '1.5px solid var(--border-light)' : 'none',
-            }} />
-            <span style={{ fontSize: 'var(--fs-caption)', color: 'var(--text-secondary)' }}>
-              {CAL_STATE_META[s.state].label}: <b style={{ fontWeight: 'var(--fw-semibold)', color: 'var(--text-primary)' }}>{s.count}</b>
+      {/* Chips (leyenda + contadores fusionados) · navegador de semana */}
+      <div className="vc-top">
+        <div className="vc-chips">
+          {([
+            { state: 'libre'     as const, count: libre },
+            { state: 'ocupado'   as const, count: ocupado },
+            { state: 'bloqueado' as const, count: bloqueado },
+            { state: 'no_work'   as const, count: noWork },
+          ]).map(s => (
+            <span key={s.state} className="vc-chip" title={CAL_STATE_META[s.state].desc}>
+              <span aria-hidden className="vc-dot" style={{ background: CAL_STATE_META[s.state].dotColor }} />
+              {CAL_STATE_META[s.state].label} <b>{s.count}</b>
             </span>
+          ))}
+        </div>
+
+        <div className="vc-week">
+          <button className="vc-week-btn" aria-label="Semana anterior" onClick={() => handleOffsetChange(offset - 1)}>‹</button>
+          <div className="vc-week-label">
+            <div className="vc-week-range" title={weekLabel}>{formatWeekRangeShort(weekDates)}</div>
+            {offset === 0
+              ? <div className="vc-week-sub">Semana actual</div>
+              : <div className="vc-week-sub"><button onClick={() => handleOffsetChange(0)}>Volver a hoy</button></div>}
           </div>
-        ))}
-        <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 'auto' }}>
-          {props.mode === 'teacher' && '✏️ Clic en una celda para cambiar estado'}
-          {props.mode === 'setter'  && '🟢 Clic en una celda libre para asignar · Horario recurrente'}
-          {props.mode === 'readonly'&& '👁 Solo lectura'}
-        </span>
+          <button className="vc-week-btn" aria-label="Semana siguiente" onClick={() => handleOffsetChange(offset + 1)}>›</button>
+        </div>
       </div>
 
-      {/* Grid */}
-      <div style={{ overflowX: 'auto', borderRadius: 10, border: '1px solid var(--border)' }}>
-        <table style={{ borderCollapse: 'collapse', minWidth: 600, width: '100%' }}>
+      {/* Conmutador Día / Semana + pestañas de día (solo móvil) */}
+      <div className="vc-mobile">
+        <div className="vc-switch" role="group" aria-label="Vista del calendario">
+          <button aria-pressed={mobileView === 'day'} onClick={() => setMobileView('day')}>Día</button>
+          <button aria-pressed={mobileView === 'week'} onClick={() => setMobileView('week')}>Semana</button>
+        </div>
+        {mobileView === 'day' && (
+          <div className="vc-daytabs" role="group" aria-label="Día de la semana">
+            {DAYS.map((day, i) => (
+              <button key={day} className="vc-daytab" aria-pressed={i === activeDay} onClick={() => setDayPicked(i)}>
+                <div className="vc-daytab-name">{day.slice(0, 3)}</div>
+                <div className="vc-daytab-num">{weekDates[i].getDate()}</div>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Agenda del día (móvil, vista "Día") */}
+      <div className={`vc-agenda${mobileView === 'week' ? ' vc-hide-mobile' : ''}`}>
+        {HOURS_ES.map(hour => {
+          const day  = DAYS[activeDay];
+          const cell = getCell(day, hour);
+          const isTodayCol = activeDay === todayColIndex;
+          const dimPast = isTodayCol && currentHour >= 0 && parseInt(hour) < currentHour;
+          return (
+            <div key={hour} className="vc-arow">
+              <div className="vc-hcell" style={{ position: 'static', border: 'none', padding: 0 }}>
+                <div className="vc-h-es">{hour}</div>
+                <div className="vc-h-ar">{toAR(hour)}</div>
+              </div>
+              <div
+                className={`vc-block${isClickable(cell) ? ' is-clickable' : ''}${dimPast ? ' is-past' : ''}`}
+                style={blockStyle(cell)}
+                title={cellTitle(cell)}
+                onClick={() => handleCellClick(day, hour)}
+              >
+                {blockContent(cell)}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Grilla semanal (escritorio siempre; móvil solo en vista "Semana") */}
+      <div className={`vc-grid${mobileView === 'day' ? ' vc-hide-mobile' : ''}`}>
+        <table className="vc-table">
           <thead>
             <tr>
-              <th style={{
-                padding: '8px 10px', fontSize: 11, fontWeight: 600, color: 'var(--text-muted)',
-                background: 'var(--bg-surface-2)', borderBottom: '1px solid var(--border)',
-                textAlign: 'left', position: 'sticky', left: 0, zIndex: 2, minWidth: 84,
-              }}>🇪🇸 / 🇦🇷</th>
+              <th className="vc-th-hours">ES / AR</th>
               {DAYS.map((day, i) => {
                 const date = weekDates[i];
-                const dayNum = date.getDate();
-                const monthShort = MONTH_NAMES_SHORT[date.getMonth()];
                 const hl = highlightDays.includes(day);
-                const isToday = date.toDateString() === new Date().toDateString();
+                const isToday = i === todayColIndex;
                 return (
-                  <th key={day} style={{
-                    padding: '6px 6px', fontSize: 12, fontWeight: 700,
-                    color: hl ? '#1E9E3A' : isToday ? '#1E9E3A' : 'var(--text-primary)',
-                    background: hl ? 'rgba(30,158,58,0.08)' : isToday ? 'rgba(30,158,58,0.05)' : 'var(--bg-surface-2)',
-                    borderBottom: `2px solid ${hl ? '#1E9E3A' : isToday ? 'rgba(30,158,58,0.4)' : 'var(--border)'}`,
-                    textAlign: 'center', minWidth: 86,
-                  }}>
+                  <th key={day} className={hl ? 'is-highlight' : isToday ? 'is-today' : undefined}>
                     <div>{day}</div>
-                    <div style={{ fontSize: 10, fontWeight: isToday ? 700 : 500, color: isToday ? '#1E9E3A' : 'var(--text-muted)', marginTop: 1 }}>
-                      {dayNum} {monthShort}
-                    </div>
+                    <div className="vc-th-date">{date.getDate()} {MONTH_NAMES_SHORT[date.getMonth()]}</div>
                   </th>
                 );
               })}
@@ -416,103 +488,36 @@ export function VisualCalendar(props: Props) {
           </thead>
           <tbody>
             {HOURS_ES.map(hour => (
-              <tr key={hour} style={{ borderBottom: '1px solid rgba(200,200,195,0.4)' }}>
-                <td style={{
-                  padding: '4px 10px', fontSize: 11, lineHeight: 1.4,
-                  background: 'var(--bg-surface-2)', position: 'sticky', left: 0, zIndex: 1,
-                  borderRight: '1px solid var(--border)', whiteSpace: 'nowrap',
-                  color: 'var(--text-secondary)',
-                }}>
-                  <div style={{ fontWeight: 600 }}>{hour}</div>
-                  <div style={{ color: 'var(--text-muted)', fontSize: 10 }}>{toAR(hour)}</div>
+              <tr key={hour}>
+                <td className="vc-hcell">
+                  <div className="vc-h-es">{hour}</div>
+                  <div className="vc-h-ar">{toAR(hour)}</div>
                 </td>
-                {DAYS.map((day, dayIdx) => {
+                {DAYS.map((day, colIdx) => {
                   const cell = getCell(day, hour);
-                  const colors = stateColor(cell.state);
                   const hlCell = isHighlighted(day, hour);
 
-                  const isTodayCol = dayIdx === todayColIndex;
+                  const isTodayCol = colIdx === todayColIndex;
                   const hourInt    = parseInt(hour);
                   // Past cells: only in today's column, only hours strictly before now.
                   const dimPast    = isTodayCol && currentHour >= 0 && hourInt < currentHour;
                   // "Now" line sits inside today's current-hour cell, at the right minute.
                   const showNowLine = isTodayCol && hourInt === currentHour;
 
-                  let cursor = 'default';
-                  if (props.mode === 'teacher') cursor = 'pointer';
-                  if (props.mode === 'setter' && cell.state === 'libre') cursor = 'pointer';
-
-                  let bg = colors.bg;
-                  let border = `1px solid ${colors.border}`;
-                  if (hlCell) {
-                    bg = 'rgba(30,158,58,0.2)';
-                    border = '2px solid rgba(30,158,58,0.7)';
-                  }
-
                   return (
-                    <td key={day}
-                      onClick={() => handleCellClick(day, hour)}
-                      title={
-                        cell.state === 'ocupado' && cell.student ? `${cell.student} · Semanal`
-                        : cell.state === 'bloqueado'
-                          ? `En recuperación${cell.student ? ` · ${cell.student}` : ''}${cell.recoveryFor ? ` · de la clase del ${cell.recoveryFor}` : ''}${cell.recoveryNote ? ` · ${cell.recoveryNote}` : ''}`
-                        : cell.state
-                      }
-                      style={{
-                        height: 40, padding: '2px 3px',
-                        background: bg, border, cursor,
-                        transition: 'background 0.08s, opacity 0.3s',
-                        textAlign: 'center', verticalAlign: 'middle',
-                        position: showNowLine ? 'relative' : undefined,
-                        opacity: dimPast ? 0.5 : 1,
-                      }}>
+                    <td key={day} className="vc-cell" onClick={() => handleCellClick(day, hour)}>
                       {showNowLine && (
-                        <div style={{
-                          position: 'absolute', left: 0, right: 0,
-                          top: `${(currentMinute / 60) * 100}%`,
-                          height: 2, background: '#1E9E3A',
-                          zIndex: 3, pointerEvents: 'none',
-                          boxShadow: '0 0 4px rgba(30,158,58,0.6)',
-                        }}>
-                          <span style={{
-                            position: 'absolute', left: 2, top: '50%', transform: 'translateY(-50%)',
-                            background: '#1E9E3A', color: 'white', fontSize: 9, fontWeight: 700,
-                            padding: '1px 5px', borderRadius: 7, lineHeight: 1.3, whiteSpace: 'nowrap',
-                          }}>
-                            {nowLabel}
-                          </span>
-                          <span style={{
-                            position: 'absolute', left: -3, top: '50%', transform: 'translateY(-50%)',
-                            width: 6, height: 6, borderRadius: '50%', background: '#1E9E3A',
-                          }} />
+                        <div className="vc-now" style={{ top: `${(currentMinute / 60) * 100}%` }}>
+                          <span className="vc-now-label">{nowLabel}</span>
                         </div>
                       )}
-                      {cell.state !== 'no_work' && (
-                        <div style={{
-                          fontSize: 9, fontWeight: 600, color: colors.text,
-                          lineHeight: 1.2, overflow: 'hidden', textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap', maxWidth: 82, margin: '0 auto',
-                        }}>
-                          {cell.state === 'ocupado'
-                            ? <>
-                                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                  {cell.student || 'Ocupado'}
-                                </div>
-                                <div style={{ fontSize: 8, color: 'var(--text-muted)', fontWeight: 400 }}>· Semanal</div>
-                              </>
-                            : cell.state === 'bloqueado'
-                              ? <>
-                                  <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                    {cell.student || 'En recuperación'}
-                                  </div>
-                                  <div style={{ fontSize: 8, color: 'var(--warn)', opacity: 0.9, fontWeight: 400 }}>{cell.student ? 'Recuperación' : '· Puntual'}</div>
-                                </>
-                              : props.mode === 'setter' ? '+ Asignar' : 'Libre'}
-                        </div>
-                      )}
-                      {cell.state === 'no_work' && props.mode === 'teacher' && (
-                        <div style={{ fontSize: 9, color: 'var(--text-muted)', opacity: 0.5 }}>No work</div>
-                      )}
+                      <div
+                        className={`vc-block${isClickable(cell) ? ' is-clickable' : ''}${dimPast ? ' is-past' : ''}${hlCell ? ' is-highlight' : ''}`}
+                        style={blockStyle(cell)}
+                        title={cellTitle(cell)}
+                      >
+                        {blockContent(cell)}
+                      </div>
                     </td>
                   );
                 })}
@@ -523,13 +528,12 @@ export function VisualCalendar(props: Props) {
       </div>
 
       {props.mode === 'teacher' && (
-        <div style={{ marginTop: 'var(--space-3)', fontSize: 'var(--fs-caption)', color: 'var(--text-muted)' }}>
-          Clic en cualquier celda para cambiar su estado.
-        </div>
+        <div className="vc-hint">Clic en cualquier celda para cambiar su estado.</div>
       )}
       {props.mode === 'setter' && (
-        <div style={{ marginTop: 'var(--space-2)', fontSize: 'var(--fs-caption)', color: 'var(--text-muted)' }}>
-          El horario asignado se repetirá <strong style={{ fontWeight: 'var(--fw-semibold)' }}>todas las semanas</strong> de forma automática.
+        <div className="vc-hint">
+          Clic en una celda libre para asignar. El horario asignado se repetirá{' '}
+          <strong style={{ fontWeight: 600 }}>todas las semanas</strong> de forma automática.
         </div>
       )}
 
