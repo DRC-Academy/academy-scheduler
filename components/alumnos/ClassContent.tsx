@@ -4,11 +4,45 @@
 
 import { isConversacionGuiada, type ConversacionGuiadaIA, type GeneratedClassIA } from '@/lib/aiTypes';
 import { Collapsible, bodyTextStyle, DRC_GREEN } from '@/components/alumnos/ui';
+import { classSegments } from '@/lib/studentViz';
 
 export function ClassContent({ nc }: { nc: GeneratedClassIA }) {
   if (isConversacionGuiada(nc)) return <ConversacionGuiadaContent nc={nc} />;
+
+  // Barra de tiempo: los minutos salen del `duration` de cada bloque. Si alguno
+  // no los declara, classSegments devuelve null y no se pinta nada (mejor eso
+  // que repartir proporciones inventadas).
+  const segments = classSegments([
+    { key: 'warmUp', title: nc.warmUp?.title || 'Warm-up', duration: nc.warmUp?.duration ?? '' },
+    { key: 'main', title: nc.mainContent?.title || 'Contenido principal', duration: nc.mainContent?.duration ?? '' },
+    { key: 'practice', title: nc.practiceActivity?.title || 'Práctica', duration: nc.practiceActivity?.duration ?? '' },
+    { key: 'closing', title: nc.closing?.title || 'Cierre', duration: nc.closing?.duration ?? '' },
+  ]);
+
   return (
     <div>
+      {segments && (
+        <div style={{ marginBottom: 18 }}>
+          <div className="sp-card-title">Estructura de la clase</div>
+          <div className="sp-timebar" role="img"
+            aria-label={segments.map(s => `${s.title}: ${s.minutes} minutos`).join('. ')}>
+            {segments.map(s => (
+              <span key={s.key} className="sp-timebar-seg"
+                style={{ width: `${s.pct}%`, background: s.color }} />
+            ))}
+          </div>
+          <div className="sp-seglist">
+            {segments.map(s => (
+              <div key={s.key} className="sp-seg">
+                <span className="sp-seg-dot" style={{ background: s.color }} />
+                <span className="sp-seg-title">{s.title}</span>
+                <span className="sp-seg-min">{s.minutes} min</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {nc.objectives?.length > 0 && (
         <Collapsible title="Objetivos">
           <ul style={{ margin: 0, paddingLeft: 18, ...bodyTextStyle }}>
@@ -39,7 +73,7 @@ function ConversacionGuiadaContent({ nc }: { nc: ConversacionGuiadaIA }) {
   return (
     <div>
       <Collapsible title="Tipo de clase">
-        <div style={bodyTextStyle}>💬 Conversación guiada — charla continua. El tópico lo elige el alumno; vos sostenés la habilidad preparada y corregís en vivo.</div>
+        <div style={bodyTextStyle}>Conversación guiada — charla continua. El tópico lo elige el alumno; vos sostenés la habilidad preparada y corregís en vivo.</div>
       </Collapsible>
       <Collapsible title="Habilidad a trabajar" defaultOpen>
         <div style={bodyTextStyle}>{nc.skillObjective}</div>
@@ -81,9 +115,9 @@ function ConversacionGuiadaContent({ nc }: { nc: ConversacionGuiadaIA }) {
 
 function ChallengeBlock({ challenge }: { challenge: string }) {
   return (
-    <div style={{ background: DRC_GREEN, color: 'white', borderRadius: 10, padding: '12px 15px', margin: '10px 0' }}>
-      <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.1em', opacity: 0.9, marginBottom: 4 }}>🏆 Tu desafío</div>
-      <div style={{ ...bodyTextStyle, color: 'white', whiteSpace: 'pre-wrap' }}>{challenge}</div>
+    <div className="sp-challenge" style={{ margin: '14px 0' }}>
+      <div className="sp-card-title">Tu desafío</div>
+      <div className="sp-challenge-body" style={{ whiteSpace: 'pre-wrap' }}>{challenge}</div>
     </div>
   );
 }
@@ -112,7 +146,7 @@ export function ClassCard({ nc, level, children }: { nc: GeneratedClassIA; level
         {nc.classTitle}
       </div>
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
-        <ClassBadge>{conversacion ? '💬 Conversación guiada' : '📚 Metodología aplicada'}</ClassBadge>
+        <ClassBadge>{conversacion ? 'Conversación guiada' : 'Metodología aplicada'}</ClassBadge>
         {level && <ClassBadge>Nivel {level}</ClassBadge>}
       </div>
       <ClassContent nc={nc} />

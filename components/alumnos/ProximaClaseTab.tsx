@@ -223,7 +223,7 @@ export default function ProximaClaseTab(p: Props) {
           <div style={{ marginTop: 24 }}>
             <ClassCard nc={newClass} level={p.assignment.studentLevel} />
             <div style={{ marginTop: 10 }}>
-              <button onClick={() => handlePdf(newClass)} style={btnSecondary}>⬇️ PDF</button>
+              <button onClick={() => handlePdf(newClass)} style={btnSecondary}>PDF</button>
             </div>
           </div>
         )}
@@ -291,7 +291,7 @@ export default function ProximaClaseTab(p: Props) {
         <div className="alu-btn-row" style={{ display: 'flex', gap: 10, marginTop: 20 }}>
           <button onClick={() => setStage('registering')} style={btnPrimary}>Registrar clase dada</button>
           <button onClick={handleCopy} style={btnSecondary}>{copied ? 'Copiada' : 'Copiar clase completa'}</button>
-          <button onClick={() => handlePdf(p.nextClass!)} style={btnSecondary}>⬇️ PDF</button>
+          <button onClick={() => handlePdf(p.nextClass!)} style={btnSecondary}>PDF</button>
           <button
             onClick={() => generate(p.nextClass!.classNumber, lastAnalysis)}
             disabled={generating}

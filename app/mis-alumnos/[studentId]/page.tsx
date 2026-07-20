@@ -6,7 +6,7 @@
 // El identificador de la URL puede ser el student_id real o, si el alumno no lo
 // tiene, el id de la assignment: se resuelve contra las dos cosas.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { NavBar } from '@/components/NavBar';
@@ -18,6 +18,9 @@ import { loadStudentBundles, norm, type StudentBundle } from '@/lib/misAlumnos';
 import { regenerateFicha } from '@/lib/aiClient';
 import { getProgressLink } from '@/lib/progressClient';
 import { getOrCreateFormLink } from '@/lib/formClient';
+import {
+  cefrSteps, milestoneProgress, skillsFromResponses, type SkillGauge,
+} from '@/lib/studentViz';
 import { classCategoryBadge } from '@/lib/finance';
 import { FORM_QUESTIONS } from '@/lib/formQuestions';
 import {
@@ -143,6 +146,9 @@ function StudentPageContent() {
   const mainSlot = a.slots?.[0] ? `${a.slots[0].day} ${a.slots[0].hour}` : '—';
 
   const initials = a.studentName.trim().split(/\s+/).slice(0, 2).map(w => w[0]?.toUpperCase() ?? '').join('');
+  const progressScore = profile?.progress_score ?? null;
+  // Única fuente por destreza: la autoevaluación del formulario inicial.
+  const skills = skillsFromResponses(asObject<Record<string, unknown>>(profile?.form_responses));
 
   return (
     <>
@@ -185,39 +191,81 @@ function StudentPageContent() {
       </nav>
 
       <div className="sp">
-        {/* ── Cabecera del alumno ── */}
-        <div className="sp-head">
-          <div className="sp-avatar" aria-hidden>{initials || '?'}</div>
-          <div style={{ minWidth: 0 }}>
-            <h1 className="sp-name">{a.studentName}</h1>
-            <div className="sp-sub">
-              <span>{[a.studentLevel, plan.label].filter(Boolean).join(' · ')}</span>
-              {risk && <RiskDot risk={risk} size={10} />}
-            </div>
-            <div className="sp-sub" style={{ color: 'var(--sp-t3)', fontSize: 12.5 }}>
-              Profesor: {teacher.name}
-              {startIso && ` · Desde: ${formatDate(startIso)}`}
+        {/* ── Identidad + progreso ── */}
+        <div className="sp-card sp-hero" style={{ marginBottom: 18 }}>
+          <div className="sp-hero-top">
+            <div className="sp-avatar" aria-hidden>{initials || '?'}</div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <h1 className="sp-name">{a.studentName}</h1>
+                {risk && (
+                  <span className="sp-chip" style={{ background: RISK_TEXT[risk].color + '1a', borderColor: RISK_TEXT[risk].color + '55', color: RISK_TEXT[risk].color }}>
+                    <span className="mcf-dot" style={{ background: RISK_TEXT[risk].color }} />
+                    {RISK_TEXT[risk].label}
+                  </span>
+                )}
+              </div>
+              <div className="sp-sub" style={{ color: 'var(--sp-t2)' }}>
+                {[a.studentLevel, plan.label, teacher.name, startIso ? `Desde ${formatDate(startIso)}` : null]
+                  .filter(Boolean).join(' · ')}
+              </div>
             </div>
           </div>
-        </div>
 
-        {/* ── Métricas rápidas ── */}
-        <div className="sp-quick">
-          <div>
-            <div className="sp-quick-label">Clases</div>
-            <div className="sp-quick-value">{classNumber}</div>
+          <div className="sp-hero-grid">
+            {/* Anillo: progress_score real (1-10). Sin dato → anillo vacío. */}
+            <div
+              className={`sp-ring${progressScore == null ? ' is-empty' : ''}`}
+              style={{ ['--sp-pct' as string]: progressScore != null ? progressScore * 10 : 0 }}
+              role="img"
+              aria-label={progressScore != null ? `Progreso ${progressScore} de 10` : 'Progreso sin datos'}
+            >
+              <div className="sp-ring-inner">
+                <div>
+                  <div className="sp-ring-value">{progressScore != null ? `${progressScore}/10` : '—'}</div>
+                  <div className="sp-ring-label">Progreso</div>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
+              <div>
+                <div className="sp-card-title">Nivel</div>
+                <div className="sp-cefr">
+                  {cefrSteps(profile?.current_level || a.studentLevel).map(s => (
+                    <span
+                      key={s.label}
+                      className={`sp-cefr-step${s.state === 'done' ? ' is-done' : s.state === 'current' ? ' is-current' : ''}`}
+                      aria-current={s.state === 'current' ? 'step' : undefined}
+                    >
+                      {s.label}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              <SkillGauges skills={skills} formDate={profile?.form_completed_at ?? null} />
+            </div>
           </div>
-          <div>
-            <div className="sp-quick-label">Antigüedad</div>
-            <div className="sp-quick-value">{antiquity != null ? `${antiquity} días` : '—'}</div>
-          </div>
-          <div>
-            <div className="sp-quick-label">Horas/sem</div>
-            <div className="sp-quick-value">{a.slots?.length ?? 0}h</div>
-          </div>
-          <div>
-            <div className="sp-quick-label">Próxima</div>
-            <div className="sp-quick-value">{mainSlot}</div>
+
+          {/* ── KPIs ── */}
+          <div className="sp-kpis">
+            <div className="sp-kpi">
+              <div className="sp-kpi-label">Clases</div>
+              <div className="sp-kpi-value">{classNumber}</div>
+            </div>
+            <div className="sp-kpi">
+              <div className="sp-kpi-label">Antigüedad</div>
+              <div className="sp-kpi-value">{antiquity != null ? `${antiquity} días` : '—'}</div>
+            </div>
+            <div className="sp-kpi">
+              <div className="sp-kpi-label">Horas/sem</div>
+              <div className="sp-kpi-value">{a.slots?.length ?? 0}h</div>
+            </div>
+            <div className="sp-kpi">
+              <div className="sp-kpi-label">Próxima</div>
+              <div className="sp-kpi-value">{mainSlot}</div>
+            </div>
           </div>
         </div>
 
@@ -234,7 +282,10 @@ function StudentPageContent() {
       {tab === 'seguimiento' && (
         <SeguimientoTab
           analyses={analyses} risk={risk}
-          progressScore={profile?.progress_score ?? null}
+          progressScore={progressScore}
+          classNumber={classNumber}
+          skills={skills}
+          formDate={profile?.form_completed_at ?? null}
           onGoToProxima={() => setTab('proxima')}
         />
       )}
@@ -263,6 +314,47 @@ function StudentPageContent() {
         {toast && <Toast message={toast} />}
       </div>
     </>
+  );
+}
+
+/**
+ * Medidores por destreza. El único dato real es la AUTOEVALUACIÓN del formulario
+ * inicial (q6_nivel): se rotula como tal, con su fecha, para no leerla como una
+ * evolución. Sin formulario respondido → estado "sin datos", nunca cifras fijas.
+ */
+function SkillGauges({ skills, formDate }: { skills: SkillGauge[] | null; formDate: string | null }) {
+  return (
+    <div>
+      <div className="sp-card-title">
+        Autoevaluación inicial
+        {formDate && <span style={{ fontWeight: 400, letterSpacing: 0, textTransform: 'none' }}> · {formatDate(formDate)}</span>}
+      </div>
+
+      {skills ? (
+        <div className="sp-gauges">
+          {skills.map(s => (
+            <div key={s.label} className="sp-gauge">
+              <span className="sp-gauge-label">{s.label}</span>
+              <span
+                className="sp-gauge-track"
+                role="img"
+                aria-label={`${s.label}: ${s.levelLabel}`}
+              >
+                <span
+                  className={`sp-gauge-fill${s.pct <= 40 ? ' is-warn' : ''}`}
+                  style={{ width: `${s.pct}%` }}
+                />
+              </span>
+              <span className="sp-gauge-value">{s.levelLabel}</span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="sp-body" style={{ color: 'var(--sp-t3)', fontSize: 13 }}>
+          Sin datos: el alumno todavía no completó el formulario inicial.
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -399,10 +491,10 @@ function PerfilTab({ bundle, ficha, risk, teacher, onToast, onRefresh }: {
       {/* ── Ancho completo ── */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginTop: 16 }}>
         {ficha.recommendedFocus && (
-          <div className="sp-card">
+          <div className="sp-card sp-amber">
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 12 }}>
               <span className="sp-card-title" style={{ marginBottom: 0 }}>Foco actual</span>
-              <span className="sp-badge-yellow">Prioridad actual</span>
+              <span className="sp-badge-yellow">Prioridad</span>
             </div>
             <div className="sp-body">{ficha.recommendedFocus}</div>
           </div>
@@ -464,12 +556,17 @@ function Field({ label, value }: { label: string; value?: string | null }) {
 }
 
 // ═══ TAB SEGUIMIENTO ══════════════════════════════════════════════════════════
-function SeguimientoTab({ analyses, risk, progressScore, onGoToProxima }: {
+function SeguimientoTab({ analyses, risk, progressScore, classNumber, skills, formDate, onGoToProxima }: {
   analyses: ClassAnalysisRow[];
   risk: RiskSignal | null;
   progressScore: number | null;
+  classNumber: number;
+  skills: SkillGauge[] | null;
+  formDate: string | null;
   onGoToProxima: () => void;
 }) {
+  const milestone = milestoneProgress(classNumber);
+
   if (analyses.length === 0) {
     return (
       <div className="sp-card sp-empty">
@@ -504,6 +601,41 @@ function SeguimientoTab({ analyses, risk, progressScore, onGoToProxima }: {
             Señal actual{progressScore != null ? ` · progreso ${progressScore}/10` : ''}
           </div>
         </div>
+      </div>
+
+      {/* Trayectoria hacia el próximo hito REAL (1 · 15 · 30 · 50). */}
+      {milestone && (
+        <div className="sp-card" style={{ marginBottom: 16 }}>
+          <div className="sp-card-title">
+            Trayectoria · clase {milestone.current} de {milestone.target}
+          </div>
+          <div className="sp-nodes" role="img"
+            aria-label={`${milestone.current} de ${milestone.target} clases hacia el próximo hito`}>
+            {Array.from({ length: milestone.target }, (_, i) => {
+              const n = i + 1;
+              const done = n <= milestone.current;
+              const current = n === milestone.current;
+              return (
+                <Fragment key={n}>
+                  {i > 0 && <span className={`sp-node-link${done ? ' is-done' : ''}`} />}
+                  <span
+                    className={`sp-node${done ? ' is-done' : ''}${current ? ' is-current' : ''}`}
+                    title={`Clase ${n}`}
+                  >
+                    {done ? '✓' : ''}
+                  </span>
+                </Fragment>
+              );
+            })}
+          </div>
+          <div className="sp-body" style={{ fontSize: 12.5, color: 'var(--sp-t3)' }}>
+            Próximo hito: clase {milestone.target}
+          </div>
+        </div>
+      )}
+
+      <div className="sp-card" style={{ marginBottom: 16 }}>
+        <SkillGauges skills={skills} formDate={formDate} />
       </div>
 
       <div className="sp-timeline">
