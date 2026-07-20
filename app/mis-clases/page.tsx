@@ -11,6 +11,7 @@ import { calculateTeacherFinance, recordVerification, ClassFinanceRow, ingresoBa
 import { dbGetAssignmentsByTeacher } from '@/lib/db';
 import { classifyPlan } from '@/lib/productUtils';
 import { analyzeTranscriptOnly, saveAnalysis } from '@/lib/aiClient';
+import { checkTranscriptDuplicates, transcriptHash, type DupeCheck } from '@/lib/transcriptDupes';
 import { Teacher, Assignment, ClassRecordType, ClassRecord } from '@/types';
 
 // Etiquetas singular/plural por tipo de falta (para los mensajes de límite).
@@ -61,13 +62,82 @@ function daysDiff(aIso: string, bIso: string): number {
   return Math.round((new Date(bIso + 'T00:00:00').getTime() - new Date(aIso + 'T00:00:00').getTime()) / 86400000);
 }
 
+/**
+ * Aviso de transcript duplicado. Tres casos:
+ *   · blocked      → texto idéntico ya registrado para ESTA clase: no se guarda.
+ *   · other-class  → texto idéntico de otro alumno/fecha: se puede confirmar.
+ *   · replace      → ya hay transcript de esta clase: se ofrece reemplazarlo.
+ */
+function DuplicateDialog({ check, onCancel, onConfirm }: {
+  check: DupeCheck; onCancel: () => void; onConfirm: () => void;
+}) {
+  if (check.kind === 'none') return null;
+
+  const when = check.row.class_date ? finShortDate(check.row.class_date) : 'fecha desconocida';
+
+  const copy = check.kind === 'blocked'
+    ? {
+        title: 'Este transcript ya fue registrado',
+        body: `Ya existe exactamente este mismo texto para ${check.row.student_name} el ${when}. No hace falta subirlo otra vez.`,
+        confirm: null,
+      }
+    : check.kind === 'other-class'
+      ? {
+          title: '¿Es el transcript correcto?',
+          body: `Este transcript parece ser el mismo que ya subiste para ${check.row.student_name} el ${when}. ¿Estás seguro de que es correcto?`,
+          confirm: 'Confirmar igualmente',
+        }
+      : {
+          title: 'Ya existe un transcript para esta clase',
+          body: `Registraste una clase con ${check.row.student_name} el ${when}. ¿Querés reemplazar el transcript existente? Se volverá a analizar con el texto nuevo.`,
+          confirm: 'Reemplazar',
+        };
+
+  return (
+    <div
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 110, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+      onClick={e => { if (e.target === e.currentTarget) onCancel(); }}
+      role="alertdialog"
+      aria-modal="true"
+    >
+      <div style={{ background: '#fff', borderRadius: 14, padding: 24, width: '100%', maxWidth: 420 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 8 }}>
+          <span style={{ width: 9, height: 9, borderRadius: '50%', background: check.kind === 'blocked' ? '#dc4a38' : '#e0912f' }} />
+          <span style={{ fontSize: 16, fontWeight: 700, color: '#1a1c1a' }}>{copy.title}</span>
+        </div>
+        <p style={{ fontSize: 13.5, color: '#5f6360', lineHeight: 1.65, margin: '0 0 18px' }}>{copy.body}</p>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button
+            onClick={onCancel}
+            style={{ flex: 1, padding: '10px', borderRadius: 9, border: '1px solid var(--border)', background: 'transparent', color: '#5f6360', cursor: 'pointer', fontSize: 13.5, fontFamily: 'inherit' }}
+          >
+            {copy.confirm ? 'Cancelar' : 'Cerrar'}
+          </button>
+          {copy.confirm && (
+            <button
+              onClick={onConfirm}
+              style={{ flex: 2, padding: '10px', borderRadius: 9, border: 'none', background: '#1E9E3A', color: '#fff', cursor: 'pointer', fontSize: 13.5, fontWeight: 700, fontFamily: 'inherit' }}
+            >
+              {copy.confirm}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Modal "Añadir clase"
 function AddClassModal({ teacher, myAssignments, classRecords, onClose, onSaved }: {
   teacher: Teacher;
   myAssignments: Assignment[];
   classRecords: ClassRecord[];
   onClose: () => void;
-  onSaved: (studentName: string, date: string, time: string | undefined, transcript: string, classType: ClassRecordType, comment: string) => Promise<void>;
+  onSaved: (
+    studentName: string, date: string, time: string | undefined, transcript: string,
+    classType: ClassRecordType, comment: string,
+    transcriptHash: string, replaceId: string | null,
+  ) => Promise<void>;
 }) {
   const studentOptions = useMemo(() => {
     const seen = new Set<string>();
@@ -87,6 +157,9 @@ function AddClassModal({ teacher, myAssignments, classRecords, onClose, onSaved 
   const [comment, setComment] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [checking, setChecking] = useState(false);
+  // Duplicado detectado a la espera de decisión del profesor.
+  const [dupe, setDupe] = useState<{ check: DupeCheck; hash: string } | null>(null);
 
   const needsTranscript = CLASS_TYPE_OPTIONS.find(o => o.value === classType)?.needsTranscript ?? true;
   const isFaltaType = classType === 'falta_sin_aviso' || classType === 'cancelacion_hora';
@@ -121,16 +194,44 @@ function AddClassModal({ teacher, myAssignments, classRecords, onClose, onSaved 
   const canSave = !!studentName && !!date && !saving && !limitReached &&
     (needsTranscript ? words >= 30 : !!comment.trim());
 
-  async function handleSave() {
-    if (!canSave) return;
+  // Guardado real. `replaceId` llega solo cuando el profesor confirmó reemplazar
+  // el transcript de una clase ya registrada.
+  async function persist(hash: string, replaceId: string | null) {
     setSaving(true); setError('');
     try {
-      await onSaved(studentName, date, time || undefined, needsTranscript ? transcript.trim() : '', classType, comment.trim());
+      await onSaved(
+        studentName, date, time || undefined,
+        needsTranscript ? transcript.trim() : '',
+        classType, comment.trim(), hash, replaceId,
+      );
       onClose();
     } catch (e: any) {
       setError(e?.message ?? 'No se pudo guardar el registro.');
       setSaving(false);
     }
+  }
+
+  async function handleSave() {
+    if (!canSave) return;
+
+    // Las faltas/cancelaciones no llevan transcript: nada que verificar.
+    if (!needsTranscript) { await persist('', null); return; }
+
+    const hash = transcriptHash(transcript);
+    setChecking(true);
+    let result: DupeCheck;
+    try {
+      result = await checkTranscriptDuplicates({
+        teacherId: teacher.id, studentName, classDate: date, hash,
+      });
+    } catch {
+      result = { kind: 'none' };   // la verificación nunca debe impedir guardar
+    } finally {
+      setChecking(false);
+    }
+
+    if (result.kind === 'none') { await persist(hash, null); return; }
+    setDupe({ check: result, hash });
   }
 
   const inputStyle = { width: '100%', padding: '9px 12px', borderRadius: 8, border: '1.5px solid var(--border)', fontSize: 13, background: 'white', color: '#111827', fontFamily: 'inherit', boxSizing: 'border-box' as const };
@@ -213,13 +314,25 @@ function AddClassModal({ teacher, myAssignments, classRecords, onClose, onSaved 
               {error && <div style={{ fontSize: 12, color: '#ef4444' }}>{error}</div>}
               <div style={{ display: 'flex', gap: 10, marginTop: 2 }}>
                 <button onClick={onClose} disabled={saving} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#6b7280', cursor: saving ? 'not-allowed' : 'pointer', fontSize: 14, fontFamily: 'inherit' }}>Cancelar</button>
-                <button onClick={handleSave} disabled={!canSave} style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: canSave ? '#1E9E3A' : '#d1d5db', color: 'white', cursor: canSave ? 'pointer' : 'not-allowed', fontSize: 14, fontWeight: 700, fontFamily: 'inherit' }}>
-                  {saving ? 'Guardando...' : 'Guardar registro'}
+                <button onClick={handleSave} disabled={!canSave || checking} style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: canSave && !checking ? '#1E9E3A' : '#d1d5db', color: 'white', cursor: canSave && !checking ? 'pointer' : 'not-allowed', fontSize: 14, fontWeight: 700, fontFamily: 'inherit' }}>
+                  {checking ? 'Verificando...' : saving ? 'Guardando...' : 'Guardar registro'}
                 </button>
               </div>
             </>
           )}
         </div>
+
+        {dupe && (
+          <DuplicateDialog
+            check={dupe.check}
+            onCancel={() => setDupe(null)}
+            onConfirm={() => {
+              const replaceId = dupe.check.kind === 'replace' ? dupe.check.row.id : null;
+              setDupe(null);
+              persist(dupe.hash, replaceId);
+            }}
+          />
+        )}
       </div>
     </div>
   );
@@ -320,8 +433,13 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
   async function handleAddClass(
     studentName: string, date: string, time: string | undefined,
     transcript: string, classType: ClassRecordType, comment: string,
+    transcriptHashValue: string, replaceId: string | null,
   ) {
-    await registerClassRecord(teacher.id, studentName, date, time, null, classType, comment);
+    // Al reemplazar un transcript NO se crea otro class_record: la clase ya
+    // estaba registrada y duplicarla contaría dos veces en el cálculo.
+    if (!replaceId) {
+      await registerClassRecord(teacher.id, studentName, date, time, null, classType, comment);
+    }
 
     if (!transcript.trim()) return;
     const asgn = myAssignments.find(a => a.studentName === studentName);
@@ -334,8 +452,11 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
       plan: asgn?.plan ?? null,
       level: asgn?.studentLevel ?? null,
       classDate: date,
+      transcriptHash: transcriptHashValue || null,
+      replaceId,
     };
-    // El endpoint separa analizar de guardar: primero el análisis, luego el alta.
+    // El endpoint separa analizar de guardar: primero el análisis, luego el alta
+    // (o la actualización, si replaceId viene informado).
     const analysis = await analyzeTranscriptOnly(base);
     await saveAnalysis({ ...base, analysis });
     await loadFinanceData();

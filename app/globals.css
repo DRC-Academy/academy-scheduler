@@ -1192,6 +1192,113 @@ label {
   .vc-hide-mobile { display: none !important; }
 }
 
+/* ── Mis alumnos (profesor): cuadrícula compacta ──────────────────────────── */
+.alu {
+  font-family: 'Public Sans', system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  max-width: 1100px; margin: 0 auto; padding: 26px 16px 56px;
+  color: #1a1c1a;
+}
+.alu-title { font-size: 24px; font-weight: 700; letter-spacing: -0.015em; margin: 0; }
+.alu-sub { font-size: 13.5px; color: #5f6360; margin: 5px 0 0; }
+.alu-sub .is-warn { color: #9a6516; font-weight: 600; }
+
+/* Buscador */
+.alu-search { position: relative; margin: 18px 0 12px; }
+.alu-search input {
+  width: 100%; box-sizing: border-box;
+  padding: 11px 14px 11px 40px; border-radius: 11px;
+  border: 1px solid #e6e7e2; background: #fff;
+  font-family: inherit; font-size: 14px; color: #1a1c1a;
+}
+.alu-search input::placeholder { color: #a4a7a1; }
+.alu-search input:focus { outline: 2px solid #cfe6d4; outline-offset: -1px; border-color: #16a34a; }
+.alu-search-icon {
+  position: absolute; left: 14px; top: 50%; transform: translateY(-50%);
+  color: #a4a7a1; pointer-events: none; display: flex;
+}
+
+/* Chips de filtro */
+.alu-chips { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 20px; }
+.alu-chip {
+  flex: 0 0 auto; padding: 7px 14px; border-radius: 999px;
+  border: 1px solid #e6e7e2; background: #fff;
+  font-family: inherit; font-size: 13px; font-weight: 500; color: #5f6360;
+  cursor: pointer; white-space: nowrap;
+}
+.alu-chip:hover { background: #f4f5f2; color: #1a1c1a; }
+.alu-chip[aria-pressed='true'] { background: #eef6ef; border-color: #cfe6d4; color: #15803d; font-weight: 600; }
+.alu-chip:focus-visible { outline: 2px solid #16a34a; outline-offset: 2px; }
+.alu-chip-count { color: #a4a7a1; font-weight: 500; }
+.alu-chip[aria-pressed='true'] .alu-chip-count { color: #2f7a42; }
+
+/* Cuadrícula */
+.alu-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.alu-card {
+  display: flex; flex-direction: column; gap: 12px; min-width: 0;
+  background: #fff; border: 1px solid #e6e7e2; border-radius: 15px;
+  padding: 16px; box-shadow: 0 1px 2px rgba(16,24,16,0.04);
+}
+.alu-card-top { display: grid; grid-template-columns: 40px minmax(0,1fr); gap: 12px; align-items: center; }
+.alu-avatar {
+  width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center;
+  background: #eef4ef; color: #2f7a42; font-size: 13.5px; font-weight: 600; user-select: none;
+}
+.alu-name {
+  font-size: 15px; font-weight: 600; letter-spacing: -0.01em;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.alu-badges { display: flex; align-items: center; gap: 6px; margin-top: 4px; min-width: 0; }
+.alu-badge {
+  flex: 0 0 auto; font-size: 11px; font-weight: 600;
+  padding: 2px 8px; border-radius: 999px; white-space: nowrap;
+}
+.alu-type {
+  font-size: 12px; color: #8b8e88;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.alu-meta { font-size: 12.5px; color: #8b8e88; }
+.alu-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  border-top: 1px solid #eef0eb; padding-top: 12px; margin-top: auto;
+}
+.alu-state {
+  display: inline-flex; align-items: center; gap: 7px;
+  font-size: 12.5px; color: #2f7a42; white-space: nowrap;
+}
+.alu-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.alu-state.is-muted { color: #a4a7a1; }
+.alu-gen {
+  display: inline-flex; align-items: center; gap: 7px;
+  border: 1px solid #f2e2c9; background: #fdf3e7; color: #9a6516;
+  border-radius: 9px; padding: 7px 12px; font-family: inherit;
+  font-size: 12.5px; font-weight: 600; cursor: pointer; white-space: nowrap;
+}
+.alu-gen:hover { background: #fbecd9; }
+.alu-gen:disabled { opacity: 0.6; cursor: not-allowed; }
+.alu-view {
+  border: 1px solid #cfe6d4; background: #eef6ef; color: #15803d;
+  border-radius: 9px; padding: 7px 12px; font-size: 12.5px; font-weight: 600;
+  text-decoration: none; white-space: nowrap; flex-shrink: 0;
+}
+.alu-view:hover { background: #e3f0e6; }
+.alu-empty {
+  background: #fff; border: 1px solid #e6e7e2; border-radius: 15px;
+  padding: 40px 24px; text-align: center; color: #8b8e88; font-size: 14px;
+}
+
+@media (max-width: 900px) {
+  .alu-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 640px) {
+  .alu { padding: 18px 12px 48px; }
+  .alu-title { font-size: 21px; }
+  .alu-grid { grid-template-columns: 1fr; }
+  .alu-chip { min-height: 44px; }
+  .alu-search input { min-height: 44px; }
+  .alu-gen, .alu-view { min-height: 44px; display: inline-flex; align-items: center; }
+}
+
 /* ── Admin → Resumen ─────────────────────────────────────────────────────────
    Cifras monocromas: el color solo aparece donde comunica estado (conflictos,
    emails fuera de plazo, severidad de alerta). */

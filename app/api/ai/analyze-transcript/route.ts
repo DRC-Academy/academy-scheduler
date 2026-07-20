@@ -26,6 +26,10 @@ interface Body {
   studentId?: string | null;
   teacherId?: string | null;
   profileId?: string | null;
+  /** Huella del transcript, para detectar subidas duplicadas. */
+  transcriptHash?: string | null;
+  /** Si viene, se ACTUALIZA esa fila en vez de insertar una nueva. */
+  replaceId?: string | null;
 }
 
 export async function POST(request: Request): Promise<Response> {
@@ -46,7 +50,7 @@ export async function POST(request: Request): Promise<Response> {
     }
     const saved = await persistAnalysis(body, body.analysis, body.transcript.trim(), studentName);
     if (saved.error) return Response.json({ error: saved.error }, { status: 500 });
-    return Response.json({ saved: true, analysisId: saved.id });
+    return Response.json({ saved: true, analysisId: body.replaceId || saved.id, replaced: !!body.replaceId });
   }
 
   // ── Analizar ──
@@ -83,15 +87,11 @@ async function persistAnalysis(
   const id = `ca_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const risk = isRiskSignal(a.riskSignal) ? a.riskSignal : 'verde';
 
-  const { error: insErr } = await supabase.from('class_analyses').insert({
-    id,
-    student_id:       body.studentId || null,
-    teacher_id:       body.teacherId || null,
-    student_name:     studentName,
-    class_number:     body.classNumber ?? null,
-    class_date:       body.classDate || null,
+  // Campos que cambian tanto al insertar como al reemplazar.
+  const content = {
     class_title:      a.classTitle,
     transcript,                       // NOT NULL en la base
+    transcript_hash:  body.transcriptHash || null,
     class_summary:    a.classSummary,
     errors_detected:  a.errorsDetected,
     progress_notes:   a.progressNotes,
@@ -100,10 +100,31 @@ async function persistAnalysis(
     risk_signal:      risk,
     risk_explanation: a.riskExplanation,
     analyzed_at:      now,
-  });
-  if (insErr) {
-    console.error('[analyze-transcript] Error al guardar class_analyses:', insErr);
-    return { error: `No se pudo guardar el análisis: ${insErr.message}` };
+  };
+
+  if (body.replaceId) {
+    // Reemplazo del transcript de una clase ya registrada: se actualiza la fila
+    // existente en vez de crear una segunda para la misma clase.
+    const { error: updErr } = await supabase.from('class_analyses')
+      .update(content).eq('id', body.replaceId);
+    if (updErr) {
+      console.error('[analyze-transcript] Error al reemplazar class_analyses:', updErr);
+      return { error: `No se pudo reemplazar el análisis: ${updErr.message}` };
+    }
+  } else {
+    const { error: insErr } = await supabase.from('class_analyses').insert({
+      id,
+      student_id:   body.studentId || null,
+      teacher_id:   body.teacherId || null,
+      student_name: studentName,
+      class_number: body.classNumber ?? null,
+      class_date:   body.classDate || null,
+      ...content,
+    });
+    if (insErr) {
+      console.error('[analyze-transcript] Error al guardar class_analyses:', insErr);
+      return { error: `No se pudo guardar el análisis: ${insErr.message}` };
+    }
   }
 
   // Ficha del alumno: riesgo, progreso y contadores.

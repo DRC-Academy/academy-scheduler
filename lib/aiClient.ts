@@ -129,6 +129,10 @@ export interface AnalyzeArgs {
   classDate?: string | null;
   studentProfile?: FichaIA | null;
   classHistory?: unknown[] | null;
+  /** Huella para detectar duplicados (se guarda junto al análisis). */
+  transcriptHash?: string | null;
+  /** Si viene, reemplaza el transcript de esa fila en vez de crear otra. */
+  replaceId?: string | null;
 }
 
 /** Sólo analiza: no guarda nada (el profesor revisa antes). */

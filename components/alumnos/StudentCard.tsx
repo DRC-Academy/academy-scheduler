@@ -1,76 +1,111 @@
 'use client';
 
-// Card de alumno en la lista: compacta y navegable.
+// Card de alumno en la cuadrícula: compacta, escaneable y navegable.
 //
-// Las tres pestañas (Perfil / Seguimiento / Próxima clase) vivían acá en línea;
-// ahora son la página /mis-alumnos/[studentId], que es la ÚNICA implementación.
-// La card solo enlaza a esa página — se abre en pestaña nueva para no perder la
-// posición en la lista.
+// Las tres pestañas (Perfil / Seguimiento / Próxima clase) son la página
+// /mis-alumnos/[studentId], que es la ÚNICA implementación. La card enlaza ahí.
 
 import Link from 'next/link';
-import { asObject, fichaFromRow, isRiskSignal, type GeneratedClassIA } from '@/lib/aiTypes';
+import { fichaFromRow } from '@/lib/aiTypes';
 import { classCategoryBadge } from '@/lib/finance';
 import type { StudentBundle } from '@/lib/misAlumnos';
-import { Avatar, RiskDot, btnSecondary, cardStyle } from '@/components/alumnos/ui';
+
+/** Color de la insignia por nivel CEFR. Neutro si el nivel no se reconoce. */
+const LEVEL_BADGE: Record<string, { bg: string; color: string }> = {
+  A1: { bg: '#f2eef8', color: '#6d34c9' },
+  A2: { bg: '#eef1f8', color: '#3b5b9e' },
+  B1: { bg: '#eef4ef', color: '#2f7a42' },
+  B2: { bg: '#eaf4f2', color: '#0f766e' },
+  C1: { bg: '#fdf3e7', color: '#9a6516' },
+  C2: { bg: '#fdf3e7', color: '#9a6516' },
+};
+const LEVEL_NEUTRAL = { bg: '#f0f1ee', color: '#5f6360' };
+
+export function levelOf(raw?: string | null): string | null {
+  const m = (raw ?? '').toUpperCase().match(/\b(A1|A2|B1|B2|C1|C2)\b/);
+  return m ? m[1] : null;
+}
+
+/** Estado de la ficha de IA de un alumno. Deriva del dato real, no de un flag. */
+export type FichaState = 'ready' | 'generable' | 'no-form';
+
+export function fichaStateOf(bundle: StudentBundle): FichaState {
+  if (fichaFromRow(bundle.profile)) return 'ready';
+  // Sin ficha pero con fila de perfil = el formulario está respondido y la
+  // ficha se puede generar. Sin fila, primero hace falta el formulario.
+  return bundle.profile ? 'generable' : 'no-form';
+}
 
 interface Props {
   bundle: StudentBundle;
   studentKey: string;
+  generating: boolean;
+  onGenerate: (bundle: StudentBundle) => void;
 }
 
-export default function StudentCard({ bundle, studentKey }: Props) {
-  const { assignment: a, profile, analyses } = bundle;
+export default function StudentCard({ bundle, studentKey, generating, onGenerate }: Props) {
+  const { assignment: a, analyses } = bundle;
 
-  const ficha = fichaFromRow(profile);
-  const nextClass = asObject<GeneratedClassIA>(profile?.next_class_content);
-  const risk = profile && isRiskSignal(profile.risk_signal) ? profile.risk_signal : null;
+  const level = levelOf(a.studentLevel);
+  const badge = level ? (LEVEL_BADGE[level] ?? LEVEL_NEUTRAL) : LEVEL_NEUTRAL;
   const plan = classCategoryBadge({ assignmentPlan: a.plan, assignmentObjetivo: a.objetivo });
   const mainSlot = a.slots?.[0] ? `${a.slots[0].day} ${a.slots[0].hour}` : null;
+  const state = fichaStateOf(bundle);
+
+  const initials = a.studentName.trim().split(/\s+/).slice(0, 2)
+    .map(w => w[0]?.toUpperCase() ?? '').join('') || '?';
 
   // La URL usa el student_id real cuando existe; si no, el id de la assignment
   // (la página resuelve ambos). `studentKey` puede ser "name:…", que no sirve.
-  const routeId = a.studentId || a.id;
-  const href = `/mis-alumnos/${encodeURIComponent(routeId)}`;
+  const href = `/mis-alumnos/${encodeURIComponent(a.studentId || a.id)}`;
 
   return (
-    <div style={{ ...cardStyle, padding: 16 }}>
-      <div className="alu-card-head" style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-        <Avatar name={a.studentName} />
-
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)' }}>{a.studentName}</div>
-          <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 2 }}>
-            {[a.studentLevel, plan.label, mainSlot].filter(Boolean).join(' · ')}
+    <article className="alu-card">
+      <div className="alu-card-top">
+        <div className="alu-avatar" aria-hidden>{initials}</div>
+        <div style={{ minWidth: 0 }}>
+          <div className="alu-name" title={a.studentName}>{a.studentName}</div>
+          <div className="alu-badges">
+            {level && <span className="alu-badge" style={badge}>{level}</span>}
+            <span className="alu-type" title={plan.label}>{plan.label}</span>
           </div>
-          <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            {risk ? <RiskDot risk={risk} /> : (
-              <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>
-                {ficha ? 'Sin señal registrada' : 'Sin ficha de IA'}
-              </span>
-            )}
-            {nextClass && (
-              <span style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>· Clase preparada</span>
-            )}
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexShrink: 0 }}>
-          <div style={{ fontSize: 13, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
-            {analyses.length} {analyses.length === 1 ? 'clase' : 'clases'}
-          </div>
-          {/* Navegación en la MISMA pestaña: <Link> ya hace navegación cliente,
-              así que no hace falta useRouter. Se quitó target="_blank" a
-              propósito — abrir con rel="noopener" creaba una pestaña con
-              sessionStorage vacío, que fue el origen del rebote al login. */}
-          <Link
-            href={href}
-            data-student-key={studentKey}
-            style={{ ...btnSecondary, textDecoration: 'none', display: 'inline-flex', alignItems: 'center', whiteSpace: 'nowrap' }}
-          >
-            Ver ficha →
-          </Link>
         </div>
       </div>
-    </div>
+
+      <div className="alu-meta">
+        {[mainSlot, `${analyses.length} ${analyses.length === 1 ? 'clase' : 'clases'}`]
+          .filter(Boolean).join(' · ')}
+      </div>
+
+      <div className="alu-foot">
+        {state === 'ready' ? (
+          <span className="alu-state">
+            <span className="alu-dot" style={{ background: '#16a34a' }} />
+            Ficha lista
+          </span>
+        ) : state === 'generable' ? (
+          <button
+            className="alu-gen"
+            onClick={() => onGenerate(bundle)}
+            disabled={generating}
+            aria-label={`Generar ficha de IA de ${a.studentName}`}
+          >
+            <span className="alu-dot" style={{ background: '#e0912f' }} />
+            {generating ? 'Generando…' : 'Generar ficha'}
+          </button>
+        ) : (
+          // Sin formulario respondido no hay nada con lo que generar la ficha:
+          // se informa en vez de ofrecer un botón que fallaría.
+          <span className="alu-state is-muted" title="El alumno todavía no completó el formulario inicial">
+            <span className="alu-dot" style={{ background: '#d0d3cd' }} />
+            Sin formulario
+          </span>
+        )}
+
+        <Link href={href} className="alu-view" data-student-key={studentKey}>
+          Ver ficha →
+        </Link>
+      </div>
+    </article>
   );
 }
