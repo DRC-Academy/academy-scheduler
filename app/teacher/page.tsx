@@ -21,7 +21,7 @@ import { Grid, Teacher, Assignment, ScoringEvent, Student, AppNotification, Clas
 import FormStatusBadge from '@/components/FormStatusBadge';
 import { EmailPreferencesCard } from '@/components/EmailPreferencesCard';
 import { maybeSendBonusEmail } from '@/lib/milestoneEmails';
-import { fetchFormTokensIndex, lookupToken, getOrCreateFormLink, type FormTokenInfo } from '@/lib/formClient';
+import { fetchFormTokensIndex, lookupToken, getOrCreateFormLink, formStateOf, type FormTokenInfo } from '@/lib/formClient';
 import { getPresentationEmailStatus } from '@/lib/presentationEmailUtils';
 import { ALL_SPECIALTIES } from '@/lib/specialties';
 import { SpecialtyChip, ToggleChip } from '@/components/ui';
@@ -1558,7 +1558,10 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, up
   const { isSent, markSent } = usePresentationSent(teacher.id);
   const [savingLink, setSavingLink] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
-  const [showNextDays, setShowNextDays] = useState(false);
+  // Navegador de fechas: desplazamiento en días respecto de hoy (0 = hoy).
+  const [dayOffset, setDayOffset] = useState(0);
+  // Fila cuyo menú "⋯" está abierto (una sola a la vez).
+  const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [showPastToday, setShowPastToday] = useState(false);
   const [joined, setJoined] = useState<Set<string>>(new Set());
   const [checkingKey, setCheckingKey] = useState<string | null>(null);
@@ -1600,33 +1603,60 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, up
     return () => clearInterval(id);
   }, []);
 
+  // Cierra el menú "⋯" al hacer clic fuera o pulsar Escape.
+  useEffect(() => {
+    if (!openMenu) return;
+    const onDown = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement).closest('[data-mc-menu]')) setOpenMenu(null);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpenMenu(null); };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [openMenu]);
+
   const refDate = now ?? new Date();
   const todayIso = isoDateLocal(refDate);
+
+  // Fecha visible = hoy + dayOffset. `refDate` sigue siendo "ahora" y es lo único
+  // que decide el estado horario de las filas (solo aplica cuando se mira hoy).
+  const viewDate = new Date(refDate);
+  viewDate.setDate(viewDate.getDate() + dayOffset);
+  const viewIso  = isoDateLocal(viewDate);
+  const isToday  = dayOffset === 0;
 
   // Current time in Spain (Europe/Madrid) — the calendar's reference timezone.
   const spain = now ? getSpainParts(now) : null;
   const currentDecimal = spain ? spain.hour + spain.minute / 60 : -1;
 
-  const todayClasses = classesForDate(myAssignments, refDate);
+  const todayClasses = classesForDate(myAssignments, viewDate);
 
   type ClassStatus = 'passed' | 'inprogress' | 'next' | 'future';
   function statusOf(c: TodayClass): ClassStatus {
-    if (currentDecimal < 0) return 'future';
+    // En días distintos de hoy no hay "en curso" ni "pasada": todo es futuro.
+    if (!isToday || currentDecimal < 0) return 'future';
     const h = parseInt(c.hour);
     if (h <= currentDecimal && h + 1 > currentDecimal) return 'inprogress';
     if (h + 1 <= currentDecimal) return 'passed';
     return 'future';
   }
   // The "next" class is the earliest one that has not started yet.
-  const nextKey = todayClasses.find(c => parseInt(c.hour) > currentDecimal)?.key ?? null;
+  const nextKey = isToday
+    ? todayClasses.find(c => parseInt(c.hour) > currentDecimal)?.key ?? null
+    : null;
 
   const pastClasses    = todayClasses.filter(c => statusOf(c) === 'passed');
   const currentClasses = todayClasses.filter(c => statusOf(c) !== 'passed');
 
-  // Unique emails of every student visible in this tab (today + next 2 days).
+  // Unique emails of every student visible in this tab (today + next 2 days, y
+  // además el día que se esté mirando con el navegador de fechas — si no, al
+  // navegar lejos el badge de suscripción se quedaría cargando para siempre).
   const visibleEmails = useMemo(() => {
     const set = new Set<string>();
-    for (let off = 0; off <= 2; off++) {
+    for (const off of new Set([0, 1, 2, dayOffset])) {
       const d = new Date();
       d.setDate(d.getDate() + off);
       for (const c of classesForDate(myAssignments, d)) {
@@ -1636,7 +1666,7 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, up
     }
     return [...set].sort();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [myAssignments, students]);
+  }, [myAssignments, students, dayOffset]);
   const emailsKey = visibleEmails.join('|');
 
   // Fetch all subscription states once when the tab opens (parallel, in-memory).
@@ -1674,18 +1704,11 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, up
   }
   const missingNames = missingLinks.map(c => c.studentName.split(' ')[0]);
 
-  const todayLabel = refDate.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' });
-
-  // Next two days
-  const nextDays = [1, 2].map(offset => {
-    const d = new Date(refDate);
-    d.setDate(refDate.getDate() + offset);
-    return {
-      label: d.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' }),
-      iso: isoDateLocal(d),
-      classes: classesForDate(myAssignments, d),
-    };
-  });
+  // Etiqueta del navegador: "Martes, 21 jul" (con "Hoy"/"Mañana" cuando aplica).
+  const dateLabel = viewDate.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'short' })
+    .replace(/\.$/, '')
+    .replace(/^(\w)/, m => m.toUpperCase());
+  const relLabel = dayOffset === 0 ? 'Hoy' : dayOffset === 1 ? 'Mañana' : dayOffset === -1 ? 'Ayer' : null;
 
   // Reprogramación (punto 2): ¿esta clase (alumno + fecha) fue reprogramada?
   function rescheduledFor(studentName: string, date: string): string | null {
@@ -1800,162 +1823,150 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, up
     const passed     = status === 'passed';
     const inProgress = status === 'inprogress';
     const isNext     = status === 'next';
-    const highlight  = inProgress || isNext;
     const rescheduledTo = rescheduledFor(c.studentName, date);
 
+    const hasLink = !!c.meetLink;
+    const menuId  = `${c.key}_${date}`;
+    const menuOpen = openMenu === menuId;
+    const sent    = isSent(c.studentName);
+
+    // Tag de tipo de clase: la etiqueta la sigue decidiendo classCategoryBadge
+    // (fuente única); acá solo se le aplica la paleta sobria de esta vista.
+    const stu = studentForAssignment(c.assignment);
+    const cat = classCategoryBadge({
+      assignmentPlan: c.assignment.plan,
+      assignmentObjetivo: c.assignment.objetivo,
+      studentPlan: stu?.plan,
+      productName: stu?.productName,
+    });
+    const tagPalette = /ex[aá]men/i.test(cat.label)
+      ? { background: '#eef1f8', color: '#3b5b9e' }
+      : { background: '#eef4ef', color: '#2f6b3f' };
+
+    const sb = subBadgeFor(subEmailForAssignment(c.assignment));
+    const formInfo = lookupToken(formIndex, { id: c.assignment.studentId, name: c.studentName });
+    const hasForm  = formStateOf(formInfo) !== 'none';
+    const showPresentationBadge = !passed && !c.assignment.presentationEmailSent;
+
+    const nextClassNum = calcCurrentClassNumber(c.assignment) + 1;
+    const slides = !passed && isMilestone(nextClassNum) ? getMilestoneSlides(nextClassNum) : null;
+
+    const desde = (() => {
+      if (!c.assignment.startDate) return null;
+      const sd = new Date(c.assignment.startDate + 'T00:00:00');
+      if (isNaN(sd.getTime())) return null;
+      const dias = Math.max(0, Math.floor((Date.now() - sd.getTime()) / 86_400_000));
+      return `Desde ${sd.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })} · ${dias} día${dias !== 1 ? 's' : ''}`;
+    })();
+
     return (
-      <div style={{
-        background: 'var(--bg-surface-2)',
-        border: `1.5px solid ${highlight ? '#1E9E3A' : 'var(--border)'}`,
-        boxShadow: highlight ? '0 0 0 3px rgba(30,158,58,0.1)' : 'none',
-        borderRadius: 12, padding: '14px 16px',
-        opacity: passed ? 0.55 : 1,
-        transition: 'opacity 0.3s',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <div style={{ width: 40, height: 40, borderRadius: '50%', background: 'rgba(30,158,58,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 700, color: '#1E9E3A', flexShrink: 0 }}>
-            {c.studentName.charAt(0).toUpperCase()}
+      <div className={`mc-card${passed ? ' is-passed' : ''}`}>
+        <div className="mc-row">
+          <div className="mc-left">
+            <div className="mc-hour">{c.hour}</div>
+            <div className={`mc-accent${inProgress ? ' is-live' : isNext ? ' is-next' : ''}`} />
+            <div className="mc-avatar">{c.studentName.charAt(0).toUpperCase()}</div>
           </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <span style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)' }}>{c.studentName}</span>
-              {(() => {
-                const stu = studentForAssignment(c.assignment);
-                const cat = classCategoryBadge({
-                  assignmentPlan: c.assignment.plan,
-                  assignmentObjetivo: c.assignment.objetivo,
-                  studentPlan: stu?.plan,
-                  productName: stu?.productName,
-                });
-                return (
-                  <span style={{ fontSize: 10, padding: '1px 9px', borderRadius: 10, background: cat.bg, color: cat.color, fontWeight: 700 }}>{cat.label}</span>
-                );
-              })()}
+
+          <div className="mc-main">
+            <div className="mc-nameline">
+              <span className="mc-name">{c.studentName}</span>
+              <span className="mc-tag" style={tagPalette}>{cat.label}</span>
               {inProgress && (
-                <span className="upcoming-live-badge" style={{ fontSize: 10, padding: '1px 9px', borderRadius: 10, background: 'rgba(220,38,38,0.12)', border: '1px solid rgba(220,38,38,0.4)', color: '#dc2626', fontWeight: 700 }}>
-                  🔴 En curso
-                </span>
-              )}
-              {isNext && (
-                <span style={{ fontSize: 10, padding: '1px 9px', borderRadius: 10, background: 'rgba(30,158,58,0.15)', border: '1px solid rgba(30,158,58,0.35)', color: '#1E9E3A', fontWeight: 700 }}>
-                  Próxima
-                </span>
-              )}
-              {passed && (
-                <span style={{ fontSize: 10, padding: '1px 9px', borderRadius: 10, background: 'var(--bg-surface-3)', color: 'var(--text-muted)', fontWeight: 600 }}>
-                  ✓ Finalizada
+                <span className="mc-live">
+                  <span className="mc-dot" style={{ background: '#16a34a' }} />En curso
                 </span>
               )}
             </div>
-            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
-              {c.plan || 'Clase'}{c.level ? ` · ${c.level}` : ''}
-            </div>
-            {c.assignment.startDate && (() => {
-              const sd = new Date(c.assignment.startDate + 'T00:00:00');
-              if (isNaN(sd.getTime())) return null;
-              const dias = Math.max(0, Math.floor((Date.now() - sd.getTime()) / 86_400_000));
-              return (
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>
-                  Desde: {sd.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })} · {dias} día{dias !== 1 ? 's' : ''}
-                </div>
-              );
-            })()}
-            {(() => {
-              const sb = subBadgeFor(subEmailForAssignment(c.assignment));
-              if (!sb) return null;
-              return (
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 6, fontSize: 10, fontWeight: 700, padding: '2px 9px', borderRadius: 10, background: sb.bg, color: sb.color }}>
-                  {sb.spin && <span className="drc-spinner-xs" />}
-                  {sb.label}
-                </span>
-              );
-            })()}
+            <div className="mc-course">{c.plan || 'Clase'}{c.level ? ` · ${c.level}` : ''}</div>
+            {desde && <div className="mc-meta">{desde}</div>}
           </div>
-          <div style={{ fontSize: 18, fontWeight: 800, color: passed ? 'var(--text-muted)' : highlight ? '#1E9E3A' : 'var(--text-primary)', flexShrink: 0 }}>{c.hour}</div>
-        </div>
 
-        {/* Reprogramación (punto 2): badge + botón */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
-          {rescheduledTo && (
-            <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 10px', borderRadius: 10, background: 'rgba(255,196,0,0.15)', border: '1px solid rgba(255,196,0,0.5)', color: '#b38600' }}>
-              📅 Reprogramada para {fmtDateDMY(rescheduledTo)}
+          {/* Estado del enlace primero: es la información clave para el profesor. */}
+          <div className="mc-right">
+            <span className={`mc-status ${passed ? 'is-muted' : hasLink ? 'is-ready' : 'is-missing'}`}>
+              <span className="mc-dot" style={{ background: passed ? '#a4a7a1' : hasLink ? '#16a34a' : '#e0912f' }} />
+              {passed ? 'Clase finalizada' : hasLink ? 'Enlace listo' : 'Sin enlace'}
             </span>
-          )}
-          <button onClick={() => setRescheduleModal({ c, date })}
-            style={{ padding: '5px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface-3)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, fontWeight: 600, fontFamily: 'inherit' }}>
-            📅 Reprogramar
-          </button>
-          <FormStatusBadge
-            student={{ id: c.assignment.studentId, name: c.studentName, email: c.assignment.studentEmail }}
-            teacher={{ id: teacher.id, name: teacher.name }}
-            assignment={{ id: c.assignment.id, plan: c.assignment.plan, level: c.assignment.studentLevel }}
-            info={lookupToken(formIndex, { id: c.assignment.studentId, name: c.studentName })}
-            onRefresh={refreshFormIndex}
-            compact
-          />
-        </div>
 
-        {/* Link area */}
-        <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
-          {c.meetLink ? (
-            <>
-              <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8, wordBreak: 'break-all' }}>
-                🔗 {stripProtocol(c.meetLink)}
-              </div>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                {passed ? (
-                  <button disabled
-                    style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface-3)', color: 'var(--text-muted)', cursor: 'not-allowed', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
-                    Clase finalizada
-                  </button>
-                ) : (
-                  <button onClick={() => handleJoin(c)} disabled={checkingKey === c.key}
-                    style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', borderRadius: 8, border: 'none', background: '#1E9E3A', color: 'white', cursor: checkingKey === c.key ? 'wait' : 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit', opacity: checkingKey === c.key ? 0.8 : 1 }}>
-                    {checkingKey === c.key
-                      ? <><span className="drc-spinner" /> Verificando...</>
-                      : <>🎥 Ingresar a clase</>}
-                  </button>
-                )}
-                <button onClick={() => setLinkModal({ assignment: c.assignment, value: c.meetLink ?? '' })}
-                  style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface-3)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
-                  ✏️ Cambiar enlace
+            <div className="mc-actions">
+              {passed ? (
+                <button className="mc-btn mc-btn-ghost" disabled>Finalizada</button>
+              ) : hasLink ? (
+                <button className="mc-btn mc-btn-primary" onClick={() => handleJoin(c)} disabled={checkingKey === c.key}>
+                  {checkingKey === c.key
+                    ? <><span className="drc-spinner" />Verificando…</>
+                    : 'Ingresar a clase'}
                 </button>
-              </div>
-              {/* Botón de diapositivas cuando la PRÓXIMA clase es un hito */}
-              {!passed && (() => {
-                const nextClass = calcCurrentClassNumber(c.assignment) + 1;
-                const slides = isMilestone(nextClass) ? getMilestoneSlides(nextClass) : null;
-                if (!slides) return null;
-                return (
-                  <button onClick={() => window.open(slides, '_blank', 'noopener,noreferrer')}
-                    style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, padding: '9px 16px', borderRadius: 8, border: 'none', background: '#FFC400', color: '#1f2937', cursor: 'pointer', fontSize: 13, fontWeight: 800, fontFamily: 'inherit', boxShadow: '0 2px 8px rgba(255,196,0,0.35)' }}>
-                    🎯 Clase {nextClass} — 📊 Ver diapositivas
-                  </button>
-                );
-              })()}
-            </>
-          ) : (
-            <>
-              <div style={{ fontSize: 12, color: passed ? 'var(--text-muted)' : '#b45309', marginBottom: passed ? 0 : 8, fontWeight: 600 }}>⚠️ Sin enlace definido</div>
-              {!passed && (
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <button onClick={() => setLinkModal({ assignment: c.assignment, value: '' })}
-                    style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', borderRadius: 8, border: '1px solid rgba(30,158,58,0.4)', background: 'rgba(30,158,58,0.08)', color: '#1E9E3A', cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
-                    🔗 Definir enlace
-                  </button>
-                  <button onClick={() => setPresentationModal(c.assignment)} style={{ ...presentationBtnStyle(isSent(c.studentName)), marginTop: 0 }}>
-                    {isSent(c.studentName) ? '📧 Reenviar presentación' : '📧 Enviar presentación'}
-                  </button>
-                </div>
+              ) : (
+                <button className="mc-btn mc-btn-primary" onClick={() => setLinkModal({ assignment: c.assignment, value: '' })}>
+                  Definir enlace
+                </button>
               )}
-            </>
-          )}
 
-          {/* Seguimiento del email de presentación (solo alumnos nuevos pendientes) */}
-          {!passed && !c.assignment.presentationEmailSent && (
-            <PresentationEmailBadge assignment={c.assignment} />
-          )}
+              <div className="mc-menu-wrap" data-mc-menu>
+                <button className="mc-more" aria-haspopup="menu" aria-expanded={menuOpen} aria-label={`Más acciones para ${c.studentName}`}
+                  onClick={() => setOpenMenu(menuOpen ? null : menuId)}>
+                  ⋯
+                </button>
+                {menuOpen && (
+                  <div className="mc-menu" role="menu">
+                    <button className="mc-menu-item" role="menuitem"
+                      onClick={() => { setOpenMenu(null); setRescheduleModal({ c, date }); }}>
+                      Reprogramar clase
+                    </button>
+                    <button className="mc-menu-item" role="menuitem"
+                      onClick={() => { setOpenMenu(null); setLinkModal({ assignment: c.assignment, value: c.meetLink ?? '' }); }}>
+                      {hasLink ? 'Cambiar enlace' : 'Definir enlace'}
+                    </button>
+                    <button className="mc-menu-item" role="menuitem"
+                      onClick={() => { setOpenMenu(null); setPresentationModal(c.assignment); }}>
+                      {sent ? 'Reenviar presentación' : 'Enviar presentación'}
+                    </button>
+                    {slides && (
+                      <button className="mc-menu-item" role="menuitem"
+                        onClick={() => { setOpenMenu(null); window.open(slides, '_blank', 'noopener,noreferrer'); }}>
+                        Diapositivas · clase {nextClassNum}
+                      </button>
+                    )}
+                    {hasLink && (
+                      <>
+                        <div className="mc-menu-sep" />
+                        <div className="mc-menu-extra mc-meta" style={{ wordBreak: 'break-all' }}>
+                          {stripProtocol(c.meetLink!)}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
         </div>
+
+        {/* Zona secundaria: avisos que no compiten con la acción principal. */}
+        {(rescheduledTo || sb || hasForm || showPresentationBadge) && (
+          <div className="mc-foot">
+            {rescheduledTo && (
+              <span className="mc-note">Reprogramada para {fmtDateDMY(rescheduledTo)}</span>
+            )}
+            {sb && (
+              <span className="mc-status" style={{ background: sb.bg, color: sb.color }}>
+                {sb.spin && <span className="drc-spinner-xs" />}
+                {sb.label}
+              </span>
+            )}
+            <FormStatusBadge
+              student={{ id: c.assignment.studentId, name: c.studentName, email: c.assignment.studentEmail }}
+              teacher={{ id: teacher.id, name: teacher.name }}
+              assignment={{ id: c.assignment.id, plan: c.assignment.plan, level: c.assignment.studentLevel }}
+              info={formInfo}
+              onRefresh={refreshFormIndex}
+              compact
+            />
+            {showPresentationBadge && <PresentationEmailBadge assignment={c.assignment} />}
+          </div>
+        )}
       </div>
     );
   }
@@ -1968,89 +1979,73 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, up
   }
 
   return (
-    <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '20px' }}>
-      <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)', marginBottom: 4, textTransform: 'capitalize' }}>
-        Próximas clases — {todayLabel}
-      </div>
-      <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 16 }}>
-        Definí el enlace de Meet/Zoom de cada alumno una sola vez. Se reutiliza siempre para esa persona.
+    <div className="mc">
+      <div className="mc-head">
+        <div>
+          <div className="mc-title">Mis clases</div>
+          <div className="mc-count">
+            {todayClasses.length === 0
+              ? 'Sin clases'
+              : `${todayClasses.length} ${todayClasses.length === 1 ? 'clase' : 'clases'}`}
+            {relLabel ? ` · ${relLabel}` : ''}
+          </div>
+        </div>
+
+        {/* Navegador de fechas */}
+        <div className="mc-nav">
+          <button className="mc-nav-btn" aria-label="Día anterior" onClick={() => setDayOffset(o => o - 1)}>‹</button>
+          <span className="mc-nav-label">{dateLabel}</span>
+          <button className="mc-nav-btn" aria-label="Día siguiente" onClick={() => setDayOffset(o => o + 1)}>›</button>
+          {!isToday && (
+            <button className="mc-today-btn" onClick={() => setDayOffset(0)}>Hoy</button>
+          )}
+        </div>
       </div>
 
       {/* Materiales de clase (diapositivas por hito) — desplegable discreto */}
       <ClassMaterialsSection />
 
-      {/* Missing links banner */}
+      {/* Aviso de alumnos sin enlace definido */}
       {missingLinks.length > 0 && (
-        <div style={{ background: 'rgba(249,115,22,0.08)', border: '1px solid rgba(249,115,22,0.35)', borderRadius: 10, padding: '12px 16px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-          <div style={{ flex: 1, fontSize: 13, color: '#b45309', fontWeight: 600 }}>
-            ⚠️ Tenés {missingLinks.length} alumno{missingLinks.length !== 1 ? 's' : ''} sin enlace de Meet definido: {missingNames.join(', ')}
+        <div className="mc-banner">
+          <div style={{ flex: 1 }}>
+            {missingLinks.length} alumno{missingLinks.length !== 1 ? 's' : ''} sin enlace definido: {missingNames.join(', ')}
           </div>
-          <button onClick={() => setLinkModal({ assignment: missingLinks[0].assignment, value: '' })}
-            style={{ padding: '7px 14px', borderRadius: 8, border: 'none', background: '#ea580c', color: 'white', cursor: 'pointer', fontSize: 12, fontWeight: 700, fontFamily: 'inherit', flexShrink: 0 }}>
-            Definir todos →
+          <button className="mc-btn mc-btn-ghost" onClick={() => setLinkModal({ assignment: missingLinks[0].assignment, value: '' })}>
+            Definir enlaces
           </button>
         </div>
       )}
 
-      {/* Today's classes */}
+      {/* Clases del día seleccionado */}
       {todayClasses.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)', fontSize: 14 }}>
-          <div style={{ fontSize: 32, marginBottom: 8 }}>📅</div>
-          No tenés clases hoy.
+        <div className="mc-empty">
+          {isToday ? 'No tenés clases hoy.' : 'No tenés clases este día.'}
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {/* Past classes — collapsed by default */}
+        <div className="mc-list">
+          {/* Clases ya pasadas de hoy — plegadas por defecto */}
           {pastClasses.length > 0 && (
             <div>
-              <button onClick={() => setShowPastToday(s => !s)}
-                style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '9px 14px', borderRadius: 9, border: '1px dashed var(--border)', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 12, fontWeight: 600, fontFamily: 'inherit' }}>
-                <span>Ver clases pasadas de hoy ({pastClasses.length})</span>
-                <span>{showPastToday ? '▲' : '▼'}</span>
+              <button className="mc-collapse" onClick={() => setShowPastToday(s => !s)}>
+                <span>Clases pasadas de hoy ({pastClasses.length})</span>
+                <span>{showPastToday ? '↑' : '↓'}</span>
               </button>
               {showPastToday && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
-                  {pastClasses.map(c => <ClassRow key={c.key} c={c} status="passed" date={todayIso} />)}
+                <div className="mc-list" style={{ marginTop: 10 }}>
+                  {pastClasses.map(c => <ClassRow key={c.key} c={c} status="passed" date={viewIso} />)}
                 </div>
               )}
             </div>
           )}
 
-          {/* In-progress / next / future — always visible */}
           {currentClasses.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '24px 0', color: 'var(--text-muted)', fontSize: 13 }}>
-              No quedan más clases por hoy.
-            </div>
+            <div className="mc-empty">No quedan más clases por hoy.</div>
           ) : (
-            currentClasses.map(c => <ClassRow key={c.key} c={c} status={rowStatus(c)} date={todayIso} />)
+            currentClasses.map(c => <ClassRow key={c.key} c={c} status={rowStatus(c)} date={viewIso} />)
           )}
         </div>
       )}
-
-      {/* Next days */}
-      <div style={{ marginTop: 18 }}>
-        <button onClick={() => setShowNextDays(s => !s)}
-          style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderRadius: 9, border: '1px solid var(--border)', background: 'var(--bg-surface-2)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
-          <span>📆 Ver próximos días</span>
-          <span>{showNextDays ? '▲' : '▼'}</span>
-        </button>
-        {showNextDays && (
-          <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 16 }}>
-            {nextDays.map(nd => (
-              <div key={nd.label}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', marginBottom: 8, textTransform: 'capitalize' }}>{nd.label}</div>
-                {nd.classes.length === 0 ? (
-                  <div style={{ fontSize: 13, color: 'var(--text-muted)', padding: '8px 0' }}>Sin clases.</div>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    {nd.classes.map(c => <ClassRow key={c.key} c={c} status="future" date={nd.iso} />)}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
 
       {/* Link modal */}
       {linkModal && (
@@ -2495,7 +2490,7 @@ function TeacherContent() {
 
   const tabs = [
     { id: 'calendar',      label: '📅 Mi calendario' },
-    { id: 'upcoming',      label: '🎥 Próximas clases' },
+    { id: 'upcoming',      label: '🎥 Mis clases' },
     { id: 'scoring',       label: '⭐ Mi Scoring' },
     { id: 'notifications', label: '🔔 Avisos' },
   ] as const;

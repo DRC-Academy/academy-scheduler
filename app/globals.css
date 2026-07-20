@@ -344,3 +344,196 @@ label {
   animation: drc-spin 0.7s linear infinite;
   vertical-align: middle;
 }
+
+/* ── "Mis clases" (tab de clases del profesor) ────────────────────────────────
+   Capa de estilo aislada bajo .mc — no afecta al resto de la app. Layout con
+   grid + gap. El bloque .mc-left usa display:contents en escritorio para que
+   hora / acento / avatar sean columnas de la fila, y pasa a columna apilada en
+   móvil sin duplicar markup. */
+.mc {
+  --mc-page:   #f4f5f2;
+  --mc-card:   #ffffff;
+  --mc-border: #e6e7e2;
+  --mc-t1:     #1a1c1a;
+  --mc-t2:     #7c807a;
+  --mc-t3:     #a4a7a1;
+  --mc-green:  #16a34a;
+  font-family: 'Public Sans', system-ui, sans-serif;
+  background: var(--mc-page);
+  border-radius: 18px;
+  padding: 24px;
+  color: var(--mc-t1);
+}
+
+/* Cabecera: título · navegador de fecha · contador */
+.mc-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap; margin-bottom: 20px;
+}
+.mc-title { font-size: 20px; font-weight: 600; letter-spacing: -0.012em; }
+.mc-count { font-size: 13px; color: var(--mc-t2); margin-top: 2px; }
+.mc-nav {
+  display: flex; align-items: center; gap: 2px;
+  background: var(--mc-card); border: 1px solid var(--mc-border);
+  border-radius: 12px; padding: 4px;
+}
+.mc-nav-btn {
+  width: 34px; height: 34px; display: grid; place-items: center;
+  border: none; background: transparent; border-radius: 9px;
+  color: var(--mc-t2); cursor: pointer; font-size: 17px; font-family: inherit; line-height: 1;
+}
+.mc-nav-btn:hover { background: var(--mc-page); color: var(--mc-t1); }
+.mc-nav-label {
+  min-width: 168px; text-align: center; font-size: 13.5px; font-weight: 600;
+  text-transform: capitalize; font-variant-numeric: tabular-nums;
+}
+.mc-today-btn {
+  border: none; background: transparent; color: var(--mc-green);
+  font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+  padding: 6px 10px; border-radius: 9px;
+}
+.mc-today-btn:hover { background: #eaf5ec; }
+
+/* Tarjeta de clase */
+.mc-list { display: flex; flex-direction: column; gap: 10px; }
+.mc-card {
+  background: var(--mc-card); border: 1px solid var(--mc-border);
+  border-radius: 16px; padding: 16px 18px;
+  box-shadow: 0 1px 2px rgba(16,24,16,0.04);
+}
+.mc-card.is-passed { opacity: 0.6; }
+
+.mc-row {
+  display: grid;
+  grid-template-columns: auto 3px 42px minmax(0,1fr) auto;
+  align-items: center; gap: 16px;
+}
+.mc-left { display: contents; }
+.mc-hour {
+  font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em; white-space: nowrap;
+}
+.mc-accent { align-self: stretch; min-height: 44px; border-radius: 2px; background: var(--mc-border); }
+.mc-accent.is-live { background: var(--mc-green); }
+.mc-accent.is-next { background: #bcd9c4; }
+.mc-avatar {
+  width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center;
+  font-size: 15px; font-weight: 600; background: #eef4ef; color: #2f6b3f; user-select: none;
+}
+
+.mc-main { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.mc-nameline { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
+.mc-name { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
+.mc-tag {
+  font-size: 11.5px; font-weight: 600; padding: 2px 9px;
+  border-radius: 999px; white-space: nowrap;
+}
+.mc-live {
+  font-size: 11.5px; font-weight: 600; color: var(--mc-green);
+  display: inline-flex; align-items: center; gap: 5px;
+}
+.mc-course {
+  font-size: 13.5px; color: var(--mc-t2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mc-meta { font-size: 12.5px; color: var(--mc-t3); }
+
+/* Columna derecha: estado del enlace (prioritario) + acciones */
+.mc-right { display: flex; flex-direction: column; align-items: flex-end; gap: 9px; }
+.mc-status {
+  display: inline-flex; align-items: center; gap: 7px;
+  font-size: 12.5px; font-weight: 600; padding: 5px 12px;
+  border-radius: 999px; white-space: nowrap;
+}
+.mc-status.is-ready   { background: #eaf5ec; color: #1f7a3d; }
+.mc-status.is-missing { background: #fdf3e7; color: #9a6516; }
+.mc-status.is-muted   { background: #f0f1ee; color: var(--mc-t2); }
+.mc-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+
+.mc-actions { display: flex; align-items: center; gap: 8px; }
+.mc-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 9px 16px; border-radius: 10px; font-family: inherit;
+  font-size: 13.5px; font-weight: 600; cursor: pointer; white-space: nowrap;
+}
+.mc-btn-primary { border: none; background: var(--mc-green); color: #fff; }
+.mc-btn-primary:hover { background: #14893f; }
+.mc-btn-primary:disabled { background: #cfd3cd; color: #fff; cursor: not-allowed; }
+.mc-btn-ghost { border: 1px solid var(--mc-border); background: var(--mc-card); color: #3f423f; }
+.mc-btn-ghost:hover { background: var(--mc-page); }
+.mc-btn-ghost:disabled { color: var(--mc-t3); cursor: not-allowed; }
+
+/* Menú de acciones secundarias */
+.mc-menu-wrap { position: relative; }
+.mc-more {
+  width: 38px; height: 38px; display: grid; place-items: center;
+  border: 1px solid var(--mc-border); background: var(--mc-card); border-radius: 10px;
+  color: var(--mc-t2); cursor: pointer; font-family: inherit; font-size: 17px; line-height: 1;
+}
+.mc-more:hover { background: var(--mc-page); color: var(--mc-t1); }
+.mc-menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 30;
+  min-width: 218px; display: flex; flex-direction: column; gap: 1px;
+  background: var(--mc-card); border: 1px solid var(--mc-border);
+  border-radius: 12px; padding: 6px; box-shadow: 0 10px 28px rgba(16,24,16,0.10);
+}
+.mc-menu-item {
+  text-align: left; padding: 10px 12px; border: none; background: transparent;
+  border-radius: 8px; font-family: inherit; font-size: 13.5px; color: #2e312e; cursor: pointer;
+}
+.mc-menu-item:hover { background: var(--mc-page); }
+.mc-menu-item:disabled { color: var(--mc-t3); cursor: not-allowed; }
+.mc-menu-sep { height: 1px; background: var(--mc-border); margin: 5px 2px; }
+.mc-menu-extra { padding: 4px 10px 6px; }
+
+/* Pie de tarjeta: avisos secundarios (reprogramada, ficha, email 24 h) */
+.mc-foot {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--mc-border);
+}
+.mc-note { font-size: 12.5px; color: var(--mc-t2); }
+
+/* Estados vacíos y secciones plegables */
+.mc-empty { text-align: center; padding: 44px 16px; color: var(--mc-t2); font-size: 14px; }
+.mc-collapse {
+  width: 100%; display: flex; align-items: center; justify-content: space-between;
+  padding: 11px 16px; border-radius: 12px; border: 1px solid var(--mc-border);
+  background: transparent; color: var(--mc-t2); cursor: pointer;
+  font-family: inherit; font-size: 13px; font-weight: 600;
+}
+.mc-collapse:hover { background: var(--mc-card); }
+.mc-banner {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  background: #fdf3e7; border: 1px solid #f0dcc2; border-radius: 12px;
+  padding: 13px 16px; margin-bottom: 14px; font-size: 13px; color: #9a6516;
+}
+
+/* ── Móvil ────────────────────────────────────────────────────────────────── */
+@media (max-width: 720px) {
+  .mc { padding: 14px; border-radius: 0; }
+  .mc-head { gap: 12px; }
+  .mc-nav { width: 100%; justify-content: space-between; }
+  .mc-nav-btn { width: 44px; height: 44px; }
+  .mc-nav-label { min-width: 0; flex: 1; }
+  .mc-today-btn { min-height: 44px; }
+
+  .mc-card { padding: 14px; }
+  .mc-row {
+    grid-template-columns: auto minmax(0,1fr);
+    grid-template-areas: "left main" "right right";
+    gap: 12px 14px;
+  }
+  .mc-left {
+    grid-area: left; display: flex; flex-direction: column;
+    align-items: center; gap: 8px; align-self: start;
+  }
+  .mc-accent { display: none; }
+  .mc-main { grid-area: main; }
+  .mc-right { grid-area: right; align-items: stretch; gap: 10px; }
+  .mc-status { align-self: flex-start; }
+  .mc-actions { width: 100%; }
+  .mc-actions .mc-btn { flex: 1; min-height: 44px; }
+  .mc-more { width: 44px; height: 44px; flex-shrink: 0; }
+  .mc-menu { min-width: 200px; }
+  .mc-menu-item { padding: 12px; min-height: 44px; }
+}
