@@ -6,7 +6,10 @@ import { dbAuthenticate } from '@/lib/db';
 interface AuthContextType {
   user: AppUser | null;
   loading: boolean;
-  login: (username: string, password: string) => Promise<boolean>;
+  /** Devuelve el usuario autenticado, o null si las credenciales no son válidas.
+   *  Devolver el usuario (y no un boolean) evita que quien llama tenga que releer
+   *  la sesión del storage para saber a dónde redirigir. */
+  login: (username: string, password: string) => Promise<AppUser | null>;
   logout: () => void;
   isRole: (...roles: UserRole[]) => boolean;
 }
@@ -14,7 +17,7 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType>({
   user: null,
   loading: true,
-  login: async () => false,
+  login: async () => null,
   logout: () => {},
   isRole: () => false,
 });
@@ -68,14 +71,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('storage', onStorage);
   }, []);
 
-  async function login(username: string, password: string): Promise<boolean> {
+  async function login(username: string, password: string): Promise<AppUser | null> {
     const u = await dbAuthenticate(username, password);
-    if (u) {
-      setUser(u);
-      try { localStorage.setItem(SESSION_KEY, JSON.stringify(u)); } catch {}
-      return true;
-    }
-    return false;
+    if (!u) return null;
+    setUser(u);
+    try { localStorage.setItem(SESSION_KEY, JSON.stringify(u)); } catch {}
+    return u;
   }
 
   function logout() {

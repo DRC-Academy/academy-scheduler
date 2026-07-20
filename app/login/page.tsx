@@ -21,16 +21,14 @@ export default function LoginPage() {
     e.preventDefault();
     setError('');
     setLoading(true);
-    const ok = await login(username, password);
+    // `login` devuelve el usuario: no hay que releer la sesión del storage para
+    // saber a dónde ir. Antes se releía de sessionStorage y, al pasar la sesión
+    // a localStorage, esa lectura devolvía null y el login se quedaba colgado
+    // sin redirigir ni mostrar error.
+    const u = await login(username, password);
     setLoading(false);
-    if (!ok) { setError('Usuario o contraseña incorrectos.'); return; }
-    try {
-      const saved = sessionStorage.getItem('academy_user');
-      if (saved) {
-        const u = JSON.parse(saved);
-        router.push(ROLE_REDIRECTS[u.role as UserRole] ?? '/');
-      }
-    } catch { router.push('/'); }
+    if (!u) { setError('Usuario o contraseña incorrectos.'); return; }
+    router.push(ROLE_REDIRECTS[u.role as UserRole] ?? '/');
   }
 
   return (

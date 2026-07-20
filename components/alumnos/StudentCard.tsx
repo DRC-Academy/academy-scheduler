@@ -58,10 +58,12 @@ export default function StudentCard({ bundle, studentKey }: Props) {
           <div style={{ fontSize: 13, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
             {analyses.length} {analyses.length === 1 ? 'clase' : 'clases'}
           </div>
+          {/* Navegación en la MISMA pestaña: <Link> ya hace navegación cliente,
+              así que no hace falta useRouter. Se quitó target="_blank" a
+              propósito — abrir con rel="noopener" creaba una pestaña con
+              sessionStorage vacío, que fue el origen del rebote al login. */}
           <Link
             href={href}
-            target="_blank"
-            rel="noopener noreferrer"
             data-student-key={studentKey}
             style={{ ...btnSecondary, textDecoration: 'none', display: 'inline-flex', alignItems: 'center', whiteSpace: 'nowrap' }}
           >
