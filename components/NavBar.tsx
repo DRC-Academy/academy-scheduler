@@ -116,6 +116,7 @@ export function NavBar() {
           </div>
 
           <div className="tnav-right">
+            <Link href="/ayuda" className="tnav-help" title="Centro de ayuda" aria-label="Centro de ayuda">?</Link>
             <NotificationBell compact />
             <span className="tnav-sep" aria-hidden />
             <div className="tnav-user">
