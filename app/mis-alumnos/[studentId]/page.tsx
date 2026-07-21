@@ -18,6 +18,11 @@ import { loadStudentBundles, norm, type StudentBundle } from '@/lib/misAlumnos';
 import { regenerateFicha } from '@/lib/aiClient';
 import { getProgressLink } from '@/lib/progressClient';
 import { getOrCreateFormLink } from '@/lib/formClient';
+import { analyzeTranscriptOnly, saveAnalysis } from '@/lib/aiClient';
+import { checkTranscriptDuplicates, transcriptHash, type DupeCheck } from '@/lib/transcriptDupes';
+import { pendingClassesFor, type PendingClass } from '@/lib/pendingClasses';
+import type { Assignment } from '@/types';
+import type { StudentProfileRow } from '@/lib/aiTypes';
 import {
   cefrSteps, milestoneProgress, skillsFromResponses, type SkillGauge,
 } from '@/lib/studentViz';
@@ -61,13 +66,14 @@ function StudentPageContent() {
   const routeId = Array.isArray(params.studentId) ? params.studentId[0] : params.studentId;
 
   const { user } = useAuth();
-  const { teachers, assignments } = useTeachers();
+  const { teachers, assignments, classJoinLogs, loadClassJoinLogs } = useTeachers();
   const teacher = teachers.find(t => t.id === user?.teacherId) ?? teachers[0];
 
   const [bundles, setBundles] = useState<StudentBundle[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<TabId>('perfil');
   const [toast, setToast] = useState<string | null>(null);
+  const [pendingTarget, setPendingTarget] = useState<PendingClass | null>(null);
 
   const myAssignments = useMemo(
     () => (teacher ? assignments.filter(a => a.teacherId === teacher.id) : []),
@@ -90,6 +96,9 @@ function StudentPageContent() {
     })();
     return () => { cancelled = true; };
   }, [teacher, myAssignments]);
+
+  // Los ingresos son la fuente de las clases pendientes de transcript.
+  useEffect(() => { loadClassJoinLogs(); }, [loadClassJoinLogs]);
 
   // Lista alfabética: es la que ordena la navegación anterior/siguiente.
   const ordered = useMemo(
@@ -149,6 +158,12 @@ function StudentPageContent() {
   const progressScore = profile?.progress_score ?? null;
   // Única fuente por destreza: la autoevaluación del formulario inicial.
   const skills = skillsFromResponses(asObject<Record<string, unknown>>(profile?.form_responses));
+
+  // Clases a las que el profe entró y todavía no tienen transcript.
+  const pending = pendingClassesFor({
+    studentName: a.studentName, teacherId: teacher.id,
+    joinLogs: classJoinLogs, analyses,
+  });
 
   return (
     <>
@@ -282,6 +297,8 @@ function StudentPageContent() {
       {tab === 'seguimiento' && (
         <SeguimientoTab
           analyses={analyses} risk={risk}
+          pending={pending}
+          onCompletePending={setPendingTarget}
           progressScore={progressScore}
           classNumber={classNumber}
           skills={skills}
@@ -310,6 +327,19 @@ function StudentPageContent() {
           }}
         />
       )}
+
+        {pendingTarget && (
+          <PendingTranscriptModal
+            pending={pendingTarget}
+            assignment={a}
+            profile={profile}
+            ficha={ficha}
+            teacher={{ id: teacher.id, name: teacher.name }}
+            onClose={() => setPendingTarget(null)}
+            onSaved={async () => { await load(); await loadClassJoinLogs(); }}
+            onToast={showToast}
+          />
+        )}
 
         {toast && <Toast message={toast} />}
       </div>
@@ -354,6 +384,138 @@ function SkillGauges({ skills, formDate }: { skills: SkillGauge[] | null; formDa
           Sin datos: el alumno todavía no completó el formulario inicial.
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Pegar el transcript de una clase PENDIENTE (una a la que el profe ya entró).
+ *
+ * La fecha NO se teclea: se hereda del ingreso, y el análisis guarda el
+ * join_log_id. Así el emparejamiento con finanzas es explícito y no depende de
+ * que las fechas coincidan.
+ */
+function PendingTranscriptModal({ pending, assignment, profile, ficha, teacher, onClose, onSaved, onToast }: {
+  pending: PendingClass;
+  assignment: Assignment;
+  profile: StudentProfileRow | null;
+  ficha: FichaIA | null;
+  teacher: { id: string; name: string };
+  onClose: () => void;
+  onSaved: () => Promise<void>;
+  onToast: (m: string) => void;
+}) {
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [dupe, setDupe] = useState<DupeCheck | null>(null);
+
+  const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+  const canSave = words >= 30 && !busy;
+
+  async function persist(hash: string) {
+    setBusy(true); setError('');
+    try {
+      const base = {
+        transcript: text.trim(),
+        studentName: assignment.studentName,
+        teacherName: teacher.name,
+        studentId: assignment.studentId || profile?.student_id || null,
+        teacherId: teacher.id,
+        profileId: profile?.id ?? null,
+        plan: assignment.plan,
+        level: assignment.studentLevel,
+        classDate: pending.date,          // heredada del ingreso
+        joinLogId: pending.joinLogId,     // vínculo explícito
+        transcriptHash: hash || null,
+        studentProfile: ficha,
+      };
+      const analysis = await analyzeTranscriptOnly(base);
+      await saveAnalysis({ ...base, analysis });
+      await onSaved();
+      onToast('Clase completada');
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo guardar el transcript.');
+      setBusy(false);
+    }
+  }
+
+  async function handleSave() {
+    if (!canSave) return;
+    const hash = transcriptHash(text);
+    setBusy(true);
+    let res: DupeCheck;
+    try {
+      res = await checkTranscriptDuplicates({
+        teacherId: teacher.id, studentName: assignment.studentName, classDate: pending.date, hash,
+      });
+    } catch {
+      res = { kind: 'none' };
+    } finally {
+      setBusy(false);
+    }
+    if (res.kind === 'none') { await persist(hash); return; }
+    setDupe(res);
+  }
+
+  return (
+    <div
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+      onClick={e => { if (e.target === e.currentTarget && !busy) onClose(); }}
+    >
+      <div className="sp" style={{ background: '#fff', borderRadius: 16, padding: 24, maxWidth: 560, width: '100%', margin: 0, maxHeight: '88vh', overflowY: 'auto' }}>
+        <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 4 }}>
+          Completar clase del {formatDate(pending.date)}
+        </div>
+        <div style={{ fontSize: 13, color: 'var(--sp-t2)', marginBottom: 16 }}>
+          {assignment.studentName}{pending.time ? ` · ${pending.time}` : ''} · Pegá el transcript de Fathom.
+        </div>
+
+        <textarea
+          value={text}
+          onChange={e => { setText(e.target.value); setError(''); }}
+          rows={9}
+          placeholder="Pegá acá el texto que genera Fathom al terminar la sesión..."
+          style={{ width: '100%', boxSizing: 'border-box', borderRadius: 10, border: '1px solid var(--border)', padding: '11px 13px', fontFamily: 'inherit', fontSize: 14, lineHeight: 1.5, resize: 'vertical' }}
+        />
+        <div style={{ fontSize: 12, color: words >= 30 ? '#1E9E3A' : 'var(--sp-t3)', marginTop: 6 }}>
+          {words} palabras{words < 30 ? ' · mínimo 30' : ''}
+        </div>
+
+        {error && (
+          <div style={{ marginTop: 12, padding: '10px 13px', borderRadius: 9, background: 'rgba(220,38,38,0.07)', color: '#B91C1C', fontSize: 13, lineHeight: 1.5 }}>{error}</div>
+        )}
+
+        <div className="sp-btn-row" style={{ display: 'flex', gap: 10, marginTop: 18 }}>
+          <button onClick={onClose} disabled={busy} style={{ ...btnSecondary, flex: 1 }}>Cancelar</button>
+          <button onClick={handleSave} disabled={!canSave} style={{ ...btnPrimary, flex: 2, opacity: canSave ? 1 : 0.6 }}>
+            {busy ? 'Analizando…' : 'Guardar y generar siguiente'}
+          </button>
+        </div>
+
+        {dupe && dupe.kind !== 'none' && (
+          <div style={{ marginTop: 16, padding: '13px 15px', borderRadius: 10, background: '#fdf3e7', border: '1px solid #f2e2c9' }}>
+            <div style={{ fontSize: 13.5, color: '#9a6516', lineHeight: 1.6, marginBottom: 10 }}>
+              {dupe.kind === 'blocked'
+                ? 'Este mismo texto ya está registrado para esta clase.'
+                : dupe.kind === 'other-class'
+                  ? `Este transcript parece el mismo que subiste para ${dupe.row.student_name}. ¿Seguro que es el correcto?`
+                  : 'Ya hay un transcript para esta clase. Se reemplazará por el nuevo.'}
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={() => setDupe(null)} style={{ ...btnSecondary, flex: 1 }}>
+                {dupe.kind === 'blocked' ? 'Cerrar' : 'Cancelar'}
+              </button>
+              {dupe.kind !== 'blocked' && (
+                <button onClick={() => { const d = dupe; setDupe(null); persist(transcriptHash(text)); void d; }} style={{ ...btnPrimary, flex: 1 }}>
+                  Continuar
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -556,9 +718,11 @@ function Field({ label, value }: { label: string; value?: string | null }) {
 }
 
 // ═══ TAB SEGUIMIENTO ══════════════════════════════════════════════════════════
-function SeguimientoTab({ analyses, risk, progressScore, classNumber, skills, formDate, onGoToProxima }: {
+function SeguimientoTab({ analyses, risk, progressScore, classNumber, skills, formDate, pending, onCompletePending, onGoToProxima }: {
   analyses: ClassAnalysisRow[];
   risk: RiskSignal | null;
+  pending: PendingClass[];
+  onCompletePending: (p: PendingClass) => void;
   progressScore: number | null;
   classNumber: number;
   skills: SkillGauge[] | null;
@@ -567,7 +731,7 @@ function SeguimientoTab({ analyses, risk, progressScore, classNumber, skills, fo
 }) {
   const milestone = milestoneProgress(classNumber);
 
-  if (analyses.length === 0) {
+  if (analyses.length === 0 && pending.length === 0) {
     return (
       <div className="sp-card sp-empty">
         <div style={{ marginBottom: 16 }}>
@@ -582,6 +746,32 @@ function SeguimientoTab({ analyses, risk, progressScore, classNumber, skills, fo
 
   return (
     <>
+      {pending.length > 0 && (
+        <div className="sp-card sp-amber" style={{ marginBottom: 16 }}>
+          <div className="sp-card-title">
+            Clases pendientes de transcript · {pending.length}
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--sp-t2)', lineHeight: 1.6, marginBottom: 12 }}>
+            Entraste a estas clases pero todavía no subiste el transcript. Hasta que lo
+            hagas quedan como “a revisar” en finanzas.
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {pending.map(p => (
+              <div key={p.joinLogId} style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', borderTop: '1px solid #f2e2c9', paddingTop: 10 }}>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#e0912f', flexShrink: 0 }} />
+                <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, fontWeight: 600 }}>
+                  {formatDate(p.date)}{p.time ? ` · ${p.time}` : ''}
+                </span>
+                <button onClick={() => onCompletePending(p)} style={{ ...btnPrimary, padding: '7px 14px', fontSize: 12.5 }}>
+                  Pegar transcript
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {analyses.length > 0 && (
       <div className="sp-metrics" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
         <div className="sp-card">
           <div className="sp-metric">{analyses.length}</div>
@@ -602,6 +792,7 @@ function SeguimientoTab({ analyses, risk, progressScore, classNumber, skills, fo
           </div>
         </div>
       </div>
+      )}
 
       {/* Trayectoria hacia el próximo hito REAL (1 · 15 · 30 · 50). */}
       {milestone && (

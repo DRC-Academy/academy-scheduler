@@ -133,6 +133,8 @@ export interface AnalyzeArgs {
   transcriptHash?: string | null;
   /** Si viene, reemplaza el transcript de esa fila en vez de crear otra. */
   replaceId?: string | null;
+  /** Ingreso al que pertenece la clase (vínculo explícito con finanzas). */
+  joinLogId?: string | null;
 }
 
 /** Sólo analiza: no guarda nada (el profesor revisa antes). */

@@ -112,6 +112,8 @@ export interface ClassTranscriptRef {
   class_date?: string | null;
   analyzed_at?: string | null;
   transcript?: string | null;
+  /** Ingreso al que pertenece este transcript. Cuando viene, manda sobre la fecha. */
+  join_log_id?: string | null;
 }
 
 /** Fecha efectiva de un análisis: class_date y, si falta, el día de analyzed_at. */
@@ -205,12 +207,34 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     log?: ClassJoinLog; record?: ClassRecord; transcript?: ClassTranscriptRef;
   }
   const cands: Cand[] = [];
-  const findCand = (student: string, date: string, tol: number) =>
-    cands.find(c => nkey(c.studentName) === nkey(student) && Math.abs(daysBetween(c.date, date)) <= tol);
+
+  const sameStudent = (c: Cand, student: string) => nkey(c.studentName) === nkey(student);
+
+  /**
+   * Empareja un dato (record o transcript) con la clase a la que pertenece.
+   *
+   * Primero busca la fecha EXACTA; solo si no la hay, el candidato LIBRE más
+   * cercano dentro de la tolerancia. El orden importa: buscar directamente "el
+   * primero dentro de ±1 día" hacía que, con clases en días consecutivos, el
+   * dato del martes se intentara pegar al lunes, viera el hueco ocupado y se
+   * descartara — la clase del martes se quedaba sin transcript para siempre.
+   */
+  const matchCand = (student: string, date: string, tol: number, isTaken: (c: Cand) => boolean) => {
+    const exact = cands.find(c => sameStudent(c, student) && c.date === date);
+    if (exact) return exact;
+    let best: Cand | undefined;
+    let bestDist = Infinity;
+    for (const c of cands) {
+      if (!sameStudent(c, student) || isTaken(c)) continue;
+      const d = Math.abs(daysBetween(c.date, date));
+      if (d <= tol && d < bestDist) { best = c; bestDist = d; }
+    }
+    return best;
+  };
 
   for (const l of myLogs) {
     if (!inMonth(l.scheduledDate)) continue;
-    let c = findCand(l.studentName, l.scheduledDate, 0);
+    let c = cands.find(x => sameStudent(x, l.studentName) && x.date === l.scheduledDate);
     if (!c) { c = { studentName: l.studentName, date: l.scheduledDate }; cands.push(c); }
     c.log = l;
   }
@@ -219,7 +243,7 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     // pago (la clase se contará cuando efectivamente se dé). Se ignora acá.
     if (r.classType === 'reprogramada') continue;
     if (!inMonth(r.classDate)) continue;
-    let c = findCand(r.studentName, r.classDate, 1);
+    let c = matchCand(r.studentName, r.classDate, 1, x => !!x.record);
     if (!c) { c = { studentName: r.studentName, date: r.classDate }; cands.push(c); }
     if (!c.record) c.record = r;
   }
@@ -228,8 +252,20 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
   // conteo. Misma tolerancia de ±1 día que los records.
   for (const t of myAnalyses) {
     const d = analysisDate(t);
+
+    // 1) Vínculo EXPLÍCITO: el transcript dice a qué ingreso pertenece. No se
+    //    adivina nada, y da igual con cuántos días de retraso se haya subido.
+    if (t.join_log_id) {
+      const linked = cands.find(c => c.log?.id === t.join_log_id);
+      if (linked) { if (!linked.transcript) linked.transcript = t; continue; }
+      // El ingreso vinculado es de otro mes: el transcript se cuenta con su
+      // clase, no acá. Evita crear una fila suelta duplicada.
+      if (!inMonth(d)) continue;
+    }
+
+    // 2) Respaldo por fecha, solo para lo añadido a mano (sin vínculo).
     if (!inMonth(d)) continue;
-    let c = findCand(t.student_name, d, 1);
+    let c = matchCand(t.student_name, d, 1, x => !!x.transcript);
     if (!c) { c = { studentName: t.student_name, date: d }; cands.push(c); }
     if (!c.transcript) c.transcript = t;
   }

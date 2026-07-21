@@ -2019,7 +2019,7 @@ export async function dbGetClassRecords(): Promise<import('@/types').ClassRecord
 export async function dbGetClassTranscripts(): Promise<import('@/lib/finance').ClassTranscriptRef[]> {
   const { data, error } = await supabase
     .from('class_analyses')
-    .select('teacher_id, student_name, class_date, analyzed_at, transcript')
+    .select('teacher_id, student_name, class_date, analyzed_at, transcript, join_log_id')
     .order('analyzed_at', { ascending: false });
   if (error || !data) {
     if (error) console.error('[db] Error al leer class_analyses para finanzas:', error);

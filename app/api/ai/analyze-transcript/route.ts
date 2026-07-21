@@ -30,6 +30,8 @@ interface Body {
   transcriptHash?: string | null;
   /** Si viene, se ACTUALIZA esa fila en vez de insertar una nueva. */
   replaceId?: string | null;
+  /** Ingreso (class_join_logs.id) al que pertenece esta clase. */
+  joinLogId?: string | null;
 }
 
 export async function POST(request: Request): Promise<Response> {
@@ -92,6 +94,7 @@ async function persistAnalysis(
     class_title:      a.classTitle,
     transcript,                       // NOT NULL en la base
     transcript_hash:  body.transcriptHash || null,
+    join_log_id:      body.joinLogId || null,
     class_summary:    a.classSummary,
     errors_detected:  a.errorsDetected,
     progress_notes:   a.progressNotes,
