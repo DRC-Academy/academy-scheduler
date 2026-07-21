@@ -21,7 +21,8 @@ import FormStatusBadge from '@/components/FormStatusBadge';
 import { EmailPreferencesCard } from '@/components/EmailPreferencesCard';
 import { maybeSendBonusEmail } from '@/lib/milestoneEmails';
 import { fetchFormTokensIndex, lookupToken, getOrCreateFormLink, formStateOf, type FormTokenInfo } from '@/lib/formClient';
-import { getPresentationEmailStatus } from '@/lib/presentationEmailUtils';
+import { getPresentationEmailStatus, hoursSinceAssigned, PRESENTATION_DEADLINE_HOURS } from '@/lib/presentationEmailUtils';
+import { PresentationEmailPopup } from '@/components/PresentationEmailPopup';
 import { ALL_SPECIALTIES } from '@/lib/specialties';
 import { SpecialtyChip, ToggleChip } from '@/components/ui';
 
@@ -2288,6 +2289,30 @@ function TeacherContent() {
 
   const teacher = teachers.find(t => t.id === user?.teacherId) ?? teachers[0];
 
+  // ── Popup recordatorio de emails de presentación pendientes ──────────────────
+  // Se evalúa una vez por montaje (al iniciar sesión / recargar). No reaparece
+  // tras enviar o descartar dentro de la misma vista; un recargo es un montaje
+  // nuevo y vuelve a evaluar. sessionStorage evita repetirlo en la sesión activa,
+  // salvo que haya algún alumno fuera de plazo (+24 h), en cuyo caso se muestra
+  // siempre. El PresentationModal se monta a este nivel para poder abrirlo desde
+  // el popup con el email ya prellenado.
+  const [showPresentationPopup, setShowPresentationPopup] = useState(false);
+  const [presentationModal, setPresentationModal] = useState<Assignment | null>(null);
+  const popupEvaluatedRef = useRef(false);
+  useEffect(() => {
+    if (!teacher || popupEvaluatedRef.current) return;
+    const pending = assignments.filter(a => a.teacherId === teacher.id && !a.presentationEmailSent);
+    if (pending.length === 0) return;   // aún sin datos o nada pendiente: reintenta al próximo cambio
+    popupEvaluatedRef.current = true;
+    const hasOverdue = pending.some(a => hoursSinceAssigned(a.createdAt) >= PRESENTATION_DEADLINE_HOURS);
+    let shownThisSession = false;
+    try { shownThisSession = sessionStorage.getItem('presentation_popup_shown') === '1'; } catch {}
+    if (!shownThisSession || hasOverdue) {
+      setShowPresentationPopup(true);
+      try { sessionStorage.setItem('presentation_popup_shown', '1'); } catch {}
+    }
+  }, [teacher?.id, assignments]);
+
   useEffect(() => {
     if (!teacher) return;
     setGridLoading(true);
@@ -2787,6 +2812,28 @@ function TeacherContent() {
           studentNames={Array.from(new Set(myAssignments.map(a => a.studentName))).sort()}
           onConfirm={handleRecuperacionConfirm}
           onCancel={() => setPendingRecuperacion(null)}
+        />
+      )}
+
+      {/* Popup recordatorio de emails de presentación pendientes */}
+      {showPresentationPopup && (
+        <PresentationEmailPopup
+          assignments={myAssignments.filter(a => !a.presentationEmailSent)}
+          onSend={(a) => { setShowPresentationPopup(false); setPresentationModal(a); }}
+          onRemindLater={() => setShowPresentationPopup(false)}
+        />
+      )}
+
+      {/* Modal de email de presentación abierto desde el popup */}
+      {presentationModal && (
+        <PresentationModal
+          assignment={presentationModal}
+          teacher={teacher}
+          students={students}
+          updateMeetLink={updateMeetLink}
+          onClose={() => setPresentationModal(null)}
+          onSent={() => {}}
+          onFormTokenReady={refreshFormIndex}
         />
       )}
 
