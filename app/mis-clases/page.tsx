@@ -14,6 +14,8 @@ import { maybeSendMilestoneEmail } from '@/lib/milestoneEmails';
 import { analyzeTranscriptOnly, saveAnalysis } from '@/lib/aiClient';
 import { checkTranscriptDuplicates, transcriptHash, type DupeCheck } from '@/lib/transcriptDupes';
 import { Teacher, Assignment, ClassRecordType, ClassRecord } from '@/types';
+import { HelpTooltip } from '@/components/ui';
+import type { HelpTooltipKey } from '@/lib/help-tooltips';
 
 // Etiquetas singular/plural por tipo de falta (para los mensajes de límite).
 const FALTA_TYPE_LABELS: Record<string, { sing: string; plural: string }> = {
@@ -544,18 +546,21 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
       <div className="mcf-content">
         {/* KPIs */}
         <div className="mcf-kpis">
-          {[
-            { label: 'Clases registradas este mes', value: monthRecords.length, dot: null, color: undefined },
-            { label: 'Con ingreso detectado', value: detectedCount, dot: '#16a34a', color: undefined },
-            { label: 'Sin ingreso detectado', value: notDetectedCount, dot: '#e0912f', color: notDetectedCount > 0 ? '#9a6516' : undefined },
-            { label: 'Alumnos con clases este mes', value: financeGroups.length, dot: null, color: undefined },
-          ].map(k => (
+          {([
+            { label: 'Clases registradas este mes', value: monthRecords.length, dot: null, color: undefined, help: undefined },
+            { label: 'Con ingreso detectado', value: detectedCount, dot: '#16a34a', color: undefined, help: 'finanzas.ingresoDetectado' },
+            { label: 'Sin ingreso detectado', value: notDetectedCount, dot: '#e0912f', color: notDetectedCount > 0 ? '#9a6516' : undefined, help: 'finanzas.sinIngreso' },
+            { label: 'Alumnos con clases este mes', value: financeGroups.length, dot: null, color: undefined, help: undefined },
+          ] as Array<{ label: string; value: number; dot: string | null; color: string | undefined; help?: HelpTooltipKey }>).map(k => (
             <div key={k.label} className="mcf-card mcf-kpi">
               <div className="mcf-kpi-value" style={k.color ? { color: k.color } : undefined}>
                 {k.dot && <span className="mcf-dot" style={{ background: k.dot }} />}
                 {k.value}
               </div>
-              <div className="mcf-kpi-label">{k.label}</div>
+              <div className="mcf-kpi-label" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                {k.label}
+                {k.help && <HelpTooltip tooltipKey={k.help} />}
+              </div>
             </div>
           ))}
         </div>
@@ -628,8 +633,20 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                         <table className="mcf-table">
                           <thead>
                             <tr>
-                              {['Fecha', 'Hora', 'Ingreso', 'Transcript', 'Suscripción', 'Tarifa', 'Acción'].map(h => (
-                                <th key={h}>{h}</th>
+                              {([
+                                { h: 'Fecha' }, { h: 'Hora' },
+                                { h: 'Ingreso', help: 'finanzas.ingreso' },
+                                { h: 'Transcript', help: 'finanzas.transcript' },
+                                { h: 'Suscripción', help: 'finanzas.suscripcion' },
+                                { h: 'Tarifa', help: 'finanzas.tarifa' },
+                                { h: 'Acción' },
+                              ] as Array<{ h: string; help?: HelpTooltipKey }>).map(col => (
+                                <th key={col.h}>
+                                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                                    {col.h}
+                                    {col.help && <HelpTooltip tooltipKey={col.help} />}
+                                  </span>
+                                </th>
                               ))}
                             </tr>
                           </thead>
@@ -737,7 +754,10 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
           {/* ── Derecha (sticky): total y clases a revisar ── */}
           <aside className="mcf-side">
             <div className="mcf-card mcf-card-pad mcf-total">
-              <div className="mcf-card-title">Total a cobrar · {monthLabel(monthYear)}</div>
+              <div className="mcf-card-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                Total a cobrar · {monthLabel(monthYear)}
+                <HelpTooltip tooltipKey="finanzas.totalCobrar" position="bottom" />
+              </div>
               <div className="mcf-amount">€{finance.totalAPagar.toFixed(2)}</div>
               <span className={`mcf-pill ${finance.paymentStatus === 'paid' ? 'is-ok' : 'is-warn'}`}>
                 <span className="mcf-dot" style={{ background: finance.paymentStatus === 'paid' ? '#16a34a' : '#e0912f' }} />
@@ -746,18 +766,25 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
 
               <div className="mcf-breakdown">
                 <div className="mcf-brow">
-                  <span className="mcf-brow-label">Clases pagables · {finance.totalPagable}</span>
+                  <span className="mcf-brow-label" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                    Clases pagables · {finance.totalPagable}
+                    <HelpTooltip tooltipKey="finanzas.pagables" />
+                  </span>
                   <span className="mcf-brow-value">€{finance.montoPagable.toFixed(2)}</span>
                 </div>
                 <div className="mcf-brow">
-                  <span className="mcf-brow-label">
+                  <span className="mcf-brow-label" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
                     Clases a revisar · {finance.totalARevisar}
                     <span className="mcf-brow-note"> pendiente de verificación</span>
+                    <HelpTooltip tooltipKey="finanzas.aRevisar" />
                   </span>
                   <span className="mcf-brow-value" style={{ color: '#8b8e88' }}>€{finance.montoARevisar.toFixed(2)}</span>
                 </div>
                 <div className="mcf-brow">
-                  <span className="mcf-brow-label">Bonos scoring</span>
+                  <span className="mcf-brow-label" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                    Bonos scoring
+                    <HelpTooltip tooltipKey="finanzas.bonosScoring" />
+                  </span>
                   <span className="mcf-brow-value">€{finance.bonusFromScoring.toFixed(2)}</span>
                 </div>
               </div>

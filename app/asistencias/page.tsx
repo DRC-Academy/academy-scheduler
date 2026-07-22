@@ -15,6 +15,8 @@ import { useTeachers } from '@/lib/TeachersContext';
 import {
   buildAttendanceRows, PUNCT_STYLE, attendanceSubBadge, isoDate, type LogRow,
 } from '@/lib/attendance';
+import { HelpTooltip } from '@/components/ui';
+import type { HelpTooltipKey } from '@/lib/help-tooltips';
 
 // Lunes de la semana que contiene `iso`.
 function mondayOf(iso: string): Date {
@@ -82,11 +84,11 @@ function AsistenciasContent() {
   const proximas   = rows.filter(r => r.status === 'pending' || r.status === 'upcoming').length;
   const punctualityPct = registered > 0 ? Math.round((onTime / registered) * 100) : 0;
 
-  const cards = [
-    { label: 'Clases con ingreso', value: registered, color: '#1E9E3A' },
-    { label: 'Puntualidad', value: `${punctualityPct}%`, color: punctualityPct >= 80 ? '#1E9E3A' : punctualityPct >= 60 ? '#f59e0b' : '#ef4444' },
-    { label: 'No ingresó', value: missed, color: missed > 0 ? '#ef4444' : '#1E9E3A' },
-    { label: 'Próximas', value: proximas, color: '#2563eb' },
+  const cards: Array<{ label: string; value: string | number; color: string; help: HelpTooltipKey }> = [
+    { label: 'Clases con ingreso', value: registered, color: '#1E9E3A', help: 'asistencias.conIngreso' },
+    { label: 'Puntualidad', value: `${punctualityPct}%`, color: punctualityPct >= 80 ? '#1E9E3A' : punctualityPct >= 60 ? '#f59e0b' : '#ef4444', help: 'asistencias.puntualidad' },
+    { label: 'No ingresó', value: missed, color: missed > 0 ? '#ef4444' : '#1E9E3A', help: 'asistencias.noIngreso' },
+    { label: 'Próximas', value: proximas, color: '#2563eb', help: 'asistencias.proximas' },
   ];
 
   const isThisWeek = weekOffset === 0;
@@ -131,7 +133,10 @@ function AsistenciasContent() {
                 {cards.map(c => (
                   <div key={c.label} style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '14px 16px' }}>
                     <div style={{ fontSize: 24, fontWeight: 700, color: c.color }}>{c.value}</div>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginTop: 3 }}>{c.label}</div>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginTop: 3, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                      {c.label}
+                      <HelpTooltip tooltipKey={c.help} />
+                    </div>
                   </div>
                 ))}
               </div>
@@ -147,8 +152,18 @@ function AsistenciasContent() {
                     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                       <thead>
                         <tr style={{ background: 'var(--bg-surface-2)', textAlign: 'left' }}>
-                          {['Día', 'Hora', 'Alumno', 'Hora ingreso', 'Estado', 'Suscripción'].map(h => (
-                            <th key={h} style={{ padding: '10px 14px', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>{h}</th>
+                          {([
+                            { h: 'Día' }, { h: 'Hora' }, { h: 'Alumno' },
+                            { h: 'Hora ingreso', help: 'asistencias.horaIngreso' },
+                            { h: 'Estado', help: 'asistencias.estado' },
+                            { h: 'Suscripción', help: 'finanzas.suscripcion' },
+                          ] as Array<{ h: string; help?: HelpTooltipKey }>).map(col => (
+                            <th key={col.h} style={{ padding: '10px 14px', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                                {col.h}
+                                {col.help && <HelpTooltip tooltipKey={col.help} />}
+                              </span>
+                            </th>
                           ))}
                         </tr>
                       </thead>

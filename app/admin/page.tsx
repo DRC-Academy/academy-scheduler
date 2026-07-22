@@ -21,6 +21,8 @@ import { SpecialtyChip, ToggleChip } from '@/components/ui';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { AppNotification, AssignedSlot } from '@/types';
 import { buildAttendanceRows, PUNCT_STYLE, attendanceSubBadge, minutesLate, isoDate, type LogRow } from '@/lib/attendance';
+import { HelpTooltip } from '@/components/ui';
+import type { HelpTooltipKey } from '@/lib/help-tooltips';
 import AiRiskTab from '@/components/ai/AiRiskTab';
 import { triggerEmail } from '@/lib/emailClient';
 
@@ -1825,11 +1827,11 @@ function ClassLogTab() {
     };
   }
 
-  const cards = [
-    { label: 'Clases registradas', value: totalRegistered, color: '#1E9E3A' },
-    { label: 'Puntualidad', value: `${punctualityPct}%`, color: punctualityPct >= 80 ? '#1E9E3A' : punctualityPct >= 60 ? '#f59e0b' : '#ef4444' },
-    { label: 'Clases perdidas', value: missedCount, color: missedCount > 0 ? '#ef4444' : '#1E9E3A' },
-    { label: 'Sin enlace', value: noLinkCount, color: noLinkCount > 0 ? '#ea580c' : '#1E9E3A' },
+  const cards: Array<{ label: string; value: string | number; color: string; help: HelpTooltipKey }> = [
+    { label: 'Clases registradas', value: totalRegistered, color: '#1E9E3A', help: 'profesores.clasesRegistradas' },
+    { label: 'Puntualidad', value: `${punctualityPct}%`, color: punctualityPct >= 80 ? '#1E9E3A' : punctualityPct >= 60 ? '#f59e0b' : '#ef4444', help: 'asistencias.puntualidad' },
+    { label: 'Clases perdidas', value: missedCount, color: missedCount > 0 ? '#ef4444' : '#1E9E3A', help: 'profesores.clasesPerdidas' },
+    { label: 'Sin enlace', value: noLinkCount, color: noLinkCount > 0 ? '#ea580c' : '#1E9E3A', help: 'profesores.sinEnlace' },
   ];
 
   const statusChips: Array<{ id: typeof statusFilter; label: string }> = [
@@ -1849,7 +1851,10 @@ function ClassLogTab() {
         {cards.map(c => (
           <div key={c.label} style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '16px 18px' }}>
             <div style={{ fontSize: 26, fontWeight: 700, color: c.color }}>{c.value}</div>
-            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginTop: 3 }}>{c.label}</div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginTop: 3, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              {c.label}
+              <HelpTooltip tooltipKey={c.help} />
+            </div>
           </div>
         ))}
       </div>
@@ -1894,8 +1899,18 @@ function ClassLogTab() {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
                 <tr style={{ background: 'var(--bg-surface-2)', textAlign: 'left' }}>
-                  {['Fecha', 'Hora', 'Profesor', 'Alumno', 'Hora ingreso', 'Puntualidad', 'Suscripción'].map(h => (
-                    <th key={h} style={{ padding: '10px 14px', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>{h}</th>
+                  {([
+                    { h: 'Fecha' }, { h: 'Hora' }, { h: 'Profesor' }, { h: 'Alumno' },
+                    { h: 'Hora ingreso', help: 'asistencias.horaIngreso' },
+                    { h: 'Puntualidad', help: 'asistencias.puntualidad' },
+                    { h: 'Suscripción', help: 'profesores.verificacionWoo' },
+                  ] as Array<{ h: string; help?: HelpTooltipKey }>).map(col => (
+                    <th key={col.h} style={{ padding: '10px 14px', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                        {col.h}
+                        {col.help && <HelpTooltip tooltipKey={col.help} />}
+                      </span>
+                    </th>
                   ))}
                 </tr>
               </thead>

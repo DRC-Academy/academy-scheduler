@@ -13,6 +13,7 @@ import { NavBar } from '@/components/NavBar';
 import { AuthGuard } from '@/components/AuthGuard';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
+import { HelpTooltip } from '@/components/ui';
 import { calcRegisteredClassNumber } from '@/lib/db';
 import { loadStudentBundles, norm, type StudentBundle } from '@/lib/misAlumnos';
 import { regenerateFicha } from '@/lib/aiClient';
@@ -787,8 +788,9 @@ function SeguimientoTab({ analyses, risk, progressScore, classNumber, skills, fo
           <div style={{ paddingTop: 4 }}>
             {risk ? <RiskDot risk={risk} size={10} /> : <span className="sp-body">—</span>}
           </div>
-          <div className="sp-metric-label">
+          <div className="sp-metric-label" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
             Señal actual{progressScore != null ? ` · progreso ${progressScore}/10` : ''}
+            <HelpTooltip tooltipKey="alumnos.riesgo" />
           </div>
         </div>
       </div>
@@ -797,8 +799,9 @@ function SeguimientoTab({ analyses, risk, progressScore, classNumber, skills, fo
       {/* Trayectoria hacia el próximo hito REAL (1 · 15 · 30 · 50). */}
       {milestone && (
         <div className="sp-card" style={{ marginBottom: 16 }}>
-          <div className="sp-card-title">
+          <div className="sp-card-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
             Trayectoria · clase {milestone.current} de {milestone.target}
+            <HelpTooltip tooltipKey="alumnos.trayectoria" />
           </div>
           <div className="sp-nodes" role="img"
             aria-label={`${milestone.current} de ${milestone.target} clases hacia el próximo hito`}>

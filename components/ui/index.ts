@@ -9,3 +9,4 @@ export { Card } from './Card';
 export { SectionHeader } from './SectionHeader';
 export { TableWrap, THead, TR, TD, CardList } from './Table';
 export { EmptyState } from './EmptyState';
+export { HelpTooltip } from './HelpTooltip';
