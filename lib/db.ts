@@ -1413,7 +1413,10 @@ export async function dbForceQuarterlyReset(): Promise<void> {
   await supabase.from('teachers').update({ last_quarterly_reset: now.toISOString(), total_score: 0, current_level: 1 }).in('id', ids);
 }
 
-// ── CLASS COUNT CALCULATOR ────────────────────────────────────────────────────
+// ── CLASS COUNT CALCULATOR (estimación por fecha — DEPRECADO) ──────────────────
+// El seguimiento clase a clase ya NO se estima por fecha: se cuenta por clases
+// registradas (ver calcRegisteredClassNumber más abajo). Esta función se conserva
+// solo como referencia/estimación y no debería usarse para hitos ni para la UI.
 
 const DAY_TO_JSDAY: Record<string, number> = {
   'Lunes': 1, 'Martes': 2, 'Miércoles': 3, 'Jueves': 4, 'Viernes': 5, 'Sábado': 6,
@@ -1462,6 +1465,57 @@ export function calcCurrentClassNumber(assignment: {
   }
 
   return Math.max(0, count + adjustment);
+}
+
+// ── CONTEO POR CLASES REGISTRADAS ─────────────────────────────────────────────
+// El seguimiento clase a clase se basa en las clases efectivamente cargadas por el
+// profesor (class_records), NO en una estimación por fecha. Solo suman las clases
+// dadas — 'normal' y 'recuperacion' (las que llevan transcript). Faltas,
+// cancelaciones y reprogramadas no cuentan. Esta es la fuente de verdad del número
+// de clase (incluida la detección de hitos 15/30/50).
+
+// class_type NULL se trata como 'normal' (así lo mapea mapClassRecord).
+export function classCountsForProgress(classType?: string | null): boolean {
+  return classType == null || classType === 'normal' || classType === 'recuperacion';
+}
+
+// Clases dadas para un alumno+profesor, a partir de registros ya cargados en memoria.
+export function countGivenClasses(
+  records: Array<{ teacherId: string; studentName: string; classType?: import('@/types').ClassRecordType }>,
+  teacherId: string,
+  studentName: string,
+): number {
+  const nk = (s: string) => (s ?? '').trim().toLowerCase();
+  const target = nk(studentName);
+  let n = 0;
+  for (const r of records) {
+    if (r.teacherId === teacherId && nk(r.studentName) === target && classCountsForProgress(r.classType)) n++;
+  }
+  return n;
+}
+
+// Número de clase actual = clases dadas registradas + ajuste manual del admin.
+// Reemplaza a calcCurrentClassNumber (estimación por fecha) para el seguimiento y
+// los hitos. Toma los registros ya cargados (contexto), sin ir a la base.
+export function calcRegisteredClassNumber(
+  assignment: { teacherId: string; studentName: string; manualClassAdjustment?: number },
+  records: Array<{ teacherId: string; studentName: string; classType?: import('@/types').ClassRecordType }>,
+): number {
+  return Math.max(0, countGivenClasses(records, assignment.teacherId, assignment.studentName) + (assignment.manualClassAdjustment ?? 0));
+}
+
+// Versión server-side: cuenta las clases dadas directamente en la base (para
+// disparadores que no tienen los registros en memoria, p. ej. la detección de
+// hitos al registrar una clase).
+export async function dbCountGivenClasses(teacherId: string, studentName: string): Promise<number> {
+  const { count } = await supabase
+    .from('class_records')
+    .select('id', { count: 'exact', head: true })
+    .eq('teacher_id', teacherId)
+    .eq('student_name', studentName)
+    // class_type NULL (filas antiguas) o normal/recuperacion.
+    .or('class_type.is.null,class_type.eq.normal,class_type.eq.recuperacion');
+  return count ?? 0;
 }
 
 // ── CLASS COUNT ───────────────────────────────────────────────────────────────
@@ -1918,9 +1972,25 @@ export async function dbUpsertTeacherAlerts(
   const today = new Date();
   const toInsert: any[] = [];
 
+  // Conteo por clases registradas (normal/recuperacion) del profesor, en una sola
+  // query, para detectar la cercanía a la clase 15 con el número real.
+  const nk = (s: string) => (s ?? '').trim().toLowerCase();
+  const givenByStudent = new Map<string, number>();
+  {
+    const { data: recs } = await supabase
+      .from('class_records')
+      .select('student_name, class_type')
+      .eq('teacher_id', teacherId);
+    for (const r of (recs ?? []) as Array<{ student_name: string; class_type: string | null }>) {
+      if (!classCountsForProgress(r.class_type)) continue;
+      const k = nk(r.student_name);
+      givenByStudent.set(k, (givenByStudent.get(k) ?? 0) + 1);
+    }
+  }
+
   for (const a of assignments) {
     const slugName = a.studentName.replace(/\s+/g, '_').toLowerCase();
-    const classNum = calcCurrentClassNumber(a as any);
+    const classNum = Math.max(0, (givenByStudent.get(nk(a.studentName)) ?? 0) + (a.manualClassAdjustment ?? 0));
 
     // Near clase 15 (3 or fewer classes away, not yet reached)
     if (classNum < 15 && 15 - classNum <= 3) {

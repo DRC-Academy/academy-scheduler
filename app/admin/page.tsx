@@ -9,7 +9,7 @@ import { useTeachers } from '@/lib/TeachersContext';
 import { useAuth } from '@/lib/AuthContext';
 import { mockAlerts } from '@/lib/mock-data';
 import { Teacher, Grid, Assignment, ScoringEvent, ScoringEventType } from '@/types';
-import { EVENT_POINTS, EVENT_EUROS, calcCurrentClassNumber, dbUpdateAssignmentStartDate, dbGetAllNotifications,
+import { EVENT_POINTS, EVENT_EUROS, calcRegisteredClassNumber, dbUpdateAssignmentStartDate, dbGetAllNotifications,
   dbAuditStudentAssignments, dbRelinkAssignment, dbSyncAssignmentName, dbMergeDuplicateStudents, dbSyncStudentAssignments,
   dbDiagnoseAllCalendars, dbSyncAllCalendarsToAssignments, dbCreateFullLink, CalendarDiagnosisAllRow, AuditResult,
   findDuplicateTeacherAssignments, type DuplicateAssignmentGroup } from '@/lib/db';
@@ -1463,7 +1463,7 @@ function TrackingMiniBar({ pct, color }: { pct: number; color: string }) {
 
 // ─── Class Tracking Tab ───────────────────────────────────────────────────────
 function ClassTrackingTab() {
-  const { assignments, teachers } = useTeachers();
+  const { assignments, teachers, classRecords } = useTeachers();
 
   const [search, setSearch]               = useState('');
   const [teacherFilter, setTeacherFilter] = useState('');
@@ -1474,7 +1474,7 @@ function ClassTrackingTab() {
   const today = new Date();
 
   const rows = assignments.map(a => {
-    const classNum   = calcCurrentClassNumber(a);
+    const classNum   = calcRegisteredClassNumber(a, classRecords);
     const totalDays  = a.startDate
       ? Math.max(0, Math.floor((today.getTime() - new Date(a.startDate + 'T00:00:00').getTime()) / 86400000))
       : null;
@@ -2965,7 +2965,7 @@ const ADMIN_TABS = ['overview', 'teachers', 'emails', 'scoring', 'tracking', 'cl
 type AdminTab = typeof ADMIN_TABS[number];
 
 function AdminContent() {
-  const { teachers, assignments, students, addTeacher, loadingTeachers, getTeacherGrid, updateTeacherGrid, checkAndRunResets, reloadAll, updateTeacherInfo } = useTeachers();
+  const { teachers, assignments, students, classRecords, addTeacher, loadingTeachers, getTeacherGrid, updateTeacherGrid, checkAndRunResets, reloadAll, updateTeacherInfo } = useTeachers();
   const [selectedTeacher, setSelectedTeacher] = useState<string | null>(null);
   const [showNewTeacher, setShowNewTeacher] = useState(false);
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');
@@ -3391,9 +3391,9 @@ function AdminContent() {
                     {(() => {
                       const ta = assignments.filter(a => a.teacherId === teacher.id);
                       if (ta.length === 0) return <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Sin alumnos asignados.</div>;
-                      const sorted = [...ta].sort((a, b) => calcCurrentClassNumber(b) - calcCurrentClassNumber(a));
+                      const sorted = [...ta].sort((a, b) => calcRegisteredClassNumber(b, classRecords) - calcRegisteredClassNumber(a, classRecords));
                       return sorted.map(a => {
-                        const classNum = calcCurrentClassNumber(a);
+                        const classNum = calcRegisteredClassNumber(a, classRecords);
                         const isMilestone = classNum >= 15;
                         const isEditing = editingStartDate[a.id] !== undefined;
                         return (

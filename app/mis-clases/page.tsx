@@ -8,8 +8,9 @@ import { getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
 import { calculateTeacherFinance, recordVerification, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge } from '@/lib/finance';
-import { dbGetAssignmentsByTeacher } from '@/lib/db';
+import { dbGetAssignmentsByTeacher, calcRegisteredClassNumber } from '@/lib/db';
 import { classifyPlan } from '@/lib/productUtils';
+import { maybeSendMilestoneEmail } from '@/lib/milestoneEmails';
 import { analyzeTranscriptOnly, saveAnalysis } from '@/lib/aiClient';
 import { checkTranscriptDuplicates, transcriptHash, type DupeCheck } from '@/lib/transcriptDupes';
 import { Teacher, Assignment, ClassRecordType, ClassRecord } from '@/types';
@@ -348,6 +349,32 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
   const [showAdd, setShowAdd] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
+  // Detección de hitos (clase 15/30/50) según las clases registradas. Se dispara
+  // al cargar Finanzas y cada vez que cambian los class_records (p. ej. tras
+  // "Añadir clase"), recontando con calcRegisteredClassNumber. maybeSendMilestoneEmail
+  // ignora los no-hito y deduplica en assignments.milestone_emails_sent, así que
+  // barrer todos los alumnos es seguro. Es el reemplazo del disparo que vivía en
+  // el borrado /conteo-automatico.
+  useEffect(() => {
+    if (!teacher || myAssignments.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      for (const a of myAssignments) {
+        if (cancelled) return;
+        try {
+          await maybeSendMilestoneEmail({
+            assignmentId: a.id,
+            teacherId: teacher.id,
+            studentName: a.studentName,
+            classNumber: calcRegisteredClassNumber(a, classRecords),
+          });
+        } catch { /* best-effort */ }
+      }
+    })();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teacher?.id, myAssignments.length, classRecords.length]);
+
   // Registros (capturas) del profesor para el mes seleccionado.
   const monthRecords = useMemo(
     () => classRecords.filter(r => r.teacherId === teacher.id && (r.classDate ?? '').slice(0, 7) === monthYear),
@@ -460,6 +487,8 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
     const analysis = await analyzeTranscriptOnly(base);
     await saveAnalysis({ ...base, analysis });
     await loadFinanceData();
+    // La detección de hitos ocurre en el barrido de MyClassesTab (useEffect), que
+    // recuenta al cambiar class_records tras loadFinanceData().
   }
 
   // Registro (captura) asociado a una clase (alumno + fecha ±1 día), si existe.
@@ -773,8 +802,8 @@ function MisClasesContent() {
         <div className="mcf">
           <header className="mcf-head">
             <div>
-              <h1 className="mcf-title">Mis clases</h1>
-              <p className="mcf-sub">Registrá tus clases y consultá tu resumen de pago</p>
+              <h1 className="mcf-title">Finanzas</h1>
+              <p className="mcf-sub">Registro de clases y resumen de pago</p>
             </div>
             <div className="mcf-updated">
               <span className="mcf-dot" style={{ background: '#16a34a' }} />

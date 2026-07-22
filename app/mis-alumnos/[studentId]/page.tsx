@@ -13,7 +13,7 @@ import { NavBar } from '@/components/NavBar';
 import { AuthGuard } from '@/components/AuthGuard';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
-import { calcCurrentClassNumber } from '@/lib/db';
+import { calcRegisteredClassNumber } from '@/lib/db';
 import { loadStudentBundles, norm, type StudentBundle } from '@/lib/misAlumnos';
 import { regenerateFicha } from '@/lib/aiClient';
 import { getProgressLink } from '@/lib/progressClient';
@@ -66,7 +66,7 @@ function StudentPageContent() {
   const routeId = Array.isArray(params.studentId) ? params.studentId[0] : params.studentId;
 
   const { user } = useAuth();
-  const { teachers, assignments, classJoinLogs, loadClassJoinLogs } = useTeachers();
+  const { teachers, assignments, classJoinLogs, loadClassJoinLogs, classRecords } = useTeachers();
   const teacher = teachers.find(t => t.id === user?.teacherId) ?? teachers[0];
 
   const [bundles, setBundles] = useState<StudentBundle[]>([]);
@@ -147,7 +147,7 @@ function StudentPageContent() {
   const risk: RiskSignal | null = profile && isRiskSignal(profile.risk_signal) ? profile.risk_signal : null;
   const plan = classCategoryBadge({ assignmentPlan: a.plan, assignmentObjetivo: a.objetivo });
   const lastAnalysis = analyses[0];
-  const classNumber = calcCurrentClassNumber(a);
+  const classNumber = calcRegisteredClassNumber(a, classRecords);
   const nextNumber = lastAnalysis?.class_number != null ? lastAnalysis.class_number + 1 : classNumber;
 
   const startIso = a.startDate ?? a.createdAt;

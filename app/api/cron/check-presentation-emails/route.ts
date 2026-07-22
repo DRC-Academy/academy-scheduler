@@ -1,15 +1,17 @@
-// Cron horario (vercel.json → "0 * * * *"): alerta a admin y profe sobre emails
-// de presentación pendientes. No penaliza scoring aquí (eso ocurre al enviarlo,
-// en /api/assignments/[id]/presentation-sent); solo avisa.
+// Cron horario (vercel.json → "0 * * * *"): recordatorios escalonados del email
+// de presentación pendiente. No penaliza scoring aquí (eso ocurre al enviarlo, en
+// /api/assignments/[id]/presentation-sent); solo avisa.
 //
 // Umbrales (desde la asignación):
-//   ·  4 h → recordatorio directo al PROFE.
-//   · 12 h → aviso al ADMIN.
-//   · 24 h → aviso urgente al ADMIN + aviso al PROFE.
+//   ·  4 h → email + aviso in-app al PROFE.
+//   · 12 h → email + aviso in-app al PROFE, y email + aviso in-app al ADMIN.
+//   · 24 h → email + aviso in-app al PROFE, y email + aviso in-app al ADMIN.
 //
-// Anti-duplicados: cada alerta usa un id determinista por assignment; se consulta
-// qué ids ya existen antes de insertar (y el upsert con ignoreDuplicates cierra la
-// carrera), así una misma alerta no se repite en cada corrida.
+// Anti-duplicados: cada umbral se marca en una columna booleana de la asignación
+// (presentation_reminder_{4h,12h,24h}_sent). Se comprueba false antes de enviar y
+// se marca true después, así ningún aviso se repite en corridas sucesivas. Las
+// notificaciones in-app usan además un id determinista (upsert ignoreDuplicates)
+// para cerrar la carrera entre dos corridas simultáneas.
 
 import { supabase } from '@/lib/supabase';
 import {
@@ -19,7 +21,9 @@ import {
   PRESENTATION_DEADLINE_HOURS,
 } from '@/lib/presentationEmailUtils';
 import {
-  fetchTeacher, sendPresentationEmailReminder, sendPresentationEmailOverdue,
+  fetchTeacher,
+  sendPresentationReminder4h, sendPresentationReminder12h, sendPresentationReminder24h,
+  sendPresentationAdminAlert12h, sendPresentationAdminAlert24h,
   type TeacherLike,
 } from '@/lib/emailNotifications';
 
@@ -32,16 +36,29 @@ interface AsgnRow {
   student_name: string;
   created_at: string;
   presentation_email_sent: boolean | null;
+  presentation_reminder_4h_sent: boolean | null;
+  presentation_reminder_12h_sent: boolean | null;
+  presentation_reminder_24h_sent: boolean | null;
 }
 
-function fmtAssignedAt(createdAt: string): { fecha: string; hora: string } {
-  const d = new Date(createdAt);
-  if (isNaN(d.getTime())) return { fecha: '—', hora: '—' };
-  return {
-    fecha: d.toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' }),
-    hora:  d.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }),
-  };
+interface NotifCandidate {
+  id: string;
+  target_user: string | null;
+  target_role: string | null;
+  title: string;
+  body: string;
+  type: string;
 }
+
+type EmailJob =
+  | { kind: 'teacher_4h';  teacherId: string; studentName: string }
+  | { kind: 'teacher_12h'; teacherId: string; studentName: string }
+  | { kind: 'teacher_24h'; teacherId: string; studentName: string }
+  | { kind: 'admin_12h';   teacherName: string; studentName: string }
+  | { kind: 'admin_24h';   teacherName: string; studentName: string };
+
+// Columnas a marcar true por asignación (los umbrales que dispararon en esta corrida).
+type FlagPatch = { presentation_reminder_4h_sent?: boolean; presentation_reminder_12h_sent?: boolean; presentation_reminder_24h_sent?: boolean };
 
 export async function GET(request: Request): Promise<Response> {
   // Autorización opcional: si hay CRON_SECRET configurado, exigir el bearer que
@@ -57,7 +74,7 @@ export async function GET(request: Request): Promise<Response> {
   // Asignaciones con el email de presentación pendiente.
   const { data, error } = await supabase
     .from('assignments')
-    .select('id, teacher_id, teacher_name, student_name, created_at, presentation_email_sent')
+    .select('id, teacher_id, teacher_name, student_name, created_at, presentation_email_sent, presentation_reminder_4h_sent, presentation_reminder_12h_sent, presentation_reminder_24h_sent')
     .or('presentation_email_sent.eq.false,presentation_email_sent.is.null');
 
   if (error) {
@@ -70,166 +87,150 @@ export async function GET(request: Request): Promise<Response> {
   const createdAtIso = new Date(now).toISOString();
 
   // Ventana de recencia: solo alertamos por asignaciones recientes. Cubre con
-  // margen el último umbral (24 h) sin nagear por asignaciones viejas ni inundar
-  // con el backfill de las que ya existían antes de esta función (esas siguen
-  // viéndose como "fuera de tiempo" en los badges de la UI, pero no generan push).
+  // margen el último umbral (24 h) sin nagear por las asignaciones que ya existían
+  // antes de esta función (esas siguen viéndose "fuera de tiempo" en los badges de
+  // la UI, pero no generan avisos nuevos).
   const ALERT_WINDOW_HOURS = 96;
 
-  // Construir las alertas candidatas (con id determinista por assignment + etapa).
-  interface Candidate {
-    id: string;
-    target_user: string | null;
-    target_role: string | null;
-    title: string;
-    body: string;
-    type: string;
-  }
-  const candidates: Candidate[] = [];
-
-  // Emails al profesor. Se cuelgan del anti-duplicados de las notificaciones:
-  // sólo se envía el email cuya notificación se inserta AHORA (id determinista
-  // por assignment+etapa), así cada profe recibe cada aviso una única vez sin
-  // necesidad de una tabla aparte.
-  interface EmailJob {
-    notifId: string;                       // id de la notificación que lo dispara
-    kind: 'reminder' | 'overdue';
-    teacherId: string;
-    studentName: string;
-    hours: number;
-  }
+  const candidates: NotifCandidate[] = [];
   const emailJobs: EmailJob[] = [];
+  const flagUpdates = new Map<string, FlagPatch>();
 
   for (const a of pending) {
     const h = hoursSinceAssigned(a.created_at, now);
     if (h > ALERT_WINDOW_HOURS) continue;   // asignación vieja → no genera alertas
-    const { fecha, hora } = fmtAssignedAt(a.created_at);
 
-    // 4 h → recordatorio al profe.
-    if (h >= PRESENTATION_WARNING_HOURS) {
+    // 4 h → email + in-app al profe.
+    if (h >= PRESENTATION_WARNING_HOURS && !a.presentation_reminder_4h_sent) {
       candidates.push({
-        id: `presalert_reminder_${a.id}`,
-        target_user: a.teacher_id,
-        target_role: null,
+        id: `presalert_4h_teacher_${a.id}`,
+        target_user: a.teacher_id, target_role: null,
         title: `📧 Recordatorio — Email de ${a.student_name}`,
         body: `Llevas 4h sin enviar el email de presentación a ${a.student_name}. ¡Los alumnos que reciben bienvenida pronto tienen mayor retención!`,
         type: 'presentation_email_reminder',
       });
+      emailJobs.push({ kind: 'teacher_4h', teacherId: a.teacher_id, studentName: a.student_name });
+      markFlag(flagUpdates, a.id, { presentation_reminder_4h_sent: true });
     }
 
-    // 12 h → aviso al admin.
-    if (h >= PRESENTATION_AT_RISK_HOURS) {
+    // 12 h → email + in-app al profe Y al admin.
+    if (h >= PRESENTATION_AT_RISK_HOURS && !a.presentation_reminder_12h_sent) {
       candidates.push({
-        id: `presalert_warning_${a.id}`,
-        target_user: null,
-        target_role: 'admin',
+        id: `presalert_12h_teacher_${a.id}`,
+        target_user: a.teacher_id, target_role: null,
+        title: `⚠️ Urgente — Email de ${a.student_name}`,
+        body: `Llevas 12h sin enviar el email de presentación a ${a.student_name}. Te quedan menos de 12 horas para enviarlo sin afectar tu scoring.`,
+        type: 'presentation_email_warning_teacher',
+      });
+      candidates.push({
+        id: `presalert_12h_admin_${a.id}`,
+        target_user: null, target_role: 'admin',
         title: `⚠️ Email pendiente — ${a.teacher_name}`,
-        body: `${a.teacher_name} lleva 12h sin enviar el email de presentación a ${a.student_name}. Asignado el ${fecha} a las ${hora}.`,
+        body: `${a.teacher_name} lleva 12h sin enviar el email de presentación a ${a.student_name}.`,
         type: 'presentation_email_warning',
       });
-      // A las 12 h el aviso in-app es sólo para el admin; el profe recibe el suyo
-      // por email (se dispara con la inserción de esa alerta).
-      emailJobs.push({
-        notifId: `presalert_warning_${a.id}`,
-        kind: 'reminder',
-        teacherId: a.teacher_id,
-        studentName: a.student_name,
-        hours: h,
-      });
+      emailJobs.push({ kind: 'teacher_12h', teacherId: a.teacher_id, studentName: a.student_name });
+      emailJobs.push({ kind: 'admin_12h', teacherName: a.teacher_name, studentName: a.student_name });
+      markFlag(flagUpdates, a.id, { presentation_reminder_12h_sent: true });
     }
 
-    // 24 h → aviso urgente al admin + aviso al profe.
-    if (h >= PRESENTATION_DEADLINE_HOURS) {
+    // 24 h → email + in-app al profe Y al admin (fuera de plazo).
+    if (h >= PRESENTATION_DEADLINE_HOURS && !a.presentation_reminder_24h_sent) {
       candidates.push({
-        id: `presalert_overdue_admin_${a.id}`,
-        target_user: null,
-        target_role: 'admin',
-        title: `🔴 Email fuera de tiempo — ${a.teacher_name}`,
-        body: `${a.teacher_name} no envió el email de presentación a ${a.student_name} en 24 horas. Se registrará -5 puntos en su scoring al enviarlo.`,
-        type: 'presentation_email_overdue',
-      });
-      candidates.push({
-        id: `presalert_overdue_teacher_${a.id}`,
-        target_user: a.teacher_id,
-        target_role: null,
-        title: '🔴 Email de presentación fuera de tiempo',
+        id: `presalert_24h_teacher_${a.id}`,
+        target_user: a.teacher_id, target_role: null,
+        title: '🔴 Email de presentación fuera de plazo',
         body: `No enviaste el email de presentación a ${a.student_name} en las primeras 24 horas. Cuando lo envíes se descontarán -5 puntos de tu scoring.`,
         type: 'presentation_email_overdue_teacher',
       });
-      emailJobs.push({
-        notifId: `presalert_overdue_teacher_${a.id}`,
-        kind: 'overdue',
-        teacherId: a.teacher_id,
-        studentName: a.student_name,
-        hours: h,
+      candidates.push({
+        id: `presalert_24h_admin_${a.id}`,
+        target_user: null, target_role: 'admin',
+        title: `🔴 Email fuera de plazo — ${a.teacher_name}`,
+        body: `${a.teacher_name} no envió el email de presentación a ${a.student_name} en 24 horas.`,
+        type: 'presentation_email_overdue',
       });
+      emailJobs.push({ kind: 'teacher_24h', teacherId: a.teacher_id, studentName: a.student_name });
+      emailJobs.push({ kind: 'admin_24h', teacherName: a.teacher_name, studentName: a.student_name });
+      markFlag(flagUpdates, a.id, { presentation_reminder_24h_sent: true });
     }
   }
 
-  if (candidates.length === 0) {
+  if (candidates.length === 0 && flagUpdates.size === 0) {
     return Response.json({ ok: true, pending: pending.length, inserted: 0, emailed: 0 });
   }
 
-  // Anti-duplicados: descartar las alertas ya emitidas.
-  const ids = candidates.map(c => c.id);
-  const { data: existing } = await supabase.from('notifications').select('id').in('id', ids);
-  const already = new Set((existing ?? []).map((r: { id: string }) => r.id));
-  const toInsert = candidates.filter(c => !already.has(c.id));
-
-  if (toInsert.length === 0) {
-    return Response.json({ ok: true, pending: pending.length, inserted: 0, emailed: 0 });
+  // ── Notificaciones in-app (dedup determinista por si dos corridas se solapan) ──
+  let inserted = 0;
+  if (candidates.length > 0) {
+    const rows = candidates.map(c => ({
+      id:          c.id,
+      target_user: c.target_user,
+      target_role: c.target_role,
+      title:       c.title,
+      body:        c.body,
+      type:        c.type,
+      read_by:     [],
+      created_at:  createdAtIso,
+      created_by:  'sistema',
+    }));
+    const { error: insErr } = await supabase
+      .from('notifications')
+      .upsert(rows, { onConflict: 'id', ignoreDuplicates: true });
+    if (insErr) {
+      console.error('[cron presentation-emails] Error al insertar notificaciones:', insErr);
+    } else {
+      inserted = rows.length;
+    }
   }
 
-  const rows = toInsert.map(c => ({
-    id:          c.id,
-    target_user: c.target_user,
-    target_role: c.target_role,
-    title:       c.title,
-    body:        c.body,
-    type:        c.type,
-    read_by:     [],
-    created_at:  createdAtIso,
-    created_by:  'sistema',
-  }));
+  // ── Emails (best-effort) ──────────────────────────────────────────────────────
+  const emailed = await sendPendingEmails(emailJobs);
 
-  // ignoreDuplicates cierra la carrera si otra corrida insertó el mismo id.
-  const { error: insErr } = await supabase
-    .from('notifications')
-    .upsert(rows, { onConflict: 'id', ignoreDuplicates: true });
-
-  if (insErr) {
-    console.error('[cron presentation-emails] Error al insertar notificaciones:', insErr);
-    return Response.json({ error: 'Error al insertar notificaciones' }, { status: 500 });
+  // ── Marcar los umbrales disparados para no repetirlos ─────────────────────────
+  for (const [assignmentId, patch] of flagUpdates) {
+    const { error: updErr } = await supabase.from('assignments').update(patch).eq('id', assignmentId);
+    if (updErr) console.error('[cron presentation-emails] Error al marcar recordatorios:', updErr);
   }
 
-  const emailed = await sendPendingEmails(emailJobs.filter(j => !already.has(j.notifId)));
+  return Response.json({ ok: true, pending: pending.length, inserted, emailed });
+}
 
-  return Response.json({ ok: true, pending: pending.length, inserted: rows.length, emailed });
+function markFlag(map: Map<string, FlagPatch>, id: string, patch: FlagPatch): void {
+  map.set(id, { ...(map.get(id) ?? {}), ...patch });
 }
 
 /**
- * Envía los emails de las alertas recién insertadas. Los profesores se cachean:
- * un profe con varios alumnos pendientes aparece en varios jobs y no hace falta
- * releerlo de la base cada vez.
+ * Envía los emails de recordatorio. Los profesores se cachean: un profe con varios
+ * alumnos pendientes aparece en varios jobs y no hace falta releerlo cada vez. Un
+ * email fallido nunca aborta el resto del cron.
  */
-async function sendPendingEmails(jobs: Array<{
-  kind: 'reminder' | 'overdue'; teacherId: string; studentName: string; hours: number;
-}>): Promise<number> {
+async function sendPendingEmails(jobs: EmailJob[]): Promise<number> {
   if (jobs.length === 0) return 0;
   const cache = new Map<string, TeacherLike | null>();
   let sent = 0;
 
+  async function teacherOf(id: string): Promise<TeacherLike | null> {
+    if (!cache.has(id)) cache.set(id, await fetchTeacher(id));
+    return cache.get(id) ?? null;
+  }
+
   for (const j of jobs) {
     try {
-      if (!cache.has(j.teacherId)) cache.set(j.teacherId, await fetchTeacher(j.teacherId));
-      const teacher = cache.get(j.teacherId);
-      if (!teacher) continue;
-
-      const ok = j.kind === 'reminder'
-        ? await sendPresentationEmailReminder(teacher, j.studentName, j.hours)
-        : await sendPresentationEmailOverdue(teacher, j.studentName);
+      let ok = false;
+      if (j.kind === 'teacher_4h' || j.kind === 'teacher_12h' || j.kind === 'teacher_24h') {
+        const teacher = await teacherOf(j.teacherId);
+        if (!teacher) continue;
+        ok = j.kind === 'teacher_4h'  ? await sendPresentationReminder4h(teacher, j.studentName)
+           : j.kind === 'teacher_12h' ? await sendPresentationReminder12h(teacher, j.studentName)
+           :                            await sendPresentationReminder24h(teacher, j.studentName);
+      } else {
+        ok = j.kind === 'admin_12h'
+          ? await sendPresentationAdminAlert12h(j.teacherName, j.studentName)
+          : await sendPresentationAdminAlert24h(j.teacherName, j.studentName);
+      }
       if (ok) sent++;
     } catch (err) {
-      // Un email fallido no debe abortar el resto del cron.
       console.error('[cron presentation-emails] Fallo al enviar email:', err);
     }
   }

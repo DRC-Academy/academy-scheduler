@@ -4,8 +4,9 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/AuthContext';
 import { NotificationBell } from '@/components/NotificationBell';
-import { Search, Users, Calendar, Wallet, ChartColumn, Settings, Menu, X, GraduationCap } from 'lucide-react';
+import { Search, Users, Calendar, Wallet, Settings, Menu, X, GraduationCap } from 'lucide-react';
 import { Button } from '@/components/ui';
+import { PresentationEmailReminder } from '@/components/PresentationEmailReminder';
 
 // Íconos lucide en vez de emojis: /mis-clases y /finanzas usaban los dos el mismo
 // 💰, así que el ícono no distinguía nada.
@@ -14,8 +15,8 @@ const navItems = [
   { href: '/students',          label: 'Alumnos',           icon: Users,       roles: ['setter', 'admin'] },
   { href: '/teacher',           label: 'Calendario',        icon: Calendar,    roles: ['teacher'] },
   { href: '/mis-alumnos',       label: 'Alumnos',           icon: GraduationCap, roles: ['teacher'] },
-  { href: '/mis-clases',        label: 'Mis clases',        icon: Wallet,      roles: ['teacher'] },
-  { href: '/conteo-automatico', label: 'Conteo automático', icon: ChartColumn, roles: ['teacher'] },
+  // /mis-clases conserva su URL (para no romper enlaces), pero se muestra como "Finanzas".
+  { href: '/mis-clases',        label: 'Finanzas',          icon: Wallet,      roles: ['teacher'] },
   { href: '/admin',             label: 'Admin',             icon: Settings,    roles: ['admin'] },
   { href: '/finanzas',          label: 'Finanzas',          icon: Wallet,      roles: ['admin'] },
 ];
@@ -137,6 +138,9 @@ export function NavBar() {
           </div>
         </div>
         {mobileMenu}
+        {/* Popup recordatorio de emails de presentación pendientes (solo rol teacher).
+            Se monta acá para que aparezca en toda la app del profesor sin duplicar. */}
+        <PresentationEmailReminder />
       </nav>
     );
   }

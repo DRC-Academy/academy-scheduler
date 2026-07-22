@@ -14,6 +14,9 @@ import { MILESTONE_SLIDES } from '@/lib/milestones';
 const FROM = 'DRC Academy <notificaciones@drcacademy.com>';
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '') || 'https://academy-scheduler-aqpt.vercel.app';
 const PAGOS_EMAIL = 'pagos@drcacademy.com';
+// Destinatario de los avisos al admin (recordatorios de emails de presentación).
+// Configurable por entorno; si no está, cae en la dirección de pagos de DRC.
+const ADMIN_EMAIL = process.env.ADMIN_NOTIFICATION_EMAIL?.trim() || PAGOS_EMAIL;
 
 // ── Preferencias ──────────────────────────────────────────────────────────────
 export type EmailPrefKey =
@@ -137,8 +140,10 @@ ${visible.map(([k, v]) => `  <tr>
 const p = (text: string) => `<p style="margin:0 0 16px;">${text}</p>`;
 
 // ── Envío ─────────────────────────────────────────────────────────────────────
+// Los avisos ya NO son opt-out: todos los emails se envían siempre (los
+// profesores no pueden desactivarlos). Por eso `send` ya no consulta preferencias.
 async function send(
-  label: string, teacher: TeacherLike, pref: EmailPrefKey,
+  label: string, teacher: TeacherLike,
   subject: string, html: string,
 ): Promise<boolean> {
   const to = destinationFor(teacher);
@@ -146,11 +151,12 @@ async function send(
     console.error(`[EMAIL] ${label}: el profesor ${teacher.name} no tiene email de destino.`);
     return false;
   }
-  if (!wantsEmail(teacher, pref)) {
-    console.log(`[EMAIL] ${label}: omitido — ${teacher.name} desactivó "${pref}".`);
-    return false;
-  }
 
+  return sendToAddress(label, to, subject, html);
+}
+
+/** Envío directo a una dirección (avisos al admin, que no es un profesor). */
+async function sendToAddress(label: string, to: string, subject: string, html: string): Promise<boolean> {
   const key = process.env.RESEND_API_KEY;
   console.log('[EMAIL] Intentando enviar email:', {
     label,
@@ -216,7 +222,7 @@ export async function sendNewStudentEmail(teacher: TeacherLike, info: NewStudent
     ctaButton('Ver en DRC Gestión', `${APP_URL}/mis-alumnos`),
     `${info.studentName} · ${info.plan ?? ''}`,
   );
-  return send('sendNewStudentEmail', teacher, 'new_student', subject, html);
+  return send('sendNewStudentEmail', teacher, subject, html);
 }
 
 // ═══ B) Formulario completado ═════════════════════════════════════════════════
@@ -230,7 +236,7 @@ export async function sendFormCompletedEmail(teacher: TeacherLike, studentName: 
     ctaButton('Ver ficha del alumno', `${APP_URL}/mis-alumnos`),
     `Ficha de ${studentName} lista`,
   );
-  return send('sendFormCompletedEmail', teacher, 'form_completed', subject, html);
+  return send('sendFormCompletedEmail', teacher, subject, html);
 }
 
 // ═══ C) Email de presentación pendiente (12 h) ════════════════════════════════
@@ -246,7 +252,7 @@ export async function sendPresentationEmailReminder(
     ctaButton('Ir a DRC Gestión', APP_URL),
     `${studentName} lleva ${Math.round(hoursElapsed)} h sin bienvenida`,
   );
-  return send('sendPresentationEmailReminder', teacher, 'presentation_reminder', subject, html);
+  return send('sendPresentationEmailReminder', teacher, subject, html);
 }
 
 // ═══ D) Email de presentación fuera de tiempo (24 h) ══════════════════════════
@@ -260,7 +266,69 @@ export async function sendPresentationEmailOverdue(teacher: TeacherLike, student
     ctaButton('Enviar ahora', APP_URL),
     `${studentName} sin bienvenida (+24 h)`,
   );
-  return send('sendPresentationEmailOverdue', teacher, 'presentation_reminder', subject, html);
+  return send('sendPresentationEmailOverdue', teacher, subject, html);
+}
+
+// ═══ E) Recordatorios escalonados del email de presentación ═══════════════════
+// Tres umbrales, disparados por el cron con anti-duplicados en columnas
+// (presentation_reminder_{4h,12h,24h}_sent). El copy es fijo por especificación.
+
+// 4 h — recordatorio al profesor.
+export async function sendPresentationReminder4h(teacher: TeacherLike, studentName: string): Promise<boolean> {
+  const subject = `Recordatorio: email pendiente — ${studentName}`;
+  const html = baseEmailTemplate(
+    p(`Hola ${esc(teacher.name)},`) +
+    p(`Llevas <strong>4 horas</strong> sin enviar el email de presentación a <strong>${esc(studentName)}</strong>. Los alumnos que reciben bienvenida pronto tienen mayor retención.`) +
+    ctaButton('Enviar ahora', APP_URL),
+    `${studentName} sigue sin email de bienvenida`,
+  );
+  return send('sendPresentationReminder4h', teacher, subject, html);
+}
+
+// 12 h — aviso urgente al profesor.
+export async function sendPresentationReminder12h(teacher: TeacherLike, studentName: string): Promise<boolean> {
+  const subject = `Urgente: email pendiente — ${studentName}`;
+  const html = baseEmailTemplate(
+    p(`Hola ${esc(teacher.name)},`) +
+    p(`Llevas <strong>12 horas</strong> sin enviar el email de presentación a <strong>${esc(studentName)}</strong>. Te quedan menos de 12 horas para enviarlo sin afectar tu scoring.`) +
+    ctaButton('Enviar ahora', APP_URL),
+    `${studentName} · quedan menos de 12 h`,
+  );
+  return send('sendPresentationReminder12h', teacher, subject, html);
+}
+
+// 24 h — email fuera de plazo (al enviarlo se descuentan -5 puntos).
+export async function sendPresentationReminder24h(teacher: TeacherLike, studentName: string): Promise<boolean> {
+  const subject = `Email fuera de plazo — ${studentName}`;
+  const html = baseEmailTemplate(
+    p(`Hola ${esc(teacher.name)},`) +
+    p(`Han pasado más de <strong>24 horas</strong> sin enviar el email de presentación a <strong>${esc(studentName)}</strong>. Cuando lo envíes se descontarán <strong>-5 puntos</strong> de tu scoring.`) +
+    ctaButton('Enviar ahora', APP_URL),
+    `${studentName} · email fuera de plazo`,
+  );
+  return send('sendPresentationReminder24h', teacher, subject, html);
+}
+
+// 12 h — aviso al admin.
+export async function sendPresentationAdminAlert12h(teacherName: string, studentName: string): Promise<boolean> {
+  const subject = `Alerta: ${teacherName} — email sin enviar 12h`;
+  const html = baseEmailTemplate(
+    p(`<strong>${esc(teacherName)}</strong> lleva 12h sin enviar el email de presentación a <strong>${esc(studentName)}</strong>.`) +
+    ctaButton('Ver en DRC Gestión', `${APP_URL}/admin`),
+    `${teacherName} · email sin enviar 12 h`,
+  );
+  return sendToAddress('sendPresentationAdminAlert12h', ADMIN_EMAIL, subject, html);
+}
+
+// 24 h — aviso al admin (fuera de plazo).
+export async function sendPresentationAdminAlert24h(teacherName: string, studentName: string): Promise<boolean> {
+  const subject = `🔴 ${teacherName} — email fuera de plazo`;
+  const html = baseEmailTemplate(
+    p(`<strong>${esc(teacherName)}</strong> no envió el email de presentación a <strong>${esc(studentName)}</strong> en 24 horas.`) +
+    ctaButton('Ver en DRC Gestión', `${APP_URL}/admin`),
+    `${teacherName} · email fuera de plazo`,
+  );
+  return sendToAddress('sendPresentationAdminAlert24h', ADMIN_EMAIL, subject, html);
 }
 
 // ═══ F/G/H) Hitos de clase ════════════════════════════════════════════════════
@@ -301,7 +369,7 @@ export async function sendMilestoneEmail(
     (slides ? ctaButton(`Ver diapositivas de clase ${milestone}`, slides) : ''),
     `${studentName} — clase ${milestone}`,
   );
-  return send('sendMilestoneEmail', teacher, 'milestones', c.subject(studentName), html);
+  return send('sendMilestoneEmail', teacher, c.subject(studentName), html);
 }
 
 // ═══ I) Bono de 6 meses ═══════════════════════════════════════════════════════
@@ -319,7 +387,7 @@ export async function sendBonusAvailableEmail(teacher: TeacherLike, studentName:
     p('Indica el nombre del alumno y la fecha de inicio de la suscripción.'),
     `Bono disponible por ${studentName}`,
   );
-  return send('sendBonusAvailableEmail', teacher, 'bonus', subject, html);
+  return send('sendBonusAvailableEmail', teacher, subject, html);
 }
 
 // ═══ J) Circular del admin ════════════════════════════════════════════════════
@@ -335,7 +403,7 @@ function circularHtml(teacher: TeacherLike, notification: { title: string; body:
 export async function sendCircularEmail(
   teacher: TeacherLike, notification: { title: string; body: string },
 ): Promise<boolean> {
-  return send('sendCircularEmail', teacher, 'circulars', notification.title, circularHtml(teacher, notification));
+  return send('sendCircularEmail', teacher, notification.title, circularHtml(teacher, notification));
 }
 
 /**
@@ -353,10 +421,6 @@ export async function sendCircularBatch(
     .filter(({ teacher, to }) => {
       if (!to) {
         console.error(`[EMAIL] circular: ${teacher.name} no tiene email de destino.`);
-        return false;
-      }
-      if (!wantsEmail(teacher, 'circulars')) {
-        console.log(`[EMAIL] circular: omitido — ${teacher.name} desactivó las circulares.`);
         return false;
       }
       return true;
