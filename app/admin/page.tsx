@@ -19,7 +19,8 @@ import { getPresentationEmailStatus, hoursSinceAssigned, type PresentationEmailS
 import { ALL_SPECIALTIES } from '@/lib/specialties';
 import { SpecialtyChip, ToggleChip } from '@/components/ui';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { AppNotification, ClassJoinLog, AssignedSlot } from '@/types';
+import { AppNotification, AssignedSlot } from '@/types';
+import { buildAttendanceRows, PUNCT_STYLE, attendanceSubBadge, minutesLate, isoDate, type LogRow } from '@/lib/attendance';
 import AiRiskTab from '@/components/ai/AiRiskTab';
 import { triggerEmail } from '@/lib/emailClient';
 
@@ -1744,52 +1745,9 @@ function ClassTrackingTab() {
 }
 
 // ─── Class Log Tab (Registro de clases) ───────────────────────────────────────
-const DAY_NAMES_BY_JSDAY_ADMIN = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
-function isoDateAdmin(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-function minutesLate(scheduledDate: string, scheduledTime: string, clickedAt: string): number {
-  const [y, m, d] = scheduledDate.split('-').map(Number);
-  const hour = parseInt(scheduledTime);
-  const scheduled = new Date(y, (m ?? 1) - 1, d ?? 1, isNaN(hour) ? 0 : hour, 0, 0, 0);
-  return (new Date(clickedAt).getTime() - scheduled.getTime()) / 60000;
-}
-
-const PUNCT_STYLE: Record<string, { label: string; color: string; bg: string }> = {
-  on_time:   { label: '✅ A tiempo',  color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)' },
-  late:      { label: '🟡 Tarde',     color: '#b45309', bg: 'rgba(245,158,11,0.12)' },
-  very_late: { label: '🟠 Muy tarde', color: '#ea580c', bg: 'rgba(249,115,22,0.12)' },
-  missed:    { label: '🔴 No ingresó', color: '#dc2626', bg: 'rgba(239,68,68,0.1)' },
-  pending:   { label: '⏳ Pendiente',  color: 'var(--text-muted)', bg: 'var(--bg-surface-3)' },
-};
-
-function subscriptionBadge(r: { joinedAt?: string; subscriptionStatus?: string; enteredWithoutActive?: boolean; subscriptionDaysRemaining?: number }):
-  { label: string; color: string; bg: string } | null {
-  if (!r.joinedAt) return null; // no se registró ingreso (no ingresó)
-  if (r.enteredWithoutActive) {
-    const days = (r.subscriptionDaysRemaining != null && r.subscriptionDaysRemaining > 0)
-      ? ` · ${r.subscriptionDaysRemaining}d`
-      : '';
-    return { label: `⚠️ Inactiva (ingresó igual)${days}`, color: '#ea580c', bg: 'rgba(249,115,22,0.12)' };
-  }
-  if (r.subscriptionStatus === 'active') return { label: '✅ Activa', color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)' };
-  return { label: '❓ No verificado', color: 'var(--text-muted)', bg: 'var(--bg-surface-3)' };
-}
-
-interface LogRow {
-  id: string;
-  date: string;
-  hour: string;
-  teacherId: string;
-  teacherName: string;
-  studentName: string;
-  joinedAt?: string;
-  status: 'on_time' | 'late' | 'very_late' | 'missed' | 'pending';
-  hasLink: boolean;
-  subscriptionStatus?: string;
-  enteredWithoutActive?: boolean;
-  subscriptionDaysRemaining?: number;
-}
+// PUNCT_STYLE, attendanceSubBadge, minutesLate, isoDate, LogRow y buildAttendanceRows
+// viven en lib/attendance (fuente única, compartida con la sección "Asistencias"
+// del profesor).
 
 function ClassLogTab() {
   const { teachers, assignments, classJoinLogs, loadClassJoinLogs } = useTeachers();
@@ -1805,7 +1763,7 @@ function ClassLogTab() {
   const defaultFrom = new Date(spainToday); defaultFrom.setDate(spainToday.getDate() - 30);
 
   const [teacherFilter, setTeacherFilter] = useState<string>('');
-  const [fromDate, setFromDate] = useState(isoDateAdmin(defaultFrom));
+  const [fromDate, setFromDate] = useState(isoDate(defaultFrom));
   const [toDate, setToDate] = useState(todayIso);
   const [statusFilter, setStatusFilter] = useState<'all' | 'on_time' | 'late' | 'missed' | 'pending' | 'no_link' | 'no_sub'>('all');
   const [expandedTeacher, setExpandedTeacher] = useState<string | null>(null);
@@ -1815,94 +1773,16 @@ function ClassLogTab() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Build all rows: expected recurring class instances over the range + any extra logs.
-  const baseRows = useMemo<LogRow[]>(() => {
-    const rows: LogRow[] = [];
-    const consumedLogs = new Set<string>();
-
-    const relevantAssignments = assignments.filter(a => !teacherFilter || a.teacherId === teacherFilter);
-
-    // Index logs by composite key for fast matching
-    const logByKey = new Map<string, ClassJoinLog>();
-    for (const log of classJoinLogs) {
-      logByKey.set(`${log.teacherId}|${log.studentName}|${log.scheduledDate}|${log.scheduledTime}`, log);
-    }
-
-    const start = new Date(fromDate + 'T00:00:00');
-    const end   = new Date(toDate + 'T00:00:00');
-    if (isNaN(start.getTime()) || isNaN(end.getTime()) || start > end) return rows;
-
-    // Cap iteration to a reasonable window
-    const maxDays = 370;
-    for (const a of relevantAssignments) {
-      const hasLink = !!a.meetLink;
-      const cursor = new Date(start);
-      let dayCount = 0;
-      while (cursor <= end && dayCount <= maxDays) {
-        const dayName = DAY_NAMES_BY_JSDAY_ADMIN[cursor.getDay()];
-        for (const slot of a.slots) {
-          if (slot.day !== dayName) continue;
-          const dateIso = isoDateAdmin(cursor);
-          const key = `${a.teacherId}|${a.studentName}|${dateIso}|${slot.hour}`;
-          const log = logByKey.get(key);
-          if (log) {
-            consumedLogs.add(key);
-            rows.push({
-              id: `${a.id}_${dateIso}_${slot.hour}`,
-              date: dateIso, hour: slot.hour,
-              teacherId: a.teacherId, teacherName: a.teacherName, studentName: a.studentName,
-              joinedAt: log.clickedAt, status: log.punctuality, hasLink,
-              subscriptionStatus: log.subscriptionStatus, enteredWithoutActive: log.enteredWithoutActive,
-              subscriptionDaysRemaining: log.subscriptionDaysRemaining,
-            });
-          } else {
-            // No hay registro de ingreso para esta clase programada. Decidimos su
-            // estado según el reloj de España (todayIso / nowMinutes):
-            //  · día anterior            → "No ingresó"
-            //  · hoy y su hora ya pasó   → "No ingresó"
-            //  · hoy y todavía no llegó  → "Pendiente" (gris)
-            //  · fecha futura            → no se incluye en este reporte
-            let status: LogRow['status'] | null = null;
-            if (dateIso < todayIso) {
-              status = 'missed';
-            } else if (dateIso === todayIso) {
-              const startMinutes = (parseInt(slot.hour) || 0) * 60;
-              status = startMinutes < nowMinutes ? 'missed' : 'pending';
-            }
-            if (status) {
-              rows.push({
-                id: `${a.id}_${dateIso}_${slot.hour}`,
-                date: dateIso, hour: slot.hour,
-                teacherId: a.teacherId, teacherName: a.teacherName, studentName: a.studentName,
-                status, hasLink,
-              });
-            }
-          }
-        }
-        cursor.setDate(cursor.getDate() + 1);
-        dayCount++;
-      }
-    }
-
-    // Include logs that didn't match a current assignment slot (e.g. slot changed afterwards)
-    for (const log of classJoinLogs) {
-      if (teacherFilter && log.teacherId !== teacherFilter) continue;
-      if (log.scheduledDate < fromDate || log.scheduledDate > toDate) continue;
-      const key = `${log.teacherId}|${log.studentName}|${log.scheduledDate}|${log.scheduledTime}`;
-      if (consumedLogs.has(key)) continue;
-      const linkedAssignment = assignments.find(a => a.teacherId === log.teacherId && a.studentName === log.studentName);
-      rows.push({
-        id: log.id,
-        date: log.scheduledDate, hour: log.scheduledTime,
-        teacherId: log.teacherId, teacherName: log.teacherName, studentName: log.studentName,
-        joinedAt: log.clickedAt, status: log.punctuality, hasLink: !!linkedAssignment?.meetLink,
-        subscriptionStatus: log.subscriptionStatus, enteredWithoutActive: log.enteredWithoutActive,
-        subscriptionDaysRemaining: log.subscriptionDaysRemaining,
-      });
-    }
-
-    return rows.sort((x, y) => (y.date.localeCompare(x.date)) || (parseInt(y.hour) - parseInt(x.hour)));
-  }, [assignments, classJoinLogs, teacherFilter, fromDate, toDate, todayIso, nowMinutes]);
+  // Filas de asistencia (fuente única: lib/attendance). El admin ve todos los
+  // profes (o el filtrado) y NO incluye clases futuras. Orden descendente.
+  const baseRows = useMemo<LogRow[]>(() =>
+    buildAttendanceRows({
+      assignments, joinLogs: classJoinLogs,
+      teacherId: teacherFilter || undefined,
+      fromDate, toDate, todayIso, nowMinutes,
+      includeFuture: false,
+    }).sort((x, y) => y.date.localeCompare(x.date) || (parseInt(y.hour) - parseInt(x.hour))),
+  [assignments, classJoinLogs, teacherFilter, fromDate, toDate, todayIso, nowMinutes]);
 
   // Summary metrics — las clases "Pendiente" (hoy, aún sin pasar) no cuentan como
   // registradas ni como perdidas.
@@ -2046,7 +1926,7 @@ function ClassLogTab() {
                       </td>
                       <td style={{ padding: '10px 14px', whiteSpace: 'nowrap' }}>
                         {(() => {
-                          const sb = subscriptionBadge(r);
+                          const sb = attendanceSubBadge(r);
                           return sb
                             ? <span style={{ fontSize: 11, padding: '2px 9px', borderRadius: 12, background: sb.bg, color: sb.color, fontWeight: 700 }}>{sb.label}</span>
                             : <span style={{ color: 'var(--text-muted)' }}>—</span>;

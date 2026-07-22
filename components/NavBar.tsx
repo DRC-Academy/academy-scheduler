@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/AuthContext';
 import { NotificationBell } from '@/components/NotificationBell';
-import { Search, Users, Calendar, Wallet, Settings, Menu, X, GraduationCap } from 'lucide-react';
+import { Search, Users, Calendar, Wallet, Settings, Menu, X, GraduationCap, CalendarCheck } from 'lucide-react';
 import { Button } from '@/components/ui';
 import { PresentationEmailReminder } from '@/components/PresentationEmailReminder';
 
@@ -17,6 +17,7 @@ const navItems = [
   { href: '/mis-alumnos',       label: 'Alumnos',           icon: GraduationCap, roles: ['teacher'] },
   // /mis-clases conserva su URL (para no romper enlaces), pero se muestra como "Finanzas".
   { href: '/mis-clases',        label: 'Finanzas',          icon: Wallet,      roles: ['teacher'] },
+  { href: '/asistencias',       label: 'Asistencias',       icon: CalendarCheck, roles: ['teacher'] },
   { href: '/admin',             label: 'Admin',             icon: Settings,    roles: ['admin'] },
   { href: '/finanzas',          label: 'Finanzas',          icon: Wallet,      roles: ['admin'] },
 ];
