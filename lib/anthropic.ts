@@ -55,7 +55,23 @@ export async function askClaudeJson<T>(opts: AskClaudeJsonOptions): Promise<AiRe
       {
         model: AI_MODEL,
         max_tokens: opts.maxTokens,
-        system: opts.system,
+        // ── Prompt caching ──────────────────────────────────────────────────────
+        // El breakpoint de caché va en el SYSTEM prompt (grande y estable entre
+        // llamadas: metodología, formato, avatar), NO en el request completo. El
+        // texto del usuario (transcript, ficha del alumno) cambia en cada llamada y
+        // queda FUERA del prefijo cacheado — que es justo lo que queremos: en la
+        // siguiente llamada con el mismo system, ese prefijo se lee del caché (~10%
+        // del costo) y solo se cobra el texto nuevo a precio completo.
+        //
+        // Ojo: auto-cachear el request completo (cache_control al tope del request)
+        // pondría el breakpoint en el último bloque = el texto variable del usuario,
+        // generando escrituras de caché sin lecturas (sin ahorro). Por eso va acá.
+        //
+        // Requiere un prefijo mínimo cacheable (~4096 tokens en Opus 4.8); los system
+        // prompts más cortos simplemente no cachean (el log de abajo lo muestra en 0).
+        system: [
+          { type: 'text', text: opts.system, cache_control: { type: 'ephemeral' } },
+        ],
         output_config: {
           format: { type: 'json_schema', schema: opts.schema },
           ...(opts.effort ? { effort: opts.effort } : {}),
@@ -64,6 +80,17 @@ export async function askClaudeJson<T>(opts: AskClaudeJsonOptions): Promise<AiRe
       },
       { timeout: opts.timeoutMs ?? 120_000 },
     );
+
+    // Monitoreo de caché (una sola vez, común a todos los endpoints de IA; `label`
+    // identifica cuál llamó). cache_read alto en llamadas repetidas = está andando.
+    // Si cache_read queda en 0 entre llamadas con el mismo system, algo invalida el
+    // prefijo o el prompt no llega al mínimo cacheable.
+    console.log('[AI Cache]', {
+      endpoint: opts.label,
+      cache_read: message.usage?.cache_read_input_tokens ?? 0,
+      cache_write: message.usage?.cache_creation_input_tokens ?? 0,
+      uncached_input: message.usage?.input_tokens ?? 0,
+    });
 
     // Claude puede negarse por seguridad; en ese caso la salida no cumple el esquema.
     if (message.stop_reason === 'refusal') {

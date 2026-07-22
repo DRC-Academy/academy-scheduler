@@ -13,43 +13,31 @@ import { getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
 import { buildAttendanceRows, isoDate, type LogRow } from '@/lib/attendance';
+import { checkSubscription, subBadge, resolveSubscriptionEmail, type SubscriptionInfo } from '@/lib/useSubscriptionStatus';
 import { HelpTooltip } from '@/components/ui';
 import type { HelpTooltipKey } from '@/lib/help-tooltips';
 
 // ── Modelo de la pantalla ─────────────────────────────────────────────────────
 type Estado = 'no' | 'proxima' | 'ingreso';
-type Sub = 'activa' | 'vencida' | 'prueba';
 interface ClassRow {
   id: string; date: string; time: string; alumno: string;
-  sinEnlace: boolean; estado: Estado; horaIngreso: string; sub: Sub | null;
+  sinEnlace: boolean; estado: Estado; horaIngreso: string;
 }
 
-// Semáforo de estados (pills redondas: punto + texto 700).
+const nkName = (s: string) => (s ?? '').trim().toLowerCase();
+
+// Semáforo de estados (pills redondas: punto + texto).
 const ESTADO_PILL: Record<Estado, { text: string; bg: string; border: string; dot: string; label: string }> = {
   no:      { text: '#b42318', bg: '#fef3f2', border: '#fecdca', dot: '#f04438', label: 'No ingresó' },
   proxima: { text: '#175cd3', bg: '#eff4ff', border: '#b2ccff', dot: '#2e90fa', label: 'Próxima' },
   ingreso: { text: '#067647', bg: '#ecfdf3', border: '#a6f4c5', dot: '#12b76a', label: 'Ingresó' },
 };
-// Suscripción (radio 7px).
-const SUB_PILL: Record<Sub, { text: string; bg: string; border: string; label: string }> = {
-  activa:  { text: '#067647', bg: '#ecfdf3', border: '#a6f4c5', label: 'Activa' },
-  vencida: { text: '#b42318', bg: '#fef3f2', border: '#fecdca', label: 'Vencida' },
-  prueba:  { text: '#b54708', bg: '#fffaeb', border: '#fedf89', label: 'Prueba' },
-};
 
-// LogRow (attendance) → modelo de pantalla.
+// LogRow (attendance) → estado de acceso de la pantalla.
 function toEstado(s: LogRow['status']): Estado {
   if (s === 'missed') return 'no';
   if (s === 'pending' || s === 'upcoming') return 'proxima';
   return 'ingreso';   // on_time | late | very_late
-}
-function toSub(r: LogRow): Sub | null {
-  if (!r.joinedAt) return null;                 // no ingresó → no hay dato de sub
-  const s = r.subscriptionStatus;
-  if (s === 'active') return 'activa';
-  if (s === 'on-hold') return 'prueba';
-  if (r.enteredWithoutActive || s === 'expired' || s === 'cancelled' || s === 'pending-cancel') return 'vencida';
-  return null;
 }
 
 // ── Helpers de fecha/formato ──────────────────────────────────────────────────
@@ -82,29 +70,33 @@ function fmtHour(h: string): string {
 function EstadoPill({ e }: { e: Estado }) {
   const p = ESTADO_PILL[e];
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 999, background: p.bg, border: `1px solid ${p.border}`, color: p.text, fontSize: 12.5, fontWeight: 700, whiteSpace: 'nowrap' }}>
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 999, background: p.bg, border: `1px solid ${p.border}`, color: p.text, fontSize: 12.5, fontWeight: 600, whiteSpace: 'nowrap' }}>
       <span style={{ width: 7, height: 7, borderRadius: 999, background: p.dot }} />
       {p.label}
     </span>
   );
 }
-function SubPill({ s }: { s: Sub | null }) {
-  if (!s) return <span style={{ color: '#98a49b' }}>—</span>;
-  const p = SUB_PILL[s];
+// Pill de suscripción con el ESTADO REAL del alumno. Fuente única: subBadge (misma
+// que "Alumnos" y "Próximas clases"), así nunca inventa un estado ("vencida") que
+// no es el real y muestra el que corresponda ("Sin verificar", "Pendiente cancelar",
+// etc.). `info` undefined = aún verificando (subBadge muestra '...'). Se muestra
+// SIEMPRE, aunque el profe no haya ingresado a la clase.
+function SubBadgePill({ info }: { info?: SubscriptionInfo }) {
+  const b = subBadge(info);
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', padding: '3px 9px', borderRadius: 7, background: p.bg, border: `1px solid ${p.border}`, color: p.text, fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap' }}>
-      {p.label}
+    <span style={{ display: 'inline-flex', alignItems: 'center', padding: '3px 9px', borderRadius: 7, background: b.bg, color: b.color, fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>
+      {b.label}
     </span>
   );
 }
 const SinEnlaceTag = () => (
-  <span style={{ fontSize: 11, fontWeight: 700, color: '#b54708', background: '#fffaeb', border: '1px solid #fedf89', borderRadius: 6, padding: '2px 7px', whiteSpace: 'nowrap' }}>sin enlace</span>
+  <span style={{ fontSize: 11, fontWeight: 600, color: '#b54708', background: '#fffaeb', border: '1px solid #fedf89', borderRadius: 6, padding: '2px 7px', whiteSpace: 'nowrap' }}>sin enlace</span>
 );
 
 // ── Página ────────────────────────────────────────────────────────────────────
 function AsistenciasContent() {
   const { user } = useAuth();
-  const { teachers, assignments, classJoinLogs, loadClassJoinLogs, reloadAll } = useTeachers();
+  const { teachers, assignments, students, classJoinLogs, loadClassJoinLogs, reloadAll } = useTeachers();
 
   const teacher = teachers.find(t => t.id === user?.teacherId) ?? teachers[0];
 
@@ -150,8 +142,37 @@ function AsistenciasContent() {
     id: r.id, date: r.date, time: fmtHour(r.hour), alumno: r.studentName,
     sinEnlace: !r.hasLink, estado: toEstado(r.status),
     horaIngreso: r.joinedAt ? new Date(r.joinedAt).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }) : '',
-    sub: toSub(r),
   })), [rows]);
+
+  // ── Suscripción por alumno (estado REAL, fuente única useSubscriptionStatus) ──
+  // Se consulta por alumno (no por join log), así el estado se muestra SIEMPRE,
+  // aunque el profe no haya ingresado a la clase, y es el mismo que ve en "Alumnos".
+  // checkSubscription cachea 5 min por email y comparte caché con el resto de la app.
+  const emailForStudent = (name: string): string => {
+    const n = nkName(name);
+    const stu = students.find(s => nkName(s.name) === n);
+    const asg = myAssignments.find(a => nkName(a.studentName) === n);
+    return resolveSubscriptionEmail(stu?.email, asg?.studentEmail);
+  };
+  const [subByStudent, setSubByStudent] = useState<Record<string, SubscriptionInfo>>({});
+  const weekStudents = useMemo(() => Array.from(new Set(allClasses.map(c => c.alumno))), [allClasses]);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      for (const name of weekStudents) {
+        try {
+          // Sin email resoluble, checkSubscription devuelve 'no_email' → subBadge
+          // muestra "Sin verificar" (no un spinner infinito).
+          const info = await checkSubscription(emailForStudent(name));
+          if (!alive) return;
+          setSubByStudent(prev => ({ ...prev, [nkName(name)]: info }));
+        } catch { /* best-effort: la pantalla no se rompe si falla la verificación */ }
+      }
+    })();
+    return () => { alive = false; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [weekStudents.join('|')]);
+  const subFor = (name: string): SubscriptionInfo | undefined => subByStudent[nkName(name)];
 
   // Métricas: SIEMPRE sobre el total de la semana (no sobre el set filtrado).
   const ingresoCount = allClasses.filter(c => c.estado === 'ingreso').length;
@@ -291,7 +312,7 @@ function AsistenciasContent() {
                       </thead>
                       <tbody>
                         {days.map(day => (
-                          <DayGroupRows key={day.iso} day={day} />
+                          <DayGroupRows key={day.iso} day={day} subFor={subFor} />
                         ))}
                       </tbody>
                     </table>
@@ -316,7 +337,7 @@ function AsistenciasContent() {
                             <div className="asis-mcard-bot">
                               <span>Ingreso: {c.horaIngreso || '—'}</span>
                               {c.sinEnlace && <SinEnlaceTag />}
-                              {c.sub && <SubPill s={c.sub} />}
+                              <SubBadgePill info={subFor(c.alumno)} />
                             </div>
                           </div>
                         ))}
@@ -338,7 +359,10 @@ function AsistenciasContent() {
 }
 
 // Franja de día + sus filas dentro de la tabla (desktop).
-function DayGroupRows({ day }: { day: { iso: string; label: string; today: boolean; classes: ClassRow[] } }) {
+function DayGroupRows({ day, subFor }: {
+  day: { iso: string; label: string; today: boolean; classes: ClassRow[] };
+  subFor: (name: string) => SubscriptionInfo | undefined;
+}) {
   return (
     <>
       <tr className="asis-daystrip">
@@ -352,16 +376,16 @@ function DayGroupRows({ day }: { day: { iso: string; label: string; today: boole
       </tr>
       {day.classes.map(c => (
         <tr key={c.id}>
-          <td style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{c.time}</td>
+          <td style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{c.time}</td>
           <td>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
               {c.alumno}
               {c.sinEnlace && <SinEnlaceTag />}
             </span>
           </td>
-          <td style={{ color: c.horaIngreso ? '#5c6a61' : '#98a49b', whiteSpace: 'nowrap' }}>{c.horaIngreso || '—'}</td>
+          <td style={{ color: c.horaIngreso ? 'var(--text-secondary)' : 'var(--text-muted)', whiteSpace: 'nowrap' }}>{c.horaIngreso || '—'}</td>
           <td><EstadoPill e={c.estado} /></td>
-          <td><SubPill s={c.sub} /></td>
+          <td><SubBadgePill info={subFor(c.alumno)} /></td>
         </tr>
       ))}
     </>
