@@ -24,6 +24,7 @@ import { buildAttendanceRows, PUNCT_STYLE, attendanceSubBadge, minutesLate, isoD
 import { HelpTooltip } from '@/components/ui';
 import type { HelpTooltipKey } from '@/lib/help-tooltips';
 import AiRiskTab from '@/components/ai/AiRiskTab';
+import LevelTestsTab from '@/components/admin/LevelTestsTab';
 import { triggerEmail } from '@/lib/emailClient';
 
 // ─── Edit Teacher Modal ───────────────────────────────────────────────────────
@@ -2856,7 +2857,7 @@ function AdminTool({ title, desc, children }: {
   );
 }
 
-const ADMIN_TABS = ['overview', 'teachers', 'emails', 'scoring', 'tracking', 'classlog', 'ai', 'notifications'] as const;
+const ADMIN_TABS = ['overview', 'teachers', 'emails', 'scoring', 'tracking', 'classlog', 'leveltests', 'ai', 'notifications'] as const;
 type AdminTab = typeof ADMIN_TABS[number];
 
 function AdminContent() {
@@ -2912,6 +2913,7 @@ function AdminContent() {
     { id: 'scoring',        label: 'Scoring' },
     { id: 'tracking',       label: 'Seguimiento' },
     { id: 'classlog',       label: 'Registro de clases' },
+    { id: 'leveltests',     label: 'Tests de nivel' },
     { id: 'ai',             label: 'IA y Riesgo' },
     { id: 'notifications',  label: 'Notificaciones' },
   ] as const;
@@ -3368,6 +3370,8 @@ function AdminContent() {
 
         {/* CLASS LOG TAB */}
         {activeTab === 'classlog' && <ClassLogTab />}
+
+        {activeTab === 'leveltests' && <LevelTestsTab />}
 
         {/* AI & RISK TAB */}
         {activeTab === 'ai' && <AiRiskTab teachers={teachers} assignments={assignments} />}

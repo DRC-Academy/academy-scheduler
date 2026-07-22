@@ -66,6 +66,12 @@ export interface StudentProfileRow {
   last_class_analyzed_at: string | null;
   next_class_content: GeneratedClassIA | string | null;
   next_class_generated_at: string | null;
+  // Test de Nivel (se refleja acá al completarse, ver app/api/level-test/.../submit)
+  level_test_cefr: string | null;
+  level_test_score: number | null;
+  level_test_completed_at: string | null;
+  level_test_evaluation: Record<string, unknown> | null;
+  level_test_session_id: string | null;
   // Formato anterior (markdown) — se conserva para fichas viejas.
   ai_ficha: string | null;
   ai_status: string | null;

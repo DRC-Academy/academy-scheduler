@@ -23,6 +23,7 @@ const PROFILE_COLS = `
   recommended_focus, current_level, current_block, grammar_focus, vocabulary_focus,
   risk_signal, risk_explanation, risk_updated_at, progress_score,
   total_classes_analyzed, last_class_analyzed_at, next_class_content, next_class_generated_at,
+  level_test_cefr, level_test_score, level_test_completed_at, level_test_evaluation, level_test_session_id,
   ai_ficha, ai_status, created_at, updated_at
 `.replace(/\s+/g, ' ').trim();
 

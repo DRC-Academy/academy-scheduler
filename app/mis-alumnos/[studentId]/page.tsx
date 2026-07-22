@@ -14,6 +14,7 @@ import { AuthGuard } from '@/components/AuthGuard';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
 import { HelpTooltip } from '@/components/ui';
+import { CEFR_COLOR } from '@/lib/levelTest/constants';
 import { calcRegisteredClassNumber } from '@/lib/db';
 import { loadStudentBundles, norm, type StudentBundle } from '@/lib/misAlumnos';
 import { regenerateFicha } from '@/lib/aiClient';
@@ -283,6 +284,8 @@ function StudentPageContent() {
               <div className="sp-kpi-value">{mainSlot}</div>
             </div>
           </div>
+
+          <LevelTestCard profile={profile} />
         </div>
 
         <Tabs tabs={TABS} active={tab} onChange={setTab} />
@@ -353,6 +356,57 @@ function StudentPageContent() {
  * inicial (q6_nivel): se rotula como tal, con su fecha, para no leerla como una
  * evolución. Sin formulario respondido → estado "sin datos", nunca cifras fijas.
  */
+// Resultado del Test de Nivel reflejado en la ficha (se vuelca en student_profiles
+// al completar el test; ver app/api/level-test/[token]/submit). Solo aparece si hay
+// un test completado.
+function LevelTestCard({ profile }: {
+  profile: {
+    level_test_cefr?: string | null; level_test_score?: number | null;
+    level_test_completed_at?: string | null; level_test_evaluation?: Record<string, unknown> | null;
+  } | null;
+}) {
+  const cefr = profile?.level_test_cefr;
+  if (!cefr) return null;
+  const color = CEFR_COLOR[cefr as keyof typeof CEFR_COLOR] || 'var(--accent)';
+  const score = profile?.level_test_score;
+  const date = profile?.level_test_completed_at
+    ? new Date(profile.level_test_completed_at).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' })
+    : null;
+  const ev = (profile?.level_test_evaluation || {}) as { overall_feedback?: string; strengths?: string[]; areas_for_improvement?: string[] };
+  const hasFeedback = !!(ev.overall_feedback || ev.strengths?.length || ev.areas_for_improvement?.length);
+
+  return (
+    <div style={{ marginTop: 14, border: '1px solid var(--border)', borderRadius: 12, padding: '14px 16px', background: 'var(--bg-surface)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Nivel de inglés (test)</span>
+        <span style={{ fontSize: 20, fontWeight: 700, color }}>{cefr}</span>
+        {score != null && <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{Math.round(score)}/100</span>}
+        {date && <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>· {date}</span>}
+      </div>
+      {hasFeedback && (
+        <details style={{ marginTop: 8 }}>
+          <summary style={{ cursor: 'pointer', color: 'var(--accent)', fontSize: 12.5 }}>Ver feedback de escritura</summary>
+          <div style={{ marginTop: 8, fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+            {ev.overall_feedback && <p style={{ margin: '0 0 8px' }}>{ev.overall_feedback}</p>}
+            {ev.strengths?.length ? (
+              <>
+                <div style={{ fontWeight: 600, color: '#1f7a3d', fontSize: 12 }}>Fortalezas</div>
+                <ul style={{ margin: '0 0 8px', paddingLeft: 18 }}>{ev.strengths.map((s, i) => <li key={i}>{s}</li>)}</ul>
+              </>
+            ) : null}
+            {ev.areas_for_improvement?.length ? (
+              <>
+                <div style={{ fontWeight: 600, color: '#b45309', fontSize: 12 }}>Para mejorar</div>
+                <ul style={{ margin: 0, paddingLeft: 18 }}>{ev.areas_for_improvement.map((s, i) => <li key={i}>{s}</li>)}</ul>
+              </>
+            ) : null}
+          </div>
+        </details>
+      )}
+    </div>
+  );
+}
+
 function SkillGauges({ skills, formDate }: { skills: SkillGauge[] | null; formDate: string | null }) {
   return (
     <div>

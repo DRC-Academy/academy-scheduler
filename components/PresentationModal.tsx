@@ -13,6 +13,7 @@ import { useTeachers } from '@/lib/TeachersContext';
 import { classifyPlan } from '@/lib/productUtils';
 import { resolveGender, g } from '@/lib/gender';
 import { getOrCreateFormLink } from '@/lib/formClient';
+import { getOrCreateTestLink } from '@/lib/levelTestClient';
 import { Teacher, Assignment, Student } from '@/types';
 
 const MEET_PLACEHOLDER = '[PENDIENTE - completar enlace de Meet]';
@@ -59,7 +60,7 @@ function firstClassInfo(a: Assignment): { dateLabel: string; horaInicio: string;
 }
 
 // Cuerpo del email con los campos dinámicos ya reemplazados.
-export function buildPresentationBody(a: Assignment, teacher: Teacher, student: Student | undefined, meetLink: string, formUrl?: string): string {
+export function buildPresentationBody(a: Assignment, teacher: Teacher, student: Student | undefined, meetLink: string, formUrl?: string, testUrl?: string): string {
   const info  = firstClassInfo(a);
   const fecha = info ? info.dateLabel : '[fecha de la primera clase]';
   const hIni  = info ? info.horaInicio : '[hora]';
@@ -76,6 +77,15 @@ Y antes de nuestro primer encuentro, me gustaría conocerte un poco mejor 💚 T
 ${formUrl.trim()}
 `
     : '';
+  // Sección del test de nivel (se incluye solo si ya hay link generado).
+  const testBlock = testUrl?.trim()
+    ? `
+
+Y para ubicarte en el nivel ideal desde el principio, te dejo también este breve test de nivel (unos 20 minutos):
+
+${testUrl.trim()}
+`
+    : '';
   return `¡Buenos días, ${a.studentName}!
 
 ¡Es un placer saludarte! Mi nombre es ${teacher.name} y he sido ${g(tg, 'elegido', 'elegida', 'elegido/a')} como tu ${g(tg, 'profesor', 'profesora', 'profesor/a')} en DRC Academy.
@@ -86,7 +96,7 @@ Será un gusto conocerte en nuestra primera clase el ${fecha} de ${hIni} a ${hFi
 
 A través del siguiente enlace podrás acceder a nuestra clase por Meet. (Usaremos el mismo para todas nuestras clases 🙂)
 
-${link}${formBlock}
+${link}${formBlock}${testBlock}
 
 Si pudieras confirmar que has recibido este email, ¡te lo agradecería mucho!
 
@@ -116,7 +126,8 @@ export function PresentationModal({ assignment, teacher, students, updateMeetLin
   const [toEmail, setToEmail]   = useState(student?.email ?? assignment.studentEmail ?? '');
   const [subject, setSubject]   = useState(`¡Bienvenido/a a DRC Academy, ${assignment.studentName}!`);
   const [formUrl, setFormUrl]   = useState('');   // link del formulario inicial (se resuelve al abrir)
-  const [body, setBody]         = useState(() => buildPresentationBody(assignment, teacher, student, assignment.meetLink ?? '', ''));
+  const [testUrl, setTestUrl]   = useState('');   // link del test de nivel (se resuelve al abrir)
+  const [body, setBody]         = useState(() => buildPresentationBody(assignment, teacher, student, assignment.meetLink ?? '', '', ''));
   const [toast, setToast]       = useState<string | null>(null);
   const [marking, setMarking]   = useState(false);   // PATCH de "marcar enviado" en vuelo
   const lastGenRef = useRef(body);
@@ -139,6 +150,19 @@ export function PresentationModal({ assignment, teacher, students, updateMeetLin
       setFormUrl(url);
       onFormTokenReady?.();
     }).catch(() => {});
+
+    // En paralelo, el link del test de nivel (reutiliza sesión vigente o crea una).
+    getOrCreateTestLink({
+      studentId: assignment.studentId || undefined,
+      studentName: assignment.studentName,
+      studentEmail: student?.email ?? assignment.studentEmail ?? undefined,
+      teacherId: teacher.id,
+      teacherName: teacher.name,
+      assignmentId: assignment.id,
+      plan: assignment.plan ?? undefined,
+      level: assignment.studentLevel ?? undefined,
+    }).then(url => { if (!cancelled) setTestUrl(url); }).catch(() => {});
+
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -148,11 +172,11 @@ export function PresentationModal({ assignment, teacher, students, updateMeetLin
   // ANTES de mutar el ref, porque el updater de setBody lee el ref al ejecutarse.
   useEffect(() => {
     const prevGen = lastGenRef.current;
-    const regenerated = buildPresentationBody(assignment, teacher, student, meetLink, formUrl);
+    const regenerated = buildPresentationBody(assignment, teacher, student, meetLink, formUrl, testUrl);
     lastGenRef.current = regenerated;
     setBody(prev => (prev === prevGen ? regenerated : prev));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [meetLink, student, formUrl]);
+  }, [meetLink, student, formUrl, testUrl]);
 
   // Guarda el enlace de Meet en la assignment (acción real, independiente del envío).
   async function saveMeetIfAny() {

@@ -36,6 +36,9 @@ export interface AskClaudeJsonOptions {
   timeoutMs?: number;
   /** Sólo para los logs, para saber qué llamada falló. */
   label: string;
+  /** Override puntual del modelo (por defecto AI_MODEL=opus-4-8). P. ej. la
+   *  evaluación de writing del test de nivel usa 'claude-haiku-4-5'. */
+  model?: string;
 }
 
 /**
@@ -53,7 +56,7 @@ export async function askClaudeJson<T>(opts: AskClaudeJsonOptions): Promise<AiRe
   try {
     const message = await anthropic.messages.create(
       {
-        model: AI_MODEL,
+        model: opts.model ?? AI_MODEL,
         max_tokens: opts.maxTokens,
         // ── Prompt caching ──────────────────────────────────────────────────────
         // El breakpoint de caché va en el SYSTEM prompt (grande y estable entre
