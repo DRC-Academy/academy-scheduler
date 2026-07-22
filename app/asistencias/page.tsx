@@ -1,58 +1,128 @@
 'use client';
-// ── Sección "Asistencias" del profesor ────────────────────────────────────────
-// Vista SEMANAL (navegable) de sus accesos a clase: las clases ya pasadas con su
-// estado de ingreso (a tiempo / tarde / no ingresó) y las que están por venir esa
-// semana. Reutiliza la MISMA lógica que el panel del admin (lib/attendance), pero
-// filtrada solo a las clases del profesor logueado y mostrando también las futuras.
+// ── Sección "Asistencias" del profesor (rediseño hi-fi) ───────────────────────
+// Vista SEMANAL navegable de sus accesos a clase: quién no ingresó, la puntualidad
+// de la semana y el estado de suscripción de cada alumno. Cableada a datos reales
+// (lib/attendance.buildAttendanceRows), misma fuente que el panel del admin.
+// Responsive: tabla ≥900px, tarjetas <900px (clases .asis-* en globals.css).
 import { useState, useEffect, useMemo } from 'react';
+import { ChevronLeft, ChevronRight, Search } from 'lucide-react';
 import { NavBar } from '@/components/NavBar';
 import { AuthGuard } from '@/components/AuthGuard';
 import { PullToRefresh } from '@/components/PullToRefresh';
-import { LastUpdated } from '@/components/LastUpdated';
 import { getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
-import {
-  buildAttendanceRows, PUNCT_STYLE, attendanceSubBadge, isoDate, type LogRow,
-} from '@/lib/attendance';
+import { buildAttendanceRows, isoDate, type LogRow } from '@/lib/attendance';
 import { HelpTooltip } from '@/components/ui';
 import type { HelpTooltipKey } from '@/lib/help-tooltips';
 
-// Lunes de la semana que contiene `iso`.
+// ── Modelo de la pantalla ─────────────────────────────────────────────────────
+type Estado = 'no' | 'proxima' | 'ingreso';
+type Sub = 'activa' | 'vencida' | 'prueba';
+interface ClassRow {
+  id: string; date: string; time: string; alumno: string;
+  sinEnlace: boolean; estado: Estado; horaIngreso: string; sub: Sub | null;
+}
+
+// Semáforo de estados (pills redondas: punto + texto 700).
+const ESTADO_PILL: Record<Estado, { text: string; bg: string; border: string; dot: string; label: string }> = {
+  no:      { text: '#b42318', bg: '#fef3f2', border: '#fecdca', dot: '#f04438', label: 'No ingresó' },
+  proxima: { text: '#175cd3', bg: '#eff4ff', border: '#b2ccff', dot: '#2e90fa', label: 'Próxima' },
+  ingreso: { text: '#067647', bg: '#ecfdf3', border: '#a6f4c5', dot: '#12b76a', label: 'Ingresó' },
+};
+// Suscripción (radio 7px).
+const SUB_PILL: Record<Sub, { text: string; bg: string; border: string; label: string }> = {
+  activa:  { text: '#067647', bg: '#ecfdf3', border: '#a6f4c5', label: 'Activa' },
+  vencida: { text: '#b42318', bg: '#fef3f2', border: '#fecdca', label: 'Vencida' },
+  prueba:  { text: '#b54708', bg: '#fffaeb', border: '#fedf89', label: 'Prueba' },
+};
+
+// LogRow (attendance) → modelo de pantalla.
+function toEstado(s: LogRow['status']): Estado {
+  if (s === 'missed') return 'no';
+  if (s === 'pending' || s === 'upcoming') return 'proxima';
+  return 'ingreso';   // on_time | late | very_late
+}
+function toSub(r: LogRow): Sub | null {
+  if (!r.joinedAt) return null;                 // no ingresó → no hay dato de sub
+  const s = r.subscriptionStatus;
+  if (s === 'active') return 'activa';
+  if (s === 'on-hold') return 'prueba';
+  if (r.enteredWithoutActive || s === 'expired' || s === 'cancelled' || s === 'pending-cancel') return 'vencida';
+  return null;
+}
+
+// ── Helpers de fecha/formato ──────────────────────────────────────────────────
 function mondayOf(iso: string): Date {
   const [y, m, d] = iso.split('-').map(Number);
   const dt = new Date(y, (m ?? 1) - 1, d ?? 1);
-  const js = dt.getDay();                 // 0=Dom … 6=Sáb
+  const js = dt.getDay();
   dt.setDate(dt.getDate() + (js === 0 ? -6 : 1 - js));
   return dt;
 }
-function addDays(base: Date, days: number): Date {
-  const d = new Date(base); d.setDate(d.getDate() + days); return d;
+const addDays = (base: Date, n: number): Date => { const d = new Date(base); d.setDate(d.getDate() + n); return d; };
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+const shortMonth = (d: Date) => d.toLocaleDateString('es-ES', { month: 'short' }).replace('.', '');
+
+function fmtWeekLabel(a: Date, b: Date): string {
+  const yr = b.getFullYear();
+  return a.getMonth() === b.getMonth()
+    ? `${a.getDate()} — ${b.getDate()} ${shortMonth(b)} ${yr}`
+    : `${a.getDate()} ${shortMonth(a)} — ${b.getDate()} ${shortMonth(b)} ${yr}`;
 }
-function fmtDayLong(iso: string): string {
-  const s = new Date(iso + 'T00:00:00').toLocaleDateString('es-ES', { weekday: 'short', day: '2-digit', month: 'short' });
-  return s.charAt(0).toUpperCase() + s.slice(1);
+function fmtDayStrip(iso: string): string {
+  const d = new Date(iso + 'T00:00:00');
+  return `${cap(d.toLocaleDateString('es-ES', { weekday: 'short' }).replace('.', ''))} ${d.getDate()}`;
 }
-function fmtRange(a: Date, b: Date): string {
-  const f = (d: Date) => d.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' });
-  return `${f(a)} — ${f(b)}`;
+function fmtHour(h: string): string {
+  return /^\d{1,2}$/.test(h) ? `${h.padStart(2, '0')}:00` : h;
 }
 
+// ── Pills ─────────────────────────────────────────────────────────────────────
+function EstadoPill({ e }: { e: Estado }) {
+  const p = ESTADO_PILL[e];
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 999, background: p.bg, border: `1px solid ${p.border}`, color: p.text, fontSize: 12.5, fontWeight: 700, whiteSpace: 'nowrap' }}>
+      <span style={{ width: 7, height: 7, borderRadius: 999, background: p.dot }} />
+      {p.label}
+    </span>
+  );
+}
+function SubPill({ s }: { s: Sub | null }) {
+  if (!s) return <span style={{ color: '#98a49b' }}>—</span>;
+  const p = SUB_PILL[s];
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', padding: '3px 9px', borderRadius: 7, background: p.bg, border: `1px solid ${p.border}`, color: p.text, fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap' }}>
+      {p.label}
+    </span>
+  );
+}
+const SinEnlaceTag = () => (
+  <span style={{ fontSize: 11, fontWeight: 700, color: '#b54708', background: '#fffaeb', border: '1px solid #fedf89', borderRadius: 6, padding: '2px 7px', whiteSpace: 'nowrap' }}>sin enlace</span>
+);
+
+// ── Página ────────────────────────────────────────────────────────────────────
 function AsistenciasContent() {
   const { user } = useAuth();
   const { teachers, assignments, classJoinLogs, loadClassJoinLogs, reloadAll } = useTeachers();
 
   const teacher = teachers.find(t => t.id === user?.teacherId) ?? teachers[0];
 
-  // "Ahora" en hora de España, igual que el calendario y el panel del admin.
   const nowSpain = getSpainParts(new Date());
   const todayIso = nowSpain.dateStr;
   const nowMinutes = nowSpain.hour * 60 + nowSpain.minute;
 
   const [weekOffset, setWeekOffset] = useState(0);
+  const [filter, setFilter] = useState<'todas' | 'no' | 'proxima'>('todas');
+  const [query, setQuery] = useState('');
+  const [loadState, setLoadState] = useState<'loading' | 'ready' | 'error'>('loading');
 
   useEffect(() => {
-    loadClassJoinLogs();
+    let alive = true;
+    loadClassJoinLogs()
+      .then(() => { if (alive) setLoadState('ready'); })
+      .catch(() => { if (alive) setLoadState('error'); });
+    return () => { alive = false; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -60,105 +130,157 @@ function AsistenciasContent() {
   const weekEnd   = useMemo(() => addDays(weekStart, 6), [weekStart]);
   const fromDate  = isoDate(weekStart);
   const toDate    = isoDate(weekEnd);
+  const isThisWeek = weekOffset === 0;
 
   const myAssignments = useMemo(
     () => (teacher ? assignments.filter(a => a.teacherId === teacher.id) : []),
     [assignments, teacher],
   );
 
+  // Filas de asistencia de la semana (datos reales), ordenadas por día y hora.
   const rows = useMemo<LogRow[]>(() => {
     if (!teacher) return [];
     return buildAttendanceRows({
-      assignments: myAssignments,
-      joinLogs: classJoinLogs,
-      teacherId: teacher.id,
-      fromDate, toDate, todayIso, nowMinutes,
-      includeFuture: true,
+      assignments: myAssignments, joinLogs: classJoinLogs, teacherId: teacher.id,
+      fromDate, toDate, todayIso, nowMinutes, includeFuture: true,
     }).sort((x, y) => x.date.localeCompare(y.date) || (parseInt(x.hour) - parseInt(y.hour)));
   }, [teacher, myAssignments, classJoinLogs, fromDate, toDate, todayIso, nowMinutes]);
 
-  // Resumen de la semana visible.
-  const registered = rows.filter(r => r.status === 'on_time' || r.status === 'late' || r.status === 'very_late').length;
-  const onTime     = rows.filter(r => r.status === 'on_time').length;
-  const missed     = rows.filter(r => r.status === 'missed').length;
-  const proximas   = rows.filter(r => r.status === 'pending' || r.status === 'upcoming').length;
-  const punctualityPct = registered > 0 ? Math.round((onTime / registered) * 100) : 0;
+  const allClasses = useMemo<ClassRow[]>(() => rows.map(r => ({
+    id: r.id, date: r.date, time: fmtHour(r.hour), alumno: r.studentName,
+    sinEnlace: !r.hasLink, estado: toEstado(r.status),
+    horaIngreso: r.joinedAt ? new Date(r.joinedAt).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }) : '',
+    sub: toSub(r),
+  })), [rows]);
 
-  const cards: Array<{ label: string; value: string | number; color: string; help: HelpTooltipKey }> = [
-    { label: 'Clases con ingreso', value: registered, color: '#1E9E3A', help: 'asistencias.conIngreso' },
-    { label: 'Puntualidad', value: `${punctualityPct}%`, color: punctualityPct >= 80 ? '#1E9E3A' : punctualityPct >= 60 ? '#f59e0b' : '#ef4444', help: 'asistencias.puntualidad' },
-    { label: 'No ingresó', value: missed, color: missed > 0 ? '#ef4444' : '#1E9E3A', help: 'asistencias.noIngreso' },
-    { label: 'Próximas', value: proximas, color: '#2563eb', help: 'asistencias.proximas' },
+  // Métricas: SIEMPRE sobre el total de la semana (no sobre el set filtrado).
+  const ingresoCount = allClasses.filter(c => c.estado === 'ingreso').length;
+  const noCount      = allClasses.filter(c => c.estado === 'no').length;
+  const proxCount    = allClasses.filter(c => c.estado === 'proxima').length;
+  const onTimeCount  = rows.filter(r => r.status === 'on_time').length;
+  const punct        = ingresoCount > 0 ? Math.round((onTimeCount / ingresoCount) * 100) : 0;
+  const total        = allClasses.length || 1;
+
+  // Filtro + búsqueda combinados (AND). Días sin clases tras filtrar se ocultan.
+  const q = query.trim().toLowerCase();
+  const filtered = allClasses.filter(c =>
+    (filter === 'todas' || c.estado === filter) && (!q || c.alumno.toLowerCase().includes(q)),
+  );
+  const days = useMemo(() => {
+    const out: Array<{ iso: string; label: string; today: boolean; classes: ClassRow[] }> = [];
+    for (const c of filtered) {
+      let g = out.find(d => d.iso === c.date);
+      if (!g) { g = { iso: c.date, label: fmtDayStrip(c.date), today: c.date === todayIso, classes: [] }; out.push(g); }
+      g.classes.push(c);
+    }
+    return out;
+  }, [filtered, todayIso]);
+
+  const metrics: Array<{ num: string | number; color: string; label: string; sub: string; help: HelpTooltipKey }> = [
+    { num: ingresoCount, color: '#067647', label: 'Clases con ingreso', sub: 'clases con acceso registrado', help: 'asistencias.conIngreso' },
+    { num: `${punct}%`,  color: '#b54708', label: 'Puntualidad',        sub: 'ingresos a tiempo',            help: 'asistencias.puntualidad' },
+    { num: noCount,      color: '#b42318', label: 'No ingresó',          sub: 'sin registro de acceso',       help: 'asistencias.noIngreso' },
+    { num: proxCount,    color: '#175cd3', label: 'Próximas',            sub: 'aún por darse esta semana',    help: 'asistencias.proximas' },
   ];
 
-  const isThisWeek = weekOffset === 0;
+  const chips: Array<{ id: typeof filter; label: string }> = [
+    { id: 'todas', label: 'Todas' }, { id: 'no', label: 'No ingresó' }, { id: 'proxima', label: 'Próximas' },
+  ];
+
+  const showSkeleton = loadState === 'loading' || !teacher;
 
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }}>
+    <div className="asis-page">
       <NavBar />
       <PullToRefresh onRefresh={async () => { await reloadAll(); await loadClassJoinLogs(); }}>
-        <div style={{ maxWidth: 980, margin: '0 auto', padding: '32px 16px 48px' }}>
-          <LastUpdated />
-          <div style={{ marginBottom: 20 }}>
-            <h1 style={{ fontSize: 24, fontWeight: 700, color: 'var(--text-primary)', margin: '0 0 4px' }}>Asistencias</h1>
-            <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0 }}>
-              Tus accesos a clase semana a semana: las clases ya dadas y las que están por venir.
-            </p>
+        <div className="asis-wrap">
+          {/* Encabezado + navegador de semana */}
+          <div className="asis-head">
+            <div>
+              <h1 className="asis-title">Asistencias</h1>
+              <p className="asis-sub">Quién no ingresó, la puntualidad de la semana y la suscripción de cada alumno.</p>
+            </div>
+            <div className="asis-weeknav">
+              <button className="asis-weekbtn" aria-label="Semana anterior" onClick={() => setWeekOffset(o => o - 1)}>
+                <ChevronLeft size={18} strokeWidth={2.25} />
+              </button>
+              <span className="asis-weeklabel">{fmtWeekLabel(weekStart, weekEnd)}</span>
+              <button className="asis-weekbtn" aria-label="Semana siguiente" onClick={() => setWeekOffset(o => o + 1)}>
+                <ChevronRight size={18} strokeWidth={2.25} />
+              </button>
+              <button className="asis-weekpill" onClick={() => setWeekOffset(0)} aria-disabled={isThisWeek}
+                title={isThisWeek ? 'Estás en la semana actual' : 'Ir a la semana actual'}>
+                Esta semana
+              </button>
+            </div>
           </div>
 
-          {!teacher ? (
-            <div style={{ textAlign: 'center', padding: '48px 0', color: 'var(--text-muted)' }}>Cargando...</div>
+          {loadState === 'error' ? (
+            <div className="asis-card asis-empty">No se pudieron cargar las asistencias. Deslizá para reintentar.</div>
+          ) : showSkeleton ? (
+            <Skeleton />
           ) : (
             <>
-              {/* Navegación de semana */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '12px 16px', marginBottom: 16 }}>
-                <button onClick={() => setWeekOffset(o => o - 1)} aria-label="Semana anterior"
-                  style={{ width: 34, height: 34, borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface-2)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 18, fontFamily: 'inherit' }}>‹</button>
-                <div style={{ flex: 1, textAlign: 'center' }}>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>
-                    Semana del {fmtRange(weekStart, weekEnd)}
-                    {isThisWeek && <span style={{ marginLeft: 8, fontSize: 11, padding: '2px 8px', borderRadius: 10, background: 'rgba(30,158,58,0.12)', color: '#1E9E3A', fontWeight: 700 }}>Esta semana</span>}
-                  </div>
-                </div>
-                <button onClick={() => setWeekOffset(o => o + 1)} aria-label="Semana siguiente"
-                  style={{ width: 34, height: 34, borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface-2)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 18, fontFamily: 'inherit' }}>›</button>
-                {!isThisWeek && (
-                  <button onClick={() => setWeekOffset(0)}
-                    style={{ padding: '7px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 12.5, fontWeight: 600, fontFamily: 'inherit' }}>Hoy</button>
-                )}
-              </div>
-
-              {/* Resumen de la semana */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12, marginBottom: 16 }}>
-                {cards.map(c => (
-                  <div key={c.label} style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '14px 16px' }}>
-                    <div style={{ fontSize: 24, fontWeight: 700, color: c.color }}>{c.value}</div>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginTop: 3, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                      {c.label}
-                      <HelpTooltip tooltipKey={c.help} />
+              {/* Métricas */}
+              <div className="asis-metrics">
+                {metrics.map(m => (
+                  <div key={m.label} className="asis-metric">
+                    <div className="asis-metric-num" style={{ color: m.color }}>{m.num}</div>
+                    <div className="asis-metric-lab">
+                      <span className="asis-dot" style={{ background: m.color }} />
+                      {m.label}
+                      <HelpTooltip tooltipKey={m.help} />
                     </div>
+                    <div className="asis-metric-sub">{m.sub}</div>
                   </div>
                 ))}
               </div>
 
-              {/* Tabla de la semana */}
-              <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
-                {rows.length === 0 ? (
-                  <div style={{ textAlign: 'center', padding: '40px 16px', color: 'var(--text-muted)', fontSize: 14 }}>
-                    No tenés clases programadas esta semana.
-                  </div>
-                ) : (
-                  <div style={{ overflowX: 'auto' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              {/* Resumen de la semana: barra apilada + leyenda */}
+              <div className="asis-summary">
+                <div className="asis-bar" role="img" aria-label={`Ingresó ${ingresoCount}, No ingresó ${noCount}, Próximas ${proxCount}`}>
+                  <span style={{ width: `${(noCount / total) * 100}%`, background: '#f04438' }} />
+                  <span style={{ width: `${(proxCount / total) * 100}%`, background: '#2e90fa' }} />
+                  <span style={{ width: `${(ingresoCount / total) * 100}%`, background: '#12b76a' }} />
+                </div>
+                <div className="asis-legend">
+                  <span><span className="asis-dot" style={{ background: '#12b76a' }} />Ingresó · <b>{ingresoCount}</b></span>
+                  <span><span className="asis-dot" style={{ background: '#f04438' }} />No ingresó · <b>{noCount}</b></span>
+                  <span><span className="asis-dot" style={{ background: '#2e90fa' }} />Próximas · <b>{proxCount}</b></span>
+                </div>
+              </div>
+
+              {/* Filtros + búsqueda */}
+              <div className="asis-filters">
+                <div className="asis-chips">
+                  {chips.map(c => (
+                    <button key={c.id} className={`asis-chip${filter === c.id ? ' is-active' : ''}`} onClick={() => setFilter(c.id)}>
+                      {c.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="asis-search">
+                  <span className="asis-search-ic"><Search size={16} strokeWidth={2.25} /></span>
+                  <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Buscar alumno…" aria-label="Buscar alumno" />
+                </div>
+              </div>
+
+              {days.length === 0 ? (
+                <div className="asis-card asis-empty">Sin clases para este filtro.</div>
+              ) : (
+                <>
+                  {/* ── Tabla agrupada por día (desktop ≥900px) ── */}
+                  <div className="asis-card asis-desktop">
+                    <table className="asis-tbl">
                       <thead>
-                        <tr style={{ background: 'var(--bg-surface-2)', textAlign: 'left' }}>
+                        <tr>
                           {([
-                            { h: 'Día' }, { h: 'Hora' }, { h: 'Alumno' },
+                            { h: 'Hora' }, { h: 'Alumno' },
                             { h: 'Hora ingreso', help: 'asistencias.horaIngreso' },
                             { h: 'Estado', help: 'asistencias.estado' },
                             { h: 'Suscripción', help: 'finanzas.suscripcion' },
-                          ] as Array<{ h: string; help?: HelpTooltipKey }>).map(col => (
-                            <th key={col.h} style={{ padding: '10px 14px', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>
+                          ] as Array<{ h: string; help?: HelpTooltipKey }>).map((col, i) => (
+                            <th key={col.h} style={i === 0 ? { width: 110 } : i === 2 ? { width: 140 } : i === 3 ? { width: 150 } : i === 4 ? { width: 130 } : undefined}>
                               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                                 {col.h}
                                 {col.help && <HelpTooltip tooltipKey={col.help} />}
@@ -168,50 +290,105 @@ function AsistenciasContent() {
                         </tr>
                       </thead>
                       <tbody>
-                        {rows.map(r => {
-                          const ps = PUNCT_STYLE[r.status];
-                          const isToday = r.date === todayIso;
-                          return (
-                            <tr key={r.id} style={{ borderTop: '1px solid var(--border)', background: isToday ? 'rgba(30,158,58,0.04)' : undefined }}>
-                              <td style={{ padding: '10px 14px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>
-                                {fmtDayLong(r.date)}
-                                {isToday && <span style={{ marginLeft: 6, fontSize: 10, padding: '1px 6px', borderRadius: 8, background: 'rgba(30,158,58,0.12)', color: '#1E9E3A', fontWeight: 700 }}>hoy</span>}
-                              </td>
-                              <td style={{ padding: '10px 14px', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 600 }}>{r.hour}</td>
-                              <td style={{ padding: '10px 14px', whiteSpace: 'nowrap', color: 'var(--text-primary)' }}>
-                                {r.studentName}
-                                {!r.hasLink && <span style={{ marginLeft: 6, fontSize: 10, padding: '1px 6px', borderRadius: 8, background: 'rgba(249,115,22,0.12)', color: '#ea580c', fontWeight: 700 }}>sin enlace</span>}
-                              </td>
-                              <td style={{ padding: '10px 14px', whiteSpace: 'nowrap', color: 'var(--text-muted)' }}>
-                                {r.joinedAt ? new Date(r.joinedAt).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }) : '—'}
-                              </td>
-                              <td style={{ padding: '10px 14px', whiteSpace: 'nowrap' }}>
-                                <span style={{ fontSize: 11, padding: '2px 9px', borderRadius: 12, background: ps.bg, color: ps.color, fontWeight: 700 }}>{ps.label}</span>
-                              </td>
-                              <td style={{ padding: '10px 14px', whiteSpace: 'nowrap' }}>
-                                {(() => {
-                                  const sb = attendanceSubBadge(r);
-                                  return sb
-                                    ? <span style={{ fontSize: 11, padding: '2px 9px', borderRadius: 12, background: sb.bg, color: sb.color, fontWeight: 700 }}>{sb.label}</span>
-                                    : <span style={{ color: 'var(--text-muted)' }}>—</span>;
-                                })()}
-                              </td>
-                            </tr>
-                          );
-                        })}
+                        {days.map(day => (
+                          <DayGroupRows key={day.iso} day={day} />
+                        ))}
                       </tbody>
                     </table>
                   </div>
-                )}
-              </div>
 
-              <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 12, lineHeight: 1.6 }}>
-                El ingreso se registra automáticamente al usar el botón <b>“Ingresar a clase”</b> desde el Calendario. Las clases futuras aparecen como <b>Próxima</b> hasta que llegue su horario.
+                  {/* ── Agenda en tarjetas por día (mobile <900px) ── */}
+                  <div className="asis-mobile">
+                    {days.map(day => (
+                      <div key={day.iso}>
+                        <div className="asis-day-h">
+                          <span className="asis-day-name">{day.label}</span>
+                          {day.today && <span className="asis-hoy">Hoy</span>}
+                          <span className="asis-day-count">{day.classes.length} clase{day.classes.length === 1 ? '' : 's'}</span>
+                        </div>
+                        {day.classes.map(c => (
+                          <div key={c.id} className="asis-mcard">
+                            <div className="asis-mcard-top">
+                              <span className="asis-mcard-time">{c.time}</span>
+                              <span className="asis-mcard-name">{c.alumno}</span>
+                              <EstadoPill e={c.estado} />
+                            </div>
+                            <div className="asis-mcard-bot">
+                              <span>Ingreso: {c.horaIngreso || '—'}</span>
+                              {c.sinEnlace && <SinEnlaceTag />}
+                              {c.sub && <SubPill s={c.sub} />}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              <div className="asis-foot">
+                El ingreso se registra automáticamente al usar el botón <b>“Ingresar a clase”</b> desde el Calendario. No se puede cargar después: las clases sin registro figuran como <b>No ingresó</b>.
               </div>
             </>
           )}
         </div>
       </PullToRefresh>
+    </div>
+  );
+}
+
+// Franja de día + sus filas dentro de la tabla (desktop).
+function DayGroupRows({ day }: { day: { iso: string; label: string; today: boolean; classes: ClassRow[] } }) {
+  return (
+    <>
+      <tr className="asis-daystrip">
+        <td colSpan={5}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 9 }}>
+            <span className="asis-day-name">{day.label}</span>
+            {day.today && <span className="asis-hoy">Hoy</span>}
+            <span className="asis-day-count">{day.classes.length} clase{day.classes.length === 1 ? '' : 's'}</span>
+          </span>
+        </td>
+      </tr>
+      {day.classes.map(c => (
+        <tr key={c.id}>
+          <td style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{c.time}</td>
+          <td>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              {c.alumno}
+              {c.sinEnlace && <SinEnlaceTag />}
+            </span>
+          </td>
+          <td style={{ color: c.horaIngreso ? '#5c6a61' : '#98a49b', whiteSpace: 'nowrap' }}>{c.horaIngreso || '—'}</td>
+          <td><EstadoPill e={c.estado} /></td>
+          <td><SubPill s={c.sub} /></td>
+        </tr>
+      ))}
+    </>
+  );
+}
+
+function Skeleton() {
+  return (
+    <div aria-hidden="true">
+      <div className="asis-metrics">
+        {[0, 1, 2, 3].map(i => (
+          <div key={i} className="asis-metric">
+            <div className="asis-skel" style={{ width: 56, height: 34 }} />
+            <div className="asis-skel" style={{ width: '70%', height: 13, marginTop: 12 }} />
+            <div className="asis-skel" style={{ width: '50%', height: 11, marginTop: 8 }} />
+          </div>
+        ))}
+      </div>
+      <div className="asis-summary">
+        <div className="asis-skel" style={{ width: '100%', height: 12, borderRadius: 999 }} />
+        <div className="asis-skel" style={{ width: '60%', height: 13, marginTop: 14 }} />
+      </div>
+      <div className="asis-card" style={{ padding: 18 }}>
+        {[0, 1, 2, 3, 4].map(i => (
+          <div key={i} className="asis-skel" style={{ width: '100%', height: 20, marginBottom: 14 }} />
+        ))}
+      </div>
     </div>
   );
 }
