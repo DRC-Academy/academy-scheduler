@@ -129,10 +129,12 @@ function DuplicateDialog({ check, onCancel, onConfirm }: {
 }
 
 // Modal "Añadir clase"
-function AddClassModal({ teacher, myAssignments, classRecords, onClose, onSaved }: {
+function AddClassModal({ teacher, myAssignments, classRecords, initial, onClose, onSaved }: {
   teacher: Teacher;
   myAssignments: Assignment[];
   classRecords: ClassRecord[];
+  // Prefill al abrir desde una clase a revisar (alumno + fecha + tipo ya puestos).
+  initial?: { studentName: string; date: string; classType: ClassRecordType } | null;
   onClose: () => void;
   onSaved: (
     studentName: string, date: string, time: string | undefined, transcript: string,
@@ -146,15 +148,19 @@ function AddClassModal({ teacher, myAssignments, classRecords, onClose, onSaved 
     for (const a of myAssignments) {
       if (!seen.has(a.studentName)) { seen.add(a.studentName); out.push(a.studentName); }
     }
-    return out.sort((x, y) => x.localeCompare(y));
-  }, [myAssignments]);
+    out.sort((x, y) => x.localeCompare(y));
+    // Ex-alumno sin assignment activa: si venimos de una clase a revisar suya, debe
+    // poder seleccionarse igual para pegarle el transcript.
+    if (initial?.studentName && !seen.has(initial.studentName)) out.unshift(initial.studentName);
+    return out;
+  }, [myAssignments, initial?.studentName]);
 
   const todayIso = getSpainParts(new Date()).dateStr;
-  const [studentName, setStudentName] = useState(studentOptions[0] ?? '');
-  const [date, setDate] = useState(todayIso);
+  const [studentName, setStudentName] = useState(initial?.studentName ?? studentOptions[0] ?? '');
+  const [date, setDate] = useState(initial?.date ?? todayIso);
   const [time, setTime] = useState('');
   const [transcript, setTranscript] = useState('');
-  const [classType, setClassType] = useState<ClassRecordType>('normal');
+  const [classType, setClassType] = useState<ClassRecordType>(initial?.classType ?? 'normal');
   const [comment, setComment] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -246,6 +252,11 @@ function AddClassModal({ teacher, myAssignments, classRecords, onClose, onSaved 
           <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: '#6b7280' }}>✕</button>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {initial && (
+            <div style={{ fontSize: 12, color: '#1f7a3d', background: 'rgba(30,158,58,0.08)', border: '1px solid rgba(30,158,58,0.28)', borderRadius: 8, padding: '9px 12px', lineHeight: 1.5 }}>
+              Completá esta clase a revisar: pegá el transcript de <b>{initial.studentName}</b> del <b>{finShortDate(initial.date)}</b> para verificarla.
+            </div>
+          )}
           <div>
             <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>Alumno</label>
             {studentOptions.length === 0 ? (
@@ -347,7 +358,16 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
 
   const [monthYear, setMonthYear] = useState(currentMonthYear());
   const [showAdd, setShowAdd] = useState(false);
+  // Prefill de "Añadir clase" al abrirlo desde una clase a revisar: deja el
+  // alumno/fecha/tipo ya puestos para que el profe solo pegue el transcript. El
+  // registro se emparejará con esa clase (mismo alumno + fecha ±1 día) en finanzas.
+  const [addPrefill, setAddPrefill] = useState<{ studentName: string; date: string; classType: ClassRecordType } | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  const openAddClass = (prefill?: { studentName: string; date: string; classType: ClassRecordType }) => {
+    setAddPrefill(prefill ?? null);
+    setShowAdd(true);
+  };
 
   // Detección de hitos (clase 15/30/50) según las clases registradas. Se dispara
   // al cargar Finanzas y cada vez que cambian los class_records (p. ej. tras
@@ -502,6 +522,7 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
   // falta (ingreso por el botón Meet o transcript).
   const reviewAlerts = finance.rows.filter(r => r.status === 'a_revisar').map(r => ({
     studentName: r.studentName, date: r.date, hour: r.hour,
+    hasTranscript: r.hasTranscript, classType: r.classType,
     missing: !r.hasTranscript
       ? 'subir transcript en Añadir clase'
       : 'ingresar con el botón Meet',
@@ -517,7 +538,7 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
           <button className="mcf-icon-btn" aria-label="Mes siguiente" onClick={() => setMonthYear(m => shiftMonth(m, 1))}>›</button>
           <button className="mcf-btn mcf-btn-ghost mcf-btn-sm" onClick={() => setMonthYear(currentMonthYear())}>Hoy</button>
         </div>
-        <button className="mcf-btn mcf-btn-primary" onClick={() => setShowAdd(true)}>Añadir clase</button>
+        <button className="mcf-btn mcf-btn-primary" onClick={() => openAddClass()}>Añadir clase</button>
       </div>
 
       <div className="mcf-content">
@@ -678,7 +699,13 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                                         ? <span className="mcf-tag" style={{ background: '#fdf3e7', color: '#9a6516' }}>Supera 2 · revisión admin</span>
                                         : <span style={{ color: '#1f7a3d', fontWeight: 600 }}>Cobrable</span>
                                     ) : !r.hasTranscript ? (
-                                      <span style={{ color: '#9a6516' }}>Falta transcript</span>
+                                      <button
+                                        onClick={() => openAddClass({ studentName: g.name, date: r.date, classType: r.classType })}
+                                        title="Pegá el transcript de esta clase para verificarla"
+                                        style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 9px', borderRadius: 7, border: '1px solid rgba(224,145,47,0.45)', background: '#fdf3e7', color: '#9a6516', cursor: 'pointer', fontSize: 12, fontWeight: 700, fontFamily: 'inherit' }}
+                                      >
+                                        + Añadir transcript
+                                      </button>
                                     ) : complete ? (
                                       <span style={{ color: '#1f7a3d', fontWeight: 600 }}>Completo</span>
                                     ) : (
@@ -745,13 +772,22 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                 {reviewAlerts.map((a, i) => (
                   <div key={i} className="mcf-review-row">
                     <span className="mcf-dot" style={{ background: '#e0912f', marginTop: 5 }} />
-                    <div style={{ minWidth: 0 }}>
+                    <div style={{ minWidth: 0, flex: 1 }}>
                       <div className="mcf-review-who">{a.studentName} · {finShortDate(a.date)}</div>
                       <div className="mcf-review-note">Falta: {a.missing}</div>
                     </div>
-                    {/* Ya no hay acción de "adjuntar" acá: el transcript se sube
-                        desde "Añadir clase", y el ingreso solo se puede registrar
-                        durante la clase con el botón Meet. */}
+                    {/* Si lo que falta es el transcript, el profe puede pegarlo acá
+                        mismo (abre "Añadir clase" prellenado). Si lo que falta es el
+                        ingreso por Meet, no hay acción: solo se registra en vivo. */}
+                    {!a.hasTranscript && (
+                      <button
+                        onClick={() => openAddClass({ studentName: a.studentName, date: a.date, classType: a.classType })}
+                        title="Pegá el transcript de esta clase para verificarla"
+                        style={{ flexShrink: 0, padding: '6px 11px', borderRadius: 8, border: 'none', background: '#1E9E3A', color: 'white', cursor: 'pointer', fontSize: 12, fontWeight: 700, fontFamily: 'inherit', whiteSpace: 'nowrap' }}
+                      >
+                        Pegar transcript
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>
@@ -765,7 +801,8 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
           teacher={teacher}
           myAssignments={myAssignments}
           classRecords={classRecords}
-          onClose={() => setShowAdd(false)}
+          initial={addPrefill}
+          onClose={() => { setShowAdd(false); setAddPrefill(null); }}
           onSaved={handleAddClass}
         />
       )}
