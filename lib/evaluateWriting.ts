@@ -42,8 +42,10 @@ score relative to the level that was expected. Judge grammar, vocabulary, cohere
 and task completion.
 
 IMPORTANT: write ALL feedback fields ("feedback", "overall_feedback", "strengths",
-"areas_for_improvement") in SPANISH (the student's native language). Return only the
-JSON that matches the schema.`;
+"areas_for_improvement") in SPANISH FROM SPAIN (español de España). Address the
+student informally with "tú"/"tuteo" — NEVER use Argentine "vos"/"voseo" or forms
+like "tenés", "manejás", "podés", "acá". Use peninsular vocabulary and phrasing.
+Return only the JSON that matches the schema.`;
 
 export async function evaluateWriting(args: {
   cefrLevel: Cefr;

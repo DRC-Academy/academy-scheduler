@@ -3,16 +3,14 @@
 // Página PÚBLICA del Test de Nivel (link único, sin login). Estado 100% en
 // Supabase vía la API (nada en localStorage): recargar retoma donde quedó.
 // Flujo: Welcome → Reading (completion/passage/email, adaptativo) → Writing →
-// Resultados. Diseño standalone con branding DRC (verde, Radio Canada).
+// Resultados. Diseño standalone con branding DRC (verde, Radio Canada), en línea
+// visual con el formulario inicial. Español de España (tuteo).
 
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import type { LTQuestionPublic, LTProgress, WritingEvaluation, Cefr } from '@/lib/levelTest/types';
 import { SECTION_LABEL, CEFR_DESC, CEFR_COLOR } from '@/lib/levelTest/constants';
-
-const GREEN = '#1E9E3A';
-const GREEN_DARK = '#167a2d';
 
 interface Result {
   reading_score: number | null;
@@ -81,7 +79,7 @@ export default function TestPage() {
       setQuestion(data.question); setProgress(data.progress);
       setSelected(null); setWritten('');
       setPhase('testing');
-    } catch { setError('No se pudo cargar el test. Revisá tu conexión.'); }
+    } catch { setError('No se pudo cargar el test. Revisa tu conexión.'); }
     finally { setBusy(false); }
   }
 
@@ -121,56 +119,54 @@ export default function TestPage() {
   }
 
   // ── Render por fase ──────────────────────────────────────────────────────────
-  if (phase === 'loading') return <Shell><Centered>Cargando…</Centered></Shell>;
-  if (phase === 'invalid') return <Shell><Centered>Este link no es válido o ya no está disponible.</Centered></Shell>;
-  if (phase === 'expired') return <Shell><Centered>Este link ya expiró. Pedí uno nuevo a tu asesor de DRC Academy.</Centered></Shell>;
+  if (phase === 'loading') return <LoadingScreen />;
+  if (phase === 'invalid') return <StatusScreen emoji="🔒" title="Este enlace no es válido" text="Contacta con tu asesor de DRC Academy para obtener uno nuevo." />;
+  if (phase === 'expired') return <StatusScreen emoji="⌛" title="Este enlace ya ha expirado" text="Pide uno nuevo a tu asesor de DRC Academy." />;
 
   if (phase === 'welcome') {
     return (
       <Shell>
-        <Card>
-          <Brand />
-          <h1 style={{ fontSize: 24, fontWeight: 600, color: '#11241a', margin: '18px 0 6px', letterSpacing: '-0.015em' }}>
-            {resuming ? `¡Seguimos, ${firstName(candidateName)}!` : `¡Hola${candidateName ? `, ${firstName(candidateName)}` : ''}!`}
-          </h1>
-          <p style={{ fontSize: 14, color: '#5c6a61', margin: '0 0 16px', lineHeight: 1.6 }}>
-            Este test evalúa tu nivel de inglés en <b>Reading</b> y <b>Writing</b>.
-          </p>
-          <ul style={{ fontSize: 13.5, color: '#5c6a61', lineHeight: 1.9, margin: '0 0 20px', paddingLeft: 18 }}>
-            <li>Duración aproximada: <b>20–30 minutos</b>.</li>
-            <li>3 secciones de Reading (completar oraciones, textos y emails) y 1 de Writing.</li>
-            <li>Una vez iniciado, no podrás volver a preguntas anteriores.</li>
-            <li>Al finalizar verás tu resultado y tu nivel CEFR.</li>
-          </ul>
-          {error && <ErrorLine>{error}</ErrorLine>}
-          <PrimaryButton onClick={loadCurrent} disabled={busy}>
-            {busy ? 'Cargando…' : resuming ? 'Continuar test' : 'Empezar el test'}
-          </PrimaryButton>
-        </Card>
+        <CardHeader progress={null} />
+        <div className="drc-t-content">
+          <div className="drc-t-screen drc-t-anim">
+            <span className="drc-t-chip">⏱ 20–30 minutos</span>
+            <h1>{resuming ? `¡Seguimos, ${firstName(candidateName)}!` : `¡Hola${candidateName ? `, ${firstName(candidateName)}` : ''}! 👋`}</h1>
+            <p>Este test evalúa tu nivel de inglés en <b>comprensión lectora</b> y <b>expresión escrita</b>. Al terminar sabrás al instante tu nivel según el marco europeo (CEFR).</p>
+            <ul className="drc-t-list">
+              <li><b>Comprensión lectora:</b> completar frases, textos y correos.</li>
+              <li><b>Expresión escrita:</b> una redacción breve.</li>
+              <li>Se adapta a tus respuestas: sube o baja de dificultad sobre la marcha.</li>
+              <li>Una vez empieces, no podrás volver a preguntas anteriores.</li>
+            </ul>
+            {error && <ErrorLine>{error}</ErrorLine>}
+          </div>
+        </div>
+        <div className="drc-t-nav start">
+          <button className="drc-t-btn drc-t-btn-primary" onClick={loadCurrent} disabled={busy}>
+            {busy ? 'Cargando…' : resuming ? 'Continuar el test →' : 'Empezar el test →'}
+          </button>
+        </div>
       </Shell>
     );
   }
 
   if (phase === 'results' && result) {
-    return <Shell><ResultsScreen result={result} name={candidateName} /></Shell>;
+    return <ResultsScreen result={result} name={candidateName} />;
   }
 
   // testing
   if (phase === 'testing' && question && progress) {
     const isWriting = question.section === 'writing';
+    const canSubmit = !busy && (isWriting ? countWords(written) >= (question.writing_min_words || 50) : selected != null);
     return (
       <Shell>
-        <div style={{ width: '100%', maxWidth: 720 }}>
-          <ProgressBar progress={progress} />
-          <Card>
-            <div style={{ fontSize: 11, fontWeight: 600, color: GREEN_DARK, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 12 }}>
-              {SECTION_LABEL[question.section]}
-            </div>
+        <CardHeader progress={progress} />
+        <div className="drc-t-content">
+          <div key={question.id} className="drc-t-anim">
+            <span className="drc-t-eyebrow">{SECTION_LABEL[question.section]}</span>
 
             {question.prompt_text && (
-              <div style={{ background: '#f5f7f4', border: '1px solid #eef1ee', borderRadius: 10, padding: '14px 16px', marginBottom: 16, fontSize: 14, color: '#11241a', lineHeight: 1.65, whiteSpace: 'pre-wrap' }}>
-                {question.prompt_text}
-              </div>
+              <div className="drc-t-passage">{question.prompt_text}</div>
             )}
 
             {isWriting ? (
@@ -183,47 +179,34 @@ export default function TestPage() {
               />
             ) : (
               <>
-                <div style={{ fontSize: 16, fontWeight: 600, color: '#11241a', margin: '0 0 16px', lineHeight: 1.5 }}>
-                  {question.question_text}
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {(question.options || []).map((opt, i) => {
-                    const active = selected === i;
-                    return (
-                      <button key={i} onClick={() => setSelected(i)}
-                        style={{
-                          textAlign: 'left', padding: '13px 15px', borderRadius: 10, cursor: 'pointer',
-                          fontFamily: 'inherit', fontSize: 14.5, lineHeight: 1.4,
-                          border: `1.5px solid ${active ? GREEN : '#e3e7e0'}`,
-                          background: active ? 'rgba(30,158,58,0.08)' : '#fff',
-                          color: active ? GREEN_DARK : '#11241a',
-                          fontWeight: active ? 600 : 400,
-                        }}>
-                        {opt}
-                      </button>
-                    );
-                  })}
+                <div className="drc-t-question">{question.question_text}</div>
+                <div className="drc-t-opts">
+                  {(question.options || []).map((opt, i) => (
+                    <button key={i} type="button"
+                      className={`drc-t-opt${selected === i ? ' sel' : ''}`}
+                      onClick={() => setSelected(i)}>
+                      <span className="drc-t-key" aria-hidden="true">{String.fromCharCode(65 + i)}</span>
+                      <span className="drc-t-lbl">{opt}</span>
+                      <span className="drc-t-check" aria-hidden="true">✓</span>
+                    </button>
+                  ))}
                 </div>
               </>
             )}
 
             {error && <ErrorLine>{error}</ErrorLine>}
-
-            <div style={{ marginTop: 22 }}>
-              <PrimaryButton
-                onClick={submitAnswer}
-                disabled={busy || (isWriting ? countWords(written) < (question.writing_min_words || 50) : selected == null)}
-              >
-                {busy ? (isWriting ? 'Evaluando…' : 'Guardando…') : 'Siguiente'}
-              </PrimaryButton>
-            </div>
-          </Card>
+          </div>
+        </div>
+        <div className="drc-t-nav">
+          <button className="drc-t-btn drc-t-btn-primary" onClick={submitAnswer} disabled={!canSubmit}>
+            {busy ? (isWriting ? 'Evaluando…' : 'Guardando…') : 'Siguiente →'}
+          </button>
         </div>
       </Shell>
     );
   }
 
-  return <Shell><Centered>Cargando…</Centered></Shell>;
+  return <LoadingScreen />;
 }
 
 // ── Sub-componentes ──────────────────────────────────────────────────────────
@@ -232,56 +215,52 @@ function countWords(s: string): number { const t = s.trim(); return t ? t.split(
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
-    <div style={{ minHeight: '100vh', background: '#f5f7f4', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '32px 16px' }}>
-      {children}
+    <div className="drc-t-page">
+      <TestStyles />
+      <div className="drc-t-stage">
+        <div className="drc-t-card">{children}</div>
+        <div className="drc-t-footer">DRC Academy · Test de nivel de inglés</div>
+      </div>
     </div>
-  );
-}
-function Card({ children }: { children: React.ReactNode }) {
-  return (
-    <div style={{ width: '100%', maxWidth: 720, background: '#fff', border: '1px solid #eef1ee', borderRadius: 16, padding: '28px 26px', boxShadow: '0 8px 24px rgba(0,0,0,0.06)' }}>
-      {children}
-    </div>
-  );
-}
-function Centered({ children }: { children: React.ReactNode }) {
-  return <div style={{ maxWidth: 460, textAlign: 'center', color: '#5c6a61', fontSize: 15, lineHeight: 1.7 }}>{children}</div>;
-}
-function Brand() {
-  return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img src="/drc-logo.png" alt="DRC Academy" style={{ height: 34, width: 'auto', display: 'block' }} />
-  );
-}
-function ErrorLine({ children }: { children: React.ReactNode }) {
-  return <div style={{ marginTop: 14, fontSize: 13, color: '#b42318' }}>{children}</div>;
-}
-function PrimaryButton({ children, onClick, disabled }: { children: React.ReactNode; onClick: () => void; disabled?: boolean }) {
-  return (
-    <button onClick={onClick} disabled={disabled}
-      style={{
-        width: '100%', minHeight: 48, padding: '13px', borderRadius: 10, border: 'none',
-        background: disabled ? '#c8d3cb' : GREEN, color: '#fff', cursor: disabled ? 'not-allowed' : 'pointer',
-        fontSize: 15, fontWeight: 600, fontFamily: 'inherit',
-      }}>
-      {children}
-    </button>
   );
 }
 
-function ProgressBar({ progress }: { progress: LTProgress }) {
-  const pct = Math.round((progress.answeredTotal / progress.grandTotal) * 100);
+function CardHeader({ progress }: { progress: LTProgress | null }) {
+  const pct = progress ? Math.round((progress.answeredTotal / progress.grandTotal) * 100) : 0;
   return (
-    <div style={{ width: '100%', maxWidth: 720, margin: '0 auto 14px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#5c6a61', marginBottom: 6 }}>
-        <span>Sección {progress.sectionIndex + 1} de {progress.sectionTotal} · {SECTION_LABEL[progress.section]}</span>
-        <span>{progress.answeredTotal} / {progress.grandTotal}</span>
+    <div className="drc-t-head">
+      <div className="drc-t-head-top">
+        <div className="drc-t-brand">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/drc-logo.png" alt="DRC Academy" className="drc-t-logo" />
+          <div>
+            <div className="drc-t-bname">DRC Academy</div>
+            <div className="drc-t-bsub">Test de nivel</div>
+          </div>
+        </div>
+        {progress && (
+          <div className="drc-t-meta">
+            <span className="drc-t-step">{SECTION_LABEL[progress.section]}</span>
+            <span className="drc-t-pct">{pct}%</span>
+          </div>
+        )}
       </div>
-      <div style={{ height: 8, borderRadius: 999, background: '#e3e7e0', overflow: 'hidden' }}>
-        <div style={{ width: `${pct}%`, height: '100%', background: GREEN, borderRadius: 999, transition: 'width 0.3s ease' }} />
-      </div>
+      {progress && (
+        <>
+          <div className="drc-t-track" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
+            <div className="drc-t-fill" style={{ width: `${pct}%` }} />
+          </div>
+          <div className="drc-t-count">
+            Sección {progress.sectionIndex + 1} de {progress.sectionTotal} · {progress.answeredTotal} / {progress.grandTotal} preguntas
+          </div>
+        </>
+      )}
     </div>
   );
+}
+
+function ErrorLine({ children }: { children: React.ReactNode }) {
+  return <div className="drc-t-err" role="alert">⚠️ {children}</div>;
 }
 
 function WritingSection({ prompt, minWords, value, onChange, busy }: {
@@ -291,14 +270,14 @@ function WritingSection({ prompt, minWords, value, onChange, busy }: {
   const ok = words >= minWords;
   return (
     <>
-      <div style={{ fontSize: 15.5, fontWeight: 600, color: '#11241a', margin: '0 0 6px', lineHeight: 1.5 }}>{prompt}</div>
-      <div style={{ fontSize: 12.5, color: '#98a49b', marginBottom: 12 }}>Mínimo {minWords} palabras.</div>
+      <div className="drc-t-question">{prompt}</div>
+      <div className="drc-t-hint">Escribe al menos {minWords} palabras en inglés.</div>
       <textarea
+        className="drc-t-area"
         value={value} onChange={e => onChange(e.target.value)} disabled={busy} rows={10}
         placeholder="Write your answer here…"
-        style={{ width: '100%', padding: '13px 15px', borderRadius: 10, border: '1.5px solid #e3e7e0', background: '#fff', color: '#11241a', fontSize: 14.5, fontFamily: 'inherit', lineHeight: 1.6, resize: 'vertical', boxSizing: 'border-box' }}
       />
-      <div style={{ fontSize: 12.5, color: ok ? GREEN_DARK : '#98a49b', marginTop: 6 }}>
+      <div className={`drc-t-words${ok ? ' ok' : ''}`}>
         {words} palabra{words === 1 ? '' : 's'}{ok ? ' ✓' : ` · faltan ${minWords - words}`}
       </div>
     </>
@@ -307,71 +286,307 @@ function WritingSection({ prompt, minWords, value, onChange, busy }: {
 
 function ResultsScreen({ result, name }: { result: Result; name: string }) {
   const cefr = (result.cefr_level || 'A1') as Cefr;
-  const color = CEFR_COLOR[cefr] || GREEN;
+  const color = CEFR_COLOR[cefr] || '#1E9E3A';
   const overall = Math.round(result.overall_score ?? 0);
   const ev = result.ai_evaluation;
   return (
-    <Card>
-      <Brand />
-      <div style={{ textAlign: 'center', margin: '18px 0 8px' }}>
-        <ScoreGauge value={overall} color={color} />
-        <div style={{ marginTop: 10, display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 13, color: '#5c6a61' }}>Nivel</span>
-          <span style={{ fontSize: 22, fontWeight: 700, color }}>{cefr}</span>
+    <Shell>
+      <CardHeader progress={null} />
+      <div className="drc-t-content">
+        <div className="drc-t-screen center drc-t-anim">
+          <div className="drc-t-result-top">
+            <ScoreGauge value={overall} color={color} />
+            <div className="drc-t-level" style={{ background: `${color}14`, borderColor: `${color}55`, color }}>
+              <span className="drc-t-level-lbl">Tu nivel</span>
+              <span className="drc-t-level-val">{cefr}</span>
+            </div>
+          </div>
+          <p className="drc-t-cefr-desc">{CEFR_DESC[cefr]}</p>
+
+          <div className="drc-t-tiles">
+            <ScoreTile label="Comprensión lectora" value={Math.round(result.reading_score ?? 0)} />
+            <ScoreTile label="Expresión escrita" value={Math.round(result.writing_score ?? 0)} />
+          </div>
+
+          {ev && (
+            <div className="drc-t-feedback">
+              <div className="drc-t-feedback-h">Comentarios sobre tu redacción</div>
+              {ev.overall_feedback && <p className="drc-t-feedback-p">{ev.overall_feedback}</p>}
+              {ev.strengths?.length > 0 && <FeedList title="Lo que has hecho bien" items={ev.strengths} tone="ok" />}
+              {ev.areas_for_improvement?.length > 0 && <FeedList title="Aspectos a mejorar" items={ev.areas_for_improvement} tone="warn" />}
+            </div>
+          )}
+
+          <p className="drc-t-close">
+            ¡Gracias por completar el test{name ? `, ${firstName(name)}` : ''}! Un asesor de DRC Academy se pondrá en contacto contigo muy pronto.
+          </p>
         </div>
-        <div style={{ fontSize: 13.5, color: '#5c6a61', maxWidth: 460, margin: '6px auto 0', lineHeight: 1.6 }}>{CEFR_DESC[cefr]}</div>
       </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, margin: '18px 0' }}>
-        <ScoreTile label="Reading" value={Math.round(result.reading_score ?? 0)} />
-        <ScoreTile label="Writing" value={Math.round(result.writing_score ?? 0)} />
-      </div>
-
-      {ev && (
-        <div style={{ borderTop: '1px solid #eef1ee', paddingTop: 16 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: '#11241a', marginBottom: 6 }}>Feedback de tu escritura</div>
-          {ev.overall_feedback && <p style={{ fontSize: 13.5, color: '#5c6a61', lineHeight: 1.65, margin: '0 0 12px' }}>{ev.overall_feedback}</p>}
-          {ev.strengths?.length > 0 && <FeedList title="Lo que hiciste bien" items={ev.strengths} color={GREEN_DARK} />}
-          {ev.areas_for_improvement?.length > 0 && <FeedList title="Para mejorar" items={ev.areas_for_improvement} color="#b45309" />}
-        </div>
-      )}
-
-      <div style={{ marginTop: 18, textAlign: 'center', fontSize: 13.5, color: '#5c6a61', lineHeight: 1.6 }}>
-        ¡Gracias por completar el test{name ? `, ${firstName(name)}` : ''}! Un asesor de DRC Academy se pondrá en contacto con vos.
-      </div>
-    </Card>
+    </Shell>
   );
 }
 
 function ScoreTile({ label, value }: { label: string; value: number }) {
   return (
-    <div style={{ background: '#f5f7f4', border: '1px solid #eef1ee', borderRadius: 12, padding: '14px 16px', textAlign: 'center' }}>
-      <div style={{ fontSize: 24, fontWeight: 700, color: '#11241a' }}>{value}<span style={{ fontSize: 13, color: '#98a49b' }}>/100</span></div>
-      <div style={{ fontSize: 12.5, color: '#5c6a61', marginTop: 2 }}>{label}</div>
+    <div className="drc-t-tile">
+      <div className="drc-t-tile-val">{value}<span className="drc-t-tile-max">/100</span></div>
+      <div className="drc-t-tile-lbl">{label}</div>
     </div>
   );
 }
-function FeedList({ title, items, color }: { title: string; items: string[]; color: string }) {
+function FeedList({ title, items, tone }: { title: string; items: string[]; tone: 'ok' | 'warn' }) {
   return (
-    <div style={{ marginBottom: 10 }}>
-      <div style={{ fontSize: 12, fontWeight: 600, color, marginBottom: 4 }}>{title}</div>
-      <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, color: '#5c6a61', lineHeight: 1.6 }}>
-        {items.map((it, i) => <li key={i}>{it}</li>)}
-      </ul>
+    <div className={`drc-t-feed drc-t-feed-${tone}`}>
+      <div className="drc-t-feed-h">{title}</div>
+      <ul>{items.map((it, i) => <li key={i}>{it}</li>)}</ul>
     </div>
   );
 }
 
 function ScoreGauge({ value, color }: { value: number; color: string }) {
-  const r = 52, c = 2 * Math.PI * r, pct = Math.max(0, Math.min(100, value));
+  const r = 58, c = 2 * Math.PI * r, pct = Math.max(0, Math.min(100, value));
   return (
-    <svg width={132} height={132} viewBox="0 0 132 132" style={{ display: 'inline-block' }}>
-      <circle cx={66} cy={66} r={r} fill="none" stroke="#e3e7e0" strokeWidth={11} />
-      <circle cx={66} cy={66} r={r} fill="none" stroke={color} strokeWidth={11} strokeLinecap="round"
-        strokeDasharray={c} strokeDashoffset={c * (1 - pct / 100)} transform="rotate(-90 66 66)"
-        style={{ transition: 'stroke-dashoffset 0.6s ease' }} />
-      <text x={66} y={62} textAnchor="middle" fontSize={30} fontWeight={700} fill="#11241a">{value}</text>
-      <text x={66} y={82} textAnchor="middle" fontSize={12} fill="#98a49b">de 100</text>
+    <svg width={148} height={148} viewBox="0 0 148 148" className="drc-t-gauge">
+      <circle cx={74} cy={74} r={r} fill="none" stroke="#e3e7e0" strokeWidth={12} />
+      <circle cx={74} cy={74} r={r} fill="none" stroke={color} strokeWidth={12} strokeLinecap="round"
+        strokeDasharray={c} strokeDashoffset={c * (1 - pct / 100)} transform="rotate(-90 74 74)"
+        style={{ transition: 'stroke-dashoffset 0.8s cubic-bezier(0.4,0,0.2,1)' }} />
+      <text x={74} y={72} textAnchor="middle" fontSize={34} fontWeight={800} fill="#11241a">{value}</text>
+      <text x={74} y={92} textAnchor="middle" fontSize={12} fill="#98a49b">de 100</text>
     </svg>
   );
 }
+
+function StatusScreen({ emoji, title, text }: { emoji: string; title: string; text: string }) {
+  return (
+    <Shell>
+      <CardHeader progress={null} />
+      <div className="drc-t-content">
+        <div className="drc-t-screen center drc-t-anim">
+          <div className="drc-t-big">{emoji}</div>
+          <h1>{title}</h1>
+          <p className="drc-t-muted">{text}</p>
+        </div>
+      </div>
+    </Shell>
+  );
+}
+
+function LoadingScreen() {
+  return (
+    <div className="drc-t-page" style={{ alignItems: 'center' }}>
+      <TestStyles />
+      <div className="drc-t-spin">
+        <div className="ring" />
+        <div className="txt">Cargando…</div>
+      </div>
+    </div>
+  );
+}
+
+function TestStyles() {
+  return <style dangerouslySetInnerHTML={{ __html: TEST_CSS }} />;
+}
+
+const TEST_CSS = `
+.drc-t-page {
+  min-height: 100dvh;
+  background: #EFF0EB;
+  color: #191A17;
+  font-family: 'Radio Canada', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  display: flex; align-items: center; justify-content: center;
+  padding: 40px 20px;
+}
+.drc-t-stage { width: 100%; max-width: 760px; }
+.drc-t-card {
+  display: flex; flex-direction: column;
+  background: #fff; border: 1px solid #E4E4DD; border-radius: 22px;
+  box-shadow: 0 24px 64px rgba(20, 40, 20, 0.13);
+  overflow: hidden;
+}
+.drc-t-footer { text-align: center; font-size: 12px; color: #83847A; padding: 16px 20px 0; }
+
+/* Header */
+.drc-t-head {
+  position: relative; padding: 20px 34px 18px; background: #FCFCFA;
+  border-bottom: 1px solid #E4E4DD;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.drc-t-head::before {
+  content: ""; position: absolute; left: 0; top: 0; right: 0; height: 4px;
+  background: linear-gradient(90deg, #1E9E3A, #1E9E3A 60%, #FFC400);
+}
+.drc-t-head-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.drc-t-brand { display: flex; align-items: center; gap: 11px; }
+.drc-t-logo { height: 36px; width: auto; display: block; }
+.drc-t-bname { font-size: 15.5px; font-weight: 800; line-height: 1.15; }
+.drc-t-bsub { font-size: 12px; color: #83847A; }
+.drc-t-meta { display: flex; align-items: baseline; gap: 10px; white-space: nowrap; }
+.drc-t-step { font-size: 12.5px; font-weight: 700; color: #46473F; }
+.drc-t-pct { font-size: 17px; font-weight: 800; color: #1E9E3A; font-variant-numeric: tabular-nums; }
+.drc-t-track {
+  height: 11px; border-radius: 999px; background: #FBFBF9;
+  box-shadow: inset 0 0 0 1px #E4E4DD; overflow: hidden; position: relative;
+}
+.drc-t-fill {
+  height: 100%; border-radius: 999px; min-width: 11px; position: relative;
+  background: linear-gradient(90deg, #167a2d, #1E9E3A 70%, #34c256);
+  transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.drc-t-fill::after {
+  content: ""; position: absolute; right: 2px; top: 50%; transform: translateY(-50%);
+  width: 5px; height: 5px; border-radius: 50%; background: #FFC400;
+  box-shadow: 0 0 6px 1px rgba(255, 196, 0, 0.8);
+}
+.drc-t-count { font-size: 11.5px; color: #83847A; }
+
+/* Content */
+.drc-t-content { padding: 32px 40px; }
+.drc-t-eyebrow {
+  display: inline-flex; align-items: center; gap: 7px;
+  font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.09em;
+  color: #167a2d; background: rgba(30, 158, 58, 0.08);
+  padding: 6px 12px; border-radius: 999px; margin-bottom: 18px;
+}
+.drc-t-passage {
+  background: #f6f8f5; border: 1px solid #E9EDE7; border-left: 3px solid #1E9E3A;
+  border-radius: 12px; padding: 16px 18px; margin-bottom: 20px;
+  font-size: 15px; color: #22271f; line-height: 1.7; white-space: pre-wrap;
+}
+.drc-t-question { font-size: 18px; font-weight: 700; color: #191A17; margin: 0 0 18px; line-height: 1.45; letter-spacing: -0.2px; }
+.drc-t-hint { font-size: 13.5px; color: #83847A; margin: -8px 0 14px; }
+
+/* Transición entre pasos */
+.drc-t-anim { animation: drc-t-in 0.4s cubic-bezier(0.22, 0.61, 0.36, 1); }
+@keyframes drc-t-in { from { opacity: 0; transform: translateY(9px); } to { opacity: 1; transform: translateY(0); } }
+
+/* Opciones */
+.drc-t-opts { display: flex; flex-direction: column; gap: 11px; }
+.drc-t-opt {
+  display: flex; align-items: center; gap: 14px; width: 100%; text-align: left;
+  padding: 14px 16px; border-radius: 13px; border: 1.5px solid #E4E4DD;
+  background: #fff; color: #191A17; font-family: inherit; font-size: 15.5px; font-weight: 500;
+  line-height: 1.4; cursor: pointer; box-shadow: 0 1px 2px rgba(20, 30, 15, 0.05);
+  transition: border-color 0.16s, background 0.16s, transform 0.14s, box-shadow 0.16s;
+}
+.drc-t-opt:hover { border-color: #1E9E3A; background: rgba(30, 158, 58, 0.06); transform: translateY(-1px); box-shadow: 0 8px 26px rgba(20, 40, 20, 0.10); }
+.drc-t-opt:focus-visible { outline: none; border-color: #1E9E3A; box-shadow: 0 0 0 3px rgba(255, 196, 0, 0.55); }
+.drc-t-opt.sel { border-color: #1E9E3A; border-width: 2px; background: rgba(30, 158, 58, 0.12); font-weight: 600; padding: 13px 15px; }
+.drc-t-key {
+  flex-shrink: 0; width: 27px; height: 27px; border-radius: 8px; background: #F0F1EC; color: #6b7d6f;
+  display: grid; place-items: center; font-size: 13px; font-weight: 800;
+  transition: background 0.16s, color 0.16s;
+}
+.drc-t-opt:hover .drc-t-key { background: rgba(30, 158, 58, 0.14); color: #167a2d; }
+.drc-t-opt.sel .drc-t-key { background: #1E9E3A; color: #fff; }
+.drc-t-lbl { flex: 1; }
+.drc-t-check { flex-shrink: 0; color: #1E9E3A; font-weight: 800; font-size: 14px; opacity: 0; transform: translateX(-4px); transition: opacity 0.16s, transform 0.16s; }
+.drc-t-opt.sel .drc-t-check { opacity: 1; transform: translateX(0); }
+
+/* Writing */
+.drc-t-area {
+  width: 100%; padding: 15px 17px; border-radius: 13px; box-sizing: border-box;
+  border: 1.5px solid #E4E4DD; background: #fff; font-family: inherit; font-size: 15.5px; color: #191A17;
+  line-height: 1.6; resize: vertical; min-height: 200px;
+  box-shadow: 0 1px 2px rgba(20, 30, 15, 0.05); transition: border-color 0.16s, box-shadow 0.16s;
+}
+.drc-t-area:focus { outline: none; border-color: #1E9E3A; box-shadow: 0 0 0 3px rgba(255, 196, 0, 0.4); }
+.drc-t-words { font-size: 13px; color: #98a49b; margin-top: 8px; font-weight: 600; }
+.drc-t-words.ok { color: #167a2d; }
+
+/* Error */
+.drc-t-err {
+  margin-top: 18px; padding: 12px 15px; border-radius: 11px;
+  background: rgba(192, 57, 43, 0.08); border: 1px solid rgba(192, 57, 43, 0.35);
+  color: #C0392B; font-size: 14px; font-weight: 600;
+  display: flex; align-items: center; gap: 8px;
+}
+
+/* Nav */
+.drc-t-nav {
+  display: flex; gap: 12px; align-items: center; justify-content: flex-end;
+  padding: 18px 40px; border-top: 1px solid #E4E4DD; background: #fff;
+}
+.drc-t-nav.start { justify-content: flex-start; }
+.drc-t-btn {
+  appearance: none; font-family: inherit; font-weight: 700; border-radius: 12px; cursor: pointer;
+  padding: 13px 30px; font-size: 15px; min-height: 50px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  transition: transform 0.14s, box-shadow 0.16s, background 0.16s, border-color 0.16s;
+}
+.drc-t-btn-primary { background: #1E9E3A; border: 1.5px solid #1E9E3A; color: #fff; box-shadow: 0 6px 16px rgba(30, 158, 58, 0.28); }
+.drc-t-btn-primary:hover { background: #167a2d; transform: translateY(-1px); box-shadow: 0 10px 22px rgba(30, 158, 58, 0.36); }
+.drc-t-btn-primary:disabled { background: #c8d3cb; border-color: #c8d3cb; box-shadow: none; cursor: not-allowed; transform: none; }
+.drc-t-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(255, 196, 0, 0.6); }
+
+/* Pantallas (welcome / estado / resultados) */
+.drc-t-screen { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.drc-t-screen.center { align-items: center; text-align: center; }
+.drc-t-big { font-size: 52px; line-height: 1; margin-bottom: 8px; }
+.drc-t-screen h1 { margin: 4px 0 12px; font-size: clamp(23px, 3vw, 30px); font-weight: 800; letter-spacing: -0.5px; line-height: 1.2; }
+.drc-t-screen p { margin: 0 0 12px; font-size: 16px; color: #46473F; max-width: 58ch; line-height: 1.65; }
+.drc-t-screen p.drc-t-muted { color: #83847A; }
+.drc-t-chip {
+  display: inline-flex; align-items: center; gap: 7px; background: rgba(30, 158, 58, 0.08);
+  color: #167a2d; font-size: 13px; font-weight: 700; padding: 7px 14px; border-radius: 999px; margin-bottom: 18px;
+}
+.drc-t-list { margin: 4px 0 4px; padding-left: 20px; font-size: 15px; color: #46473F; line-height: 1.9; max-width: 58ch; }
+.drc-t-list li { margin-bottom: 2px; }
+
+/* Resultados */
+.drc-t-result-top { display: flex; flex-direction: column; align-items: center; gap: 14px; margin-bottom: 6px; }
+.drc-t-gauge { display: block; }
+.drc-t-level {
+  display: inline-flex; align-items: center; gap: 9px; border: 1.5px solid; border-radius: 999px; padding: 7px 18px;
+}
+.drc-t-level-lbl { font-size: 13px; font-weight: 700; opacity: 0.85; }
+.drc-t-level-val { font-size: 22px; font-weight: 800; letter-spacing: -0.3px; }
+.drc-t-cefr-desc { font-size: 14.5px; color: #5c6a61; max-width: 48ch; margin: 4px auto 0; line-height: 1.6; }
+.drc-t-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; width: 100%; margin: 22px 0 6px; }
+.drc-t-tile { background: #f6f8f5; border: 1px solid #E9EDE7; border-radius: 14px; padding: 16px 14px; text-align: center; }
+.drc-t-tile-val { font-size: 27px; font-weight: 800; color: #11241a; letter-spacing: -0.5px; }
+.drc-t-tile-max { font-size: 13px; font-weight: 600; color: #98a49b; }
+.drc-t-tile-lbl { font-size: 12.5px; color: #5c6a61; margin-top: 3px; font-weight: 600; }
+
+.drc-t-feedback { width: 100%; text-align: left; border-top: 1px solid #E4E4DD; margin-top: 20px; padding-top: 18px; }
+.drc-t-feedback-h { font-size: 14px; font-weight: 800; color: #11241a; margin-bottom: 8px; }
+.drc-t-feedback-p { font-size: 14.5px; color: #46473F; line-height: 1.7; margin: 0 0 14px; max-width: none; }
+.drc-t-feed { border-radius: 12px; padding: 13px 15px; margin-bottom: 10px; }
+.drc-t-feed-ok { background: rgba(30, 158, 58, 0.07); border: 1px solid rgba(30, 158, 58, 0.22); }
+.drc-t-feed-warn { background: rgba(180, 83, 9, 0.06); border: 1px solid rgba(180, 83, 9, 0.22); }
+.drc-t-feed-h { font-size: 12.5px; font-weight: 800; margin-bottom: 5px; }
+.drc-t-feed-ok .drc-t-feed-h { color: #167a2d; }
+.drc-t-feed-warn .drc-t-feed-h { color: #b45309; }
+.drc-t-feed ul { margin: 0; padding-left: 18px; font-size: 13.5px; color: #46473F; line-height: 1.65; }
+.drc-t-close { font-size: 14.5px; color: #46473F; line-height: 1.65; margin-top: 20px; max-width: 52ch; }
+
+/* Spinner */
+.drc-t-spin { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+.drc-t-spin .ring { width: 34px; height: 34px; border: 3px solid #E4E4DD; border-top-color: #1E9E3A; border-radius: 50%; animation: drc-t-rot 0.8s linear infinite; }
+.drc-t-spin .txt { font-size: 14px; color: #83847A; }
+@keyframes drc-t-rot { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .drc-t-anim, .drc-t-spin .ring { animation: none; }
+  .drc-t-fill, .drc-t-gauge circle { transition: none; }
+}
+
+/* Mobile */
+@media (max-width: 767px) {
+  .drc-t-page { padding: 0; align-items: stretch; }
+  .drc-t-stage { max-width: none; }
+  .drc-t-card { border-radius: 0; border: 0; box-shadow: none; min-height: 100dvh; }
+  .drc-t-head { padding: 15px 18px 14px; padding-top: max(15px, env(safe-area-inset-top)); }
+  .drc-t-bsub { display: none; }
+  .drc-t-content { padding: 24px 18px; flex: 1; }
+  .drc-t-question { font-size: 16.5px; }
+  .drc-t-tiles { grid-template-columns: 1fr; }
+  .drc-t-nav {
+    position: sticky; bottom: 0; padding: 12px 18px;
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+    box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.05);
+  }
+  .drc-t-btn { flex: 1; }
+  .drc-t-footer { display: none; }
+}
+`;

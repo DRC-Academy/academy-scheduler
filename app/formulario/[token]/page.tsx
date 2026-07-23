@@ -74,6 +74,7 @@ function FormFlow({ token }: { token: TokenRow }) {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [sent, setSent] = useState(false);
+  const [testUrl, setTestUrl] = useState<string | null>(null);
 
   const q = step >= 0 && step < total ? FORM_QUESTIONS[step] : null;
 
@@ -124,6 +125,7 @@ function FormFlow({ token }: { token: TokenRow }) {
         setSubmitting(false);
         return;
       }
+      setTestUrl(typeof data?.testUrl === 'string' ? data.testUrl : null);
       setSent(true);
     } catch {
       setError('No hay conexión. Revisa tu internet e inténtalo de nuevo.');
@@ -131,7 +133,7 @@ function FormFlow({ token }: { token: TokenRow }) {
     }
   }
 
-  if (sent) return <ThankYouScreen studentName={token.student_name} teacherName={token.teacher_name} />;
+  if (sent) return <ThankYouScreen studentName={token.student_name} teacherName={token.teacher_name} testUrl={testUrl} />;
 
   const progress =
     step < 0 ? null
@@ -396,7 +398,7 @@ function LevelRow({ row, cols, selected, onSelect }: {
 }
 
 // ── Pantallas de estado (gracias / error / ya completado / cargando) ────────────
-function ThankYouScreen({ studentName, teacherName }: { studentName: string; teacherName: string }) {
+function ThankYouScreen({ studentName, teacherName, testUrl }: { studentName: string; teacherName: string; testUrl: string | null }) {
   return (
     <Shell>
       <CardHeader progress={null} />
@@ -405,7 +407,24 @@ function ThankYouScreen({ studentName, teacherName }: { studentName: string; tea
           <div className="drc-f-big">🎉</div>
           <h1>Gracias, {studentName}.</h1>
           <p>Ya tengo todo lo que necesitaba. Se lo hago llegar a {teacherName} para que prepare tu primera clase y empieces con buen pie.</p>
-          <p>Nos vemos muy pronto.</p>
+
+          {testUrl ? (
+            <div className="drc-f-cta">
+              <div className="drc-f-cta-badge">🎯 Último paso recomendado</div>
+              <div className="drc-f-cta-title">Descubre tu nivel de inglés</div>
+              <p className="drc-f-cta-text">
+                Haz ahora un breve <b>test de nivel</b>: en unos minutos sabrás al instante en qué nivel te
+                encuentras y nos ayudará a preparar tu primera clase a tu medida.
+              </p>
+              <a className="drc-f-btn drc-f-btn-primary drc-f-cta-btn" href={testUrl}>
+                Hacer el test de nivel →
+              </a>
+              <div className="drc-f-cta-note">Tarda unos 20 minutos · Puedes hacerlo también más tarde desde este enlace.</div>
+            </div>
+          ) : (
+            <p>Nos vemos muy pronto.</p>
+          )}
+
           <p className="drc-f-sig">Diego Ruiz. Director de DRC Academy.</p>
         </div>
       </div>
@@ -663,7 +682,23 @@ const FORM_CSS = `
 .drc-f-screen h1 { margin: 0 0 12px; font-size: clamp(25px, 3vw, 34px); font-weight: 800; letter-spacing: -0.5px; }
 .drc-f-screen p { margin: 0 0 12px; font-size: 16.5px; color: #46473F; max-width: 54ch; line-height: 1.6; }
 .drc-f-screen p.drc-f-muted { color: #83847A; }
-.drc-f-sig { color: #167a2d; font-weight: 700; }
+.drc-f-sig { color: #167a2d; font-weight: 700; margin-top: 4px; }
+
+/* CTA del test de nivel (pantalla final del formulario) */
+.drc-f-cta {
+  width: 100%; max-width: 520px; margin: 22px auto 8px; text-align: center;
+  background: linear-gradient(180deg, rgba(30, 158, 58, 0.07), rgba(255, 196, 0, 0.05));
+  border: 1.5px solid rgba(30, 158, 58, 0.28); border-radius: 18px; padding: 26px 24px;
+}
+.drc-f-cta-badge {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 800;
+  text-transform: uppercase; letter-spacing: 0.07em; color: #167a2d;
+  background: rgba(30, 158, 58, 0.12); padding: 6px 13px; border-radius: 999px; margin-bottom: 12px;
+}
+.drc-f-cta-title { font-size: 21px; font-weight: 800; color: #191A17; letter-spacing: -0.4px; margin-bottom: 8px; }
+.drc-f-cta-text { font-size: 15px; color: #46473F; line-height: 1.6; margin: 0 auto 20px; max-width: 44ch; }
+.drc-f-cta-btn { width: 100%; max-width: 340px; text-decoration: none; }
+.drc-f-cta-note { font-size: 12.5px; color: #83847A; margin-top: 12px; line-height: 1.5; }
 .drc-f-chip {
   display: inline-flex; align-items: center; gap: 7px; background: rgba(30, 158, 58, 0.08);
   color: #167a2d; font-size: 13px; font-weight: 700; padding: 7px 14px; border-radius: 999px;

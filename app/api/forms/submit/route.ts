@@ -6,10 +6,18 @@ import { formatResponsesForAI, firstUnansweredRequired, type FormResponses } fro
 import { generateFicha } from '@/lib/analyzeForm';
 import { fichaToColumns } from '@/lib/aiTypes';
 import { fetchTeacher, sendFormCompletedEmail } from '@/lib/emailNotifications';
+import { getOrCreateTestSession } from '@/lib/levelTest/createSession';
 
 interface Body {
   token?: string;
   responses?: FormResponses;
+}
+
+function publicBase(request: Request): string {
+  const envUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '');
+  if (envUrl) return envUrl;
+  try { return new URL(request.url).origin; }
+  catch { return 'https://academy-scheduler-aqpt.vercel.app'; }
 }
 
 export async function POST(request: Request): Promise<Response> {
@@ -41,7 +49,7 @@ export async function POST(request: Request): Promise<Response> {
 
   if (tkErr) {
     console.error('[submit] Error al leer el token:', tkErr);
-    return Response.json({ error: 'Error del servidor. Intentá de nuevo.' }, { status: 500 });
+    return Response.json({ error: 'Error del servidor. Inténtalo de nuevo.' }, { status: 500 });
   }
   if (!tk) {
     return Response.json({ error: 'Este link no es válido.' }, { status: 404 });
@@ -64,7 +72,7 @@ export async function POST(request: Request): Promise<Response> {
     .eq('status', 'pending');   // evita doble envío concurrente
   if (updErr) {
     console.error('[submit] Error al marcar el token completado:', updErr);
-    return Response.json({ error: 'Error del servidor. Intentá de nuevo.' }, { status: 500 });
+    return Response.json({ error: 'Error del servidor. Inténtalo de nuevo.' }, { status: 500 });
   }
 
   // 3) Formatear respuestas + generar la ficha con IA (best-effort).
@@ -131,5 +139,25 @@ export async function POST(request: Request): Promise<Response> {
     if (teacher) await sendFormCompletedEmail(teacher, tk.student_name);
   }
 
-  return Response.json({ success: true });
+  // 6) Preparar el link del Test de Nivel para ofrecerlo en la pantalla final del
+  //    formulario (mismo flujo). Best-effort: si falla, el alumno ve el "gracias"
+  //    igual, solo que sin el CTA del test.
+  let testUrl: string | null = null;
+  try {
+    const { token: testToken } = await getOrCreateTestSession({
+      studentId:    tk.student_id || undefined,
+      studentName:  tk.student_name,
+      studentEmail: tk.student_email || undefined,
+      teacherId:    tk.teacher_id || undefined,
+      teacherName:  tk.teacher_name || undefined,
+      assignmentId: tk.assignment_id || undefined,
+      plan:         tk.plan || undefined,
+      level:        tk.level || undefined,
+    });
+    if (testToken) testUrl = `${publicBase(request)}/test/${testToken}`;
+  } catch (e) {
+    console.error('[submit] No se pudo preparar el test de nivel:', e);
+  }
+
+  return Response.json({ success: true, testUrl });
 }

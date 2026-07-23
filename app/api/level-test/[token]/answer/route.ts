@@ -52,7 +52,7 @@ export async function POST(
     .eq('session_id', s.id).order('answered_at', { ascending: false }).limit(1);
   const last = lastArr?.[0]?.answered_at;
   if (last && Date.now() - new Date(last).getTime() < 700) {
-    return Response.json({ error: 'Demasiado rápido, esperá un momento.' }, { status: 429 });
+    return Response.json({ error: 'Demasiado rápido, espera un momento.' }, { status: 429 });
   }
 
   const answeredIds = parseAnswered(s.questions_answered);

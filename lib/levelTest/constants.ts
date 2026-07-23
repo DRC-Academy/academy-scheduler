@@ -42,7 +42,7 @@ export function scoreToCefr(score: number): Cefr {
 export const CEFR_DESC: Record<Cefr, string> = {
   A1: 'Principiante — frases básicas y situaciones cotidianas muy simples.',
   A2: 'Elemental — intercambios sencillos sobre temas conocidos.',
-  B1: 'Intermedio — te manejás en la mayoría de situaciones del día a día.',
+  B1: 'Intermedio — te desenvuelves en la mayoría de situaciones del día a día.',
   B2: 'Intermedio alto — fluidez y precisión en contextos variados, incluido el laboral.',
   C1: 'Avanzado — uso flexible y eficaz del idioma en contextos complejos.',
   C2: 'Maestría — comprensión y expresión prácticamente como un nativo.',
