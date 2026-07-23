@@ -12,7 +12,7 @@ import { Teacher, Grid, Assignment, ScoringEvent, ScoringEventType } from '@/typ
 import { EVENT_POINTS, EVENT_EUROS, calcRegisteredClassNumber, dbUpdateAssignmentStartDate, dbGetAllNotifications,
   dbAuditStudentAssignments, dbRelinkAssignment, dbSyncAssignmentName, dbMergeDuplicateStudents, dbSyncStudentAssignments,
   dbDiagnoseAllCalendars, dbSyncAllCalendarsToAssignments, dbCreateFullLink, CalendarDiagnosisAllRow, AuditResult,
-  findDuplicateTeacherAssignments, type DuplicateAssignmentGroup } from '@/lib/db';
+  findDuplicateTeacherAssignments, type DuplicateAssignmentGroup, type DeleteTeacherResult } from '@/lib/db';
 import { CambiarProfesorModal } from '@/components/CambiarProfesorModal';
 import { CrearVinculoModal } from '@/components/CrearVinculoModal';
 import { getPresentationEmailStatus, hoursSinceAssigned, type PresentationEmailStatusKind } from '@/lib/presentationEmailUtils';
@@ -28,10 +28,11 @@ import LevelTestsTab from '@/components/admin/LevelTestsTab';
 import { triggerEmail } from '@/lib/emailClient';
 
 // ─── Edit Teacher Modal ───────────────────────────────────────────────────────
-function EditTeacherModal({ teacher, onClose, onSave }: {
+function EditTeacherModal({ teacher, onClose, onSave, onDelete }: {
   teacher: Teacher;
   onClose: () => void;
   onSave: (id: string, data: { name: string; email: string; specialties: string[]; notificationEmail: string }) => Promise<void>;
+  onDelete: (id: string) => Promise<DeleteTeacherResult>;
 }) {
   const [form, setForm] = useState({
     name:             teacher.name,
@@ -40,6 +41,11 @@ function EditTeacherModal({ teacher, onClose, onSave }: {
     specialties:      [...(teacher.specialties ?? [])],
   });
   const [saving, setSaving] = useState(false);
+  // Zona de peligro: borrado definitivo. Requiere teclear el nombre exacto.
+  const [confirming, setConfirming] = useState(false);
+  const [confirmText, setConfirmText] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   function toggleSpecialty(s: string) {
     setForm(f => ({
@@ -57,6 +63,32 @@ function EditTeacherModal({ teacher, onClose, onSave }: {
     setSaving(false);
     onClose();
   }
+
+  async function handleDelete() {
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const res = await onDelete(teacher.id);
+      if (!res.ok) {
+        const names = (res.studentNames ?? []).slice(0, 5).join(', ');
+        const more = (res.studentNames?.length ?? 0) > 5 ? '…' : '';
+        setDeleteError(
+          `No se puede eliminar: ${teacher.name} todavía tiene ${res.activeAssignments} ` +
+          `asignación${res.activeAssignments === 1 ? '' : 'es'} activa${res.activeAssignments === 1 ? '' : 's'}` +
+          (names ? ` (${names}${more})` : '') +
+          `. Reasigná o dá de baja a esos alumnos primero.`
+        );
+        setDeleting(false);
+        return;
+      }
+      onClose();
+    } catch {
+      setDeleteError('No se pudo eliminar el profesor. Inténtalo de nuevo.');
+      setDeleting(false);
+    }
+  }
+
+  const canConfirmDelete = confirmText.trim() === teacher.name.trim() && !deleting;
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(6px)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
@@ -101,6 +133,43 @@ function EditTeacherModal({ teacher, onClose, onSave }: {
               style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: form.name.trim() && !saving ? '#1E9E3A' : '#d1d5db', color: 'white', cursor: form.name.trim() && !saving ? 'pointer' : 'not-allowed', fontSize: 14, fontWeight: 600, fontFamily: 'inherit' }}>
               {saving ? 'Guardando...' : 'Guardar cambios'}
             </button>
+          </div>
+
+          {/* ── Zona de peligro: eliminar definitivamente ── */}
+          <div style={{ marginTop: 10, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
+            {!confirming ? (
+              <button onClick={() => { setConfirming(true); setDeleteError(null); }}
+                style={{ width: '100%', padding: '9px', borderRadius: 8, border: '1px solid #f0c4bd', background: 'transparent', color: '#c0392b', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
+                Eliminar profesor definitivamente
+              </button>
+            ) : (
+              <div style={{ background: 'rgba(192,57,43,0.05)', border: '1px solid #f0c4bd', borderRadius: 10, padding: 14 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#c0392b', marginBottom: 6 }}>⚠️ Eliminar a {teacher.name}</div>
+                <div style={{ fontSize: 12.5, color: '#6b7280', lineHeight: 1.55, marginBottom: 12 }}>
+                  Se eliminará el profesor, su acceso al sistema y su calendario. El historial de clases y
+                  finanzas de meses anteriores se conserva. <b>Esta acción no se puede deshacer.</b>
+                </div>
+                <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 5 }}>
+                  Escribe <b>{teacher.name}</b> para confirmar
+                </label>
+                <input value={confirmText} onChange={e => setConfirmText(e.target.value)} autoFocus
+                  placeholder={teacher.name}
+                  style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1.5px solid #f0c4bd', fontSize: 13, background: 'white', color: '#111827', fontFamily: 'inherit', boxSizing: 'border-box' }} />
+                {deleteError && (
+                  <div style={{ fontSize: 12.5, color: '#c0392b', marginTop: 10, lineHeight: 1.5, fontWeight: 500 }}>{deleteError}</div>
+                )}
+                <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
+                  <button onClick={() => { setConfirming(false); setConfirmText(''); setDeleteError(null); }} disabled={deleting}
+                    style={{ flex: 1, padding: '9px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#6b7280', cursor: deleting ? 'not-allowed' : 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
+                    Cancelar
+                  </button>
+                  <button onClick={handleDelete} disabled={!canConfirmDelete}
+                    style={{ flex: 2, padding: '9px', borderRadius: 8, border: 'none', background: canConfirmDelete ? '#c0392b' : '#e5b8b1', color: 'white', cursor: canConfirmDelete ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+                    {deleting ? 'Eliminando…' : 'Eliminar definitivamente'}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -2861,7 +2930,7 @@ const ADMIN_TABS = ['overview', 'teachers', 'emails', 'scoring', 'tracking', 'cl
 type AdminTab = typeof ADMIN_TABS[number];
 
 function AdminContent() {
-  const { teachers, assignments, students, classRecords, addTeacher, loadingTeachers, getTeacherGrid, updateTeacherGrid, checkAndRunResets, reloadAll, updateTeacherInfo } = useTeachers();
+  const { teachers, assignments, students, classRecords, addTeacher, deleteTeacher, loadingTeachers, getTeacherGrid, updateTeacherGrid, checkAndRunResets, reloadAll, updateTeacherInfo } = useTeachers();
   const [selectedTeacher, setSelectedTeacher] = useState<string | null>(null);
   const [showNewTeacher, setShowNewTeacher] = useState(false);
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');
@@ -3401,6 +3470,7 @@ function AdminContent() {
           teacher={editTeacher}
           onClose={() => setEditTeacher(null)}
           onSave={async (id, data) => { await updateTeacherInfo(id, data); setEditTeacher(null); }}
+          onDelete={deleteTeacher}
         />
       )}
       </PullToRefresh>

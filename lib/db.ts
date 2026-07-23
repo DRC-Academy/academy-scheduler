@@ -165,6 +165,51 @@ export async function dbAddTeacher(teacher: Teacher, username: string): Promise<
   });
 }
 
+export interface DeleteTeacherResult {
+  ok: boolean;
+  /** Cantidad de asignaciones activas que impiden borrar (guard), si ok === false. */
+  activeAssignments?: number;
+  /** Nombres de los alumnos aún asignados a ese profesor. */
+  studentNames?: string[];
+}
+
+// Elimina DEFINITIVAMENTE a un profesor que ya no trabaja con la academia.
+//
+// GUARD: si el profesor todavía tiene alumnos asignados (assignments), NO se borra
+// — devuelve ok:false con el recuento y los nombres, para que el admin primero
+// reasigne o dé de baja a esos alumnos. Así nunca dejamos a un alumno activo sin
+// profesor por accidente.
+//
+// Al borrar se elimina su IDENTIDAD y ACCESO: la fila de `teachers`, su usuario de
+// login (`app_users`) y su calendario (`teacher_calendars`). El HISTORIAL de clases
+// y finanzas (class_records, class_join_logs, finance_payments, scoring_events) se
+// PRESERVA a propósito: son la base contable de meses ya cerrados y no deben
+// desaparecer porque el profesor se vaya (misma filosofía que dbDeleteStudent).
+export async function dbDeleteTeacher(teacherId: string): Promise<DeleteTeacherResult> {
+  const { data: assigns } = await supabase
+    .from('assignments')
+    .select('student_name')
+    .eq('teacher_id', teacherId);
+
+  if (assigns && assigns.length > 0) {
+    const studentNames = [...new Set(assigns.map(a => a.student_name).filter(Boolean) as string[])];
+    return { ok: false, activeAssignments: assigns.length, studentNames };
+  }
+
+  // Sin alumnos asignados → borrado seguro de identidad + acceso + calendario.
+  await supabase.from('app_users').delete().eq('teacher_id', teacherId);
+  await supabase.from('teacher_calendars').delete().eq('teacher_id', teacherId);
+
+  const { error } = await supabase.from('teachers').delete().eq('id', teacherId);
+  if (error) {
+    console.error('[dbDeleteTeacher] Error al eliminar el profesor:', error);
+    throw new Error(error.message);
+  }
+
+  console.log(`[dbDeleteTeacher] Profesor ${teacherId} eliminado (identidad + login + calendario). Historial preservado.`);
+  return { ok: true };
+}
+
 // ── CALENDARS ─────────────────────────────────────────────────────────────────
 
 export async function dbGetTeacherGrid(teacherId: string): Promise<Grid> {

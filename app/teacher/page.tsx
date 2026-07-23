@@ -1035,6 +1035,8 @@ interface TodayClass {
   level: string;
   plan: string;
   meetLink?: string;
+  isRecovery?: boolean;   // clase puntual de recuperación (celda 'bloqueado' del grid)
+  recoveryFor?: string;   // 'YYYY-MM-DD' de la clase original que se recupera
 }
 
 // All classes for a given date, built from recurring assignment slots, sorted by hour.
@@ -1056,6 +1058,64 @@ function classesForDate(myAssignments: Assignment[], date: Date): TodayClass[] {
     }
   }
   return list.sort((x, y) => parseInt(x.hour) - parseInt(y.hour));
+}
+
+// Lunes (ISO) de la semana que contiene la fecha dada.
+function mondayIsoOf(d: Date): string {
+  const dow = d.getDay();                    // 0=Dom … 6=Sáb
+  const diff = dow === 0 ? -6 : 1 - dow;     // retroceder hasta el lunes
+  const monday = new Date(d);
+  monday.setDate(d.getDate() + diff);
+  return isoDateLocal(monday);
+}
+
+// Match tolerante de una celda de recuperación a una assignment por nombre.
+function findAssignmentForName(myAssignments: Assignment[], name: string): Assignment | undefined {
+  const nk = (x: string) => x.trim().toLowerCase();
+  const full = nk(name);
+  const first = nk(name.split(' ')[0]);
+  return myAssignments.find(a => nk(a.studentName) === full)
+      ?? myAssignments.find(a => { const c = nk(a.studentName); return c === first || c.startsWith(first) || full.startsWith(c); });
+}
+
+// FUENTE 2 de "Próximas clases": celdas de recuperación del grid ('bloqueado' con
+// alumno + weekDate) cuya fecha real (lunes de weekDate + día de la celda) cae en
+// la fecha pedida. Se vinculan a la assignment del alumno para heredar enlace de
+// Meet, plan, nivel, email (necesarios para Ingresar a clase y suscripción). Las
+// que no matchean ninguna assignment se omiten (siguen visibles en el calendario).
+function recoveriesForDate(grid: Grid, date: Date, myAssignments: Assignment[]): TodayClass[] {
+  const targetIso = isoDateLocal(date);
+  const list: TodayClass[] = [];
+  for (const [key, cell] of Object.entries(grid)) {
+    if (cell.state !== 'bloqueado' || !cell.student || !cell.weekDate) continue;
+    const usc = key.lastIndexOf('_');
+    if (usc < 0) continue;
+    const day = key.slice(0, usc);
+    const hour = key.slice(usc + 1);
+    const dayIdx = DAYS.indexOf(day);
+    if (dayIdx < 0) continue;
+    // Fecha real de la celda = lunes(weekDate) + índice de día.
+    const monday = new Date(cell.weekDate + 'T00:00:00');
+    if (isNaN(monday.getTime())) continue;
+    const cellDate = new Date(monday);
+    cellDate.setDate(monday.getDate() + dayIdx);
+    if (isoDateLocal(cellDate) !== targetIso) continue;
+
+    const a = findAssignmentForName(myAssignments, cell.student);
+    if (!a) continue;
+    list.push({
+      key:         `rec_${key}_${targetIso}`,
+      assignment:  a,
+      studentName: cell.student,
+      hour,
+      level:       a.studentLevel,
+      plan:        a.plan || a.objetivo || '',
+      meetLink:    a.meetLink,
+      isRecovery:  true,
+      recoveryFor: cell.recoveryFor,
+    });
+  }
+  return list;
 }
 
 // ─── Email de presentación (nuevo alumno) ─────────────────────────────────────
@@ -1311,11 +1371,13 @@ function RescheduleModal({ studentName, currentDate, currentHour, saving, onConf
 }
 
 // ─── Teacher Upcoming Classes Tab ─────────────────────────────────────────────
-function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, updateMeetLink, logClassJoin, addRescheduleRecord, formIndex, refreshFormIndex }: {
+function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, grid, onGridChange, updateMeetLink, logClassJoin, addRescheduleRecord, formIndex, refreshFormIndex }: {
   teacher: Teacher;
   myAssignments: Assignment[];
   students: Student[];
   classRecords: ClassRecord[];
+  grid: Grid;
+  onGridChange: (g: Grid) => Promise<void>;
   updateMeetLink: (assignmentId: string, link: string) => Promise<void>;
   logClassJoin: (teacherId: string, teacherName: string, studentName: string, scheduledDate: string, scheduledTime: string, subscriptionStatus?: string, enteredWithoutActive?: boolean, subscriptionDaysRemaining?: number | null) => Promise<void>;
   addRescheduleRecord: (p: { teacherId: string; teacherName: string; studentName: string; originalDate: string; originalTime?: string; newDate: string; newTime?: string; classType: 'reprogramada' | 'cancelacion_hora'; comment: string }) => Promise<void>;
@@ -1403,7 +1465,14 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, up
   const spain = now ? getSpainParts(now) : null;
   const currentDecimal = spain ? spain.hour + spain.minute / 60 : -1;
 
-  const todayClasses = classesForDate(myAssignments, viewDate);
+  // Lista del día = FUENTE 1 (slots recurrentes) + FUENTE 2 (recuperaciones del
+  // grid que caen en este día), unidas y ordenadas por hora.
+  const todayClasses = useMemo(
+    () => [...classesForDate(myAssignments, viewDate), ...recoveriesForDate(grid, viewDate, myAssignments)]
+      .sort((x, y) => parseInt(x.hour) - parseInt(y.hour)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [myAssignments, grid, viewIso],
+  );
 
   type ClassStatus = 'passed' | 'inprogress' | 'next' | 'future';
   function statusOf(c: TodayClass): ClassStatus {
@@ -1430,14 +1499,14 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, up
     for (const off of new Set([0, 1, 2, dayOffset])) {
       const d = new Date();
       d.setDate(d.getDate() + off);
-      for (const c of classesForDate(myAssignments, d)) {
+      for (const c of [...classesForDate(myAssignments, d), ...recoveriesForDate(grid, d, myAssignments)]) {
         const e = subEmailForAssignment(c.assignment);
         if (e) set.add(e);
       }
     }
     return [...set].sort();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [myAssignments, students, dayOffset]);
+  }, [myAssignments, students, grid, dayOffset]);
   const emailsKey = visibleEmails.join('|');
 
   // Fetch all subscription states once when the tab opens (parallel, in-memory).
@@ -1504,6 +1573,40 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, up
         newDate: data.newDate, newTime: data.newTime || undefined,
         classType, comment,
       });
+
+      // Reflejar el movimiento en el grid (best-effort, no bloquea la constancia):
+      //  · celda ORIGINAL → 'reprogramada' (tachada, gris) esa semana.
+      //  · celda de la NUEVA fecha/hora → 'bloqueado' (recuperación) → aparece en
+      //    Próximas clases el día correcto y cuenta al darse (finanzas).
+      try {
+        const origDate = new Date(date + 'T00:00:00');
+        const newDate  = new Date(data.newDate + 'T00:00:00');
+        const newHour  = `${(data.newTime || c.hour).slice(0, 2)}:00`;
+        if (!isNaN(origDate.getTime()) && !isNaN(newDate.getTime())) {
+          const origKey = cellKey(dayNameFromDate(origDate), c.hour);
+          const newKey  = cellKey(dayNameFromDate(newDate), newHour);
+          const next: Grid = { ...grid };
+          const prevOrig = grid[origKey];
+          next[origKey] = {
+            state: 'reprogramada', student: c.studentName,
+            weekDate: mondayIsoOf(origDate),
+            baseState: prevOrig && prevOrig.state !== 'reprogramada' && prevOrig.state !== 'bloqueado' ? prevOrig.state : 'ocupado',
+            rescheduledTo: data.newDate,
+          };
+          const prevNew = grid[newKey];
+          // No pisar una clase recurrente real en la nueva celda.
+          if (!prevNew || prevNew.state !== 'ocupado') {
+            next[newKey] = {
+              state: 'bloqueado', student: c.studentName,
+              weekDate: mondayIsoOf(newDate),
+              baseState: prevNew && prevNew.state !== 'bloqueado' && prevNew.state !== 'reprogramada' ? prevNew.state : 'libre',
+              recoveryFor: date,
+            };
+          }
+          await onGridChange(next);
+        }
+      } catch { /* el grid es secundario; la constancia ya quedó registrada */ }
+
       setRescheduleModal(null);
       showToast(`📅 Clase reprogramada para ${fmtDateDMY(data.newDate)}`);
     } finally {
@@ -1594,7 +1697,10 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, up
     const passed     = status === 'passed';
     const inProgress = status === 'inprogress';
     const isNext     = status === 'next';
-    const rescheduledTo = rescheduledFor(c.studentName, date);
+    // Una clase RECURRENTE se considera reprogramada si hay constancia; una fila de
+    // recuperación (destino del movimiento) nunca se pinta como reprogramada.
+    const rescheduledTo = c.isRecovery ? null : rescheduledFor(c.studentName, date);
+    const rescheduled   = !!rescheduledTo;
 
     const hasLink = !!c.meetLink;
     const menuId  = `${c.key}_${date}`;
@@ -1617,7 +1723,10 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, up
     const sb = subBadgeFor(subEmailForAssignment(c.assignment));
     const formInfo = lookupToken(formIndex, { id: c.assignment.studentId, name: c.studentName });
     const hasForm  = formStateOf(formInfo) !== 'none';
-    const showPresentationBadge = !passed && !c.assignment.presentationEmailSent;
+    const presentationSent = !!c.assignment.presentationEmailSent;
+    // Botón "Enviar presentación": solo para clases normales sin presentación enviada.
+    const showPresentationBtn = !passed && !rescheduled && !c.isRecovery && !presentationSent;
+    const showPresentationSent = !passed && !rescheduled && !c.isRecovery && presentationSent;
 
     const nextClassNum = calcRegisteredClassNumber(c.assignment, classRecords) + 1;
     const slides = !passed && isMilestone(nextClassNum) ? getMilestoneSlides(nextClassNum) : null;
@@ -1631,7 +1740,7 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, up
     })();
 
     return (
-      <div className={`mc-card${passed ? ' is-passed' : ''}`}>
+      <div className={`mc-card${passed ? ' is-passed' : ''}`} style={rescheduled ? { opacity: 0.5 } : undefined}>
         <div className="mc-row">
           <div className="mc-left">
             <div className="mc-hour">{c.hour}</div>
@@ -1641,27 +1750,39 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, up
 
           <div className="mc-main">
             <div className="mc-nameline">
-              <span className="mc-name">{c.studentName}</span>
+              <span className={`mc-name${rescheduled ? ' is-struck' : ''}`}>{c.studentName}</span>
+              {c.isRecovery && <span className="mc-badge-recovery">Recuperación</span>}
+              {rescheduled && <span className="mc-badge-resched">Reprogramada → {fmtDateDMY(rescheduledTo)}</span>}
               <span className="mc-tag" style={tagPalette}>{cat.label}</span>
-              {inProgress && (
+              {inProgress && !rescheduled && (
                 <span className="mc-live">
                   <span className="mc-dot" style={{ background: '#16a34a' }} />En curso
                 </span>
               )}
             </div>
             <div className="mc-course">{c.plan || 'Clase'}{c.level ? ` · ${c.level}` : ''}</div>
-            {desde && <div className="mc-meta">{desde}</div>}
+            {c.isRecovery && c.recoveryFor && <div className="mc-meta">Recupera clase del {fmtDateDMY(c.recoveryFor)}</div>}
+            {desde && !c.isRecovery && <div className="mc-meta">{desde}</div>}
           </div>
 
           {/* Estado del enlace primero: es la información clave para el profesor. */}
           <div className="mc-right">
-            <span className={`mc-status ${passed ? 'is-muted' : hasLink ? 'is-ready' : 'is-missing'}`}>
-              <span className="mc-dot" style={{ background: passed ? '#a4a7a1' : hasLink ? '#16a34a' : '#e0912f' }} />
-              {passed ? 'Clase finalizada' : hasLink ? 'Enlace listo' : 'Sin enlace'}
-            </span>
+            {rescheduled ? (
+              <span className="mc-status is-muted">
+                <span className="mc-dot" style={{ background: '#a4a7a1' }} />
+                Reprogramada
+              </span>
+            ) : (
+              <span className={`mc-status ${passed ? 'is-muted' : hasLink ? 'is-ready' : 'is-missing'}`}>
+                <span className="mc-dot" style={{ background: passed ? '#a4a7a1' : hasLink ? '#16a34a' : '#e0912f' }} />
+                {passed ? 'Clase finalizada' : hasLink ? 'Enlace listo' : 'Sin enlace'}
+              </span>
+            )}
 
             <div className="mc-actions">
-              {passed ? (
+              {rescheduled ? (
+                <button className="mc-btn mc-btn-ghost" disabled>Reprogramada</button>
+              ) : passed ? (
                 <button className="mc-btn mc-btn-ghost" disabled>Finalizada</button>
               ) : hasLink ? (
                 <button className="mc-btn mc-btn-primary" onClick={() => handleJoin(c)} disabled={checkingKey === c.key}>
@@ -1712,15 +1833,22 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, up
                 )}
               </div>
             </div>
+
+            {/* Acción secundaria: enviar la presentación si aún no se envió. */}
+            {showPresentationBtn && (
+              <button className="mc-pres-btn" onClick={() => setPresentationModal(c.assignment)}>
+                ✉️ Enviar presentación
+              </button>
+            )}
+            {showPresentationSent && (
+              <span className="mc-pres-sent">Presentación enviada ✓</span>
+            )}
           </div>
         </div>
 
         {/* Zona secundaria: avisos que no compiten con la acción principal. */}
-        {(rescheduledTo || sb || hasForm || showPresentationBadge) && (
+        {(sb || hasForm || (showPresentationBtn)) && (
           <div className="mc-foot">
-            {rescheduledTo && (
-              <span className="mc-note">Reprogramada para {fmtDateDMY(rescheduledTo)}</span>
-            )}
             {sb && (
               <span className="mc-status" style={{ background: sb.bg, color: sb.color }}>
                 {sb.spin && <span className="drc-spinner-xs" />}
@@ -1735,7 +1863,7 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, up
               onRefresh={refreshFormIndex}
               compact
             />
-            {showPresentationBadge && <PresentationEmailBadge assignment={c.assignment} />}
+            {showPresentationBtn && <PresentationEmailBadge assignment={c.assignment} />}
           </div>
         )}
       </div>
@@ -2479,6 +2607,8 @@ function TeacherContent() {
             myAssignments={myAssignments}
             students={students}
             classRecords={classRecords}
+            grid={grid}
+            onGridChange={handleGridChange}
             updateMeetLink={updateMeetLink}
             logClassJoin={logClassJoin}
             addRescheduleRecord={addRescheduleRecord}

@@ -99,6 +99,11 @@
      #7c807a (4.6:1). El estado se sigue distinguiendo por fondo/borde/punto. */
   --cal-nowork-text:    #c4c7c1;
   --cal-nowork-dot:     #d0d3cd;
+  /* Reprogramada: celda original de una clase movida a otra fecha. Gris apagado. */
+  --cal-resched-bg:     #e5e5e0;
+  --cal-resched-border: #d6d6cf;
+  --cal-resched-text:   #6b6f68;
+  --cal-resched-dot:    #9aa09a;
 
   /* ═══ LEGACY ═══════════════════════════════════════════════════════════════
      Referenciadas por los estilos inline que quedan. Se eliminan a medida que
@@ -469,6 +474,28 @@ label {
 .mc-btn-ghost { border: 1px solid var(--mc-border); background: var(--mc-card); color: #3f423f; }
 .mc-btn-ghost:hover { background: var(--mc-page); }
 .mc-btn-ghost:disabled { color: var(--mc-t3); cursor: not-allowed; }
+
+/* Badge de recuperación (amarillo DRC) junto al nombre del alumno */
+.mc-badge-recovery {
+  font-size: 11.5px; font-weight: 700; padding: 2px 9px; border-radius: 999px; white-space: nowrap;
+  background: rgba(255,196,0,0.18); color: #8a6d00; border: 1px solid rgba(255,196,0,0.5);
+}
+/* Badge de clase reprogramada (gris) */
+.mc-badge-resched {
+  font-size: 11.5px; font-weight: 600; padding: 2px 9px; border-radius: 999px; white-space: nowrap;
+  background: #ececE7; color: #6b6f68; border: 1px solid #d6d6cf;
+}
+.mc-name.is-struck { text-decoration: line-through; color: var(--mc-t2); }
+
+/* Botón secundario "Enviar presentación" (bajo el botón principal) */
+.mc-pres-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 7px 14px; border-radius: 9px; font-family: inherit; font-size: 12.5px; font-weight: 600;
+  cursor: pointer; white-space: nowrap;
+  border: 1px solid var(--mc-border); background: var(--mc-card); color: #3f423f;
+}
+.mc-pres-btn:hover { background: var(--mc-page); }
+.mc-pres-sent { font-size: 12px; font-weight: 600; color: var(--mc-t3); display: inline-flex; align-items: center; gap: 5px; }
 
 /* Menú de acciones secundarias */
 .mc-menu-wrap { position: relative; }

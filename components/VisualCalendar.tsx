@@ -59,6 +59,7 @@ export function stateColor(state: CellState) {
     case 'ocupado':   return { bg: 'var(--cal-busy-bg)',      border: 'var(--cal-busy-border)',     text: 'var(--cal-busy-text)' };
     case 'bloqueado': return { bg: 'var(--cal-recovery-bg)',  border: 'var(--cal-recovery-border)', text: 'var(--cal-recovery-text)' };
     case 'no_work':   return { bg: 'var(--cal-nowork-bg)',    border: 'var(--cal-nowork-border)',   text: 'var(--cal-nowork-text)' };
+    case 'reprogramada': return { bg: 'var(--cal-resched-bg)', border: 'var(--cal-resched-border)', text: 'var(--cal-resched-text)' };
   }
 }
 
@@ -69,6 +70,7 @@ export const CAL_STATE_META: Record<CellState, { label: string; desc: string; do
   ocupado:   { label: 'Ocupado',         desc: 'Clase con alumno',              dotColor: 'var(--cal-busy-dot)' },
   bloqueado: { label: 'En recuperación', desc: 'Clase de recuperación o ajuste', dotColor: 'var(--cal-recovery-dot)' },
   no_work:   { label: 'No work',         desc: 'No trabajás ese horario',       dotColor: 'var(--cal-nowork-dot)' },
+  reprogramada: { label: 'Reprogramada', desc: 'Clase movida a otra fecha',     dotColor: 'var(--cal-resched-dot)' },
 };
 
 export function buildGridFromTeacher(
@@ -305,10 +307,12 @@ export function VisualCalendar(props: Props) {
 
   function getCell(day: string, hour: string): Cell {
     const cell = props.grid[cellKey(day, hour)] ?? { state: 'no_work' };
-    if (cell.state === 'bloqueado' && cell.weekDate) {
+    // 'bloqueado' (recuperación) y 'reprogramada' son marcas puntuales de UNA semana:
+    // en el resto de semanas la celda revierte a su estado base (normalmente el slot).
+    if ((cell.state === 'bloqueado' || cell.state === 'reprogramada') && cell.weekDate) {
       const currentMonday = toISODateStr(weekDates[0]);
       if (cell.weekDate !== currentMonday) {
-        return { state: cell.baseState ?? 'libre' };
+        return { state: cell.baseState ?? 'libre', student: cell.baseState === 'ocupado' ? cell.student : undefined };
       }
     }
     return cell;
@@ -371,6 +375,14 @@ export function VisualCalendar(props: Props) {
         </>
       );
     }
+    if (cell.state === 'reprogramada') {
+      return (
+        <>
+          <div className="vc-b-name" style={{ textDecoration: 'line-through' }}>{cell.student || 'Reprogramada'}</div>
+          <div className="vc-b-sub">Repr.</div>
+        </>
+      );
+    }
     return <div className="vc-b-name">{props.mode === 'setter' ? '+ Asignar' : 'Libre'}</div>;
   }
 
@@ -380,6 +392,10 @@ export function VisualCalendar(props: Props) {
       return `En recuperación${cell.student ? ` · ${cell.student}` : ''}` +
         `${cell.recoveryFor ? ` · de la clase del ${cell.recoveryFor}` : ''}` +
         `${cell.recoveryNote ? ` · ${cell.recoveryNote}` : ''}`;
+    }
+    if (cell.state === 'reprogramada') {
+      return `Reprogramada${cell.student ? ` · ${cell.student}` : ''}` +
+        `${cell.rescheduledTo ? ` · al ${cell.rescheduledTo}` : ''}`;
     }
     return cell.state;
   }

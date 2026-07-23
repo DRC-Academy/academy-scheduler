@@ -162,15 +162,18 @@ export interface AppUser {
 }
 
 // Calendar cell
-export type CellState = 'libre' | 'ocupado' | 'bloqueado' | 'no_work';
+// 'bloqueado' = "En recuperación" (clase puntual recuperada). 'reprogramada' = la
+// celda ORIGINAL de una clase que se movió a otra fecha (marca puntual de esa semana).
+export type CellState = 'libre' | 'ocupado' | 'bloqueado' | 'no_work' | 'reprogramada';
 
 export interface Cell {
   state: CellState;
   student?: string;
-  weekDate?: string;     // 'bloqueado' cells: Monday ISO date of the specific week (YYYY-MM-DD)
-  baseState?: CellState; // 'bloqueado' cells: state to revert to in other weeks
-  recoveryFor?: string;  // 'bloqueado' (En recuperación) cells: 'YYYY-MM-DD' de la clase original que se recupera
-  recoveryNote?: string; // 'bloqueado' cells: nota opcional del profesor sobre la recuperación
+  weekDate?: string;      // 'bloqueado'/'reprogramada' cells: Monday ISO date of the specific week (YYYY-MM-DD)
+  baseState?: CellState;  // 'bloqueado'/'reprogramada' cells: state to revert to in other weeks
+  recoveryFor?: string;   // 'bloqueado' (En recuperación) cells: 'YYYY-MM-DD' de la clase original que se recupera
+  recoveryNote?: string;  // 'bloqueado' cells: nota opcional del profesor sobre la recuperación
+  rescheduledTo?: string; // 'reprogramada' cells: 'YYYY-MM-DD' de la nueva fecha a la que se movió la clase
 }
 
 export type Grid = Record<string, Cell>;
