@@ -18,14 +18,16 @@ import { FormQuestion, FormResponses } from './types';
 import { FORM_GENERAL } from './general';
 import { FORM_B1_PRELIMINARY } from './b1Preliminary';
 import { FORM_B2_FIRST } from './b2First';
+import { FORM_C1_ADVANCED } from './c1Advanced';
 
 export type { FormQuestion, QuestionType, FormResponses } from './types';
 export { SKILL_LEVELS } from './types';
 export { FORM_GENERAL } from './general';
 export { FORM_B1_PRELIMINARY } from './b1Preliminary';
 export { FORM_B2_FIRST } from './b2First';
+export { FORM_C1_ADVANCED } from './c1Advanced';
 
-export type FormVariant = 'general' | 'b1_preliminary' | 'b2_first';
+export type FormVariant = 'general' | 'b1_preliminary' | 'b2_first' | 'c1_advanced';
 
 interface VariantDef {
   id: FormVariant;
@@ -51,7 +53,13 @@ export const FORM_VARIANTS: VariantDef[] = [
     questions: FORM_B2_FIRST,
     match: ({ isExamen, level }) => isExamen && level === 'B2',
   },
-  // ← Próximos: C1 Advanced, IELTS. Un archivo + una entrada acá.
+  {
+    id: 'c1_advanced',
+    label: 'C1 Advanced',
+    questions: FORM_C1_ADVANCED,
+    match: ({ isExamen, level }) => isExamen && level === 'C1',
+  },
+  // ← Próximo: IELTS (ojo: su plan no lleva nivel, hace falta un match propio).
   {
     id: 'general',
     label: 'Inglés general',
