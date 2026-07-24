@@ -5,6 +5,7 @@
 // (todos los profes) y la sección "Asistencias" del profesor (solo las suyas).
 
 import type { Assignment, ClassJoinLog } from '@/types';
+import { minutesLateSpain } from '@/lib/spainTime';
 
 export type AttendanceStatus =
   | 'on_time' | 'late' | 'very_late'   // ingresó (según puntualidad del log)
@@ -43,11 +44,10 @@ export function isoDate(d: Date): string {
 }
 
 // Minutos de retraso (negativo = se adelantó) entre la hora programada y el clic.
+// La hora programada es hora de ESPAÑA, no del navegador que mira: ver
+// lib/spainTime.ts.
 export function minutesLate(scheduledDate: string, scheduledTime: string, clickedAt: string): number {
-  const [y, m, d] = scheduledDate.split('-').map(Number);
-  const hour = parseInt(scheduledTime);
-  const scheduled = new Date(y, (m ?? 1) - 1, d ?? 1, isNaN(hour) ? 0 : hour, 0, 0, 0);
-  return (new Date(clickedAt).getTime() - scheduled.getTime()) / 60000;
+  return minutesLateSpain(scheduledDate, scheduledTime, clickedAt);
 }
 
 // Badge de suscripción de una fila (solo tiene sentido si hubo ingreso).

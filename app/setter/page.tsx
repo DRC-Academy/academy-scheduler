@@ -13,6 +13,7 @@ import { AssignmentEmailModal } from '@/components/AssignmentEmailModal';
 import { StudentAutofillCard } from '@/components/StudentAutofillCard';
 import { useStudentAutofill } from '@/lib/useStudentAutofill';
 import { planBadgeStyle } from '@/lib/productUtils';
+import { formatPuntualDate, isAssignableCell, withBaseState } from '@/lib/cells';
 import { useTeachers } from '@/lib/TeachersContext';
 import { daysOfWeek } from '@/lib/mock-data';
 import { Teacher, SlotFilter, Grid, Assignment, Student, AssignedSlot } from '@/types';
@@ -126,7 +127,7 @@ function AssignModal({
 
   const availableSlots = useMemo<AssignedSlot[]>(() => {
     return Object.entries(teacherGrid)
-      .filter(([, cell]) => cell.state === 'libre')
+      .filter(([, cell]) => isAssignableCell(cell))
       .map(([key]) => { const [day, hour] = key.split('_'); return { day, hour }; })
       .sort((a, b) => {
         const d = DAY_ORDER.indexOf(a.day) - DAY_ORDER.indexOf(b.day);
@@ -619,7 +620,9 @@ function TeacherCalendarModal({
           onConfirm={(a, s) => {
             let updated = { ...grid };
             a.slots.forEach(sl => {
-              updated = { ...updated, [cellKey(sl.day, sl.hour)]: { state: 'ocupado' as const, student: s.name } };
+              // withBaseState: no borra una recuperación puntual de esa semana.
+              const key = cellKey(sl.day, sl.hour);
+              updated = { ...updated, [key]: withBaseState(updated[key], 'ocupado', s.name) };
             });
             handleGridChange(updated);
             setAssignCell(null);
@@ -1029,12 +1032,32 @@ function SetterContent() {
     setSlotFilters(prev => prev.map(f => f.id === id ? { ...f, [field]: value } : f));
   }
 
-  // A searched slot counts as available ONLY if the teacher's real grid cell
-  // (from teacher_calendars) is exactly 'libre'. libreCells holds those exact
-  // `${day}_${hour}` keys — NOT a min-max range — so 'ocupado' / 'bloqueado'
-  // ("En recuperación") / 'no_work' cells between free hours never match.
+  // A searched slot counts as available if the teacher's real grid cell (from
+  // teacher_calendars) admite un alumno recurrente. libreCells holds those exact
+  // `${day}_${hour}` keys — NOT a min-max range — so 'ocupado' / 'no_work' cells
+  // between free hours never match. Una celda "En recuperación" SÍ matchea: es una
+  // clase puntual de una semana, el horario de fondo sigue libre (ver lib/cells).
   const teacherHasAllSlots = (t: Teacher) =>
     slotFilters.every(sf => (t.libreCells ?? []).includes(`${sf.day}_${sf.hour}`));
+
+  // Avisos para los horarios que están libres pero tienen una recuperación puntual
+  // en una semana concreta.
+  const puntualNotes = (t: Teacher, slots: Array<{ day: string; hour: string }>) =>
+    slots
+      .map(sf => {
+        const date = (t.puntualCells ?? {})[`${sf.day}_${sf.hour}`];
+        return date
+          ? `${sf.day} ${sf.hour}: disponible — tiene una recuperación puntual el ${formatPuntualDate(date)}, el resto de semanas es libre`
+          : null;
+      })
+      .filter((n): n is string => n !== null);
+
+  // Horarios en juego según el modo de búsqueda activo, para los avisos de arriba.
+  const searchedSlots = (t: Teacher): Array<{ day: string; hour: string }> => {
+    if (searchMode === 'day')  return freeHoursOnDay(t, dayOnly).map(h => ({ day: dayOnly, hour: h }));
+    if (searchMode === 'hour') return freeDaysAtHour(t, hourOnly).map(d => ({ day: d, hour: hourOnly }));
+    return slotFilters.map(sf => ({ day: sf.day, hour: sf.hour }));
+  };
 
   // Horas libres de un profesor un día dado (modo "Solo por día").
   const freeHoursOnDay = (t: Teacher, day: string) =>
@@ -1272,6 +1295,9 @@ function SetterContent() {
                     return freeSearched.length > 0 && <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Disponible en: {freeSearched.map(sf => `${sf.day} ${sf.hour}`).join(' · ')}</div>;
                   })()}
                 </>)}
+                {puntualNotes(recommended, searchedSlots(recommended)).map(note => (
+                  <div key={note} style={{ fontSize: 11, color: '#f59e0b', fontWeight: 600, marginTop: 4 }}>♻️ {note}</div>
+                ))}
               </div>
               <button onClick={() => setCalendarTeacher(recommended)} style={{ padding: '8px 18px', borderRadius: 8, border: 'none', background: '#1E9E3A', color: 'white', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>📅 Ver calendario →</button>
             </div>
@@ -1311,6 +1337,11 @@ function SetterContent() {
                           📆 Libre a las {hourOnly}: {freeDaysAtHour(t, hourOnly).join(', ') || '—'}
                         </div>
                       )}
+                      {puntualNotes(t, searchedSlots(t)).map(note => (
+                        <div key={note} style={{ fontSize: 11, color: '#f59e0b', fontWeight: 600, marginTop: 4 }}>
+                          ♻️ {note}
+                        </div>
+                      ))}
                     </div>
                   </div>
 

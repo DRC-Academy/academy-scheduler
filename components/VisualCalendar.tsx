@@ -2,6 +2,8 @@
 import { useState, useCallback, useEffect } from 'react';
 import { Grid, Cell, CellState } from '@/types';
 import { Button } from '@/components/ui';
+import { isPuntualState, baseCellOf, baseStudentOf, isAssignableCell } from '@/lib/cells';
+import { getSpainParts } from '@/lib/spainTime';
 
 export const DAYS = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 export const HOURS_ES = Array.from({ length: 14 }, (_, i) => `${(i + 9).toString().padStart(2, '0')}:00`);
@@ -24,25 +26,10 @@ export function cellKey(day: string, hour: string) {
   return `${day}_${hour}`;
 }
 
-// Current time in Europe/Madrid (Spain) — the calendar's reference timezone — no
-// matter where the user's browser actually is. Returns the Spain wall-clock hour,
-// minute and the Spain calendar date as YYYY-MM-DD.
-export function getSpainParts(now: Date): { hour: number; minute: number; dateStr: string } {
-  const fmt = new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Europe/Madrid',
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', hour12: false,
-  });
-  const parts = fmt.formatToParts(now);
-  const get = (t: string) => parts.find(p => p.type === t)?.value ?? '00';
-  let hour = parseInt(get('hour'), 10);
-  if (hour === 24) hour = 0; // some runtimes emit '24' for midnight
-  return {
-    hour,
-    minute: parseInt(get('minute'), 10),
-    dateStr: `${get('year')}-${get('month')}-${get('day')}`,
-  };
-}
+// La conversión de zona horaria vive en lib/spainTime.ts (lib no puede depender de
+// components). Se re-exporta acá porque media app importa getSpainParts de este
+// módulo desde antes de que existiera el lib.
+export { getSpainParts, spainWallClockToEpoch } from '@/lib/spainTime';
 
 export type { Grid, Cell, CellState };
 
@@ -309,11 +296,9 @@ export function VisualCalendar(props: Props) {
     const cell = props.grid[cellKey(day, hour)] ?? { state: 'no_work' };
     // 'bloqueado' (recuperación) y 'reprogramada' son marcas puntuales de UNA semana:
     // en el resto de semanas la celda revierte a su estado base (normalmente el slot).
-    if ((cell.state === 'bloqueado' || cell.state === 'reprogramada') && cell.weekDate) {
+    if (isPuntualState(cell.state) && cell.weekDate) {
       const currentMonday = toISODateStr(weekDates[0]);
-      if (cell.weekDate !== currentMonday) {
-        return { state: cell.baseState ?? 'libre', student: cell.baseState === 'ocupado' ? cell.student : undefined };
-      }
+      if (cell.weekDate !== currentMonday) return baseCellOf(cell);
     }
     return cell;
   }
@@ -323,7 +308,9 @@ export function VisualCalendar(props: Props) {
     if (props.mode === 'teacher') {
       setMenu({ day, hour });
     } else if (props.mode === 'setter') {
-      if (cell.state === 'libre') props.onCellClick(day, hour);
+      // Se puede asignar un alumno recurrente sobre una recuperación puntual: la
+      // marca solo ocupa esa semana, el horario de fondo está libre.
+      if (isAssignableCell(cell)) props.onCellClick(day, hour);
     }
   }
 
@@ -333,9 +320,17 @@ export function VisualCalendar(props: Props) {
     let newCell: Cell;
     if (state === 'bloqueado') {
       const prevCell = props.grid[key] ?? { state: 'no_work' };
-      const baseState = prevCell.state === 'bloqueado' ? (prevCell.baseState ?? 'libre') : prevCell.state;
-      newCell = { state, student, weekDate: toISODateStr(weekDates[0]), baseState, recoveryFor: recovery?.recoveryFor, recoveryNote: recovery?.note };
+      // El fondo que se recupera al salir de esta semana: nunca otra marca puntual.
+      // `baseStudent` conserva al alumno recurrente, distinto del que recupera.
+      const base = baseCellOf(prevCell);
+      newCell = {
+        state, student, weekDate: toISODateStr(weekDates[0]),
+        baseState: base.state, baseStudent: base.student,
+        recoveryFor: recovery?.recoveryFor, recoveryNote: recovery?.note,
+      };
     } else {
+      // libre / ocupado / no_work desde el menú reemplazan la celda entera: es la
+      // vía manual para limpiar una recuperación vieja del calendario.
       newCell = { state, student };
     }
     props.onGridChange({ ...props.grid, [key]: newCell });
@@ -389,9 +384,12 @@ export function VisualCalendar(props: Props) {
   function cellTitle(cell: Cell) {
     if (cell.state === 'ocupado' && cell.student) return `${cell.student} · Semanal`;
     if (cell.state === 'bloqueado') {
+      // baseStudent: el horario ya tiene un alumno fijo; la recuperación ocupa solo
+      // esta semana y en las demás la celda vuelve a ser suya.
       return `En recuperación${cell.student ? ` · ${cell.student}` : ''}` +
         `${cell.recoveryFor ? ` · de la clase del ${cell.recoveryFor}` : ''}` +
-        `${cell.recoveryNote ? ` · ${cell.recoveryNote}` : ''}`;
+        `${cell.recoveryNote ? ` · ${cell.recoveryNote}` : ''}` +
+        `${baseStudentOf(cell) ? ` · solo esta semana (horario de ${baseStudentOf(cell)})` : ''}`;
     }
     if (cell.state === 'reprogramada') {
       return `Reprogramada${cell.student ? ` · ${cell.student}` : ''}` +
@@ -406,7 +404,7 @@ export function VisualCalendar(props: Props) {
   }
 
   function isClickable(cell: Cell) {
-    return props.mode === 'teacher' || (props.mode === 'setter' && cell.state === 'libre');
+    return props.mode === 'teacher' || (props.mode === 'setter' && isAssignableCell(cell));
   }
 
   return (

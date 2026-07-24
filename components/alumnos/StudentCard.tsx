@@ -8,6 +8,7 @@
 import Link from 'next/link';
 import { fichaFromRow } from '@/lib/aiTypes';
 import { classCategoryBadge } from '@/lib/finance';
+import { planFieldsOf } from '@/lib/productUtils';
 import type { StudentBundle } from '@/lib/misAlumnos';
 
 /** Color de la insignia por nivel CEFR. Neutro si el nivel no se reconoce. */
@@ -48,7 +49,9 @@ export default function StudentCard({ bundle, studentKey, generating, onGenerate
 
   const level = levelOf(a.studentLevel);
   const badge = level ? (LEVEL_BADGE[level] ?? LEVEL_NEUTRAL) : LEVEL_NEUTRAL;
-  const plan = classCategoryBadge({ assignmentPlan: a.plan, assignmentObjetivo: a.objetivo });
+  // planFieldsOf sin alumno: el bundle no trae students, así que clasifica solo
+  // con la assignment. Si algún día el bundle incluye el alumno, va como 2º arg.
+  const plan = classCategoryBadge(planFieldsOf(a));
   const mainSlot = a.slots?.[0] ? `${a.slots[0].day} ${a.slots[0].hour}` : null;
   const state = fichaStateOf(bundle);
 

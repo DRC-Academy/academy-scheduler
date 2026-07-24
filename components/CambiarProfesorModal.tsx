@@ -1,6 +1,7 @@
 'use client';
 import { useState, useMemo, useEffect, type CSSProperties } from 'react';
 import { useTeachers } from '@/lib/TeachersContext';
+import { isAssignableCell } from '@/lib/cells';
 import { AssignmentEmailModal } from '@/components/AssignmentEmailModal';
 import { Teacher, Assignment, AssignedSlot, Grid } from '@/types';
 
@@ -101,7 +102,7 @@ export function CambiarProfesorModal({
     if (!newGrid) return [];
     return sortSlots(
       Object.entries(newGrid)
-        .filter(([, cell]) => cell.state === 'libre')
+        .filter(([, cell]) => isAssignableCell(cell))
         .map(([key]) => { const [day, hour] = key.split('_'); return { day, hour }; }),
     );
   }, [newGrid]);

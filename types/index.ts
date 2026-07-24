@@ -68,7 +68,8 @@ export interface Teacher {
   vacations: Vacation[];
   upcomingClasses: UpcomingClass[];
   specialties: string[];
-  libreCells?: string[];         // exact `${day}_${hour}` keys whose grid cell state === 'libre'
+  libreCells?: string[];         // exact `${day}_${hour}` keys asignables (estado recurrente 'libre')
+  puntualCells?: Record<string, string>; // key → 'YYYY-MM-DD' de la marca puntual (recuperación) sobre un horario libre
   internalRating?: number;
   createdAt?: string;
   currentLevel?: number;
@@ -171,6 +172,7 @@ export interface Cell {
   student?: string;
   weekDate?: string;      // 'bloqueado'/'reprogramada' cells: Monday ISO date of the specific week (YYYY-MM-DD)
   baseState?: CellState;  // 'bloqueado'/'reprogramada' cells: state to revert to in other weeks
+  baseStudent?: string;   // 'bloqueado'/'reprogramada' cells con baseState 'ocupado': alumno RECURRENTE del horario (≠ `student`, que es quien recupera)
   recoveryFor?: string;   // 'bloqueado' (En recuperación) cells: 'YYYY-MM-DD' de la clase original que se recupera
   recoveryNote?: string;  // 'bloqueado' cells: nota opcional del profesor sobre la recuperación
   rescheduledTo?: string; // 'reprogramada' cells: 'YYYY-MM-DD' de la nueva fecha a la que se movió la clase

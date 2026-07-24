@@ -434,7 +434,8 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
       const plan = asgn?.plan || rows[0]?.plan || '';
       const level = asgn?.studentLevel ?? '';
       const startDate = asgn?.startDate;
-      const planTypeLabel = classifyPlan({ assignmentPlan: plan, assignmentObjetivo: asgn?.objetivo }).displayName;
+      // Sale del cálculo de finanzas (misma clasificación que la tarifa cobrada).
+      const planTypeLabel = rows[0]?.planLabel ?? '';
 
       const nuevoRows = rows.filter(r => r.antiquityDays < 30);
       const antiguoRows = rows.filter(r => r.antiquityDays >= 30);

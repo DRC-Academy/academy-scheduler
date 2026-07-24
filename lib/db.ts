@@ -1,5 +1,7 @@
 import { supabase } from './supabase';
 import { triggerEmail } from './emailClient';
+import { baseStateOf, baseStudentOf, withBaseState, assignableCellKeys, puntualCellDates } from './cells';
+import { minutesLateSpain } from './spainTime';
 import { Teacher, Student, Assignment, AppUser, Grid, TeacherStatus, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, AssignedSlot, EmailPreferences } from '@/types';
 
 // ── AUTH ─────────────────────────────────────────────────────────────────────
@@ -27,9 +29,11 @@ export async function dbAuthenticate(username: string, password: string): Promis
 // ── HELPERS ───────────────────────────────────────────────────────────────────
 
 function calcStatusFromGrid(grid: Grid): { status: TeacherStatus; freeSpots: number; ocupadoSpots: number; weeklyLoad: number } {
-  const cells = Object.values(grid);
-  const freeSpots    = cells.filter(c => c.state === 'libre').length;
-  const ocupadoSpots = cells.filter(c => c.state === 'ocupado').length;
+  // Se cuenta el estado RECURRENTE (baseStateOf): una recuperación puntual tapa la
+  // celda una sola semana, así que ese horario sigue siendo un cupo libre.
+  const cells = Object.values(grid).map(baseStateOf);
+  const freeSpots    = cells.filter(s => s === 'libre').length;
+  const ocupadoSpots = cells.filter(s => s === 'ocupado').length;
   const totalActive  = freeSpots + ocupadoSpots;
 
   let status: TeacherStatus = 'no_availability';
@@ -80,17 +84,21 @@ export async function dbGetTeachers(): Promise<Teacher[]> {
     const { status, freeSpots, ocupadoSpots, weeklyLoad } = calcStatusFromGrid(grid);
 
     const upcomingClasses = Object.entries(grid)
-      .filter(([, cell]) => cell.state === 'ocupado')
-      .map(([key, cell]) => {
+      .map(([key, cell]) => ({ key, student: baseStudentOf(cell) }))
+      .filter((e): e is { key: string; student: string } => !!e.student)
+      .map(({ key, student }) => {
         const [day, time] = key.split('_');
-        return { id: key, studentName: cell.student ?? '—', day, time, duration: 1, type: 'Clase' };
+        return { id: key, studentName: student, day, time, duration: 1, type: 'Clase' };
       });
 
     // Exact list of free cell keys (`${day}_${hour}`) — the single source of truth
-    // for slot availability. ONLY cells whose state is exactly 'libre' count.
-    const libreCells = Object.entries(grid)
-      .filter(([, cell]) => cell.state === 'libre')
-      .map(([key]) => key);
+    // for slot availability. Cuentan las celdas cuyo estado RECURRENTE es 'libre':
+    // 'libre' a secas y las que solo tienen una marca puntual encima (recuperación
+    // o reprogramada de UNA semana) sobre un fondo libre.
+    const libreCells = assignableCellKeys(grid);
+    // key → fecha 'YYYY-MM-DD' de la marca puntual, para avisar en el buscador que
+    // ese horario está libre salvo esa semana.
+    const puntualCells = puntualCellDates(grid);
 
     // One TimeSlot per individual free hour (NOT a min-max range), so any
     // consumer iterating from→to lands on real free cells only — occupied
@@ -125,6 +133,7 @@ export async function dbGetTeachers(): Promise<Teacher[]> {
       specialties:         row.specialties ?? ['Inglés'],
       timeSlots,
       libreCells,
+      puntualCells,
       blockedSlots:        [],
       vacations:           [],
       upcomingClasses,
@@ -505,9 +514,12 @@ interface OcupadoCell { student: string; day: string; hour: string; }
 function extractOcupadoCells(grid: Grid | null | undefined): OcupadoCell[] {
   const out: OcupadoCell[] = [];
   for (const [key, cell] of Object.entries(grid ?? {})) {
-    if (cell?.state === 'ocupado' && cell.student && String(cell.student).trim()) {
+    // Alumno RECURRENTE: incluye las celdas tapadas por una recuperación puntual,
+    // que si no quedarían fuera de la auditoría de vínculos.
+    const student = cell ? baseStudentOf(cell)?.trim() : undefined;
+    if (student) {
       const [day, hour] = key.split('_');
-      out.push({ student: String(cell.student).trim(), day, hour });
+      out.push({ student, day, hour });
     }
   }
   return out;
@@ -1367,8 +1379,11 @@ export async function dbRevertPenalty(p: {
 export async function dbGetScoringEvents(teacherId?: string): Promise<ScoringEvent[]> {
   let q = supabase.from('scoring_events').select('*').order('created_at', { ascending: false });
   if (teacherId) q = (q as any).eq('teacher_id', teacherId);
-  const { data } = await q;
-  if (!data) return [];
+  const { data, error } = await q;
+  // Se LANZA ante error en vez de devolver []: una lista vacía es un estado
+  // legítimo (no hay eventos) y el llamador no podía distinguirla de un fallo de
+  // red, así que un refresh caído vaciaba el scoring en pantalla.
+  if (error || !data) throw new Error(`dbGetScoringEvents: ${error?.message ?? 'sin datos'}`);
   return (data as any[]).map(r => ({
     id:          r.id,
     teacherId:   r.teacher_id,
@@ -1866,11 +1881,12 @@ export async function dbUpdateMeetLink(assignmentId: string, link: string): Prom
 // ── CLASS JOIN LOGS ───────────────────────────────────────────────────────────
 
 function calcPunctuality(scheduledDate: string, scheduledTime: string, clickedAt: Date): ClassJoinLog['punctuality'] {
-  // scheduledTime is "HH:00" (Spain time, same reference used across the app)
-  const [y, m, d] = scheduledDate.split('-').map(Number);
-  const hour = parseInt(scheduledTime);
-  const scheduled = new Date(y, (m ?? 1) - 1, d ?? 1, isNaN(hour) ? 0 : hour, 0, 0, 0);
-  const diffMin = (clickedAt.getTime() - scheduled.getTime()) / 60000;
+  // scheduledTime es "HH:00" en hora de ESPAÑA. Antes se construía la hora
+  // programada con `new Date(y, m, d, h)`, que usa la zona del navegador: un
+  // profesor en Argentina la medía contra las 15:00 argentinas en vez de las
+  // españolas, así que entrar 5 h tarde quedaba registrado como 'on_time'.
+  const diffMin = minutesLateSpain(scheduledDate, scheduledTime, clickedAt);
+  if (isNaN(diffMin)) return 'on_time';   // fecha inválida: no penalizamos
   if (diffMin <= 5)  return 'on_time';
   if (diffMin <= 15) return 'late';
   return 'very_late';
@@ -1947,7 +1963,11 @@ export async function dbGetUnassignedStudents(): Promise<Student[]> {
     supabase.from('assignments').select('student_id, student_name'),
   ]);
 
-  if (studentsRes.error || !studentsRes.data) return [];
+  // Lanza ante error (ver dbGetScoringEvents): "ningún alumno sin asignar" es un
+  // estado normal y no debe confundirse con un fallo de red.
+  if (studentsRes.error || !studentsRes.data) {
+    throw new Error(`dbGetUnassignedStudents: ${studentsRes.error?.message ?? 'sin datos'}`);
+  }
 
   const assignedIds   = new Set<string>();
   const assignedNames = new Set<string>();
@@ -2516,9 +2536,12 @@ export async function dbChangeStudentTeacher(p: ChangeTeacherParams): Promise<vo
   let cleared = 0;
   for (const key of Object.keys(updatedOld)) {
     const cell = updatedOld[key];
-    if (cell.state !== 'ocupado') continue;
-    if (oldKeys.has(key) || _cellIsStudent(cell.student, p.studentName)) {
-      updatedOld[key] = { state: 'libre', student: undefined };
+    // Se mira el alumno RECURRENTE: una celda con una recuperación encima sigue
+    // siendo el horario fijo del alumno que se transfiere, y hay que liberarla.
+    const recurring = baseStudentOf(cell);
+    if (!recurring) continue;
+    if (oldKeys.has(key) || _cellIsStudent(recurring, p.studentName)) {
+      updatedOld[key] = withBaseState(cell, 'libre');
       cleared++;
     }
   }
@@ -2528,7 +2551,8 @@ export async function dbChangeStudentTeacher(p: ChangeTeacherParams): Promise<vo
   const newGrid = await dbGetTeacherGrid(p.to.id);
   const updatedNew: Grid = { ...newGrid };
   for (const s of p.newSlots) {
-    updatedNew[`${s.day}_${s.hour}`] = { state: 'ocupado', student: p.studentName };
+    const key = `${s.day}_${s.hour}`;
+    updatedNew[key] = withBaseState(updatedNew[key], 'ocupado', p.studentName);
   }
   await dbSaveTeacherGrid(p.to.id, updatedNew);
 

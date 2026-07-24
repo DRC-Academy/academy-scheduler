@@ -11,28 +11,84 @@ export interface PlanClassification {
   displayName: string;
 }
 
+/**
+ * Quita tildes y pasa a minúsculas. IMPRESCINDIBLE antes de comparar: "Exámenes"
+ * NO contiene la subcadena "examen" (la á es otro carácter), así que sin esto los
+ * planes escritos con tilde — la mayoría — se clasificaban como generales y el
+ * profesor cobraba la tarifa baja.
+ */
+function normalizeText(s: string): string {
+  return s.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
+}
+
+// Palabras que identifican un plan de examen. Van con \b a ambos lados porque los
+// códigos cortos aparecían DENTRO de palabras corrientes del texto libre de
+// disponibilidad — "repetir", "competencia" — y clasificaban como examen (tarifa
+// alta) a alumnos de inglés general.
+const EXAM_RE = new RegExp(
+  '\\b(' + [
+    'examen(?:es)?', 'preparacion(?:es)?', 'certificad[oa]s?',
+    'fce', 'ielts', 'aptis', 'cambridge',
+    'first\\s+certificate', 'preliminary', 'advanced', 'proficiency',
+  ].join('|') + ')\\b',
+);
+
+// "cae" y "pet" son a la vez códigos de examen de Cambridge y palabras españolas
+// corrientes ("Cae bien el horario", "el alumno pet-ició"). Se exigen en
+// MAYÚSCULAS sobre el texto SIN normalizar, que es como se escriben los exámenes.
+const EXAM_CODE_RE = /\b(CAE|PET)\b/;
+
+const INTENSIVO_RE = /\bintensivos?\b/;
+
 export function classifyPlan(fields: {
   assignmentPlan?: string | null;
   assignmentObjetivo?: string | null;
   studentPlan?: string | null;
   productName?: string | null;
 }): PlanClassification {
-  const allText = Object.values(fields).filter(Boolean).join(' ').toLowerCase();
+  const rawText = Object.values(fields).filter(Boolean).join(' ');
+  const allText = normalizeText(rawText);
 
-  const EXAM_KEYWORDS = [
-    'examen', 'examenes', 'fce', 'pet', 'cae', 'ielts', 'aptis',
-    'cambridge', 'certificado', 'preparacion', 'preparación',
-    'first certificate', 'advanced', 'proficiency',
-  ];
-  const isExamen =
-    EXAM_KEYWORDS.some(k => allText.includes(k)) ||
-    /b[12].*examen|examen.*b[12]/i.test(allText);
-
-  const isIntensivo = allText.includes('intensivo');
+  const isExamen = EXAM_RE.test(allText) || EXAM_CODE_RE.test(rawText);
+  const isIntensivo = INTENSIVO_RE.test(allText);
 
   if (isExamen)                return { type: 'examenes',  financeType: 'examenes', badge: '📝 Exámenes',       displayName: 'Exámenes' };
   if (isIntensivo && !isExamen) return { type: 'intensivo', financeType: 'general',  badge: '⚡ Intensivo',      displayName: 'Intensivo' };
   return                              { type: 'general',    financeType: 'general',  badge: '💬 Inglés general', displayName: 'Inglés general' };
+}
+
+// ── Campos de clasificación (USAR SIEMPRE ESTO) ───────────────────────────────
+//
+// classifyPlan es una sola función, pero antes cada pantalla le pasaba un
+// SUBCONJUNTO distinto de campos: finanzas cobraba con los 4, la columna "Plan"
+// de esa misma tabla clasificaba con 2, y 41 de 183 assignments daban categorías
+// diferentes. El admin veía "Inglés general" en una celda y tarifa de exámenes en
+// la de al lado. Estos helpers arman el objeto completo una sola vez.
+//
+// NO llamar a classifyPlan con campos sueltos: usar classifyFor / planFieldsOf.
+
+export interface PlanAssignmentLike { plan?: string | null; objetivo?: string | null }
+export interface PlanStudentLike { plan?: string | null; productName?: string | null }
+
+/** Los 4 campos que alimentan la clasificación, a partir de assignment + alumno. */
+export function planFieldsOf(
+  assignment?: PlanAssignmentLike | null,
+  student?: PlanStudentLike | null,
+) {
+  return {
+    assignmentPlan:     assignment?.plan ?? null,
+    assignmentObjetivo: assignment?.objetivo ?? null,
+    studentPlan:        student?.plan ?? null,
+    productName:        student?.productName ?? null,
+  };
+}
+
+/** Clasificación de un alumno con TODOS los campos disponibles. */
+export function classifyFor(
+  assignment?: PlanAssignmentLike | null,
+  student?: PlanStudentLike | null,
+): PlanClassification {
+  return classifyPlan(planFieldsOf(assignment, student));
 }
 
 // ── Detección de nivel (A1–C2) ────────────────────────────────────────────────

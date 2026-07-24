@@ -29,6 +29,7 @@ import {
   cefrSteps, milestoneProgress, skillsFromResponses, type SkillGauge,
 } from '@/lib/studentViz';
 import { classCategoryBadge } from '@/lib/finance';
+import { planFieldsOf } from '@/lib/productUtils';
 import { FORM_QUESTIONS } from '@/lib/formQuestions';
 import {
   asObject, fichaFromRow, isRiskSignal,
@@ -148,7 +149,7 @@ function StudentPageContent() {
   const ficha = fichaFromRow(profile);
   const nextClass = asObject<GeneratedClassIA>(profile?.next_class_content);
   const risk: RiskSignal | null = profile && isRiskSignal(profile.risk_signal) ? profile.risk_signal : null;
-  const plan = classCategoryBadge({ assignmentPlan: a.plan, assignmentObjetivo: a.objetivo });
+  const plan = classCategoryBadge(planFieldsOf(a));
   const lastAnalysis = analyses[0];
   const classNumber = calcRegisteredClassNumber(a, classRecords);
   const nextNumber = lastAnalysis?.class_number != null ? lastAnalysis.class_number + 1 : classNumber;

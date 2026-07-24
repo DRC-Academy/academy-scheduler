@@ -138,7 +138,7 @@ function StudentDetailTable({ result, assignments, onApproveReview, onApproveExc
                 <Fragment key={name}>
                   <tr style={{ borderTop: '1px solid var(--border)', cursor: 'pointer' }} onClick={() => setOpenStudent(isOpen ? null : name)}>
                     <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 600 }}>{isOpen ? '▾ ' : '▸ '}{name}</td>
-                    <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>{classifyPlan({ assignmentPlan: asgn?.plan || rows[0]?.plan, assignmentObjetivo: asgn?.objetivo }).displayName}</td>
+                    <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>{rows[0]?.planLabel ?? '—'}</td>
                     <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>{asgn?.startDate ? finDateShort(asgn.startDate) : '—'}</td>
                     <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>{antiquity}d</td>
                     <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', color: 'var(--text-primary)' }}>€{rate.toFixed(2)}</td>

@@ -10,6 +10,8 @@ import { useTeachers } from '@/lib/TeachersContext';
 import { calcRegisteredClassNumber, dbCheckStudentExists, dbSetStudentProduct, dbEnsureStudentAndAssignment } from '@/lib/db';
 import { classCategoryBadge } from '@/lib/finance';
 import { planBadgeStyle } from '@/lib/productUtils';
+import { isAssignableCell, withBaseState, baseCellOf } from '@/lib/cells';
+import { planFieldsOf } from '@/lib/productUtils';
 import { StudentAutofillCard } from '@/components/StudentAutofillCard';
 import { useStudentAutofill } from '@/lib/useStudentAutofill';
 import { checkSubscription, subBadge, type SubscriptionInfo } from '@/lib/useSubscriptionStatus';
@@ -108,7 +110,9 @@ function AssignStudentModal({
   libreCells.push({ day, hour });
   seenKeys.add(`${day}_${hour}`);
   for (const [key, cell] of Object.entries(grid)) {
-    if (cell.state === 'libre' && !seenKeys.has(key)) {
+    // isAssignableCell: incluye horarios con una recuperación puntual encima, que
+    // siguen libres para un alumno recurrente el resto de las semanas.
+    if (isAssignableCell(cell) && !seenKeys.has(key)) {
       const [d, h] = key.split('_');
       libreCells.push({ day: d, hour: h });
       seenKeys.add(key);
@@ -1639,20 +1643,23 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, gr
           const origKey = cellKey(dayNameFromDate(origDate), c.hour);
           const newKey  = cellKey(dayNameFromDate(newDate), newHour);
           const next: Grid = { ...grid };
-          const prevOrig = grid[origKey];
+          // baseCellOf: el fondo de la celda (nunca otra marca puntual), con su
+          // alumno recurrente, que puede no ser el de la clase que se mueve.
+          const baseOrig = grid[origKey] ? baseCellOf(grid[origKey]) : null;
           next[origKey] = {
             state: 'reprogramada', student: c.studentName,
             weekDate: mondayIsoOf(origDate),
-            baseState: prevOrig && prevOrig.state !== 'reprogramada' && prevOrig.state !== 'bloqueado' ? prevOrig.state : 'ocupado',
+            baseState: baseOrig ? baseOrig.state : 'ocupado',
+            baseStudent: baseOrig ? baseOrig.student : c.studentName,
             rescheduledTo: data.newDate,
           };
-          const prevNew = grid[newKey];
+          const baseNew = grid[newKey] ? baseCellOf(grid[newKey]) : null;
           // No pisar una clase recurrente real en la nueva celda.
-          if (!prevNew || prevNew.state !== 'ocupado') {
+          if (!baseNew || baseNew.state !== 'ocupado') {
             next[newKey] = {
               state: 'bloqueado', student: c.studentName,
               weekDate: mondayIsoOf(newDate),
-              baseState: prevNew && prevNew.state !== 'bloqueado' && prevNew.state !== 'reprogramada' ? prevNew.state : 'libre',
+              baseState: baseNew ? baseNew.state : 'libre',
               recoveryFor: date,
             };
           }
@@ -1787,12 +1794,7 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, gr
     // Tag de tipo de clase: la etiqueta la sigue decidiendo classCategoryBadge
     // (fuente única); acá solo se le aplica la paleta sobria de esta vista.
     const stu = studentForAssignment(c.assignment);
-    const cat = classCategoryBadge({
-      assignmentPlan: c.assignment.plan,
-      assignmentObjetivo: c.assignment.objetivo,
-      studentPlan: stu?.plan,
-      productName: stu?.productName,
-    });
+    const cat = classCategoryBadge(planFieldsOf(c.assignment, stu));
     const tagPalette = /ex[aá]men/i.test(cat.label)
       ? { background: '#eef1f8', color: '#3b5b9e' }
       : { background: '#eef4ef', color: '#2f6b3f' };
@@ -2410,12 +2412,16 @@ function TeacherContent() {
     if (data.existingAssignment) {
       for (const old of data.existingAssignment.slots ?? []) {
         if (!data.slots.some(s => s.day === old.day && s.hour === old.hour)) {
-          updatedGrid[cellKey(old.day, old.hour)] = { state: 'libre' };
+          const key = cellKey(old.day, old.hour);
+          updatedGrid[key] = withBaseState(updatedGrid[key], 'libre');
         }
       }
     }
+    // withBaseState: si la celda tiene una recuperación puntual, esta sigue pintada
+    // en su semana y el alumno recurrente ocupa el resto.
     for (const slot of data.slots) {
-      updatedGrid[cellKey(slot.day, slot.hour)] = { state: 'ocupado', student: finalName };
+      const key = cellKey(slot.day, slot.hour);
+      updatedGrid[key] = withBaseState(updatedGrid[key], 'ocupado', finalName);
     }
     await handleGridChange(updatedGrid);
     setPendingOcupado(null);

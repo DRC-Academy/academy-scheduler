@@ -179,6 +179,10 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
       setTeachers(prev => t.length > 0 ? t : prev);
       setStudents(prev => sa.students.length > 0 ? sa.students : prev);
       setAssignments(prev => sa.assignments.length > 0 ? sa.assignments : prev);
+      // Estas dos NO llevan guarda por longitud: vacío es un estado legítimo
+      // ("sin eventos", "nadie sin asignar") y colgarlo al valor anterior las
+      // dejaría pegadas para siempre. Ante un fallo real lanzan, y el catch de
+      // abajo conserva todo el estado previo.
       setScoringEvents(ev);
       setUnassignedStudents(unassigned);
       setTeacherGrids({});

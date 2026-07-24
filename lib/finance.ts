@@ -16,7 +16,7 @@
 //     nunca suma al total, independientemente de logs/capturas).
 
 import { Assignment, ClassJoinLog, ClassRecord, FinanceRate, ScoringEvent, FinancePayment, Student, ClassRecordType, FinanceManualApproval } from '@/types';
-import { classifyPlan, planBadgeStyle } from '@/lib/productUtils';
+import { classifyPlan, classifyFor, planBadgeStyle, type PlanClassification } from '@/lib/productUtils';
 
 const DAY_NAMES_BY_JSDAY = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 
@@ -35,6 +35,12 @@ export interface ClassFinanceRow {
   hour: string;            // 'HH:MM'
   studentName: string;
   plan: string;            // plan resuelto (assignments → objetivo → students → 'Inglés general')
+  // Categoría YA clasificada. La UI debe mostrar ESTO y no volver a clasificar:
+  // antes la columna "Plan" de finanzas reclasificaba con menos campos que el
+  // cálculo de la tarifa, así que la categoría en pantalla y el € de la fila de al
+  // lado podían discrepar.
+  planCategory: PlanClassification['type'];
+  planLabel: string;       // displayName de la categoría ('Exámenes' / 'Intensivo' / …)
   weeklyHours: number;
   antiquityDays: number;
   rate: number;
@@ -302,9 +308,10 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     // Plan: productName de WooCommerce (principal) → assignments.plan → objetivo
     // → students.plan → 'Inglés general'. La tarifa (planType) usa classifyPlan.
     const plan = firstNonEmpty(stu?.productName, a?.plan, a?.objetivo, stu?.plan) || 'Inglés general';
-    const planType = classifyPlan({
-      productName: stu?.productName, assignmentPlan: a?.plan, assignmentObjetivo: a?.objetivo, studentPlan: stu?.plan,
-    }).financeType;
+    // classifyFor arma SIEMPRE los 4 campos: es la única clasificación de la fila,
+    // y de ella salen tanto la tarifa como la etiqueta que ve el admin.
+    const planClass = classifyFor(a, stu);
+    const planType = planClass.financeType;
 
     const start = a?.startDate ?? firstDateByStudent.get(nkey(c.studentName));
     const antiquityDays = start ? Math.max(0, daysBetween(start, c.date)) : 0;
@@ -332,7 +339,9 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     }
 
     rows.push({
-      date: c.date, hour, studentName: c.studentName, plan, weeklyHours, antiquityDays, rate, status,
+      date: c.date, hour, studentName: c.studentName, plan,
+      planCategory: planClass.type, planLabel: planClass.displayName,
+      weeklyHours, antiquityDays, rate, status,
       classType, hasJoinLog: join, hasTranscript: isTranscript, hasMeetLink, punctuality, manuallyApproved: approved,
       subscriptionStatus, subAtJoin, subAtRecord,
     });

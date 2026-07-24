@@ -10,7 +10,7 @@
 // caso normal con Gmail en el navegador). El flujo es copiar el texto y pegarlo.
 import { useState, useEffect, useMemo, useRef, type CSSProperties } from 'react';
 import { useTeachers } from '@/lib/TeachersContext';
-import { classifyPlan } from '@/lib/productUtils';
+import { classifyFor } from '@/lib/productUtils';
 import { resolveGender, g } from '@/lib/gender';
 import { getOrCreateFormLink } from '@/lib/formClient';
 import { Teacher, Assignment, Student } from '@/types';
@@ -20,12 +20,7 @@ const DAY_NAMES_BY_JSDAY = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves'
 
 // Descripción amigable del plan para el cuerpo del email.
 function planDescription(a: Assignment, student?: Student): string {
-  const c = classifyPlan({
-    assignmentPlan:     a.plan,
-    assignmentObjetivo: a.objetivo,
-    studentPlan:        student?.plan,
-    productName:        student?.productName,
-  });
+  const c = classifyFor(a, student);
   if (c.financeType === 'examenes') return 'nuestra preparación para el examen';
   if (c.type === 'intensivo')       return 'nuestro programa intensivo';
   return 'el aprendizaje del inglés';

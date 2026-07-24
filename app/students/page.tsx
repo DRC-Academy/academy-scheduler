@@ -9,7 +9,8 @@ import { useTeachers } from '@/lib/TeachersContext';
 import { useAuth } from '@/lib/AuthContext';
 import { DAYS, cellKey } from '@/components/VisualCalendar';
 import { dbCheckStudentExists, dbSetStudentManualActive, dbActivateOneTimeAccess } from '@/lib/db';
-import { classifyPlan, planBadgeStyle } from '@/lib/productUtils';
+import { classifyFor, planBadgeStyle } from '@/lib/productUtils';
+import { isAssignableCell, withBaseState } from '@/lib/cells';
 import { checkSubscription, clearSubscriptionCache, subBadge, subCategory, type SubscriptionInfo, type SubCategory } from '@/lib/useSubscriptionStatus';
 import { CambiarProfesorModal } from '@/components/CambiarProfesorModal';
 import { Student, Grid, Assignment } from '@/types';
@@ -118,7 +119,7 @@ function EditStudentModal({ student, assignment, teacherGrid, onClose, onSave }:
     const studentName = assignment?.studentName ?? student.name;
     return Object.entries(teacherGrid)
       .filter(([, cell]) =>
-        cell.state === 'libre' ||
+        isAssignableCell(cell) ||
         (cell.state === 'ocupado' && cell.student === studentName)
       )
       .map(([key]) => { const [d, h] = key.split('_'); return { day: d, hour: h }; })
@@ -682,12 +683,15 @@ function StudentsContent() {
       const updatedGrid = { ...currentGrid };
       for (const old of editingAssignment.slots) {
         if (!slots.some(s => s.day === old.day && s.hour === old.hour)) {
-          updatedGrid[cellKey(old.day, old.hour)] = { state: 'libre' };
+          const key = cellKey(old.day, old.hour);
+          updatedGrid[key] = withBaseState(updatedGrid[key], 'libre');
         }
       }
+      // withBaseState conserva las recuperaciones puntuales que hubiera en la celda.
       for (const slot of slots) {
         if (slot.day && slot.hour) {
-          updatedGrid[cellKey(slot.day, slot.hour)] = { state: 'ocupado', student: updated.name };
+          const key = cellKey(slot.day, slot.hour);
+          updatedGrid[key] = withBaseState(updatedGrid[key], 'ocupado', updated.name);
         }
       }
       await updateTeacherGrid(editingAssignment.teacherId, updatedGrid);
@@ -781,7 +785,12 @@ function StudentsContent() {
                   const fecha = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
                   return { fecha, dias };
                 })();
-                const cls = classifyPlan({ studentPlan: s.plan ?? null, productName: planText === '—' ? null : planText });
+                // classifyFor con assignment + alumno: mismos campos que usa el
+                // cálculo de la tarifa, para que el badge no contradiga a finanzas.
+                const cls = classifyFor(
+                  studentAssignments[0] ?? null,
+                  { plan: s.plan ?? null, productName: planText === '—' ? null : planText },
+                );
                 const clsStyle = planBadgeStyle(cls.type);
                 const menuOpen = menuOpenId === s.id;
                 const hasPhone = !!s.phone?.trim();
