@@ -1,25 +1,10 @@
-// Definición de las 11 preguntas del formulario inicial del alumno.
-// Fuente única de verdad: la usa tanto la página pública del formulario
-// (render) como el endpoint /api/forms/submit (formateo para la IA).
+import { FormQuestion, SKILL_LEVELS } from './types';
 
-export type QuestionType = 'short' | 'long' | 'radio' | 'checkbox' | 'matrix';
-
-export interface FormQuestion {
-  id: string;
-  section: string;        // encabezado de sección (con emoji)
-  title: string;
-  hint?: string;
-  type: QuestionType;
-  options?: string[];     // radio / checkbox
-  rows?: string[];        // matrix (una pregunta radio por fila)
-  cols?: string[];        // matrix (opciones compartidas)
-  required: boolean;
-}
-
-// Escala compartida de la matriz de habilidades (pregunta 6).
-export const SKILL_LEVELS = ['Muy bajo', 'Básico', 'Intermedio', 'Bueno', 'Muy bueno'] as const;
-
-export const FORM_QUESTIONS: FormQuestion[] = [
+// Formulario inicial de INGLÉS GENERAL — el que se venía usando para todos.
+// Es la variante por defecto: la reciben los alumnos de inglés general, los de
+// intensivo, y los de examen cuyo examen todavía no tiene formulario propio.
+export const FORM_GENERAL: FormQuestion[] = [
+  // ── 💼 Sobre ti ──────────────────────────────────────────
   {
     id: 'q1_dedicas',
     section: '💼 Sobre ti',
@@ -28,6 +13,8 @@ export const FORM_QUESTIONS: FormQuestion[] = [
     type: 'short',
     required: true,
   },
+
+  // ── 🎯 Tu objetivo ───────────────────────────────────────
   {
     id: 'q2_objetivo',
     section: '🎯 Tu objetivo',
@@ -36,6 +23,8 @@ export const FORM_QUESTIONS: FormQuestion[] = [
     type: 'long',
     required: true,
   },
+
+  // ── 📚 Tu historia con el inglés ─────────────────────────
   {
     id: 'q3_pausa',
     section: '📚 Tu historia con el inglés',
@@ -77,6 +66,8 @@ export const FORM_QUESTIONS: FormQuestion[] = [
     type: 'long',
     required: true,
   },
+
+  // ── 🧠 Cómo aprendes ─────────────────────────────────────
   {
     id: 'q6_nivel',
     section: '🧠 Cómo aprendes',
@@ -109,6 +100,8 @@ export const FORM_QUESTIONS: FormQuestion[] = [
     ],
     required: true,
   },
+
+  // ── 🌍 El inglés en tu vida ──────────────────────────────
   {
     id: 'q10_uso',
     section: '🌍 El inglés en tu vida',
@@ -139,6 +132,8 @@ export const FORM_QUESTIONS: FormQuestion[] = [
     ],
     required: true,
   },
+
+  // ── ✨ Una última cosa ───────────────────────────────────
   {
     id: 'q12_extra',
     section: '✨ Una última cosa',
@@ -148,45 +143,3 @@ export const FORM_QUESTIONS: FormQuestion[] = [
     required: false,
   },
 ];
-
-export type FormResponses = Record<string, unknown>;
-
-// Convierte la respuesta cruda de una pregunta a texto legible.
-function answerToText(q: FormQuestion, value: unknown): string {
-  if (value == null || value === '') return '(sin responder)';
-  if (q.type === 'checkbox' && Array.isArray(value)) {
-    return value.length ? value.join(', ') : '(sin responder)';
-  }
-  if (q.type === 'matrix' && typeof value === 'object') {
-    const v = value as Record<string, string>;
-    return (q.rows ?? [])
-      .map(row => `${row}: ${v[row]?.trim() ? v[row] : '(sin responder)'}`)
-      .join(' · ');
-  }
-  return String(value);
-}
-
-// Arma un texto legible con todas las preguntas y respuestas, para pasarle a la
-// IA que genera la ficha (y como respaldo humano de las respuestas crudas).
-export function formatResponsesForAI(responses: FormResponses): string {
-  return FORM_QUESTIONS
-    .map(q => `${q.title}\n→ ${answerToText(q, responses[q.id])}`)
-    .join('\n\n');
-}
-
-// Valida que las preguntas obligatorias estén respondidas.
-export function firstUnansweredRequired(responses: FormResponses): FormQuestion | null {
-  for (const q of FORM_QUESTIONS) {
-    if (!q.required) continue;
-    const v = responses[q.id];
-    if (q.type === 'checkbox') {
-      if (!Array.isArray(v) || v.length === 0) return q;
-    } else if (q.type === 'matrix') {
-      const obj = (v ?? {}) as Record<string, string>;
-      if ((q.rows ?? []).some(row => !obj[row])) return q;
-    } else if (v == null || String(v).trim() === '') {
-      return q;
-    }
-  }
-  return null;
-}

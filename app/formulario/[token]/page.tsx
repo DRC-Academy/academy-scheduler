@@ -7,7 +7,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
-import { FORM_QUESTIONS, firstUnansweredRequired, type FormResponses, type FormQuestion } from '@/lib/formQuestions';
+import { resolveFormVariant, questionsOf, firstUnansweredRequired, type FormResponses, type FormQuestion } from '@/lib/formQuestions';
 
 // ── Emojis por habilidad (detalle visual de la matriz — no se toca formQuestions) ──
 const SKILL_EMOJI: Record<string, string> = {
@@ -68,7 +68,10 @@ export default function FormularioPage() {
 
 // ── Flujo del formulario (una pregunta a la vez) ────────────────────────────────
 function FormFlow({ token }: { token: TokenRow }) {
-  const total = FORM_QUESTIONS.length;
+  // Qué formulario le toca a este alumno, según el plan guardado en su token
+  // (inglés general, B1 Preliminary, …). Ver lib/formQuestions/index.ts.
+  const questions = questionsOf(resolveFormVariant({ plan: token.plan }));
+  const total = questions.length;
   const [step, setStep] = useState(-1);   // -1 = pantalla de bienvenida
   const [responses, setResponses] = useState<FormResponses>({});
   const [error, setError] = useState<string | null>(null);
@@ -76,7 +79,7 @@ function FormFlow({ token }: { token: TokenRow }) {
   const [sent, setSent] = useState(false);
   const [testUrl, setTestUrl] = useState<string | null>(null);
 
-  const q = step >= 0 && step < total ? FORM_QUESTIONS[step] : null;
+  const q = step >= 0 && step < total ? questions[step] : null;
 
   function setAnswer(id: string, value: unknown) {
     setResponses(prev => ({ ...prev, [id]: value }));
@@ -104,10 +107,10 @@ function FormFlow({ token }: { token: TokenRow }) {
   function prev() { setError(null); setStep(s => s - 1); }
 
   async function submit() {
-    const missing = firstUnansweredRequired(responses);
+    const missing = firstUnansweredRequired(responses, questions);
     if (missing) {
       setError(`Falta responder: ${missing.title}`);
-      const idx = FORM_QUESTIONS.findIndex(x => x.id === missing.id);
+      const idx = questions.findIndex(x => x.id === missing.id);
       if (idx >= 0) setStep(idx);
       return;
     }

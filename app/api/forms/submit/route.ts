@@ -2,7 +2,10 @@
 // PÚBLICO: no requiere login, solo un token válido en estado 'pending'.
 
 import { supabase } from '@/lib/supabase';
-import { formatResponsesForAI, firstUnansweredRequired, type FormResponses } from '@/lib/formQuestions';
+import {
+  formatResponsesForAI, firstUnansweredRequired, resolveFormVariant, questionsOf,
+  type FormResponses,
+} from '@/lib/formQuestions';
 import { generateFicha } from '@/lib/analyzeForm';
 import { fichaToColumns } from '@/lib/aiTypes';
 import { fetchTeacher, sendFormCompletedEmail } from '@/lib/emailNotifications';
@@ -34,12 +37,6 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ error: 'Faltan datos (token, responses).' }, { status: 400 });
   }
 
-  // Validación de obligatorias del lado servidor (defensa en profundidad).
-  const missing = firstUnansweredRequired(responses);
-  if (missing) {
-    return Response.json({ error: `Falta responder: ${missing.title}` }, { status: 400 });
-  }
-
   // 1) Buscar el token y validar que esté disponible.
   const { data: tk, error: tkErr } = await supabase
     .from('form_tokens')
@@ -62,9 +59,20 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ error: 'Este link ya expiró.' }, { status: 410 });
   }
 
+  // 2) Validación de obligatorias del lado servidor (defensa en profundidad).
+  //    Va DESPUÉS de leer el token (hace falta su plan para saber qué formulario
+  //    contestó) y ANTES de marcarlo completado, para que un envío inválido no
+  //    queme el link del alumno.
+  const variant = resolveFormVariant({ plan: tk.plan });
+  const questions = questionsOf(variant);
+  const missing = firstUnansweredRequired(responses, questions);
+  if (missing) {
+    return Response.json({ error: `Falta responder: ${missing.title}` }, { status: 400 });
+  }
+
   const now = new Date().toISOString();
 
-  // 2) Marcar el token como completado.
+  // 3) Marcar el token como completado.
   const { error: updErr } = await supabase
     .from('form_tokens')
     .update({ status: 'completed', completed_at: now })
@@ -75,8 +83,8 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ error: 'Error del servidor. Inténtalo de nuevo.' }, { status: 500 });
   }
 
-  // 3) Formatear respuestas + generar la ficha con IA (best-effort).
-  const responsesText = formatResponsesForAI(responses);
+  // 4) Formatear respuestas + generar la ficha con IA (best-effort).
+  const responsesText = formatResponsesForAI(responses, questions);
   const ficha = await generateFicha({
     studentName: tk.student_name,
     teacherName: tk.teacher_name,
@@ -85,7 +93,7 @@ export async function POST(request: Request): Promise<Response> {
     responsesText,
   });
 
-  // 4) Crear/actualizar la ficha del alumno.
+  // 5) Crear/actualizar la ficha del alumno.
   // La ficha se guarda en COLUMNAS SEPARADAS (initial_diagnosis, strong_points, …),
   // que es como está definida la tabla. Si la IA no pudo generarla, guardamos igual
   // las respuestas: son irreemplazables y permiten regenerar la ficha después.
@@ -118,7 +126,7 @@ export async function POST(request: Request): Promise<Response> {
     console.error('[submit] Error al guardar student_profiles:', profErr);
   }
 
-  // 5) Notificar al profesor.
+  // 6) Notificar al profesor.
   if (tk.teacher_id) {
     const { error: notifErr } = await supabase.from('notifications').insert({
       id:          `notif_form_${Date.now()}`,
@@ -139,7 +147,7 @@ export async function POST(request: Request): Promise<Response> {
     if (teacher) await sendFormCompletedEmail(teacher, tk.student_name);
   }
 
-  // 6) Preparar el link del Test de Nivel para ofrecerlo en la pantalla final del
+  // 7) Preparar el link del Test de Nivel para ofrecerlo en la pantalla final del
   //    formulario (mismo flujo). Best-effort: si falla, el alumno ve el "gracias"
   //    igual, solo que sin el CTA del test.
   let testUrl: string | null = null;

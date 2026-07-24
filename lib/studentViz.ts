@@ -14,11 +14,14 @@
 //   · total de clases del plan       → NO existe (se usa el próximo hito real).
 //   · "constancia"                   → NO existe.
 
-import { SKILL_LEVELS } from '@/lib/formQuestions';
+import { SKILL_LEVELS, questionsForResponses, skillsQuestionOf } from '@/lib/formQuestions';
 import { getNextMilestone } from '@/lib/milestones';
 
-// ── Autoevaluación por destreza (formulario inicial, pregunta q6_nivel) ───────
-export const SKILL_QUESTION_ID = 'q6_nivel';
+// ── Autoevaluación por destreza (matriz del formulario inicial) ──────────────
+// Antes acá estaba escrito a mano el id del formulario general ('q6_nivel'), así
+// que el gráfico quedaba vacío para cualquier otra variante. Ahora la matriz se
+// busca en el formulario que el alumno contestó de verdad.
+export const SKILL_QUESTION_ID = 'q6_nivel';   // solo compatibilidad; no se usa para leer
 
 export interface SkillGauge {
   label: string;        // "Hablar"
@@ -33,7 +36,8 @@ export interface SkillGauge {
 export function skillsFromResponses(
   responses: Record<string, unknown> | null | undefined,
 ): SkillGauge[] | null {
-  const raw = responses?.[SKILL_QUESTION_ID];
+  const matrix = skillsQuestionOf(questionsForResponses(responses));
+  const raw = matrix ? responses?.[matrix.id] : undefined;
   if (!raw || typeof raw !== 'object') return null;
 
   const answers = raw as Record<string, string>;

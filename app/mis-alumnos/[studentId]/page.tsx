@@ -30,7 +30,7 @@ import {
 } from '@/lib/studentViz';
 import { classCategoryBadge } from '@/lib/finance';
 import { planFieldsOf } from '@/lib/productUtils';
-import { FORM_QUESTIONS } from '@/lib/formQuestions';
+import { questionsForResponses } from '@/lib/formQuestions';
 import {
   asObject, fichaFromRow, isRiskSignal,
   type ClassAnalysisRow, type FichaIA, type GeneratedClassIA, type NextClassGuide, type RiskSignal,
@@ -749,7 +749,9 @@ function PerfilTab({ bundle, ficha, risk, teacher, onToast, onRefresh }: {
             {hasResponses && (
               <Accordion title="Respuestas del formulario">
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  {FORM_QUESTIONS.map(q => {
+                  {/* Las preguntas salen del formulario que el alumno contestó
+                      (general, B1 Preliminary, …), deducido de sus respuestas. */}
+                  {questionsForResponses(responses).map(q => {
                     const v = responses[q.id];
                     let text: string;
                     if (q.type === 'checkbox' && Array.isArray(v)) text = v.length ? (v as string[]).join(', ') : '—';
