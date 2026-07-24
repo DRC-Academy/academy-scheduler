@@ -13,12 +13,13 @@
 // formulario): las respuestas se guardan en un JSON plano `{ [id]: valor }` y de
 // ahí se deduce qué formulario contestó un alumno (ver questionsForResponses).
 
-import { classifyPlan, detectLevel } from '@/lib/productUtils';
+import { classifyPlan, detectLevel, type PlanClassification } from '@/lib/productUtils';
 import { FormQuestion, FormResponses } from './types';
 import { FORM_GENERAL } from './general';
 import { FORM_B1_PRELIMINARY } from './b1Preliminary';
 import { FORM_B2_FIRST } from './b2First';
 import { FORM_C1_ADVANCED } from './c1Advanced';
+import { FORM_INTENSIVO } from './intensivo';
 
 export type { FormQuestion, QuestionType, FormResponses } from './types';
 export { SKILL_LEVELS } from './types';
@@ -26,8 +27,9 @@ export { FORM_GENERAL } from './general';
 export { FORM_B1_PRELIMINARY } from './b1Preliminary';
 export { FORM_B2_FIRST } from './b2First';
 export { FORM_C1_ADVANCED } from './c1Advanced';
+export { FORM_INTENSIVO } from './intensivo';
 
-export type FormVariant = 'general' | 'b1_preliminary' | 'b2_first' | 'c1_advanced';
+export type FormVariant = 'general' | 'b1_preliminary' | 'b2_first' | 'c1_advanced' | 'intensivo';
 
 interface VariantDef {
   id: FormVariant;
@@ -36,8 +38,12 @@ interface VariantDef {
   /**
    * ¿Le corresponde esta variante a un alumno con este plan? Se evalúan en orden
    * y gana la primera que devuelva true; 'general' es el fallback y no se evalúa.
+   *
+   * `type` sale de classifyPlan y ya distingue examen de intensivo: un "Intensivo
+   * FCE" es 'examenes' (va al formulario del examen), y solo los intensivos SIN
+   * examen de por medio quedan como 'intensivo'.
    */
-  match?: (ctx: { isExamen: boolean; level: string | null }) => boolean;
+  match?: (ctx: { type: PlanClassification['type']; level: string | null }) => boolean;
 }
 
 export const FORM_VARIANTS: VariantDef[] = [
@@ -45,19 +51,25 @@ export const FORM_VARIANTS: VariantDef[] = [
     id: 'b1_preliminary',
     label: 'B1 Preliminary',
     questions: FORM_B1_PRELIMINARY,
-    match: ({ isExamen, level }) => isExamen && level === 'B1',
+    match: ({ type, level }) => type === 'examenes' && level === 'B1',
   },
   {
     id: 'b2_first',
     label: 'B2 First',
     questions: FORM_B2_FIRST,
-    match: ({ isExamen, level }) => isExamen && level === 'B2',
+    match: ({ type, level }) => type === 'examenes' && level === 'B2',
   },
   {
     id: 'c1_advanced',
     label: 'C1 Advanced',
     questions: FORM_C1_ADVANCED,
-    match: ({ isExamen, level }) => isExamen && level === 'C1',
+    match: ({ type, level }) => type === 'examenes' && level === 'C1',
+  },
+  {
+    id: 'intensivo',
+    label: 'Intensivo',
+    questions: FORM_INTENSIVO,
+    match: ({ type }) => type === 'intensivo',
   },
   // ← Próximo: IELTS (ojo: su plan no lleva nivel, hace falta un match propio).
   {
@@ -95,8 +107,8 @@ export function labelOf(variant: FormVariant | null | undefined): string {
  * del examen IELTS", sin nivel), va el general — que le sirve a cualquiera. Un
  * formulario de otro examen sería peor que el genérico.
  *
- * Un examen sin formulario propio todavía —B2, C1, IELTS— recibe el general.
- * Cuando se agregue el suyo al registro, empieza a usarlo sin tocar nada más.
+ * Un examen sin formulario propio todavía —IELTS— recibe el general. Cuando se
+ * agregue el suyo al registro, empieza a usarlo sin tocar nada más.
  */
 export function resolveFormVariant(fields: {
   plan?: string | null;
@@ -104,12 +116,12 @@ export function resolveFormVariant(fields: {
   studentPlan?: string | null;
   productName?: string | null;
 }): FormVariant {
-  const isExamen = classifyPlan({
+  const { type } = classifyPlan({
     assignmentPlan:     fields.plan,
     assignmentObjetivo: fields.objetivo,
     studentPlan:        fields.studentPlan,
     productName:        fields.productName,
-  }).type === 'examenes';
+  });
 
   // El nivel lo manda el plan de la ASSIGNMENT: es la decisión operativa del
   // setter sobre qué examen prepara el alumno. Solo si ahí no hay nivel se mira
@@ -123,7 +135,7 @@ export function resolveFormVariant(fields: {
     ?? detectLevel([fields.productName, fields.studentPlan, fields.objetivo].filter(Boolean).join(' '));
 
   for (const v of FORM_VARIANTS) {
-    if (v.match?.({ isExamen, level })) return v.id;
+    if (v.match?.({ type, level })) return v.id;
   }
   return 'general';
 }
