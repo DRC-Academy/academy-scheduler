@@ -8,6 +8,7 @@ import crypto from 'crypto';
 import { supabase } from '@/lib/supabase';
 import { dbDeleteStudent } from '@/lib/db';
 import { sendCancellationEmail } from '@/lib/notifications-email';
+import { captureChurnSnapshot } from '@/lib/churnSnapshot';
 
 export const runtime = 'nodejs';
 
@@ -79,6 +80,25 @@ export async function POST(req: Request): Promise<Response> {
 
     const studentId   = studentRow.id;
     const studentName = studentRow.name;
+
+    // 5.5) PREDICCIÓN DE BAJAS — capturar la "foto" de churn ANTES de borrar al
+    //      alumno (para tener el teacher_id de su asignación). Es el ejemplo REAL
+    //      etiquetado 'churned' que alimenta el dataset. Best-effort: nunca debe
+    //      romper el flujo de la baja.
+    try {
+      const byId = await supabase.from('assignments').select('teacher_id').eq('student_id', studentId).limit(1).maybeSingle();
+      let teacherId: string | null = byId.data?.teacher_id ?? null;
+      if (!teacherId) {
+        const byName = await supabase.from('assignments').select('teacher_id').eq('student_name', studentName).limit(1).maybeSingle();
+        teacherId = byName.data?.teacher_id ?? null;
+      }
+      await captureChurnSnapshot({
+        studentId, studentName, teacherId,
+        trigger: 'cancellation', label: 'churned',
+      });
+    } catch (e) {
+      console.error('[webhook cancelled] No se pudo capturar la foto de churn:', e);
+    }
 
     // 6) Eliminar al alumno en todos lados (grid + assignments + students) y
     //    notificar a cada profesor afectado (createdBy 'sistema').

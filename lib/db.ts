@@ -2317,6 +2317,72 @@ export async function dbReviewTranscript(
   }
 }
 
+// ── PREDICCIÓN DE BAJAS (churn) ─────────────────────────────────────────────────
+
+export interface ChurnRiskStudent {
+  id: string;
+  studentName: string;
+  teacherId: string | null;
+  capturedAt: string | null;
+  combinedRisk: number | null;
+  cancellations: number | null;
+  lateCount: number | null;
+  speakingTrend: string | null;
+  aiReasoning: string | null;
+  explicitQuit: boolean | null;
+}
+
+export interface ChurnOverview {
+  churnedCount: number;        // ejemplos de baja recopilados (meta ~100)
+  activeScannedCount: number;  // fotos de alumnos activos
+  atRisk: ChurnRiskStudent[];  // alumnos activos con riesgo alto (última foto)
+}
+
+// Resumen para el panel del admin. Degradación limpia si la tabla no existe aún.
+export async function dbGetChurnOverview(riskThreshold = 55): Promise<ChurnOverview> {
+  const empty: ChurnOverview = { churnedCount: 0, activeScannedCount: 0, atRisk: [] };
+  try {
+    const [churnedRes, activeRes, recentRes] = await Promise.all([
+      supabase.from('churn_snapshots').select('id', { count: 'exact', head: true }).eq('label', 'churned'),
+      supabase.from('churn_snapshots').select('id', { count: 'exact', head: true }).eq('label', 'active'),
+      supabase.from('churn_snapshots')
+        .select('id, student_name, teacher_id, captured_at, combined_risk, cancellations, late_count, speaking_trend, ai_reasoning, ai_explicit_quit')
+        .eq('label', 'active').order('captured_at', { ascending: false }).limit(300),
+    ]);
+
+    // Última foto por alumno.
+    const latest = new Map<string, ChurnRiskStudent>();
+    for (const r of (recentRes.data ?? []) as Array<Record<string, unknown>>) {
+      const key = String(r.student_name ?? '').trim().toLowerCase();
+      if (!key || latest.has(key)) continue;
+      latest.set(key, {
+        id:            r.id as string,
+        studentName:   r.student_name as string,
+        teacherId:     (r.teacher_id as string) ?? null,
+        capturedAt:    (r.captured_at as string) ?? null,
+        combinedRisk:  (r.combined_risk as number) ?? null,
+        cancellations: (r.cancellations as number) ?? null,
+        lateCount:     (r.late_count as number) ?? null,
+        speakingTrend: (r.speaking_trend as string) ?? null,
+        aiReasoning:   (r.ai_reasoning as string) ?? null,
+        explicitQuit:  (r.ai_explicit_quit as boolean) ?? null,
+      });
+    }
+    const atRisk = [...latest.values()]
+      .filter(s => (s.combinedRisk ?? 0) >= riskThreshold)
+      .sort((a, b) => (b.combinedRisk ?? 0) - (a.combinedRisk ?? 0));
+
+    return {
+      churnedCount: churnedRes.count ?? 0,
+      activeScannedCount: activeRes.count ?? 0,
+      atRisk,
+    };
+  } catch (e) {
+    console.error('[db] dbGetChurnOverview:', e);
+    return empty;
+  }
+}
+
 // Sube la captura al bucket público "class-screenshots" y devuelve su URL pública.
 export async function dbUploadClassScreenshot(file: File, teacherId: string): Promise<string> {
   const ext  = (file.name.split('.').pop() || 'jpg').toLowerCase();

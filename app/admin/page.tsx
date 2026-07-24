@@ -26,6 +26,7 @@ import type { HelpTooltipKey } from '@/lib/help-tooltips';
 import AiRiskTab from '@/components/ai/AiRiskTab';
 import LevelTestsTab from '@/components/admin/LevelTestsTab';
 import TranscriptValidationTab from '@/components/admin/TranscriptValidationTab';
+import ChurnTab from '@/components/admin/ChurnTab';
 import { triggerEmail } from '@/lib/emailClient';
 
 // ─── Edit Teacher Modal ───────────────────────────────────────────────────────
@@ -2927,7 +2928,7 @@ function AdminTool({ title, desc, children }: {
   );
 }
 
-const ADMIN_TABS = ['overview', 'teachers', 'emails', 'scoring', 'tracking', 'classlog', 'leveltests', 'validacion', 'ai', 'notifications'] as const;
+const ADMIN_TABS = ['overview', 'teachers', 'emails', 'scoring', 'tracking', 'classlog', 'leveltests', 'validacion', 'ai', 'bajas', 'notifications'] as const;
 type AdminTab = typeof ADMIN_TABS[number];
 
 function AdminContent() {
@@ -2993,6 +2994,7 @@ function AdminContent() {
     { id: 'leveltests',     label: 'Tests de nivel' },
     { id: 'validacion',     label: 'Validación' },
     { id: 'ai',             label: 'IA y Riesgo' },
+    { id: 'bajas',          label: 'Bajas' },
     { id: 'notifications',  label: 'Notificaciones' },
   ] as const;
 
@@ -3484,6 +3486,9 @@ function AdminContent() {
 
         {/* AI & RISK TAB */}
         {activeTab === 'ai' && <AiRiskTab teachers={teachers} assignments={assignments} />}
+
+        {/* CHURN / BAJAS TAB */}
+        {activeTab === 'bajas' && <ChurnTab />}
 
         {/* NOTIFICATIONS TAB */}
         {activeTab === 'notifications' && <NotificationsAdminTab />}
