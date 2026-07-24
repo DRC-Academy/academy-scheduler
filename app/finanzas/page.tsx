@@ -9,7 +9,8 @@ import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
 import { calculateTeacherFinance, TeacherFinanceResult, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge, SUBSCRIPTION_STATUS_OPTIONS } from '@/lib/finance';
 import { classifyPlan } from '@/lib/productUtils';
-import { Assignment } from '@/types';
+import { dbRevertPenalty } from '@/lib/db';
+import { Assignment, ScoringEvent } from '@/types';
 
 // ─── Finance helpers ──────────────────────────────────────────────────────────
 const FIN_MONTHS_ADMIN = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
@@ -186,6 +187,32 @@ function FinanceTab() {
   const [subFilter, setSubFilter] = useState('all'); // estado de suscripción
   const [expandedTeacher, setExpandedTeacher] = useState<string | null>(null);
   const [paying, setPaying] = useState<string | null>(null);
+  // Reversión de penalización (Bloque 4.5).
+  const [revertModal, setRevertModal] = useState<ScoringEvent | null>(null);
+  const [revertReason, setRevertReason] = useState('');
+  const [reverting, setReverting] = useState(false);
+
+  async function handleRevert() {
+    if (!revertModal || !revertReason.trim()) return;
+    setReverting(true);
+    try {
+      await dbRevertPenalty({
+        penaltyId: revertModal.id, teacherId: revertModal.teacherId, teacherName: revertModal.teacherName,
+        originalDate: (revertModal.createdAt ?? '').slice(0, 10), studentName: revertModal.studentRef,
+        reason: revertReason.trim(), adminName: approvedBy,
+      });
+      setRevertModal(null); setRevertReason('');
+      await loadFinanceData();
+    } catch (e) {
+      alert(`No se pudo revertir: ${(e as Error).message}`);
+    } finally {
+      setReverting(false);
+    }
+  }
+
+  const penaltiesOf = (teacherId: string): ScoringEvent[] => scoringEvents.filter(e =>
+    e.teacherId === teacherId && e.eventType === 'falta_sin_aviso_penalizacion' &&
+    (e.createdAt ?? '').slice(0, 7) === monthYear);
 
   useEffect(() => { loadFinanceData(); /* eslint-disable-next-line */ }, []);
 
@@ -209,7 +236,7 @@ function FinanceTab() {
   }, [teachers, students, teacherFilter, statusFilter, monthYear, assignments, classJoinLogs, classRecords, financeRates, scoringEvents, manualApprovals, financePayments]);
 
   // Solo mostrar profesores con actividad en el mes (o el filtrado explícito).
-  let visible = results.filter(r => teacherFilter || r.rows.length > 0 || r.bonusFromScoring > 0 || r.paymentStatus === 'paid');
+  let visible = results.filter(r => teacherFilter || r.rows.length > 0 || r.bonusFromScoring > 0 || r.penaltiesFromScoring < 0 || r.paymentStatus === 'paid');
   // Filtro por estado de suscripción: profesores con alguna clase de ese estado.
   if (subFilter !== 'all') {
     visible = visible.filter(r => r.rows.some(row => (row.subscriptionStatus ?? 'error') === subFilter));
@@ -358,6 +385,28 @@ function FinanceTab() {
                               onApproveReview={(student, date) => approveReviewClass(r.teacherId, student, date, approvedBy)}
                               onApproveExceed={(student, date) => approveExceedLimitClass(r.teacherId, student, date, approvedBy)}
                             />
+                            {penaltiesOf(r.teacherId).length > 0 && (
+                              <div style={{ marginTop: 14, border: '1px solid var(--border)', borderRadius: 10, padding: '12px 14px' }}>
+                                <div style={{ fontSize: 12.5, fontWeight: 700, color: '#c0392b', marginBottom: 8 }}>Penalizaciones del mes</div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                  {penaltiesOf(r.teacherId).map(p => (
+                                    <div key={p.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, fontSize: 12.5 }}>
+                                      <span style={{ color: p.reverted ? 'var(--text-muted)' : 'var(--text-secondary)', textDecoration: p.reverted ? 'line-through' : undefined }}>
+                                        {p.note.replace('Falta sin aviso registrada — ', '')} · −€{Math.abs(p.euros).toFixed(2)}
+                                      </span>
+                                      {p.reverted ? (
+                                        <span style={{ fontSize: 11.5, color: '#1f7a3d', fontWeight: 700, whiteSpace: 'nowrap' }}>Revertida{p.revertedBy ? ` · ${p.revertedBy}` : ''}</span>
+                                      ) : (
+                                        <button onClick={() => { setRevertModal(p); setRevertReason(''); }}
+                                          style={{ padding: '4px 11px', borderRadius: 7, border: '1px solid #f0c4bd', background: 'white', color: '#c0392b', cursor: 'pointer', fontSize: 11.5, fontWeight: 700, fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
+                                          Revertir
+                                        </button>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
                           </td>
                         </tr>
                       )}
@@ -369,6 +418,31 @@ function FinanceTab() {
           </div>
         )}
       </div>
+
+      {/* Modal de reversión de penalización (Bloque 4.5) */}
+      {revertModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+          onClick={e => { if (e.target === e.currentTarget && !reverting) setRevertModal(null); }}>
+          <div style={{ background: '#F7F7F5', border: '1px solid var(--border)', borderRadius: 14, padding: 24, width: '100%', maxWidth: 440 }}>
+            <div style={{ fontWeight: 700, fontSize: 16, color: '#111827', marginBottom: 8 }}>Revertir penalización</div>
+            <div style={{ fontSize: 13, color: '#5f6360', lineHeight: 1.6, marginBottom: 16 }}>
+              Se devolverán <b>5,00 €</b> al balance de <b>{revertModal.teacherName}</b> por la falta registrada
+              el {(revertModal.createdAt ?? '').slice(0, 10)}{revertModal.studentRef ? ` con ${revertModal.studentRef}` : ''}.
+            </div>
+            <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>Motivo de la reversión</label>
+            <textarea value={revertReason} onChange={e => setRevertReason(e.target.value)} rows={3} autoFocus
+              placeholder="Ej: el alumno confirmó que avisó por WhatsApp"
+              style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1.5px solid var(--border)', fontSize: 13, background: 'white', color: '#111827', fontFamily: 'inherit', boxSizing: 'border-box', resize: 'vertical' }} />
+            <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+              <button onClick={() => setRevertModal(null)} disabled={reverting} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#6b7280', cursor: reverting ? 'not-allowed' : 'pointer', fontSize: 13, fontFamily: 'inherit' }}>Cancelar</button>
+              <button onClick={handleRevert} disabled={reverting || !revertReason.trim()}
+                style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: reverting || !revertReason.trim() ? '#d1d5db' : '#1E9E3A', color: 'white', cursor: reverting || !revertReason.trim() ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+                {reverting ? 'Revirtiendo…' : 'Confirmar reversión'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

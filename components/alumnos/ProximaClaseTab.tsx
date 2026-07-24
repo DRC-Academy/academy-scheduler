@@ -242,12 +242,14 @@ export default function ProximaClaseTab(p: Props) {
 
   // ═══ ESTADO C — registrando ═══
   if (stage === 'registering') {
-    const claseDada = p.nextClass?.classNumber ?? p.nextNumber;
     const words = transcript.trim() ? transcript.trim().split(/\s+/).length : 0;
     return (
       <div style={cardStyle}>
-        <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 16 }}>
-          Registrar clase {claseDada}
+        <h2 style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 8 }}>
+          Siguiente paso: validar la clase y generar guion de la próxima clase
+        </h2>
+        <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 18 }}>
+          Pega la transcripción de Fathom para validar esta clase y preparar la siguiente.
         </div>
 
         <div className="alu-two-col" style={{ marginBottom: 16 }}>
@@ -275,7 +277,7 @@ export default function ProximaClaseTab(p: Props) {
         {error && <div style={errStyle}>{error}</div>}
 
         <div className="alu-btn-row" style={{ display: 'flex', gap: 10, marginTop: 16 }}>
-          <button onClick={analyze} style={btnPrimary}>Analizar y generar siguiente clase</button>
+          <button onClick={analyze} style={btnPrimary}>Validar y generar</button>
           <button onClick={() => { setStage('idle'); setError(null); }} style={btnSecondary}>Cancelar</button>
         </div>
       </div>

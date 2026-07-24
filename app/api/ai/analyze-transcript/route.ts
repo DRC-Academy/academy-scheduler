@@ -9,6 +9,8 @@
 import { supabase } from '@/lib/supabase';
 import { analyzeTranscript } from '@/lib/analyzeTranscript';
 import { isRiskSignal, type TranscriptIA } from '@/lib/aiTypes';
+import { computeTranscriptVerdict, type TranscriptVerdict } from '@/lib/transcriptVerdict';
+import { flagLabel } from '@/lib/transcriptValidation';
 
 interface Body {
   transcript?: string;
@@ -50,9 +52,39 @@ export async function POST(request: Request): Promise<Response> {
     if (!body.analysis || !body.transcript?.trim()) {
       return Response.json({ error: 'Faltan datos (analysis, transcript).' }, { status: 400 });
     }
-    const saved = await persistAnalysis(body, body.analysis, body.transcript.trim(), studentName);
+    const transcript = body.transcript.trim();
+
+    // BLOQUE 1 — Verificación en 3 capas ANTES de guardar. Si el veredicto es
+    // 'blocked', NO se persiste el transcript y se avisa al profesor con lenguaje
+    // neutro (el class_record ya existe → la clase queda 'a revisar' en finanzas).
+    const verdict = await computeTranscriptVerdict({
+      teacherId:   body.teacherId || '',
+      teacherName: body.teacherName?.trim() || '',
+      studentName,
+      classDate:   body.classDate || new Date().toISOString().slice(0, 10),
+      transcript,
+      level:       body.level,
+      excludeId:   body.replaceId,
+    });
+
+    if (verdict.decision === 'blocked') {
+      await notifyAdminTranscript(verdict, studentName, body, 'blocked');
+      return Response.json({
+        saved: false, blocked: true,
+        validation: verdictPayload(verdict),
+      });
+    }
+
+    const saved = await persistAnalysis(body, body.analysis, transcript, studentName, verdict);
     if (saved.error) return Response.json({ error: saved.error }, { status: 500 });
-    return Response.json({ saved: true, analysisId: body.replaceId || saved.id, replaced: !!body.replaceId });
+
+    if (verdict.decision === 'review') {
+      await notifyAdminTranscript(verdict, studentName, body, 'review');
+    }
+    return Response.json({
+      saved: true, analysisId: body.replaceId || saved.id, replaced: !!body.replaceId,
+      validation: verdictPayload(verdict),
+    });
   }
 
   // ── Analizar ──
@@ -83,14 +115,23 @@ export async function POST(request: Request): Promise<Response> {
 // Guarda en class_analyses, actualiza la ficha del alumno y avisa al admin si hay riesgo.
 // Ojo con el esquema real: el timestamp es `analyzed_at` y NO existe `teacher_name`.
 async function persistAnalysis(
-  body: Body, a: TranscriptIA, transcript: string, studentName: string,
+  body: Body, a: TranscriptIA, transcript: string, studentName: string, verdict?: TranscriptVerdict,
 ): Promise<{ id?: string; error?: string }> {
   const now = new Date().toISOString();
   const id = `ca_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const risk = isRiskSignal(a.riskSignal) ? a.riskSignal : 'verde';
 
-  // Campos que cambian tanto al insertar como al reemplazar.
-  const content = {
+  // Campos de validación (Bloque 1). Se degradan sin romper si las columnas aún no
+  // existen (el insert reintenta sin ellas más abajo).
+  const validationCols = verdict ? {
+    transcript_validation_score: verdict.structure.score,
+    transcript_validation_flags: verdict.flags,
+    ai_authenticity_check:       verdict.ai ?? null,
+    validation_status:           verdict.decision === 'review' ? 'review' : 'ok',
+  } : {};
+
+  // Campos base (sin validación) — para reintentar si esas columnas no existen aún.
+  const contentBase = {
     class_title:      a.classTitle,
     transcript,                       // NOT NULL en la base
     transcript_hash:  body.transcriptHash || null,
@@ -104,26 +145,34 @@ async function persistAnalysis(
     risk_explanation: a.riskExplanation,
     analyzed_at:      now,
   };
+  const content = { ...contentBase, ...validationCols };
+  // La columna transcript_hash es opcional en algunas bases; PGRST204 = columna
+  // inexistente → reintentamos sin las columnas de validación (Bloque 1 recién
+  // migrado). El resto del análisis se guarda igual.
+  const isMissingCol = (e: { code?: string } | null) => e?.code === 'PGRST204' || e?.code === '42703';
 
   if (body.replaceId) {
-    // Reemplazo del transcript de una clase ya registrada: se actualiza la fila
-    // existente en vez de crear una segunda para la misma clase.
-    const { error: updErr } = await supabase.from('class_analyses')
-      .update(content).eq('id', body.replaceId);
+    let { error: updErr } = await supabase.from('class_analyses').update(content).eq('id', body.replaceId);
+    if (updErr && isMissingCol(updErr)) {
+      ({ error: updErr } = await supabase.from('class_analyses').update(contentBase).eq('id', body.replaceId));
+    }
     if (updErr) {
       console.error('[analyze-transcript] Error al reemplazar class_analyses:', updErr);
       return { error: `No se pudo reemplazar el análisis: ${updErr.message}` };
     }
   } else {
-    const { error: insErr } = await supabase.from('class_analyses').insert({
+    const baseRow = {
       id,
       student_id:   body.studentId || null,
       teacher_id:   body.teacherId || null,
       student_name: studentName,
       class_number: body.classNumber ?? null,
       class_date:   body.classDate || null,
-      ...content,
-    });
+    };
+    let { error: insErr } = await supabase.from('class_analyses').insert({ ...baseRow, ...content });
+    if (insErr && isMissingCol(insErr)) {
+      ({ error: insErr } = await supabase.from('class_analyses').insert({ ...baseRow, ...contentBase }));
+    }
     if (insErr) {
       console.error('[analyze-transcript] Error al guardar class_analyses:', insErr);
       return { error: `No se pudo guardar el análisis: ${insErr.message}` };
@@ -199,4 +248,54 @@ async function notifyAdmin(
     created_by:  'ia',
   });
   if (error) console.error('[analyze-transcript] Error al crear la notificación de riesgo:', error);
+}
+
+// Payload de validación que se devuelve al cliente (mensajes neutros al profesor).
+function verdictPayload(v: TranscriptVerdict) {
+  return {
+    decision:     v.decision,
+    score:        v.structure.score,
+    flags:        v.flags,
+    flagLabels:   v.flags.map(flagLabel),
+    teacherTitle: v.teacherTitle,
+    teacherBody:  v.teacherBody,
+    similarityPct: v.cross.similarityPct,
+    ai:           v.ai ? { authentic: v.ai.authentic, confidence: v.ai.confidence, reasoning: v.ai.reasoning } : null,
+  };
+}
+
+// Aviso al admin cuando un transcript se bloquea o queda en revisión. Incluye los
+// flags legibles y, si hubo similitud alta, el registro parecido.
+async function notifyAdminTranscript(
+  v: TranscriptVerdict, studentName: string, body: Body, kind: 'blocked' | 'review',
+): Promise<void> {
+  const teacher = body.teacherName?.trim() || 'sin asignar';
+  const flagsTxt = v.flags.map(flagLabel).join(', ') || 'ninguno';
+  const simTxt = v.cross.similarMatch
+    ? `\nSimilitud ${v.cross.similarityPct}% con la clase de ${v.cross.similarMatch.studentName} (${v.cross.similarMatch.classDate ?? 's/f'}).`
+    : '';
+  const aiTxt = v.ai ? `\nIA: ${v.ai.authentic ? 'auténtica' : 'sospechosa'} (${v.ai.confidence}%) — ${v.ai.reasoning}` : '';
+
+  const notif = kind === 'blocked'
+    ? {
+        title: `🚫 Transcripción bloqueada — ${teacher}`,
+        body:  `Clase de ${studentName} (${body.classDate ?? 's/f'}). Score ${v.structure.score}/100.\nSeñales: ${flagsTxt}.${simTxt}${aiTxt}`,
+        type:  'transcript_blocked',
+      }
+    : {
+        title: `⚠️ Transcripción a revisar — ${teacher}`,
+        body:  `Clase de ${studentName} (${body.classDate ?? 's/f'}). Score ${v.structure.score}/100.\nSeñales: ${flagsTxt}.${simTxt}${aiTxt}`,
+        type:  'transcript_review',
+      };
+
+  const { error } = await supabase.from('notifications').insert({
+    id:          `notif_tx_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    target_user: null,
+    target_role: 'admin',
+    ...notif,
+    read_by:     [],
+    created_at:  new Date().toISOString(),
+    created_by:  'sistema',
+  });
+  if (error) console.error('[analyze-transcript] Error al crear la notificación de validación:', error);
 }

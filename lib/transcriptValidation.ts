@@ -1,0 +1,216 @@
+// CAPA 1 — Validación estructural del transcript (Bloque 1, detección de
+// transcripciones falsas). Función PURA: no toca la base ni la red. Analiza SOLO
+// el texto y devuelve una confianza 0-100 de que procede de una grabación real
+// (Fathom) y no de un modelo generativo.
+//
+// Umbrales:
+//   score >= 60           → válido, sin alerta
+//   score 35-59           → válido, pero marcado para revisión del admin
+//   score < 35            → inválido, bloquear el guardado
+//
+// La lógica es deliberadamente conservadora: los marcadores positivos son cosas
+// que una IA rara vez reproduce (timestamps, muletillas, frases cortadas), y los
+// negativos son marcas típicas de texto generado (markdown, prosa perfecta,
+// lenguaje de resumen).
+
+export interface ValidationResult {
+  valid: boolean;
+  score: number;        // 0-100, confianza de que es real
+  flags: string[];      // señales sospechosas detectadas
+  reason: string;
+  /** Último timestamp detectado en minutos (para la coherencia de duración, capa 2). */
+  lastTimestampMinutes: number | null;
+  /** Nº de timestamps detectados (diagnóstico). */
+  timestampCount: number;
+}
+
+const SCORE_BASE = 50;
+
+// Muletillas / marcas de habla natural (inglés + español).
+const FILLERS = [
+  'um', 'uh', 'you know', 'i mean', 'like,', 'eh', 'o sea',
+  '¿sabes?', 'sabes?', 'bueno,', 'mmm',
+];
+
+// Autocorrecciones.
+const SELF_CORRECTIONS = ['perdón', 'perdon', 'quería decir', 'queria decir', 'sorry, i mean', 'no, espera'];
+
+// Frases de resumen generado (por TIPO — cada tipo detectado resta 15).
+const SUMMARY_PHRASES = [
+  'en resumen', 'en conclusión', 'en conclusion', 'a continuación', 'a continuacion',
+  'in summary', 'overall', 'key points', 'objetivos:',
+];
+
+// Etiquetas legibles en español de cada flag (para el panel del admin).
+export const FLAG_LABELS: Record<string, string> = {
+  formato_markdown:        'Formato Markdown (encabezados/listas/negritas)',
+  sin_timestamps:          'Sin marcas de tiempo',
+  prosa_demasiado_limpia:  'Prosa demasiado limpia (frases largas y perfectas)',
+  sin_habla_natural:       'Sin muletillas ni habla natural',
+  lenguaje_de_resumen:     'Lenguaje de resumen generado',
+  demasiado_corto:         'Demasiado corto para la duración de la clase',
+  alternancia_artificial:  'Alternancia profesor/alumno artificialmente perfecta',
+  sin_acceso_registrado:   'Sin acceso registrado por el botón "Ingresar a clase"',
+  duracion_insuficiente:   'Duración insuficiente según las marcas de tiempo',
+  registro_tardio:         'Registrado más de 7 días después de la clase',
+  alta_similitud:          'Muy similar a otra transcripción reciente del profesor',
+  ia_no_autentico:         'La IA la considera probablemente generada',
+};
+
+export function flagLabel(flag: string): string {
+  return FLAG_LABELS[flag] ?? flag;
+}
+
+function countMatches(text: string, re: RegExp): number {
+  const m = text.match(re);
+  return m ? m.length : 0;
+}
+
+// Convierte "1:05:22" o "12:34" a minutos (número). Devuelve null si no parsea.
+function tsToMinutes(ts: string): number | null {
+  const parts = ts.split(':').map(n => parseInt(n, 10));
+  if (parts.some(n => Number.isNaN(n))) return null;
+  if (parts.length === 3) return parts[0] * 60 + parts[1] + parts[2] / 60;
+  if (parts.length === 2) return parts[0] + parts[1] / 60;
+  return null;
+}
+
+export function validateTranscriptStructure(
+  transcript: string,
+  opts: { durationMinutes?: number } = {},
+): ValidationResult {
+  const text = (transcript ?? '').trim();
+  const lower = text.toLowerCase();
+  const lines = text.split(/\r?\n/);
+  const words = text.split(/\s+/).filter(Boolean);
+  const wordCount = words.length;
+  const durationMinutes = opts.durationMinutes ?? 60;
+
+  let score = SCORE_BASE;
+  const flags: string[] = [];
+
+  // ── MARCADORES POSITIVOS ────────────────────────────────────────────────────
+
+  // Timestamps tipo 0:00 / 12:34 / 1:05:22.
+  const tsRegex = /\b\d{1,2}:\d{2}(?::\d{2})?\b/g;
+  const tsMatches = text.match(tsRegex) ?? [];
+  const timestampCount = tsMatches.length;
+  if (timestampCount >= 10) score += 30;
+  else if (timestampCount >= 3) score += 15;
+
+  // Último timestamp en minutos (para la capa 2, coherencia de duración).
+  let lastTimestampMinutes: number | null = null;
+  for (const ts of tsMatches) {
+    const m = tsToMinutes(ts);
+    if (m != null && (lastTimestampMinutes == null || m > lastTimestampMinutes)) lastTimestampMinutes = m;
+  }
+
+  // Etiquetas de hablante repetidas: "Nombre:" al inicio de línea (mín. 15).
+  const speakerLineRe = /^\s*([\p{Lu}][\p{L}.'-]*(?:\s[\p{L}.'-]+){0,3})\s*:/u;
+  const speakers: string[] = [];
+  for (const ln of lines) {
+    const m = ln.match(speakerLineRe);
+    if (m) speakers.push(m[1].trim().toLowerCase());
+  }
+  if (speakers.length >= 15) score += 20;
+
+  // Muletillas / habla natural (total de apariciones).
+  let fillerHits = 0;
+  for (const f of FILLERS) {
+    fillerHits += countMatches(lower, new RegExp(escapeRe(f), 'g'));
+  }
+  if (fillerHits >= 8) score += 20;
+
+  // Frases incompletas / cortadas: línea que termina sin puntuación y la siguiente
+  // continúa con minúscula.
+  let cutPhrases = 0;
+  for (let i = 0; i < lines.length - 1; i++) {
+    const cur = lines[i].trim();
+    const nxt = lines[i + 1].trim();
+    if (!cur || !nxt) continue;
+    const endsNoPunct = !/[.!?…:]$/.test(cur);
+    const nextLower = /^[a-záéíóúñ]/.test(nxt);
+    if (endsNoPunct && nextLower) cutPhrases++;
+  }
+  if (cutPhrases >= 5) score += 15;
+
+  // Autocorrecciones.
+  const hasSelfCorrection = SELF_CORRECTIONS.some(s => lower.includes(s));
+  if (hasSelfCorrection) score += 10;
+
+  // ── MARCADORES NEGATIVOS ────────────────────────────────────────────────────
+
+  // Estructura Markdown: encabezados (#), listas (-/*), **negrita**.
+  const hasHeading = /^\s{0,3}#{1,6}\s/m.test(text);
+  const hasBullets = (text.match(/^\s*[-*]\s+\S/gm) ?? []).length >= 3;
+  const hasBold    = /\*\*[^*\n]+\*\*/.test(text);
+  if (hasHeading || hasBullets || hasBold) {
+    score -= 30;
+    flags.push('formato_markdown');
+  }
+
+  // Ausencia total de timestamps.
+  if (timestampCount === 0) {
+    score -= 25;
+    flags.push('sin_timestamps');
+  }
+
+  // Prosa demasiado limpia: media de longitud de frase > 25 palabras.
+  const sentences = text.split(/[.!?]+/).map(s => s.trim()).filter(s => s.split(/\s+/).length >= 2);
+  const avgSentenceWords = sentences.length
+    ? sentences.reduce((s, x) => s + x.split(/\s+/).filter(Boolean).length, 0) / sentences.length
+    : 0;
+  if (avgSentenceWords > 25) {
+    score -= 20;
+    flags.push('prosa_demasiado_limpia');
+  }
+
+  // Ausencia total de muletillas.
+  if (fillerHits === 0) {
+    score -= 20;
+    flags.push('sin_habla_natural');
+  }
+
+  // Lenguaje de resumen generado (−15 por cada TIPO detectado).
+  const summaryTypes = SUMMARY_PHRASES.filter(p => lower.includes(p));
+  if (summaryTypes.length > 0) {
+    score -= 15 * summaryTypes.length;
+    flags.push('lenguaje_de_resumen');
+  }
+
+  // Longitud insuficiente para la duración.
+  const minWords = durationMinutes >= 60 ? 800 : durationMinutes >= 30 ? 400 : 200;
+  if (wordCount < minWords) {
+    score -= 25;
+    flags.push('demasiado_corto');
+  }
+
+  // Alternancia perfecta profesor/alumno: si hay diálogo etiquetado (≥10 turnos)
+  // con exactamente 2 hablantes y NUNCA dos turnos seguidos del mismo → artificial.
+  const distinctSpeakers = new Set(speakers);
+  if (speakers.length >= 10 && distinctSpeakers.size === 2) {
+    let consecutiveSame = false;
+    for (let i = 1; i < speakers.length; i++) {
+      if (speakers[i] === speakers[i - 1]) { consecutiveSame = true; break; }
+    }
+    if (!consecutiveSame) {
+      score -= 15;
+      flags.push('alternancia_artificial');
+    }
+  }
+
+  // ── Límites y veredicto ─────────────────────────────────────────────────────
+  score = Math.max(0, Math.min(100, Math.round(score)));
+
+  const valid = score >= 35;
+  const reason =
+    score >= 60 ? 'La estructura del texto es coherente con una transcripción real de Fathom.'
+    : score >= 35 ? 'La estructura presenta señales dudosas; se marca para revisión del equipo.'
+    : 'La estructura no coincide con una transcripción real de Fathom.';
+
+  return { valid, score, flags, reason, lastTimestampMinutes, timestampCount };
+}
+
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}

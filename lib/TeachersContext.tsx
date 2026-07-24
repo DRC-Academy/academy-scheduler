@@ -20,6 +20,7 @@ import {
   dbGetFinanceRates, dbGetFinancePayments, dbMarkPaymentPaid,
   dbGetManualApprovals, dbAddManualApproval,
   dbChangeStudentTeacher, dbAddRescheduleRecord, dbAddRecoveryClass, dbRemoveAssignment,
+  dbApplyFaltaSideEffects,
 } from '@/lib/db';
 import type { AffectedTeacher, ChangeTeacherParams, DeleteTeacherResult } from '@/lib/db';
 import type { AssignedSlot } from '@/types';
@@ -494,6 +495,13 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     const url = screenshotFile ? await dbUploadClassScreenshot(screenshotFile, teacherId) : '';
     const record = await dbAddClassRecord(teacherId, teacherName, studentName, date, time, url, classType, comment, subscriptionStatus);
     setClassRecords(prev => [record, ...prev]);
+
+    // Efectos de falta (Bloque 4): penalización -5 € por falta sin aviso + alertas
+    // internas al admin. Best-effort; luego refrescamos scoring para reflejar el balance.
+    if (classType === 'falta_sin_aviso' || classType === 'cancelacion_hora' || classType === 'falta_con_aviso') {
+      await dbApplyFaltaSideEffects({ teacherId, teacherName, studentName, classDate: date, classType });
+      if (classType === 'falta_sin_aviso') await loadScoringEvents();
+    }
   }
 
   // Adjunta una captura a una clase puntual existente (o la crea para esa fecha).

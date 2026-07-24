@@ -25,6 +25,7 @@ import { HelpTooltip } from '@/components/ui';
 import type { HelpTooltipKey } from '@/lib/help-tooltips';
 import AiRiskTab from '@/components/ai/AiRiskTab';
 import LevelTestsTab from '@/components/admin/LevelTestsTab';
+import TranscriptValidationTab from '@/components/admin/TranscriptValidationTab';
 import { triggerEmail } from '@/lib/emailClient';
 
 // ─── Edit Teacher Modal ───────────────────────────────────────────────────────
@@ -2926,11 +2927,11 @@ function AdminTool({ title, desc, children }: {
   );
 }
 
-const ADMIN_TABS = ['overview', 'teachers', 'emails', 'scoring', 'tracking', 'classlog', 'leveltests', 'ai', 'notifications'] as const;
+const ADMIN_TABS = ['overview', 'teachers', 'emails', 'scoring', 'tracking', 'classlog', 'leveltests', 'validacion', 'ai', 'notifications'] as const;
 type AdminTab = typeof ADMIN_TABS[number];
 
 function AdminContent() {
-  const { teachers, assignments, students, classRecords, addTeacher, deleteTeacher, loadingTeachers, getTeacherGrid, updateTeacherGrid, checkAndRunResets, reloadAll, updateTeacherInfo } = useTeachers();
+  const { teachers, assignments, students, classRecords, scoringEvents, addTeacher, deleteTeacher, loadingTeachers, getTeacherGrid, updateTeacherGrid, checkAndRunResets, reloadAll, updateTeacherInfo } = useTeachers();
   const [selectedTeacher, setSelectedTeacher] = useState<string | null>(null);
   const [showNewTeacher, setShowNewTeacher] = useState(false);
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');
@@ -2950,6 +2951,13 @@ function AdminContent() {
   const [editingStartDate, setEditingStartDate] = useState<Record<string, string>>({});
   const [savingStartDate, setSavingStartDate] = useState<Set<string>>(new Set());
   const [emailDetail, setEmailDetail] = useState<string | null>(null);   // profe con el detalle de emails abierto
+  const [faltasDetail, setFaltasDetail] = useState<string | null>(null); // profe con el detalle de faltas del mes abierto
+
+  // Contador interno de faltas sin aviso del mes (SOLO admin). Excluye las revertidas.
+  const faltasMonth = new Date().toISOString().slice(0, 7);
+  const faltasOfTeacher = (teacherId: string) => scoringEvents.filter(e =>
+    e.teacherId === teacherId && e.eventType === 'falta_sin_aviso_penalizacion' &&
+    (e.createdAt ?? '').slice(0, 7) === faltasMonth && !e.reverted);
 
   // Referencia temporal para el estado de los emails de presentación (no requiere
   // reloj vivo en admin: se recalcula al recargar / cambiar de pestaña).
@@ -2983,6 +2991,7 @@ function AdminContent() {
     { id: 'tracking',       label: 'Seguimiento' },
     { id: 'classlog',       label: 'Registro de clases' },
     { id: 'leveltests',     label: 'Tests de nivel' },
+    { id: 'validacion',     label: 'Validación' },
     { id: 'ai',             label: 'IA y Riesgo' },
     { id: 'notifications',  label: 'Notificaciones' },
   ] as const;
@@ -3166,7 +3175,7 @@ function AdminContent() {
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}>
                     <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)' }}>
-                      {['Nombre', 'Especialidades', 'Estado', 'Nivel', 'Carga', 'Cupos', '📧 Emails', ''].map(h => (
+                      {['Nombre', 'Especialidades', 'Estado', 'Nivel', 'Carga', 'Cupos', '📧 Emails', 'Faltas mes', ''].map(h => (
                         <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{h}</th>
                       ))}
                     </tr>
@@ -3224,6 +3233,20 @@ function AdminContent() {
                             </button>
                           </td>
                           <td style={{ padding: '11px 14px' }}>
+                            {(() => {
+                              const n = faltasOfTeacher(t.id).length;
+                              const color = n >= 4 ? '#dc2626' : n >= 2 ? '#ea580c' : 'var(--text-muted)';
+                              return (
+                                <button
+                                  onClick={() => { if (n > 0) setFaltasDetail(faltasDetail === t.id ? null : t.id); }}
+                                  style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 20, border: `1px solid ${n >= 2 ? color : 'var(--border)'}`, background: n >= 4 ? 'rgba(239,68,68,0.08)' : n >= 2 ? 'rgba(249,115,22,0.08)' : 'transparent', color, fontSize: 12, fontWeight: 700, cursor: n > 0 ? 'pointer' : 'default', fontFamily: 'inherit' }}>
+                                  {n}
+                                  {n > 0 && <span style={{ opacity: 0.7 }}>{faltasDetail === t.id ? '▲' : '▼'}</span>}
+                                </button>
+                              );
+                            })()}
+                          </td>
+                          <td style={{ padding: '11px 14px' }}>
                             <div style={{ display: 'flex', gap: 6 }}>
                               <button onClick={() => setEditTeacher(t)} style={{ padding: '5px 10px', borderRadius: 7, border: '1px solid rgba(30,158,58,0.35)', background: 'rgba(30,158,58,0.07)', color: '#1E9E3A', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>
                                 Editar
@@ -3236,12 +3259,26 @@ function AdminContent() {
                         </tr>
                         {emailOpen && presSum.pending.length > 0 && (
                           <tr style={{ background: 'var(--bg-surface-2)' }}>
-                            <td colSpan={8} style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)' }}>
+                            <td colSpan={9} style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)' }}>
                               <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 6 }}>{t.name} — Email pendiente:</div>
                               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                                 {presSum.pending.map((p, i) => (
                                   <div key={i} style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
                                     {p.studentName} · Asignada hace {p.hours}h · <span style={{ fontWeight: 700, color: p.statusKind === 'overdue' ? '#ef4444' : p.statusKind === 'at_risk' ? '#f97316' : '#b8860b' }}>{p.statusLabel}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                        {faltasDetail === t.id && (
+                          <tr style={{ background: 'var(--bg-surface-2)' }}>
+                            <td colSpan={9} style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)' }}>
+                              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 6 }}>{t.name} — Faltas sin aviso de este mes:</div>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                {faltasOfTeacher(t.id).map((e, i) => (
+                                  <div key={i} style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                                    {e.note.replace('Falta sin aviso registrada — ', '')}
                                   </div>
                                 ))}
                               </div>
@@ -3441,6 +3478,9 @@ function AdminContent() {
         {activeTab === 'classlog' && <ClassLogTab />}
 
         {activeTab === 'leveltests' && <LevelTestsTab />}
+
+        {/* TRANSCRIPT VALIDATION TAB */}
+        {activeTab === 'validacion' && <TranscriptValidationTab />}
 
         {/* AI & RISK TAB */}
         {activeTab === 'ai' && <AiRiskTab teachers={teachers} assignments={assignments} />}

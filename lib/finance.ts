@@ -67,6 +67,7 @@ export interface TeacherFinanceResult {
   montoARevisar: number;
   montoRetenido: number;
   bonusFromScoring: number;
+  penaltiesFromScoring: number;   // suma NEGATIVA de penalizaciones del mes (Bloque 4)
   totalAPagar: number;
   paymentStatus: 'pending' | 'paid';
   paidAt?: string;
@@ -114,6 +115,15 @@ export interface ClassTranscriptRef {
   transcript?: string | null;
   /** Ingreso al que pertenece este transcript. Cuando viene, manda sobre la fecha. */
   join_log_id?: string | null;
+  /** Validación (Bloque 1): 'review'/'rejected' NO valen como segundo factor. */
+  validation_status?: string | null;
+}
+
+// Un transcript verifica la clase (segundo factor) salvo que esté pendiente de
+// revisión o rechazado por el admin. Legacy (sin columna / null) → válido.
+function transcriptCounts(t: ClassTranscriptRef | undefined): boolean {
+  if (!t || !hasText(t)) return false;
+  return t.validation_status !== 'review' && t.validation_status !== 'rejected';
 }
 
 /** Fecha efectiva de un análisis: class_date y, si falta, el día de analyzed_at. */
@@ -239,9 +249,10 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     c.log = l;
   }
   for (const r of myRecords) {
-    // 'reprogramada' es solo una constancia de una clase movida: NO cuenta para el
-    // pago (la clase se contará cuando efectivamente se dé). Se ignora acá.
-    if (r.classType === 'reprogramada') continue;
+    // Constancias que NO cuentan para el pago (clase no dada): 'reprogramada'
+    // (movida), 'cancelada_con_preaviso' (cancelada >24h) y 'falta_con_aviso'
+    // (falta avisada). Se ignoran en el conteo.
+    if (r.classType === 'reprogramada' || r.classType === 'cancelada_con_preaviso' || r.classType === 'falta_con_aviso') continue;
     if (!inMonth(r.classDate)) continue;
     let c = matchCand(r.studentName, r.classDate, 1, x => !!x.record);
     if (!c) { c = { studentName: r.studentName, date: r.classDate }; cands.push(c); }
@@ -283,9 +294,9 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     const punctuality = log?.punctuality;
     const isNormalType = classType === 'normal' || classType === 'recuperacion';
     const isFaltaType  = classType === 'falta_sin_aviso' || classType === 'cancelacion_hora';
-    // Segundo factor: transcript con texto. Las faltas/cancelaciones tienen sus
-    // propias reglas y no lo requieren (igual que antes con la captura).
-    const isTranscript = !!c.transcript && isNormalType;
+    // Segundo factor: transcript con texto Y validado (no en revisión/rechazado).
+    // Las faltas/cancelaciones tienen sus propias reglas y no lo requieren.
+    const isTranscript = transcriptCounts(c.transcript) && isNormalType;
     const hasMeetLink = !!(a?.meetLink && a.meetLink.trim());
 
     // Plan: productName de WooCommerce (principal) → assignments.plan → objetivo
@@ -365,11 +376,25 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
   // Alerta: ¿alguna clase pagable tuvo suscripción ≠ active al momento de darse?
   const hasInactiveSubPayable = pagables.some(r => r.subscriptionStatus && r.subscriptionStatus !== 'active');
 
-  const bonusFromScoring = scoringEvents
-    .filter(e => e.teacherId === teacherId && (e.euros ?? 0) > 0 && (e.createdAt ?? '').slice(0, 7) === monthYear)
+  // Eventos de scoring de ESTE mes que afectan al balance. Se excluyen las
+  // penalizaciones revertidas (quedan solo como constancia tachada) y sus eventos
+  // compensatorios (audit-only), para que una reversión sea neutra en el total.
+  const scoringThisMonth = scoringEvents.filter(e =>
+    e.teacherId === teacherId &&
+    (e.createdAt ?? '').slice(0, 7) === monthYear &&
+    !e.reverted &&
+    e.eventType !== 'penalizacion_revertida');
+
+  const bonusFromScoring = scoringThisMonth
+    .filter(e => (e.euros ?? 0) > 0)
+    .reduce((s, e) => s + (e.euros ?? 0), 0);
+  // Suma NEGATIVA (penalizaciones: falta sin aviso, etc.). FIX del bug histórico:
+  // antes solo se sumaban los euros > 0, así que las penalizaciones no restaban.
+  const penaltiesFromScoring = scoringThisMonth
+    .filter(e => (e.euros ?? 0) < 0)
     .reduce((s, e) => s + (e.euros ?? 0), 0);
 
-  let totalAPagar = montoPagable + bonusFromScoring;
+  let totalAPagar = montoPagable + bonusFromScoring + penaltiesFromScoring;
 
   let paymentStatus: 'pending' | 'paid' = 'pending';
   let paidAt: string | undefined;
@@ -388,7 +413,7 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     totalNoCobrable: noCobrable.length,
     hasInactiveSubPayable,
     montoPagable, montoARevisar, montoRetenido,
-    bonusFromScoring, totalAPagar,
+    bonusFromScoring, penaltiesFromScoring, totalAPagar,
     paymentStatus, paidAt,
   };
 }

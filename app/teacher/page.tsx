@@ -1370,8 +1370,58 @@ function RescheduleModal({ studentName, currentDate, currentHour, saving, onConf
   );
 }
 
+// ─── Modal "Cancelar clase" (Bloque 4.4) ──────────────────────────────────────
+function CancelClassModal({ studentName, currentDate, currentHour, saving, onConfirm, onClose }: {
+  studentName: string; currentDate: string; currentHour: string; saving: boolean;
+  onConfirm: (reason: string, withNotice: boolean, hoursNotice: number) => void;
+  onClose: () => void;
+}) {
+  const [reason, setReason] = useState('');
+  // Horas de antelación entre AHORA y la clase.
+  const classDt = new Date(`${currentDate}T${(currentHour || '00:00').slice(0, 5)}:00`);
+  const hoursNotice = isNaN(classDt.getTime()) ? 0 : Math.max(0, (classDt.getTime() - Date.now()) / 3_600_000);
+  const withNotice = hoursNotice > 24;
+  const hoursLabel = Math.round(hoursNotice);
+  const canConfirm = !!reason.trim() && !saving;
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 85, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+      onClick={e => { if (e.target === e.currentTarget && !saving) onClose(); }}>
+      <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 14, padding: 24, width: '100%', maxWidth: 420 }}>
+        <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)', marginBottom: 4 }}>Cancelar clase</div>
+        <div style={{ fontSize: 12.5, color: 'var(--text-muted)', marginBottom: 16 }}>{studentName} — {fmtDateDMY(currentDate)} {currentHour}</div>
+
+        {withNotice ? (
+          <div style={{ fontSize: 12.5, color: '#1f7a3d', background: 'rgba(30,158,58,0.08)', border: '1px solid rgba(30,158,58,0.3)', borderRadius: 8, padding: '10px 12px', marginBottom: 16, lineHeight: 1.5 }}>
+            <b>Cancelación con antelación suficiente</b><br />
+            Faltan {hoursLabel} horas para la clase. Esta cancelación no genera penalización.
+          </div>
+        ) : (
+          <div style={{ fontSize: 12.5, color: '#b45309', background: 'rgba(255,196,0,0.14)', border: '1px solid rgba(255,196,0,0.5)', borderRadius: 8, padding: '10px 12px', marginBottom: 16, lineHeight: 1.5 }}>
+            <b>Cancelación sin antelación suficiente</b><br />
+            Faltan solo {hoursLabel} horas para la clase. Esta cancelación se registrará como falta y puede afectar a tu balance.
+          </div>
+        )}
+
+        <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>Motivo</label>
+        <textarea value={reason} onChange={e => setReason(e.target.value)} rows={3} autoFocus
+          placeholder="Explica brevemente el motivo…"
+          style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1.5px solid var(--border)', background: 'var(--bg-surface-2)', color: 'var(--text-primary)', fontSize: 13, fontFamily: 'inherit', boxSizing: 'border-box', resize: 'vertical', marginBottom: 18 }} />
+
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button onClick={onClose} disabled={saving} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: saving ? 'not-allowed' : 'pointer', fontSize: 13, fontFamily: 'inherit' }}>Cerrar</button>
+          <button onClick={() => canConfirm && onConfirm(reason.trim(), withNotice, hoursNotice)} disabled={!canConfirm}
+            style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: !canConfirm ? 'var(--bg-surface-3)' : withNotice ? '#1E9E3A' : '#ea580c', color: !canConfirm ? 'var(--text-muted)' : 'white', cursor: canConfirm ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+            {saving ? 'Cancelando…' : 'Confirmar cancelación'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Teacher Upcoming Classes Tab ─────────────────────────────────────────────
-function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, grid, onGridChange, updateMeetLink, logClassJoin, addRescheduleRecord, formIndex, refreshFormIndex }: {
+function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, grid, onGridChange, updateMeetLink, logClassJoin, addRescheduleRecord, registerClassRecord, formIndex, refreshFormIndex }: {
   teacher: Teacher;
   myAssignments: Assignment[];
   students: Student[];
@@ -1381,11 +1431,14 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, gr
   updateMeetLink: (assignmentId: string, link: string) => Promise<void>;
   logClassJoin: (teacherId: string, teacherName: string, studentName: string, scheduledDate: string, scheduledTime: string, subscriptionStatus?: string, enteredWithoutActive?: boolean, subscriptionDaysRemaining?: number | null) => Promise<void>;
   addRescheduleRecord: (p: { teacherId: string; teacherName: string; studentName: string; originalDate: string; originalTime?: string; newDate: string; newTime?: string; classType: 'reprogramada' | 'cancelacion_hora'; comment: string }) => Promise<void>;
+  registerClassRecord: (teacherId: string, studentName: string, date: string, time: string | undefined, screenshotFile: File | null, classType?: import('@/types').ClassRecordType, comment?: string) => Promise<void>;
   formIndex: FormIndex;
   refreshFormIndex: () => void;
 }) {
   const [rescheduleModal, setRescheduleModal] = useState<{ c: TodayClass; date: string } | null>(null);
   const [savingReschedule, setSavingReschedule] = useState(false);
+  const [cancelModal, setCancelModal] = useState<{ c: TodayClass; date: string } | null>(null);
+  const [savingCancel, setSavingCancel] = useState(false);
   const [linkModal, setLinkModal] = useState<{ assignment: Assignment; value: string } | null>(null);
   const [presentationModal, setPresentationModal] = useState<Assignment | null>(null);
   const { isSent, markSent } = usePresentationSent(teacher.id);
@@ -1614,6 +1667,30 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, gr
     }
   }
 
+  async function handleCancelConfirm(reason: string, withNotice: boolean, hoursNotice: number) {
+    if (!cancelModal) return;
+    const { c, date } = cancelModal;
+    setSavingCancel(true);
+    try {
+      // >24h → constancia sin penalización; <24h → falta sin aviso (penaliza -5 €).
+      const classType = withNotice ? 'cancelada_con_preaviso' : 'falta_sin_aviso';
+      await registerClassRecord(teacher.id, c.studentName, date, c.hour, null, classType, reason);
+      // Email al alumno + aviso al admin (best-effort).
+      fetch('/api/classes/cancel', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          studentEmail: subEmailForAssignment(c.assignment),
+          studentName: c.studentName, teacherName: teacher.name, teacherId: teacher.id,
+          dateLabel: fmtDateDMY(date), timeLabel: c.hour, hoursNotice, reason, withNotice,
+        }),
+      }).catch(() => {});
+      setCancelModal(null);
+      showToast(withNotice ? '✅ Clase cancelada — avisamos al alumno' : '⚠️ Registrada como falta — avisamos al alumno');
+    } finally {
+      setSavingCancel(false);
+    }
+  }
+
   async function handleSaveLink() {
     if (!linkModal) return;
     setSavingLink(true);
@@ -1807,6 +1884,12 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, gr
                       onClick={() => { setOpenMenu(null); setRescheduleModal({ c, date }); }}>
                       Reprogramar clase
                     </button>
+                    {!passed && !rescheduled && (
+                      <button className="mc-menu-item" role="menuitem"
+                        onClick={() => { setOpenMenu(null); setCancelModal({ c, date }); }}>
+                        Cancelar clase
+                      </button>
+                    )}
                     <button className="mc-menu-item" role="menuitem"
                       onClick={() => { setOpenMenu(null); setLinkModal({ assignment: c.assignment, value: c.meetLink ?? '' }); }}>
                       {hasLink ? 'Cambiar enlace' : 'Definir enlace'}
@@ -2073,6 +2156,18 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, gr
         />
       )}
 
+      {/* Cancel modal (Bloque 4.4) */}
+      {cancelModal && (
+        <CancelClassModal
+          studentName={cancelModal.c.studentName}
+          currentDate={cancelModal.date}
+          currentHour={cancelModal.c.hour}
+          saving={savingCancel}
+          onConfirm={handleCancelConfirm}
+          onClose={() => setCancelModal(null)}
+        />
+      )}
+
       {/* Toast */}
       {toast && (
         <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', background: '#1E9E3A', color: 'white', padding: '10px 22px', borderRadius: 24, fontSize: 14, fontWeight: 700, zIndex: 90, boxShadow: '0 4px 16px rgba(0,0,0,0.25)' }}>
@@ -2140,7 +2235,7 @@ type TeacherTab = typeof TEACHER_TABS[number];
 
 function TeacherContent() {
   const { user } = useAuth();
-  const { teachers, students, assignments, scoringEvents, notifications, classRecords, getTeacherGrid, updateTeacherGrid, addStudent, addAssignment, updateAssignmentStartDate, updateAssignmentSlots, reloadAll, updateTeacherSpecialties, loadNotifications, markNotificationRead, updateMeetLink, logClassJoin, addRecoveryClass, addRescheduleRecord } = useTeachers();
+  const { teachers, students, assignments, scoringEvents, notifications, classRecords, getTeacherGrid, updateTeacherGrid, addStudent, addAssignment, updateAssignmentStartDate, updateAssignmentSlots, reloadAll, updateTeacherSpecialties, loadNotifications, markNotificationRead, updateMeetLink, logClassJoin, addRecoveryClass, addRescheduleRecord, registerClassRecord } = useTeachers();
   const [activeTab, setActiveTab] = useState<TeacherTab>('calendar');
 
   // El campanario del header navega a /teacher?tab=notifications. Sincronizamos
@@ -2612,6 +2707,7 @@ function TeacherContent() {
             updateMeetLink={updateMeetLink}
             logClassJoin={logClassJoin}
             addRescheduleRecord={addRescheduleRecord}
+            registerClassRecord={registerClassRecord}
             formIndex={formIndex}
             refreshFormIndex={refreshFormIndex}
           />

@@ -76,6 +76,7 @@ function StudentPageContent() {
   const [tab, setTab] = useState<TabId>('perfil');
   const [toast, setToast] = useState<string | null>(null);
   const [pendingTarget, setPendingTarget] = useState<PendingClass | null>(null);
+  const [shareOpen, setShareOpen] = useState(false);   // "Compartir progreso" (visible en los 3 tabs)
 
   const myAssignments = useMemo(
     () => (teacher ? assignments.filter(a => a.teacherId === teacher.id) : []),
@@ -227,6 +228,20 @@ function StudentPageContent() {
                   .filter(Boolean).join(' · ')}
               </div>
             </div>
+
+            {/* Compartir progreso: destacado en amarillo DRC, visible en los 3 tabs. */}
+            <button
+              onClick={() => setShareOpen(true)}
+              title="Genera un enlace para que vea su evolución"
+              style={{
+                flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 7,
+                padding: '10px 16px', borderRadius: 10, border: 'none', cursor: 'pointer',
+                background: '#FFC400', color: '#1A1A1A', fontSize: 13.5, fontWeight: 600, fontFamily: 'inherit',
+                boxShadow: '0 2px 8px rgba(255,196,0,0.35)',
+              }}
+            >
+              📤 Compartir progreso con el alumno
+            </button>
           </div>
 
           <div className="sp-hero-grid">
@@ -341,6 +356,17 @@ function StudentPageContent() {
             teacher={{ id: teacher.id, name: teacher.name }}
             onClose={() => setPendingTarget(null)}
             onSaved={async () => { await load(); await loadClassJoinLogs(); }}
+            onToast={showToast}
+          />
+        )}
+
+        {/* Compartir progreso — disponible desde los 3 tabs (Bloque 3.2) */}
+        {shareOpen && (
+          <ShareModal
+            studentName={a.studentName}
+            studentId={a.studentId}
+            teacherId={teacher.id}
+            onClose={() => setShareOpen(false)}
             onToast={showToast}
           />
         )}
@@ -591,7 +617,6 @@ function PerfilTab({ bundle, ficha, risk, teacher, onToast, onRefresh }: {
 }) {
   const { assignment: a, profile, analyses } = bundle;
   const [busy, setBusy] = useState(false);
-  const [shareOpen, setShareOpen] = useState(false);
   const last = analyses[0];
 
   const responses = asObject<Record<string, unknown>>(profile?.form_responses) ?? {};
@@ -681,10 +706,6 @@ function PerfilTab({ bundle, ficha, risk, teacher, onToast, onRefresh }: {
               {risk && <RiskDot risk={risk} size={10} />}
             </div>
           )}
-
-          <button onClick={() => setShareOpen(true)} style={{ ...btnSecondary, width: '100%' }}>
-            Compartir progreso con el alumno
-          </button>
         </div>
 
         {/* ── Columna derecha ── */}
@@ -749,15 +770,6 @@ function PerfilTab({ bundle, ficha, risk, teacher, onToast, onRefresh }: {
         )}
       </div>
 
-      {shareOpen && (
-        <ShareModal
-          studentName={a.studentName}
-          studentId={a.studentId}
-          teacherId={teacher.id}
-          onClose={() => setShareOpen(false)}
-          onToast={onToast}
-        />
-      )}
     </>
   );
 }

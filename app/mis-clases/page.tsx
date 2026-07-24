@@ -365,6 +365,9 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
   // registro se emparejará con esa clase (mismo alumno + fecha ±1 día) en finanzas.
   const [addPrefill, setAddPrefill] = useState<{ studentName: string; date: string; classType: ClassRecordType } | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // Aviso "pendiente de validación" (Bloque 1) tras guardar una clase que quedó en revisión.
+  const [validationNotice, setValidationNotice] = useState<{ title: string; body: string } | null>(null);
+  const [showPenalties, setShowPenalties] = useState(false);
 
   const openAddClass = (prefill?: { studentName: string; date: string; classType: ClassRecordType }) => {
     setAddPrefill(prefill ?? null);
@@ -484,13 +487,13 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
     transcript: string, classType: ClassRecordType, comment: string,
     transcriptHashValue: string, replaceId: string | null,
   ) {
-    // Al reemplazar un transcript NO se crea otro class_record: la clase ya
-    // estaba registrada y duplicarla contaría dos veces en el cálculo.
-    if (!replaceId) {
-      await registerClassRecord(teacher.id, studentName, date, time, null, classType, comment);
+    // Faltas/cancelaciones (sin transcript): solo la constancia, como antes.
+    if (!transcript.trim()) {
+      if (!replaceId) await registerClassRecord(teacher.id, studentName, date, time, null, classType, comment);
+      await loadFinanceData();
+      return;
     }
 
-    if (!transcript.trim()) return;
     const asgn = myAssignments.find(a => a.studentName === studentName);
     const base = {
       transcript: transcript.trim(),
@@ -504,10 +507,24 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
       transcriptHash: transcriptHashValue || null,
       replaceId,
     };
-    // El endpoint separa analizar de guardar: primero el análisis, luego el alta
-    // (o la actualización, si replaceId viene informado).
+    // BLOQUE 1 — verificar ANTES de registrar: primero analiza, luego guarda (que
+    // corre las 3 capas). Si se bloquea, NO se persiste nada (ni el class_record).
     const analysis = await analyzeTranscriptOnly(base);
-    await saveAnalysis({ ...base, analysis });
+    const result = await saveAnalysis({ ...base, analysis });
+
+    if (result.blocked) {
+      const v = result.validation;
+      // Se lanza para que el modal muestre el mensaje neutro y quede abierto.
+      throw new Error(`${v?.teacherTitle ?? 'No hemos podido validar esta transcripción'}\n\n${v?.teacherBody ?? ''}`);
+    }
+
+    // Transcript aceptado (ok o review): recién ahora se registra la clase.
+    if (!replaceId) {
+      await registerClassRecord(teacher.id, studentName, date, time, null, classType, comment);
+    }
+    if (result.validation?.decision === 'review' && result.validation) {
+      setValidationNotice({ title: result.validation.teacherTitle, body: result.validation.teacherBody });
+    }
     await loadFinanceData();
     // La detección de hitos ocurre en el barrido de MyClassesTab (useEffect), que
     // recuenta al cambiar class_records tras loadFinanceData().
@@ -530,8 +547,26 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
       : 'ingresar con el botón Meet',
   }));
 
+  // Penalizaciones del mes (Bloque 4): faltas sin aviso. Las revertidas se muestran
+  // tachadas y no restan (ver lib/finance.ts).
+  const monthPenalties = scoringEvents
+    .filter(e => e.teacherId === teacher.id && e.eventType === 'falta_sin_aviso_penalizacion' && (e.createdAt ?? '').slice(0, 7) === monthYear)
+    .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''));
+
   return (
     <>
+      {/* Aviso de validación pendiente (Bloque 1) */}
+      {validationNotice && (
+        <div className="mcf-card" style={{ borderLeft: '4px solid #FFC400', background: '#fffdf5', padding: '14px 18px', marginBottom: 12, display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+          <span style={{ fontSize: 18, lineHeight: 1 }}>⏳</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 700, fontSize: 14, color: '#1a1c1a', marginBottom: 3 }}>{validationNotice.title}</div>
+            <div style={{ fontSize: 13, color: '#5f6360', lineHeight: 1.5 }}>{validationNotice.body}</div>
+          </div>
+          <button onClick={() => setValidationNotice(null)} style={{ background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: '#9ca3af', lineHeight: 1 }}>✕</button>
+        </div>
+      )}
+
       {/* Barra de mes */}
       <div className="mcf-card mcf-monthbar">
         <div className="mcf-month">
@@ -787,6 +822,31 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                   </span>
                   <span className="mcf-brow-value">€{finance.bonusFromScoring.toFixed(2)}</span>
                 </div>
+                {finance.penaltiesFromScoring < 0 && (
+                  <div className="mcf-brow">
+                    <span className="mcf-brow-label" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                      Penalizaciones
+                      <button onClick={() => setShowPenalties(s => !s)}
+                        style={{ background: 'none', border: 'none', color: '#c0392b', cursor: 'pointer', fontSize: 11.5, fontWeight: 600, padding: 0, textDecoration: 'underline' }}>
+                        {showPenalties ? 'ocultar' : 'ver detalle'}
+                      </button>
+                    </span>
+                    <span className="mcf-brow-value" style={{ color: '#c0392b', fontWeight: 700 }}>−€{Math.abs(finance.penaltiesFromScoring).toFixed(2)}</span>
+                  </div>
+                )}
+                {showPenalties && monthPenalties.length > 0 && (
+                  <div style={{ marginTop: 6, paddingTop: 8, borderTop: '1px dashed var(--border)', display: 'flex', flexDirection: 'column', gap: 5 }}>
+                    {monthPenalties.map(p => (
+                      <div key={p.id} style={{ fontSize: 12, color: p.reverted ? 'var(--text-muted)' : '#5f6360', display: 'flex', justifyContent: 'space-between', gap: 8, textDecoration: p.reverted ? 'line-through' : undefined }}>
+                        <span>{p.note.replace('Falta sin aviso registrada — ', '').replace('alumno ', '').replace('fecha ', '')}</span>
+                        <span style={{ whiteSpace: 'nowrap' }}>
+                          {p.reverted ? <span style={{ textDecoration: 'none', color: '#1f7a3d', marginRight: 6 }}>Revertida por el equipo</span> : null}
+                          −€{Math.abs(p.euros).toFixed(2)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 

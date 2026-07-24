@@ -1277,6 +1277,93 @@ export async function dbAddScoringEvent(event: Omit<ScoringEvent, 'id' | 'create
   return { ...event, id, createdAt };
 }
 
+// ── PENALIZACIONES POR FALTA (Bloque 4) ─────────────────────────────────────────
+
+async function notifyAdmin(title: string, body: string, type: string): Promise<void> {
+  await supabase.from('notifications').insert({
+    id:          `notif_${type}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    target_user: null, target_role: 'admin',
+    title, body, type,
+    read_by:     [], created_at: new Date().toISOString(), created_by: 'sistema',
+  });
+}
+
+// Efectos secundarios al registrar una falta/cancelación (además del class_record):
+//  · 'falta_sin_aviso'  → penalización de -5 € (scoring_event) + alerta admin a las 4.
+//  · 'cancelacion_hora'/'falta_con_aviso' → sin penalización económica; se cuentan
+//    y se avisa al admin al superar 3 y al superar 5 (contador interno, no al profe).
+// Best-effort: nunca debe romper el registro de la clase.
+export async function dbApplyFaltaSideEffects(p: {
+  teacherId: string; teacherName: string; studentName: string; classDate: string;
+  classType: import('@/types').ClassRecordType;
+}): Promise<void> {
+  const monthPrefix = (p.classDate || new Date().toISOString()).slice(0, 7);
+
+  try {
+    if (p.classType === 'falta_sin_aviso') {
+      // Penalización económica de -5 € en el balance del profesor.
+      await dbAddScoringEvent({
+        teacherId: p.teacherId, teacherName: p.teacherName,
+        eventType: 'falta_sin_aviso_penalizacion', points: 0, euros: -5,
+        note: `Falta sin aviso registrada — alumno ${p.studentName}, fecha ${p.classDate}`,
+        createdBy: 'sistema', studentRef: p.studentName,
+      });
+
+      // Contador interno (SOLO admin): faltas sin aviso NO revertidas del mes.
+      const { data } = await supabase.from('scoring_events')
+        .select('created_at, student_ref, reverted')
+        .eq('teacher_id', p.teacherId).eq('event_type', 'falta_sin_aviso_penalizacion');
+      const month = (data ?? []).filter(e => (e.created_at ?? '').slice(0, 7) === monthPrefix && !e.reverted);
+      if (month.length === 4) {
+        const alumnos = [...new Set(month.map(e => e.student_ref).filter(Boolean))].join(', ');
+        await notifyAdmin(
+          `${p.teacherName} alcanzó 4 faltas sin aviso`,
+          `Revisar situación. Alumnos afectados: ${alumnos || '—'}.`,
+          'limite_faltas_admin',
+        );
+      }
+    } else if (p.classType === 'cancelacion_hora' || p.classType === 'falta_con_aviso') {
+      // Faltas CON aviso: sin penalización económica, pero se cuentan para el admin.
+      const { data } = await supabase.from('class_records')
+        .select('student_name, class_date, class_type')
+        .eq('teacher_id', p.teacherId).in('class_type', ['cancelacion_hora', 'falta_con_aviso']);
+      const month = (data ?? []).filter(r => (r.class_date ?? '').slice(0, 7) === monthPrefix);
+      // Avisar al superar 3 (=4) y al superar 5 (=6). No en cada falta.
+      if (month.length === 4 || month.length === 6) {
+        const alumnos = [...new Set(month.map(r => r.student_name).filter(Boolean))].join(', ');
+        await notifyAdmin(
+          `Alerta: ${p.teacherName} acumula ${month.length} faltas con aviso`,
+          `${p.teacherName} ha registrado ${month.length} faltas con aviso este mes. Alumnos afectados: ${alumnos || '—'}.`,
+          'faltas_con_aviso_alerta',
+        );
+      }
+    }
+  } catch (e) {
+    console.error('[dbApplyFaltaSideEffects] Error (no bloquea el registro):', e);
+  }
+}
+
+// Revierte una penalización de falta sin aviso (Bloque 4.5): marca la original como
+// revertida y crea un evento compensatorio +5 € (constancia). El neto en finanzas
+// es 0 (ambos se excluyen del cálculo; ver lib/finance.ts).
+export async function dbRevertPenalty(p: {
+  penaltyId: string; teacherId: string; teacherName: string;
+  originalDate: string; studentName?: string; reason: string; adminName: string;
+}): Promise<void> {
+  const now = new Date().toISOString();
+  const { error } = await supabase.from('scoring_events')
+    .update({ reverted: true, reverted_by: p.adminName, reverted_at: now })
+    .eq('id', p.penaltyId);
+  if (error) throw new Error(error.message);
+
+  await dbAddScoringEvent({
+    teacherId: p.teacherId, teacherName: p.teacherName,
+    eventType: 'penalizacion_revertida', points: 0, euros: 5,
+    note: `Reversión de penalización del ${p.originalDate}${p.studentName ? ` (${p.studentName})` : ''} — Motivo: ${p.reason}`,
+    createdBy: p.adminName, studentRef: p.studentName,
+  });
+}
+
 export async function dbGetScoringEvents(teacherId?: string): Promise<ScoringEvent[]> {
   let q = supabase.from('scoring_events').select('*').order('created_at', { ascending: false });
   if (teacherId) q = (q as any).eq('teacher_id', teacherId);
@@ -1294,6 +1381,9 @@ export async function dbGetScoringEvents(teacherId?: string): Promise<ScoringEve
     createdBy:   r.created_by,
     studentRef:  r.student_ref ?? undefined,
     quantity:    r.quantity ?? undefined,
+    reverted:    r.reverted ?? false,
+    revertedBy:  r.reverted_by ?? undefined,
+    revertedAt:  r.reverted_at ?? undefined,
   }));
 }
 
@@ -2134,13 +2224,97 @@ export async function dbGetClassRecords(): Promise<import('@/types').ClassRecord
 export async function dbGetClassTranscripts(): Promise<import('@/lib/finance').ClassTranscriptRef[]> {
   const { data, error } = await supabase
     .from('class_analyses')
-    .select('teacher_id, student_name, class_date, analyzed_at, transcript, join_log_id')
+    .select('teacher_id, student_name, class_date, analyzed_at, transcript, join_log_id, validation_status')
     .order('analyzed_at', { ascending: false });
   if (error || !data) {
     if (error) console.error('[db] Error al leer class_analyses para finanzas:', error);
+    // Si la columna validation_status aún no existe, reintentar sin ella.
+    if (error?.code === '42703' || error?.code === 'PGRST204') {
+      const retry = await supabase
+        .from('class_analyses')
+        .select('teacher_id, student_name, class_date, analyzed_at, transcript, join_log_id')
+        .order('analyzed_at', { ascending: false });
+      if (!retry.error && retry.data) return retry.data as unknown as import('@/lib/finance').ClassTranscriptRef[];
+    }
     return [];
   }
   return data as unknown as import('@/lib/finance').ClassTranscriptRef[];
+}
+
+// ── VALIDACIÓN DE TRANSCRIPCIONES (Bloque 1) ────────────────────────────────────
+
+export interface FlaggedTranscript {
+  id: string;
+  teacherId: string | null;
+  studentName: string;
+  classDate: string | null;
+  analyzedAt: string | null;
+  transcript: string;
+  score: number | null;
+  flags: string[];
+  aiCheck: { authentic?: boolean; confidence?: number; reasoning?: string } | null;
+  validationStatus: string;   // 'review' | 'approved' | 'rejected' | 'ok'
+  reviewedBy: string | null;
+  reviewedAt: string | null;
+}
+
+// Transcripciones marcadas (en revisión o ya resueltas) para el panel del admin.
+export async function dbGetFlaggedTranscripts(): Promise<FlaggedTranscript[]> {
+  const { data, error } = await supabase
+    .from('class_analyses')
+    .select('id, teacher_id, student_name, class_date, analyzed_at, transcript, transcript_validation_score, transcript_validation_flags, ai_authenticity_check, validation_status, validation_reviewed_by, validation_reviewed_at')
+    .in('validation_status', ['review', 'approved', 'rejected'])
+    .order('analyzed_at', { ascending: false });
+  if (error || !data) {
+    if (error && error.code !== '42703' && error.code !== 'PGRST204') {
+      console.error('[db] Error al leer transcripciones marcadas:', error);
+    }
+    return [];   // columnas aún no migradas → lista vacía (degradación limpia)
+  }
+  return (data as Array<Record<string, unknown>>).map(r => ({
+    id:               r.id as string,
+    teacherId:        (r.teacher_id as string) ?? null,
+    studentName:      (r.student_name as string) ?? '',
+    classDate:        (r.class_date as string) ?? null,
+    analyzedAt:       (r.analyzed_at as string) ?? null,
+    transcript:       (r.transcript as string) ?? '',
+    score:            (r.transcript_validation_score as number) ?? null,
+    flags:            (r.transcript_validation_flags as string[]) ?? [],
+    aiCheck:          (r.ai_authenticity_check as FlaggedTranscript['aiCheck']) ?? null,
+    validationStatus: (r.validation_status as string) ?? 'review',
+    reviewedBy:       (r.validation_reviewed_by as string) ?? null,
+    reviewedAt:       (r.validation_reviewed_at as string) ?? null,
+  }));
+}
+
+// Aprobar o rechazar una transcripción marcada. Al rechazar, avisa al profesor
+// (mensaje neutro) para que registre la clase de nuevo con el transcript correcto.
+export async function dbReviewTranscript(
+  row: { id: string; teacherId: string | null; studentName: string; classDate: string | null },
+  decision: 'approved' | 'rejected',
+  reviewerName: string,
+): Promise<void> {
+  const now = new Date().toISOString();
+  const { error } = await supabase.from('class_analyses').update({
+    validation_status:      decision,
+    validation_reviewed_by: reviewerName,
+    validation_reviewed_at: now,
+  }).eq('id', row.id);
+  if (error) throw new Error(error.message);
+
+  if (decision === 'rejected' && row.teacherId) {
+    await supabase.from('notifications').insert({
+      id:          `notif_txrej_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      target_user: row.teacherId,
+      target_role: null,
+      title:       'Revisión de una clase registrada',
+      body:        `La clase de ${row.studentName}${row.classDate ? ` del ${row.classDate}` : ''} no pudo validarse y no se contará para el pago. Si la diste, vuelve a registrarla copiando la transcripción completa de Fathom.`,
+      type:        'transcript_rejected',
+      read_by:     [],
+      created_at:  now,
+      created_by:  'sistema',
+    });
+  }
 }
 
 // Sube la captura al bucket público "class-screenshots" y devuelve su URL pública.

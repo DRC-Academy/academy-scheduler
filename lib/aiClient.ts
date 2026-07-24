@@ -149,8 +149,25 @@ export async function analyzeTranscriptOnly(args: AnalyzeArgs): Promise<Transcri
   return data.analysis as TranscriptIA;
 }
 
-/** Guarda el análisis (posiblemente editado por el profesor). */
-export async function saveAnalysis(args: AnalyzeArgs & { analysis: TranscriptIA }): Promise<void> {
+export interface TranscriptValidation {
+  decision: 'ok' | 'review' | 'blocked';
+  score: number;
+  flags: string[];
+  flagLabels: string[];
+  teacherTitle: string;
+  teacherBody: string;
+  similarityPct?: number;
+  ai?: { authentic: boolean; confidence: number; reasoning: string } | null;
+}
+export interface SaveAnalysisResult {
+  saved: boolean;
+  blocked?: boolean;
+  validation?: TranscriptValidation;
+}
+
+/** Guarda el análisis (posiblemente editado por el profesor). Devuelve el veredicto
+ *  de validación (Bloque 1): si `blocked`, el transcript NO se guardó. */
+export async function saveAnalysis(args: AnalyzeArgs & { analysis: TranscriptIA }): Promise<SaveAnalysisResult> {
   const res = await fetch('/api/ai/analyze-transcript', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -158,6 +175,7 @@ export async function saveAnalysis(args: AnalyzeArgs & { analysis: TranscriptIA 
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data?.error || 'No se pudo guardar el análisis.');
+  return data as SaveAnalysisResult;
 }
 
 // ── Siguiente clase ───────────────────────────────────────────────────────────

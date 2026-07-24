@@ -193,7 +193,9 @@ export type ScoringEventType =
   | 'review_trustpilot' | 'bonus_feedback'
   | 'cambio_por_alumno' | 'cambio_por_profesor'
   | 'profe_del_mes' | 'profe_del_trimestre'
-  | 'email_presentacion_tardio';
+  | 'email_presentacion_tardio'
+  // Penalización económica por falta sin aviso (-5 €) y su reversión (+5 €).
+  | 'falta_sin_aviso_penalizacion' | 'penalizacion_revertida';
 
 export interface ScoringEvent {
   id: string;
@@ -207,6 +209,10 @@ export interface ScoringEvent {
   createdBy: string;
   studentRef?: string;
   quantity?: number;
+  // Reversión de penalización (Bloque 4.5): la penalización original queda tachada.
+  reverted?: boolean;
+  revertedBy?: string;
+  revertedAt?: string;
 }
 
 export interface ClassCount {
@@ -235,7 +241,7 @@ export interface AppNotification {
 // Tipo de clase registrada por el profesor.
 // 'reprogramada' = constancia de una clase movida a otra fecha; NO cuenta para el
 // pago (la clase se contará cuando efectivamente se dé). Ver lib/finance.ts.
-export type ClassRecordType = 'normal' | 'falta_sin_aviso' | 'cancelacion_hora' | 'recuperacion' | 'reprogramada';
+export type ClassRecordType = 'normal' | 'falta_sin_aviso' | 'cancelacion_hora' | 'recuperacion' | 'reprogramada' | 'falta_con_aviso' | 'cancelada_con_preaviso';
 
 // Captura de pantalla de una clase dada, subida por el profesor.
 export interface ClassRecord {
