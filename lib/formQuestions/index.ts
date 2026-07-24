@@ -17,13 +17,15 @@ import { classifyPlan, detectLevel } from '@/lib/productUtils';
 import { FormQuestion, FormResponses } from './types';
 import { FORM_GENERAL } from './general';
 import { FORM_B1_PRELIMINARY } from './b1Preliminary';
+import { FORM_B2_FIRST } from './b2First';
 
 export type { FormQuestion, QuestionType, FormResponses } from './types';
 export { SKILL_LEVELS } from './types';
 export { FORM_GENERAL } from './general';
 export { FORM_B1_PRELIMINARY } from './b1Preliminary';
+export { FORM_B2_FIRST } from './b2First';
 
-export type FormVariant = 'general' | 'b1_preliminary';
+export type FormVariant = 'general' | 'b1_preliminary' | 'b2_first';
 
 interface VariantDef {
   id: FormVariant;
@@ -43,7 +45,13 @@ export const FORM_VARIANTS: VariantDef[] = [
     questions: FORM_B1_PRELIMINARY,
     match: ({ isExamen, level }) => isExamen && level === 'B1',
   },
-  // ← Próximos: B2 First, C1 Advanced, IELTS. Un archivo + una entrada acá.
+  {
+    id: 'b2_first',
+    label: 'B2 First',
+    questions: FORM_B2_FIRST,
+    match: ({ isExamen, level }) => isExamen && level === 'B2',
+  },
+  // ← Próximos: C1 Advanced, IELTS. Un archivo + una entrada acá.
   {
     id: 'general',
     label: 'Inglés general',
@@ -95,11 +103,16 @@ export function resolveFormVariant(fields: {
     productName:        fields.productName,
   }).type === 'examenes';
 
-  // detectLevel respeta la prioridad C2 > C1 > B2 > B1, así que "B2 First
-  // Certificate" resuelve B2 y no matchea el formulario de B1.
-  const level = detectLevel(
-    [fields.plan, fields.productName, fields.studentPlan, fields.objetivo].filter(Boolean).join(' '),
-  );
+  // El nivel lo manda el plan de la ASSIGNMENT: es la decisión operativa del
+  // setter sobre qué examen prepara el alumno. Solo si ahí no hay nivel se mira
+  // el producto/plan del alumno.
+  //
+  // Buscar en todo el texto junto daba el examen equivocado: el plan de alumno de
+  // Iñigo Cabezon es "Empresas Intensivos — 5h semanales · B2 · 3 Meses", donde
+  // ese B2 es su NIVEL y no el examen; como detectLevel prioriza B2 sobre B1, le
+  // ganaba al "B1 Exámenes" de su assignment y le mandaba el formulario del First.
+  const level = detectLevel(fields.plan)
+    ?? detectLevel([fields.productName, fields.studentPlan, fields.objetivo].filter(Boolean).join(' '));
 
   for (const v of FORM_VARIANTS) {
     if (v.match?.({ isExamen, level })) return v.id;
