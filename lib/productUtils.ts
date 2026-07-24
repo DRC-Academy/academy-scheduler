@@ -17,7 +17,7 @@ export interface PlanClassification {
  * planes escritos con tilde — la mayoría — se clasificaban como generales y el
  * profesor cobraba la tarifa baja.
  */
-function normalizeText(s: string): string {
+export function normalizeText(s: string): string {
   return s.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
 }
 

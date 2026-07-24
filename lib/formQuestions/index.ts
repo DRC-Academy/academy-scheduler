@@ -13,13 +13,14 @@
 // formulario): las respuestas se guardan en un JSON plano `{ [id]: valor }` y de
 // ahí se deduce qué formulario contestó un alumno (ver questionsForResponses).
 
-import { classifyPlan, detectLevel, type PlanClassification } from '@/lib/productUtils';
+import { classifyPlan, detectLevel, normalizeText, type PlanClassification } from '@/lib/productUtils';
 import { FormQuestion, FormResponses } from './types';
 import { FORM_GENERAL } from './general';
 import { FORM_B1_PRELIMINARY } from './b1Preliminary';
 import { FORM_B2_FIRST } from './b2First';
 import { FORM_C1_ADVANCED } from './c1Advanced';
 import { FORM_INTENSIVO } from './intensivo';
+import { FORM_IELTS } from './ielts';
 
 export type { FormQuestion, QuestionType, FormResponses } from './types';
 export { SKILL_LEVELS } from './types';
@@ -28,25 +29,45 @@ export { FORM_B1_PRELIMINARY } from './b1Preliminary';
 export { FORM_B2_FIRST } from './b2First';
 export { FORM_C1_ADVANCED } from './c1Advanced';
 export { FORM_INTENSIVO } from './intensivo';
+export { FORM_IELTS } from './ielts';
 
-export type FormVariant = 'general' | 'b1_preliminary' | 'b2_first' | 'c1_advanced' | 'intensivo';
+export type FormVariant =
+  | 'general' | 'b1_preliminary' | 'b2_first' | 'c1_advanced' | 'intensivo' | 'ielts';
 
 interface VariantDef {
   id: FormVariant;
   label: string;              // para la UI del profe/admin
   questions: FormQuestion[];
   /**
-   * ¿Le corresponde esta variante a un alumno con este plan? Se evalúan en orden
+   * ¿Le corresponde esta variante a un alumno con este plan? Se evalúan EN ORDEN
    * y gana la primera que devuelva true; 'general' es el fallback y no se evalúa.
    *
    * `type` sale de classifyPlan y ya distingue examen de intensivo: un "Intensivo
    * FCE" es 'examenes' (va al formulario del examen), y solo los intensivos SIN
    * examen de por medio quedan como 'intensivo'.
+   *
+   * `text` es el texto del plan normalizado (sin tildes, en minúsculas), para las
+   * variantes que se identifican por NOMBRE de examen y no por nivel.
    */
-  match?: (ctx: { type: PlanClassification['type']; level: string | null }) => boolean;
+  match?: (ctx: {
+    type: PlanClassification['type'];
+    level: string | null;
+    text: string;
+  }) => boolean;
 }
 
+// EL ORDEN IMPORTA: gana el primer match. Las variantes que se identifican por
+// nombre de examen van ANTES que las que van por nivel, porque el nombre es más
+// específico — si un plan dijera "IELTS B2", debe ganar IELTS y no el First.
 export const FORM_VARIANTS: VariantDef[] = [
+  {
+    id: 'ielts',
+    label: 'IELTS',
+    questions: FORM_IELTS,
+    // El IELTS no tiene nivel CEFR en su plan ("Preparación del examen IELTS"),
+    // así que matchea por nombre. \b para no colarse dentro de otra palabra.
+    match: ({ type, text }) => type === 'examenes' && /\bielts\b/.test(text),
+  },
   {
     id: 'b1_preliminary',
     label: 'B1 Preliminary',
@@ -71,7 +92,6 @@ export const FORM_VARIANTS: VariantDef[] = [
     questions: FORM_INTENSIVO,
     match: ({ type }) => type === 'intensivo',
   },
-  // ← Próximo: IELTS (ojo: su plan no lleva nivel, hace falta un match propio).
   {
     id: 'general',
     label: 'Inglés general',
@@ -103,12 +123,9 @@ export function labelOf(variant: FormVariant | null | undefined): string {
  * formulario del examen equivocado. El texto del plan es lo único que identifica
  * de verdad QUÉ examen prepara el alumno.
  *
- * Criterio conservador: si el plan no identifica el examen (p. ej. "Preparación
- * del examen IELTS", sin nivel), va el general — que le sirve a cualquiera. Un
- * formulario de otro examen sería peor que el genérico.
- *
- * Un examen sin formulario propio todavía —IELTS— recibe el general. Cuando se
- * agregue el suyo al registro, empieza a usarlo sin tocar nada más.
+ * Criterio conservador: un examen que no se puede identificar (ni por nombre ni
+ * por nivel) recibe el general, que le sirve a cualquiera. Un formulario de otro
+ * examen sería peor que el genérico.
  */
 export function resolveFormVariant(fields: {
   plan?: string | null;
@@ -134,8 +151,15 @@ export function resolveFormVariant(fields: {
   const level = detectLevel(fields.plan)
     ?? detectLevel([fields.productName, fields.studentPlan, fields.objetivo].filter(Boolean).join(' '));
 
+  // Texto completo normalizado, para las variantes que matchean por NOMBRE de
+  // examen (IELTS). Va todo junto: el nombre puede estar en el plan del alumno
+  // aunque el de la assignment no lo mencione.
+  const text = normalizeText(
+    [fields.plan, fields.objetivo, fields.studentPlan, fields.productName].filter(Boolean).join(' '),
+  );
+
   for (const v of FORM_VARIANTS) {
-    if (v.match?.({ type, level })) return v.id;
+    if (v.match?.({ type, level, text })) return v.id;
   }
   return 'general';
 }
