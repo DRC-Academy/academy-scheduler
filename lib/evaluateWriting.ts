@@ -43,7 +43,7 @@ and task completion.
 
 IMPORTANT: write ALL feedback fields ("feedback", "overall_feedback", "strengths",
 "areas_for_improvement") in SPANISH FROM SPAIN (español de España). Address the
-student informally with "tú"/"tuteo" — NEVER use Argentine "vos"/"voseo" or forms
+student informally with "tú"/"tuteo". NEVER use Argentine "vos"/"voseo" or forms
 like "tenés", "manejás", "podés", "acá". Use peninsular vocabulary and phrasing.
 Return only the JSON that matches the schema.`;
 

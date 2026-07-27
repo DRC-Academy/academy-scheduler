@@ -297,7 +297,7 @@ export function NotificationBell({ compact = false }: { compact?: boolean } = {}
                 <div style={{ padding: '40px 20px', textAlign: 'center' }}>
                   <div style={{ fontSize: 34, marginBottom: 10 }}>🔔</div>
                   <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 4 }}>
-                    No tenés notificaciones
+                    No tienes notificaciones
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
                     Te avisaremos cuando haya novedades

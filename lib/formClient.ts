@@ -113,7 +113,7 @@ export async function getOrCreateFormLink(payload: GenerateTokenPayload): Promis
 
 // Email pre-armado para enviarle el formulario al alumno.
 export function buildFormEmail(studentName: string, teacherName: string, url: string): { subject: string; body: string } {
-  const subject = 'Antes de tu primera clase — DRC Academy 🎓';
+  const subject = 'Antes de tu primera clase · DRC Academy 🎓';
   const body =
 `¡Hola ${studentName}!
 
@@ -123,7 +123,7 @@ Te dejo este formulario, son solo 10 minutos:
 
 ${url}
 
-Ya conozco tu nivel y tu horario — estas preguntas son para entender cómo aprendes y qué necesitas.
+Ya conozco tu nivel y tu horario. Estas preguntas son para entender cómo aprendes y qué necesitas.
 
 ¡Hasta pronto! 😊
 ${teacherName}`;

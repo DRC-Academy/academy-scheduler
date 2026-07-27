@@ -176,7 +176,7 @@ function Progress({ row, profile, analyses }: {
       </div>
 
       <div style={{ marginTop: 28, fontSize: 12.5, color: 'var(--sp-t3)', textAlign: 'center', lineHeight: 1.6 }}>
-        Este resumen es privado y solo para vos. Si tenés dudas, hablalo con tu profesor.
+        Este resumen es privado y solo para ti. Si tienes dudas, háblalo con tu profesor.
       </div>
     </>
   );

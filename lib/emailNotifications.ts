@@ -230,7 +230,7 @@ export async function sendClassCancelledEmail(args: {
   studentEmail: string; studentName: string; teacherName: string;
   dateLabel: string; timeLabel: string;
 }): Promise<boolean> {
-  const subject = `Cambio en tu clase del ${args.dateLabel} — DRC Academy`;
+  const subject = `Cambio en tu clase del ${args.dateLabel} · DRC Academy`;
   const html = baseEmailTemplate(
     p(`Hola ${esc(args.studentName)},`) +
     p(`Te escribimos para informarte de que tu clase del <strong>${esc(args.dateLabel)}</strong> a las <strong>${esc(args.timeLabel)}</strong> no podrá realizarse.`) +
@@ -260,7 +260,7 @@ export async function sendFormCompletedEmail(teacher: TeacherLike, studentName: 
 export async function sendPresentationEmailReminder(
   teacher: TeacherLike, studentName: string, hoursElapsed: number,
 ): Promise<boolean> {
-  const subject = `Recordatorio: email de presentación pendiente — ${studentName}`;
+  const subject = `Recordatorio: email de presentación pendiente · ${studentName}`;
   const html = baseEmailTemplate(
     p(`Hola ${esc(teacher.name)},`) +
     p(`Han pasado <strong>${Math.round(hoursElapsed)} horas</strong> desde que se te asignó <strong>${esc(studentName)}</strong> y aún no has enviado el email de presentación.`) +
@@ -274,7 +274,7 @@ export async function sendPresentationEmailReminder(
 
 // ═══ D) Email de presentación fuera de tiempo (24 h) ══════════════════════════
 export async function sendPresentationEmailOverdue(teacher: TeacherLike, studentName: string): Promise<boolean> {
-  const subject = `Email de presentación no enviado — ${studentName}`;
+  const subject = `Email de presentación no enviado · ${studentName}`;
   const html = baseEmailTemplate(
     p(`Hola ${esc(teacher.name)},`) +
     p(`Han pasado más de <strong>24 horas</strong> desde que se te asignó <strong>${esc(studentName)}</strong> y aún no has enviado el email de presentación.`) +
@@ -292,7 +292,7 @@ export async function sendPresentationEmailOverdue(teacher: TeacherLike, student
 
 // 4 h — recordatorio al profesor.
 export async function sendPresentationReminder4h(teacher: TeacherLike, studentName: string): Promise<boolean> {
-  const subject = `Recordatorio: email pendiente — ${studentName}`;
+  const subject = `Recordatorio: email pendiente · ${studentName}`;
   const html = baseEmailTemplate(
     p(`Hola ${esc(teacher.name)},`) +
     p(`Llevas <strong>4 horas</strong> sin enviar el email de presentación a <strong>${esc(studentName)}</strong>. Los alumnos que reciben bienvenida pronto tienen mayor retención.`) +
@@ -304,7 +304,7 @@ export async function sendPresentationReminder4h(teacher: TeacherLike, studentNa
 
 // 12 h — aviso urgente al profesor.
 export async function sendPresentationReminder12h(teacher: TeacherLike, studentName: string): Promise<boolean> {
-  const subject = `Urgente: email pendiente — ${studentName}`;
+  const subject = `Urgente: email pendiente · ${studentName}`;
   const html = baseEmailTemplate(
     p(`Hola ${esc(teacher.name)},`) +
     p(`Llevas <strong>12 horas</strong> sin enviar el email de presentación a <strong>${esc(studentName)}</strong>. Te quedan menos de 12 horas para enviarlo sin afectar tu scoring.`) +
@@ -316,7 +316,7 @@ export async function sendPresentationReminder12h(teacher: TeacherLike, studentN
 
 // 24 h — email fuera de plazo (al enviarlo se descuentan -5 puntos).
 export async function sendPresentationReminder24h(teacher: TeacherLike, studentName: string): Promise<boolean> {
-  const subject = `Email fuera de plazo — ${studentName}`;
+  const subject = `Email fuera de plazo · ${studentName}`;
   const html = baseEmailTemplate(
     p(`Hola ${esc(teacher.name)},`) +
     p(`Han pasado más de <strong>24 horas</strong> sin enviar el email de presentación a <strong>${esc(studentName)}</strong>. Cuando lo envíes se descontarán <strong>-5 puntos</strong> de tu scoring.`) +
@@ -328,7 +328,7 @@ export async function sendPresentationReminder24h(teacher: TeacherLike, studentN
 
 // 12 h — aviso al admin.
 export async function sendPresentationAdminAlert12h(teacherName: string, studentName: string): Promise<boolean> {
-  const subject = `Alerta: ${teacherName} — email sin enviar 12h`;
+  const subject = `Alerta: ${teacherName} · email sin enviar 12h`;
   const html = baseEmailTemplate(
     p(`<strong>${esc(teacherName)}</strong> lleva 12h sin enviar el email de presentación a <strong>${esc(studentName)}</strong>.`) +
     ctaButton('Ver en DRC Gestión', `${APP_URL}/admin`),
@@ -339,7 +339,7 @@ export async function sendPresentationAdminAlert12h(teacherName: string, student
 
 // 24 h — aviso al admin (fuera de plazo).
 export async function sendPresentationAdminAlert24h(teacherName: string, studentName: string): Promise<boolean> {
-  const subject = `🔴 ${teacherName} — email fuera de plazo`;
+  const subject = `🔴 ${teacherName} · email fuera de plazo`;
   const html = baseEmailTemplate(
     p(`<strong>${esc(teacherName)}</strong> no envió el email de presentación a <strong>${esc(studentName)}</strong> en 24 horas.`) +
     ctaButton('Ver en DRC Gestión', `${APP_URL}/admin`),
@@ -353,7 +353,7 @@ export type MilestoneNumber = 15 | 30 | 50;
 
 const MILESTONE_COPY: Record<MilestoneNumber, { subject: (s: string) => string; intro: string; bullets: string[] }> = {
   15: {
-    subject: s => `Clase 15 con ${s} — acción requerida`,
+    subject: s => `Clase 15 con ${s} · acción requerida`,
     intro: '{S} está llegando a la clase 15.',
     bullets: ['Grabar la sesión con Fathom', 'Subir el enlace al Excel correspondiente', 'Aprovechar para pedir una reseña en Trustpilot'],
   },
@@ -384,14 +384,14 @@ export async function sendMilestoneEmail(
     `<ul style="margin:0 0 16px; padding-left:20px;">${c.bullets.map(b => `<li style="margin-bottom:6px;">${esc(b)}</li>`).join('')}</ul>` +
     p(`Las diapositivas de la clase ${milestone} están disponibles en DRC Gestión.`) +
     (slides ? ctaButton(`Ver diapositivas de clase ${milestone}`, slides) : ''),
-    `${studentName} — clase ${milestone}`,
+    `${studentName} · clase ${milestone}`,
   );
   return send('sendMilestoneEmail', teacher, c.subject(studentName), html);
 }
 
 // ═══ I) Bono de 6 meses ═══════════════════════════════════════════════════════
 export async function sendBonusAvailableEmail(teacher: TeacherLike, studentName: string): Promise<boolean> {
-  const subject = `Bono de retención disponible — ${studentName}`;
+  const subject = `Bono de retención disponible · ${studentName}`;
   const html = baseEmailTemplate(
     p(`Hola ${esc(teacher.name)},`) +
     p(`<strong>${esc(studentName)}</strong> lleva 6 meses contigo. Tienes derecho a solicitar el bono de retención.`) +

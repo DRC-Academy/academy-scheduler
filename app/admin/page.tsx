@@ -2522,6 +2522,86 @@ function StartDateSyncPanel() {
   );
 }
 
+// Limpieza de guiones en los textos de IA ya guardados (fichas y análisis).
+// Los textos NUEVOS ya salen limpios: las reglas de estilo van en todos los
+// system prompts y la respuesta pasa por cleanAiDeep (lib/textCleanup.ts).
+// Este botón es solo para lo que quedó guardado antes de ese cambio.
+type DashResult = { totalAffected: number; totalUpdated: number; applied: boolean;
+  profiles: { scanned: number; affected: number }; analyses: { scanned: number; affected: number } };
+
+function CleanDashesPanel() {
+  const [running, setRunning] = useState(false);
+  const [preview, setPreview] = useState<DashResult | null>(null);
+  const [done, setDone] = useState<DashResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function call(method: 'GET' | 'POST'): Promise<DashResult> {
+    const res = await fetch('/api/admin/clean-ai-dashes', { method });
+    const raw = await res.text();
+    let data: Record<string, unknown> = {};
+    try { data = raw ? JSON.parse(raw) : {}; } catch { /* respuesta sin JSON */ }
+    if (!res.ok) {
+      console.error('[clean-ai-dashes] Respuesta', res.status, raw.slice(0, 400));
+      throw new Error(typeof data.error === 'string' ? data.error : `Error ${res.status}`);
+    }
+    return data as unknown as DashResult;
+  }
+
+  async function run(method: 'GET' | 'POST') {
+    setRunning(true); setError(null);
+    try {
+      const r = await call(method);
+      if (method === 'GET') { setPreview(r); setDone(null); }
+      else { setDone(r); setPreview(null); }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo ejecutar la limpieza.');
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        <button
+          onClick={() => run('GET')}
+          disabled={running}
+          style={{ padding: '10px 16px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: running ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}
+        >
+          {running ? 'Revisando...' : 'Ver cuántos textos tienen guiones'}
+        </button>
+        <button
+          onClick={() => run('POST')}
+          disabled={running}
+          style={{ padding: '10px 16px', borderRadius: 8, border: 'none', background: running ? '#8fc7a0' : '#1E9E3A', color: 'white', cursor: running ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}
+        >
+          {running ? 'Limpiando...' : 'Limpiar guiones de textos de IA'}
+        </button>
+      </div>
+
+      {error && (
+        <div style={{ marginTop: 12, fontSize: 13, color: '#c73a28', lineHeight: 1.5 }}>{error}</div>
+      )}
+      {preview && (
+        <div style={{ marginTop: 12, fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+          {preview.totalAffected === 0
+            ? 'No hay textos con guiones. Todo limpio.'
+            : `${preview.totalAffected} texto${preview.totalAffected !== 1 ? 's' : ''} con guiones: ${preview.profiles.affected} ficha${preview.profiles.affected !== 1 ? 's' : ''} y ${preview.analyses.affected} análisis. Nada modificado todavía.`}
+        </div>
+      )}
+      {done && (
+        <div style={{ marginTop: 12, fontSize: 13, color: '#1f7a3d', lineHeight: 1.6 }}>
+          Listo: {done.totalUpdated} texto{done.totalUpdated !== 1 ? 's' : ''} actualizado{done.totalUpdated !== 1 ? 's' : ''}
+          {' '}({done.profiles.scanned} fichas y {done.analyses.scanned} análisis revisados).
+        </div>
+      )}
+      <div style={{ marginTop: 10, fontSize: 11.5, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+        No toca las transcripciones: son el texto original de Fathom, no un texto generado.
+      </div>
+    </div>
+  );
+}
+
 function AuditPanel() {
   const { students, reloadAll } = useTeachers();
   const router = useRouter();
@@ -3101,6 +3181,13 @@ function AdminContent() {
             >
               <PlanSyncPanel />
               <StartDateSyncPanel />
+            </AdminTool>
+
+            <AdminTool
+              title="Estilo de los textos de IA"
+              desc="Quita los guiones que la IA usaba como conectores en fichas y análisis ya guardados."
+            >
+              <CleanDashesPanel />
             </AdminTool>
           </div>
 

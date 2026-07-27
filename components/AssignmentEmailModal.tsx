@@ -40,17 +40,18 @@ function slotLine(s: AssignedSlot): string {
 }
 
 // Limpia el nombre del plan: corta metadatos de horario (todo tras " · ") y colapsa
-// duplicados tipo "3h semanales — 3h semanales" → "3h semanales".
+// duplicados tipo "3h semanales · 3h semanales" → "3h semanales".
 function cleanPlanName(raw: string): string {
   if (!raw) return '';
   let s = raw.split('·')[0].trim();          // descarta "· 16:00 · Lunes, miércoles..."
-  s = s.replace(/\s*—\s*/g, ' - ');          // em-dash → guion espaciado uniforme
+  s = s.replace(/\s*[—–]\s*/g, ' - ');       // separadores de Woo a un formato único, para poder partir
   const parts = s.split(/\s+-\s+/).map(p => p.trim()).filter(Boolean);
   const dedup: string[] = [];
   for (const p of parts) {
     if (!dedup.some(d => d.toLowerCase() === p.toLowerCase())) dedup.push(p);
   }
-  return dedup.join(' - ');
+  // Se une con punto medio: en DRC no se usan guiones como separadores.
+  return dedup.join(' · ');
 }
 
 // Construye asunto + cuerpo + destinatario del email de asignación a partir de la

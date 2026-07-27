@@ -19,6 +19,7 @@ import { daysOfWeek } from '@/lib/mock-data';
 import { Teacher, SlotFilter, Grid, Assignment, Student, AssignedSlot } from '@/types';
 import FormStatusBadge from '@/components/FormStatusBadge';
 import { fetchFormTokensIndex, lookupToken, type FormTokenInfo } from '@/lib/formClient';
+import { isValidEmail } from '@/lib/validation';
 
 type FormIndex = { byId: Map<string, FormTokenInfo>; byName: Map<string, FormTokenInfo> };
 
@@ -196,7 +197,11 @@ function AssignModal({
   const selectedStudent = tab === 'existing' ? existingStudents.find(s => s.id === selectedExisting) : null;
   const studentName  = tab === 'existing' ? (selectedStudent?.name  ?? '') : newStudent.name;
   const studentLevel = tab === 'existing' ? (selectedStudent?.level ?? '') : newStudent.level;
-  const hasStudent = tab === 'existing' ? !!selectedExisting : (!!newStudent.name && !!newStudent.email);
+  // El email tiene que ser válido de verdad: es la clave de cruce con Woo y la
+  // dirección a la que va el formulario inicial.
+  const hasStudent = tab === 'existing'
+    ? !!selectedExisting
+    : (!!newStudent.name.trim() && isValidEmail(newStudent.email));
   const slotsComplete = slots.length === weeklyHours;
   const canConfirm = hasStudent && slotsComplete && availableSlots.length > 0 && !!startDate;
 
@@ -324,7 +329,16 @@ function AssignModal({
         {tab === 'new' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 18 }}>
             <div><label>Nombre completo *</label><input value={newStudent.name} onChange={e => setNewStudent(p => ({ ...p, name: e.target.value }))} placeholder="Ej: María González" autoFocus /></div>
-            <div><label>Email *</label><input type="email" value={newStudent.email} onChange={e => setNewStudent(p => ({ ...p, email: e.target.value }))} placeholder="maria@gmail.com" /></div>
+            <div>
+              <label>Email *</label>
+              <input type="email" value={newStudent.email} onChange={e => setNewStudent(p => ({ ...p, email: e.target.value }))} placeholder="maria@gmail.com" />
+              {/* Sin esto, el botón se quedaba desactivado sin explicar por qué. */}
+              {newStudent.email.trim() !== '' && !isValidEmail(newStudent.email) && (
+                <div style={{ fontSize: 11.5, color: '#c2410c', marginTop: 4 }}>
+                  Revisa el email: hace falta uno válido para cruzarlo con WooCommerce y enviarle el formulario.
+                </div>
+              )}
+            </div>
             <div><label>Nivel</label>
               <select value={newStudent.level} onChange={e => setNewStudent(p => ({ ...p, level: e.target.value }))}>
                 {LEVELS.map(l => <option key={l}>{l}</option>)}
@@ -366,7 +380,7 @@ function AssignModal({
           {detection && (
             <div style={{ fontSize: 11.5, marginTop: 6, lineHeight: 1.4, color: detection.confidence === 'high' ? '#1E9E3A' : '#ea580c' }}>
               {detection.confidence === 'high'
-                ? `✅ ${detection.source} — podés editarlo si es incorrecto`
+                ? `✅ ${detection.source} — puedes editarlo si es incorrecto`
                 : detection.message}
             </div>
           )}

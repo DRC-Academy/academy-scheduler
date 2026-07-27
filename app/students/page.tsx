@@ -12,6 +12,7 @@ import { dbCheckStudentExists, dbSetStudentManualActive, dbActivateOneTimeAccess
 import { classifyFor, planBadgeStyle } from '@/lib/productUtils';
 import { isAssignableCell, withBaseState } from '@/lib/cells';
 import { checkSubscription, clearSubscriptionCache, subBadge, subCategory, type SubscriptionInfo, type SubCategory } from '@/lib/useSubscriptionStatus';
+import { isValidEmail } from '@/lib/validation';
 import { CambiarProfesorModal } from '@/components/CambiarProfesorModal';
 import { Student, Grid, Assignment } from '@/types';
 
@@ -144,7 +145,7 @@ function EditStudentModal({ student, assignment, teacherGrid, onClose, onSave }:
   function removeSlot(i: number) { setSlots(prev => prev.filter((_, idx) => idx !== i)); }
 
   const allSlotsValid = slots.length === 0 || slots.every(s => s.day && s.hour);
-  const canSave = !!form.name.trim() && !!form.email.trim() && allSlotsValid && !saving;
+  const canSave = !!form.name.trim() && isValidEmail(form.email) && allSlotsValid && !saving;
 
   async function handleSave() {
     if (!canSave) return;
@@ -320,7 +321,7 @@ function DeleteStudentModal({ student, onConfirm, onCancel }: {
         <div style={{ fontSize: 24, marginBottom: 10 }}>🗑️</div>
         <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)', marginBottom: 8 }}>Eliminar alumno</div>
         <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 16, lineHeight: 1.6 }}>
-          ¿Seguro que querés eliminar a <b style={{ color: 'var(--text-primary)' }}>{student.name}</b>? Se borrarán sus asignaciones y se liberará su horario. Esta acción no se puede deshacer.
+          ¿Seguro que quieres eliminar a <b style={{ color: 'var(--text-primary)' }}>{student.name}</b>? Se borrarán sus asignaciones y se liberará su horario. Esta acción no se puede deshacer.
         </div>
 
         {/* WhatsApp notice */}

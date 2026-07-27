@@ -38,7 +38,7 @@ const SEQUENCE_BALANCE: Record<CEFRLevel, string> = {
   A2: 'Único tipo viable: metodología aplicada. Foco: automatización (producir oraciones simples sin trabarse) y pensamiento en inglés a complejidad básica (tópicos simples, poca variación de formalidad, tiempos elementales). Secuencia: MÁS tiempo de input/exposición antes de pasar a producción, respecto a niveles superiores.',
   B1: 'Viable metodología aplicada y también conversación guiada. Foco: pensamiento en inglés y comunicación integrados, con más complejidad que A2 (más variedad de tópicos, más matices de formalidad, mayor rango de tiempos verbales, más trabajo con frases idiomáticas frente a la traducción directa del español). Secuencia (metodología aplicada): se ESTIRA la práctica guiada (reflexión/transformación) en proporción al input, a diferencia de A2.',
   B2: 'Viable metodología aplicada y también conversación guiada. Foco: aprendizaje significativo y pensamiento en inglés con más matices, ambos con peso equivalente. Secuencia (metodología aplicada): input BAJO (el mínimo necesario); práctica guiada y producción libre con peso equivalente entre sí, pero la práctica sigue siendo prioritaria sobre el input.',
-  C1: 'Viable metodología aplicada y también conversación guiada. Foco: vocabulario avanzado con expresiones formales y sociales + pensamiento en inglés (mismo foco que B2, con mayor sofisticación). Secuencia (metodología aplicada): igual que B2 — input bajo, práctica guiada y producción libre equivalentes, con la práctica como prioritaria.',
+  C1: 'Viable metodología aplicada y también conversación guiada. Foco: vocabulario avanzado con expresiones formales y sociales + pensamiento en inglés (mismo foco que B2, con mayor sofisticación). Secuencia (metodología aplicada): igual que B2: input bajo, práctica guiada y producción libre equivalentes, con la práctica como prioritaria.',
 };
 
 // Filosofía y objetivos de fondo, comunes a todo avatar.
@@ -113,7 +113,7 @@ const DOMAIN_LABEL: Record<AvatarDomain, string> = {
 // Bloque de texto con la guía del avatar, para inyectar en el prompt de clase.
 export function buildAvatarBlock(a: ResolvedAvatar): string {
   const tipo = a.classType === 'conversacion_guiada' ? 'Conversación guiada' : 'Metodología aplicada';
-  return `AVATAR DE ESTA CLASE — Dominio: ${DOMAIN_LABEL[a.domain]} · Nivel: ${a.level} · Tipo de clase: ${tipo}.
+  return `AVATAR DE ESTA CLASE. Dominio: ${DOMAIN_LABEL[a.domain]} · Nivel: ${a.level} · Tipo de clase: ${tipo}.
 
 BALANCE DE SECUENCIA Y FOCO DEL NIVEL ${a.level}:
 ${a.sequenceBalance}`;

@@ -73,7 +73,7 @@ function ConversacionGuiadaContent({ nc }: { nc: ConversacionGuiadaIA }) {
   return (
     <div>
       <Collapsible title="Tipo de clase">
-        <div style={bodyTextStyle}>Conversación guiada — charla continua. El tópico lo elige el alumno; vos sostenés la habilidad preparada y corregís en vivo.</div>
+        <div style={bodyTextStyle}>Conversación guiada: charla continua. El tópico lo elige el alumno; vos sostenés la habilidad preparada y corregís en vivo.</div>
       </Collapsible>
       <Collapsible title="Habilidad a trabajar" defaultOpen>
         <div style={bodyTextStyle}>{nc.skillObjective}</div>

@@ -27,6 +27,7 @@ import { fetchFormTokensIndex, lookupToken, formStateOf, type FormTokenInfo } fr
 import { getPresentationEmailStatus } from '@/lib/presentationEmailUtils';
 import { PresentationModal } from '@/components/PresentationModal';
 import { ALL_SPECIALTIES } from '@/lib/specialties';
+import { isValidOptionalEmail } from '@/lib/validation';
 import { SpecialtyChip, ToggleChip } from '@/components/ui';
 
 // Índice de tokens de formulario (por id/nombre de alumno). Se pasa a los tabs.
@@ -259,7 +260,7 @@ function AssignStudentModal({
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {filtered.length === 0 ? (
                   <div style={{ textAlign: 'center', padding: '24px 0', color: 'var(--text-muted)', fontSize: 13 }}>
-                    {myAssignments.length === 0 ? 'No tenés alumnos asignados aún.' : 'Sin resultados.'}
+                    {myAssignments.length === 0 ? 'No tienes alumnos asignados aún.' : 'Sin resultados.'}
                   </div>
                 ) : filtered.map(a => (
                   <button key={a.id} onClick={() => selectStudent(a)} style={{
@@ -354,7 +355,7 @@ function AssignStudentModal({
                 )}
               </div>
               {(() => {
-                const canCreate = !!newName.trim() && allSlotsValid && !!startDate && !checkingEmail;
+                const canCreate = !!newName.trim() && isValidOptionalEmail(newEmail) && allSlotsValid && !!startDate && !checkingEmail;
                 return (<>
                   <button
                     onClick={async () => {
@@ -2007,7 +2008,7 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, gr
       {/* Clases del día seleccionado */}
       {todayClasses.length === 0 ? (
         <div className="mc-empty">
-          {isToday ? 'No tenés clases hoy.' : 'No tenés clases este día.'}
+          {isToday ? 'No tienes clases hoy.' : 'No tienes clases este día.'}
         </div>
       ) : (
         <div className="mc-list">

@@ -87,7 +87,9 @@ export async function generateFicha(input: FichaInput): Promise<FichaResult> {
     schema: FICHA_SCHEMA as unknown as Record<string, unknown>,
     maxTokens: 8000,
     effort: 'medium',   // el alumno espera este resultado al enviar el formulario
-    timeoutMs: 90_000,
+    // Por debajo del maxDuration (60 s) de las rutas que lo llaman: si no, la
+    // plataforma corta la función antes y el error llega sin cuerpo JSON.
+    timeoutMs: 45_000,
   });
 }
 

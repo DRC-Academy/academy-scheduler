@@ -175,7 +175,7 @@ export function PresentationModal({ assignment, teacher, students, updateMeetLin
       document.body.removeChild(ta);
     }
     await saveMeetIfAny();
-    setToast('📋 Email copiado — pégalo en Gmail');
+    setToast('📋 Email copiado. Pégalo en Gmail');
   }
 
   // ÚNICA vía por la que el email pasa a "enviado": el profesor lo afirma
@@ -192,7 +192,7 @@ export function PresentationModal({ assignment, teacher, students, updateMeetLin
       setToast('✅ Presentación marcada como enviada');
       setTimeout(onClose, 900);
     } catch {
-      setToast('⚠️ No se pudo marcar como enviada — inténtalo de nuevo');
+      setToast('⚠️ No se pudo marcar como enviada. Inténtalo de nuevo');
       setMarking(false);
     }
   }
@@ -205,7 +205,7 @@ export function PresentationModal({ assignment, teacher, students, updateMeetLin
       onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
       <div style={{ background: '#F7F7F5', border: '2px solid #1E9E3A', borderRadius: 16, padding: 24, width: '100%', maxWidth: 560, maxHeight: '90vh', overflowY: 'auto' }}>
         <div style={{ fontWeight: 800, fontSize: 17, color: '#1E9E3A', marginBottom: 6 }}>
-          📧 Email de presentación — {assignment.studentName}
+          📧 Email de presentación · {assignment.studentName}
         </div>
         <div style={{ height: 3, width: 48, background: '#FFC400', borderRadius: 2, marginBottom: 18 }} />
 

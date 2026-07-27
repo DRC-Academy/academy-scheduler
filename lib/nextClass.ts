@@ -65,7 +65,7 @@ export const NEXT_CLASS_SCHEMA = {
     mainContent:      BLOCK_SCHEMA,
     practiceActivity: BLOCK_SCHEMA,
     closing:          BLOCK_SCHEMA,
-    challenge:        { type: 'string', description: 'Desafío para llevarse, EN INGLÉS: UNA tarea real y concreta que el alumno hace ANTES de la próxima clase, en su vida/trabajo real, dirigida en segunda persona ("This week, in your next meeting, ..."). Aplica lo trabajado hoy en un uso auténtico — NO un ejercicio mecánico ni de relleno. Copy-paste ready para el alumno.' },
+    challenge:        { type: 'string', description: 'Desafío para llevarse, EN INGLÉS: UNA tarea real y concreta que el alumno hace ANTES de la próxima clase, en su vida/trabajo real, dirigida en segunda persona ("This week, in your next meeting, ..."). Aplica lo trabajado hoy en un uso auténtico, NO un ejercicio mecánico ni de relleno. Copy-paste ready para el alumno.' },
     teacherNotes:     { type: 'string', description: 'Máximo 3 notas breves para el profesor, EN ESPAÑOL.' },
     connectionToPrevious: { type: 'string', description: 'EN ESPAÑOL, para el profesor: cómo conecta con la clase anterior. Si es la clase 1, explica el punto de partida.' },
   },
@@ -121,7 +121,7 @@ function buildLanguageRule(level: CEFRLevel, classType: ClassType): string {
     : `- teacherNotes
 - connectionToPrevious`;
 
-  return `REGLA DE IDIOMA — CRÍTICA, POR ENCIMA DE CUALQUIER OTRA INSTRUCCIÓN:
+  return `REGLA DE IDIOMA, CRÍTICA, POR ENCIMA DE CUALQUIER OTRA INSTRUCCIÓN:
 
 Todo el contenido que el alumno ve, lee o escucha va EN INGLÉS, sin excepción:
 ${studentFields}
@@ -210,7 +210,10 @@ export async function generateNextClass(input: NextClassInput): Promise<NextClas
     schema: schema as unknown as Record<string, unknown>,
     maxTokens: 16000,
     effort: 'high',
-    timeoutMs: 180_000,
+    // Por debajo del maxDuration (60 s) de /api/ai/generate-next-class. Con 180 s
+    // la plataforma mataba la función antes de que venciera el timeout del SDK y
+    // el profesor recibía un fallo sin explicación.
+    timeoutMs: 50_000,
   });
 }
 

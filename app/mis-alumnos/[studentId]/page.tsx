@@ -628,7 +628,7 @@ function PendingTranscriptModal({ pending, assignment, profile, ficha, teacher, 
       const res = await registerClassWithTranscript(base);
       await onSaved();
       if (!res.analyzed) {
-        onToast('Clase guardada. El análisis no se completó: podés reintentarlo en Seguimiento.');
+        onToast('Clase guardada. El análisis no se completó: puedes reintentarlo en Seguimiento.');
       } else if (res.validation && res.validation.decision !== 'ok') {
         onToast('Tu clase se ha guardado y está pendiente de revisión.');
       } else {
@@ -671,14 +671,14 @@ function PendingTranscriptModal({ pending, assignment, profile, ficha, teacher, 
           Completar clase del {formatDate(pending.date)}
         </div>
         <div style={{ fontSize: 13, color: 'var(--sp-t2)', marginBottom: 16 }}>
-          {assignment.studentName}{pending.time ? ` · ${pending.time}` : ''} · Pegá el transcript de Fathom.
+          {assignment.studentName}{pending.time ? ` · ${pending.time}` : ''} · Pega el transcript de Fathom.
         </div>
 
         <textarea
           value={text}
           onChange={e => { setText(e.target.value); setError(''); }}
           rows={9}
-          placeholder="Pegá acá el texto que genera Fathom al terminar la sesión..."
+          placeholder="Pega aquí el texto que genera Fathom al terminar la sesión..."
           style={{ width: '100%', boxSizing: 'border-box', borderRadius: 10, border: '1px solid var(--border)', padding: '11px 13px', fontFamily: 'inherit', fontSize: 14, lineHeight: 1.5, resize: 'vertical' }}
         />
         <div style={{ fontSize: 12, color: words >= 30 ? '#1E9E3A' : 'var(--sp-t3)', marginTop: 6 }}>

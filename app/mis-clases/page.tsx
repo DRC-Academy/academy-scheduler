@@ -256,13 +256,13 @@ function AddClassModal({ teacher, myAssignments, classRecords, initial, onClose,
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           {initial && (
             <div style={{ fontSize: 12, color: '#1f7a3d', background: 'rgba(30,158,58,0.08)', border: '1px solid rgba(30,158,58,0.28)', borderRadius: 8, padding: '9px 12px', lineHeight: 1.5 }}>
-              Completá esta clase a revisar: pegá el transcript de <b>{initial.studentName}</b> del <b>{finShortDate(initial.date)}</b> para verificarla.
+              Completa esta clase a revisar: pega el transcript de <b>{initial.studentName}</b> del <b>{finShortDate(initial.date)}</b> para verificarla.
             </div>
           )}
           <div>
             <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>Alumno</label>
             {studentOptions.length === 0 ? (
-              <div style={{ fontSize: 12, color: '#b45309' }}>No tenés alumnos asignados.</div>
+              <div style={{ fontSize: 12, color: '#b45309' }}>No tienes alumnos asignados.</div>
             ) : (
               <select value={studentName} onChange={e => setStudentName(e.target.value)} style={inputStyle}>
                 {studentOptions.map(s => <option key={s} value={s}>{s}</option>)}
@@ -305,7 +305,7 @@ function AddClassModal({ teacher, myAssignments, classRecords, initial, onClose,
                     value={transcript}
                     onChange={e => { setTranscript(e.target.value); setError(''); }}
                     rows={6}
-                    placeholder="Pegá acá el texto que genera Fathom al terminar la sesión..."
+                    placeholder="Pega aquí el texto que genera Fathom al terminar la sesión..."
                     style={{ ...inputStyle, resize: 'vertical', lineHeight: 1.5 }}
                   />
                   <div style={{ fontSize: 11, color: words >= 30 ? '#1E9E3A' : '#6b7280', marginTop: 5 }}>
@@ -520,7 +520,7 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
     if (!result.analyzed) {
       setValidationNotice({
         title: 'Clase guardada — análisis pendiente',
-        body: 'La clase quedó registrada y cuenta para tu pago. El informe de IA no se pudo generar; podés reintentarlo desde la ficha del alumno, en Seguimiento.',
+        body: 'La clase quedó registrada y cuenta para tu pago. El informe de IA no se pudo generar; puedes reintentarlo desde la ficha del alumno, en Seguimiento.',
       });
     } else if (result.validation && result.validation.decision !== 'ok') {
       setValidationNotice({ title: result.validation.teacherTitle, body: result.validation.teacherBody });

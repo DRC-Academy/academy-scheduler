@@ -6,6 +6,7 @@
 // alumno nunca debe romperse porque la IA no esté disponible.
 
 import Anthropic from '@anthropic-ai/sdk';
+import { NO_DASH_RULES, cleanAiDeep } from '@/lib/textCleanup';
 
 // El constructor no lanza si falta la clave (deja apiKey en null): solo fallan
 // las requests. Por eso es seguro construirlo a nivel de módulo.
@@ -36,6 +37,8 @@ export interface AskClaudeJsonOptions {
   timeoutMs?: number;
   /** Sólo para los logs, para saber qué llamada falló. */
   label: string;
+  /** Campos que NO se limpian de guiones (identificadores, enums, códigos). */
+  skipCleanKeys?: readonly string[];
   /** Override puntual del modelo (por defecto AI_MODEL=opus-4-8). P. ej. la
    *  evaluación de writing del test de nivel usa 'claude-haiku-4-5'. */
   model?: string;
@@ -47,6 +50,12 @@ export interface AskClaudeJsonOptions {
  * Usa structured outputs (`output_config.format`): la API restringe la salida al
  * esquema, así que no hace falta pedir "responde sólo con JSON" en el prompt ni
  * limpiar bloques markdown de la respuesta.
+ *
+ * ESTILO: acá se aplican las dos defensas contra los guiones de la IA, de forma
+ * central, para que ningún endpoint se las olvide:
+ *   · se añaden las NO_DASH_RULES al final de CADA system prompt;
+ *   · se pasa la respuesta por cleanAiDeep antes de devolverla.
+ * Ver lib/textCleanup.ts.
  */
 export async function askClaudeJson<T>(opts: AskClaudeJsonOptions): Promise<AiResult<T>> {
   if (!hasAnthropicKey()) {
@@ -72,8 +81,10 @@ export async function askClaudeJson<T>(opts: AskClaudeJsonOptions): Promise<AiRe
         //
         // Requiere un prefijo mínimo cacheable (~4096 tokens en Opus 4.8); los system
         // prompts más cortos simplemente no cachean (el log de abajo lo muestra en 0).
+        // Las reglas de estilo van al final del system prompt: son constantes, así
+        // que el prefijo cacheado sigue siendo estable entre llamadas.
         system: [
-          { type: 'text', text: opts.system, cache_control: { type: 'ephemeral' } },
+          { type: 'text', text: `${opts.system}\n\n${NO_DASH_RULES}`, cache_control: { type: 'ephemeral' } },
         ],
         output_config: {
           format: { type: 'json_schema', schema: opts.schema },
@@ -116,7 +127,9 @@ export async function askClaudeJson<T>(opts: AskClaudeJsonOptions): Promise<AiRe
       return { data: null, status: 'error', error: 'La IA no devolvió contenido.' };
     }
 
-    return { data: JSON.parse(text) as T, status: 'ready' };
+    // Limpieza de guiones ANTES de que nadie guarde ni muestre el resultado.
+    const parsed = JSON.parse(text) as T;
+    return { data: cleanAiDeep(parsed, opts.skipCleanKeys ?? []), status: 'ready' };
   } catch (err: unknown) {
     const msg = describeError(err);
     console.error(`[ai:${opts.label}] Falló la llamada a Claude: ${msg}`);
