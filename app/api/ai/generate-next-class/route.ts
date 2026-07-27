@@ -7,6 +7,9 @@
 
 import { supabase } from '@/lib/supabase';
 import { generateNextClass } from '@/lib/nextClass';
+export const runtime = 'nodejs';
+// Llamada a la IA: sin esto la plataforma corta la función a los pocos segundos.
+export const maxDuration = 60;
 import type { AvatarDomain, ClassType, FichaIA, TranscriptIA } from '@/lib/aiTypes';
 
 interface Body {

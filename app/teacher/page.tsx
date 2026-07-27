@@ -4,10 +4,13 @@ import { useSearchParams } from 'next/navigation';
 import { NavBar } from '@/components/NavBar';
 import { AuthGuard } from '@/components/AuthGuard';
 import { PullToRefresh } from '@/components/PullToRefresh';
-import { VisualCalendar, DAYS, cellKey, getSpainParts, CAL_STATE_META, type RecuperacionData } from '@/components/VisualCalendar';
+import {
+  VisualCalendar, DAYS, cellKey, getSpainParts, CAL_STATE_META,
+  CAL_DEFAULT_START, CAL_DEFAULT_END, type RecuperacionData,
+} from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
-import { calcRegisteredClassNumber, dbCheckStudentExists, dbSetStudentProduct, dbEnsureStudentAndAssignment } from '@/lib/db';
+import { calcRegisteredClassNumber, dbCheckStudentExists, dbSetStudentProduct, dbEnsureStudentAndAssignment, dbSaveTeacherCalendarHours } from '@/lib/db';
 import { classCategoryBadge } from '@/lib/finance';
 import { planBadgeStyle } from '@/lib/productUtils';
 import { isAssignableCell, withBaseState, baseCellOf } from '@/lib/cells';
@@ -2253,6 +2256,7 @@ function TeacherContent() {
   const [specialtiesDraft, setSpecialtiesDraft] = useState<string[]>([]);
   const [savingSpecialties, setSavingSpecialties] = useState(false);
   const [grid, setGrid]           = useState<Grid>({});
+  const [calendarRange, setCalendarRange] = useState({ start: CAL_DEFAULT_START, end: CAL_DEFAULT_END });
   const [gridLoading, setGridLoading]   = useState(true);
   const [saveStatus, setSaveStatus]     = useState<'idle' | 'saving' | 'saved'>('idle');
   const [dismissedInSession, setDismissedInSession] = useState<Set<string>>(new Set());
@@ -2272,6 +2276,10 @@ function TeacherContent() {
   useEffect(() => {
     if (!teacher) return;
     setGridLoading(true);
+    setCalendarRange({
+      start: teacher.calendarStartHour ?? CAL_DEFAULT_START,
+      end:   teacher.calendarEndHour   ?? CAL_DEFAULT_END,
+    });
     getTeacherGrid(teacher.id).then(g => {
       setGrid(g);
       setGridLoading(false);
@@ -2283,6 +2291,21 @@ function TeacherContent() {
     setSaveStatus('saving');
     await updateTeacherGrid(teacher.id, g);
     setSaveStatus('saved');
+    setTimeout(() => setSaveStatus('idle'), 2000);
+  }
+
+  // Ampliación del rango de horas del calendario. El estado local manda mientras
+  // dura la sesión (la lista de profesores se recarga cada 60 s) y la preferencia
+  // queda guardada en teachers.calendar_start_hour / calendar_end_hour.
+  async function handleRangeChange(startHour: number, endHour: number) {
+    setCalendarRange({ start: startHour, end: endHour });
+    setSaveStatus('saving');
+    try {
+      await dbSaveTeacherCalendarHours(teacher.id, startHour, endHour);
+      setSaveStatus('saved');
+    } catch {
+      setSaveStatus('idle');
+    }
     setTimeout(() => setSaveStatus('idle'), 2000);
   }
 
@@ -2697,7 +2720,16 @@ function TeacherContent() {
             {gridLoading ? (
               <div style={{ textAlign: 'center', padding: '48px 0', color: '#8b8e88' }}>Cargando calendario...</div>
             ) : (
-              <VisualCalendar mode="teacher" grid={grid} onGridChange={handleGridChange} onOcupadoNeed={handleOcupadoNeed} onRecuperacionNeed={handleRecuperacionNeed} />
+              <VisualCalendar
+                mode="teacher"
+                grid={grid}
+                startHour={calendarRange.start}
+                endHour={calendarRange.end}
+                onRangeChange={handleRangeChange}
+                onGridChange={handleGridChange}
+                onOcupadoNeed={handleOcupadoNeed}
+                onRecuperacionNeed={handleRecuperacionNeed}
+              />
             )}
           </div>
         )}

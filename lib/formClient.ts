@@ -74,7 +74,9 @@ export interface GenerateTokenPayload {
 }
 
 // Genera un token nuevo vía el endpoint. Devuelve { token, formUrl }.
-export async function generateFormToken(payload: GenerateTokenPayload): Promise<{ token: string; formUrl: string }> {
+export async function generateFormToken(
+  payload: GenerateTokenPayload & { expirePrevious?: boolean },
+): Promise<{ token: string; formUrl: string; expiredCount?: number }> {
   const res = await fetch('/api/forms/generate-token', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -82,7 +84,17 @@ export async function generateFormToken(payload: GenerateTokenPayload): Promise<
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data?.error || 'No se pudo generar el link.');
-  return { token: data.token, formUrl: data.formUrl };
+  return { token: data.token, formUrl: data.formUrl, expiredCount: data.expiredCount };
+}
+
+/**
+ * "Regenerar enlace del formulario": marca como 'expired' el/los enlaces
+ * anteriores del alumno y crea uno nuevo. Para cuando el anterior caducó, el
+ * alumno lo perdió o se envió a un email equivocado.
+ */
+export async function regenerateFormLink(payload: GenerateTokenPayload): Promise<{ token: string; formUrl: string }> {
+  const { token, formUrl } = await generateFormToken({ ...payload, expirePrevious: true });
+  return { token, formUrl };
 }
 
 // Devuelve el link del formulario para un alumno: reutiliza un token vigente

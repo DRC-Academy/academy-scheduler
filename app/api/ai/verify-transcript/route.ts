@@ -7,6 +7,10 @@
 import { computeTranscriptVerdict } from '@/lib/transcriptVerdict';
 import { flagLabel } from '@/lib/transcriptValidation';
 
+export const runtime = 'nodejs';
+// Corre las 3 capas (una de ellas llama a la IA): necesita presupuesto propio.
+export const maxDuration = 60;
+
 interface Body {
   transcript?: string;
   teacherId?: string;

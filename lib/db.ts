@@ -131,6 +131,9 @@ export async function dbGetTeachers(): Promise<Teacher[]> {
       freeSpots,
       totalSpots:          freeSpots + ocupadoSpots,
       specialties:         row.specialties ?? ['Inglés'],
+      // Rango del calendario. Sin migrar (columna ausente) → 9-22, el de siempre.
+      calendarStartHour:   row.calendar_start_hour ?? 9,
+      calendarEndHour:     row.calendar_end_hour ?? 22,
       timeSlots,
       libreCells,
       puntualCells,
@@ -240,6 +243,30 @@ export async function dbSaveTeacherGrid(teacherId: string, grid: Grid): Promise<
       grid:       grid,
       updated_at: new Date().toISOString(),
     }, { onConflict: 'teacher_id' });
+}
+
+/**
+ * Rango de horas que el profesor quiere ver en su calendario (06–23).
+ * Si las columnas todavía no existen (falta correr supabase-calendar-hours.sql)
+ * no se rompe nada: el calendario sigue funcionando, solo no recuerda el rango
+ * entre sesiones.
+ */
+export async function dbSaveTeacherCalendarHours(
+  teacherId: string, startHour: number, endHour: number,
+): Promise<void> {
+  const { error } = await supabase.from('teachers').update({
+    calendar_start_hour: startHour,
+    calendar_end_hour:   endHour,
+  }).eq('id', teacherId);
+
+  if (error) {
+    if (error.code === 'PGRST204' || error.code === '42703') {
+      console.warn('[db] Falta correr supabase-calendar-hours.sql: el rango del calendario no se guarda.');
+      return;
+    }
+    console.error('[db] Error al guardar el rango del calendario:', error);
+    throw new Error(error.message);
+  }
 }
 
 // ── STUDENTS ─────────────────────────────────────────────────────────────────

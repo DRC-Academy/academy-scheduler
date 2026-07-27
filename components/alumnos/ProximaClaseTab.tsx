@@ -11,7 +11,10 @@
 // pierde nada.
 
 import { useState } from 'react';
-import { analyzeTranscriptOnly, saveAnalysis, generateNextClassClient, analysisFromRow } from '@/lib/aiClient';
+import {
+  analyzeTranscriptOnly, saveAnalysis, saveTranscriptOnly,
+  generateNextClassClient, analysisFromRow,
+} from '@/lib/aiClient';
 import type { ClassAnalysisRow, FichaIA, GeneratedClassIA, TranscriptIA, StudentProfileRow } from '@/lib/aiTypes';
 import { isRiskSignal } from '@/lib/aiTypes';
 import { ClassCard, classToText, copyText } from '@/components/alumnos/ClassContent';
@@ -166,6 +169,35 @@ export default function ProximaClaseTab(p: Props) {
     }
   }
 
+  /**
+   * Salida de emergencia si la IA no responde: guarda SOLO el transcript. La clase
+   * queda registrada y cuenta para el pago; el informe se genera después desde
+   * Seguimiento con "Reintentar análisis". Antes, un fallo de la IA acá dejaba al
+   * profesor sin forma de registrar la clase.
+   */
+  async function saveWithoutAnalysis() {
+    setSaving(true);
+    setError(null);
+    try {
+      await saveTranscriptOnly({
+        ...baseArgs,
+        transcript: transcript.trim(),
+        classNumber: p.nextClass?.classNumber ?? p.nextNumber,
+        classDate: date || null,
+      });
+      await p.onRefresh();
+      p.onToast('Clase guardada. El análisis quedó pendiente: reintentalo en Seguimiento.');
+      setStage('idle');
+      setAnalysis(null);
+      setNewClass(null);
+      setTranscript('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo guardar la clase.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function handleCopy() {
     if (!p.nextClass) return;
     await copyText(classToText(p.nextClass, p.assignment.studentName));
@@ -276,9 +308,15 @@ export default function ProximaClaseTab(p: Props) {
 
         {error && <div style={errStyle}>{error}</div>}
 
-        <div className="alu-btn-row" style={{ display: 'flex', gap: 10, marginTop: 16 }}>
-          <button onClick={analyze} style={btnPrimary}>Validar y generar</button>
-          <button onClick={() => { setStage('idle'); setError(null); }} style={btnSecondary}>Cancelar</button>
+        <div className="alu-btn-row" style={{ display: 'flex', gap: 10, marginTop: 16, flexWrap: 'wrap' }}>
+          <button onClick={analyze} disabled={saving} style={btnPrimary}>Validar y generar</button>
+          {/* Si la IA falló, la clase igual se puede registrar. */}
+          {error && words >= 30 && (
+            <button onClick={saveWithoutAnalysis} disabled={saving} style={btnSecondary}>
+              {saving ? 'Guardando…' : 'Guardar clase sin análisis'}
+            </button>
+          )}
+          <button onClick={() => { setStage('idle'); setError(null); }} disabled={saving} style={btnSecondary}>Cancelar</button>
         </div>
       </div>
     );

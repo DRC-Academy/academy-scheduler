@@ -3,10 +3,18 @@
 // el texto y devuelve una confianza 0-100 de que procede de una grabación real
 // (Fathom) y no de un modelo generativo.
 //
-// Umbrales:
+// Umbrales (relajados el 27/07/2026 — ver nota):
 //   score >= 60           → válido, sin alerta
-//   score 35-59           → válido, pero marcado para revisión del admin
-//   score < 35            → inválido, bloquear el guardado
+//   score 15-59           → válido, pero marcado para revisión del admin
+//   score < 15            → señal máxima: se guarda igual y va a revisión
+//
+// NOTA IMPORTANTE — el validador NUNCA impide guardar la clase.
+// Antes, un score < 35 cancelaba el guardado y el profesor perdía el registro.
+// Transcripciones REALES de Fathom caen ahí sin ser falsas: sin marcas de tiempo
+// (el profe copia solo el texto), clases cortas, o un pegado parcial. Ahora el
+// score solo decide si la clase va directa a pagable (>= 60 y sin flags) o queda
+// pendiente de validación del equipo. El caso < 15 se conserva como severidad
+// máxima en el aviso al admin, no como bloqueo.
 //
 // La lógica es deliberadamente conservadora: los marcadores positivos son cosas
 // que una IA rara vez reproduce (timestamps, muletillas, frases cortadas), y los
@@ -25,6 +33,11 @@ export interface ValidationResult {
 }
 
 const SCORE_BASE = 50;
+
+/** Por debajo de esto la señal es máxima (aviso severo al admin). NO bloquea. */
+export const SCORE_SEVERE = 15;
+/** A partir de acá la clase puede ir directa a pagable (si no hay flags). */
+export const SCORE_CLEAN = 60;
 
 // Muletillas / marcas de habla natural (inglés + español).
 const FILLERS = [
@@ -202,11 +215,12 @@ export function validateTranscriptStructure(
   // ── Límites y veredicto ─────────────────────────────────────────────────────
   score = Math.max(0, Math.min(100, Math.round(score)));
 
-  const valid = score >= 35;
+  // `valid` = no necesita revisión. Nunca se usa para impedir el guardado.
+  const valid = score >= SCORE_CLEAN;
   const reason =
-    score >= 60 ? 'La estructura del texto es coherente con una transcripción real de Fathom.'
-    : score >= 35 ? 'La estructura presenta señales dudosas; se marca para revisión del equipo.'
-    : 'La estructura no coincide con una transcripción real de Fathom.';
+    score >= SCORE_CLEAN ? 'La estructura del texto es coherente con una transcripción real de Fathom.'
+    : score >= SCORE_SEVERE ? 'La estructura presenta señales dudosas; se marca para revisión del equipo.'
+    : 'La estructura no se parece a una transcripción de Fathom; se marca para revisión del equipo.';
 
   return { valid, score, flags, reason, lastTimestampMinutes, timestampCount };
 }

@@ -11,7 +11,7 @@ import { calculateTeacherFinance, recordVerification, ClassFinanceRow, ingresoBa
 import { dbGetAssignmentsByTeacher, calcRegisteredClassNumber } from '@/lib/db';
 import { classifyPlan } from '@/lib/productUtils';
 import { maybeSendMilestoneEmail } from '@/lib/milestoneEmails';
-import { analyzeTranscriptOnly, saveAnalysis } from '@/lib/aiClient';
+import { registerClassWithTranscript } from '@/lib/aiClient';
 import { checkTranscriptDuplicates, transcriptHash, type DupeCheck } from '@/lib/transcriptDupes';
 import { Teacher, Assignment, ClassRecordType, ClassRecord } from '@/types';
 import { HelpTooltip } from '@/components/ui';
@@ -478,10 +478,12 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
    * Guardar una clase desde "Añadir clase":
    *   1) el registro en class_records (tipo, hora, comentario) — igual que antes,
    *      pero SIN captura: se pasa null al parámetro de archivo.
-   *   2) si el tipo requiere transcript, se analiza y se guarda en class_analyses,
-   *      que es el segundo factor de verificación del cálculo de finanzas.
-   * El análisis es una llamada a la IA: tarda y tiene coste, por eso solo se
-   * dispara para clases normales/recuperación.
+   *   2) si el tipo requiere transcript, se GUARDA en class_analyses (segundo
+   *      factor de verificación del cálculo de finanzas) y recién después se
+   *      analiza con IA.
+   *
+   * El orden importa: antes se analizaba primero y, si la IA fallaba o tardaba,
+   * la clase no llegaba a registrarse. Ahora el guardado no depende de la IA.
    */
   async function handleAddClass(
     studentName: string, date: string, time: string | undefined,
@@ -508,22 +510,19 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
       transcriptHash: transcriptHashValue || null,
       replaceId,
     };
-    // BLOQUE 1 — verificar ANTES de registrar: primero analiza, luego guarda (que
-    // corre las 3 capas). Si se bloquea, NO se persiste nada (ni el class_record).
-    const analysis = await analyzeTranscriptOnly(base);
-    const result = await saveAnalysis({ ...base, analysis });
+    // Guardar el transcript (rápido, sin IA) y luego analizarlo. La validación ya
+    // no cancela nada: como mucho deja la clase pendiente de revisión del equipo.
+    const result = await registerClassWithTranscript(base);
 
-    if (result.blocked) {
-      const v = result.validation;
-      // Se lanza para que el modal muestre el mensaje neutro y quede abierto.
-      throw new Error(`${v?.teacherTitle ?? 'No hemos podido validar esta transcripción'}\n\n${v?.teacherBody ?? ''}`);
-    }
-
-    // Transcript aceptado (ok o review): recién ahora se registra la clase.
     if (!replaceId) {
       await registerClassRecord(teacher.id, studentName, date, time, null, classType, comment);
     }
-    if (result.validation?.decision === 'review' && result.validation) {
+    if (!result.analyzed) {
+      setValidationNotice({
+        title: 'Clase guardada — análisis pendiente',
+        body: 'La clase quedó registrada y cuenta para tu pago. El informe de IA no se pudo generar; podés reintentarlo desde la ficha del alumno, en Seguimiento.',
+      });
+    } else if (result.validation && result.validation.decision !== 'ok') {
       setValidationNotice({ title: result.validation.teacherTitle, body: result.validation.teacherBody });
     }
     await loadFinanceData();

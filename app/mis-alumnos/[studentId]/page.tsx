@@ -6,7 +6,7 @@
 // El identificador de la URL puede ser el student_id real o, si el alumno no lo
 // tiene, el id de la assignment: se resuelve contra las dos cosas.
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { NavBar } from '@/components/NavBar';
@@ -19,8 +19,7 @@ import { calcRegisteredClassNumber } from '@/lib/db';
 import { loadStudentBundles, norm, type StudentBundle } from '@/lib/misAlumnos';
 import { regenerateFicha } from '@/lib/aiClient';
 import { getProgressLink } from '@/lib/progressClient';
-import { getOrCreateFormLink } from '@/lib/formClient';
-import { analyzeTranscriptOnly, saveAnalysis } from '@/lib/aiClient';
+import { registerClassWithTranscript, retryAnalysis } from '@/lib/aiClient';
 import { checkTranscriptDuplicates, transcriptHash, type DupeCheck } from '@/lib/transcriptDupes';
 import { pendingClassesFor, type PendingClass } from '@/lib/pendingClasses';
 import type { Assignment } from '@/types';
@@ -32,10 +31,12 @@ import { classCategoryBadge } from '@/lib/finance';
 import { planFieldsOf } from '@/lib/productUtils';
 import { questionsForResponses } from '@/lib/formQuestions';
 import {
-  asObject, fichaFromRow, isRiskSignal,
+  asObject, fichaFromRow, isRiskSignal, needsAnalysis,
   type ClassAnalysisRow, type FichaIA, type GeneratedClassIA, type NextClassGuide, type RiskSignal,
 } from '@/lib/aiTypes';
 import ProximaClaseTab from '@/components/alumnos/ProximaClaseTab';
+import FormLinkModal from '@/components/alumnos/FormLinkModal';
+import ResetProfileModal from '@/components/alumnos/ResetProfileModal';
 import {
   Accordion, BulletList, ClampText, ProgressCompare, toBullets,
 } from '@/components/alumnos/studentPageUi';
@@ -64,6 +65,12 @@ const DOMAIN_LABEL: Record<string, string> = {
   social: 'Social', laboral: 'Laboral', educacional: 'Educacional',
 };
 
+const menuItemStyle: CSSProperties = {
+  display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px',
+  border: 'none', background: 'transparent', borderRadius: 8, cursor: 'pointer',
+  fontSize: 13.5, fontWeight: 500, fontFamily: 'inherit', color: 'var(--sp-t1)',
+};
+
 function StudentPageContent() {
   const params = useParams<{ studentId: string }>();
   const routeId = Array.isArray(params.studentId) ? params.studentId[0] : params.studentId;
@@ -78,6 +85,11 @@ function StudentPageContent() {
   const [toast, setToast] = useState<string | null>(null);
   const [pendingTarget, setPendingTarget] = useState<PendingClass | null>(null);
   const [shareOpen, setShareOpen] = useState(false);   // "Compartir progreso" (visible en los 3 tabs)
+  const [menuOpen, setMenuOpen] = useState(false);     // menú "⋯" de la cabecera
+  const [formOpen, setFormOpen] = useState(false);
+  const [resetOpen, setResetOpen] = useState(false);
+  // Enlace recién generado tras reiniciar el perfil: el modal lo muestra ya listo.
+  const [freshFormUrl, setFreshFormUrl] = useState<string | null>(null);
 
   const myAssignments = useMemo(
     () => (teacher ? assignments.filter(a => a.teacherId === teacher.id) : []),
@@ -243,6 +255,51 @@ function StudentPageContent() {
             >
               📤 Compartir progreso con el alumno
             </button>
+
+            {/* Opciones menos frecuentes: formulario y reinicio del perfil. */}
+            <div style={{ position: 'relative', flexShrink: 0 }}>
+              <button
+                onClick={() => setMenuOpen(o => !o)}
+                aria-haspopup="menu"
+                aria-expanded={menuOpen}
+                title="Más opciones"
+                style={{
+                  width: 38, height: 38, borderRadius: 10, cursor: 'pointer',
+                  border: '1px solid var(--border)', background: '#fff',
+                  color: 'var(--sp-t2)', fontSize: 18, lineHeight: 1, fontFamily: 'inherit',
+                }}
+              >
+                ⋯
+              </button>
+              {menuOpen && (
+                <>
+                  <div style={{ position: 'fixed', inset: 0, zIndex: 90 }} onClick={() => setMenuOpen(false)} />
+                  <div
+                    role="menu"
+                    style={{
+                      position: 'absolute', right: 0, top: 44, zIndex: 91, minWidth: 250,
+                      background: '#fff', border: '1px solid var(--border)', borderRadius: 12,
+                      boxShadow: '0 8px 28px rgba(0,0,0,0.14)', padding: 6,
+                    }}
+                  >
+                    <button
+                      role="menuitem"
+                      onClick={() => { setMenuOpen(false); setFreshFormUrl(null); setFormOpen(true); }}
+                      style={menuItemStyle}
+                    >
+                      Formulario inicial · enlace
+                    </button>
+                    <button
+                      role="menuitem"
+                      onClick={() => { setMenuOpen(false); setResetOpen(true); }}
+                      style={{ ...menuItemStyle, color: '#B91C1C' }}
+                    >
+                      Reiniciar perfil de IA
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
 
           <div className="sp-hero-grid">
@@ -311,6 +368,7 @@ function StudentPageContent() {
           bundle={bundle} ficha={ficha} risk={risk}
           teacher={{ id: teacher.id, name: teacher.name }}
           onToast={showToast} onRefresh={load}
+          onOpenForm={() => { setFreshFormUrl(null); setFormOpen(true); }}
         />
       )}
 
@@ -324,6 +382,17 @@ function StudentPageContent() {
           skills={skills}
           formDate={profile?.form_completed_at ?? null}
           onGoToProxima={() => setTab('proxima')}
+          retryCtx={{
+            studentName: a.studentName,
+            teacherName: teacher.name,
+            teacherId: teacher.id,
+            studentId: a.studentId || profile?.student_id || null,
+            profileId: profile?.id ?? null,
+            plan: a.plan,
+            level: a.studentLevel,
+            ficha,
+          }}
+          onRetried={async (msg: string) => { await load(); showToast(msg); }}
         />
       )}
 
@@ -358,6 +427,48 @@ function StudentPageContent() {
             onClose={() => setPendingTarget(null)}
             onSaved={async () => { await load(); await loadClassJoinLogs(); }}
             onToast={showToast}
+          />
+        )}
+
+        {/* Formulario inicial: ver, copiar y REGENERAR el enlace. */}
+        {formOpen && (
+          <FormLinkModal
+            payload={{
+              studentId: a.studentId || profile?.student_id || undefined,
+              studentName: a.studentName,
+              studentEmail: a.studentEmail || undefined,
+              teacherId: teacher.id,
+              teacherName: teacher.name,
+              assignmentId: a.id,
+              plan: a.plan || undefined,
+              level: a.studentLevel || undefined,
+            }}
+            initialUrl={freshFormUrl}
+            onClose={() => { setFormOpen(false); setFreshFormUrl(null); }}
+            onToast={showToast}
+          />
+        )}
+
+        {/* Reiniciar perfil de IA (no toca finanzas). */}
+        {resetOpen && (
+          <ResetProfileModal
+            payload={{
+              studentId: a.studentId || profile?.student_id || null,
+              studentName: a.studentName,
+              studentEmail: a.studentEmail || null,
+              teacherId: teacher.id,
+              teacherName: teacher.name,
+              assignmentId: a.id,
+              plan: a.plan || null,
+              level: a.studentLevel || null,
+            }}
+            onClose={() => setResetOpen(false)}
+            onDone={async (res) => {
+              setResetOpen(false);
+              await load();
+              showToast('Perfil reiniciado. Envía el nuevo formulario al alumno.');
+              if (res.formUrl) { setFreshFormUrl(res.formUrl); setFormOpen(true); }
+            }}
           />
         )}
 
@@ -497,28 +608,37 @@ function PendingTranscriptModal({ pending, assignment, profile, ficha, teacher, 
 
   async function persist(hash: string) {
     setBusy(true); setError('');
+    // GUARDAR primero, ANALIZAR después: si la IA falla o tarda, la clase ya está
+    // registrada y cuenta para finanzas. El informe se reintenta desde Seguimiento.
+    const base = {
+      transcript: text.trim(),
+      studentName: assignment.studentName,
+      teacherName: teacher.name,
+      studentId: assignment.studentId || profile?.student_id || null,
+      teacherId: teacher.id,
+      profileId: profile?.id ?? null,
+      plan: assignment.plan,
+      level: assignment.studentLevel,
+      classDate: pending.date,          // heredada del ingreso
+      joinLogId: pending.joinLogId,     // vínculo explícito
+      transcriptHash: hash || null,
+      studentProfile: ficha,
+    };
     try {
-      const base = {
-        transcript: text.trim(),
-        studentName: assignment.studentName,
-        teacherName: teacher.name,
-        studentId: assignment.studentId || profile?.student_id || null,
-        teacherId: teacher.id,
-        profileId: profile?.id ?? null,
-        plan: assignment.plan,
-        level: assignment.studentLevel,
-        classDate: pending.date,          // heredada del ingreso
-        joinLogId: pending.joinLogId,     // vínculo explícito
-        transcriptHash: hash || null,
-        studentProfile: ficha,
-      };
-      const analysis = await analyzeTranscriptOnly(base);
-      await saveAnalysis({ ...base, analysis });
+      const res = await registerClassWithTranscript(base);
       await onSaved();
-      onToast('Clase completada');
+      if (!res.analyzed) {
+        onToast('Clase guardada. El análisis no se completó: podés reintentarlo en Seguimiento.');
+      } else if (res.validation && res.validation.decision !== 'ok') {
+        onToast('Tu clase se ha guardado y está pendiente de revisión.');
+      } else {
+        onToast('Clase completada');
+      }
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'No se pudo guardar el transcript.');
+      const detalle = e instanceof Error ? e.message : String(e);
+      console.error('[mis-alumnos] No se pudo guardar el transcript:', e);
+      setError(`No se pudo guardar. Inténtalo de nuevo o contacta con el equipo. Error: ${detalle}`);
       setBusy(false);
     }
   }
@@ -572,7 +692,7 @@ function PendingTranscriptModal({ pending, assignment, profile, ficha, teacher, 
         <div className="sp-btn-row" style={{ display: 'flex', gap: 10, marginTop: 18 }}>
           <button onClick={onClose} disabled={busy} style={{ ...btnSecondary, flex: 1 }}>Cancelar</button>
           <button onClick={handleSave} disabled={!canSave} style={{ ...btnPrimary, flex: 2, opacity: canSave ? 1 : 0.6 }}>
-            {busy ? 'Analizando…' : 'Guardar y generar siguiente'}
+            {busy ? 'Guardando…' : 'Guardar y generar siguiente'}
           </button>
         </div>
 
@@ -608,13 +728,14 @@ function hrefFor(b: StudentBundle): string {
 }
 
 // ═══ TAB PERFIL ═══════════════════════════════════════════════════════════════
-function PerfilTab({ bundle, ficha, risk, teacher, onToast, onRefresh }: {
+function PerfilTab({ bundle, ficha, risk, teacher, onToast, onRefresh, onOpenForm }: {
   bundle: StudentBundle;
   ficha: FichaIA | null;
   risk: RiskSignal | null;
   teacher: { id: string; name: string };
   onToast: (m: string) => void;
   onRefresh: () => Promise<void>;
+  onOpenForm: () => void;
 }) {
   const { assignment: a, profile, analyses } = bundle;
   const [busy, setBusy] = useState(false);
@@ -622,30 +743,6 @@ function PerfilTab({ bundle, ficha, risk, teacher, onToast, onRefresh }: {
 
   const responses = asObject<Record<string, unknown>>(profile?.form_responses) ?? {};
   const hasResponses = Object.keys(responses).length > 0;
-
-  // Reutiliza el link vigente del formulario del alumno (o crea uno) con el
-  // mismo helper que usa el email de presentación: no inventa un flujo nuevo.
-  async function handleCopyFormLink() {
-    setBusy(true);
-    try {
-      const url = await getOrCreateFormLink({
-        studentId: a.studentId || undefined,
-        studentName: a.studentName,
-        studentEmail: a.studentEmail || undefined,
-        teacherId: teacher.id,
-        teacherName: teacher.name,
-        assignmentId: a.id,
-        plan: a.plan || undefined,
-        level: a.studentLevel || undefined,
-      });
-      await navigator.clipboard.writeText(url);
-      onToast('Link del formulario copiado');
-    } catch (e) {
-      onToast(e instanceof Error ? e.message : 'No se pudo generar el link.');
-    } finally {
-      setBusy(false);
-    }
-  }
 
   async function handleRegenerate() {
     if (!profile) return;
@@ -669,9 +766,9 @@ function PerfilTab({ bundle, ficha, risk, teacher, onToast, onRefresh }: {
           Envía el formulario inicial al alumno para generar su perfil automáticamente.
         </div>
         <div className="sp-btn-row" style={{ display: 'inline-flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center' }}>
-          <button onClick={handleCopyFormLink} disabled={busy} style={{ ...btnPrimary, opacity: busy ? 0.6 : 1 }}>
-            {busy ? 'Generando…' : 'Copiar link del formulario'}
-          </button>
+          {/* Abre el modal del formulario: copiar el enlace, copiar el email y
+              regenerarlo si el alumno lo perdió o caducó. */}
+          <button onClick={onOpenForm} style={btnPrimary}>Enlace del formulario</button>
           {/* Si ya hay respuestas guardadas, la ficha se puede generar sin esperar. */}
           {profile && (
             <button onClick={handleRegenerate} disabled={busy} style={btnSecondary}>Generar ficha ahora</button>
@@ -787,8 +884,55 @@ function Field({ label, value }: { label: string; value?: string | null }) {
   );
 }
 
+/**
+ * Clase guardada cuyo informe de IA quedó pendiente o falló. El transcript ESTÁ
+ * guardado y cuenta para finanzas: solo falta el informe, que se reintenta sin
+ * volver a pegar nada.
+ */
+function RetryAnalysisRow({ row, ctx, onDone }: {
+  row: ClassAnalysisRow;
+  ctx: { studentName: string; teacherName: string; teacherId: string; studentId?: string | null; profileId?: string | null; plan?: string | null; level?: string | null; ficha: FichaIA | null };
+  onDone: (msg: string) => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  async function run() {
+    setBusy(true); setError('');
+    const res = await retryAnalysis({
+      analysisId: row.id,
+      studentName: ctx.studentName,
+      teacherName: ctx.teacherName,
+      teacherId: ctx.teacherId,
+      studentId: ctx.studentId,
+      profileId: ctx.profileId,
+      plan: ctx.plan,
+      level: ctx.level,
+      studentProfile: ctx.ficha,
+    });
+    if (res.analyzed) {
+      await onDone('Análisis completado');
+      return;
+    }
+    setError(res.error || 'El análisis sigue sin completarse. Probá de nuevo en unos minutos.');
+    setBusy(false);
+  }
+
+  return (
+    <div style={{ marginTop: 10, padding: '11px 13px', borderRadius: 9, background: '#fffdf5', border: '1px solid #f2e2c9' }}>
+      <div style={{ fontSize: 13, color: '#9a6516', lineHeight: 1.5, marginBottom: 9 }}>
+        La clase está guardada, pero su análisis no se completó.
+      </div>
+      {error && <div style={{ fontSize: 12.5, color: '#B91C1C', lineHeight: 1.5, marginBottom: 9 }}>{error}</div>}
+      <button onClick={run} disabled={busy} style={{ ...btnSecondary, padding: '7px 14px', fontSize: 12.5, opacity: busy ? 0.6 : 1 }}>
+        {busy ? 'Analizando…' : 'Reintentar análisis'}
+      </button>
+    </div>
+  );
+}
+
 // ═══ TAB SEGUIMIENTO ══════════════════════════════════════════════════════════
-function SeguimientoTab({ analyses, risk, progressScore, classNumber, skills, formDate, pending, onCompletePending, onGoToProxima }: {
+function SeguimientoTab({ analyses, risk, progressScore, classNumber, skills, formDate, pending, onCompletePending, onGoToProxima, retryCtx, onRetried }: {
   analyses: ClassAnalysisRow[];
   risk: RiskSignal | null;
   pending: PendingClass[];
@@ -798,6 +942,8 @@ function SeguimientoTab({ analyses, risk, progressScore, classNumber, skills, fo
   skills: SkillGauge[] | null;
   formDate: string | null;
   onGoToProxima: () => void;
+  retryCtx: { studentName: string; teacherName: string; teacherId: string; studentId?: string | null; profileId?: string | null; plan?: string | null; level?: string | null; ficha: FichaIA | null };
+  onRetried: (msg: string) => Promise<void>;
 }) {
   const milestone = milestoneProgress(classNumber);
 
@@ -958,6 +1104,10 @@ function SeguimientoTab({ analyses, risk, progressScore, classNumber, skills, fo
                   </Accordion>
                 )}
               </div>
+
+              {needsAnalysis(r) && (
+                <RetryAnalysisRow row={r} ctx={retryCtx} onDone={onRetried} />
+              )}
               </div>
             </div>
           );

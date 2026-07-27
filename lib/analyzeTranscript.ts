@@ -91,6 +91,17 @@ TRANSCRIPCIÓN:
 ${input.transcript}`;
 }
 
+// El timeout tiene que caber DENTRO del límite de la función serverless
+// (maxDuration = 60 s en app/api/ai/analyze-transcript, que además corre después
+// la verificación de autenticidad). Antes eran 180 s: la llamada seguía viva pero
+// Vercel ya había matado la función, así que el profesor recibía un fallo genérico
+// sin cuerpo JSON. Con 40 s el error llega limpio y,
+// como el transcript YA está guardado, la clase no se pierde: queda el botón
+// "Reintentar análisis".
+//
+// effort 'medium' (antes 'high'): con 'high' un transcript de 60 min se iba por
+// encima del minuto y el análisis fallaba casi siempre. 'medium' entra holgado y
+// el informe mantiene la calidad (el esquema estructurado hace el trabajo duro).
 export async function analyzeTranscript(input: TranscriptInput): Promise<TranscriptResult> {
   return askClaudeJson<TranscriptIA>({
     label: 'analyze-transcript',
@@ -98,7 +109,7 @@ export async function analyzeTranscript(input: TranscriptInput): Promise<Transcr
     prompt: buildUserPrompt(input),
     schema: TRANSCRIPT_SCHEMA as unknown as Record<string, unknown>,
     maxTokens: 12000,
-    effort: 'high',
-    timeoutMs: 180_000,
+    effort: 'medium',
+    timeoutMs: 40_000,
   });
 }

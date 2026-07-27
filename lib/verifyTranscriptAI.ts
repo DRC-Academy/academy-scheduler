@@ -72,6 +72,9 @@ ${snippet}`;
     schema: SCHEMA as unknown as Record<string, unknown>,
     maxTokens: 700,
     label: 'verify-transcript',
+    // Corre DESPUÉS del análisis pedagógico dentro de la misma función serverless
+    // (maxDuration 60 s): 15 s de techo para no comerse el presupuesto restante.
+    timeoutMs: 15_000,
   });
   return { data: res.data, status: res.status };
 }

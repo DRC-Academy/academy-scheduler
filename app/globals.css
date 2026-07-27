@@ -1163,6 +1163,21 @@ label {
   padding: 1px 6px; border-radius: 7px; line-height: 1.3; white-space: nowrap;
 }
 
+/* Ampliar el rango de horas (profesor): fila al principio y al final de la
+   columna de horas, en las dos vistas (grilla y agenda móvil). */
+.vc-addhour {
+  display: block; width: 100%; box-sizing: border-box;
+  padding: 9px 12px; border: 1px dashed #cfd3cb; background: #fbfbf9;
+  color: #5f6360; font-family: inherit; font-size: 12.5px; font-weight: 600;
+  cursor: pointer; text-align: left; transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.vc-grid > .vc-addhour { border-left: none; border-right: none; }
+.vc-grid > .vc-addhour:first-child { border-top: none; }
+.vc-grid > .vc-addhour:last-child { border-bottom: none; }
+.vc-agenda > .vc-addhour { border-radius: 10px; }
+.vc-addhour:hover:not(:disabled) { background: #eef6ef; color: #15803d; border-color: #1E9E3A; }
+.vc-addhour:disabled { opacity: 0.45; cursor: not-allowed; }
+
 /* Conmutador y agenda: solo móvil */
 .vc-mobile { display: none; }
 .vc-agenda { display: none; }

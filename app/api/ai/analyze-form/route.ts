@@ -11,6 +11,9 @@
 
 import { supabase } from '@/lib/supabase';
 import { generateFicha } from '@/lib/analyzeForm';
+export const runtime = 'nodejs';
+// Llamada a la IA: sin esto la plataforma corta la función a los pocos segundos.
+export const maxDuration = 60;
 import { fichaToColumns } from '@/lib/aiTypes';
 import { formatResponsesForAI, type FormResponses } from '@/lib/formQuestions';
 

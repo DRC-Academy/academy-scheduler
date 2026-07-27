@@ -33,6 +33,11 @@ const ANALYSIS_COLS = `
   risk_signal, risk_explanation, analyzed_at, class_date, class_title, next_class_content
 `.replace(/\s+/g, ' ').trim();
 
+// Columnas de migraciones posteriores (vínculo con el ingreso, validación, estado
+// del análisis). Si la base no las tiene, Supabase falla la consulta ENTERA con
+// 42703 → se reintenta sin ellas para no dejar la página en blanco.
+const ANALYSIS_COLS_EXTRA = `${ANALYSIS_COLS}, join_log_id, validation_status, analysis_status, analysis_error`;
+
 export interface StudentBundle {
   assignment: Assignment;
   profile: StudentProfileRow | null;
@@ -68,10 +73,17 @@ function lookup<T extends { student_id?: string | null; student_name?: string | 
  * `assignments` viene del contexto de la app (ya cargado): es la fuente de verdad.
  */
 export async function loadStudentBundles(assignments: Assignment[]): Promise<StudentBundle[]> {
-  const [profilesRes, analysesRes] = await Promise.all([
+  const readAnalyses = (cols: string) =>
+    supabase.from('class_analyses').select(cols).order('analyzed_at', { ascending: false });
+
+  const [profilesRes, firstTry] = await Promise.all([
     supabase.from('student_profiles').select(PROFILE_COLS),
-    supabase.from('class_analyses').select(ANALYSIS_COLS).order('analyzed_at', { ascending: false }),
+    readAnalyses(ANALYSIS_COLS_EXTRA),
   ]);
+
+  const analysesRes = (firstTry.error?.code === '42703' || firstTry.error?.code === 'PGRST204')
+    ? await readAnalyses(ANALYSIS_COLS)
+    : firstTry;
 
   if (profilesRes.error) console.error('[mis-alumnos] Error al leer student_profiles:', profilesRes.error);
   if (analysesRes.error) console.error('[mis-alumnos] Error al leer class_analyses:', analysesRes.error);

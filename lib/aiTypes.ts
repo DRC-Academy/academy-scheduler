@@ -184,6 +184,21 @@ export interface ClassAnalysisRow {
   class_date: string | null;
   class_title: string | null;
   next_class_content: GeneratedClassIA | string | null;
+  /** Ingreso ("Ingresar a clase") al que pertenece esta clase, si se registró así. */
+  join_log_id?: string | null;
+  /** 'ok' | 'review' | 'approved' | 'rejected' — validación del transcript. */
+  validation_status?: string | null;
+  /** 'ready' | 'pending' | 'failed' — estado del informe de IA (puede reintentarse). */
+  analysis_status?: string | null;
+  analysis_error?: string | null;
+}
+
+/** ¿El informe de IA de esta clase quedó a medias? (transcript guardado, informe no) */
+export function needsAnalysis(r: ClassAnalysisRow): boolean {
+  if (r.analysis_status === 'ready') return false;
+  if (r.analysis_status === 'pending' || r.analysis_status === 'failed') return true;
+  // Base sin migrar (sin analysis_status): se deduce del contenido.
+  return !(r.class_summary ?? '').trim();
 }
 
 /** Bloque de una clase generada (warm-up, contenido, práctica, cierre). */

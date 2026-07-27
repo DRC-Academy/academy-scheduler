@@ -16,6 +16,32 @@ interface Body {
   assignmentId?: string;
   plan?: string;
   level?: string;
+  /** "Regenerar enlace": invalida los links anteriores del alumno antes de crear
+   *  el nuevo. El link viejo deja de funcionar. */
+  expirePrevious?: boolean;
+}
+
+/**
+ * Marca como 'expired' los tokens vigentes del alumno. Se busca por student_id y,
+ * como respaldo, por nombre (mismo criterio tolerante que el resto del sistema:
+ * hay alumnos antiguos cuyo token se creó sin student_id).
+ */
+async function expirePreviousTokens(studentId: string | undefined, studentName: string): Promise<number> {
+  const patch = { status: 'expired' };
+  let expired = 0;
+
+  if (studentId) {
+    const { data, error } = await supabase.from('form_tokens').update(patch)
+      .eq('student_id', studentId).neq('status', 'expired').select('id');
+    if (error) console.error('[generate-token] Error al expirar por student_id:', error);
+    expired += data?.length ?? 0;
+  }
+  const { data, error } = await supabase.from('form_tokens').update(patch)
+    .ilike('student_name', studentName).neq('status', 'expired').select('id');
+  if (error) console.error('[generate-token] Error al expirar por nombre:', error);
+  expired += data?.length ?? 0;
+
+  return expired;
 }
 
 // Base pública del formulario. Se prioriza el origin de la request (funciona en
@@ -47,6 +73,13 @@ export async function POST(request: Request): Promise<Response> {
       { error: 'Faltan datos obligatorios (teacherId, studentName, teacherName).' },
       { status: 400 },
     );
+  }
+
+  // Regenerar: el enlace anterior deja de funcionar ANTES de crear el nuevo, para
+  // que nunca queden dos links vivos del mismo alumno.
+  let expiredCount = 0;
+  if (body.expirePrevious) {
+    expiredCount = await expirePreviousTokens(body.studentId?.trim() || undefined, studentName);
   }
 
   const token = crypto.randomUUID();
@@ -82,5 +115,5 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   const formUrl = `${publicBase(request)}/formulario/${token}`;
-  return Response.json({ token, formUrl, id });
+  return Response.json({ token, formUrl, id, expiredCount });
 }
