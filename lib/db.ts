@@ -1040,6 +1040,35 @@ export interface AffectedTeacher {
   notificationEmail?: string;
 }
 
+/**
+ * Pide al servidor la foto de churn de un alumno que se está dando de baja.
+ * Nunca lanza: si falla, se pierde el ejemplo del dataset pero la baja sigue.
+ *
+ * Tope de 20 s para que el admin no se quede esperando. Si se agota, el endpoint
+ * sigue corriendo en el servidor y normalmente acaba guardando la foto igual: se
+ * pierde el aviso en consola, no el dato.
+ */
+async function captureChurnOnDropout(args: {
+  studentId: string | null; studentName: string; teacherId: string | null;
+}): Promise<void> {
+  try {
+    const res = await fetch('/api/churn/capture', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...args, trigger: 'manual_dropout', label: 'churned' }),
+      signal: AbortSignal.timeout(20_000),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (data?.captured) {
+      console.log(`[dbDeleteStudent] Foto de churn guardada para "${args.studentName}" (riesgo ${data.combinedRisk}/100).`);
+    } else {
+      console.warn(`[dbDeleteStudent] No se pudo capturar la foto de churn de "${args.studentName}":`, data?.error ?? data?.reason ?? 'sin detalle');
+    }
+  } catch (e) {
+    console.error('[dbDeleteStudent] Falló la captura de churn (la baja continúa):', e);
+  }
+}
+
 export async function dbDeleteStudent(studentId: string, studentName: string, createdBy?: string): Promise<AffectedTeacher[]> {
   const firstName = studentName.split(' ')[0];
 
@@ -1101,6 +1130,20 @@ export async function dbDeleteStudent(studentId: string, studentName: string, cr
     const { error: dropErr } = await supabase.from('student_dropouts').insert(dropoutRows);
     if (dropErr) console.error('[dbDeleteStudent] Error al registrar la baja (churn):', dropErr);
   }
+
+  // Foto de señales de churn ANTES de borrar: es el ejemplo POSITIVO etiquetado
+  // que alimenta la predicción de bajas. En DRC las bajas son siempre manuales
+  // (el admin ve "cancelado" en WooSubscriptions y borra al alumno), así que sin
+  // esto el dataset se quedaba vacío: el webhook de Woo nunca se dispara.
+  //
+  // Va por endpoint porque la captura es de servidor (lee varias tablas y llama a
+  // la IA) y esta función corre en el navegador. Best-effort: la baja NUNCA se
+  // bloquea ni se retrasa de forma perceptible por esto.
+  await captureChurnOnDropout({
+    studentId,
+    studentName,
+    teacherId: [...teacherIds][0] ?? null,
+  });
 
   // Notificar a cada profesor afectado antes de limpiar (manual o vía webhook).
   if (createdBy && teacherIds.size > 0) {

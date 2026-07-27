@@ -24,6 +24,7 @@ export default function ChurnTab() {
   const [data, setData] = useState<ChurnOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
+  const [backfilling, setBackfilling] = useState(false);
   const [scanMsg, setScanMsg] = useState<string | null>(null);
 
   async function load() {
@@ -48,6 +49,29 @@ export default function ChurnTab() {
     }
   }
 
+  // Bajas antiguas que se registraron antes de que la baja manual capturara la
+  // foto: su historial sigue en la base, así que se pueden recuperar.
+  async function backfill() {
+    setBackfilling(true); setScanMsg(null);
+    try {
+      const prev = await (await fetch('/api/churn/backfill')).json();
+      if (prev?.error) throw new Error(prev.error);
+      if (!prev.pendingStudents) {
+        setScanMsg('No hay bajas antiguas pendientes: todas tienen su foto.');
+        return;
+      }
+      const res = await fetch('/api/churn/backfill', { method: 'POST' });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j?.error || 'La recuperación falló.');
+      setScanMsg(`${j.captured} baja(s) recuperada(s)${j.failed ? `, ${j.failed} sin datos suficientes` : ''}.`);
+      await load();
+    } catch (e) {
+      setScanMsg((e as Error).message);
+    } finally {
+      setBackfilling(false);
+    }
+  }
+
   const pct = data ? Math.min(100, Math.round((data.churnedCount / GOAL) * 100)) : 0;
 
   const card = (label: string, value: React.ReactNode, sub?: string) => (
@@ -68,10 +92,17 @@ export default function ChurnTab() {
             Hasta reunir ~{GOAL} bajas (estimado 3 meses) las alertas son orientativas, no fiables.
           </div>
         </div>
-        <button onClick={scanNow} disabled={scanning}
-          style={{ padding: '9px 16px', borderRadius: 8, border: 'none', background: scanning ? '#c8d3cb' : '#1E9E3A', color: 'white', cursor: scanning ? 'wait' : 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
-          {scanning ? 'Escaneando…' : 'Escanear ahora'}
-        </button>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button onClick={backfill} disabled={backfilling || scanning}
+            title="Recupera las bajas que se registraron antes de que la baja manual guardara sus señales"
+            style={{ padding: '9px 16px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: backfilling ? 'wait' : 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
+            {backfilling ? 'Recuperando…' : 'Recuperar bajas antiguas'}
+          </button>
+          <button onClick={scanNow} disabled={scanning || backfilling}
+            style={{ padding: '9px 16px', borderRadius: 8, border: 'none', background: scanning ? '#c8d3cb' : '#1E9E3A', color: 'white', cursor: scanning ? 'wait' : 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
+            {scanning ? 'Escaneando…' : 'Escanear ahora'}
+          </button>
+        </div>
       </div>
 
       {scanMsg && (

@@ -3,8 +3,12 @@
 // combina en un riesgo y lo guarda en churn_snapshots. SOLO SERVIDOR.
 //
 // Reutilizado por:
-//   · el webhook de cancelación de WooCommerce (label 'churned') — el ejemplo real.
+//   · la BAJA MANUAL desde el panel (label 'churned') — la vía real en DRC: el
+//     admin ve "cancelado" en WooSubscriptions y borra al alumno a mano.
+//   · el webhook de cancelación de WooCommerce (label 'churned'), si algún día
+//     se conecta.
 //   · el escaneo de alumnos activos (label 'active') — la vigilancia temprana.
+//   · el backfill de bajas antiguas (label 'churned', con asOfIso).
 
 import { supabase } from '@/lib/supabase';
 import { computeChurnSignals, type ChurnSignals } from '@/lib/churnSignals';
@@ -33,14 +37,21 @@ export async function captureChurnSnapshot(args: {
   studentId?: string | null;
   studentName: string;
   teacherId?: string | null;
-  trigger: 'cancellation' | 'active_check' | 'manual';
+  trigger: 'cancellation' | 'manual_dropout' | 'active_check' | 'manual';
   label: 'churned' | 'active';
   // Control de coste de la IA: 'always' (bajas y manual), 'gated' (escaneo: solo si
   // el riesgo determinista ya es apreciable), 'never'. Por defecto 'always'.
   aiMode?: 'always' | 'gated' | 'never';
+  /**
+   * Fecha a la que se refiere la foto. Por defecto ahora. El backfill de bajas
+   * antiguas pasa la fecha REAL de la baja: sin esto, "días desde la última
+   * clase" se mediría contra hoy y saldría inflado en cada baja recuperada.
+   */
+  asOfIso?: string;
 }): Promise<ChurnSnapshotResult | null> {
   const studentName = args.studentName?.trim();
   if (!studentName) return null;
+  const asOf = args.asOfIso || new Date().toISOString();
 
   // 1) Reunir el historial reciente. class_records/join_logs se filtran por nombre;
   //    los análisis por student_id si lo hay (más fiable) y por nombre si no.
@@ -57,7 +68,7 @@ export async function captureChurnSnapshot(args: {
   const analyses = (anaRes.data ?? []) as Array<{ student_name: string; class_date?: string | null; analyzed_at?: string | null; risk_signal?: string | null; transcript?: string | null }>;
 
   // 2) Señales deterministas.
-  const signals = computeChurnSignals({ studentName, records, logs, analyses, window: WINDOW });
+  const signals = computeChurnSignals({ studentName, records, logs, analyses, window: WINDOW, nowIso: asOf });
 
   // 3) Análisis por IA (best-effort) sobre las transcripciones disponibles.
   const aiMode = args.aiMode ?? 'always';
@@ -84,7 +95,7 @@ export async function captureChurnSnapshot(args: {
     student_id:   args.studentId ?? null,
     student_name: studentName,
     teacher_id:   args.teacherId ?? null,
-    captured_at:  new Date().toISOString(),
+    captured_at:  asOf,
     trigger:      args.trigger,
     label:        args.label,
     classes_analyzed:      signals.classesAnalyzed,
