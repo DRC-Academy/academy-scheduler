@@ -2866,12 +2866,21 @@ function AuditPanel() {
 // ─── Alerta de alumnos con múltiples profesores (punto 4) ─────────────────────
 const DUP_REVIEWED_KEY = 'dup_teachers_reviewed';
 
+/** Acción destructiva pendiente de confirmar. */
+type DupAction =
+  | { kind: 'keep'; group: DuplicateAssignmentGroup; assignmentId: string; teacherName: string }
+  | { kind: 'delete'; group: DuplicateAssignmentGroup };
+
 function DuplicatesBanner() {
-  const { assignments, teachers, removeAssignment } = useTeachers();
+  const { assignments, removeAssignment, deleteStudent } = useTeachers();
+  const { user } = useAuth();
   const [open, setOpen] = useState(false);
   const [reviewed, setReviewed] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
-  const [changeFor, setChangeFor] = useState<{ group: DuplicateAssignmentGroup } | null>(null);
+  const [changeFor, setChangeFor] = useState<{ assignmentId: string } | null>(null);
+  const [confirm, setConfirm] = useState<DupAction | null>(null);
+  const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
+  const [showReviewed, setShowReviewed] = useState(false);
 
   // Marcados como "revisado" (localStorage) para no volver a alertar.
   useEffect(() => {
@@ -2882,7 +2891,8 @@ function DuplicatesBanner() {
   }, []);
 
   const allDuplicates = useMemo(() => findDuplicateTeacherAssignments(assignments), [assignments]);
-  const duplicates = allDuplicates.filter(d => !reviewed.has(d.key));
+  const duplicates = showReviewed ? allDuplicates : allDuplicates.filter(d => !reviewed.has(d.key));
+  const hiddenCount = allDuplicates.length - allDuplicates.filter(d => !reviewed.has(d.key)).length;
 
   function markReviewed(key: string) {
     setReviewed(prev => {
@@ -2891,35 +2901,68 @@ function DuplicatesBanner() {
       return next;
     });
   }
+  function clearReviewed() {
+    setReviewed(new Set());
+    try { localStorage.removeItem(DUP_REVIEWED_KEY); } catch {}
+  }
 
-  // "Mantener solo con [teacher]": elimina las demás assignments del alumno.
+  // "Mantener solo con [profe]": elimina las DEMÁS assignments y libera sus grids.
   async function keepOnly(group: DuplicateAssignmentGroup, keepAssignmentId: string) {
-    setBusy(true);
-    try {
-      for (const a of group.assignments) {
-        if (a.assignmentId === keepAssignmentId) continue;
+    setBusy(true); setMsg(null);
+    const fallidas: string[] = [];
+    let quitadas = 0;
+    // Sin cortar en el primer error: si una falla, las demás igual se limpian y
+    // se informa de cuál quedó pendiente (antes se abortaba a medias en silencio).
+    for (const a of group.assignments) {
+      if (a.assignmentId === keepAssignmentId) continue;
+      try {
         await removeAssignment(a.assignmentId, a.teacherId, group.studentName, a.slots);
+        quitadas++;
+      } catch (e) {
+        console.error('[duplicados] No se pudo quitar la asignación', a.assignmentId, e);
+        fallidas.push(a.teacherName);
       }
+    }
+    setBusy(false);
+    setMsg(fallidas.length
+      ? { text: `Se quitaron ${quitadas}, pero fallaron: ${fallidas.join(', ')}.`, error: true }
+      : { text: `${group.studentName}: ${quitadas} asignación(es) eliminada(s) y calendario liberado.` });
+  }
+
+  // Elimina al alumno del sistema: assignments, ficha(s) y celdas de TODOS los
+  // calendarios. Conserva el historial de clases (base contable).
+  async function removeStudent(group: DuplicateAssignmentGroup) {
+    setBusy(true); setMsg(null);
+    try {
+      const [principal, ...resto] = group.studentIds.length ? group.studentIds : [group.studentId];
+      const afectados = await deleteStudent(principal, group.studentName, user?.username, resto);
+      markReviewed(group.key);
+      setMsg({ text: `${group.studentName} eliminado. Calendarios liberados: ${afectados.length || 0} profesor(es).` });
+    } catch (e) {
+      console.error('[duplicados] No se pudo eliminar al alumno:', e);
+      setMsg({ text: `No se pudo eliminar a ${group.studentName}: ${(e as Error).message}`, error: true });
     } finally {
       setBusy(false);
     }
   }
 
-  if (duplicates.length === 0) return null;
+  if (allDuplicates.length === 0) return null;
 
   const changeGroupAssignment = changeFor
-    ? assignments.find(a => a.id === changeFor.group.assignments[0].assignmentId)
+    ? assignments.find(a => a.id === changeFor.assignmentId)
     : null;
 
   return (
     <>
-      <div className="adm-banner">
-        <span className="adm-dot" style={{ background: '#dc4a38' }} />
-        <span style={{ flex: 1, minWidth: 200, lineHeight: 1.5 }}>
-          {duplicates.length} alumno{duplicates.length !== 1 ? 's' : ''} asignado{duplicates.length !== 1 ? 's' : ''} a múltiples profesores — puede causar errores en finanzas y calendarios.
-        </span>
-        <button className="adm-banner-btn" onClick={() => setOpen(true)}>Ver y resolver</button>
-      </div>
+      {duplicates.length > 0 && (
+        <div className="adm-banner">
+          <span className="adm-dot" style={{ background: '#dc4a38' }} />
+          <span style={{ flex: 1, minWidth: 200, lineHeight: 1.5 }}>
+            {duplicates.length} alumno{duplicates.length !== 1 ? 's' : ''} con asignaciones duplicadas. Puede duplicar clases en finanzas y ocupar horarios que en realidad están libres.
+          </span>
+          <button className="adm-banner-btn" onClick={() => setOpen(true)}>Ver y resolver</button>
+        </div>
+      )}
 
       {open && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(6px)', zIndex: 90, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
@@ -2927,11 +2970,31 @@ function DuplicatesBanner() {
           <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 18, width: '100%', maxWidth: 620, maxHeight: '92vh', overflowY: 'auto', padding: 26 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
               <div>
-                <div style={{ fontWeight: 700, fontSize: 18, color: 'var(--text-primary)' }}>⚠️ Alumnos con múltiples profesores</div>
-                <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', marginTop: 3 }}>Resolvé cada caso para evitar errores en finanzas y calendarios.</div>
+                <div style={{ fontWeight: 700, fontSize: 18, color: 'var(--text-primary)' }}>⚠️ Alumnos con asignaciones duplicadas</div>
+                <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', marginTop: 3, lineHeight: 1.55 }}>
+                  Un alumno con dos asignaciones activas cuenta dos veces en finanzas y bloquea horarios que en realidad están libres.
+                  Si de verdad da clase con los dos profesores, márcalo como correcto.
+                </div>
               </div>
-              <button onClick={() => setOpen(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 22, cursor: 'pointer' }}>✕</button>
+              <button onClick={() => setOpen(false)} disabled={busy} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 22, cursor: busy ? 'not-allowed' : 'pointer' }}>✕</button>
             </div>
+
+            {msg && (
+              <div style={{
+                marginBottom: 14, padding: '10px 13px', borderRadius: 9, fontSize: 12.5, lineHeight: 1.5,
+                background: msg.error ? 'rgba(220,38,38,0.08)' : 'rgba(30,158,58,0.08)',
+                border: `1px solid ${msg.error ? 'rgba(220,38,38,0.3)' : 'rgba(30,158,58,0.3)'}`,
+                color: msg.error ? '#B91C1C' : '#1f7a3d',
+              }}>
+                {msg.text}
+              </div>
+            )}
+
+            {duplicates.length === 0 && (
+              <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
+                No queda ningún caso pendiente.
+              </div>
+            )}
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               {duplicates.map(group => (
@@ -2941,35 +3004,126 @@ function DuplicatesBanner() {
                       {group.studentName.split(' ').map(p => p[0]).join('').toUpperCase().slice(0, 2)}
                     </div>
                     <div style={{ fontWeight: 700, fontSize: 14.5, color: 'var(--text-primary)' }}>{group.studentName}</div>
+                    <span style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 700, padding: '3px 9px', borderRadius: 20, whiteSpace: 'nowrap', background: group.variosProfesores ? 'rgba(220,38,38,0.1)' : 'rgba(255,196,0,0.15)', color: group.variosProfesores ? '#B91C1C' : '#8a6d00' }}>
+                      {group.variosProfesores ? 'Varios profesores' : 'Asignación duplicada'}
+                    </span>
                   </div>
-                  <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', marginBottom: 12, lineHeight: 1.6 }}>
-                    Asignada a: {group.assignments.map((a, i) => (
-                      <span key={a.assignmentId}>
-                        {i > 0 && ' y '}
-                        <b style={{ color: 'var(--text-primary)' }}>{a.teacherName}</b> ({a.slots.map(s => `${s.day} ${s.hour}`).join(', ') || '—'})
-                      </span>
+                  {/* Evidencia: por qué se agrupó y con qué datos. Si hay varios
+                      student_id, el alumno está duplicado en la tabla `students`,
+                      que es la causa habitual de todo el lío. */}
+                  <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 10, lineHeight: 1.6 }}>
+                    {group.emails.length > 0 && <div>Email: {group.emails.join(' · ')}</div>}
+                    {group.studentIds.length > 1 && (
+                      <div style={{ color: '#c2410c', fontWeight: 600 }}>
+                        ⚠️ Está dado de alta {group.studentIds.length} veces en la base ({group.studentIds.join(', ')}).
+                      </div>
+                    )}
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 12 }}>
+                    {group.assignments.map(a => (
+                      <div key={a.assignmentId} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 12.5, color: 'var(--text-secondary)' }}>
+                        <b style={{ color: 'var(--text-primary)' }}>{a.teacherName}</b>
+                        <span>{a.slots.map(s => `${s.day} ${s.hour}`).join(', ') || 'sin horario'}</span>
+                        {a.startDate && <span style={{ color: 'var(--text-muted)' }}>· desde {a.startDate.slice(0, 10)}</span>}
+                        <button onClick={() => setChangeFor({ assignmentId: a.assignmentId })} disabled={busy}
+                          title="Mover este alumno a otro profesor conservando su historial"
+                          style={{ marginLeft: 'auto', background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 11.5, cursor: busy ? 'not-allowed' : 'pointer', textDecoration: 'underline', fontFamily: 'inherit', padding: 0 }}>
+                          cambiar de profesor
+                        </button>
+                      </div>
                     ))}
                   </div>
+
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
                     {group.assignments.map(a => (
-                      <button key={a.assignmentId} onClick={() => keepOnly(group, a.assignmentId)} disabled={busy}
+                      <button key={a.assignmentId} onClick={() => setConfirm({ kind: 'keep', group, assignmentId: a.assignmentId, teacherName: a.teacherName })} disabled={busy}
                         style={{ padding: '9px 12px', borderRadius: 8, border: '1px solid rgba(30,158,58,0.4)', background: 'rgba(30,158,58,0.08)', color: '#1E9E3A', fontWeight: 700, fontSize: 12.5, cursor: busy ? 'not-allowed' : 'pointer', textAlign: 'left', fontFamily: 'inherit' }}>
-                        ✓ Mantener solo con {a.teacherName} (elimina las demás y libera su grid)
+                        ✓ Dejarlo solo con {a.teacherName}
                       </button>
                     ))}
                     <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
                       <button onClick={() => markReviewed(group.key)} disabled={busy}
-                        style={{ flex: '1 1 180px', padding: '9px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface-3)', color: 'var(--text-secondary)', fontWeight: 600, fontSize: 12.5, cursor: busy ? 'not-allowed' : 'pointer', fontFamily: 'inherit' }}>
-                        Ambas son correctas (tiene clases con las dos)
+                        style={{ flex: '1 1 200px', padding: '9px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface-3)', color: 'var(--text-secondary)', fontWeight: 600, fontSize: 12.5, cursor: busy ? 'not-allowed' : 'pointer', fontFamily: 'inherit' }}>
+                        Es correcto, da clase con {group.assignments.length > 2 ? 'todos' : 'los dos'}
                       </button>
-                      <button onClick={() => setChangeFor({ group })} disabled={busy}
-                        style={{ flex: '1 1 150px', padding: '9px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', fontWeight: 600, fontSize: 12.5, cursor: busy ? 'not-allowed' : 'pointer', fontFamily: 'inherit' }}>
-                        🔄 Usar "Cambiar de profesor"
+                      <button onClick={() => setConfirm({ kind: 'delete', group })} disabled={busy}
+                        style={{ flex: '1 1 150px', padding: '9px 12px', borderRadius: 8, border: '1px solid rgba(220,38,38,0.4)', background: 'rgba(220,38,38,0.06)', color: '#B91C1C', fontWeight: 700, fontSize: 12.5, cursor: busy ? 'not-allowed' : 'pointer', fontFamily: 'inherit' }}>
+                        🗑 Eliminar alumno
                       </button>
                     </div>
                   </div>
                 </div>
               ))}
+            </div>
+
+            {hiddenCount > 0 && (
+              <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid var(--border)', fontSize: 11.5, color: 'var(--text-muted)', lineHeight: 1.55 }}>
+                {hiddenCount} caso{hiddenCount !== 1 ? 's' : ''} marcado{hiddenCount !== 1 ? 's' : ''} como correcto{hiddenCount !== 1 ? 's' : ''}.
+                Esa marca se guarda solo en este navegador, así que otro admin los seguirá viendo.
+                <button onClick={() => setShowReviewed(s => !s)} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', textDecoration: 'underline', fontSize: 11.5, fontFamily: 'inherit', marginLeft: 6 }}>
+                  {showReviewed ? 'ocultarlos' : 'mostrarlos'}
+                </button>
+                <button onClick={clearReviewed} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', textDecoration: 'underline', fontSize: 11.5, fontFamily: 'inherit', marginLeft: 8 }}>
+                  quitar marcas
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Confirmación de las acciones que borran datos. Antes se ejecutaban con un
+          solo clic y sin vuelta atrás. */}
+      {confirm && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.72)', backdropFilter: 'blur(6px)', zIndex: 95, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+          onClick={e => { if (e.target === e.currentTarget && !busy) setConfirm(null); }}>
+          <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 16, width: '100%', maxWidth: 430, padding: 24 }}>
+            {confirm.kind === 'keep' ? (
+              <>
+                <div style={{ fontWeight: 700, fontSize: 16.5, color: 'var(--text-primary)', marginBottom: 10 }}>
+                  Dejar a {confirm.group.studentName} solo con {confirm.teacherName}
+                </div>
+                <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.65 }}>
+                  Se eliminarán sus otras {confirm.group.assignments.length - 1} asignación(es) y se liberarán esos horarios
+                  en los calendarios de {confirm.group.assignments.filter(a => a.assignmentId !== confirm.assignmentId).map(a => a.teacherName).join(' y ')}.
+                  <br /><br />
+                  El alumno sigue existiendo y su historial de clases no se toca.
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{ fontWeight: 700, fontSize: 16.5, color: '#B91C1C', marginBottom: 10 }}>
+                  Eliminar a {confirm.group.studentName} del sistema
+                </div>
+                <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.65 }}>
+                  Se borrarán <b>todas</b> sus asignaciones ({confirm.group.assignments.length}), su ficha
+                  {confirm.group.studentIds.length > 1 ? ` (las ${confirm.group.studentIds.length} altas duplicadas)` : ''} y
+                  se liberarán sus horarios en los calendarios de {[...new Set(confirm.group.assignments.map(a => a.teacherName))].join(', ')}.
+                  <br /><br />
+                  Se registra la baja y <b>el historial de clases se conserva</b>, así que las clases ya dadas siguen contando para el pago de los profesores.
+                  <br /><br />
+                  <b>Esta acción no se puede deshacer.</b>
+                </div>
+              </>
+            )}
+
+            <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
+              <button onClick={() => setConfirm(null)} disabled={busy}
+                style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: busy ? 'not-allowed' : 'pointer', fontSize: 13.5, fontFamily: 'inherit' }}>
+                Cancelar
+              </button>
+              <button
+                onClick={async () => {
+                  const accion = confirm;
+                  setConfirm(null);
+                  if (accion.kind === 'keep') await keepOnly(accion.group, accion.assignmentId);
+                  else await removeStudent(accion.group);
+                }}
+                disabled={busy}
+                style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: busy ? 'var(--bg-surface-3)' : confirm.kind === 'delete' ? '#dc2626' : '#1E9E3A', color: 'white', cursor: busy ? 'not-allowed' : 'pointer', fontSize: 13.5, fontWeight: 700, fontFamily: 'inherit' }}>
+                {busy ? 'Aplicando…' : confirm.kind === 'delete' ? 'Sí, eliminar' : 'Sí, dejarlo solo con este profesor'}
+              </button>
             </div>
           </div>
         </div>

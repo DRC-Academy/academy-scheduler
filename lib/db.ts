@@ -1069,7 +1069,18 @@ async function captureChurnOnDropout(args: {
   }
 }
 
-export async function dbDeleteStudent(studentId: string, studentName: string, createdBy?: string): Promise<AffectedTeacher[]> {
+/**
+ * Borra un alumno: assignments, ficha en `students`, celdas del calendario de
+ * cada profesor, registro de baja y foto de churn. El HISTORIAL (class_records,
+ * class_join_logs, scoring_events) se conserva: es la base contable.
+ *
+ * `alsoStudentIds`: ids ADICIONALES del mismo alumno cuando está duplicado en
+ * `students` (dos altas de la misma persona). Sin esto quedaba la fila huérfana
+ * de la segunda alta, que es justo lo que provoca los duplicados de profesor.
+ */
+export async function dbDeleteStudent(
+  studentId: string, studentName: string, createdBy?: string, alsoStudentIds: string[] = [],
+): Promise<AffectedTeacher[]> {
   const firstName = studentName.split(' ')[0];
 
   const [byId, byName] = await Promise.all([
@@ -1209,9 +1220,33 @@ export async function dbDeleteStudent(studentId: string, studentName: string, cr
   // `students`, sus clases ya dadas deben seguir contando para el pago al
   // profesor (ver lib/finance.ts → "orphan history"). Tampoco se tocan
   // scoring_events (ej. bonos ya cobrados) ni notifications.
-  await supabase.from('assignments').delete().eq('student_id', studentId);
+  // GUARD: hay assignments que comparten student_id pero tienen OTRO nombre. Es un
+  // dato corrupto real (auditoría 27/07/2026: la assignment de "Marina Garcia"
+  // apuntaba a la ficha de "Hugo García"), y borrar por id se llevaría por delante
+  // la clase de otra persona. Se avisa por consola y esas filas NO se borran.
+  const { data: mismasFilas } = await supabase
+    .from('assignments').select('id, student_name, teacher_name').eq('student_id', studentId);
+  const ajenas = (mismasFilas ?? []).filter(r => _nk(r.student_name) !== _nk(studentName));
+  if (ajenas.length > 0) {
+    console.warn(
+      `[dbDeleteStudent] ${ajenas.length} asignación(es) comparten el id de "${studentName}" con OTRO nombre ` +
+      `(${ajenas.map(r => `${r.student_name} · ${r.teacher_name}`).join(' | ')}). NO se borran: revisá el vínculo a mano.`,
+    );
+  }
+
+  const idsAjenos = ajenas.map(r => r.id);
+  const borrarPorId = supabase.from('assignments').delete().eq('student_id', studentId);
+  await (idsAjenos.length > 0 ? borrarPorId.not('id', 'in', `(${idsAjenos.join(',')})`) : borrarPorId);
   await supabase.from('assignments').delete().eq('student_name', studentName);
-  await supabase.from('students').delete().eq('id', studentId);
+
+  // Se borran TODAS las fichas del alumno: la principal y las de las altas
+  // duplicadas. Antes solo se borraba `studentId` y la duplicada quedaba
+  // huérfana en `students`, lista para volver a generar el mismo lío.
+  const idsABorrar = [...new Set([studentId, ...alsoStudentIds].filter(Boolean))];
+  await supabase.from('students').delete().in('id', idsABorrar);
+  if (idsABorrar.length > 1) {
+    console.log(`[dbDeleteStudent] "${studentName}" tenía ${idsABorrar.length} fichas duplicadas: ${idsABorrar.join(', ')}`);
+  }
 
   console.log(`[dbDeleteStudent] Alumno "${studentName}" eliminado correctamente (historial de clases/finanzas preservado)`);
 
@@ -2778,33 +2813,85 @@ export interface DuplicateAssignmentGroup {
   studentId: string;
   studentName: string;
   studentEmail: string;
+  /** TODOS los student_id del grupo. Más de uno = el alumno está duplicado en `students`. */
+  studentIds: string[];
+  /** false = todas las assignments son del MISMO profesor (asignación duplicada). */
+  variosProfesores: boolean;
+  /** Emails distintos vistos en el grupo (evidencia para el admin). */
+  emails: string[];
   assignments: Array<{ assignmentId: string; teacherId: string; teacherName: string; slots: AssignedSlot[]; startDate?: string }>;
 }
 
-// Detecta alumnos asignados a MÁS DE UN profesor (punto 4). Función pura: opera
-// sobre las assignments ya cargadas en memoria (sin llamadas a la base).
+/**
+ * Detecta alumnos asignados a MÁS DE UN profesor. Función pura: opera sobre las
+ * assignments ya cargadas en memoria.
+ *
+ * AGRUPA POR IDENTIDAD, no por una sola clave. La versión anterior usaba
+ * `studentId || email || nombre`, la primera que hubiera, y eso se dejaba fuera
+ * los duplicados de verdad: si el mismo alumno está dos veces en `students` con
+ * ids distintos, cada assignment caía en un grupo diferente y no se detectaba
+ * nada. Comprobado con datos reales (27/07/2026): detectaba 2 casos y había 3, y
+ * de "Virginia Alfonso" mostraba 2 profesores cuando en realidad tenía 3.
+ *
+ * El email NO se usa para agrupar, solo como evidencia: hay alumnos que comparten
+ * dirección (familia, o un dato mal metido) y agrupar por email juntaba a dos
+ * personas distintas. Con un botón de "eliminar alumno" en ese panel, un falso
+ * positivo así se paga caro.
+ */
 export function findDuplicateTeacherAssignments(assignments: Assignment[]): DuplicateAssignmentGroup[] {
+  // Union-find sobre dos señales fuertes de identidad: mismo student_id o mismo
+  // nombre normalizado.
+  const parent = new Map<string, string>();
+  const find = (x: string): string => {
+    let r = x;
+    while (parent.get(r) && parent.get(r) !== r) r = parent.get(r)!;
+    return r;
+  };
+  const union = (a: string, b: string) => {
+    parent.set(a, parent.get(a) ?? a);
+    parent.set(b, parent.get(b) ?? b);
+    const ra = find(a), rb = find(b);
+    if (ra !== rb) parent.set(ra, rb);
+  };
+
+  const idOf   = (a: Assignment) => `id:${a.studentId}`;
+  const nameOf = (a: Assignment) => `name:${_nk(a.studentName)}`;
+
+  for (const a of assignments) {
+    const señales = [a.studentId ? idOf(a) : '', _nk(a.studentName) ? nameOf(a) : ''].filter(Boolean);
+    if (señales.length === 0) continue;
+    señales.forEach(s => parent.set(s, parent.get(s) ?? s));
+    if (señales.length === 2) union(señales[0], señales[1]);
+  }
+
   const groups = new Map<string, Assignment[]>();
   for (const a of assignments) {
-    const key = a.studentId || _nk(a.studentEmail) || _nk(a.studentName);
-    if (!key) continue;
-    const arr = groups.get(key);
-    if (arr) arr.push(a); else groups.set(key, [a]);
+    const señal = a.studentId ? idOf(a) : (_nk(a.studentName) ? nameOf(a) : '');
+    if (!señal) continue;
+    const root = find(señal);
+    const arr = groups.get(root);
+    if (arr) arr.push(a); else groups.set(root, [a]);
   }
+
   const out: DuplicateAssignmentGroup[] = [];
   for (const [key, arr] of groups) {
-    const teacherIds = new Set(arr.map(a => a.teacherId));
-    if (teacherIds.size > 1) {
-      out.push({
-        key,
-        studentId:    arr[0].studentId,
-        studentName:  arr[0].studentName,
-        studentEmail: arr[0].studentEmail,
-        assignments:  arr.map(a => ({ assignmentId: a.id, teacherId: a.teacherId, teacherName: a.teacherName, slots: a.slots, startDate: a.startDate })),
-      });
-    }
+    // Se marca cuando hay VARIAS assignments, aunque sean del MISMO profesor:
+    // "Marina de Castro" tenía dos idénticas con Daiana.M (mismo plan y mismos
+    // slots, solo cambiaba start_date) y eso duplica la clase en finanzas igual
+    // que tener dos profesores. Antes se exigía profesores distintos y no salía.
+    if (arr.length <= 1) continue;
+    out.push({
+      key,
+      studentId:    arr[0].studentId,
+      studentName:  arr[0].studentName,
+      studentEmail: arr[0].studentEmail,
+      studentIds:   [...new Set(arr.map(a => a.studentId).filter(Boolean))],
+      variosProfesores: new Set(arr.map(a => a.teacherId)).size > 1,
+      emails:       [...new Set(arr.map(a => (a.studentEmail ?? '').trim()).filter(Boolean))],
+      assignments:  arr.map(a => ({ assignmentId: a.id, teacherId: a.teacherId, teacherName: a.teacherName, slots: a.slots, startDate: a.startDate })),
+    });
   }
-  return out;
+  return out.sort((a, b) => b.assignments.length - a.assignments.length);
 }
 
 // ── FINANCE: APROBACIONES MANUALES ────────────────────────────────────────────

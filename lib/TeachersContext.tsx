@@ -48,7 +48,7 @@ interface TeachersContextType {
   addTeacher: (t: Teacher, username: string) => Promise<void>;
   deleteTeacher: (teacherId: string) => Promise<DeleteTeacherResult>;
   addStudent: (s: Student) => Promise<void>;
-  deleteStudent: (studentId: string, studentName: string, createdBy?: string) => Promise<AffectedTeacher[]>;
+  deleteStudent: (studentId: string, studentName: string, createdBy?: string, alsoStudentIds?: string[]) => Promise<AffectedTeacher[]>;
   updateStudent: (student: Student) => Promise<void>;
   addAssignment: (a: Assignment) => Promise<void>;
   getTeacherGrid: (teacherId: string, force?: boolean) => Promise<Grid>;
@@ -244,8 +244,8 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     });
   }
 
-  async function deleteStudent(studentId: string, studentName: string, createdBy?: string) {
-    const affected = await dbDeleteStudent(studentId, studentName, createdBy);
+  async function deleteStudent(studentId: string, studentName: string, createdBy?: string, alsoStudentIds?: string[]) {
+    const affected = await dbDeleteStudent(studentId, studentName, createdBy, alsoStudentIds);
     const [t, sa, unassigned] = await Promise.all([
       dbGetTeachers(),
       dbGetAllStudentsWithAssignments(),

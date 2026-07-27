@@ -289,14 +289,19 @@ function EditStudentModal({ student, assignment, teacherGrid, onClose, onSave }:
 }
 
 // ── Delete confirmation + WhatsApp notice ─────────────────────────────────────
-function DeleteStudentModal({ student, onConfirm, onCancel }: {
+function DeleteStudentModal({ student, teacherNames, onUnassign, onConfirm, onCancel }: {
   student: DisplayStudent;
+  /** Profesores que tiene ahora (para explicar qué se libera). */
+  teacherNames: string[];
+  /** Quitar el profesor y dejarlo en "Sin asignar" (conserva la ficha). */
+  onUnassign: () => Promise<void>;
   onConfirm: () => Promise<void>;
   onCancel: () => void;
 }) {
   const [phone, setPhone] = useState(student.phone || '');
   const [loadingPhone, setLoadingPhone] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [unassigning, setUnassigning] = useState(false);
 
   // If there's no local phone, try to get it from WooCommerce (billing.phone).
   useEffect(() => {
@@ -319,9 +324,34 @@ function DeleteStudentModal({ student, onConfirm, onCancel }: {
       onClick={e => { if (e.target === e.currentTarget && !deleting) onCancel(); }}>
       <div style={{ background: 'var(--bg-surface)', border: '1px solid #35405a', borderRadius: 14, padding: 24, width: '100%', maxWidth: 420 }}>
         <div style={{ fontSize: 24, marginBottom: 10 }}>🗑️</div>
-        <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)', marginBottom: 8 }}>Eliminar alumno</div>
+        <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)', marginBottom: 8 }}>
+          Dar de baja a {student.name}
+        </div>
         <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 16, lineHeight: 1.6 }}>
-          ¿Seguro que quieres eliminar a <b style={{ color: 'var(--text-primary)' }}>{student.name}</b>? Se borrarán sus asignaciones y se liberará su horario. Esta acción no se puede deshacer.
+          Hay dos opciones y no hacen lo mismo. En casi todos los casos quieres la primera.
+        </div>
+
+        {/* Opción por defecto: desvincular. El alumno sigue existiendo y aparece en
+            "Sin asignar" del setter, listo para reasignar, con su historial intacto. */}
+        <div style={{ border: '1px solid rgba(30,158,58,0.35)', background: 'rgba(30,158,58,0.06)', borderRadius: 10, padding: '12px 14px', marginBottom: 10 }}>
+          <div style={{ fontWeight: 700, fontSize: 13.5, color: '#1f7a3d', marginBottom: 4 }}>Quitar el profesor</div>
+          <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.55, marginBottom: 10 }}>
+            Se libera {teacherNames.length > 1 ? 'su horario con ' : 'su horario con '}
+            <b>{teacherNames.join(' y ') || 'su profesor'}</b> y el alumno pasa a <b>Sin asignar</b>,
+            listo para reasignarlo. Conserva su ficha y su historial.
+          </div>
+          <button
+            onClick={async () => { setUnassigning(true); await onUnassign(); }}
+            disabled={deleting || unassigning}
+            style={{ width: '100%', padding: '10px', borderRadius: 8, border: 'none', background: unassigning ? '#8fc7a0' : '#1E9E3A', color: 'white', cursor: deleting || unassigning ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}
+          >
+            {unassigning ? 'Quitando…' : 'Quitar profesor y dejar sin asignar'}
+          </button>
+        </div>
+
+        <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.6, marginBottom: 14 }}>
+          O bien <b>eliminarlo del sistema</b>: se borra su ficha y desaparece de la lista de alumnos.
+          Solo si se ha dado de baja de verdad. El historial de clases se conserva para el pago a los profesores.
         </div>
 
         {/* WhatsApp notice */}
@@ -341,13 +371,13 @@ function DeleteStudentModal({ student, onConfirm, onCancel }: {
 
         {/* Actions */}
         <div style={{ display: 'flex', gap: 10 }}>
-          <button onClick={onCancel} disabled={deleting}
-            style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: deleting ? 'not-allowed' : 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
+          <button onClick={onCancel} disabled={deleting || unassigning}
+            style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: deleting || unassigning ? 'not-allowed' : 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
             Cancelar
           </button>
-          <button onClick={async () => { setDeleting(true); await onConfirm(); }} disabled={deleting}
-            style={{ flex: 2, padding: '10px', borderRadius: 8, border: '1px solid rgba(239,68,68,0.35)', background: 'rgba(239,68,68,0.15)', color: '#dc2626', cursor: deleting ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
-            {deleting ? 'Eliminando...' : 'Eliminar alumno'}
+          <button onClick={async () => { setDeleting(true); await onConfirm(); }} disabled={deleting || unassigning}
+            style={{ flex: 2, padding: '10px', borderRadius: 8, border: '1px solid rgba(239,68,68,0.35)', background: 'rgba(239,68,68,0.15)', color: '#dc2626', cursor: deleting || unassigning ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+            {deleting ? 'Eliminando...' : 'Eliminar del sistema'}
           </button>
         </div>
       </div>
@@ -472,7 +502,7 @@ function AccessModal({ student, onConfirm, onCancel }: {
 
 function StudentsContent() {
   const {
-    students, assignments, deleteStudent, updateStudent,
+    students, assignments, deleteStudent, updateStudent, removeAssignment,
     getTeacherGrid, updateTeacherGrid, updateAssignmentSlots, updateAssignmentStartDate, reloadAll,
   } = useTeachers();
   const { user } = useAuth();
@@ -908,6 +938,15 @@ function StudentsContent() {
       {deletingStudent && (
         <DeleteStudentModal
           student={deletingStudent}
+          teacherNames={[...new Set(assignmentsForStudent(deletingStudent).map(a => a.teacherName))]}
+          onUnassign={async () => {
+            // (B) Se quitan las asignaciones y se liberan los horarios, pero la
+            // ficha se conserva: el alumno cae en "Sin asignar" del setter.
+            for (const a of assignmentsForStudent(deletingStudent)) {
+              await removeAssignment(a.id, a.teacherId, a.studentName, a.slots);
+            }
+            setDeletingStudent(null);
+          }}
           onConfirm={async () => {
             const studentName = deletingStudent.name;
             clearSubscriptionCache(deletingStudent.email); // el alumno ya no existe: invalida su estado cacheado

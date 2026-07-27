@@ -5,7 +5,7 @@ import { NavBar } from '@/components/NavBar';
 import { AuthGuard } from '@/components/AuthGuard';
 import { PullToRefresh } from '@/components/PullToRefresh';
 import {
-  VisualCalendar, DAYS, cellKey, getSpainParts, CAL_STATE_META,
+  VisualCalendar, DAYS, cellKey, getSpainParts, spainWallClockToEpoch, CAL_STATE_META,
   CAL_DEFAULT_START, CAL_DEFAULT_END, type RecuperacionData,
 } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
@@ -20,7 +20,7 @@ import { useStudentAutofill } from '@/lib/useStudentAutofill';
 import { checkSubscription, subBadge, type SubscriptionInfo } from '@/lib/useSubscriptionStatus';
 import { isMilestone, getMilestoneSlides, getMilestoneCopy, MILESTONES, MILESTONE_SLIDES, MILESTONE_TITLES } from '@/lib/milestones';
 import { RETENTION_BONUS_DAYS, retentionDaysActive, retentionStartDate, retentionBonusDate, hasRetentionBonus } from '@/lib/retention';
-import { Grid, Teacher, Assignment, ScoringEvent, Student, AppNotification, ClassRecord } from '@/types';
+import { Grid, Teacher, Assignment, ScoringEvent, Student, AppNotification, ClassRecord, ClassRecordType } from '@/types';
 import FormStatusBadge from '@/components/FormStatusBadge';
 import { maybeSendBonusEmail } from '@/lib/milestoneEmails';
 import { fetchFormTokensIndex, lookupToken, formStateOf, type FormTokenInfo } from '@/lib/formClient';
@@ -29,6 +29,8 @@ import { PresentationModal } from '@/components/PresentationModal';
 import { ALL_SPECIALTIES } from '@/lib/specialties';
 import { isValidOptionalEmail } from '@/lib/validation';
 import { SpecialtyChip, ToggleChip } from '@/components/ui';
+import AlumnoYaAsignadoModal from '@/components/AlumnoYaAsignadoModal';
+import { findOtherTeacherAssignments, type ExistingAssignmentMatch } from '@/lib/assignmentGuard';
 
 // Índice de tokens de formulario (por id/nombre de alumno). Se pasa a los tabs.
 type FormIndex = { byId: Map<string, FormTokenInfo>; byName: Map<string, FormTokenInfo> };
@@ -964,6 +966,30 @@ function dayNameFromDate(d: Date): string {
 function isoDateLocal(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
+
+// ── Fechas de clase: SIEMPRE en hora española ────────────────────────────────
+// El día de la agenda salía de `getDay()`/`getFullYear()`, o sea de la zona del
+// NAVEGADOR, mientras que "pasada / en curso / próxima" se decidía con la hora de
+// Madrid. Con las dos zonas mezcladas, un profesor en Argentina que abriera el
+// panel a partir de las 19:00 (00:00 en España) veía las clases de AYER, y encima
+// marcadas como futuras. Estas dos funciones operan sobre la fecha como CADENA,
+// con aritmética en UTC, así que no dependen de dónde esté el navegador.
+
+/** Día de la semana ("Lunes"…) de una fecha 'YYYY-MM-DD'. */
+function dayNameFromIso(iso: string): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  if (!y || !m || !d) return '';
+  return DAY_NAMES_BY_JSDAY[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
+}
+
+/** Suma días a una fecha 'YYYY-MM-DD' sin pasar por la zona local. */
+function addDaysIso(iso: string, days: number): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  if (!y || !m || !d) return iso;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  return dt.toISOString().slice(0, 10);
+}
 function stripProtocol(url: string): string {
   return url.replace(/^https?:\/\//, '').replace(/\/$/, '');
 }
@@ -1048,8 +1074,8 @@ interface TodayClass {
 }
 
 // All classes for a given date, built from recurring assignment slots, sorted by hour.
-function classesForDate(myAssignments: Assignment[], date: Date): TodayClass[] {
-  const dayName = dayNameFromDate(date);
+function classesForDate(myAssignments: Assignment[], dateIso: string): TodayClass[] {
+  const dayName = dayNameFromIso(dateIso);
   const list: TodayClass[] = [];
   for (const a of myAssignments) {
     for (const slot of a.slots ?? []) {
@@ -1091,8 +1117,8 @@ function findAssignmentForName(myAssignments: Assignment[], name: string): Assig
 // la fecha pedida. Se vinculan a la assignment del alumno para heredar enlace de
 // Meet, plan, nivel, email (necesarios para Ingresar a clase y suscripción). Las
 // que no matchean ninguna assignment se omiten (siguen visibles en el calendario).
-function recoveriesForDate(grid: Grid, date: Date, myAssignments: Assignment[]): TodayClass[] {
-  const targetIso = isoDateLocal(date);
+function recoveriesForDate(grid: Grid, dateIso: string, myAssignments: Assignment[]): TodayClass[] {
+  const targetIso = dateIso;
   const list: TodayClass[] = [];
   for (const [key, cell] of Object.entries(grid)) {
     if (cell.state !== 'bloqueado' || !cell.student || !cell.weekDate) continue;
@@ -1102,12 +1128,9 @@ function recoveriesForDate(grid: Grid, date: Date, myAssignments: Assignment[]):
     const hour = key.slice(usc + 1);
     const dayIdx = DAYS.indexOf(day);
     if (dayIdx < 0) continue;
-    // Fecha real de la celda = lunes(weekDate) + índice de día.
-    const monday = new Date(cell.weekDate + 'T00:00:00');
-    if (isNaN(monday.getTime())) continue;
-    const cellDate = new Date(monday);
-    cellDate.setDate(monday.getDate() + dayIdx);
-    if (isoDateLocal(cellDate) !== targetIso) continue;
+    // Fecha real de la celda = lunes(weekDate) + índice de día. Aritmética sobre
+    // la cadena, sin pasar por la zona del navegador.
+    if (addDaysIso(cell.weekDate, dayIdx) !== targetIso) continue;
 
     const a = findAssignmentForName(myAssignments, cell.student);
     if (!a) continue;
@@ -1385,9 +1408,12 @@ function CancelClassModal({ studentName, currentDate, currentHour, saving, onCon
   onClose: () => void;
 }) {
   const [reason, setReason] = useState('');
-  // Horas de antelación entre AHORA y la clase.
-  const classDt = new Date(`${currentDate}T${(currentHour || '00:00').slice(0, 5)}:00`);
-  const hoursNotice = isNaN(classDt.getTime()) ? 0 : Math.max(0, (classDt.getTime() - Date.now()) / 3_600_000);
+  // Horas de antelación entre AHORA y la clase. La hora de la clase es hora de
+  // PARED ESPAÑOLA: con `new Date("2026-07-29T16:00:00")` se interpretaba en la
+  // zona del navegador y un profesor en Argentina veía 5 horas de más, con lo que
+  // se libraba de la penalización de 5 € en una franja de 5 horas.
+  const classEpoch = spainWallClockToEpoch(currentDate, parseInt(currentHour || '0', 10) || 0);
+  const hoursNotice = isNaN(classEpoch) ? 0 : Math.max(0, (classEpoch - Date.now()) / 3_600_000);
   const withNotice = hoursNotice > 24;
   const hoursLabel = Math.round(hoursNotice);
   const canConfirm = !!reason.trim() && !saving;
@@ -1513,27 +1539,28 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, gr
   }, [openMenu]);
 
   const refDate = now ?? new Date();
-  const todayIso = isoDateLocal(refDate);
-
-  // Fecha visible = hoy + dayOffset. `refDate` sigue siendo "ahora" y es lo único
-  // que decide el estado horario de las filas (solo aplica cuando se mira hoy).
-  const viewDate = new Date(refDate);
-  viewDate.setDate(viewDate.getDate() + dayOffset);
-  const viewIso  = isoDateLocal(viewDate);
-  const isToday  = dayOffset === 0;
 
   // Current time in Spain (Europe/Madrid) — the calendar's reference timezone.
   const spain = now ? getSpainParts(now) : null;
   const currentDecimal = spain ? spain.hour + spain.minute / 60 : -1;
 
+  // HOY es hoy EN ESPAÑA, no en la zona del navegador. Antes se mezclaban las dos
+  // y un profesor fuera de España veía el día equivocado (ver dayNameFromIso).
+  const todayIso = spain ? spain.dateStr : isoDateLocal(refDate);
+
+  // Fecha visible = hoy + dayOffset, sobre la cadena para no reintroducir la zona local.
+  const viewIso  = addDaysIso(todayIso, dayOffset);
+  const isToday  = dayOffset === 0;
+
   // Lista del día = FUENTE 1 (slots recurrentes) + FUENTE 2 (recuperaciones del
   // grid que caen en este día), unidas y ordenadas por hora.
-  const todayClasses = useMemo(
-    () => [...classesForDate(myAssignments, viewDate), ...recoveriesForDate(grid, viewDate, myAssignments)]
-      .sort((x, y) => parseInt(x.hour) - parseInt(y.hour)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [myAssignments, grid, viewIso],
-  );
+  // Sin useMemo a propósito: son dos filtros sobre unas pocas decenas de
+  // elementos y el compilador de React lo memoiza solo. El useMemo manual que
+  // había aquí le impedía optimizar el componente entero.
+  const todayClasses = [
+    ...classesForDate(myAssignments, viewIso),
+    ...recoveriesForDate(grid, viewIso, myAssignments),
+  ].sort((x, y) => parseInt(x.hour) - parseInt(y.hour));
 
   type ClassStatus = 'passed' | 'inprogress' | 'next' | 'future';
   function statusOf(c: TodayClass): ClassStatus {
@@ -1558,9 +1585,8 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, gr
   const visibleEmails = useMemo(() => {
     const set = new Set<string>();
     for (const off of new Set([0, 1, 2, dayOffset])) {
-      const d = new Date();
-      d.setDate(d.getDate() + off);
-      for (const c of [...classesForDate(myAssignments, d), ...recoveriesForDate(grid, d, myAssignments)]) {
+      const iso = addDaysIso(todayIso, off);
+      for (const c of [...classesForDate(myAssignments, iso), ...recoveriesForDate(grid, iso, myAssignments)]) {
         const e = subEmailForAssignment(c.assignment);
         if (e) set.add(e);
       }
@@ -1606,7 +1632,7 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, gr
   const missingNames = missingLinks.map(c => c.studentName.split(' ')[0]);
 
   // Etiqueta del navegador: "Martes, 21 jul" (con "Hoy"/"Mañana" cuando aplica).
-  const dateLabel = viewDate.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'short' })
+  const dateLabel = new Date(viewIso + 'T12:00:00Z').toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'short', timeZone: 'UTC' })
     .replace(/\.$/, '')
     .replace(/^(\w)/, m => m.toUpperCase());
   const relLabel = dayOffset === 0 ? 'Hoy' : dayOffset === 1 ? 'Mañana' : dayOffset === -1 ? 'Ayer' : null;
@@ -1619,6 +1645,23 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, gr
       nk(r.studentName) === nk(studentName) && r.classDate === date,
     );
     return rec?.rescheduledTo ?? null;
+  }
+
+  // ¿Esta clase se canceló? `rescheduledFor` solo mira los registros que llevan
+  // `rescheduledTo`, que únicamente pone el flujo de reprogramación. Una clase
+  // cancelada con el botón Cancelar crea un class_record de tipo
+  // 'cancelada_con_preaviso' / 'falta_sin_aviso' / 'cancelacion_hora' SIN ese
+  // campo, así que seguía apareciendo como una clase normal, con su botón de
+  // "Ingresar a clase" incluido.
+  const CANCEL_TYPES = new Set(['cancelada_con_preaviso', 'falta_sin_aviso', 'cancelacion_hora', 'falta_con_aviso']);
+  function cancelledFor(studentName: string, date: string): ClassRecordType | null {
+    const nk = (x: string) => x.trim().toLowerCase();
+    const rec = classRecords.find(r =>
+      r.teacherId === teacher.id && !r.rescheduledTo &&
+      CANCEL_TYPES.has(r.classType ?? '') &&
+      nk(r.studentName) === nk(studentName) && r.classDate === date,
+    );
+    return (rec?.classType as ClassRecordType) ?? null;
   }
 
   async function handleRescheduleConfirm(data: { reason: RescheduleReason; reasonLabel: string; newDate: string; newTime: string }) {
@@ -1789,6 +1832,16 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, gr
     // recuperación (destino del movimiento) nunca se pinta como reprogramada.
     const rescheduledTo = c.isRecovery ? null : rescheduledFor(c.studentName, date);
     const rescheduled   = !!rescheduledTo;
+    // Cancelada: constancia sin `rescheduledTo`. Se pinta igual que una
+    // reprogramada (apagada y sin botón de ingreso), con su propia etiqueta.
+    const cancelledType = c.isRecovery ? null : cancelledFor(c.studentName, date);
+    const cancelled     = !!cancelledType;
+    const cancelLabel   = cancelledType === 'falta_sin_aviso'   ? 'Falta sin aviso'
+                        : cancelledType === 'cancelacion_hora'  ? 'Cancelada sobre la hora'
+                        : cancelledType === 'falta_con_aviso'   ? 'Falta con aviso'
+                        : 'Cancelada';
+    // Estado inactivo = la clase no se va a dar. Agrupa reprogramada y cancelada.
+    const inactive = rescheduled || cancelled;
 
     const hasLink = !!c.meetLink;
     const menuId  = `${c.key}_${date}`;
@@ -1808,8 +1861,8 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, gr
     const hasForm  = formStateOf(formInfo) !== 'none';
     const presentationSent = !!c.assignment.presentationEmailSent;
     // Botón "Enviar presentación": solo para clases normales sin presentación enviada.
-    const showPresentationBtn = !passed && !rescheduled && !c.isRecovery && !presentationSent;
-    const showPresentationSent = !passed && !rescheduled && !c.isRecovery && presentationSent;
+    const showPresentationBtn = !passed && !inactive && !c.isRecovery && !presentationSent;
+    const showPresentationSent = !passed && !inactive && !c.isRecovery && presentationSent;
 
     const nextClassNum = calcRegisteredClassNumber(c.assignment, classRecords) + 1;
     const slides = !passed && isMilestone(nextClassNum) ? getMilestoneSlides(nextClassNum) : null;
@@ -1823,7 +1876,7 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, gr
     })();
 
     return (
-      <div className={`mc-card${passed ? ' is-passed' : ''}`} style={rescheduled ? { opacity: 0.5 } : undefined}>
+      <div className={`mc-card${passed ? ' is-passed' : ''}`} style={inactive ? { opacity: 0.5 } : undefined}>
         <div className="mc-row">
           <div className="mc-left">
             <div className="mc-hour">{c.hour}</div>
@@ -1833,11 +1886,12 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, gr
 
           <div className="mc-main">
             <div className="mc-nameline">
-              <span className={`mc-name${rescheduled ? ' is-struck' : ''}`}>{c.studentName}</span>
+              <span className={`mc-name${inactive ? ' is-struck' : ''}`}>{c.studentName}</span>
               {c.isRecovery && <span className="mc-badge-recovery">Recuperación</span>}
               {rescheduled && <span className="mc-badge-resched">Reprogramada → {fmtDateDMY(rescheduledTo)}</span>}
+              {cancelled && <span className="mc-badge-resched">{cancelLabel}</span>}
               <span className="mc-tag" style={tagPalette}>{cat.label}</span>
-              {inProgress && !rescheduled && (
+              {inProgress && !inactive && (
                 <span className="mc-live">
                   <span className="mc-dot" style={{ background: '#16a34a' }} />En curso
                 </span>
@@ -2241,7 +2295,7 @@ type TeacherTab = typeof TEACHER_TABS[number];
 
 function TeacherContent() {
   const { user } = useAuth();
-  const { teachers, students, assignments, scoringEvents, notifications, classRecords, getTeacherGrid, updateTeacherGrid, addStudent, addAssignment, updateAssignmentStartDate, updateAssignmentSlots, reloadAll, updateTeacherSpecialties, loadNotifications, markNotificationRead, updateMeetLink, logClassJoin, addRecoveryClass, addRescheduleRecord, registerClassRecord } = useTeachers();
+  const { teachers, students, assignments, scoringEvents, notifications, classRecords, getTeacherGrid, updateTeacherGrid, addStudent, addAssignment, updateAssignmentStartDate, updateAssignmentSlots, reloadAll, updateTeacherSpecialties, loadNotifications, markNotificationRead, updateMeetLink, logClassJoin, addRecoveryClass, addRescheduleRecord, registerClassRecord, removeAssignment } = useTeachers();
   const [activeTab, setActiveTab] = useState<TeacherTab>('calendar');
 
   // El campanario del header navega a /teacher?tab=notifications. Sincronizamos
@@ -2263,6 +2317,8 @@ function TeacherContent() {
   const [dismissedInSession, setDismissedInSession] = useState<Set<string>>(new Set());
   const [dismissedBonusInSession, setDismissedBonusInSession] = useState<Set<string>>(new Set());
   const [pendingOcupado, setPendingOcupado] = useState<{ day: string; hour: string; resolve: (name: string) => void } | null>(null);
+  // Aviso "este alumno ya tiene profesor": guarda la asignación a la espera de decisión.
+  const [yaAsignado, setYaAsignado] = useState<{ data: AssignConfirmData; matches: ExistingAssignmentMatch[] } | null>(null);
   const [pendingRecuperacion, setPendingRecuperacion] = useState<{ day: string; hour: string; resolve: (data: RecuperacionData) => void } | null>(null);
   const [formIndex, setFormIndex] = useState<FormIndex>(EMPTY_FORM_INDEX);
 
@@ -2334,7 +2390,30 @@ function TeacherContent() {
     } catch { /* la constancia de finanzas no debe romper el marcado del grid */ }
   }
 
+  /**
+   * Guard: ¿el alumno ya tiene profesor? Se comprueba ANTES de crear nada. Si lo
+   * tiene, se guarda la asignación pendiente y se muestra el aviso; el flujo real
+   * continúa en `aplicarAsignacion` cuando el profesor decide mover o mantener.
+   *
+   * Este flujo no tenía ningún control: el calendario del profesor creaba la
+   * asignación directamente, y así es como salían los alumnos con dos profesores.
+   */
   async function handleAssignStudent(data: AssignConfirmData) {
+    if (!teacher || !pendingOcupado) return;
+
+    // Reasignar horarios del MISMO profesor no dispara el aviso.
+    if (!data.existingAssignment) {
+      const identidad = data.isNew
+        ? { email: data.newStudentData?.email, name: data.newStudentData?.name ?? data.studentName }
+        : { studentId: data.useExistingStudent?.id, email: data.useExistingStudent?.email, name: data.studentName };
+      const otros = findOtherTeacherAssignments(identidad, assignments, teacher.id);
+      if (otros.length > 0) { setYaAsignado({ data, matches: otros }); return; }
+    }
+
+    await aplicarAsignacion(data);
+  }
+
+  async function aplicarAsignacion(data: AssignConfirmData) {
     if (!teacher || !pendingOcupado) return;
     let finalName = data.studentName;
 
@@ -2528,9 +2607,11 @@ function TeacherContent() {
     ...legacyList.map(l => l.student),
   ]).size;
 
-  const nowHeader = new Date();
-  const todayClassesHeader = classesForDate(myAssignments, nowHeader);
-  const nextClassHeader = todayClassesHeader.find(c => parseInt(c.hour) + 1 > nowHeader.getHours() + nowHeader.getMinutes() / 60);
+  // Cabecera: día y hora de España, la misma referencia que la agenda. Antes usaba
+  // la hora local del navegador y podía anunciar la clase de otro día.
+  const spainHeader = getSpainParts(new Date());
+  const todayClassesHeader = classesForDate(myAssignments, spainHeader.dateStr);
+  const nextClassHeader = todayClassesHeader.find(c => parseInt(c.hour) + 1 > spainHeader.hour + spainHeader.minute / 60);
   const nextClassLabel = nextClassHeader
     ? `Hoy ${nextClassHeader.hour} · ${nextClassHeader.studentName}`
     : 'Sin clases hoy';
@@ -2798,6 +2879,31 @@ function TeacherContent() {
           myAssignments={myAssignments}
           onConfirm={handleAssignStudent}
           onCancel={handleAssignCancel}
+        />
+      )}
+
+      {/* Aviso: el alumno ya tiene profesor (antes de crear la asignación). */}
+      {yaAsignado && teacher && (
+        <AlumnoYaAsignadoModal
+          studentName={yaAsignado.data.studentName}
+          targetTeacherName={teacher.name}
+          matches={yaAsignado.matches}
+          onMove={async () => {
+            // Quitar las asignaciones anteriores libera el calendario del otro
+            // profesor; después se crea la nueva con el flujo de siempre.
+            for (const m of yaAsignado.matches) {
+              await removeAssignment(m.assignmentId, m.teacherId, m.studentName, m.slots);
+            }
+            const pend = yaAsignado.data;
+            setYaAsignado(null);
+            await aplicarAsignacion(pend);
+          }}
+          onKeepBoth={async () => {
+            const pend = yaAsignado.data;
+            setYaAsignado(null);
+            await aplicarAsignacion(pend);
+          }}
+          onCancel={() => { setYaAsignado(null); setPendingOcupado(null); }}
         />
       )}
 

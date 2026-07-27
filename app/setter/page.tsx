@@ -20,6 +20,9 @@ import { Teacher, SlotFilter, Grid, Assignment, Student, AssignedSlot } from '@/
 import FormStatusBadge from '@/components/FormStatusBadge';
 import { fetchFormTokensIndex, lookupToken, type FormTokenInfo } from '@/lib/formClient';
 import { isValidEmail } from '@/lib/validation';
+import AlumnoYaAsignadoModal from '@/components/AlumnoYaAsignadoModal';
+import { findOtherTeacherAssignments, type ExistingAssignmentMatch } from '@/lib/assignmentGuard';
+import { checkSubscription, subBadge, type SubscriptionInfo } from '@/lib/useSubscriptionStatus';
 
 type FormIndex = { byId: Map<string, FormTokenInfo>; byName: Map<string, FormTokenInfo> };
 
@@ -119,12 +122,13 @@ function AssignModal({
   onClose: () => void;
   onConfirm: (a: Assignment, s: Student) => void;
 }) {
-  const { assignments: allAssignments } = useTeachers();
+  const { assignments: allAssignments, removeAssignment } = useTeachers();
   const [tab, setTab] = useState<'existing' | 'new'>('existing');
   const [selectedExisting, setSelectedExisting] = useState(initialStudentId ?? '');
   const [newStudent, setNewStudent] = useState({ name: '', email: '', level: 'B1' });
-  // Punto 4 — prevención: alumno existente ya asignado a OTRO profesor.
-  const [dupTeacherWarn, setDupTeacherWarn] = useState<{ teacherName: string } | null>(null);
+  // Prevención: el alumno ya tiene profesor. Se detecta por id, email o nombre
+  // (ver lib/assignmentGuard): comparar solo el id dejaba pasar los duplicados.
+  const [yaAsignado, setYaAsignado] = useState<ExistingAssignmentMatch[] | null>(null);
 
   const availableSlots = useMemo<AssignedSlot[]>(() => {
     return Object.entries(teacherGrid)
@@ -208,12 +212,14 @@ function AssignModal({
   async function handleConfirm() {
     if (!canConfirm) return;
 
-    // Punto 4 — prevención: si el alumno existente ya tiene assignment con OTRO
-    // profesor, avisar antes de crear una asignación adicional.
-    if (tab === 'existing' && selectedExisting) {
-      const other = allAssignments.find(a => a.studentId === selectedExisting && a.teacherId !== teacher.id);
-      if (other) { setDupTeacherWarn({ teacherName: other.teacherName }); return; }
-    }
+    // Prevención: ¿el alumno ya tiene profesor? Se comprueba por id, email y
+    // nombre, tanto para un alumno existente como para uno "nuevo" que en
+    // realidad ya estaba dado de alta.
+    const identidad = tab === 'existing'
+      ? (() => { const s = existingStudents.find(x => x.id === selectedExisting); return { studentId: s?.id, email: s?.email, name: s?.name }; })()
+      : { email: newStudent.email, name: newStudent.name };
+    const otros = findOtherTeacherAssignments(identidad, allAssignments, teacher.id);
+    if (otros.length > 0) { setYaAsignado(otros); return; }
 
     // Check for duplicate email when creating new student
     if (tab === 'new' && newStudent.email.trim()) {
@@ -493,32 +499,23 @@ function AssignModal({
     </div>
 
     {/* Duplicate-teacher warning (punto 4) */}
-    {dupTeacherWarn && (
-      <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)', zIndex: 75, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
-        <div style={{ background: 'var(--bg-surface)', border: '1px solid rgba(239,68,68,0.4)', borderRadius: 14, padding: 24, width: '100%', maxWidth: 420 }}>
-          <div style={{ fontSize: 24, marginBottom: 10 }}>⚠️</div>
-          <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)', marginBottom: 8 }}>Este alumno ya tiene profesor</div>
-          <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 20, lineHeight: 1.6 }}>
-            {studentName} ya está asignado/a a <b style={{ color: 'var(--text-primary)' }}>{dupTeacherWarn.teacherName}</b>.
-            ¿Querés asignarle un profesor adicional (ej. clases con dos profes) o cambiar de profesor?
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <button
-              onClick={() => { setDupTeacherWarn(null); doConfirm(); }}
-              style={{ padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface-3)', color: 'var(--text-primary)', cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
-              ➕ Asignar uno adicional
-            </button>
-            <div style={{ fontSize: 11.5, color: 'var(--text-muted)', textAlign: 'center', lineHeight: 1.5 }}>
-              Para <b>cambiar</b> de profesor (transferir), usá "🔄 Cambiar profesor" en el Historial o en Alumnos.
-            </div>
-            <button
-              onClick={() => setDupTeacherWarn(null)}
-              style={{ padding: '10px', borderRadius: 8, border: 'none', background: '#1E9E3A', color: 'white', cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
-              Cancelar
-            </button>
-          </div>
-        </div>
-      </div>
+    {yaAsignado && (
+      <AlumnoYaAsignadoModal
+        studentName={studentName}
+        targetTeacherName={teacher.name}
+        matches={yaAsignado}
+        onMove={async () => {
+          // Mover = quitar las asignaciones anteriores (libera sus calendarios) y
+          // seguir con la creación normal de la nueva.
+          for (const m of yaAsignado) {
+            await removeAssignment(m.assignmentId, m.teacherId, m.studentName, m.slots);
+          }
+          setYaAsignado(null);
+          doConfirm();
+        }}
+        onKeepBoth={() => { setYaAsignado(null); doConfirm(); }}
+        onCancel={() => setYaAsignado(null)}
+      />
     )}
 
     {/* Duplicate email modal */}
@@ -1002,6 +999,27 @@ function SetterContent() {
     showToast(msg);
   }
 
+  // Estado de suscripción de los alumnos SIN ASIGNAR. Sin esto, el setter podía
+  // asignarle profesor a alguien que ya había cancelado: el badge existía en el
+  // panel de Alumnos y en las clases del profesor, pero no aquí, que es justo
+  // donde se toma la decisión de asignar.
+  const [subs, setSubs] = useState<Record<string, SubscriptionInfo>>({});
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      // De a poco (5 en 5) para no disparar 40 peticiones a Woo de golpe.
+      const pendientes = unassignedStudents.filter(s => s.email && !subs[s.email.trim().toLowerCase()]);
+      for (let i = 0; i < pendientes.length; i += 5) {
+        const lote = pendientes.slice(i, i + 5);
+        const res = await Promise.all(lote.map(async s => [s.email.trim().toLowerCase(), await checkSubscription(s.email)] as const));
+        if (cancelled) return;
+        setSubs(prev => ({ ...prev, ...Object.fromEntries(res) }));
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [unassignedStudents.length]);
+
   // Ocupación de los calendarios (Tipo B: alumno en grid sin assignment).
   const [gridOccupancy, setGridOccupancy] = useState<GridOccupancy[]>([]);
   const [createLinkFor, setCreateLinkFor] = useState<{ student: Student; occ: GridOccupancy; teacher: Teacher } | null>(null);
@@ -1447,8 +1465,16 @@ function SetterContent() {
                         <div style={{ flex: 1, minWidth: 140 }}>
                           <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)' }}>{s.name}</div>
                           <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 1 }}>{s.email}</div>
-                          <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 3 }}>
-                            Plan: <b>{s.plan || '—'}</b> · Nivel: <b>{s.level}</b>
+                          <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 3, display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+                            <span>Plan: <b>{s.plan || '—'}</b> · Nivel: <b>{s.level}</b></span>
+                            {(() => {
+                              const b = subBadge(subs[(s.email ?? '').trim().toLowerCase()]);
+                              return (
+                                <span style={{ padding: '2px 9px', borderRadius: 20, fontSize: 11, fontWeight: 700, color: b.color, background: b.bg, whiteSpace: 'nowrap' }}>
+                                  {b.spin ? 'Verificando…' : b.label}
+                                </span>
+                              );
+                            })()}
                           </div>
                           {tb ? (
                             <div style={{ fontSize: 11, color: '#8a6d00', marginTop: 2 }}>
