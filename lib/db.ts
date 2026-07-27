@@ -2312,23 +2312,34 @@ export async function dbGetClassRecords(): Promise<import('@/types').ClassRecord
  * ser enorme y acá únicamente interesa si existe y no está vacío.
  */
 export async function dbGetClassTranscripts(): Promise<import('@/lib/finance').ClassTranscriptRef[]> {
-  const { data, error } = await supabase
-    .from('class_analyses')
-    .select('teacher_id, student_name, class_date, analyzed_at, transcript, join_log_id, validation_status')
-    .order('analyzed_at', { ascending: false });
-  if (error || !data) {
-    if (error) console.error('[db] Error al leer class_analyses para finanzas:', error);
-    // Si la columna validation_status aún no existe, reintentar sin ella.
-    if (error?.code === '42703' || error?.code === 'PGRST204') {
-      const retry = await supabase
-        .from('class_analyses')
-        .select('teacher_id, student_name, class_date, analyzed_at, transcript, join_log_id')
-        .order('analyzed_at', { ascending: false });
-      if (!retry.error && retry.data) return retry.data as unknown as import('@/lib/finance').ClassTranscriptRef[];
+  // Se piden las columnas opcionales una a una y se van descartando si la base no
+  // las tiene. El reintento anterior sólo quitaba `validation_status` y seguía
+  // pidiendo `join_log_id`: cuando faltaban las DOS (migraciones sin correr) el
+  // reintento fallaba igual, esta función devolvía [] y finanzas se quedaba sin el
+  // segundo factor de verificación, con TODAS las clases marcadas "a revisar"
+  // aunque tuvieran transcript.
+  const BASE = 'teacher_id, student_name, class_date, analyzed_at, transcript';
+  const OPCIONALES = ['join_log_id', 'validation_status'];
+
+  for (let quitar = 0; quitar <= OPCIONALES.length; quitar++) {
+    const cols = [BASE, ...OPCIONALES.slice(0, OPCIONALES.length - quitar)].join(', ');
+    const { data, error } = await supabase
+      .from('class_analyses')
+      .select(cols)
+      .order('analyzed_at', { ascending: false });
+
+    if (!error && data) {
+      if (quitar > 0) {
+        console.warn(`[db] class_analyses sin las columnas [${OPCIONALES.slice(OPCIONALES.length - quitar).join(', ')}]. Faltan migraciones: supabase-join-log-link.sql / supabase-transcript-validation.sql.`);
+      }
+      return data as unknown as import('@/lib/finance').ClassTranscriptRef[];
     }
-    return [];
+    if (error && error.code !== '42703' && error.code !== 'PGRST204') {
+      console.error('[db] Error al leer class_analyses para finanzas:', error);
+      return [];
+    }
   }
-  return data as unknown as import('@/lib/finance').ClassTranscriptRef[];
+  return [];
 }
 
 // ── VALIDACIÓN DE TRANSCRIPCIONES (Bloque 1) ────────────────────────────────────
