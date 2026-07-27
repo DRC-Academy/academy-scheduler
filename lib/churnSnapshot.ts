@@ -48,6 +48,11 @@ export async function captureChurnSnapshot(args: {
    * clase" se mediría contra hoy y saldría inflado en cada baja recuperada.
    */
   asOfIso?: string;
+  /**
+   * Alta del alumno. Necesaria para medir la inactividad de quien no tiene
+   * NINGUNA clase registrada. Si no viene, se busca en sus asignaciones.
+   */
+  studentSinceIso?: string | null;
 }): Promise<ChurnSnapshotResult | null> {
   const studentName = args.studentName?.trim();
   if (!studentName) return null;
@@ -67,8 +72,12 @@ export async function captureChurnSnapshot(args: {
   const logs     = (logRes.data ?? []) as Array<{ student_name: string; scheduled_date: string | null; punctuality?: string | null }>;
   const analyses = (anaRes.data ?? []) as Array<{ student_name: string; class_date?: string | null; analyzed_at?: string | null; risk_signal?: string | null; transcript?: string | null }>;
 
-  // 2) Señales deterministas.
-  const signals = computeChurnSignals({ studentName, records, logs, analyses, window: WINDOW, nowIso: asOf });
+  // 2) Señales deterministas. La fecha de alta permite puntuar al alumno que no
+  //    tiene ni una clase registrada (antes puntuaba 0, que era justo al revés).
+  const studentSinceIso = args.studentSinceIso ?? await lookupStudentSince(args.studentId, studentName);
+  const signals = computeChurnSignals({
+    studentName, records, logs, analyses, window: WINDOW, nowIso: asOf, studentSinceIso,
+  });
 
   // 3) Análisis por IA (best-effort) sobre las transcripciones disponibles.
   const aiMode = args.aiMode ?? 'always';
@@ -122,6 +131,21 @@ export async function captureChurnSnapshot(args: {
   }
 
   return { id, studentName, signals, ai, combinedRisk };
+}
+
+/** Alta más antigua del alumno entre sus asignaciones. null si no se sabe. */
+async function lookupStudentSince(studentId: string | null | undefined, studentName: string): Promise<string | null> {
+  const sel = 'start_date, created_at';
+  const res = studentId
+    ? await supabase.from('assignments').select(sel).eq('student_id', studentId)
+    : await supabase.from('assignments').select(sel).ilike('student_name', studentName);
+  if (res.error || !res.data?.length) return null;
+
+  const fechas = res.data
+    .map(r => (r as { start_date?: string | null; created_at?: string | null }))
+    .map(r => r.start_date || r.created_at || null)
+    .filter(Boolean) as string[];
+  return fechas.sort()[0] ?? null;   // la más antigua
 }
 
 // Marca una foto como "ya alertada" (para no repetir el aviso al mismo alumno).

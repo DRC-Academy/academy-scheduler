@@ -8,11 +8,13 @@ import { dbGetChurnOverview, type ChurnOverview } from '@/lib/db';
 
 const GOAL = 100;   // bajas estimadas para que la muestra sea fiable (~3 meses)
 
+// Alineado con el umbral de aviso del escaneo (65).
 function riskColor(r: number | null): string {
   if (r == null) return '#6b7280';
-  if (r >= 70) return '#dc2626';
-  if (r >= 55) return '#ea580c';
-  return '#b45309';
+  if (r >= 65) return '#dc2626';
+  if (r >= 40) return '#ea580c';
+  if (r > 0)   return '#b45309';
+  return '#6b7280';
 }
 function fmtDate(iso: string | null): string {
   if (!iso) return '—';
@@ -34,13 +36,30 @@ export default function ChurnTab() {
   }
   useEffect(() => { load(); }, []);
 
+  /**
+   * El escaneo va POR LOTES: el servidor procesa lo que le cabe en su presupuesto
+   * de tiempo y devuelve `nextOffset`. Aquí se repite hasta `done`, para que se
+   * cubran los 177 alumnos y no solo los primeros que entren en una llamada.
+   */
   async function scanNow() {
     setScanning(true); setScanMsg(null);
     try {
-      const res = await fetch('/api/churn/scan', { method: 'POST' });
-      const j = await res.json();
-      if (!res.ok) throw new Error(j?.error || 'El escaneo falló.');
-      setScanMsg(`Escaneados ${j.scanned} alumnos · ${j.alerts} aviso(s) nuevo(s).`);
+      let offset = 0, scanned = 0, alerts = 0, vueltas = 0;
+      for (;;) {
+        const res = await fetch(`/api/churn/scan?offset=${offset}`, { method: 'POST' });
+        const j = await res.json();
+        if (!res.ok) throw new Error(j?.error || 'El escaneo falló.');
+
+        scanned += j.scanned ?? 0;
+        alerts  += j.alerts ?? 0;
+        offset   = j.nextOffset ?? offset;
+        setScanMsg(`Escaneando… ${scanned} de ${j.total ?? '?'} alumnos.`);
+
+        if (j.done) break;
+        // Cortafuegos: si el servidor no avanza, no entrar en bucle infinito.
+        if (++vueltas > 20 || (j.scanned ?? 0) === 0) break;
+      }
+      setScanMsg(`Escaneados ${scanned} alumnos · ${alerts} aviso(s) nuevo(s).`);
       await load();
     } catch (e) {
       setScanMsg((e as Error).message);
@@ -111,8 +130,8 @@ export default function ChurnTab() {
 
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
         {card('Bajas registradas', `${data?.churnedCount ?? 0}`, `Meta ~${GOAL} para fiabilidad`)}
-        {card('Alumnos activos escaneados', `${data?.activeScannedCount ?? 0}`)}
-        {card('En riesgo ahora', `${data?.atRisk.length ?? 0}`, 'según su última foto')}
+        {card('Alumnos escaneados', `${data?.studentsScanned ?? 0}`, `${data?.activeScannedCount ?? 0} fotos en total`)}
+        {card('Superan el umbral de aviso', `${data?.aboveThreshold ?? 0}`, 'riesgo 65 o más')}
       </div>
 
       {/* Progreso del dataset */}
@@ -131,14 +150,18 @@ export default function ChurnTab() {
         <div style={{ textAlign: 'center', padding: '30px 0', color: 'var(--text-muted)' }}>Cargando…</div>
       ) : (data?.atRisk.length ?? 0) === 0 ? (
         <div style={{ textAlign: 'center', padding: '30px 0', color: 'var(--text-muted)' }}>
-          Ningún alumno activo supera el umbral de riesgo ahora mismo. Pulsa «Escanear ahora» para actualizar.
+          Todavía no hay ningún alumno escaneado. Pulsa «Escanear ahora».
         </div>
       ) : (
         <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 12 }}>
+          <div style={{ padding: '10px 14px', fontSize: 12.5, color: 'var(--text-muted)', borderBottom: '1px solid var(--border)' }}>
+            Alumnos con más riesgo según su última foto. Se muestran los {data!.atRisk.length} primeros,
+            ordenados de mayor a menor, aunque no lleguen al umbral de aviso.
+          </div>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
               <tr style={{ background: 'var(--bg-surface-2)', textAlign: 'left' }}>
-                {['Alumno', 'Riesgo', 'Cancelaciones', 'Retrasos', 'Habla', 'Motivo (IA)', 'Última foto'].map(h => (
+                {['Alumno', 'Riesgo', 'Sin actividad', 'Cancelaciones', 'Retrasos', 'Habla', 'Motivo (IA)', 'Última foto'].map(h => (
                   <th key={h} style={{ padding: '10px 12px', fontWeight: 700, color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{h}</th>
                 ))}
               </tr>
@@ -150,6 +173,9 @@ export default function ChurnTab() {
                     {s.studentName}{s.explicitQuit && <span title="Mencionó dejarlo" style={{ marginLeft: 6 }}>🚪</span>}
                   </td>
                   <td style={{ padding: '10px 12px', fontWeight: 800, color: riskColor(s.combinedRisk) }}>{s.combinedRisk ?? '—'}</td>
+                  <td style={{ padding: '10px 12px', whiteSpace: 'nowrap', color: (s.daysSinceLastClass ?? 0) > 30 ? '#dc2626' : (s.daysSinceLastClass ?? 0) > 14 ? '#ea580c' : 'var(--text-secondary)' }}>
+                    {s.daysSinceLastClass == null ? '—' : `${s.daysSinceLastClass} d`}
+                  </td>
                   <td style={{ padding: '10px 12px' }}>{s.cancellations ?? 0}</td>
                   <td style={{ padding: '10px 12px' }}>{s.lateCount ?? 0}</td>
                   <td style={{ padding: '10px 12px', color: s.speakingTrend === 'down' ? '#dc2626' : 'var(--text-secondary)' }}>

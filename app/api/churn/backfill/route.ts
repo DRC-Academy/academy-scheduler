@@ -26,6 +26,7 @@ interface DropoutRow {
   student_name: string;
   teacher_id: string | null;
   dropped_at: string | null;
+  start_date: string | null;
 }
 
 /** Bajas sin foto. Una por ALUMNO: `student_dropouts` guarda una fila por
@@ -33,7 +34,7 @@ interface DropoutRow {
 async function pendingDropouts(): Promise<{ pending: DropoutRow[]; totalRows: number; error?: string }> {
   const { data: drops, error } = await supabase
     .from('student_dropouts')
-    .select('student_id, student_name, teacher_id, dropped_at')
+    .select('student_id, student_name, teacher_id, dropped_at, start_date')
     .order('dropped_at', { ascending: false });
   if (error) {
     console.error('[churn/backfill] Error al leer student_dropouts:', error);
@@ -87,6 +88,9 @@ export async function POST(): Promise<Response> {
         trigger:     'manual_dropout',
         label:       'churned',
         asOfIso:     d.dropped_at ?? undefined,
+        // El alta quedó guardada en la propia baja: es lo único que permite medir
+        // la inactividad de un alumno cuyo assignment ya no existe.
+        studentSinceIso: d.start_date ?? undefined,
       });
       if (snap) {
         captured++;

@@ -23,11 +23,35 @@ export interface ChurnSignals {
   cancellations: number;       // cancelaciones/ausencias recientes
   lateCount: number;           // ingresos con retraso (late / very_late)
   riskFlags: number;           // análisis con señal amarillo/rojo en la ventana
+  /**
+   * Días SIN ACTIVIDAD. Si el alumno nunca tuvo ninguna, se mide desde su alta:
+   * no es lo mismo un alumno que empezó ayer que uno que lleva 40 días sin
+   * aparecer. null solo si no hay ninguna referencia (ni actividad ni alta).
+   */
   daysSinceLastClass: number | null;
+  /** true si no hay NI UNA clase, ingreso o análisis en todo su historial. */
+  noActivityEver: boolean;
   avgSpeakingPct: number | null;   // % medio de habla del alumno (de los transcripts)
   speakingTrend: 'up' | 'stable' | 'down' | 'unknown';
   speakingByClass: number[];       // % por clase (recientes → antiguas), para el dataset
   deterministicRisk: number;       // 0-100, heurística SOLO con señales objetivas
+}
+
+/**
+ * Puntos por inactividad. Antes era binario (15 puntos si pasaban 14 días) y,
+ * peor, un alumno SIN NINGUNA actividad puntuaba 0: `daysSinceLastClass` salía
+ * null y no sumaba nada. O sea, el caso más sospechoso de todos (ni una clase,
+ * ni un ingreso) se leía como "todo bien". Se comprobó con datos reales: las 4
+ * bajas del histórico daban riesgo 0.
+ *
+ * Ahora es gradual y la ausencia total de actividad pesa aparte.
+ */
+export function inactivityPoints(daysInactive: number | null, noActivityEver: boolean): number {
+  if (daysInactive == null) return 0;              // alumno recién dado de alta, sin referencia
+  const base = daysInactive > 30 ? 30 : daysInactive > 14 ? 15 : 0;
+  // Nunca hubo actividad y ya pasó la ventana de cortesía: señal fuerte.
+  const nunca = noActivityEver && daysInactive > 14 ? 10 : 0;
+  return base + nunca;
 }
 
 const nkey = (s: string) => (s ?? '').trim().toLowerCase();
@@ -74,6 +98,9 @@ export function computeChurnSignals(input: {
   analyses: ChurnAnalysisLite[];
   window?: number;
   nowIso?: string;
+  /** Alta del alumno (start_date de su asignación). Sirve para medir la
+   *  inactividad de quien nunca tuvo ninguna clase registrada. */
+  studentSinceIso?: string | null;
 }): ChurnSignals {
   const window = input.window ?? 10;
   const now = input.nowIso ?? new Date().toISOString();
@@ -96,14 +123,17 @@ export function computeChurnSignals(input: {
   const lateCount = myLogs.filter(l => l.punctuality === 'late' || l.punctuality === 'very_late').length;
   const riskFlags = myAnalyses.filter(a => a.risk_signal === 'amarillo' || a.risk_signal === 'rojo').length;
 
-  // Días desde la última actividad conocida.
+  // Días desde la última actividad conocida. Si NO hay ninguna, se mide desde el
+  // alta del alumno: sin esto, el alumno del que no hay ni rastro puntuaba 0.
   const lastDates = [
     ...myRecords.map(r => r.class_date),
     ...myLogs.map(l => l.scheduled_date),
     ...myAnalyses.map(a => a.class_date ?? a.analyzed_at ?? null),
   ].filter(Boolean) as string[];
   const lastIso = lastDates.sort().at(-1) ?? null;
-  const daysSinceLastClass = lastIso ? Math.max(0, daysBetween(lastIso, now)) : null;
+  const noActivityEver = lastIso == null;
+  const referenceIso = lastIso ?? input.studentSinceIso ?? null;
+  const daysSinceLastClass = referenceIso ? Math.max(0, daysBetween(referenceIso, now)) : null;
 
   // % de habla por clase (recientes → antiguas) y tendencia.
   const speakingByClass = myAnalyses
@@ -129,13 +159,13 @@ export function computeChurnSignals(input: {
     lateCount * 6 +
     riskFlags * 12 +
     (speakingTrend === 'down' ? 15 : 0) +
-    (daysSinceLastClass != null && daysSinceLastClass > 14 ? 15 : 0)
+    inactivityPoints(daysSinceLastClass, noActivityEver)
   )));
 
   return {
     window,
     classesAnalyzed: Math.max(myRecords.length, myLogs.length, myAnalyses.length),
-    cancellations, lateCount, riskFlags, daysSinceLastClass,
+    cancellations, lateCount, riskFlags, daysSinceLastClass, noActivityEver,
     avgSpeakingPct, speakingTrend, speakingByClass, deterministicRisk,
   };
 }

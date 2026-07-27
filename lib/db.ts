@@ -2417,6 +2417,8 @@ export interface ChurnRiskStudent {
   combinedRisk: number | null;
   cancellations: number | null;
   lateCount: number | null;
+  /** Días sin actividad (o desde el alta si nunca tuvo ninguna). */
+  daysSinceLastClass: number | null;
   speakingTrend: string | null;
   aiReasoning: string | null;
   explicitQuit: boolean | null;
@@ -2425,19 +2427,36 @@ export interface ChurnRiskStudent {
 export interface ChurnOverview {
   churnedCount: number;        // ejemplos de baja recopilados (meta ~100)
   activeScannedCount: number;  // fotos de alumnos activos
-  atRisk: ChurnRiskStudent[];  // alumnos activos con riesgo alto (última foto)
+  /** Alumnos ORDENADOS por riesgo (los `topN` primeros), no filtrados por umbral. */
+  atRisk: ChurnRiskStudent[];
+  /** Cuántos superan el umbral de aviso (los que de verdad son alerta). */
+  aboveThreshold: number;
+  /** Alumnos escaneados distintos (una foto por alumno, la última). */
+  studentsScanned: number;
 }
 
-// Resumen para el panel del admin. Degradación limpia si la tabla no existe aún.
-export async function dbGetChurnOverview(riskThreshold = 55): Promise<ChurnOverview> {
-  const empty: ChurnOverview = { churnedCount: 0, activeScannedCount: 0, atRisk: [] };
+/**
+ * Resumen para el panel del admin. Degradación limpia si la tabla no existe aún.
+ *
+ * Devuelve el TOP por riesgo en vez de filtrar por umbral: con la muestra actual
+ * el riesgo máximo real es ~33 y un filtro en 55 dejaba la tabla siempre vacía,
+ * así que el escaneo parecía no hacer nada. Viendo el top se puede calibrar el
+ * umbral mirando datos en vez de a ojo.
+ */
+export async function dbGetChurnOverview(riskThreshold = 65, topN = 15): Promise<ChurnOverview> {
+  const empty: ChurnOverview = {
+    churnedCount: 0, activeScannedCount: 0, atRisk: [], aboveThreshold: 0, studentsScanned: 0,
+  };
   try {
     const [churnedRes, activeRes, recentRes] = await Promise.all([
       supabase.from('churn_snapshots').select('id', { count: 'exact', head: true }).eq('label', 'churned'),
       supabase.from('churn_snapshots').select('id', { count: 'exact', head: true }).eq('label', 'active'),
       supabase.from('churn_snapshots')
-        .select('id, student_name, teacher_id, captured_at, combined_risk, cancellations, late_count, speaking_trend, ai_reasoning, ai_explicit_quit')
-        .eq('label', 'active').order('captured_at', { ascending: false }).limit(300),
+        .select('id, student_name, teacher_id, captured_at, combined_risk, cancellations, late_count, days_since_last_class, speaking_trend, ai_reasoning, ai_explicit_quit')
+        // Se queda con la ÚLTIMA foto de cada alumno, así que hay que traer varias
+        // rondas de escaneo: con 177 alumnos, 300 filas se quedaban cortas a la
+        // segunda pasada y los últimos alumnos desaparecían del resumen.
+        .eq('label', 'active').order('captured_at', { ascending: false }).limit(2000),
     ]);
 
     // Última foto por alumno.
@@ -2453,19 +2472,21 @@ export async function dbGetChurnOverview(riskThreshold = 55): Promise<ChurnOverv
         combinedRisk:  (r.combined_risk as number) ?? null,
         cancellations: (r.cancellations as number) ?? null,
         lateCount:     (r.late_count as number) ?? null,
+        daysSinceLastClass: (r.days_since_last_class as number) ?? null,
         speakingTrend: (r.speaking_trend as string) ?? null,
         aiReasoning:   (r.ai_reasoning as string) ?? null,
         explicitQuit:  (r.ai_explicit_quit as boolean) ?? null,
       });
     }
-    const atRisk = [...latest.values()]
-      .filter(s => (s.combinedRisk ?? 0) >= riskThreshold)
+    const ordenados = [...latest.values()]
       .sort((a, b) => (b.combinedRisk ?? 0) - (a.combinedRisk ?? 0));
 
     return {
       churnedCount: churnedRes.count ?? 0,
       activeScannedCount: activeRes.count ?? 0,
-      atRisk,
+      atRisk: ordenados.slice(0, topN),
+      aboveThreshold: ordenados.filter(s => (s.combinedRisk ?? 0) >= riskThreshold).length,
+      studentsScanned: ordenados.length,
     };
   } catch (e) {
     console.error('[db] dbGetChurnOverview:', e);
