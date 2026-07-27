@@ -200,6 +200,7 @@ function FinanceTab() {
         penaltyId: revertModal.id, teacherId: revertModal.teacherId, teacherName: revertModal.teacherName,
         originalDate: (revertModal.createdAt ?? '').slice(0, 10), studentName: revertModal.studentRef,
         reason: revertReason.trim(), adminName: approvedBy,
+        amount: Math.abs(revertModal.euros ?? 5),   // devuelve lo que se descontó
       });
       setRevertModal(null); setRevertReason('');
       await loadFinanceData();
@@ -210,8 +211,12 @@ function FinanceTab() {
     }
   }
 
+  // Toda penalización del mes = cualquier evento con euros negativos, sea del tipo
+  // que sea (falta sin aviso del calendario, falta injustificada del admin…). Si se
+  // filtrara por un event_type concreto, una penalización de otro tipo restaría del
+  // total sin salir en la lista ni poder revertirse.
   const penaltiesOf = (teacherId: string): ScoringEvent[] => scoringEvents.filter(e =>
-    e.teacherId === teacherId && e.eventType === 'falta_sin_aviso_penalizacion' &&
+    e.teacherId === teacherId && (e.euros ?? 0) < 0 &&
     (e.createdAt ?? '').slice(0, 7) === monthYear);
 
   useEffect(() => { loadFinanceData(); /* eslint-disable-next-line */ }, []);

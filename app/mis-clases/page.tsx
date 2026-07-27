@@ -547,10 +547,13 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
       : 'ingresar con el botón Meet',
   }));
 
-  // Penalizaciones del mes (Bloque 4): faltas sin aviso. Las revertidas se muestran
-  // tachadas y no restan (ver lib/finance.ts).
+  // Penalizaciones del mes: CUALQUIER evento con euros negativos (falta sin aviso
+  // registrada en el calendario, falta injustificada cargada por el admin, etc.).
+  // Antes se filtraba por un único event_type y las demás penalizaciones restaban
+  // del total sin aparecer en el desglose, que es lo peor de los dos mundos.
+  // Las revertidas se muestran tachadas y no restan (ver lib/finance.ts).
   const monthPenalties = scoringEvents
-    .filter(e => e.teacherId === teacher.id && e.eventType === 'falta_sin_aviso_penalizacion' && (e.createdAt ?? '').slice(0, 7) === monthYear)
+    .filter(e => e.teacherId === teacher.id && (e.euros ?? 0) < 0 && (e.createdAt ?? '').slice(0, 7) === monthYear)
     .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''));
 
   return (

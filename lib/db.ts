@@ -1253,9 +1253,16 @@ export const EVENT_POINTS: Record<string, number> = {
   email_presentacion_tardio: -5,
 };
 
+// Importe en euros de cada tipo de evento. Los NEGATIVOS son penalizaciones y se
+// restan del pago del mes (lib/finance.ts los suma aparte para mostrarlos en rojo).
 export const EVENT_EUROS: Record<string, number> = {
   upsell:          20,
   bonus_retencion: 30,
+  // Una falta injustificada resta 15 puntos de scoring Y 5 € del pago, igual que
+  // la falta sin aviso registrada desde el calendario. Antes solo restaba puntos,
+  // así que el admin la cargaba esperando ver el descuento en finanzas y no pasaba
+  // nada.
+  falta_injustificada: -5,
 };
 
 // ── RETENTION RATE ────────────────────────────────────────────────────────────
@@ -1337,11 +1344,20 @@ export async function dbRecalculateTeacherScore(teacherId: string): Promise<void
     .eq('id', teacherId);
 }
 
+/**
+ * Guarda un evento de scoring.
+ *
+ * LANZA si el INSERT falla. Antes se ignoraba el error y se devolvía el objeto
+ * como si estuviera guardado: el contexto lo metía en el estado local y en
+ * pantalla parecía aplicado hasta recargar. Con las columnas `student_ref` y
+ * `quantity` sin migrar, PostgREST rechazaba TODOS los inserts (PGRST204) y no
+ * se guardó ni un solo evento durante semanas sin que nadie lo notara.
+ */
 export async function dbAddScoringEvent(event: Omit<ScoringEvent, 'id' | 'createdAt'>): Promise<ScoringEvent> {
   const id        = `se_${Date.now()}`;
   const createdAt = new Date().toISOString();
 
-  await supabase.from('scoring_events').insert({
+  const row = {
     id,
     teacher_id:   event.teacherId,
     teacher_name: event.teacherName,
@@ -1353,7 +1369,24 @@ export async function dbAddScoringEvent(event: Omit<ScoringEvent, 'id' | 'create
     student_ref:  event.studentRef ?? null,
     quantity:     event.quantity ?? null,
     created_at:   createdAt,
-  });
+  };
+
+  let { error } = await supabase.from('scoring_events').insert(row);
+
+  // Si faltan las columnas opcionales (migración sin correr), se reintenta sin
+  // ellas para no perder el evento: mejor guardarlo sin el alumno que no
+  // guardarlo. Se avisa por consola para que se corra supabase-scoring-columns.sql.
+  if (error && (error.code === 'PGRST204' || error.code === '42703')) {
+    console.warn('[dbAddScoringEvent] Faltan columnas en scoring_events (student_ref/quantity). Corré supabase-scoring-columns.sql. Se guarda sin ellas.');
+    const { student_ref, quantity, ...base } = row;
+    void student_ref; void quantity;
+    ({ error } = await supabase.from('scoring_events').insert(base));
+  }
+
+  if (error) {
+    console.error('[dbAddScoringEvent] No se pudo guardar el evento:', error);
+    throw new Error(`No se pudo guardar el evento de scoring: ${error.message}`);
+  }
 
   await dbRecalculateTeacherScore(event.teacherId);
   return { ...event, id, createdAt };
@@ -1431,6 +1464,8 @@ export async function dbApplyFaltaSideEffects(p: {
 export async function dbRevertPenalty(p: {
   penaltyId: string; teacherId: string; teacherName: string;
   originalDate: string; studentName?: string; reason: string; adminName: string;
+  /** Importe de la penalización original (positivo). Por defecto 5 €. */
+  amount?: number;
 }): Promise<void> {
   const now = new Date().toISOString();
   const { error } = await supabase.from('scoring_events')
@@ -1438,10 +1473,13 @@ export async function dbRevertPenalty(p: {
     .eq('id', p.penaltyId);
   if (error) throw new Error(error.message);
 
+  // El compensatorio devuelve lo que se descontó, no un 5 fijo: ya hay
+  // penalizaciones de tipos distintos y mañana puede haberlas de otro importe.
+  const amount = Math.abs(p.amount ?? 5);
   await dbAddScoringEvent({
     teacherId: p.teacherId, teacherName: p.teacherName,
-    eventType: 'penalizacion_revertida', points: 0, euros: 5,
-    note: `Reversión de penalización del ${p.originalDate}${p.studentName ? ` (${p.studentName})` : ''} — Motivo: ${p.reason}`,
+    eventType: 'penalizacion_revertida', points: 0, euros: amount,
+    note: `Reversión de penalización del ${p.originalDate}${p.studentName ? ` (${p.studentName})` : ''}. Motivo: ${p.reason}`,
     createdBy: p.adminName, studentRef: p.studentName,
   });
 }
