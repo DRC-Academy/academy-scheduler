@@ -337,6 +337,7 @@ const EVENT_LABELS: Record<string, string> = {
   profe_del_mes:       '🏆 Profe del Mes',
   profe_del_trimestre: '🏆 Profe del Trimestre',
   email_presentacion_tardio: 'Email de presentación tardío',
+  alerta_no_atendida:  'Alerta de riesgo no atendida',
 };
 
 const EVENT_ICONS: Record<string, string> = {
@@ -355,6 +356,7 @@ const EVENT_ICONS: Record<string, string> = {
   profe_del_mes:       '🏆',
   profe_del_trimestre: '🏆',
   email_presentacion_tardio: '📧',
+  alerta_no_atendida:  '🔕',
 };
 
 // ─── Seguimiento del email de presentación (resumen para el admin) ────────────

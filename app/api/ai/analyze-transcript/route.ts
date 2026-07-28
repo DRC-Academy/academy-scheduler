@@ -24,6 +24,12 @@ import {
   resolveProfileId, updateProfileFromAnalysis,
   notifyAdminRisk, notifyAdminTranscript, verdictPayload,
 } from '@/lib/transcriptStore';
+import { normalizeSuggestion, normalizeCheck } from '@/lib/interventions';
+import {
+  loadInterventionContext, saveActiveIntervention, recordInterventionAudit,
+  notifyTeacherIntervention, notifyAdminUnattended, type InterventionContext,
+} from '@/lib/interventionStore';
+import { fetchTeacher, sendInterventionEmail } from '@/lib/emailNotifications';
 
 export const runtime = 'nodejs';
 // El análisis con IA puede tardar. Sin esto, la plataforma corta la función a los
@@ -91,6 +97,15 @@ async function handleAttach(body: Body, studentName: string, analysisId: string)
 
   const classNumber = body.classNumber ?? (row?.class_number as number | null) ?? null;
   const classDate   = body.classDate   ?? (row?.class_date as string | null)   ?? null;
+  const studentId   = (row?.student_id as string | null) ?? body.studentId ?? null;
+
+  // Alerta que el alumno traía abierta: si la hay, la IA evalúa además si el
+  // profesor intervino (auditoría de seguimiento). `currentAnalysisId` evita
+  // auditar esta clase contra la alerta que ella misma generó en un intento
+  // anterior ("Reintentar análisis").
+  const ctx = await loadInterventionContext({
+    profileId: body.profileId, studentId, studentName, currentAnalysisId: analysisId,
+  });
 
   const result = await analyzeTranscript({
     transcript,
@@ -102,6 +117,7 @@ async function handleAttach(body: Body, studentName: string, analysisId: string)
     classDate,
     studentProfile: body.studentProfile,
     classHistory: body.classHistory,
+    activeIntervention: ctx.active,
   });
 
   if (result.status !== 'ready' || !result.data) {
@@ -127,8 +143,9 @@ async function handleAttach(body: Body, studentName: string, analysisId: string)
     classNumber,
     body,
     teacherId: (row?.teacher_id as string | null) ?? body.teacherId ?? null,
-    studentId: (row?.student_id as string | null) ?? body.studentId ?? null,
+    studentId,
     validationStatus: (row?.validation_status as string | null) ?? 'ok',
+    intervention: ctx,
   });
 
   return Response.json({ analyzed: true, saved: true, analysisId, analysis: result.data });
@@ -138,6 +155,14 @@ async function handleAttach(body: Body, studentName: string, analysisId: string)
 async function handleAnalyzeOnly(body: Body, studentName: string): Promise<Response> {
   const transcript = body.transcript?.trim();
   if (!transcript) return Response.json({ error: 'Falta la transcripción.' }, { status: 400 });
+
+  // El informe que se devuelve ya lleva la sugerencia y, si el alumno tenía una
+  // alerta abierta, la auditoría: al guardarlo (modo 3) se procesan sin volver
+  // a llamar a la IA.
+  const ctx = await loadInterventionContext({
+    profileId: body.profileId, studentId: body.studentId, studentName,
+    currentAnalysisId: body.replaceId,
+  });
 
   const result = await analyzeTranscript({
     transcript,
@@ -149,6 +174,7 @@ async function handleAnalyzeOnly(body: Body, studentName: string): Promise<Respo
     classDate: body.classDate,
     studentProfile: body.studentProfile,
     classHistory: body.classHistory,
+    activeIntervention: ctx.active,
   });
 
   if (result.status !== 'ready' || !result.data) {
@@ -166,6 +192,13 @@ async function handleSaveWithAnalysis(body: Body, studentName: string): Promise<
   }
   const transcript = body.transcript.trim();
   const classDate = body.classDate || new Date().toISOString().slice(0, 10);
+
+  // La alerta abierta se lee ANTES de guardar: el informe que llega del cliente
+  // ya trae la auditoría (se generó en el modo "solo analizar").
+  const ctx = await loadInterventionContext({
+    profileId: body.profileId, studentId: body.studentId, studentName,
+    currentAnalysisId: body.replaceId,
+  });
 
   // Capas 1 y 2 (sin IA: la 3 corre abajo, ya con la clase guardada).
   let verdict = null;
@@ -225,6 +258,7 @@ async function handleSaveWithAnalysis(body: Body, studentName: string): Promise<
     teacherId: body.teacherId ?? null,
     studentId: body.studentId ?? null,
     validationStatus: verdict ? (verdict.decision === 'ok' ? 'ok' : 'review') : 'review',
+    intervention: ctx,
   });
 
   return Response.json({
@@ -235,8 +269,9 @@ async function handleSaveWithAnalysis(body: Body, studentName: string): Promise<
 }
 
 /**
- * Después de guardar el informe: ficha del alumno, aviso de riesgo y CAPA 3
- * (autenticidad por IA). Todo best-effort — acá ya no se puede perder la clase.
+ * Después de guardar el informe: ficha del alumno, aviso de riesgo, sugerencia
+ * de intervención, auditoría de seguimiento y CAPA 3 (autenticidad por IA).
+ * Todo best-effort — acá ya no se puede perder la clase.
  */
 async function afterAnalysis(args: {
   analysisId: string;
@@ -249,11 +284,13 @@ async function afterAnalysis(args: {
   teacherId: string | null;
   studentId: string | null;
   validationStatus: string;
+  intervention: InterventionContext;
 }): Promise<void> {
   const { analysis, studentName, body } = args;
 
+  let profileId: string | null = args.intervention.profileId;
   try {
-    const profileId = await resolveProfileId({
+    profileId ??= await resolveProfileId({
       profileId: body.profileId, studentId: args.studentId, studentName,
     });
     if (profileId) {
@@ -267,6 +304,15 @@ async function afterAnalysis(args: {
   }
 
   const risk = isRiskSignal(analysis.riskSignal) ? analysis.riskSignal : 'verde';
+
+  // AUDITORÍA primero, sugerencia después: si esta clase vuelve a salir en
+  // riesgo, la intervención nueva tiene que sobrescribir a la que se cierre acá.
+  try {
+    await runInterventionAudit({ ...args, profileId });
+  } catch (err) {
+    console.error('[analyze-transcript] Auditoría de seguimiento no disponible:', err);
+  }
+
   if (risk === 'amarillo' || risk === 'rojo') {
     try {
       await notifyAdminRisk(risk, studentName, {
@@ -274,6 +320,12 @@ async function afterAnalysis(args: {
       }, analysis);
     } catch (err) {
       console.error('[analyze-transcript] No se pudo avisar del riesgo:', err);
+    }
+
+    try {
+      await openIntervention({ ...args, profileId, risk });
+    } catch (err) {
+      console.error('[analyze-transcript] No se pudo generar la intervención:', err);
     }
   }
 
@@ -309,6 +361,111 @@ async function afterAnalysis(args: {
     );
   } catch (err) {
     console.error('[analyze-transcript] Verificación de autenticidad no disponible:', err);
+  }
+}
+
+/**
+ * BLOQUE 1 — la clase salió en amarillo/rojo: se abre la intervención.
+ *
+ * Deja la sugerencia como alerta ABIERTA en la ficha y se la hace llegar al
+ * profesor por los dos canales (campanita + email) con el mismo contenido.
+ */
+async function openIntervention(args: {
+  analysis: TranscriptIA;
+  studentName: string;
+  classNumber: number | null;
+  analysisId: string;
+  teacherId: string | null;
+  body: Body;
+  profileId: string | null;
+  risk: 'amarillo' | 'rojo';
+}): Promise<void> {
+  const suggestion = normalizeSuggestion(args.analysis.interventionSuggestion);
+  if (!suggestion) {
+    console.warn(`[analyze-transcript] ${args.studentName}: riesgo ${args.risk} sin sugerencia de intervención utilizable.`);
+    return;
+  }
+
+  if (args.profileId) {
+    await saveActiveIntervention({
+      profileId:   args.profileId,
+      suggestion,
+      risk:        args.risk,
+      analysisId:  args.analysisId,
+      classNumber: args.classNumber,
+    });
+  }
+
+  if (!args.teacherId) return;   // sin profesor asignado no hay a quién avisar
+
+  await notifyTeacherIntervention({
+    teacherId: args.teacherId, studentName: args.studentName, suggestion,
+  });
+
+  // Email: es el único correo ligado a las señales de riesgo y sale solo cuando
+  // hay una sugerencia concreta. Best-effort, como el resto de los avisos.
+  try {
+    const teacher = await fetchTeacher(args.teacherId);
+    if (teacher) {
+      await sendInterventionEmail(teacher, {
+        studentName: args.studentName, suggestion, classNumber: args.classNumber,
+      });
+    }
+  } catch (err) {
+    console.error('[analyze-transcript] No se pudo enviar el email de intervención:', err);
+  }
+}
+
+/**
+ * BLOQUE 2 — el alumno traía una alerta abierta: se registra si hubo señales de
+ * intervención y, tras 2 auditorías consecutivas sin ellas, se avisa al ADMIN.
+ *
+ * Nunca crea scoring_events ni notifica al profesor: detectar una intervención
+ * sutil leyendo un transcript es impreciso y la decisión final es humana.
+ */
+async function runInterventionAudit(args: {
+  analysis: TranscriptIA;
+  studentName: string;
+  studentId: string | null;
+  teacherId: string | null;
+  analysisId: string;
+  body: Body;
+  profileId: string | null;
+  intervention: InterventionContext;
+}): Promise<void> {
+  const previous = args.intervention.active;
+  if (!previous) return;
+
+  const check = normalizeCheck(args.analysis.interventionCheck);
+  if (!check) {
+    console.warn(`[analyze-transcript] ${args.studentName}: había alerta abierta pero la IA no devolvió la auditoría.`);
+    return;
+  }
+
+  const { counted, consecutive } = await recordInterventionAudit({
+    profileId:        args.profileId,
+    studentId:        args.studentId,
+    studentName:      args.studentName,
+    teacherId:        args.teacherId,
+    teacherName:      args.body.teacherName?.trim() || null,
+    previous,
+    check,
+    analysisId:       args.analysisId,
+    unattendedBefore: args.intervention.unattended,
+  });
+
+  console.log(
+    `[analyze-transcript] Auditoría de ${args.studentName}: ` +
+    `señales=${check.signsOfIntervention} confianza=${check.confidence} ` +
+    `(cuenta=${counted}, consecutivas=${consecutive}).`,
+  );
+
+  if (counted && consecutive >= 2) {
+    await notifyAdminUnattended({
+      studentName: args.studentName,
+      teacherName: args.body.teacherName,
+      classes:     consecutive,
+    });
   }
 }
 

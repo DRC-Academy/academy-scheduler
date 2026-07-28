@@ -38,6 +38,8 @@ function notifIcon(type: string): string {
   if (type === 'new_assignment')       return '📚';
   if (type === 'student_removed')      return '❌';
   if (type === 'subscription_cancelled') return '❌';
+  if (type === 'risk_alert')           return '🧭';   // intervención recomendada
+  if (type === 'intervention_audit_admin' || type === 'churn_open_alert') return '🔎';
   return '📢';
 }
 

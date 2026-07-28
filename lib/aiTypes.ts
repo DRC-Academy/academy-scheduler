@@ -61,6 +61,11 @@ export interface StudentProfileRow {
   risk_signal: string | null;
   risk_explanation: string | null;
   risk_updated_at: string | null;
+  /** Alerta ABIERTA pendiente de atender (ver lib/interventions.ts). */
+  active_intervention?: Record<string, unknown> | string | null;
+  active_intervention_at?: string | null;
+  /** Auditorías sin señales de intervención. Señal para el admin, NO penaliza. */
+  unattended_alerts?: number | null;
   progress_score: number | null;
   total_classes_analyzed: number | null;
   last_class_analyzed_at: string | null;
@@ -163,6 +168,11 @@ export interface TranscriptIA {
   riskSignal: RiskSignal;
   riskExplanation: string;
   nextClassGuide: NextClassGuide;
+  /** Sugerencia de intervención (llega vacía si la clase sale en verde). Ver
+   *  lib/interventions.ts: los tipos viven allí para no acoplar este archivo. */
+  interventionSuggestion?: unknown;
+  /** Solo cuando el alumno traía una intervención abierta: ¿el profesor actuó? */
+  interventionCheck?: unknown;
 }
 
 /** Fila de class_analyses (snake_case = columnas reales). */
@@ -180,6 +190,8 @@ export interface ClassAnalysisRow {
   next_class_guide: NextClassGuide | string | null;
   risk_signal: string | null;
   risk_explanation: string | null;
+  /** Sugerencia de intervención de ESTA clase (ver lib/interventions.ts). */
+  intervention_suggestion?: Record<string, unknown> | string | null;
   analyzed_at: string;         // ← el timestamp se llama así, NO created_at
   class_date: string | null;
   class_title: string | null;

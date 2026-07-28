@@ -13,6 +13,7 @@
 // alumno no se puede quedar bloqueada por esto.
 
 import { captureChurnSnapshot } from '@/lib/churnSnapshot';
+import { flagChurnWithOpenAlert } from '@/lib/interventionStore';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -21,6 +22,8 @@ interface Body {
   studentId?: string | null;
   studentName?: string;
   teacherId?: string | null;
+  /** Solo para el aviso al admin si la baja llega con una alerta abierta. */
+  teacherName?: string | null;
   /** 'manual_dropout' (baja a mano), 'cancellation' (webhook), 'manual' (a demanda). */
   trigger?: 'cancellation' | 'manual_dropout' | 'manual';
   label?: 'churned' | 'active';
@@ -42,6 +45,20 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ captured: false, error: 'Falta studentName.' }, { status: 400 });
   }
 
+  // ¿Se va con una alerta de riesgo pendiente de atender? Se marca ANTES de que
+  // la baja borre al alumno. Es contexto para el admin, no una penalización.
+  let openAlert = false;
+  if ((body.label ?? 'churned') === 'churned') {
+    try {
+      const res = await flagChurnWithOpenAlert({
+        studentId: body.studentId ?? null, studentName, teacherName: body.teacherName ?? null,
+      });
+      openAlert = res.flagged;
+    } catch (err) {
+      console.error('[churn/capture] No se pudo marcar la baja con alerta previa:', err);
+    }
+  }
+
   try {
     const snap = await captureChurnSnapshot({
       studentId:   body.studentId ?? null,
@@ -54,7 +71,7 @@ export async function POST(request: Request): Promise<Response> {
 
     if (!snap) {
       console.warn(`[churn/capture] Sin foto para ${studentName} (¿falta correr supabase-churn.sql?).`);
-      return Response.json({ captured: false, reason: 'sin_tabla_o_sin_datos' });
+      return Response.json({ captured: false, reason: 'sin_tabla_o_sin_datos', openAlert });
     }
 
     console.log(`[churn/capture] ${studentName}: riesgo ${snap.combinedRisk}/100 (determinista ${snap.signals.deterministicRisk}, ${snap.signals.classesAnalyzed} clases).`);
@@ -63,10 +80,11 @@ export async function POST(request: Request): Promise<Response> {
       id: snap.id,
       combinedRisk: snap.combinedRisk,
       classesAnalyzed: snap.signals.classesAnalyzed,
+      openAlert,
     });
   } catch (err) {
     // Nunca se devuelve 500: quien llama está borrando un alumno y no debe fallar.
     console.error('[churn/capture] Error al capturar la foto:', err);
-    return Response.json({ captured: false, error: 'Error al capturar la foto de churn.' });
+    return Response.json({ captured: false, error: 'Error al capturar la foto de churn.', openAlert });
   }
 }

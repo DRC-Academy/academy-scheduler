@@ -22,6 +22,9 @@ const PROFILE_COLS = `
   ai_ficha, ai_status, created_at, updated_at
 `.replace(/\s+/g, ' ').trim();
 
+// supabase-interventions.sql (ver fetchRiskProfiles: se reintenta sin ellas).
+const PROFILE_COLS_EXTRA = `${PROFILE_COLS}, active_intervention, active_intervention_at, unattended_alerts`;
+
 const ANALYSIS_COLS = `
   id, student_id, teacher_id, student_name, class_number, transcript,
   class_summary, errors_detected, progress_notes, topics_covered, next_class_guide,
@@ -352,8 +355,13 @@ export async function saveNextClass(profileId: string, nextClass: GeneratedClass
 
 /** Resumen liviano de las fichas con riesgo (panel de admin). */
 export async function fetchRiskProfiles(): Promise<StudentProfileRow[]> {
-  const { data, error } = await supabase.from('student_profiles').select(PROFILE_COLS)
+  const build = (cols: string) => supabase.from('student_profiles').select(cols)
     .order('updated_at', { ascending: false });
+
+  // Las columnas de intervenciones son de una migración posterior: si faltan, la
+  // consulta entera falla (42703) y el panel se queda sin datos. Se reintenta.
+  let { data, error } = await build(PROFILE_COLS_EXTRA);
+  if (error && isMissingCol(error)) ({ data, error } = await build(PROFILE_COLS));
   if (error) { console.error('[aiClient] Error al leer student_profiles:', error); return []; }
   return (data ?? []) as unknown as StudentProfileRow[];
 }

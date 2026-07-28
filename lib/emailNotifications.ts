@@ -10,6 +10,7 @@
 import { resend, hasResendKey } from '@/lib/resend';
 import { supabase } from '@/lib/supabase';
 import { MILESTONE_SLIDES } from '@/lib/milestones';
+import { AVOID_ITEMS, NATURAL_REMINDER, type InterventionSuggestion } from '@/lib/interventions';
 
 const FROM = 'DRC Academy <notificaciones@drcacademy.com>';
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '') || 'https://academy-scheduler-aqpt.vercel.app';
@@ -240,6 +241,56 @@ export async function sendClassCancelledEmail(args: {
     `Cambio en tu clase del ${args.dateLabel}`,
   );
   return sendToAddress('sendClassCancelledEmail', args.studentEmail, subject, html);
+}
+
+// ═══ A.3) Intervención recomendada sobre una alerta de riesgo ═════════════════
+//
+// Es el ÚNICO email ligado a las señales de riesgo: las alertas de riesgo en sí
+// (amarillo/rojo) siguen sin enviarse por correo, solo generan aviso interno.
+// Este sale cuando hay una sugerencia de intervención concreta que dar, con el
+// mismo contenido que la notificación de la campanita.
+export async function sendInterventionEmail(
+  teacher: TeacherLike,
+  info: { studentName: string; suggestion: InterventionSuggestion; classNumber?: number | null },
+): Promise<boolean> {
+  const s = info.suggestion;
+  const escalate = s.escalateToSupport;
+  const subject = escalate
+    ? `Escalar a soporte · ${info.studentName}`
+    : `Seguimiento recomendado · ${info.studentName}`;
+
+  const banner = (bg: string, border: string, color: string, title: string, text: string) =>
+    `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:0 0 16px;">
+  <tr><td style="background-color:${bg}; border-left:4px solid ${border}; border-radius:8px; padding:14px 16px;">
+    <div style="font-size:12px; font-weight:700; color:${color}; text-transform:uppercase; letter-spacing:0.04em; margin-bottom:6px;">${esc(title)}</div>
+    <div style="font-size:15px; line-height:1.6; color:#1A1A1A;">${esc(text)}</div>
+  </td></tr>
+</table>`;
+
+  const html = baseEmailTemplate(
+    p(`Hola ${esc(teacher.name)},`) +
+    p(`<strong>${esc(info.studentName)}</strong> ha mostrado señales de riesgo en su última clase${info.classNumber != null ? ` (clase ${info.classNumber})` : ''}.`) +
+    banner(
+      escalate ? '#FDECEC' : '#FFF9E0',
+      escalate ? '#DC2626' : '#FFC400',
+      escalate ? '#991B1B' : '#8A6A00',
+      escalate ? 'Escalar a soporte' : 'Intervención recomendada',
+      s.action,
+    ) +
+    (s.reconnectHook ? p(`<strong>Oportunidad:</strong> ${esc(s.reconnectHook)}`) : '') +
+    (escalate
+      ? p('Contacta al equipo de soporte para activar el protocolo de gestión de bajas. No intentes retener al alumno tú solo.')
+      : '') +
+    p(`<em>${esc(NATURAL_REMINDER)}</em>`) +
+    `<div style="margin:0 0 16px; padding:12px 14px; border:1px solid #E0E0DA; border-radius:8px;">
+  <div style="font-size:12px; font-weight:700; color:#888880; text-transform:uppercase; letter-spacing:0.04em; margin-bottom:8px;">Qué evitar</div>
+  <ul style="margin:0; padding-left:18px; font-size:13.5px; line-height:1.6; color:#5A5A55;">${AVOID_ITEMS.map(t => `<li style="margin-bottom:4px;">${esc(t)}</li>`).join('')}</ul>
+</div>` +
+    ctaButton('Ver la ficha del alumno', `${APP_URL}/mis-alumnos`),
+    `${info.studentName} · ${escalate ? 'escalar a soporte' : 'seguimiento recomendado'}`,
+  );
+
+  return send('sendInterventionEmail', teacher, subject, html);
 }
 
 // ═══ B) Formulario completado ═════════════════════════════════════════════════

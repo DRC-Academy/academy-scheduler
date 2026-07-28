@@ -14,6 +14,7 @@
 
 import { supabase } from '@/lib/supabase';
 import { isRiskSignal, type TranscriptIA } from '@/lib/aiTypes';
+import { normalizeSuggestion } from '@/lib/interventions';
 import { flagLabel } from '@/lib/transcriptValidation';
 import { statusForDecision, type TranscriptVerdict } from '@/lib/transcriptVerdict';
 
@@ -23,8 +24,11 @@ const isMissingCol = (e: { code?: string } | null): boolean =>
   e?.code === 'PGRST204' || e?.code === '42703';
 
 // Grupos de columnas opcionales, en el orden en que se van descartando si la
-// base todavía no las tiene.
+// base todavía no las tiene. Van de la migración MÁS NUEVA a la más vieja: la
+// última en añadirse es la que más probablemente falte, y descartarla primero
+// evita perder por el camino las columnas de las migraciones ya corridas.
 const OPTIONAL_GROUPS: string[][] = [
+  ['intervention_suggestion'],                                            // supabase-interventions.sql
   ['analysis_status', 'analysis_error', 'analysis_updated_at'],           // supabase-transcript-flow.sql
   ['transcript_validation_score', 'transcript_validation_flags',
    'ai_authenticity_check', 'validation_status'],                          // supabase-transcript-validation.sql
@@ -135,6 +139,8 @@ export async function persistAnalysisFields(
     next_class_guide: a.nextClassGuide,
     risk_signal:      isRiskSignal(a.riskSignal) ? a.riskSignal : 'verde',
     risk_explanation: a.riskExplanation,
+    // Sugerencia de intervención de esta clase (null si la clase salió en verde).
+    intervention_suggestion: normalizeSuggestion(a.interventionSuggestion),
 
     analysis_status:     'ready',
     analysis_error:      null,

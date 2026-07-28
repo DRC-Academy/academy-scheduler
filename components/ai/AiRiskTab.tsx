@@ -7,11 +7,12 @@
 //   · Tabla por profesor: analizados, % de uso del módulo y riesgo promedio.
 //   · Al abrir un alumno: su ficha completa, igual que la ve el profesor.
 
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { fetchAllClassAnalyses, fetchRiskProfiles, type ClassAnalysisRow } from '@/lib/aiClient';
 import { RISK_META, isRiskSignal, type RiskSignal, type StudentProfileRow } from '@/lib/aiTypes';
 import { RiskBadge, DRC, formatDate } from '@/components/ai/FichaView';
 import AiStudentPanel from '@/components/ai/AiStudentPanel';
+import InterventionAuditSection from '@/components/admin/InterventionAuditSection';
 import { Modal, ModalHeader } from '@/components/ai/modalUi';
 import type { Assignment, Teacher } from '@/types';
 
@@ -48,6 +49,11 @@ export default function AiRiskTab({ teachers, assignments }: Props) {
       if (!cancelled) { setProfiles(p); setAnalyses(a); setLoading(false); }
     })();
     return () => { cancelled = true; };
+  }, []);
+
+  // Recarga de las fichas tras una acción del admin sobre una intervención.
+  const reloadProfiles = useCallback(async () => {
+    setProfiles(await fetchRiskProfiles());
   }, []);
 
   // Último análisis por alumno (ya vienen ordenados por analyzed_at desc).
@@ -188,6 +194,16 @@ export default function AiRiskTab({ teachers, assignments }: Props) {
           </div>
         )}
       </div>
+
+      {/* Seguimiento de intervenciones (señal al admin, sin penalización automática) */}
+      <InterventionAuditSection
+        students={rows.map(r => ({
+          profileId: r.profileId, studentId: r.studentId, studentName: r.studentName,
+          teacherId: r.teacherId, teacherName: r.teacherName,
+        }))}
+        profiles={profiles}
+        onRefresh={reloadProfiles}
+      />
 
       {/* Todos los alumnos */}
       <div style={card}>

@@ -34,6 +34,9 @@ import {
   asObject, fichaFromRow, isRiskSignal, needsAnalysis,
   type ClassAnalysisRow, type FichaIA, type GeneratedClassIA, type NextClassGuide, type RiskSignal,
 } from '@/lib/aiTypes';
+import {
+  asIntervention, AVOID_ITEMS, AVOID_TITLE, NATURAL_REMINDER, type ActiveIntervention,
+} from '@/lib/interventions';
 import ProximaClaseTab from '@/components/alumnos/ProximaClaseTab';
 import FormLinkModal from '@/components/alumnos/FormLinkModal';
 import ResetProfileModal from '@/components/alumnos/ResetProfileModal';
@@ -375,6 +378,7 @@ function StudentPageContent() {
       {tab === 'seguimiento' && (
         <SeguimientoTab
           analyses={analyses} risk={risk}
+          intervention={asIntervention(profile?.active_intervention)}
           pending={pending}
           onCompletePending={setPendingTarget}
           progressScore={progressScore}
@@ -931,10 +935,67 @@ function RetryAnalysisRow({ row, ctx, onDone }: {
   );
 }
 
+/**
+ * Intervención recomendada — la alerta ABIERTA del alumno (Bloque 1).
+ *
+ * La sugerencia la genera la IA con las señales concretas de este alumno al
+ * detectar riesgo. El recordatorio de "qué evitar" va plegado a propósito: es
+ * consulta, no ruido.
+ */
+function InterventionCard({ intervention }: { intervention: ActiveIntervention }) {
+  const escalate = intervention.escalateToSupport;
+  const accent = intervention.risk === 'rojo' ? '#DC2626' : '#FFC400';
+
+  return (
+    <div
+      className="sp-card"
+      style={{ marginBottom: 16, borderLeft: `4px solid ${accent}` }}
+    >
+      <div className="sp-card-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+        Intervención recomendada
+      </div>
+
+      {escalate && (
+        <div style={{
+          margin: '0 0 12px', padding: '10px 13px', borderRadius: 9,
+          background: 'rgba(220,38,38,0.08)', border: '1px solid rgba(220,38,38,0.3)',
+          color: '#991B1B', fontSize: 13, fontWeight: 700, lineHeight: 1.5,
+        }}>
+          Escalar a soporte · no intentes retener al alumno tú solo
+        </div>
+      )}
+
+      <div className="sp-body" style={{ fontSize: 14.5 }}>{intervention.action}</div>
+
+      {intervention.reconnectHook && (
+        <div style={{
+          marginTop: 12, padding: '10px 13px', borderRadius: 9,
+          background: 'rgba(255,196,0,0.12)', border: '1px solid rgba(255,196,0,0.4)',
+          fontSize: 13.5, lineHeight: 1.6, color: 'var(--sp-t1)',
+        }}>
+          <strong>Oportunidad:</strong> {intervention.reconnectHook}
+        </div>
+      )}
+
+      <div style={{ marginTop: 12, fontSize: 12.5, color: 'var(--sp-t3)', lineHeight: 1.6, fontStyle: 'italic' }}>
+        {NATURAL_REMINDER}
+      </div>
+
+      <details style={{ marginTop: 10 }}>
+        <summary style={{ cursor: 'pointer', color: 'var(--sp-t2)', fontSize: 12.5 }}>{AVOID_TITLE}</summary>
+        <ul style={{ margin: '8px 0 0', paddingLeft: 18, fontSize: 12.5, lineHeight: 1.7, color: 'var(--sp-t2)' }}>
+          {AVOID_ITEMS.map(t => <li key={t}>{t}</li>)}
+        </ul>
+      </details>
+    </div>
+  );
+}
+
 // ═══ TAB SEGUIMIENTO ══════════════════════════════════════════════════════════
-function SeguimientoTab({ analyses, risk, progressScore, classNumber, skills, formDate, pending, onCompletePending, onGoToProxima, retryCtx, onRetried }: {
+function SeguimientoTab({ analyses, risk, intervention, progressScore, classNumber, skills, formDate, pending, onCompletePending, onGoToProxima, retryCtx, onRetried }: {
   analyses: ClassAnalysisRow[];
   risk: RiskSignal | null;
+  intervention: ActiveIntervention | null;
   pending: PendingClass[];
   onCompletePending: (p: PendingClass) => void;
   progressScore: number | null;
@@ -949,12 +1010,15 @@ function SeguimientoTab({ analyses, risk, progressScore, classNumber, skills, fo
 
   if (analyses.length === 0 && pending.length === 0) {
     return (
-      <div className="sp-card sp-empty">
-        <div style={{ marginBottom: 16 }}>
-          Aún no hay clases registradas. Registra la primera clase después de darla.
+      <>
+        {intervention && <InterventionCard intervention={intervention} />}
+        <div className="sp-card sp-empty">
+          <div style={{ marginBottom: 16 }}>
+            Aún no hay clases registradas. Registra la primera clase después de darla.
+          </div>
+          <button onClick={onGoToProxima} style={btnPrimary}>Registrar primera clase</button>
         </div>
-        <button onClick={onGoToProxima} style={btnPrimary}>Registrar primera clase</button>
-      </div>
+      </>
     );
   }
 
@@ -962,6 +1026,9 @@ function SeguimientoTab({ analyses, risk, progressScore, classNumber, skills, fo
 
   return (
     <>
+      {/* La alerta abierta manda: va arriba del todo, junto al estado de riesgo. */}
+      {intervention && <InterventionCard intervention={intervention} />}
+
       {pending.length > 0 && (
         <div className="sp-card sp-amber" style={{ marginBottom: 16 }}>
           <div className="sp-card-title">

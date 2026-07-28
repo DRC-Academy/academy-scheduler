@@ -9,6 +9,7 @@ import { supabase } from '@/lib/supabase';
 import { dbDeleteStudent } from '@/lib/db';
 import { sendCancellationEmail } from '@/lib/notifications-email';
 import { captureChurnSnapshot } from '@/lib/churnSnapshot';
+import { flagChurnWithOpenAlert } from '@/lib/interventionStore';
 
 export const runtime = 'nodejs';
 
@@ -86,16 +87,21 @@ export async function POST(req: Request): Promise<Response> {
     //      etiquetado 'churned' que alimenta el dataset. Best-effort: nunca debe
     //      romper el flujo de la baja.
     try {
-      const byId = await supabase.from('assignments').select('teacher_id').eq('student_id', studentId).limit(1).maybeSingle();
+      const byId = await supabase.from('assignments').select('teacher_id, teacher_name').eq('student_id', studentId).limit(1).maybeSingle();
       let teacherId: string | null = byId.data?.teacher_id ?? null;
+      let teacherName: string | null = byId.data?.teacher_name ?? null;
       if (!teacherId) {
-        const byName = await supabase.from('assignments').select('teacher_id').eq('student_name', studentName).limit(1).maybeSingle();
+        const byName = await supabase.from('assignments').select('teacher_id, teacher_name').eq('student_name', studentName).limit(1).maybeSingle();
         teacherId = byName.data?.teacher_id ?? null;
+        teacherName = byName.data?.teacher_name ?? null;
       }
       await captureChurnSnapshot({
         studentId, studentName, teacherId,
         trigger: 'cancellation', label: 'churned',
       });
+      // ¿Se va con una alerta de riesgo pendiente? Marcador + aviso al admin.
+      // Va aquí y no en dbDeleteStudent porque el alumno se borra justo después.
+      await flagChurnWithOpenAlert({ studentId, studentName, teacherName });
     } catch (e) {
       console.error('[webhook cancelled] No se pudo capturar la foto de churn:', e);
     }

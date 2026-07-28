@@ -3,6 +3,7 @@
 
 import { askClaudeJson, type AiResult } from '@/lib/anthropic';
 import type { TranscriptIA } from '@/lib/aiTypes';
+import type { ActiveIntervention } from '@/lib/interventions';
 
 export type { TranscriptIA, NextClassGuide, RiskSignal } from '@/lib/aiTypes';
 
@@ -16,18 +17,48 @@ export interface TranscriptInput {
   classDate?: string | null;
   studentProfile?: Record<string, unknown> | null;
   classHistory?: unknown[] | null;
+  /**
+   * Intervención que quedó ABIERTA tras la clase anterior. Si viene, se le pide
+   * a la IA una evaluación extra (interventionCheck): ¿hay señales de que el
+   * profesor actuó? Ver Bloque 2 en supabase-interventions.sql.
+   */
+  activeIntervention?: ActiveIntervention | null;
 }
 
 export type TranscriptResult = AiResult<TranscriptIA>;
+
+const INTERVENTION_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['action', 'reconnectHook', 'escalateToSupport', 'channel'],
+  properties: {
+    action:            { type: 'string',  description: 'Acción concreta y específica para el profesor, una sola, en español de España. Vacío si riskSignal es verde.' },
+    reconnectHook:     { type: 'string',  description: 'Si el alumno está a 1 o 2 clases de un hito (15 o 30), cómo usar la evaluación de hito como excusa natural para reconectar. Vacío si no aplica.' },
+    escalateToSupport: { type: 'boolean', description: 'true solo si el alumno dijo explícitamente que piensa cancelar o dejar las clases.' },
+    channel:           { type: 'string',  enum: ['en_clase', 'mensaje_previo', 'escalar_soporte'] },
+  },
+} as const;
+
+const CHECK_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['signsOfIntervention', 'evidence', 'confidence'],
+  properties: {
+    signsOfIntervention: { type: 'boolean', description: '¿Hay señales de que el profesor actuó sobre la alerta anterior?' },
+    evidence:            { type: 'string',  description: 'Qué señales de intervención se observaron o su ausencia. Breve, en español.' },
+    confidence:          { type: 'string',  enum: ['alta', 'media', 'baja'] },
+  },
+} as const;
 
 export const TRANSCRIPT_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   required: [
     'classTitle', 'classSummary', 'errorsDetected', 'progressNotes', 'topicsCovered',
-    'progressScore', 'riskSignal', 'riskExplanation', 'nextClassGuide',
+    'progressScore', 'riskSignal', 'riskExplanation', 'nextClassGuide', 'interventionSuggestion',
   ],
   properties: {
+    interventionSuggestion: INTERVENTION_SCHEMA,
     classTitle:      { type: 'string', description: 'Título breve y descriptivo de lo que se trabajó, p. ej. "Present Perfect en contexto laboral".' },
     classSummary:    { type: 'string', description: 'Qué se trabajó y cómo fue.' },
     errorsDetected:  { type: 'string', description: 'Errores específicos y patrones.' },
@@ -64,7 +95,21 @@ PUNTUACIÓN DE PROGRESO (progressScore, 1-10):
 - 7-10: progreso claro y por encima de lo esperado.
 Si hay clases anteriores, puntúa la evolución respecto a ellas, no el nivel absoluto del alumno.
 
-Basa el informe únicamente en lo que ocurre en la transcripción. La señal de riesgo es una valoración con consecuencias reales: no la infles por una clase floja aislada ni la rebajes si el alumno expresa que se plantea dejarlo.`;
+Basa el informe únicamente en lo que ocurre en la transcripción. La señal de riesgo es una valoración con consecuencias reales: no la infles por una clase floja aislada ni la rebajes si el alumno expresa que se plantea dejarlo.
+
+SUGERENCIA DE INTERVENCIÓN (interventionSuggestion):
+Si riskSignal es amarillo o rojo, genera una sugerencia de intervención para el profesor. Si es verde, deja action y reconnectHook vacíos, escalateToSupport en false y channel en "en_clase".
+Cuando generes la sugerencia de intervención:
+- Basala en las señales CONCRETAS detectadas: número de cancelaciones y en qué plazo, caída del porcentaje de participación del alumno, clases previas en amarillo o rojo, días sin clase, y menciones textuales en el transcript (frustración, falta de progreso, intención de dejarlo).
+- La acción debe ser práctica y específica, nunca un consejo genérico. Mal: "presta más atención al alumno". Bien: "al inicio de la próxima clase pregúntale cómo se siente con el progreso y recuérdale lo que ha avanzado desde que empezó".
+- La intervención debe parecer NATURAL, nunca reactiva. El profesor nunca debe dar a entender al alumno que el sistema detectó un problema o que "algo ha fallado".
+- Si el alumno mencionó EXPLÍCITAMENTE que piensa cancelar o dejar las clases: escalateToSupport = true, y la acción debe indicar escalar al equipo de soporte para activar el protocolo de gestión de bajas, NO que el profesor intente retenerlo solo.
+- Si el alumno está a 1 o 2 clases de un hito (15, 30), aprovechá ese hito como motivo natural para reconectar en reconnectHook.
+- Redacta en español de España, tono cercano y profesional, sin guiones como conectores.
+
+AUDITORÍA DE SEGUIMIENTO (interventionCheck):
+Solo cuando el mensaje incluya la sugerencia de intervención que recibió el profesor tras la clase anterior. Analiza si en ESTA clase hay señales de que el profesor actuó: preguntó por el progreso o cómo se siente el alumno, ajustó el enfoque, hubo más interacción, cambió el tono respecto a clases anteriores.
+IMPORTANTE: una buena intervención es sutil y puede no ser evidente. Si no estás seguro, marca confidence "baja". No afirmes con confianza alta que no hubo intervención salvo que la clase sea claramente idéntica a las anteriores sin ningún cambio.`;
 
 function buildUserPrompt(input: TranscriptInput): string {
   const header = [
@@ -83,9 +128,19 @@ function buildUserPrompt(input: TranscriptInput): string {
     ? `\n\nHistorial de las últimas clases:\n${JSON.stringify(input.classHistory, null, 2)}`
     : '\n\nHistorial de las últimas clases: (no hay clases anteriores analizadas)';
 
+  // Alerta abierta de la clase anterior: activa la auditoría de seguimiento.
+  const prev = input.activeIntervention;
+  const alerta = prev
+    ? `\n\nALERTA ABIERTA DE LA CLASE ANTERIOR (señal ${prev.risk}${prev.classNumber != null ? `, clase ${prev.classNumber}` : ''}).
+Esto es lo que se le sugirió al profesor tras esa clase:
+- Acción sugerida: ${prev.action}
+${prev.reconnectHook ? `- Oportunidad de reconexión: ${prev.reconnectHook}\n` : ''}- Escalado a soporte: ${prev.escalateToSupport ? 'sí' : 'no'}
+Devuelve también interventionCheck evaluando si en ESTA clase hay señales de que el profesor actuó.`
+    : '';
+
   return `Analiza la transcripción de esta clase.
 
-${header}${profile}${history}
+${header}${profile}${history}${alerta}
 
 TRANSCRIPCIÓN:
 ${input.transcript}`;
@@ -107,9 +162,29 @@ export async function analyzeTranscript(input: TranscriptInput): Promise<Transcr
     label: 'analyze-transcript',
     system: SYSTEM_PROMPT,
     prompt: buildUserPrompt(input),
-    schema: TRANSCRIPT_SCHEMA as unknown as Record<string, unknown>,
+    schema: schemaFor(!!input.activeIntervention),
     maxTokens: 12000,
     effort: 'medium',
     timeoutMs: 40_000,
+    // `channel` y `confidence` son enums, no prosa: la limpieza de guiones no
+    // debe tocarlos (hoy no los rompería, pero no dependemos de eso).
+    skipCleanKeys: ['channel', 'confidence'],
   });
+}
+
+/**
+ * El esquema pide interventionCheck SOLO cuando hay una alerta abierta.
+ * Con structured outputs todo lo declarado es obligatorio, así que un esquema
+ * fijo forzaría a la IA a inventarse la auditoría en cada clase.
+ */
+function schemaFor(withCheck: boolean): Record<string, unknown> {
+  const base = TRANSCRIPT_SCHEMA as unknown as {
+    required: readonly string[]; properties: Record<string, unknown>;
+  };
+  if (!withCheck) return TRANSCRIPT_SCHEMA as unknown as Record<string, unknown>;
+  return {
+    ...(TRANSCRIPT_SCHEMA as unknown as Record<string, unknown>),
+    required:   [...base.required, 'interventionCheck'],
+    properties: { ...base.properties, interventionCheck: CHECK_SCHEMA },
+  };
 }

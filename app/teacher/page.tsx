@@ -25,6 +25,7 @@ import FormStatusBadge from '@/components/FormStatusBadge';
 import { maybeSendBonusEmail } from '@/lib/milestoneEmails';
 import { fetchFormTokensIndex, lookupToken, formStateOf, type FormTokenInfo } from '@/lib/formClient';
 import { getPresentationEmailStatus } from '@/lib/presentationEmailUtils';
+import { AVOID_ITEMS, AVOID_TITLE } from '@/lib/interventions';
 import { PresentationModal } from '@/components/PresentationModal';
 import { ALL_SPECIALTIES } from '@/lib/specialties';
 import { isValidOptionalEmail } from '@/lib/validation';
@@ -905,17 +906,28 @@ function TeacherNotificationsTab({ teacher, myAssignments, students, classRecord
           ? resolveAssignmentForNotif(n.body, myAssignments)
           : undefined;
         const sent = asgn ? isSent(asgn.studentName) : false;
+        // Sugerencia de intervención: el cuerpo lleva saltos de línea y se
+        // acompaña del recordatorio plegado de "qué evitar".
+        const isRiskAlert = n.type === 'risk_alert';
         return (
           <div key={av.key} style={{ ...cardStyle, background: isRead ? 'var(--bg-surface)' : 'rgba(30,158,58,0.04)', border: `1.5px solid ${isRead ? 'var(--border)' : 'rgba(30,158,58,0.3)'}` }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-              <span style={{ fontSize: 20, marginTop: 2 }}>{n.type === 'new_assignment' ? '📚' : '📢'}</span>
+              <span style={{ fontSize: 20, marginTop: 2 }}>{n.type === 'new_assignment' ? '📚' : isRiskAlert ? '🧭' : '📢'}</span>
               <div style={{ flex: 1 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
                   <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)' }}>{n.title}</div>
                   {!isRead && <span style={{ fontSize: 10, padding: '1px 7px', borderRadius: 10, background: 'rgba(30,158,58,0.15)', border: '1px solid rgba(30,158,58,0.3)', color: '#1E9E3A', fontWeight: 700 }}>NUEVO</span>}
                   {asgn && sent && <span style={{ fontSize: 10, padding: '1px 7px', borderRadius: 10, background: 'rgba(30,158,58,0.12)', border: '1px solid rgba(30,158,58,0.3)', color: '#1E9E3A', fontWeight: 700 }}>📧 Presentación enviada</span>}
                 </div>
-                <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: 6 }}>{n.body}</div>
+                <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: 6, whiteSpace: isRiskAlert ? 'pre-wrap' : undefined }}>{n.body}</div>
+                {isRiskAlert && (
+                  <details style={{ marginBottom: 6 }}>
+                    <summary style={{ cursor: 'pointer', fontSize: 12, color: 'var(--text-muted)' }}>{AVOID_TITLE}</summary>
+                    <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: 12, lineHeight: 1.6, color: 'var(--text-muted)' }}>
+                      {AVOID_ITEMS.map(t => <li key={t}>{t}</li>)}
+                    </ul>
+                  </details>
+                )}
                 <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
                   {new Date(n.createdAt).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
                 </div>

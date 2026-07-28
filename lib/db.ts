@@ -2,6 +2,7 @@ import { supabase } from './supabase';
 import { triggerEmail } from './emailClient';
 import { baseStateOf, baseStudentOf, withBaseState, assignableCellKeys, puntualCellDates } from './cells';
 import { minutesLateSpain } from './spainTime';
+import { fetchOpenAlertState } from './interventionsClient';
 import { Teacher, Student, Assignment, AppUser, Grid, TeacherStatus, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, AssignedSlot, EmailPreferences } from '@/types';
 
 // ── AUTH ─────────────────────────────────────────────────────────────────────
@@ -1050,6 +1051,8 @@ export interface AffectedTeacher {
  */
 async function captureChurnOnDropout(args: {
   studentId: string | null; studentName: string; teacherId: string | null;
+  /** Solo para el aviso al admin si la baja llega con una alerta abierta. */
+  teacherName?: string | null;
 }): Promise<void> {
   try {
     const res = await fetch('/api/churn/capture', {
@@ -1128,6 +1131,12 @@ export async function dbDeleteStudent(
   if (teacherIds.size > 0) {
     const now = new Date().toISOString();
     const reason = createdBy === 'sistema' ? 'webhook' : 'manual';
+
+    // ¿Se va con una alerta de riesgo sin atender? Es CONTEXTO para el admin (no
+    // penaliza a nadie) y tiene que quedar en la baja: `students` se borra a
+    // continuación, `student_dropouts` no. Ver supabase-interventions.sql.
+    const alerta = await fetchOpenAlertState({ studentId, studentName }).catch(() => null);
+
     const dropoutRows = [...teacherIds].map((tid, i) => ({
       id:           `drop_${Date.now()}_${i}`,
       teacher_id:   tid,
@@ -1137,8 +1146,21 @@ export async function dbDeleteStudent(
       dropped_at:   now,
       reason,
       created_by:   createdBy ?? null,
+      had_open_alert:    alerta?.hasOpenAlert ?? false,
+      unattended_alerts: alerta?.unattended ?? 0,
     }));
-    const { error: dropErr } = await supabase.from('student_dropouts').insert(dropoutRows);
+
+    let { error: dropErr } = await supabase.from('student_dropouts').insert(dropoutRows);
+    // Migración sin correr: la baja se registra igual, sin el marcador.
+    if (dropErr && (dropErr.code === '42703' || dropErr.code === 'PGRST204')) {
+      console.warn('[dbDeleteStudent] student_dropouts sin las columnas de alertas. Corré supabase-interventions.sql.');
+      ({ error: dropErr } = await supabase.from('student_dropouts').insert(
+        dropoutRows.map(({ had_open_alert, unattended_alerts, ...base }) => {
+          void had_open_alert; void unattended_alerts;
+          return base;
+        }),
+      ));
+    }
     if (dropErr) console.error('[dbDeleteStudent] Error al registrar la baja (churn):', dropErr);
   }
 
@@ -1154,6 +1176,7 @@ export async function dbDeleteStudent(
     studentId,
     studentName,
     teacherId: [...teacherIds][0] ?? null,
+    teacherName: affectedTeachers[0]?.name ?? null,
   });
 
   // Notificar a cada profesor afectado antes de limpiar (manual o vía webhook).
@@ -1286,6 +1309,10 @@ export const EVENT_POINTS: Record<string, number> = {
   profe_del_mes:        50,
   profe_del_trimestre: 100,
   email_presentacion_tardio: -5,
+  // Se carga SOLO a mano desde la auditoría de intervenciones (panel de admin).
+  // El sistema nunca lo aplica automáticamente: una intervención sutil puede no
+  // verse en el transcript, así que la decisión es humana.
+  alerta_no_atendida:  -10,
 };
 
 // Importe en euros de cada tipo de evento. Los NEGATIVOS son penalizaciones y se

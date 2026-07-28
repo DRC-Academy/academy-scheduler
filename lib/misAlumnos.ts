@@ -27,6 +27,11 @@ const PROFILE_COLS = `
   ai_ficha, ai_status, created_at, updated_at
 `.replace(/\s+/g, ' ').trim();
 
+// Igual que con los análisis: si supabase-interventions.sql todavía no se corrió,
+// pedir estas columnas haría fallar la consulta ENTERA (42703) y la página del
+// alumno se quedaría vacía. Se reintenta sin ellas.
+const PROFILE_COLS_EXTRA = `${PROFILE_COLS}, active_intervention, active_intervention_at, unattended_alerts`;
+
 const ANALYSIS_COLS = `
   id, student_id, teacher_id, student_name, class_number, transcript,
   class_summary, errors_detected, progress_notes, topics_covered, next_class_guide,
@@ -75,15 +80,16 @@ function lookup<T extends { student_id?: string | null; student_name?: string | 
 export async function loadStudentBundles(assignments: Assignment[]): Promise<StudentBundle[]> {
   const readAnalyses = (cols: string) =>
     supabase.from('class_analyses').select(cols).order('analyzed_at', { ascending: false });
+  const readProfiles = (cols: string) => supabase.from('student_profiles').select(cols);
+  const missingCol = (e: { code?: string } | null) => e?.code === '42703' || e?.code === 'PGRST204';
 
-  const [profilesRes, firstTry] = await Promise.all([
-    supabase.from('student_profiles').select(PROFILE_COLS),
+  const [firstProfiles, firstTry] = await Promise.all([
+    readProfiles(PROFILE_COLS_EXTRA),
     readAnalyses(ANALYSIS_COLS_EXTRA),
   ]);
 
-  const analysesRes = (firstTry.error?.code === '42703' || firstTry.error?.code === 'PGRST204')
-    ? await readAnalyses(ANALYSIS_COLS)
-    : firstTry;
+  const profilesRes = missingCol(firstProfiles.error) ? await readProfiles(PROFILE_COLS) : firstProfiles;
+  const analysesRes = missingCol(firstTry.error) ? await readAnalyses(ANALYSIS_COLS) : firstTry;
 
   if (profilesRes.error) console.error('[mis-alumnos] Error al leer student_profiles:', profilesRes.error);
   if (analysesRes.error) console.error('[mis-alumnos] Error al leer class_analyses:', analysesRes.error);
