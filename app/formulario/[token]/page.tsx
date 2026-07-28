@@ -193,14 +193,41 @@ function FormFlow({ token }: { token: TokenRow }) {
 }
 
 // ── Contenido de pantallas ──────────────────────────────────────────────────────
+// Bienvenida: dos columnas en desktop (texto 55% / foto 45%), apiladas en mobile
+// con la foto arriba. El botón "Empezar" sigue viviendo en la nav del card.
 function WelcomeInner({ token }: { token: TokenRow }) {
   return (
-    <div className="drc-f-screen">
-      <span className="drc-f-chip">⏱ 5 minutos</span>
-      <h1>Hola, {token.student_name}. 👋</h1>
-      <p>Soy Diego, el director de DRC Academy. Antes de tu primera clase con <b>{token.teacher_name}</b> me gustaría conocerte un poco.</p>
-      <p>Con esto prepararemos una clase pensada para ti desde el primer minuto.</p>
-      <p className="drc-f-muted">Son once preguntas y solo te llevará cinco minutos. Responde con sinceridad, para que podamos personalizar tu clase.</p>
+    <div className="drc-f-welcome">
+      <div className="drc-f-screen">
+        <span className="drc-f-chip">⏱ 5 minutos</span>
+        <h1>Hola, {token.student_name}. 👋</h1>
+        <p>Soy Diego, el director de DRC Academy. Antes de tu primera clase con <b>{token.teacher_name}</b> me gustaría conocerte un poco.</p>
+        <p>Con esto prepararemos una clase pensada para ti desde el primer minuto.</p>
+        <p className="drc-f-muted">Son once preguntas y solo te llevará cinco minutos. Responde con sinceridad, para que podamos personalizar tu clase.</p>
+      </div>
+      <WelcomeMedia />
+    </div>
+  );
+}
+
+// Si la imagen no está (o falla la carga) se pinta un placeholder del MISMO
+// tamaño, para que el layout de dos columnas no se descoloque.
+function WelcomeMedia() {
+  const [failed, setFailed] = useState(false);
+  return (
+    <div className="drc-f-welcome-media">
+      {failed ? (
+        <div className="drc-f-welcome-ph">Imagen de bienvenida</div>
+      ) : (
+        <img
+          className="drc-f-welcome-img"
+          src="/formulario-bienvenida.webp"
+          alt="Diego Ruiz, director de DRC Academy"
+          width={1365}
+          height={1600}
+          onError={() => setFailed(true)}
+        />
+      )}
     </div>
   );
 }
@@ -686,6 +713,34 @@ const FORM_CSS = `
 .drc-f-screen p { margin: 0 0 12px; font-size: 16.5px; color: #46473F; max-width: 54ch; line-height: 1.6; }
 .drc-f-screen p.drc-f-muted { color: #83847A; }
 .drc-f-sig { color: #167a2d; font-weight: 700; margin-top: 4px; }
+
+/* Bienvenida: texto + foto en dos columnas (SOLO la primera pantalla).
+   Los fr con minmax(0, …) reparten lo que sobra DESPUÉS del gap, así que
+   55/45 + 32px no desborda el card como haría un 55%/45% en porcentaje. */
+.drc-f-welcome {
+  display: grid; grid-template-columns: minmax(0, 55fr) minmax(0, 45fr);
+  gap: 32px; align-items: center;
+}
+.drc-f-welcome-media { display: flex; align-items: center; justify-content: center; min-width: 0; }
+.drc-f-welcome-img, .drc-f-welcome-ph {
+  width: 100%; max-width: 100%; height: auto; display: block;
+  aspect-ratio: 1365 / 1600;   /* ratio real del .webp: con cover casi no recorta */
+  max-height: 420px; border-radius: 12px;
+}
+.drc-f-welcome-img { object-fit: cover; object-position: center 18%; background: #EFF0EB; }
+.drc-f-welcome-ph {
+  display: grid; place-items: center; text-align: center; padding: 12px;
+  background: #E4E4DD; color: #83847A; font-size: 14px; font-weight: 600;
+}
+
+/* Mobile: la foto ARRIBA del texto, centrada y contenida en 200px de alto. */
+@media (max-width: 767px) {
+  .drc-f-welcome { grid-template-columns: 1fr; gap: 20px; }
+  .drc-f-welcome-media { order: -1; }
+  .drc-f-welcome-img, .drc-f-welcome-ph {
+    width: auto; height: 200px; max-height: 200px; max-width: 100%; margin: 0 auto;
+  }
+}
 
 /* CTA del test de nivel (pantalla final del formulario) */
 .drc-f-cta {
