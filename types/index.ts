@@ -131,6 +131,13 @@ export interface Assignment {
   meetLink?: string;
   presentationEmailSent?: boolean;    // email de bienvenida enviado al alumno
   presentationEmailSentAt?: string;   // ISO en que se marcó como enviado
+  /**
+   * 'active' | 'inactive'. Se marca 'inactive' al liberarse la ÚLTIMA celda del
+   * alumno en el grid del profesor; nunca se borra la fila, para conservar el
+   * histórico de clases contadas. Vuelve a 'active' si se le reasigna una celda.
+   * `undefined` = la columna todavía no está migrada (ver supabase-assignment-status.sql).
+   */
+  status?: string;
 }
 
 export interface ClassJoinLog {

@@ -237,6 +237,10 @@ export async function dbGetTeacherGrid(teacherId: string): Promise<Grid> {
 }
 
 export async function dbSaveTeacherGrid(teacherId: string, grid: Grid): Promise<void> {
+  // El grid ANTERIOR se lee antes de pisarlo: hace falta para saber qué alumno
+  // se quedó sin celdas en ESTE guardado (ver reconcileAssignmentStatus).
+  const previous = await dbGetTeacherGrid(teacherId);
+
   await supabase
     .from('teacher_calendars')
     .upsert({
@@ -244,6 +248,59 @@ export async function dbSaveTeacherGrid(teacherId: string, grid: Grid): Promise<
       grid:       grid,
       updated_at: new Date().toISOString(),
     }, { onConflict: 'teacher_id' });
+
+  await reconcileAssignmentStatus(teacherId, previous, grid);
+}
+
+/**
+ * Marca inactivos los assignments cuyo alumno acaba de perder su ÚLTIMA celda, y
+ * reactiva los de quien vuelve a tener alguna. Nunca borra: el histórico de
+ * clases contadas se conserva.
+ *
+ * Se compara ANTES vs DESPUÉS a propósito, en vez de desactivar todo lo que no
+ * esté en el grid. Un barrido general marcaría inactivos de golpe a los
+ * assignments que ya estaban huérfanos de antes (hoy son 22, y 14 son alumnos
+ * reales cuyo profesor nunca pintó las celdas). Esto solo reacciona al cambio
+ * real: "se liberó la última celda de X".
+ *
+ * Best-effort: si la columna `status` no está migrada, se avisa y el guardado
+ * del calendario sigue su curso.
+ */
+async function reconcileAssignmentStatus(teacherId: string, before: Grid, after: Grid): Promise<void> {
+  const namesOf = (g: Grid) => new Set(extractOcupadoCells(g).map(c => normKey(c.student)));
+  const antes   = namesOf(before);
+  const despues = namesOf(after);
+
+  const liberados = [...antes].filter(n => !despues.has(n));     // perdió su última celda
+  const recuperados = [...despues].filter(n => !antes.has(n));   // volvió al grid
+  if (liberados.length === 0 && recuperados.length === 0) return;
+
+  const assignments = await dbGetAssignmentsByTeacher(teacherId);
+  const idsOf = (names: string[]) => {
+    const set = new Set(names);
+    return assignments.filter(a => set.has(normKey(a.studentName))).map(a => a.id);
+  };
+
+  const cambios: Array<{ ids: string[]; status: string }> = [
+    { ids: idsOf(liberados),   status: 'inactive' },
+    { ids: idsOf(recuperados), status: 'active'   },
+  ].filter(c => c.ids.length > 0);
+
+  for (const { ids, status } of cambios) {
+    const { error } = await supabase.from('assignments').update({ status }).in('id', ids);
+    if (error) {
+      if (error.code === '42703' || error.code === 'PGRST204') {
+        console.warn(
+          '[db] La columna assignments.status no existe todavía. ' +
+          'Corré supabase-assignment-status.sql para que el calendario pueda retirar alumnos sin borrarlos.',
+        );
+        return;   // sin columna no hay nada que reconciliar
+      }
+      console.error('[db] No se pudo actualizar el status de los assignments:', error);
+      return;
+    }
+    console.log(`[db] ${ids.length} assignment(s) de ${teacherId} marcados '${status}'.`);
+  }
 }
 
 /**
@@ -406,6 +463,7 @@ export async function dbGetAssignments(): Promise<Assignment[]> {
     meetLink:              row.meet_link ?? undefined,
     presentationEmailSent:   row.presentation_email_sent ?? false,
     presentationEmailSentAt: row.presentation_email_sent_at ?? undefined,
+    status:                  row.status ?? undefined,
   }));
 }
 
@@ -671,6 +729,84 @@ export async function dbGetAllGridOccupancy(): Promise<GridOccupancy[]> {
     }
   }
   return out;
+}
+
+// ── FUENTE ÚNICA DE VERDAD: alumnos de un profesor ───────────────────────────
+//
+// REGLA: un alumno pertenece a un profesor SI Y SOLO SI tiene al menos una celda
+// 'ocupado' RECURRENTE en el grid de teacher_calendars de ese profesor.
+// `assignments` guarda METADATOS (start_date, weeklyHours, meetLink, contador),
+// nunca define la pertenencia por sí sola.
+//
+// Dos detalles que hay que respetar y no son obvios:
+//
+//   1. El grid identifica al alumno por NOMBRE, no por id: `Cell.student` es un
+//      string. No hay student_id en las celdas, así que el cruce con students y
+//      assignments es por nombre normalizado, igual que el resto de lib/db.ts.
+//
+//   2. Se lee con `baseStudentOf` (lib/cells.ts), no con `cell.student`: una
+//      recuperación puntual ('bloqueado'/'reprogramada') tapa la celda esa
+//      semana y deja al alumno fijo en `baseStudent`. Mirando `cell.state` crudo,
+//      un alumno con una recuperación esta semana desaparecería de su profesor.
+
+export interface TeacherStudent {
+  /** Nombre tal como está escrito en el grid: la fuente de verdad. */
+  studentName: string;
+  /** Horario recurrente REAL, derivado de las celdas (no de assignment.slots). */
+  slots: AssignedSlot[];
+  /** Ficha en `students`, si el nombre matchea. Null si el alumno no existe ahí. */
+  student: Student | null;
+  /** Metadatos. Null si el alumno está en el grid pero no tiene assignment. */
+  assignment: Assignment | null;
+}
+
+/**
+ * Alumnos de un profesor según el grid. Devuelve SOLO los presentes en él: un
+ * assignment sin celdas no se incluye (y tampoco se borra ni se toca).
+ */
+export async function getStudentsForTeacher(teacherId: string): Promise<TeacherStudent[]> {
+  const [grid, assignments, students] = await Promise.all([
+    dbGetTeacherGrid(teacherId),
+    dbGetAssignmentsByTeacher(teacherId),
+    dbGetStudents(),
+  ]);
+
+  const studentsByName = new Map(students.map(s => [normKey(s.name), s]));
+  const asgByName = new Map<string, Assignment>();
+  for (const a of assignments) {
+    // Con assignments duplicados para el mismo alumno gana el más reciente
+    // (dbGetAssignmentsByTeacher ya ordena por created_at desc).
+    const k = normKey(a.studentName);
+    if (!asgByName.has(k)) asgByName.set(k, a);
+  }
+
+  const out: TeacherStudent[] = [];
+  for (const { name, slots } of groupCellsByStudent(extractOcupadoCells(grid)).values()) {
+    const k = normKey(name);
+    out.push({
+      studentName: name,
+      slots,
+      student:     studentsByName.get(k) ?? null,
+      assignment:  asgByName.get(k) ?? null,
+    });
+  }
+  return out.sort((a, b) => a.studentName.localeCompare(b.studentName, 'es'));
+}
+
+/**
+ * Assignments del profesor que NO tienen ninguna celda en su grid. No se borran
+ * ni se ocultan solos: esto alimenta el diagnóstico y la limpieza manual.
+ * Equivale a `scripts/diagnose-orphan-assignments.mjs` para un solo profesor.
+ */
+export async function getOrphanAssignmentsForTeacher(teacherId: string): Promise<Assignment[]> {
+  const [grid, assignments] = await Promise.all([
+    dbGetTeacherGrid(teacherId),
+    dbGetAssignmentsByTeacher(teacherId),
+  ]);
+  const inGrid = new Set(
+    extractOcupadoCells(grid).map(c => normKey(c.student)),
+  );
+  return assignments.filter(a => !inGrid.has(normKey(a.studentName)));
 }
 
 // Crea el vínculo COMPLETO (student + assignment) a partir de datos de un
@@ -989,6 +1125,7 @@ export async function dbGetAssignmentsByTeacher(teacherId: string): Promise<Assi
     meetLink:              row.meet_link ?? undefined,
     presentationEmailSent:   row.presentation_email_sent ?? false,
     presentationEmailSentAt: row.presentation_email_sent_at ?? undefined,
+    status:                  row.status ?? undefined,
   }));
 }
 
@@ -1898,40 +2035,6 @@ export async function dbIncrementClassCount(
   return { id, teacherId, studentName, studentEmail, classNumber: 1, lastUpdated: now };
 }
 
-export async function dbGetTeacherStudents(teacherId: string): Promise<Assignment[]> {
-  const { data, error } = await supabase
-    .from('assignments')
-    .select('*')
-    .eq('teacher_id', teacherId);
-
-  if (error || !data) return [];
-
-  const seen = new Set<string>();
-  return (data as any[])
-    .filter(row => { if (seen.has(row.student_name)) return false; seen.add(row.student_name); return true; })
-    .map(row => ({
-      id:                    row.id,
-      teacherId:             row.teacher_id,
-      teacherName:           row.teacher_name,
-      teacherEmail:          row.teacher_email,
-      studentId:             row.student_id,
-      studentName:           row.student_name,
-      studentEmail:          row.student_email,
-      studentLevel:          row.student_level,
-      slots:                 row.slots,
-      objetivo:              row.objetivo ?? '',
-      plan:                  row.plan ?? '',
-      weeklyHours:           row.weekly_hours,
-      availability:          row.availability ?? '',
-      notes:                 row.notes ?? '',
-      startDate:             row.start_date ?? undefined,
-      createdAt:             row.created_at,
-      manualClassAdjustment: row.manual_class_adjustment ?? 0,
-      meetLink:              row.meet_link ?? undefined,
-      presentationEmailSent:   row.presentation_email_sent ?? false,
-      presentationEmailSentAt: row.presentation_email_sent_at ?? undefined,
-    }));
-}
 
 export async function dbUpdateAssignmentStartDate(assignmentId: string, startDate: string): Promise<void> {
   await supabase.from('assignments').update({ start_date: startDate }).eq('id', assignmentId);

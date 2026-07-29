@@ -13,7 +13,7 @@ import { useTeachers } from '@/lib/TeachersContext';
 import { calcRegisteredClassNumber, dbCheckStudentExists, dbSetStudentProduct, dbEnsureStudentAndAssignment, dbSaveTeacherCalendarHours } from '@/lib/db';
 import { classCategoryBadge } from '@/lib/finance';
 import { planBadgeStyle } from '@/lib/productUtils';
-import { isAssignableCell, withBaseState, baseCellOf } from '@/lib/cells';
+import { isAssignableCell, withBaseState, baseCellOf, baseStudentOf } from '@/lib/cells';
 import { planFieldsOf } from '@/lib/productUtils';
 import { StudentAutofillCard } from '@/components/StudentAutofillCard';
 import { useStudentAutofill } from '@/lib/useStudentAutofill';
@@ -2558,7 +2558,28 @@ function TeacherContent() {
 
   if (!teacher) return null;
 
-  const myAssignments = assignments.filter(a => a.teacherId === teacher.id);
+  // Alumnos del profesor. Hoy manda `assignments`; con ?strictGrid=1 se
+  // previsualiza la REGLA NUEVA: pertenece quien tiene al menos una celda en el
+  // grid. Es un ensayo sin efectos, para revisar el panel antes de cambiarlo
+  // para todos (hay 22 assignments sin celdas, 14 de alumnos reales).
+  // Ver scripts/diagnose-orphan-assignments.mjs y getStudentsForTeacher().
+  // Sin useMemo a propósito: esto va DESPUÉS del `if (!teacher) return null`, así
+  // que un hook acá rompería el orden de hooks entre renders. El grid son ~100
+  // celdas, recorrerlo en cada render no se nota.
+  const strictGrid = searchParams.get('strictGrid') === '1';
+  const allMine = assignments.filter(a => a.teacherId === teacher.id);
+  const myAssignments = strictGrid
+    ? (() => {
+        const enGrid = new Set<string>();
+        for (const cell of Object.values(grid)) {
+          // baseStudentOf, no cell.student: una recuperación puntual tapa la
+          // celda esa semana y el alumno fijo del horario vive en baseStudent.
+          const name = baseStudentOf(cell)?.trim();
+          if (name) enGrid.add(name.toLowerCase());
+        }
+        return allMine.filter(a => enGrid.has(a.studentName.trim().toLowerCase()));
+      })()
+    : allMine;
   const myEvents      = scoringEvents.filter(e => e.teacherId === teacher.id);
 
   const freeCount    = Object.values(grid).filter(c => c.state === 'libre').length;
