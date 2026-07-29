@@ -33,6 +33,8 @@ export interface AuditStudent {
   studentName: string;
   teacherId: string | null;
   teacherName: string;
+  /** false → alumno sin ficha (solo en class_analyses): no hay dónde cerrar la alerta. */
+  hasProfile: boolean;
 }
 
 interface Row extends AuditStudent {
@@ -219,8 +221,11 @@ export default function InterventionAuditSection({ students, profiles, onRefresh
                       <button onClick={() => setDetail(r)} style={detailBtn}>👁️ Ver detalle</button>
                       <button
                         onClick={() => handleAttended(r)}
-                        disabled={busyId === r.profileId}
-                        style={{ ...okBtn, opacity: busyId === r.profileId ? 0.6 : 1 }}
+                        disabled={busyId === r.profileId || !r.hasProfile}
+                        title={r.hasProfile
+                          ? 'Cierra la alerta en la ficha del alumno'
+                          : 'El alumno todavía no tiene ficha: se creará al analizar su próxima clase'}
+                        style={{ ...okBtn, opacity: busyId === r.profileId || !r.hasProfile ? 0.5 : 1 }}
                       >
                         ✅ Marcar como atendida
                       </button>

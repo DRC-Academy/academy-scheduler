@@ -21,7 +21,7 @@ import { validateTranscriptStructure } from '@/lib/transcriptValidation';
 import { verifyTranscriptAI } from '@/lib/verifyTranscriptAI';
 import {
   persistTranscript, persistAnalysisFields, markAnalysisFailed, markForReview,
-  resolveProfileId, updateProfileFromAnalysis,
+  ensureProfileId, updateProfileFromAnalysis,
   notifyAdminRisk, notifyAdminTranscript, verdictPayload,
 } from '@/lib/transcriptStore';
 import { normalizeSuggestion, normalizeCheck } from '@/lib/interventions';
@@ -288,16 +288,21 @@ async function afterAnalysis(args: {
 }): Promise<void> {
   const { analysis, studentName, body } = args;
 
+  // La ficha se CREA si no existe: sin ella el riesgo se quedaba en
+  // class_analyses y el panel del admin no tenía nada que mostrar.
   let profileId: string | null = args.intervention.profileId;
   try {
-    profileId ??= await resolveProfileId({
+    profileId ??= await ensureProfileId({
       profileId: body.profileId, studentId: args.studentId, studentName,
+      teacherId: args.teacherId,
     });
     if (profileId) {
       await updateProfileFromAnalysis({
         profileId, studentId: args.studentId, studentName,
         classDate: args.classDate, analysis,
       });
+    } else {
+      console.warn(`[analyze-transcript] ${studentName}: sin ficha y no se pudo crear; el riesgo queda solo en class_analyses.`);
     }
   } catch (err) {
     console.error('[analyze-transcript] No se pudo actualizar la ficha:', err);
@@ -386,6 +391,8 @@ async function openIntervention(args: {
     return;
   }
 
+  // `afterAnalysis` ya garantiza la ficha (la crea si hace falta), así que acá
+  // normalmente hay profileId. El guard queda por si la creación falló.
   if (args.profileId) {
     await saveActiveIntervention({
       profileId:   args.profileId,
@@ -394,6 +401,8 @@ async function openIntervention(args: {
       analysisId:  args.analysisId,
       classNumber: args.classNumber,
     });
+  } else {
+    console.warn(`[analyze-transcript] ${args.studentName}: intervención sin ficha donde guardarla; solo se avisa al profesor.`);
   }
 
   if (!args.teacherId) return;   // sin profesor asignado no hay a quién avisar

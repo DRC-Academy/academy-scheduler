@@ -31,10 +31,18 @@ interface Row {
   teacherName: string;
   lastClassAt: string | null;
   classNumber: number | null;
+  /** false → el alumno solo existe en class_analyses, todavía sin ficha. */
+  hasProfile: boolean;
+  /** true → el riesgo mostrado sale de la última clase, no de la ficha. */
+  riskFromClass: boolean;
 }
 
 const norm = (s: string) => s.trim().toLowerCase();
 const RISK_SCORE: Record<RiskSignal, number> = { verde: 1, amarillo: 2, rojo: 3 };
+
+/** Claves con las que se reconoce a un alumno: por id y por nombre normalizado. */
+const aliasesOf = (studentId: string | null | undefined, name: string): string[] =>
+  [studentId || null, `name:${norm(name)}`].filter((k): k is string => !!k);
 
 export default function AiRiskTab({ teachers, assignments }: Props) {
   const [profiles, setProfiles] = useState<StudentProfileRow[]>([]);
@@ -73,25 +81,82 @@ export default function AiRiskTab({ teachers, assignments }: Props) {
     return m;
   }, [assignments]);
 
-  const rows: Row[] = useMemo(() => profiles
-    .filter(p => p.student_name)
-    .map(p => {
-      const name = p.student_name!;
+  // Los alumnos salen de DOS fuentes:
+  //
+  //   · student_profiles → la ficha, que es donde vive el riesgo "oficial".
+  //   · class_analyses   → la señal que produjo la IA al analizar cada clase.
+  //
+  // Hace falta mirar las dos porque la ficha solo existía si el alumno había
+  // completado el formulario inicial: los alumnos analizados sin ficha tenían su
+  // riesgo únicamente en class_analyses y no aparecían acá. Cuando un alumno está
+  // en ambas, gana la fuente MÁS RECIENTE (y se muestra una sola fila).
+  const rows: Row[] = useMemo(() => {
+    const seen = new Set<string>();
+    const out: Row[] = [];
+
+    const nameOfTeacher = (id: string | null) => teachers.find(t => t.id === id)?.name ?? '—';
+
+    for (const p of profiles) {
+      const name = p.student_name;
+      if (!name) continue;
+
       const last = (p.student_id && latestByStudent.get(p.student_id)) || latestByStudent.get(`name:${norm(name)}`);
       const teacherId = last?.teacher_id || p.teacher_id || teacherOfStudent.get(norm(name)) || null;
-      const teacher = teachers.find(t => t.id === teacherId);
-      return {
+
+      const fichaRisk = isRiskSignal(p.risk_signal) ? p.risk_signal : 'verde';
+      const claseRisk = isRiskSignal(last?.risk_signal) ? last!.risk_signal : null;
+
+      // La ficha manda solo si se actualizó DESPUÉS de la última clase analizada.
+      // Sin risk_updated_at (ficha que nunca recibió un análisis) gana la clase.
+      const fichaAt = p.risk_updated_at ?? null;
+      const claseAt = last?.analyzed_at ?? null;
+      const usarClase = !!claseRisk && (!fichaAt || (!!claseAt && claseAt > fichaAt));
+
+      out.push({
         profileId:   p.id,
         studentId:   p.student_id,
         studentName: name,
-        risk:        isRiskSignal(p.risk_signal) ? p.risk_signal : 'verde',
-        riskExplanation: p.risk_explanation,
+        risk:            usarClase ? claseRisk! : fichaRisk,
+        riskExplanation: usarClase ? (last?.risk_explanation ?? null) : p.risk_explanation,
         teacherId,
-        teacherName: teacher?.name ?? '—',
+        teacherName: nameOfTeacher(teacherId),
         lastClassAt: last?.class_date ?? last?.analyzed_at ?? p.last_class_analyzed_at ?? null,
         classNumber: last?.class_number ?? null,
-      };
-    }), [profiles, latestByStudent, teacherOfStudent, teachers]);
+        hasProfile:  true,
+        riskFromClass: usarClase,
+      });
+      for (const k of aliasesOf(p.student_id, name)) seen.add(k);
+    }
+
+    // Alumnos analizados que todavía no tienen ficha. `analyses` viene ordenado
+    // por analyzed_at desc, así que la primera aparición de cada uno es la última
+    // clase; las siguientes se descartan solas por el Set.
+    for (const a of analyses) {
+      const name = a.student_name;
+      if (!name) continue;
+      const alias = aliasesOf(a.student_id, name);
+      if (alias.some(k => seen.has(k))) continue;
+      for (const k of alias) seen.add(k);
+
+      const teacherId = a.teacher_id || teacherOfStudent.get(norm(name)) || null;
+      out.push({
+        // No hay ficha: la clave es sintética y `hasProfile` lo deja explícito.
+        profileId:   `analysis:${a.id}`,
+        studentId:   a.student_id,
+        studentName: name,
+        risk:            isRiskSignal(a.risk_signal) ? a.risk_signal : 'verde',
+        riskExplanation: a.risk_explanation,
+        teacherId,
+        teacherName: nameOfTeacher(teacherId),
+        lastClassAt: a.class_date ?? a.analyzed_at ?? null,
+        classNumber: a.class_number ?? null,
+        hasProfile:  false,
+        riskFromClass: true,
+      });
+    }
+
+    return out;
+  }, [profiles, analyses, latestByStudent, teacherOfStudent, teachers]);
 
   const counts: Record<RiskSignal, number> = {
     verde:    rows.filter(r => r.risk === 'verde').length,
@@ -127,10 +192,10 @@ export default function AiRiskTab({ teachers, assignments }: Props) {
         <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-muted)' }}>
           <div style={{ fontSize: 34, marginBottom: 10 }}>🤖</div>
           <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 4 }}>
-            Todavía no hay fichas de alumnos
+            Todavía no hay alumnos que mostrar
           </div>
           <div style={{ fontSize: 12.5, lineHeight: 1.5 }}>
-            Aparecen cuando los alumnos completan el formulario inicial.
+            Aparecen al analizar la primera clase o cuando completan el formulario inicial.
           </div>
         </div>
       </div>
@@ -169,11 +234,13 @@ export default function AiRiskTab({ teachers, assignments }: Props) {
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                       <span style={{ fontWeight: 800, fontSize: 14, color: 'var(--text-primary)' }}>{r.studentName}</span>
                       <RiskBadge risk={r.risk} compact />
+                      {!r.hasProfile && <span style={noFichaChip} title="El riesgo viene del análisis de la clase. La ficha se creará al analizar su próxima clase.">sin ficha</span>}
                     </div>
                     <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 3 }}>
                       Profesor: {r.teacherName}
                       {r.classNumber != null && ` · Clase ${r.classNumber}`}
                       {r.lastClassAt && ` · ${formatDate(r.lastClassAt)}`}
+                      {r.riskFromClass && ' · según la última clase'}
                     </div>
                   </div>
                   <button onClick={() => setDetail(r)} style={r.risk === 'rojo' ? interveneBtn : detailBtn}>
@@ -199,7 +266,7 @@ export default function AiRiskTab({ teachers, assignments }: Props) {
       <InterventionAuditSection
         students={rows.map(r => ({
           profileId: r.profileId, studentId: r.studentId, studentName: r.studentName,
-          teacherId: r.teacherId, teacherName: r.teacherName,
+          teacherId: r.teacherId, teacherName: r.teacherName, hasProfile: r.hasProfile,
         }))}
         profiles={profiles}
         onRefresh={reloadProfiles}
@@ -219,7 +286,10 @@ export default function AiRiskTab({ teachers, assignments }: Props) {
             <tbody>
               {rows.map(r => (
                 <tr key={r.profileId}>
-                  <td style={{ ...td, fontWeight: 700, color: 'var(--text-primary)' }}>{r.studentName}</td>
+                  <td style={{ ...td, fontWeight: 700, color: 'var(--text-primary)' }}>
+                    {r.studentName}
+                    {!r.hasProfile && <span style={{ ...noFichaChip, marginLeft: 6 }}>sin ficha</span>}
+                  </td>
                   <td style={td}>{r.teacherName}</td>
                   <td style={td}><RiskBadge risk={r.risk} compact /></td>
                   <td style={td}>{r.lastClassAt ? formatDate(r.lastClassAt) : '—'}</td>
@@ -316,4 +386,9 @@ const interveneBtn: CSSProperties = {
 const detailBtn: CSSProperties = {
   padding: '6px 12px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--bg-surface-3)',
   color: 'var(--text-secondary)', fontSize: 11.5, fontWeight: 600, fontFamily: 'inherit', whiteSpace: 'nowrap', cursor: 'pointer',
+};
+// Alumno analizado que todavía no tiene ficha (amarillo DRC, sin gritar).
+const noFichaChip: CSSProperties = {
+  fontSize: 10, fontWeight: 700, padding: '1.5px 7px', borderRadius: 999, whiteSpace: 'nowrap',
+  background: 'rgba(255,196,0,0.16)', color: '#8A6A00', border: '1px solid rgba(255,196,0,0.45)',
 };

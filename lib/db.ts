@@ -2459,20 +2459,33 @@ export interface FlaggedTranscript {
   reviewedAt: string | null;
 }
 
+export interface FlaggedTranscriptsResult {
+  rows: FlaggedTranscript[];
+  /** true → falta la migración de validación: la pestaña no puede mostrar nada. */
+  missingColumns: boolean;
+}
+
 // Transcripciones marcadas (en revisión o ya resueltas) para el panel del admin.
-export async function dbGetFlaggedTranscripts(): Promise<FlaggedTranscript[]> {
+//
+// Si las columnas de validación no están migradas se devuelve `missingColumns`
+// en vez de una lista vacía a secas: antes la pestaña se veía vacía como si todo
+// estuviera en orden, cuando en realidad la consulta fallaba con un 42703.
+export async function dbGetFlaggedTranscripts(): Promise<FlaggedTranscriptsResult> {
   const { data, error } = await supabase
     .from('class_analyses')
     .select('id, teacher_id, student_name, class_date, analyzed_at, transcript, transcript_validation_score, transcript_validation_flags, ai_authenticity_check, validation_status, validation_reviewed_by, validation_reviewed_at')
     .in('validation_status', ['review', 'approved', 'rejected'])
     .order('analyzed_at', { ascending: false });
   if (error || !data) {
-    if (error && error.code !== '42703' && error.code !== 'PGRST204') {
+    const missingColumns = error?.code === '42703' || error?.code === 'PGRST204';
+    if (error && !missingColumns) {
       console.error('[db] Error al leer transcripciones marcadas:', error);
+    } else if (missingColumns) {
+      console.warn('[db] Faltan las columnas de validación en class_analyses. Corré supabase-transcript-validation.sql.');
     }
-    return [];   // columnas aún no migradas → lista vacía (degradación limpia)
+    return { rows: [], missingColumns };
   }
-  return (data as Array<Record<string, unknown>>).map(r => ({
+  const rows = (data as Array<Record<string, unknown>>).map(r => ({
     id:               r.id as string,
     teacherId:        (r.teacher_id as string) ?? null,
     studentName:      (r.student_name as string) ?? '',
@@ -2486,6 +2499,7 @@ export async function dbGetFlaggedTranscripts(): Promise<FlaggedTranscript[]> {
     reviewedBy:       (r.validation_reviewed_by as string) ?? null,
     reviewedAt:       (r.validation_reviewed_at as string) ?? null,
   }));
+  return { rows, missingColumns: false };
 }
 
 // Aprobar o rechazar una transcripción marcada. Al rechazar, avisa al profesor

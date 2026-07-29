@@ -31,6 +31,7 @@ export default function TranscriptValidationTab() {
   const { user } = useAuth();
   const [rows, setRows] = useState<FlaggedTranscript[]>([]);
   const [loading, setLoading] = useState(true);
+  const [missingColumns, setMissingColumns] = useState(false);
   const [viewing, setViewing] = useState<FlaggedTranscript | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -38,7 +39,9 @@ export default function TranscriptValidationTab() {
 
   async function load() {
     setLoading(true);
-    setRows(await dbGetFlaggedTranscripts());
+    const res = await dbGetFlaggedTranscripts();
+    setRows(res.rows);
+    setMissingColumns(res.missingColumns);
     setLoading(false);
   }
   useEffect(() => { load(); }, []);
@@ -97,6 +100,16 @@ export default function TranscriptValidationTab() {
 
       {loading ? (
         <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>Cargando…</div>
+      ) : missingColumns ? (
+        <div style={{
+          border: '1px solid rgba(255,196,0,0.5)', background: 'rgba(255,196,0,0.1)',
+          borderRadius: 10, padding: '14px 16px', fontSize: 13, color: '#8A6A00', lineHeight: 1.65,
+        }}>
+          <b>Falta la migración de validación.</b> La columna <code>validation_status</code> no existe en
+          la base, así que esta pestaña no puede mostrar nada todavía. Corré{' '}
+          <code>supabase-transcript-validation.sql</code> en el editor SQL de Supabase. Las clases que se
+          registren después de correrla aparecerán acá automáticamente.
+        </div>
       ) : ordered.length === 0 ? (
         <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
           No hay transcripciones marcadas. ✅

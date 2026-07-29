@@ -23,18 +23,39 @@ type Row = Record<string, unknown>;
 const isMissingCol = (e: { code?: string } | null): boolean =>
   e?.code === 'PGRST204' || e?.code === '42703';
 
-// Grupos de columnas opcionales, en el orden en que se van descartando si la
-// base todavía no las tiene. Van de la migración MÁS NUEVA a la más vieja: la
-// última en añadirse es la que más probablemente falte, y descartarla primero
-// evita perder por el camino las columnas de las migraciones ya corridas.
-const OPTIONAL_GROUPS: string[][] = [
-  ['intervention_suggestion'],                                            // supabase-interventions.sql
-  ['analysis_status', 'analysis_error', 'analysis_updated_at'],           // supabase-transcript-flow.sql
-  ['transcript_validation_score', 'transcript_validation_flags',
-   'ai_authenticity_check', 'validation_status'],                          // supabase-transcript-validation.sql
-  ['transcript_hash'],                                                     // supabase-transcript-hash.sql
-  ['join_log_id'],                                                         // supabase-join-log-link.sql
-];
+// Columnas que dependen de una migración posterior: pueden no existir todavía.
+// El valor es el script que las crea, para que el aviso del log diga qué correr.
+//
+// OJO — este mapa NO define orden ni grupos a propósito. La versión anterior
+// descartaba GRUPOS EN CASCADA hasta que la escritura pasaba, así que una sola
+// columna ausente al final de la lista tiraba por el camino todas las columnas
+// anteriores AUNQUE EXISTIERAN (así se perdieron transcript_hash y los scores de
+// validación en todas las filas). Ahora se descarta exactamente la columna que
+// la base dice que falta, y ninguna más.
+const OPTIONAL_COLUMNS: Record<string, string> = {
+  intervention_suggestion:     'supabase-interventions.sql',
+  analysis_status:             'supabase-transcript-flow.sql',
+  analysis_error:              'supabase-transcript-flow.sql',
+  analysis_updated_at:         'supabase-transcript-flow.sql',
+  transcript_validation_score: 'supabase-transcript-validation.sql',
+  transcript_validation_flags: 'supabase-transcript-validation.sql',
+  ai_authenticity_check:       'supabase-transcript-validation.sql',
+  validation_status:           'supabase-transcript-validation.sql',
+  transcript_hash:             'supabase-transcript-hash.sql',
+  join_log_id:                 'supabase-join-log-link.sql',
+};
+
+/**
+ * Nombre de la columna que la base dice que no existe. Los dos formatos reales:
+ *   42703    → «column class_analyses.validation_status does not exist»
+ *   PGRST204 → «Could not find the 'validation_status' column of 'class_analyses'…»
+ */
+function missingColumnOf(error: { message?: string }): string | null {
+  const msg = error.message ?? '';
+  const m = /column\s+(?:[\w$]+\.)?"?([a-zA-Z0-9_]+)"?\s+does not exist/i.exec(msg)
+    ?? /could not find the '([^']+)' column/i.exec(msg);
+  return m?.[1] ?? null;
+}
 
 function omit(row: Row, keys: string[]): Row {
   const out = { ...row };
@@ -42,23 +63,84 @@ function omit(row: Row, keys: string[]): Row {
   return out;
 }
 
-/** Ejecuta la escritura descartando grupos de columnas opcionales si no existen. */
+/**
+ * Ejecuta la escritura descartando SOLO las columnas opcionales que la base
+ * reporte como inexistentes, una por una. Todo lo demás se conserva.
+ *
+ * Una vez corridas las migraciones este fallback no descarta nada: la primera
+ * escritura pasa y no se emite ningún aviso. Queda como red de seguridad para un
+ * entorno nuevo o una migración a medias, pero siempre dejando rastro en el log.
+ */
 async function writeWithFallback(
   label: string,
   run: (row: Row) => PromiseLike<{ error: { code?: string; message: string } | null }>,
   row: Row,
 ): Promise<{ error?: string }> {
   let current = row;
-  for (let i = 0; i <= OPTIONAL_GROUPS.length; i++) {
+  const dropped: string[] = [];
+
+  // Cota: como mucho una vuelta por columna opcional, más el intento inicial.
+  for (let i = 0; i <= Object.keys(OPTIONAL_COLUMNS).length; i++) {
     const { error } = await run(current);
-    if (!error) return {};
-    if (!isMissingCol(error) || i === OPTIONAL_GROUPS.length) {
+
+    if (!error) {
+      if (dropped.length) {
+        console.warn(
+          `[transcriptStore] ${label}: guardado SIN las columnas [${dropped.join(', ')}] porque no existen en la base. ` +
+          `Corré ${[...new Set(dropped.map(c => OPTIONAL_COLUMNS[c]))].join(' y ')} para que dejen de perderse.`,
+        );
+      }
+      return {};
+    }
+
+    if (!isMissingCol(error)) {
       console.error(`[transcriptStore] ${label} falló:`, error);
       return { error: error.message };
     }
-    console.warn(`[transcriptStore] ${label}: columnas no migradas (${OPTIONAL_GROUPS[i].join(', ')}), reintentando sin ellas.`);
-    current = omit(current, OPTIONAL_GROUPS[i]);
+
+    const col = missingColumnOf(error);
+
+    // No se pudo identificar la columna: último recurso, se van todas las
+    // opcionales que queden. Solo así, y avisando fuerte.
+    if (!col) {
+      const remaining = Object.keys(OPTIONAL_COLUMNS).filter(c => c in current);
+      if (remaining.length === 0) {
+        console.error(`[transcriptStore] ${label} falló y no se pudo identificar la columna:`, error);
+        return { error: error.message };
+      }
+      console.warn(
+        `[transcriptStore] ${label}: falta una columna pero el error no dice cuál (${error.message}). ` +
+        `Se reintenta sin las opcionales restantes [${remaining.join(', ')}].`,
+      );
+      dropped.push(...remaining);
+      current = omit(current, remaining);
+      continue;
+    }
+
+    // La columna que falta no es opcional → es un problema real de esquema y
+    // silenciarlo escondería un bug. Se corta acá.
+    if (!(col in OPTIONAL_COLUMNS)) {
+      console.error(
+        `[transcriptStore] ${label}: falta la columna OBLIGATORIA "${col}" en class_analyses. ` +
+        'Revisá el esquema: no se descarta porque el dato es imprescindible.',
+      );
+      return { error: error.message };
+    }
+
+    // La base reporta una columna que ya no estamos enviando: sin salida.
+    if (!(col in current)) {
+      console.error(`[transcriptStore] ${label}: la base pide "${col}" pero no está en la escritura.`, error);
+      return { error: error.message };
+    }
+
+    console.warn(
+      `[transcriptStore] ${label}: la columna "${col}" no existe en la base (la crea ${OPTIONAL_COLUMNS[col]}). ` +
+      'Se descarta SOLO esa columna y se reintenta; el resto se guarda igual.',
+    );
+    dropped.push(col);
+    current = omit(current, [col]);
   }
+
   return { error: 'No se pudo escribir el análisis.' };
 }
 
@@ -183,12 +265,85 @@ export async function resolveProfileId(args: {
   profileId?: string | null; studentId?: string | null; studentName: string;
 }): Promise<string | null> {
   if (args.profileId) return args.profileId;
+  // `.limit(1)` antes de maybeSingle: sin él, dos fichas con el mismo nombre
+  // hacen que PostgREST devuelva error en vez de la ficha.
   if (args.studentId) {
-    const { data } = await supabase.from('student_profiles').select('id').eq('student_id', args.studentId).maybeSingle();
+    const { data } = await supabase.from('student_profiles').select('id')
+      .eq('student_id', args.studentId).order('updated_at', { ascending: false }).limit(1).maybeSingle();
     if (data) return data.id;
   }
-  const { data } = await supabase.from('student_profiles').select('id').ilike('student_name', args.studentName).maybeSingle();
+  const { data } = await supabase.from('student_profiles').select('id')
+    .ilike('student_name', args.studentName.trim())
+    .order('updated_at', { ascending: false }).limit(1).maybeSingle();
   return data?.id ?? null;
+}
+
+/**
+ * La ficha del alumno, creándola si no existe.
+ *
+ * Por qué: hasta ahora la señal de riesgo solo se guardaba `if (profileId)`, y la
+ * ficha únicamente nacía cuando el alumno completaba el formulario inicial. Los
+ * alumnos que nunca lo completaron (la mayoría) quedaban con el riesgo enterrado
+ * en class_analyses y sin ficha donde colgar la intervención: la campanita
+ * avisaba y el panel del admin se veía vacío.
+ *
+ * La ficha creada acá es MÍNIMA y queda marcada con `ai_status: 'auto'` para
+ * distinguirla de una ficha completa del formulario. El id se elige a propósito
+ * igual al `student_id` cuando lo hay, que es la misma convención que usa
+ * /api/forms/submit: así, si el alumno completa el formulario más tarde, su
+ * upsert `onConflict: 'id'` ENRIQUECE esta misma fila en vez de duplicarla.
+ */
+export async function ensureProfileId(args: {
+  profileId?: string | null;
+  studentId?: string | null;
+  studentName: string;
+  teacherId?: string | null;
+}): Promise<string | null> {
+  const existing = await resolveProfileId(args);
+  if (existing) return existing;
+
+  const name = args.studentName.trim();
+  if (!name) return null;
+
+  // Sin student_id explícito, se busca el alumno por nombre: es lo que permite
+  // que la ficha nazca ya vinculada y que el formulario posterior la reutilice.
+  let studentId = args.studentId ?? null;
+  if (!studentId) {
+    const { data } = await supabase.from('students').select('id')
+      .ilike('name', name).limit(1).maybeSingle();
+    studentId = data?.id ?? null;
+  }
+
+  const now = new Date().toISOString();
+  const row: Row = {
+    student_name: name,
+    student_id:   studentId,
+    teacher_id:   args.teacherId ?? null,
+    ai_status:    'auto',          // ← marca: ficha creada desde un análisis
+    created_at:   now,
+    updated_at:   now,
+  };
+  const id = studentId ?? `sp_auto_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+  let { error } = await supabase.from('student_profiles')
+    .upsert({ id, ...row }, { onConflict: 'id' });
+
+  // El alumno no está en `students` (vínculo solo por nombre): se guarda la ficha
+  // sin vincular en vez de perder el riesgo. Mismo criterio que /api/forms/submit.
+  if (error?.code === '23503') {
+    ({ error } = await supabase.from('student_profiles').upsert(
+      { id: `sp_auto_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, ...row, student_id: null },
+      { onConflict: 'id' },
+    ));
+  }
+
+  if (error) {
+    console.error(`[transcriptStore] No se pudo crear la ficha automática de "${name}":`, error);
+    return null;
+  }
+
+  console.log(`[transcriptStore] Ficha automática creada para "${name}" (id ${id}, ai_status 'auto').`);
+  return id;
 }
 
 const clampScore = (n: number): number =>
