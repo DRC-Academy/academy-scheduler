@@ -8,8 +8,10 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTeachers } from '@/lib/TeachersContext';
 import { useAuth } from '@/lib/AuthContext';
 import { dbGetFlaggedTranscripts, dbReviewTranscript, dbReopenTranscript, type FlaggedTranscript } from '@/lib/db';
-import { flagLabel, SCORE_SEVERE } from '@/lib/transcriptValidation';
-import { SCORE_AUTO_APPROVE } from '@/lib/transcriptVerdict';
+// Los umbrales salen de transcriptValidation (módulo puro), NO de
+// transcriptVerdict: ese es 'server-only' y arrastraría el SDK de Anthropic al
+// navegador, que es lo que rompía la app tras el login.
+import { flagLabel, SCORE_SEVERE, SCORE_AUTO_APPROVE } from '@/lib/transcriptValidation';
 
 const GREEN = '#1E9E3A';
 

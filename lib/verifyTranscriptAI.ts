@@ -5,6 +5,8 @@
 // Se ejecuta SOLO en la zona gris (score de capa 1 entre 35 y 70) o si hay flags
 // de la capa 2: si el score es muy alto y no hay flags, no se gasta en IA.
 
+import 'server-only';   // llega al SDK de Anthropic vía askClaudeJson
+
 import { askClaudeJson } from '@/lib/anthropic';
 
 export interface TranscriptAuthenticity {

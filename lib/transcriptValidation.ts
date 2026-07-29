@@ -36,6 +36,18 @@ const SCORE_BASE = 50;
 
 /** Por debajo de esto la señal es máxima (aviso severo al admin). NO bloquea. */
 export const SCORE_SEVERE = 15;
+/**
+ * Score a partir del cual una clase limpia se APRUEBA SOLA, sin pasar por el
+ * admin. Vive acá y no en transcriptVerdict.ts a propósito: este módulo es PURO
+ * (sin un solo import), así que lo puede leer tanto el servidor como la pestaña
+ * de Validación del admin, que es un componente cliente.
+ *
+ * Importarlo desde transcriptVerdict.ts arrastraba al navegador la cadena
+ * transcriptVerdict → verifyTranscriptAI → anthropic → `new Anthropic(...)`,
+ * y el SDK lanza al detectar un entorno de navegador: rompía la app entera
+ * después del login (29/07/2026).
+ */
+export const SCORE_AUTO_APPROVE = 80;
 /** A partir de acá la clase puede ir directa a pagable (si no hay flags). */
 export const SCORE_CLEAN = 60;
 

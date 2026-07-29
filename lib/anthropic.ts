@@ -5,6 +5,13 @@
 // distinto de 'ready' y quien llama sigue funcionando igual. El formulario del
 // alumno nunca debe romperse porque la IA no esté disponible.
 
+// SOLO SERVIDOR. `new Anthropic(...)` corre al importar el módulo y el SDK lanza
+// si detecta un navegador; además no tendría sentido, porque la API key nunca
+// llega al cliente. Este import hace que el BUILD FALLE si alguien vuelve a
+// arrastrar este archivo a un componente cliente, en vez de romperse en runtime
+// después del login como pasó el 29/07/2026.
+import 'server-only';
+
 import Anthropic from '@anthropic-ai/sdk';
 import { NO_DASH_RULES, cleanAiDeep } from '@/lib/textCleanup';
 

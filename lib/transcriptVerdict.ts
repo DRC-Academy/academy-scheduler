@@ -22,8 +22,10 @@
 // puede DEGRADAR la clase a revisión. Así una llamada lenta a la IA no puede hacer
 // que el profesor pierda su registro de clase.
 
+import 'server-only';   // arrastra el SDK de Anthropic: nunca debe entrar al bundle del navegador
+
 import {
-  validateTranscriptStructure, SCORE_SEVERE, SCORE_CLEAN,
+  validateTranscriptStructure, SCORE_SEVERE, SCORE_CLEAN, SCORE_AUTO_APPROVE,
   type ValidationResult,
 } from '@/lib/transcriptValidation';
 import { runTranscriptCrossChecks, type CrossCheckResult } from '@/lib/transcriptCrossCheck';
@@ -53,11 +55,12 @@ const REVIEW_MSG = {
 };
 
 /**
- * Score a partir del cual una clase limpia se APRUEBA SOLA, sin pasar por el
- * admin. Vive acá con SCORE_SEVERE y SCORE_CLEAN para que exista un único sitio
- * donde se tocan los umbrales.
+ * Los tres umbrales viven en lib/transcriptValidation.ts, que es un módulo puro.
+ * Se reexportan acá para que el código de servidor los siga importando de un
+ * único sitio, pero el cliente debe tomarlos de transcriptValidation: este
+ * archivo es 'server-only' y arrastra el SDK de Anthropic.
  */
-export const SCORE_AUTO_APPROVE = 80;
+export { SCORE_AUTO_APPROVE, SCORE_SEVERE, SCORE_CLEAN };
 
 /**
  * Estado que se guarda en class_analyses.validation_status.
