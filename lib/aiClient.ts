@@ -203,9 +203,12 @@ export interface RegisterClassResult {
   /** Id de la fila de class_analyses. La clase YA está guardada si viene. */
   analysisId: string;
   validation: TranscriptValidation | null;
-  /** false → el transcript se guardó pero el informe de IA no salió. */
-  analyzed: boolean;
-  analysisError?: string;
+  /**
+   * El análisis de IA, todavía en curso. La clase YA está guardada y validada
+   * cuando esto se devuelve; escuchar la promesa es opcional (sirve para avisar
+   * al profesor cuando el informe esté listo o si falló).
+   */
+  analysis: Promise<{ analyzed: boolean; error?: string }>;
 }
 
 /** Paso 1 — guarda el transcript. Devuelve el id de la fila creada. */
@@ -263,11 +266,26 @@ export async function runAnalysisFor(args: AnalyzeArgs & { analysisId: string })
   }
 }
 
-/** Flujo completo del profesor: guardar y luego analizar. */
+/**
+ * Flujo del profesor: guarda el transcript y DEVUELVE en cuanto está guardado.
+ *
+ * El análisis de IA (10-30 s con Sonnet) arranca pero NO se espera: se devuelve
+ * su promesa en `analysis` para que la pantalla pueda avisar cuando termine. Antes
+ * se hacía `await` de los dos pasos y el profesor se quedaba mirando el spinner
+ * todo ese rato, aunque la clase ya estuviera guardada y validada desde el primer
+ * segundo.
+ *
+ * La validación (score + validation_status) sí va en el paso 1, síncrona: es local
+ * y rápida, y es lo que necesita la pestaña Validación. Por eso la clase aparece
+ * validada de inmediato aunque el informe tarde.
+ *
+ * `runAnalysisFor` nunca lanza (captura dentro), así que la promesa no puede
+ * quedar como unhandled rejection si nadie la escucha.
+ */
 export async function registerClassWithTranscript(args: AnalyzeArgs): Promise<RegisterClassResult> {
   const { analysisId, validation } = await saveTranscriptOnly(args);   // si esto falla, sí lanza
-  const { analyzed, error } = await runAnalysisFor({ ...args, analysisId });
-  return { analysisId, validation, analyzed, analysisError: error };
+  const analysis = runAnalysisFor({ ...args, analysisId });
+  return { analysisId, validation, analysis };
 }
 
 /** "Reintentar análisis": vuelve a analizar un transcript ya guardado. */

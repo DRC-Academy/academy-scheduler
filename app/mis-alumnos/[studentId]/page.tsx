@@ -629,16 +629,21 @@ function PendingTranscriptModal({ pending, assignment, profile, ficha, teacher, 
       studentProfile: ficha,
     };
     try {
+      // Devuelve en cuanto la clase está GUARDADA y VALIDADA. El informe de IA
+      // sigue en segundo plano: el profesor no espera por él.
       const res = await registerClassWithTranscript(base);
       await onSaved();
-      if (!res.analyzed) {
-        onToast('Clase guardada. El análisis no se completó: puedes reintentarlo en Seguimiento.');
-      } else if (res.validation && res.validation.decision !== 'ok') {
-        onToast('Tu clase se ha guardado y está pendiente de revisión.');
-      } else {
-        onToast('Clase completada');
-      }
+      onToast(res.validation && res.validation.decision !== 'ok'
+        ? 'Clase guardada ✓ Pendiente de revisión del equipo. El análisis se completará en unos instantes.'
+        : 'Clase guardada ✓ El análisis se completará en unos instantes.');
       onClose();
+
+      // Segundo aviso solo si hay algo que decir: que el informe falló.
+      res.analysis.then(({ analyzed }) => {
+        if (!analyzed) {
+          onToast('La clase está guardada, pero el análisis no se completó: puedes reintentarlo en Seguimiento.');
+        }
+      });
     } catch (e) {
       const detalle = e instanceof Error ? e.message : String(e);
       console.error('[mis-alumnos] No se pudo guardar el transcript:', e);

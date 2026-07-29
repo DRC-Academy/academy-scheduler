@@ -7,10 +7,19 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTeachers } from '@/lib/TeachersContext';
 import { useAuth } from '@/lib/AuthContext';
-import { dbGetFlaggedTranscripts, dbReviewTranscript, type FlaggedTranscript } from '@/lib/db';
-import { flagLabel } from '@/lib/transcriptValidation';
+import { dbGetFlaggedTranscripts, dbReviewTranscript, dbReopenTranscript, type FlaggedTranscript } from '@/lib/db';
+import { flagLabel, SCORE_SEVERE } from '@/lib/transcriptValidation';
+import { SCORE_AUTO_APPROVE } from '@/lib/transcriptVerdict';
 
 const GREEN = '#1E9E3A';
+
+type Vista = 'pendientes' | 'auto' | 'dudosas';
+
+// Las "muy dudosas" no son un estado aparte en la base: son las pendientes con
+// score por debajo del umbral severo. Se distinguen por el score para no tocar el
+// contrato de finanzas, que decide qué se paga por validation_status.
+const esMuyDudosa = (r: FlaggedTranscript): boolean =>
+  r.validationStatus === 'review' && r.score != null && r.score < SCORE_SEVERE;
 
 function scoreColor(score: number | null): string {
   if (score == null) return '#6b7280';
@@ -34,6 +43,7 @@ export default function TranscriptValidationTab() {
   const [missingColumns, setMissingColumns] = useState(false);
   const [viewing, setViewing] = useState<FlaggedTranscript | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [vista, setVista] = useState<Vista>('pendientes');
 
   const teacherName = (id: string | null) => teachers.find(t => t.id === id)?.name ?? '—';
 
@@ -46,17 +56,45 @@ export default function TranscriptValidationTab() {
   }
   useEffect(() => { load(); }, []);
 
-  const thisMonth = new Date().toISOString().slice(0, 7);
-  const pending = rows.filter(r => r.validationStatus === 'review');
-  const approvedThisMonth = rows.filter(r => r.validationStatus === 'approved' && (r.reviewedAt ?? '').slice(0, 7) === thisMonth);
-  const rejectedThisMonth = rows.filter(r => r.validationStatus === 'rejected' && (r.reviewedAt ?? '').slice(0, 7) === thisMonth);
+  const autoAprobadas = rows.filter(r => r.validationStatus === 'auto_approved');
+  const muyDudosas    = rows.filter(esMuyDudosa);
+  // "Pendientes" son las que esperan decisión y NO son las muy dudosas (esas
+  // tienen su propia pestaña, para que lo urgente no se pierda entre lo normal).
+  const pendientes    = rows.filter(r => r.validationStatus === 'review' && !esMuyDudosa(r));
 
-  // Pendientes primero, luego por fecha de análisis descendente.
-  const ordered = useMemo(() =>
-    [...rows].sort((a, b) =>
+  // El filtrado va DENTRO del useMemo: si `visibles` se calcula fuera, cambia de
+  // identidad en cada render y la memoización no sirve de nada.
+  // Sin resolver primero; dentro de cada grupo, lo más reciente arriba.
+  const ordered = useMemo(() => {
+    const visibles = vista === 'auto'
+      ? rows.filter(r => r.validationStatus === 'auto_approved')
+      : vista === 'dudosas'
+        ? rows.filter(esMuyDudosa)
+        // Pendientes primero y las ya resueltas debajo, como historial.
+        : rows.filter(r =>
+            (r.validationStatus === 'review' && !esMuyDudosa(r)) ||
+            r.validationStatus === 'approved' || r.validationStatus === 'rejected');
+    return visibles.sort((a, b) =>
       (Number(b.validationStatus === 'review') - Number(a.validationStatus === 'review')) ||
-      (b.analyzedAt ?? '').localeCompare(a.analyzedAt ?? '')),
-    [rows]);
+      (b.analyzedAt ?? '').localeCompare(a.analyzedAt ?? ''));
+  }, [rows, vista]);
+
+  // Reabrir una auto-aprobada: vuelve a 'review' y deja de contar para el pago
+  // hasta que el admin decida.
+  async function reopen(row: FlaggedTranscript) {
+    setBusyId(row.id);
+    try {
+      await dbReopenTranscript(row.id, user?.displayName ?? 'admin');
+      setRows(prev => prev.map(r => r.id === row.id
+        ? { ...r, validationStatus: 'review', reviewedBy: user?.displayName ?? 'admin', reviewedAt: new Date().toISOString() }
+        : r));
+      setViewing(null);
+    } catch (e) {
+      alert(`No se pudo reabrir: ${(e as Error).message}`);
+    } finally {
+      setBusyId(null);
+    }
+  }
 
   async function review(row: FlaggedTranscript, decision: 'approved' | 'rejected') {
     setBusyId(row.id);
@@ -93,10 +131,41 @@ export default function TranscriptValidationTab() {
       </div>
 
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-        {card('Pendientes', pending.length, '#b45309')}
-        {card('Aprobadas este mes', approvedThisMonth.length, '#1f7a3d')}
-        {card('Rechazadas este mes', rejectedThisMonth.length, '#dc2626')}
+        {card(`Aprobadas automáticamente (score ≥ ${SCORE_AUTO_APPROVE})`, autoAprobadas.length, GREEN)}
+        {card('Pendientes de revisión', pendientes.length, '#b45309')}
+        {card(`Muy dudosas (score < ${SCORE_SEVERE})`, muyDudosas.length, '#dc2626')}
       </div>
+
+      {/* Filtros. Se abre en Pendientes: es lo único que pide acción del admin. */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        {([
+          ['pendientes', `Pendientes (${pendientes.length})`, '#b45309'],
+          ['auto',       `Aprobadas automáticamente (${autoAprobadas.length})`, GREEN],
+          ['dudosas',    `Muy dudosas (${muyDudosas.length})`, '#dc2626'],
+        ] as const).map(([id, label, color]) => (
+          <button key={id} onClick={() => setVista(id)} style={{
+            padding: '7px 14px', borderRadius: 999, cursor: 'pointer',
+            fontSize: 12.5, fontWeight: 700, fontFamily: 'inherit',
+            border: `1.5px solid ${vista === id ? color : 'var(--border)'}`,
+            background: vista === id ? color : 'var(--bg-surface)',
+            color: vista === id ? (id === 'auto' ? 'white' : 'white') : 'var(--text-secondary)',
+          }}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {vista === 'auto' && (
+        <div style={{
+          border: `1px solid rgba(30,158,58,0.35)`, background: 'rgba(30,158,58,0.08)',
+          borderRadius: 10, padding: '11px 14px', fontSize: 12.5, color: '#166534', lineHeight: 1.6,
+        }}>
+          Estas clases pasaron la validación con {SCORE_AUTO_APPROVE} puntos o más y sin ninguna señal:
+          ya cuentan para el pago y no requieren que hagas nada. Están aquí solo para que puedas
+          auditarlas. Si alguna te llama la atención, «Marcar para revisión» la reabre y deja de contar
+          hasta que decidas.
+        </div>
+      )}
 
       {loading ? (
         <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>Cargando…</div>
@@ -112,7 +181,9 @@ export default function TranscriptValidationTab() {
         </div>
       ) : ordered.length === 0 ? (
         <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
-          No hay transcripciones marcadas. ✅
+          {vista === 'auto'    ? 'Todavía no hay clases aprobadas automáticamente.'
+          : vista === 'dudosas' ? 'Ninguna transcripción muy dudosa. ✅'
+          : 'No hay transcripciones pendientes de revisión. ✅'}
         </div>
       ) : (
         <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 12 }}>
@@ -127,8 +198,15 @@ export default function TranscriptValidationTab() {
             <tbody>
               {ordered.map(r => {
                 const resolved = r.validationStatus !== 'review';
+                // Solo se atenúa el historial ya decidido. Las auto-aprobadas se
+                // ven a plena opacidad: son una categoría viva, no un archivo.
+                const atenuada = r.validationStatus === 'approved' || r.validationStatus === 'rejected';
                 return (
-                  <tr key={r.id} style={{ borderTop: '1px solid var(--border)', opacity: resolved ? 0.6 : 1 }}>
+                  <tr key={r.id} style={{
+                    borderTop: '1px solid var(--border)',
+                    opacity: atenuada ? 0.6 : 1,
+                    background: esMuyDudosa(r) ? 'rgba(220,38,38,0.06)' : undefined,
+                  }}>
                     <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>{teacherName(r.teacherId)}</td>
                     <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>{r.studentName}</td>
                     <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>{fmtDate(r.classDate)}</td>
@@ -149,7 +227,15 @@ export default function TranscriptValidationTab() {
                       )}
                     </td>
                     <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
-                      {resolved ? (
+                      {r.validationStatus === 'auto_approved' ? (
+                        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: GREEN }}>✓ Aprobada automáticamente</span>
+                          <button onClick={() => setViewing(r)} style={btn('ghost')}>Ver transcript</button>
+                          <button onClick={() => reopen(r)} disabled={busyId === r.id} style={btn('ghost')}>
+                            Marcar para revisión
+                          </button>
+                        </div>
+                      ) : resolved ? (
                         <span style={{ fontSize: 12, fontWeight: 700, color: r.validationStatus === 'approved' ? '#1f7a3d' : '#dc2626' }}>
                           {r.validationStatus === 'approved' ? '✅ Aprobada' : '❌ Rechazada'}
                         </span>

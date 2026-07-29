@@ -175,7 +175,7 @@ export async function persistTranscript(
 
     transcript_validation_score: verdict.structure.score,
     transcript_validation_flags: verdict.flags,
-    validation_status:           statusForDecision(verdict.decision),
+    validation_status:           statusForDecision(verdict.decision, verdict.structure.score),
 
     analysis_status:     'pending',
     analysis_error:      null,

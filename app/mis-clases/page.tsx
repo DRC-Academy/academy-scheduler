@@ -517,14 +517,25 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
     if (!replaceId) {
       await registerClassRecord(teacher.id, studentName, date, time, null, classType, comment);
     }
-    if (!result.analyzed) {
-      setValidationNotice({
-        title: 'Clase guardada — análisis pendiente',
-        body: 'La clase quedó registrada y cuenta para tu pago. El informe de IA no se pudo generar; puedes reintentarlo desde la ficha del alumno, en Seguimiento.',
-      });
-    } else if (result.validation && result.validation.decision !== 'ok') {
+    // La clase ya está guardada y validada acá; el informe de IA va por detrás.
+    if (result.validation && result.validation.decision !== 'ok') {
       setValidationNotice({ title: result.validation.teacherTitle, body: result.validation.teacherBody });
+    } else {
+      setValidationNotice({
+        title: 'Clase guardada ✓',
+        body: 'La clase quedó registrada y cuenta para tu pago. El análisis se completará en unos instantes; no hace falta que esperes.',
+      });
     }
+    // Solo se vuelve a avisar si el informe falla: si sale bien, no hay nada que
+    // contarle al profesor que no vea ya en la ficha del alumno.
+    result.analysis.then(({ analyzed }) => {
+      if (!analyzed) {
+        setValidationNotice({
+          title: 'Análisis pendiente',
+          body: 'La clase quedó registrada y cuenta para tu pago. El informe de IA no se pudo generar; puedes reintentarlo desde la ficha del alumno, en Seguimiento.',
+        });
+      }
+    });
     await loadFinanceData();
     // La detección de hitos ocurre en el barrido de MyClassesTab (useEffect), que
     // recuenta al cambiar class_records tras loadFinanceData().

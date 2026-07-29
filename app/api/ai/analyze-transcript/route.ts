@@ -16,7 +16,7 @@
 import { supabase } from '@/lib/supabase';
 import { analyzeTranscript } from '@/lib/analyzeTranscript';
 import { isRiskSignal, type TranscriptIA } from '@/lib/aiTypes';
-import { computeTranscriptVerdict, decideTranscript, shouldRunAI } from '@/lib/transcriptVerdict';
+import { computeTranscriptVerdict, decideTranscript, shouldRunAI, statusForDecision } from '@/lib/transcriptVerdict';
 import { validateTranscriptStructure } from '@/lib/transcriptValidation';
 import { verifyTranscriptAI } from '@/lib/verifyTranscriptAI';
 import {
@@ -257,7 +257,8 @@ async function handleSaveWithAnalysis(body: Body, studentName: string): Promise<
     body,
     teacherId: body.teacherId ?? null,
     studentId: body.studentId ?? null,
-    validationStatus: verdict ? (verdict.decision === 'ok' ? 'ok' : 'review') : 'review',
+    // Mismo criterio que el guardado: los umbrales viven solo en transcriptVerdict.
+    validationStatus: verdict ? statusForDecision(verdict.decision, verdict.structure.score) : 'review',
     intervention: ctx,
   });
 

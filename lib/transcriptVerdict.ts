@@ -52,9 +52,34 @@ const REVIEW_MSG = {
   body: 'Esta clase se ha registrado correctamente y está pendiente de validación por el equipo. Aparecerá en tu resumen de pago una vez validada.',
 };
 
-/** Estado que se guarda en class_analyses.validation_status para cada decisión. */
-export function statusForDecision(d: TranscriptDecision): 'ok' | 'review' {
-  return d === 'ok' ? 'ok' : 'review';
+/**
+ * Score a partir del cual una clase limpia se APRUEBA SOLA, sin pasar por el
+ * admin. Vive acá con SCORE_SEVERE y SCORE_CLEAN para que exista un único sitio
+ * donde se tocan los umbrales.
+ */
+export const SCORE_AUTO_APPROVE = 80;
+
+/**
+ * Estado que se guarda en class_analyses.validation_status.
+ *
+ *   'auto_approved' → score >= 80 y sin ninguna señal: cuenta para el pago y no
+ *                     genera aviso al admin. Visible en la pestaña Validación
+ *                     para que pueda auditarla si quiere.
+ *   'ok'            → limpia pero por debajo de 80: cuenta igual (comportamiento
+ *                     de siempre), sin pasar por revisión.
+ *   'review'        → pendiente de decisión del admin. Las de score < 15 son las
+ *                     "muy dudosas"; se distinguen por el score, no por un estado
+ *                     aparte, para no tocar el contrato de finanzas.
+ *
+ * OJO: el score por sí solo no basta para auto-aprobar. Una clase puede sacar 100
+ * en la capa 1 y traer flags de la capa 2 (sin acceso registrado, registro tardío,
+ * similitud con otra clase); en ese caso `decision` ya no es 'ok' y va a revisión.
+ */
+export type ValidationStatus = 'auto_approved' | 'ok' | 'review';
+
+export function statusForDecision(d: TranscriptDecision, score: number): ValidationStatus {
+  if (d !== 'ok') return 'review';
+  return score >= SCORE_AUTO_APPROVE ? 'auto_approved' : 'ok';
 }
 
 export interface VerdictInput {

@@ -2620,7 +2620,10 @@ export async function dbGetFlaggedTranscripts(): Promise<FlaggedTranscriptsResul
   const { data, error } = await supabase
     .from('class_analyses')
     .select('id, teacher_id, student_name, class_date, analyzed_at, transcript, transcript_validation_score, transcript_validation_flags, ai_authenticity_check, validation_status, validation_reviewed_by, validation_reviewed_at')
-    .in('validation_status', ['review', 'approved', 'rejected'])
+    // 'auto_approved' entra para que el admin pueda AUDITARLAS, aunque no
+    // requieran ninguna acción suya. 'ok' se queda fuera a propósito: son las
+    // limpias de score < 80, que nunca pasaron por validación.
+    .in('validation_status', ['review', 'approved', 'rejected', 'auto_approved'])
     .order('analyzed_at', { ascending: false });
   if (error || !data) {
     const missingColumns = error?.code === '42703' || error?.code === 'PGRST204';
@@ -2646,6 +2649,21 @@ export async function dbGetFlaggedTranscripts(): Promise<FlaggedTranscriptsResul
     reviewedAt:       (r.validation_reviewed_at as string) ?? null,
   }));
   return { rows, missingColumns: false };
+}
+
+/**
+ * Reabre una clase auto-aprobada: el admin vio algo que no le cuadra y la manda
+ * a revisión manual. Es la única vía para sacar algo de 'auto_approved'.
+ * OJO: al pasar a 'review' la clase DEJA de contar para el pago hasta que se
+ * apruebe o rechace (lib/finance.ts), que es justamente lo que se busca.
+ */
+export async function dbReopenTranscript(analysisId: string, reviewerName: string): Promise<void> {
+  const { error } = await supabase.from('class_analyses').update({
+    validation_status:      'review',
+    validation_reviewed_by: reviewerName,
+    validation_reviewed_at: new Date().toISOString(),
+  }).eq('id', analysisId);
+  if (error) throw new Error(error.message);
 }
 
 // Aprobar o rechazar una transcripción marcada. Al rechazar, avisa al profesor
