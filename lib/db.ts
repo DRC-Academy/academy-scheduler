@@ -794,6 +794,49 @@ export async function getStudentsForTeacher(teacherId: string): Promise<TeacherS
 }
 
 /**
+ * Lo mismo que `getStudentsForTeacher`, pero en forma de `Assignment[]`, que es
+ * lo que consumen los listados. ESTA es la función que deben usar Asistencias,
+ * Próximas clases y Mis alumnos: ninguna de las tres puede filtrar `assignments`
+ * por teacherId por su cuenta.
+ *
+ * `slots` sale SIEMPRE del grid, no de assignment.slots. Las dos fuentes estaban
+ * desincronizadas en 26 alumnos y la de assignments hacía que se mostraran horas
+ * que no existen en el calendario del profesor.
+ */
+export async function getTeacherAssignments(teacher: Teacher): Promise<Assignment[]> {
+  const rows = await getStudentsForTeacher(teacher.id);
+  return rows.map(ts => ts.assignment
+    ? { ...ts.assignment, slots: ts.slots }
+    : assignmentFromGrid(teacher, ts));
+}
+
+/**
+ * Alumno presente en el grid pero SIN fila en `assignments`. Se representa igual:
+ * tiene celdas, así que pertenece al profesor y este tiene que verlo. Le faltarán
+ * meet link, fecha de inicio y contador hasta que se le cree el vínculo.
+ */
+function assignmentFromGrid(teacher: Teacher, ts: TeacherStudent): Assignment {
+  return {
+    id:            `grid_${teacher.id}_${normKey(ts.studentName).replace(/\s+/g, '_')}`,
+    teacherId:     teacher.id,
+    teacherName:   teacher.name,
+    teacherEmail:  teacher.email,
+    studentId:     ts.student?.id ?? '',
+    studentName:   ts.studentName,
+    studentEmail:  ts.student?.email ?? '',
+    studentLevel:  ts.student?.level ?? '',
+    slots:         ts.slots,
+    objetivo:      '',
+    plan:          ts.student?.plan ?? '',
+    weeklyHours:   ts.slots.length,
+    availability:  ts.slots.map(s => `${s.day} ${s.hour}`).join(', '),
+    notes:         '',
+    createdAt:     ts.student?.createdAt ?? new Date().toISOString(),
+    status:        'active',
+  };
+}
+
+/**
  * Assignments del profesor que NO tienen ninguna celda en su grid. No se borran
  * ni se ocultan solos: esto alimenta el diagnóstico y la limpieza manual.
  * Equivale a `scripts/diagnose-orphan-assignments.mjs` para un solo profesor.

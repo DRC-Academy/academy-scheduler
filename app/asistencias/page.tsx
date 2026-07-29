@@ -13,6 +13,8 @@ import { getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
 import { buildAttendanceRows, isoDate, type LogRow } from '@/lib/attendance';
+import { getTeacherAssignments } from '@/lib/db';
+import type { Assignment } from '@/types';
 import { checkSubscription, subBadge, resolveSubscriptionEmail, type SubscriptionInfo } from '@/lib/useSubscriptionStatus';
 import { HelpTooltip } from '@/components/ui';
 import type { HelpTooltipKey } from '@/lib/help-tooltips';
@@ -96,7 +98,7 @@ const SinEnlaceTag = () => (
 // ── Página ────────────────────────────────────────────────────────────────────
 function AsistenciasContent() {
   const { user } = useAuth();
-  const { teachers, assignments, students, classJoinLogs, loadClassJoinLogs, reloadAll } = useTeachers();
+  const { teachers, students, classJoinLogs, loadClassJoinLogs, reloadAll } = useTeachers();
 
   const teacher = teachers.find(t => t.id === user?.teacherId) ?? teachers[0];
 
@@ -124,10 +126,22 @@ function AsistenciasContent() {
   const toDate    = isoDate(weekEnd);
   const isThisWeek = weekOffset === 0;
 
-  const myAssignments = useMemo(
-    () => (teacher ? assignments.filter(a => a.teacherId === teacher.id) : []),
-    [assignments, teacher],
-  );
+  // Los alumnos salen del GRID, no de `assignments`. Filtrar por teacherId metía
+  // acá a alumnos sin ninguna celda en el calendario del profesor, y como cada
+  // clase esperada sin ingreso cuenta como "🔴 No ingresó", le falseaba la
+  // asistencia hacia abajo. La pertenencia la decide getTeacherAssignments.
+  const [myAssignments, setMyAssignments] = useState<Assignment[]>([]);
+  useEffect(() => {
+    if (!teacher) return;
+    let cancelled = false;
+    getTeacherAssignments(teacher)
+      .then(rows => { if (!cancelled) setMyAssignments(rows); })
+      .catch(err => console.error('[asistencias] No se pudieron leer los alumnos del grid:', err));
+    return () => { cancelled = true; };
+  // Por ID, no por el objeto `teacher`: la lista se recarga cada 60 s y su
+  // identidad cambia en cada recarga, lo que relanzaría la lectura en bucle.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teacher?.id]);
 
   // Filas de asistencia de la semana (datos reales), ordenadas por día y hora.
   const rows = useMemo<LogRow[]>(() => {

@@ -12,6 +12,7 @@ import { PullToRefresh } from '@/components/PullToRefresh';
 import { Toast } from '@/components/alumnos/ui';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
+import { getTeacherAssignments } from '@/lib/db';
 import { regenerateFicha } from '@/lib/aiClient';
 import { loadStudentBundles, norm, type StudentBundle } from '@/lib/misAlumnos';
 import StudentCard, { fichaStateOf, levelOf } from '@/components/alumnos/StudentCard';
@@ -21,7 +22,7 @@ type Filter = string;
 
 function MisAlumnosContent() {
   const { user } = useAuth();
-  const { teachers, assignments, reloadAll } = useTeachers();
+  const { teachers, reloadAll } = useTeachers();
   const teacher = teachers.find(t => t.id === user?.teacherId) ?? teachers[0];
 
   const [bundles, setBundles] = useState<StudentBundle[]>([]);
@@ -31,27 +32,26 @@ function MisAlumnosContent() {
   const [generatingId, setGeneratingId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
-  const myAssignments = useMemo(
-    () => (teacher ? assignments.filter(a => a.teacherId === teacher.id) : []),
-    [teacher, assignments],
-  );
-
+  // Los alumnos salen del GRID del profesor, no de `assignments`. Filtrar
+  // assignments por teacherId mostraba acá alumnos que ya no estaban con él (sin
+  // ninguna celda en su calendario): es el agujero que reportó una profesora.
+  // La pertenencia la decide getTeacherAssignments y nadie más.
   const load = useCallback(async () => {
     if (!teacher) return;
-    const data = await loadStudentBundles(myAssignments);
+    const data = await loadStudentBundles(await getTeacherAssignments(teacher));
     setBundles(data);
     setLoading(false);
-  }, [teacher, myAssignments]);
+  }, [teacher]);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       if (!teacher) return;
-      const data = await loadStudentBundles(myAssignments);
+      const data = await loadStudentBundles(await getTeacherAssignments(teacher));
       if (!cancelled) { setBundles(data); setLoading(false); }
     })();
     return () => { cancelled = true; };
-  }, [teacher, myAssignments]);
+  }, [teacher]);
 
   function showToast(m: string) {
     setToast(m);

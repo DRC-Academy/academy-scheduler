@@ -10,7 +10,7 @@ import {
 } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
-import { calcRegisteredClassNumber, dbCheckStudentExists, dbSetStudentProduct, dbEnsureStudentAndAssignment, dbSaveTeacherCalendarHours } from '@/lib/db';
+import { calcRegisteredClassNumber, dbCheckStudentExists, dbSetStudentProduct, dbEnsureStudentAndAssignment, dbSaveTeacherCalendarHours, getTeacherAssignments } from '@/lib/db';
 import { classCategoryBadge } from '@/lib/finance';
 import { planBadgeStyle } from '@/lib/productUtils';
 import { isAssignableCell, withBaseState, baseCellOf, baseStudentOf } from '@/lib/cells';
@@ -2355,6 +2355,38 @@ function TeacherContent() {
     });
   }, [teacher?.id]);
 
+  // ── Alumnos del profesor: FUENTE ÚNICA DE VERDAD ───────────────────────────
+  //
+  // Un alumno pertenece a este profesor si y solo si tiene al menos una celda en
+  // su grid. `getStudentsForTeacher` es la ÚNICA función que lo decide: acá ya no
+  // se filtra `assignments` por teacherId, que era lo que dejaba colgados en
+  // Asistencias / Próximas clases / Mis alumnos a los alumnos sin celdas.
+  const [myAssignments, setMyAssignments] = useState<Assignment[]>([]);
+
+  // Firma de la ocupación: cambia solo si cambia QUIÉN ocupa QUÉ celda. Sin esto
+  // habría que releer en cada repintado del calendario.
+  const gridOccupancy = useMemo(() => Object.entries(grid)
+    .map(([key, cell]) => {
+      // baseStudentOf, no cell.student: una recuperación puntual tapa la celda
+      // esa semana y el alumno fijo del horario vive en baseStudent.
+      const name = baseStudentOf(cell)?.trim();
+      return name ? `${key}:${name.toLowerCase()}` : null;
+    })
+    .filter(Boolean).sort().join('|'), [grid]);
+
+  // Depende del ID, no del objeto `teacher`: la lista de profesores se recarga
+  // cada 60 s y su identidad cambia en cada recarga, lo que dispararía una
+  // relectura en bucle. Mismo criterio que el efecto del grid de acá arriba.
+  useEffect(() => {
+    if (!teacher) return;
+    let cancelled = false;
+    getTeacherAssignments(teacher)
+      .then(rows => { if (!cancelled) setMyAssignments(rows); })
+      .catch(err => console.error('[teacher] No se pudieron leer los alumnos del grid:', err));
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teacher?.id, gridOccupancy]);
+
   async function handleGridChange(g: Grid) {
     setGrid(g);
     setSaveStatus('saving');
@@ -2563,23 +2595,6 @@ function TeacherContent() {
   // grid. Es un ensayo sin efectos, para revisar el panel antes de cambiarlo
   // para todos (hay 22 assignments sin celdas, 14 de alumnos reales).
   // Ver scripts/diagnose-orphan-assignments.mjs y getStudentsForTeacher().
-  // Sin useMemo a propósito: esto va DESPUÉS del `if (!teacher) return null`, así
-  // que un hook acá rompería el orden de hooks entre renders. El grid son ~100
-  // celdas, recorrerlo en cada render no se nota.
-  const strictGrid = searchParams.get('strictGrid') === '1';
-  const allMine = assignments.filter(a => a.teacherId === teacher.id);
-  const myAssignments = strictGrid
-    ? (() => {
-        const enGrid = new Set<string>();
-        for (const cell of Object.values(grid)) {
-          // baseStudentOf, no cell.student: una recuperación puntual tapa la
-          // celda esa semana y el alumno fijo del horario vive en baseStudent.
-          const name = baseStudentOf(cell)?.trim();
-          if (name) enGrid.add(name.toLowerCase());
-        }
-        return allMine.filter(a => enGrid.has(a.studentName.trim().toLowerCase()));
-      })()
-    : allMine;
   const myEvents      = scoringEvents.filter(e => e.teacherId === teacher.id);
 
   const freeCount    = Object.values(grid).filter(c => c.state === 'libre').length;
