@@ -1882,3 +1882,212 @@ label {
   .asis-desktop { display: none; }
   .asis-mobile { display: block; }
 }
+
+/* ── "Mis clases" semanal del profesor (/clases) ──────────────────────────────
+   Capa aislada bajo .mc7-page. Escritorio: 7 columnas (lun→dom) con la semana
+   completa a la vista. Móvil: días apilados; en la semana en curso se rotan con
+   `order` para que HOY quede arriba y los días ya pasados al final — por eso el
+   orden llega como custom property y solo se aplica en el breakpoint móvil.
+   Branding DRC: verde #1E9E3A, amarillo #FFC400, fondo #F7F7F5, Radio Canada. */
+.mc7-page {
+  --mc7-green:  #1E9E3A;
+  --mc7-yellow: #FFC400;
+  --mc7-page:   #F7F7F5;
+  --mc7-card:   #ffffff;
+  --mc7-border: #e6e7e2;
+  --mc7-t1:     #1a1c1a;
+  --mc7-t2:     #5f6360;
+  --mc7-t3:     #8b8e88;
+  min-height: 100vh;
+  background: var(--mc7-page);
+  font-family: 'Radio Canada', system-ui, sans-serif;
+}
+.mc7-wrap { max-width: 1400px; margin: 0 auto; padding: 24px 20px 64px; }
+
+/* Cabecera */
+.mc7-head {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap; margin-bottom: 18px;
+}
+.mc7-title { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; color: var(--mc7-t1); margin: 0; }
+.mc7-sub { font-size: 14px; color: var(--mc7-t2); margin: 4px 0 0; }
+.mc7-sub b { color: var(--mc7-t1); font-weight: 600; }
+
+.mc7-weeknav { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.mc7-weekbtn {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 40px; padding: 0 14px; border-radius: 10px;
+  border: 1px solid var(--mc7-border); background: var(--mc7-card);
+  color: var(--mc7-t2); cursor: pointer; font-family: inherit;
+  font-size: 13.5px; font-weight: 600; white-space: nowrap;
+}
+.mc7-weekbtn:hover { background: var(--mc7-page); color: var(--mc7-t1); border-color: #d8dad3; }
+.mc7-todaybtn {
+  height: 40px; padding: 0 18px; border-radius: 10px;
+  border: 1.5px solid var(--mc7-green); background: var(--mc7-green); color: #fff;
+  cursor: pointer; font-family: inherit; font-size: 13.5px; font-weight: 700;
+}
+.mc7-todaybtn:hover { background: #18862f; border-color: #18862f; }
+.mc7-todaybtn.is-current { background: var(--mc7-card); color: var(--mc7-green); }
+.mc7-todaybtn.is-current:hover { background: #eaf5ec; }
+
+/* Aviso tras guardar */
+.mc7-notice {
+  display: flex; gap: 12px; align-items: flex-start;
+  background: #fffdf5; border: 1px solid rgba(255,196,0,0.55); border-left: 4px solid var(--mc7-yellow);
+  border-radius: 12px; padding: 13px 16px; margin-bottom: 16px;
+}
+.mc7-notice-title { font-size: 14px; font-weight: 700; color: var(--mc7-t1); margin-bottom: 3px; }
+.mc7-notice-body { font-size: 13px; color: var(--mc7-t2); line-height: 1.55; }
+.mc7-notice-x { background: none; border: none; font-size: 17px; color: var(--mc7-t3); cursor: pointer; line-height: 1; }
+
+/* Resumen */
+.mc7-summary {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  background: var(--mc7-card); border: 1px solid var(--mc7-border);
+  border-radius: 12px; padding: 12px 18px; margin-bottom: 16px;
+  font-size: 13.5px; color: var(--mc7-t2);
+}
+.mc7-stat b { color: var(--mc7-t1); font-weight: 700; font-size: 15px; }
+.mc7-stat.is-warn { color: #9a6516; }
+.mc7-stat.is-warn b { color: #9a6516; }
+.mc7-sep { width: 1px; height: 16px; background: var(--mc7-border); }
+
+/* Rejilla de la semana (lunes → sábado: el grid no tiene domingo) */
+.mc7-week { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; align-items: start; }
+.mc7-day {
+  background: var(--mc7-card); border: 1px solid var(--mc7-border);
+  border-radius: 14px; padding: 10px; min-width: 0;
+}
+.mc7-day.is-past { background: #fbfbfa; }
+.mc7-day.is-today { border-color: var(--mc7-green); box-shadow: 0 0 0 2px rgba(30,158,58,0.14); }
+
+.mc7-dayhead {
+  display: flex; align-items: center; gap: 6px;
+  padding: 2px 4px 10px; border-bottom: 1px solid var(--mc7-border); margin-bottom: 10px;
+}
+.mc7-dayname {
+  font-size: 13.5px; font-weight: 700; color: var(--mc7-t1);
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mc7-day.is-today .mc7-dayname { color: var(--mc7-green); }
+.mc7-dayname-full { display: none; }
+.mc7-hoy {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase;
+  color: #fff; background: var(--mc7-green); border-radius: 999px; padding: 2px 8px; flex-shrink: 0;
+}
+.mc7-daycount {
+  font-size: 11.5px; font-weight: 600; color: var(--mc7-t3);
+  font-variant-numeric: tabular-nums; flex-shrink: 0;
+}
+.mc7-dayempty { font-size: 12.5px; color: var(--mc7-t3); padding: 14px 4px; text-align: center; }
+
+/* Tarjeta de clase */
+.mc7-cards { display: flex; flex-direction: column; gap: 8px; }
+.mc7-card {
+  border: 1px solid var(--mc7-border); border-left: 3px solid var(--mc7-border);
+  border-radius: 11px; padding: 10px 11px; background: var(--mc7-card);
+}
+.mc7-card.is-donepast { background: #f4f5f2; border-left-color: #cfd3cd; }
+.mc7-card.is-live { border-left-color: var(--mc7-green); background: #f2faf4; }
+.mc7-card.is-next { border-left-color: var(--mc7-yellow); background: #fffdf3; }
+.mc7-card.is-off { background: #fafaf8; border-left-color: #ddded8; opacity: 0.72; }
+
+.mc7-cardtop { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-bottom: 4px; }
+.mc7-hour {
+  font-size: 13px; font-weight: 700; color: var(--mc7-t1);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.mc7-card.is-donepast .mc7-hour, .mc7-card.is-off .mc7-hour { color: var(--mc7-t2); }
+.mc7-live {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 10.5px; font-weight: 700; color: var(--mc7-green);
+}
+.mc7-dot {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--mc7-green);
+  animation: upcoming-live-pulse 1.6s ease-in-out infinite;
+}
+.mc7-nextpill {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em;
+  color: #8a6d00; background: rgba(255,196,0,0.22); border-radius: 999px; padding: 2px 7px;
+}
+.mc7-name {
+  font-size: 14px; font-weight: 600; color: var(--mc7-t1); line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.mc7-name.is-struck { text-decoration: line-through; color: var(--mc7-t2); font-weight: 500; }
+
+.mc7-badges { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.mc7-badge {
+  font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 999px;
+  white-space: nowrap; display: inline-block;
+}
+.mc7-badge.is-recovery { background: rgba(255,196,0,0.18); color: #8a6d00; border: 1px solid rgba(255,196,0,0.5); }
+.mc7-badge.is-muted { background: #ececE7; color: #6b6f68; border: 1px solid #d9dad3; }
+.mc7-badge.is-ok { background: #eaf5ec; color: #1f7a3d; border: 1px solid rgba(30,158,58,0.3); }
+
+/* Ingresar a clase */
+.mc7-jbtn {
+  width: 100%; margin-top: 9px; padding: 8px 10px; border-radius: 9px;
+  border: none; background: var(--mc7-green); color: #fff;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  font-family: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer; min-height: 38px;
+}
+.mc7-jbtn:hover { background: #18862f; }
+.mc7-jbtn:disabled { background: #cfd3cd; cursor: not-allowed; }
+.mc7-joined {
+  margin-top: 9px; font-size: 11.5px; font-weight: 700; color: #1f7a3d;
+  background: #eaf5ec; border: 1px solid rgba(30,158,58,0.3);
+  border-radius: 9px; padding: 7px 10px; text-align: center;
+}
+
+/* Transcript: en las clases ya dadas el botón principal es este, así que va en
+   verde; cuando convive con "Ingresar a clase" (nunca a la vez) no compiten. */
+.mc7-tbtn {
+  width: 100%; margin-top: 9px; padding: 8px 10px; border-radius: 9px;
+  border: none; background: var(--mc7-green); color: #fff;
+  font-family: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer;
+  min-height: 38px;
+}
+.mc7-tbtn:hover { background: #18862f; }
+.mc7-tdone { margin-top: 9px; display: flex; flex-direction: column; gap: 5px; align-items: flex-start; }
+.mc7-tlinks { font-size: 11.5px; color: var(--mc7-t3); }
+.mc7-link { color: var(--mc7-green); font-weight: 600; text-decoration: none; }
+.mc7-link:hover { text-decoration: underline; }
+.mc7-linkbtn {
+  background: none; border: none; padding: 0; cursor: pointer;
+  font-family: inherit; font-size: 11.5px; font-weight: 600; color: var(--mc7-t2); text-decoration: underline;
+}
+.mc7-linkbtn:hover { color: var(--mc7-t1); }
+
+.mc7-foot { font-size: 12.5px; color: var(--mc7-t3); line-height: 1.65; margin-top: 20px; }
+.mc7-foot b { color: var(--mc7-t2); font-weight: 600; }
+
+/* Skeleton */
+.mc7-skel { background: #eef1ee; border-radius: 8px; animation: asis-pulse 1.3s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .mc7-skel, .mc7-dot { animation: none; } }
+
+/* Pantallas medianas: la semana pasa a dos filas de 3 antes de apilarse. */
+@media (max-width: 1180px) and (min-width: 760px) {
+  .mc7-week { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+/* Móvil: días apilados, HOY arriba, botones táctiles. */
+@media (max-width: 759px) {
+  .mc7-wrap { padding: 18px 14px 84px; }
+  .mc7-head { flex-direction: column; align-items: stretch; }
+  .mc7-title { font-size: 22px; }
+  .mc7-weeknav { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; }
+  .mc7-weekbtn { justify-content: center; min-height: 44px; }
+  .mc7-todaybtn { min-height: 44px; }
+  .mc7-week { grid-template-columns: 1fr; gap: 10px; }
+  .mc7-day { order: var(--mc7-order, 0); padding: 12px; }
+  .mc7-dayname-full { display: inline; }
+  .mc7-dayname-short { display: none; }
+  .mc7-dayname { font-size: 15px; }
+  .mc7-daycount { font-size: 12.5px; }
+  .mc7-card { padding: 12px 13px; }
+  .mc7-name { font-size: 15px; }
+  .mc7-hour { font-size: 14px; }
+  .mc7-tbtn, .mc7-jbtn { min-height: 44px; font-size: 13.5px; }
+}

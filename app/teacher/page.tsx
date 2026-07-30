@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 import { useState, useEffect, useMemo, Suspense, type CSSProperties } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { NavBar } from '@/components/NavBar';
@@ -14,11 +14,16 @@ import { calcRegisteredClassNumber, dbCheckStudentExists, dbSetStudentProduct, d
 import { classCategoryBadge } from '@/lib/finance';
 import { planBadgeStyle } from '@/lib/productUtils';
 import { isAssignableCell, withBaseState, baseCellOf, baseStudentOf } from '@/lib/cells';
+import {
+  classesForDate, recoveriesForDate, addDaysIso, isoDateLocal, dayNameFromDate, mondayIsoOf,
+  rescheduledTargetFor, cancellationFor, cancellationLabel, type TeacherClass as TodayClass,
+} from '@/lib/teacherClasses';
 import { planFieldsOf } from '@/lib/productUtils';
 import { StudentAutofillCard } from '@/components/StudentAutofillCard';
 import { useStudentAutofill } from '@/lib/useStudentAutofill';
 import { checkSubscription, subBadge, type SubscriptionInfo } from '@/lib/useSubscriptionStatus';
-import { isMilestone, getMilestoneSlides, getMilestoneCopy, MILESTONES, MILESTONE_SLIDES, MILESTONE_TITLES } from '@/lib/milestones';
+import { useClassJoin } from '@/components/JoinClass';
+import { isMilestone, getMilestoneSlides, MILESTONES, MILESTONE_SLIDES, MILESTONE_TITLES } from '@/lib/milestones';
 import { RETENTION_BONUS_DAYS, retentionDaysActive, retentionStartDate, retentionBonusDate, hasRetentionBonus } from '@/lib/retention';
 import { Grid, Teacher, Assignment, ScoringEvent, Student, AppNotification, ClassRecord, ClassRecordType } from '@/types';
 import FormStatusBadge from '@/components/FormStatusBadge';
@@ -970,45 +975,14 @@ function TeacherNotificationsTab({ teacher, myAssignments, students, classRecord
 }
 
 // ─── Date / class helpers (Próximas clases) ───────────────────────────────────
-const DAY_NAMES_BY_JSDAY = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+// La expansión de horarios a clases con fecha (classesForDate, recoveriesForDate)
+// y los helpers de fecha viven en lib/teacherClasses: son la MISMA fuente que usa
+// la vista semanal /clases, para que las dos pantallas no puedan mostrar agendas
+// distintas. Todas operan sobre la fecha como CADENA, con aritmética en UTC, así
+// que no dependen de la zona del navegador (ver lib/spainTime.ts).
 
-function dayNameFromDate(d: Date): string {
-  return DAY_NAMES_BY_JSDAY[d.getDay()];
-}
-function isoDateLocal(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-
-// ── Fechas de clase: SIEMPRE en hora española ────────────────────────────────
-// El día de la agenda salía de `getDay()`/`getFullYear()`, o sea de la zona del
-// NAVEGADOR, mientras que "pasada / en curso / próxima" se decidía con la hora de
-// Madrid. Con las dos zonas mezcladas, un profesor en Argentina que abriera el
-// panel a partir de las 19:00 (00:00 en España) veía las clases de AYER, y encima
-// marcadas como futuras. Estas dos funciones operan sobre la fecha como CADENA,
-// con aritmética en UTC, así que no dependen de dónde esté el navegador.
-
-/** Día de la semana ("Lunes"…) de una fecha 'YYYY-MM-DD'. */
-function dayNameFromIso(iso: string): string {
-  const [y, m, d] = iso.split('-').map(Number);
-  if (!y || !m || !d) return '';
-  return DAY_NAMES_BY_JSDAY[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
-}
-
-/** Suma días a una fecha 'YYYY-MM-DD' sin pasar por la zona local. */
-function addDaysIso(iso: string, days: number): string {
-  const [y, m, d] = iso.split('-').map(Number);
-  if (!y || !m || !d) return iso;
-  const dt = new Date(Date.UTC(y, m - 1, d));
-  dt.setUTCDate(dt.getUTCDate() + days);
-  return dt.toISOString().slice(0, 10);
-}
 function stripProtocol(url: string): string {
   return url.replace(/^https?:\/\//, '').replace(/\/$/, '');
-}
-function normalizeUrl(url: string): string {
-  const t = url.trim();
-  if (!t) return t;
-  return /^https?:\/\//i.test(t) ? t : `https://${t}`;
 }
 
 function fmtDateDMY(iso: string | null | undefined): string {
@@ -1018,148 +992,14 @@ function fmtDateDMY(iso: string | null | undefined): string {
   return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
 }
 
-// Builds the inactive-subscription disclaimer copy + styling per WooCommerce status.
-function subDisclaimer(name: string, status: string, daysRemaining: number | null, endDate: string | null):
-  { title: string; body: string; accent: string; bg: string; soft: boolean } {
-  switch (status) {
-    case 'pending-cancel':
-      if (daysRemaining != null && daysRemaining > 0) {
-        return {
-          title: '⏳ Suscripción pendiente de cancelar',
-          body: `${name} tiene su suscripción en estado 'pendiente de cancelar'. Finaliza definitivamente en ${daysRemaining} día${daysRemaining === 1 ? '' : 's'} (el ${fmtDateDMY(endDate)}).`,
-          accent: '#D97706', bg: '#FFFBEB', soft: true,
-        };
-      }
-      return {
-        title: '⏳ Suscripción pendiente de cancelar',
-        body: `${name} tiene su suscripción pendiente de cancelar.`,
-        accent: '#D97706', bg: '#FFFBEB', soft: true,
-      };
-    case 'on-hold':
-      return {
-        title: '⚠️ Pago pendiente',
-        body: `${name} tiene un pago pendiente de procesar. Su suscripción está en espera.`,
-        accent: '#ea580c', bg: 'rgba(249,115,22,0.06)', soft: false,
-      };
-    case 'cancelled':
-      return {
-        title: '❌ Suscripción cancelada',
-        body: `${name} canceló su suscripción.`,
-        accent: '#dc2626', bg: 'rgba(239,68,68,0.05)', soft: false,
-      };
-    case 'expired':
-      return {
-        title: '❌ Suscripción expirada',
-        body: `${name} tiene su suscripción expirada.`,
-        accent: '#dc2626', bg: 'rgba(239,68,68,0.05)', soft: false,
-      };
-    case 'not_found':
-      return {
-        title: '❓ Sin suscripción registrada',
-        body: 'No se encontró ninguna suscripción asociada a este email en el sistema de pagos.',
-        accent: '#6b7280', bg: 'rgba(107,114,128,0.06)', soft: false,
-      };
-    default:
-      return {
-        title: '⚠️ Suscripción inactiva',
-        body: `${name} no cuenta con una suscripción activa en este momento.`,
-        accent: '#D97706', bg: '#FFFBEB', soft: false,
-      };
-  }
-}
-
 // El estado de suscripción se verifica con la fuente única de verdad
 // (lib/useSubscriptionStatus.ts): mismo endpoint, misma interpretación y mismo
 // cache compartido que el panel "Alumnos". Ver checkSubscription / subBadge.
-const SUB_TTL_MS = 5 * 60 * 1000;
-
-interface TodayClass {
-  key: string;
-  assignment: Assignment;
-  studentName: string;
-  hour: string;       // "HH:00"
-  level: string;
-  plan: string;
-  meetLink?: string;
-  isRecovery?: boolean;   // clase puntual de recuperación (celda 'bloqueado' del grid)
-  recoveryFor?: string;   // 'YYYY-MM-DD' de la clase original que se recupera
-}
-
-// All classes for a given date, built from recurring assignment slots, sorted by hour.
-function classesForDate(myAssignments: Assignment[], dateIso: string): TodayClass[] {
-  const dayName = dayNameFromIso(dateIso);
-  const list: TodayClass[] = [];
-  for (const a of myAssignments) {
-    for (const slot of a.slots ?? []) {
-      if (slot.day !== dayName) continue;
-      list.push({
-        key:         `${a.id}_${slot.hour}`,
-        assignment:  a,
-        studentName: a.studentName,
-        hour:        slot.hour,
-        level:       a.studentLevel,
-        plan:        a.plan || a.objetivo || '',
-        meetLink:    a.meetLink,
-      });
-    }
-  }
-  return list.sort((x, y) => parseInt(x.hour) - parseInt(y.hour));
-}
-
-// Lunes (ISO) de la semana que contiene la fecha dada.
-function mondayIsoOf(d: Date): string {
-  const dow = d.getDay();                    // 0=Dom … 6=Sáb
-  const diff = dow === 0 ? -6 : 1 - dow;     // retroceder hasta el lunes
-  const monday = new Date(d);
-  monday.setDate(d.getDate() + diff);
-  return isoDateLocal(monday);
-}
-
-// Match tolerante de una celda de recuperación a una assignment por nombre.
-function findAssignmentForName(myAssignments: Assignment[], name: string): Assignment | undefined {
-  const nk = (x: string) => x.trim().toLowerCase();
-  const full = nk(name);
-  const first = nk(name.split(' ')[0]);
-  return myAssignments.find(a => nk(a.studentName) === full)
-      ?? myAssignments.find(a => { const c = nk(a.studentName); return c === first || c.startsWith(first) || full.startsWith(c); });
-}
-
-// FUENTE 2 de "Próximas clases": celdas de recuperación del grid ('bloqueado' con
-// alumno + weekDate) cuya fecha real (lunes de weekDate + día de la celda) cae en
-// la fecha pedida. Se vinculan a la assignment del alumno para heredar enlace de
-// Meet, plan, nivel, email (necesarios para Ingresar a clase y suscripción). Las
-// que no matchean ninguna assignment se omiten (siguen visibles en el calendario).
-function recoveriesForDate(grid: Grid, dateIso: string, myAssignments: Assignment[]): TodayClass[] {
-  const targetIso = dateIso;
-  const list: TodayClass[] = [];
-  for (const [key, cell] of Object.entries(grid)) {
-    if (cell.state !== 'bloqueado' || !cell.student || !cell.weekDate) continue;
-    const usc = key.lastIndexOf('_');
-    if (usc < 0) continue;
-    const day = key.slice(0, usc);
-    const hour = key.slice(usc + 1);
-    const dayIdx = DAYS.indexOf(day);
-    if (dayIdx < 0) continue;
-    // Fecha real de la celda = lunes(weekDate) + índice de día. Aritmética sobre
-    // la cadena, sin pasar por la zona del navegador.
-    if (addDaysIso(cell.weekDate, dayIdx) !== targetIso) continue;
-
-    const a = findAssignmentForName(myAssignments, cell.student);
-    if (!a) continue;
-    list.push({
-      key:         `rec_${key}_${targetIso}`,
-      assignment:  a,
-      studentName: cell.student,
-      hour,
-      level:       a.studentLevel,
-      plan:        a.plan || a.objetivo || '',
-      meetLink:    a.meetLink,
-      isRecovery:  true,
-      recoveryFor: cell.recoveryFor,
-    });
-  }
-  return list;
-}
+//
+// El flujo completo de "Ingresar a clase" (enlace de Meet → disclaimer de hito →
+// verificación de suscripción → registro del acceso) vive en components/JoinClass:
+// es lo que decide si la clase cuenta para el pago, así que no puede estar
+// implementado dos veces. La vista semanal /clases usa el mismo hook.
 
 // ─── Email de presentación (nuevo alumno) ─────────────────────────────────────
 // El modal y el armado del cuerpo del email viven en components/PresentationModal
@@ -1485,23 +1325,15 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, gr
   const [savingReschedule, setSavingReschedule] = useState(false);
   const [cancelModal, setCancelModal] = useState<{ c: TodayClass; date: string } | null>(null);
   const [savingCancel, setSavingCancel] = useState(false);
-  const [linkModal, setLinkModal] = useState<{ assignment: Assignment; value: string } | null>(null);
   const [presentationModal, setPresentationModal] = useState<Assignment | null>(null);
   const { isSent, markSent } = usePresentationSent(teacher.id);
-  const [savingLink, setSavingLink] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   // Navegador de fechas: desplazamiento en días respecto de hoy (0 = hoy).
   const [dayOffset, setDayOffset] = useState(0);
   // Fila cuyo menú "⋯" está abierto (una sola a la vez).
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [showPastToday, setShowPastToday] = useState(false);
-  const [joined, setJoined] = useState<Set<string>>(new Set());
-  const [checkingKey, setCheckingKey] = useState<string | null>(null);
-  const [subModal, setSubModal] = useState<{ c: TodayClass; status: string; daysRemaining: number | null; endDate: string | null } | null>(null);
   const [subInfo, setSubInfo] = useState<Record<string, SubscriptionInfo>>({});
-  // Disclaimer de hito: se muestra ANTES del flujo de suscripción cuando la clase
-  // a la que se va a ingresar es la 1, 15, 30 o 50.
-  const [milestoneModal, setMilestoneModal] = useState<{ c: TodayClass; classNumber: number } | null>(null);
 
   // Lookup de alumnos por email/nombre para clasificar el plan con TODOS los campos
   // (plan + objetivo de la assignment + plan/producto del alumno).
@@ -1516,15 +1348,6 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, gr
   const studentForAssignment = (a: Assignment): Student | undefined =>
     (a.studentEmail && studentByEmail.get(a.studentEmail.trim().toLowerCase())) ||
     studentByEmail.get(`name:${a.studentName.trim().toLowerCase()}`);
-
-  // Email a usar para verificar la suscripción. CRÍTICO para la consistencia con
-  // el panel "Alumnos": se prefiere SIEMPRE el email de la tabla students (el que
-  // está en WooCommerce); el de la assignment es solo el fallback. Si difieren,
-  // students.email manda — es lo que garantiza el mismo resultado en ambos lados.
-  const subEmailForAssignment = (a: Assignment): string => {
-    const student = studentForAssignment(a);
-    return (student?.email?.trim().toLowerCase()) || (a.studentEmail?.trim().toLowerCase()) || '';
-  };
 
   // Live "now" — set on mount (avoids SSR hydration mismatch) and refreshed every
   // minute so each class's state (pasada / en curso / próxima) updates on its own.
@@ -1563,6 +1386,18 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, gr
   // Fecha visible = hoy + dayOffset, sobre la cadena para no reintroducir la zona local.
   const viewIso  = addDaysIso(todayIso, dayOffset);
   const isToday  = dayOffset === 0;
+
+  // Flujo "Ingresar a clase" (fuente única, compartida con /clases): enlace de
+  // Meet → disclaimer de hito → verificación de suscripción → registro del acceso.
+  // Se le pasa el cache de suscripciones que este tab ya precargó para los badges,
+  // así el botón no vuelve a pedir lo que acaba de verificar.
+  const join = useClassJoin({
+    teacher, students, classRecords, todayIso, logClassJoin, updateMeetLink,
+    onToast: (msg, ms) => showToast(msg, ms),
+    getCachedSub: email => subInfo[email],
+    onSubResolved: (email, info) => setSubInfo(prev => ({ ...prev, [email]: info })),
+  });
+  const subEmailForAssignment = join.emailFor;
 
   // Lista del día = FUENTE 1 (slots recurrentes) + FUENTE 2 (recuperaciones del
   // grid que caen en este día), unidas y ordenadas por hora.
@@ -1649,32 +1484,15 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, gr
     .replace(/^(\w)/, m => m.toUpperCase());
   const relLabel = dayOffset === 0 ? 'Hoy' : dayOffset === 1 ? 'Mañana' : dayOffset === -1 ? 'Ayer' : null;
 
-  // Reprogramación (punto 2): ¿esta clase (alumno + fecha) fue reprogramada?
-  function rescheduledFor(studentName: string, date: string): string | null {
-    const nk = (x: string) => x.trim().toLowerCase();
-    const rec = classRecords.find(r =>
-      r.teacherId === teacher.id && !!r.rescheduledTo &&
-      nk(r.studentName) === nk(studentName) && r.classDate === date,
-    );
-    return rec?.rescheduledTo ?? null;
-  }
-
-  // ¿Esta clase se canceló? `rescheduledFor` solo mira los registros que llevan
-  // `rescheduledTo`, que únicamente pone el flujo de reprogramación. Una clase
-  // cancelada con el botón Cancelar crea un class_record de tipo
-  // 'cancelada_con_preaviso' / 'falta_sin_aviso' / 'cancelacion_hora' SIN ese
-  // campo, así que seguía apareciendo como una clase normal, con su botón de
-  // "Ingresar a clase" incluido.
-  const CANCEL_TYPES = new Set(['cancelada_con_preaviso', 'falta_sin_aviso', 'cancelacion_hora', 'falta_con_aviso']);
-  function cancelledFor(studentName: string, date: string): ClassRecordType | null {
-    const nk = (x: string) => x.trim().toLowerCase();
-    const rec = classRecords.find(r =>
-      r.teacherId === teacher.id && !r.rescheduledTo &&
-      CANCEL_TYPES.has(r.classType ?? '') &&
-      nk(r.studentName) === nk(studentName) && r.classDate === date,
-    );
-    return (rec?.classType as ClassRecordType) ?? null;
-  }
+  // Reprogramación / cancelación de una clase puntual. Las dos preguntas se
+  // resuelven en lib/teacherClasses (misma fuente que la vista semanal /clases):
+  // una reprogramación deja `rescheduledTo` en el class_record y una cancelación
+  // no, así que hacen falta las dos consultas para no dejar una clase cancelada
+  // pintada como normal, con su botón de "Ingresar a clase" incluido.
+  const rescheduledFor = (studentName: string, date: string) =>
+    rescheduledTargetFor(classRecords, teacher.id, studentName, date);
+  const cancelledFor = (studentName: string, date: string) =>
+    cancellationFor(classRecords, teacher.id, studentName, date);
 
   async function handleRescheduleConfirm(data: { reason: RescheduleReason; reasonLabel: string; newDate: string; newTime: string }) {
     if (!rescheduleModal) return;
@@ -1757,83 +1575,9 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, gr
     }
   }
 
-  async function handleSaveLink() {
-    if (!linkModal) return;
-    setSavingLink(true);
-    await updateMeetLink(linkModal.assignment.id, linkModal.value);
-    setSavingLink(false);
-    setLinkModal(null);
-  }
-
   function showToast(msg: string, ms = 2500) {
     setToast(msg);
     setTimeout(() => setToast(null), ms);
-  }
-
-  // Opens the Meet link and records the join with the verified subscription status.
-  function doJoin(c: TodayClass, subscriptionStatus: string, enteredWithoutActive: boolean, daysRemaining: number | null = null) {
-    if (!c.meetLink) return;
-    window.open(normalizeUrl(c.meetLink), '_blank', 'noopener,noreferrer');
-    logClassJoin(teacher.id, teacher.name, c.studentName, todayIso, c.hour, subscriptionStatus, enteredWithoutActive, daysRemaining);
-    setJoined(prev => new Set([...prev, c.key]));
-  }
-
-  // Punto de entrada del botón "Ingresar a clase". Si la clase a la que se va a
-  // ingresar es un hito (1/15/30/50), muestra primero el disclaimer de hito; al
-  // confirmar continúa con el flujo normal (verificación de suscripción + Meet).
-  function handleJoin(c: TodayClass) {
-    if (!c.meetLink || checkingKey) return;
-    const nextClass = calcRegisteredClassNumber(c.assignment, classRecords) + 1;
-    if (isMilestone(nextClass)) {
-      setMilestoneModal({ c, classNumber: nextClass });
-      return;
-    }
-    proceedJoin(c);
-  }
-
-  // Verifies the student's WooCommerce subscription before joining. Reuses the
-  // in-memory result from tab load; only re-fetches if it's older than 5 min.
-  async function proceedJoin(c: TodayClass) {
-    if (!c.meetLink || checkingKey) return;
-    const email = subEmailForAssignment(c.assignment);
-    // Log temporal de diagnóstico: confirma qué email se usa vs. las dos fuentes.
-    console.log('Verificando suscripción:', {
-      studentName: c.assignment.studentName,
-      emailUsado: email,
-      sourceEmail: c.assignment.studentEmail,
-      studentEmail: studentForAssignment(c.assignment)?.email,
-    });
-    if (!email) {
-      doJoin(c, 'not_verified', false);
-      showToast('No se pudo verificar la suscripción, ingreso permitido', 3000);
-      return;
-    }
-
-    let info = subInfo[email];
-    if (!info || Date.now() - info.fetchedAt >= SUB_TTL_MS) {
-      setCheckingKey(c.key);
-      info = await checkSubscription(email);
-      setSubInfo(prev => ({ ...prev, [email]: info! }));
-      setCheckingKey(null);
-    }
-
-    if (info.active === true) {
-      doJoin(c, 'active', false);
-      showToast('✅ Ingreso registrado');
-    } else if (info.active === false) {
-      setSubModal({ c, status: info.status, daysRemaining: info.daysRemaining, endDate: info.endDate });
-    } else {
-      doJoin(c, 'error', false);
-      showToast('No se pudo verificar la suscripción, ingreso permitido', 3000);
-    }
-  }
-
-  // Confirmed join from the inactive-subscription disclaimer.
-  function handleJoinAnyway() {
-    if (!subModal) return;
-    doJoin(subModal.c, subModal.status, true, subModal.daysRemaining);
-    setSubModal(null);
-    showToast('✅ Ingreso registrado');
   }
 
   function ClassRow({ c, status, date }: { c: TodayClass; status: ClassStatus; date: string }) {
@@ -1848,10 +1592,7 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, gr
     // reprogramada (apagada y sin botón de ingreso), con su propia etiqueta.
     const cancelledType = c.isRecovery ? null : cancelledFor(c.studentName, date);
     const cancelled     = !!cancelledType;
-    const cancelLabel   = cancelledType === 'falta_sin_aviso'   ? 'Falta sin aviso'
-                        : cancelledType === 'cancelacion_hora'  ? 'Cancelada sobre la hora'
-                        : cancelledType === 'falta_con_aviso'   ? 'Falta con aviso'
-                        : 'Cancelada';
+    const cancelLabel   = cancellationLabel(cancelledType);
     // Estado inactivo = la clase no se va a dar. Agrupa reprogramada y cancelada.
     const inactive = rescheduled || cancelled;
 
@@ -1934,13 +1675,13 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, gr
               ) : passed ? (
                 <button className="mc-btn mc-btn-ghost" disabled>Finalizada</button>
               ) : hasLink ? (
-                <button className="mc-btn mc-btn-primary" onClick={() => handleJoin(c)} disabled={checkingKey === c.key}>
-                  {checkingKey === c.key
+                <button className="mc-btn mc-btn-primary" onClick={() => join.join(c)} disabled={join.checkingKey === c.key}>
+                  {join.checkingKey === c.key
                     ? <><span className="drc-spinner" />Verificando…</>
                     : 'Ingresar a clase'}
                 </button>
               ) : (
-                <button className="mc-btn mc-btn-primary" onClick={() => setLinkModal({ assignment: c.assignment, value: '' })}>
+                <button className="mc-btn mc-btn-primary" onClick={() => join.openLinkModal(c.assignment, '')}>
                   Definir enlace
                 </button>
               )}
@@ -1963,7 +1704,7 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, gr
                       </button>
                     )}
                     <button className="mc-menu-item" role="menuitem"
-                      onClick={() => { setOpenMenu(null); setLinkModal({ assignment: c.assignment, value: c.meetLink ?? '' }); }}>
+                      onClick={() => { setOpenMenu(null); join.openLinkModal(c.assignment); }}>
                       {hasLink ? 'Cambiar enlace' : 'Definir enlace'}
                     </button>
                     <button className="mc-menu-item" role="menuitem"
@@ -2065,7 +1806,7 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, gr
           <div style={{ flex: 1 }}>
             {missingLinks.length} alumno{missingLinks.length !== 1 ? 's' : ''} sin enlace definido: {missingNames.join(', ')}
           </div>
-          <button className="mc-btn mc-btn-ghost" onClick={() => setLinkModal({ assignment: missingLinks[0].assignment, value: '' })}>
+          <button className="mc-btn mc-btn-ghost" onClick={() => join.openLinkModal(missingLinks[0].assignment, '')}>
             Definir enlaces
           </button>
         </div>
@@ -2101,107 +1842,9 @@ function TeacherUpcomingTab({ teacher, myAssignments, students, classRecords, gr
         </div>
       )}
 
-      {/* Link modal */}
-      {linkModal && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
-          onClick={e => { if (e.target === e.currentTarget) setLinkModal(null); }}>
-          <div style={{ background: 'var(--bg-surface)', border: '1px solid #35405a', borderRadius: 14, padding: 24, width: '100%', maxWidth: 420 }}>
-            <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)', marginBottom: 6 }}>
-              {linkModal.assignment.meetLink ? 'Cambiar enlace' : 'Definir enlace'}
-            </div>
-            <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 14, lineHeight: 1.5 }}>
-              Este enlace se usará siempre para <b style={{ color: 'var(--text-primary)' }}>{linkModal.assignment.studentName}</b>, no hace falta volver a definirlo.
-            </div>
-            <input
-              value={linkModal.value}
-              onChange={e => setLinkModal(prev => prev ? { ...prev, value: e.target.value } : null)}
-              placeholder="https://meet.google.com/abc-xyz"
-              autoFocus
-              style={{ width: '100%', marginBottom: 16 }}
-            />
-            <div style={{ display: 'flex', gap: 10 }}>
-              <button onClick={() => setLinkModal(null)} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
-                Cancelar
-              </button>
-              <button onClick={handleSaveLink} disabled={savingLink || !linkModal.value.trim()}
-                style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: savingLink || !linkModal.value.trim() ? 'var(--bg-surface-3)' : '#1E9E3A', color: savingLink || !linkModal.value.trim() ? 'var(--text-muted)' : 'white', cursor: savingLink || !linkModal.value.trim() ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
-                {savingLink ? 'Guardando...' : 'Guardar enlace'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Milestone disclaimer (clase hito 1/15/30/50) */}
-      {milestoneModal && (() => {
-        const { c, classNumber } = milestoneModal;
-        const slides = getMilestoneSlides(classNumber);
-        const copy = getMilestoneCopy(classNumber, c.studentName) ?? '';
-        return (
-          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 85, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
-            onClick={e => { if (e.target === e.currentTarget) setMilestoneModal(null); }}>
-            <div style={{ background: '#F7F7F5', border: '2px solid #FFC400', borderRadius: 16, padding: 26, width: '100%', maxWidth: 440 }}>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 6 }}>
-                <span style={{ fontSize: 24, fontWeight: 800, color: '#1E9E3A' }}>🎯 Clase {classNumber}</span>
-              </div>
-              <div style={{ fontSize: 14, color: '#374151', fontWeight: 600, marginBottom: 14 }}>
-                con {c.studentName}
-              </div>
-              <div style={{ fontSize: 14, color: '#374151', lineHeight: 1.6, marginBottom: 18 }}>
-                {copy}
-              </div>
-              {slides && (
-                <a href={slides} target="_blank" rel="noopener noreferrer"
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '9px 16px', borderRadius: 8, border: '1.5px solid #1E9E3A', background: 'white', color: '#1E9E3A', cursor: 'pointer', fontSize: 13, fontWeight: 700, textDecoration: 'none', marginBottom: 20 }}>
-                  📊 Ver diapositivas de clase {classNumber}
-                </a>
-              )}
-              <div style={{ display: 'flex', gap: 10 }}>
-                <button onClick={() => setMilestoneModal(null)} style={{ flex: 1, padding: '11px', borderRadius: 8, border: '1px solid var(--border)', background: 'white', color: '#6b7280', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
-                  Cancelar
-                </button>
-                <button onClick={() => { setMilestoneModal(null); proceedJoin(c); }}
-                  style={{ flex: 2, padding: '11px', borderRadius: 8, border: 'none', background: '#1E9E3A', color: 'white', cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
-                  ✅ Entendido — Ingresar a clase
-                </button>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
-
-      {/* Inactive subscription disclaimer */}
-      {subModal && (() => {
-        const d = subDisclaimer(subModal.c.studentName, subModal.status, subModal.daysRemaining, subModal.endDate);
-        return (
-          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 85, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
-            onClick={e => { if (e.target === e.currentTarget) setSubModal(null); }}>
-            <div style={{ background: d.bg, border: `2px solid ${d.accent}`, borderRadius: 14, padding: 24, width: '100%', maxWidth: 420 }}>
-              <div style={{ fontWeight: 700, fontSize: 17, color: d.accent, marginBottom: 12 }}>{d.title}</div>
-              <div style={{ fontSize: 14, color: 'var(--text-secondary)', marginBottom: 18, lineHeight: 1.6 }}>
-                {d.body}
-              </div>
-              <div style={{ fontSize: 14, color: 'var(--text-primary)', fontWeight: 600, marginBottom: 20 }}>
-                ¿Seguro que deseas ingresar a la clase de todas formas?
-              </div>
-              <div style={{ display: 'flex', gap: 10 }}>
-                <button onClick={() => setSubModal(null)} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
-                  Cancelar
-                </button>
-                {/* "pending-cancel" sigue activo hasta la fecha → CTA con menor énfasis (outline) */}
-                <button onClick={handleJoinAnyway} style={{
-                  flex: 2, padding: '10px', borderRadius: 8, cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit',
-                  border: d.soft ? `1.5px solid ${d.accent}` : 'none',
-                  background: d.soft ? 'transparent' : d.accent,
-                  color: d.soft ? d.accent : 'white',
-                }}>
-                  Ingresar de todas formas
-                </button>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
+      {/* Diálogos del flujo "Ingresar a clase": enlace de Meet, disclaimer de
+          hito y disclaimer de suscripción inactiva (components/JoinClass). */}
+      {join.dialogs}
 
       {/* Presentation email modal */}
       {presentationModal && (

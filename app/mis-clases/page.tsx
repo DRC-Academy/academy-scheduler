@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 import { useState, useEffect, useMemo } from 'react';
 import { NavBar } from '@/components/NavBar';
 import { AuthGuard } from '@/components/AuthGuard';
@@ -9,27 +9,11 @@ import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
 import { calculateTeacherFinance, recordVerification, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge } from '@/lib/finance';
 import { dbGetAssignmentsByTeacher, calcRegisteredClassNumber } from '@/lib/db';
-import { classifyPlan } from '@/lib/productUtils';
 import { maybeSendMilestoneEmail } from '@/lib/milestoneEmails';
-import { registerClassWithTranscript } from '@/lib/aiClient';
-import { checkTranscriptDuplicates, transcriptHash, type DupeCheck } from '@/lib/transcriptDupes';
-import { Teacher, Assignment, ClassRecordType, ClassRecord } from '@/types';
+import { AddClassModal, saveTeacherClass, ANALYSIS_FAILED_NOTICE } from '@/components/AddClassModal';
+import { Teacher, Assignment, ClassRecordType } from '@/types';
 import { HelpTooltip } from '@/components/ui';
 import type { HelpTooltipKey } from '@/lib/help-tooltips';
-
-// Etiquetas singular/plural por tipo de falta (para los mensajes de límite).
-const FALTA_TYPE_LABELS: Record<string, { sing: string; plural: string }> = {
-  falta_sin_aviso:  { sing: 'falta sin aviso',           plural: 'faltas sin aviso' },
-  cancelacion_hora: { sing: 'cancelación sobre la hora', plural: 'cancelaciones sobre la hora' },
-};
-
-// Opciones del selector "Tipo de clase".
-const CLASS_TYPE_OPTIONS: Array<{ value: ClassRecordType; label: string; needsTranscript: boolean }> = [
-  { value: 'normal',           label: 'Clase normal',                needsTranscript: true },
-  { value: 'falta_sin_aviso',  label: 'Falta del alumno sin aviso',  needsTranscript: false },
-  { value: 'cancelacion_hora', label: 'Cancelación sobre la hora',    needsTranscript: false },
-  { value: 'recuperacion',     label: 'Clase de recuperación',        needsTranscript: true },
-];
 
 // Las etiquetas de ingresoBadge / classTypeBadge / subscriptionBadge vienen con
 // emoji desde lib/finance (fuente compartida con el panel de admin). Acá solo se
@@ -65,292 +49,6 @@ function daysDiff(aIso: string, bIso: string): number {
   return Math.round((new Date(bIso + 'T00:00:00').getTime() - new Date(aIso + 'T00:00:00').getTime()) / 86400000);
 }
 
-/**
- * Aviso de transcript duplicado. Tres casos:
- *   · blocked      → texto idéntico ya registrado para ESTA clase: no se guarda.
- *   · other-class  → texto idéntico de otro alumno/fecha: se puede confirmar.
- *   · replace      → ya hay transcript de esta clase: se ofrece reemplazarlo.
- */
-function DuplicateDialog({ check, onCancel, onConfirm }: {
-  check: DupeCheck; onCancel: () => void; onConfirm: () => void;
-}) {
-  if (check.kind === 'none') return null;
-
-  const when = check.row.class_date ? finShortDate(check.row.class_date) : 'fecha desconocida';
-
-  const copy = check.kind === 'blocked'
-    ? {
-        title: 'Este transcript ya fue registrado',
-        body: `Ya existe exactamente este mismo texto para ${check.row.student_name} el ${when}. No hace falta subirlo otra vez.`,
-        confirm: null,
-      }
-    : check.kind === 'other-class'
-      ? {
-          title: '¿Es el transcript correcto?',
-          body: `Este transcript parece ser el mismo que ya subiste para ${check.row.student_name} el ${when}. ¿Estás seguro de que es correcto?`,
-          confirm: 'Confirmar igualmente',
-        }
-      : {
-          title: 'Ya existe un transcript para esta clase',
-          body: `Registraste una clase con ${check.row.student_name} el ${when}. ¿Querés reemplazar el transcript existente? Se volverá a analizar con el texto nuevo.`,
-          confirm: 'Reemplazar',
-        };
-
-  return (
-    <div
-      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 110, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
-      onClick={e => { if (e.target === e.currentTarget) onCancel(); }}
-      role="alertdialog"
-      aria-modal="true"
-    >
-      <div style={{ background: '#fff', borderRadius: 14, padding: 24, width: '100%', maxWidth: 420 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 8 }}>
-          <span style={{ width: 9, height: 9, borderRadius: '50%', background: check.kind === 'blocked' ? '#dc4a38' : '#e0912f' }} />
-          <span style={{ fontSize: 16, fontWeight: 700, color: '#1a1c1a' }}>{copy.title}</span>
-        </div>
-        <p style={{ fontSize: 13.5, color: '#5f6360', lineHeight: 1.65, margin: '0 0 18px' }}>{copy.body}</p>
-        <div style={{ display: 'flex', gap: 10 }}>
-          <button
-            onClick={onCancel}
-            style={{ flex: 1, padding: '10px', borderRadius: 9, border: '1px solid var(--border)', background: 'transparent', color: '#5f6360', cursor: 'pointer', fontSize: 13.5, fontFamily: 'inherit' }}
-          >
-            {copy.confirm ? 'Cancelar' : 'Cerrar'}
-          </button>
-          {copy.confirm && (
-            <button
-              onClick={onConfirm}
-              style={{ flex: 2, padding: '10px', borderRadius: 9, border: 'none', background: '#1E9E3A', color: '#fff', cursor: 'pointer', fontSize: 13.5, fontWeight: 700, fontFamily: 'inherit' }}
-            >
-              {copy.confirm}
-            </button>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Modal "Añadir clase"
-function AddClassModal({ teacher, myAssignments, classRecords, initial, onClose, onSaved }: {
-  teacher: Teacher;
-  myAssignments: Assignment[];
-  classRecords: ClassRecord[];
-  // Prefill al abrir desde una clase a revisar (alumno + fecha + tipo ya puestos).
-  initial?: { studentName: string; date: string; classType: ClassRecordType } | null;
-  onClose: () => void;
-  onSaved: (
-    studentName: string, date: string, time: string | undefined, transcript: string,
-    classType: ClassRecordType, comment: string,
-    transcriptHash: string, replaceId: string | null,
-  ) => Promise<void>;
-}) {
-  const studentOptions = useMemo(() => {
-    const seen = new Set<string>();
-    const out: string[] = [];
-    for (const a of myAssignments) {
-      if (!seen.has(a.studentName)) { seen.add(a.studentName); out.push(a.studentName); }
-    }
-    out.sort((x, y) => x.localeCompare(y));
-    // Ex-alumno sin assignment activa: si venimos de una clase a revisar suya, debe
-    // poder seleccionarse igual para pegarle el transcript.
-    if (initial?.studentName && !seen.has(initial.studentName)) out.unshift(initial.studentName);
-    return out;
-  }, [myAssignments, initial?.studentName]);
-
-  const todayIso = getSpainParts(new Date()).dateStr;
-  const [studentName, setStudentName] = useState(initial?.studentName ?? studentOptions[0] ?? '');
-  const [date, setDate] = useState(initial?.date ?? todayIso);
-  const [time, setTime] = useState('');
-  const [transcript, setTranscript] = useState('');
-  const [classType, setClassType] = useState<ClassRecordType>(initial?.classType ?? 'normal');
-  const [comment, setComment] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
-  const [checking, setChecking] = useState(false);
-  // Duplicado detectado a la espera de decisión del profesor.
-  const [dupe, setDupe] = useState<{ check: DupeCheck; hash: string } | null>(null);
-
-  const needsTranscript = CLASS_TYPE_OPTIONS.find(o => o.value === classType)?.needsTranscript ?? true;
-  const isFaltaType = classType === 'falta_sin_aviso' || classType === 'cancelacion_hora';
-
-  // Cuántos registros de ESE tipo ya tiene el alumno (acumulativo, todo el historial).
-  const typeCount = useMemo(() => {
-    if (!isFaltaType) return 0;
-    const nk = (x: string) => (x ?? '').trim().toLowerCase();
-    return classRecords.filter(r =>
-      r.teacherId === teacher.id && nk(r.studentName) === nk(studentName) && r.classType === classType
-    ).length;
-  }, [classRecords, teacher.id, studentName, classType, isFaltaType]);
-  const limitReached = isFaltaType && typeCount >= 2;
-  const typeLabel = FALTA_TYPE_LABELS[classType];
-
-  // Auto-rellenar la hora con el slot recurrente del alumno si el día coincide.
-  // Depende solo de alumno+fecha para no pisar una hora editada a mano.
-  useEffect(() => {
-    if (!studentName || !date) return;
-    const jsDay = new Date(date + 'T00:00:00').getDay();
-    const dayName = ['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'][jsDay];
-    for (const a of myAssignments.filter(a => a.studentName === studentName)) {
-      const slot = (a.slots ?? []).find(s => s.day === dayName);
-      if (slot) { setTime(slot.hour.length === 5 ? slot.hour : `${slot.hour.padStart(2, '0')}:00`); return; }
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [studentName, date]);
-
-  // Normal/recuperación: TRANSCRIPT obligatorio (segundo factor de verificación).
-  // Falta/cancelación: comentario obligatorio y bloqueado al llegar a 2 de ese tipo.
-  const words = transcript.trim() ? transcript.trim().split(/\s+/).length : 0;
-  const canSave = !!studentName && !!date && !saving && !limitReached &&
-    (needsTranscript ? words >= 30 : !!comment.trim());
-
-  // Guardado real. `replaceId` llega solo cuando el profesor confirmó reemplazar
-  // el transcript de una clase ya registrada.
-  async function persist(hash: string, replaceId: string | null) {
-    setSaving(true); setError('');
-    try {
-      await onSaved(
-        studentName, date, time || undefined,
-        needsTranscript ? transcript.trim() : '',
-        classType, comment.trim(), hash, replaceId,
-      );
-      onClose();
-    } catch (e: any) {
-      setError(e?.message ?? 'No se pudo guardar el registro.');
-      setSaving(false);
-    }
-  }
-
-  async function handleSave() {
-    if (!canSave) return;
-
-    // Las faltas/cancelaciones no llevan transcript: nada que verificar.
-    if (!needsTranscript) { await persist('', null); return; }
-
-    const hash = transcriptHash(transcript);
-    setChecking(true);
-    let result: DupeCheck;
-    try {
-      result = await checkTranscriptDuplicates({
-        teacherId: teacher.id, studentName, classDate: date, hash,
-      });
-    } catch {
-      result = { kind: 'none' };   // la verificación nunca debe impedir guardar
-    } finally {
-      setChecking(false);
-    }
-
-    if (result.kind === 'none') { await persist(hash, null); return; }
-    setDupe({ check: result, hash });
-  }
-
-  const inputStyle = { width: '100%', padding: '9px 12px', borderRadius: 8, border: '1.5px solid var(--border)', fontSize: 13, background: 'white', color: '#111827', fontFamily: 'inherit', boxSizing: 'border-box' as const };
-
-  return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(6px)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
-      onClick={e => { if (e.target === e.currentTarget && !saving) onClose(); }}>
-      <div style={{ background: '#F7F7F5', border: '1px solid var(--border)', borderRadius: 16, width: '100%', maxWidth: 440, padding: 26 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
-          <div style={{ fontWeight: 700, fontSize: 17, color: '#111827' }}>Añadir clase</div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: '#6b7280' }}>✕</button>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          {initial && (
-            <div style={{ fontSize: 12, color: '#1f7a3d', background: 'rgba(30,158,58,0.08)', border: '1px solid rgba(30,158,58,0.28)', borderRadius: 8, padding: '9px 12px', lineHeight: 1.5 }}>
-              Completa esta clase a revisar: pega el transcript de <b>{initial.studentName}</b> del <b>{finShortDate(initial.date)}</b> para verificarla.
-            </div>
-          )}
-          <div>
-            <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>Alumno</label>
-            {studentOptions.length === 0 ? (
-              <div style={{ fontSize: 12, color: '#b45309' }}>No tienes alumnos asignados.</div>
-            ) : (
-              <select value={studentName} onChange={e => setStudentName(e.target.value)} style={inputStyle}>
-                {studentOptions.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-            )}
-          </div>
-          <div>
-            <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>Tipo de clase <span style={{ color: '#ef4444' }}>*</span></label>
-            <select value={classType} onChange={e => setClassType(e.target.value as ClassRecordType)} style={inputStyle}>
-              {CLASS_TYPE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-          </div>
-          {limitReached ? (
-            <>
-              <div style={{ fontSize: 13, color: '#dc2626', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.35)', borderRadius: 10, padding: '12px 14px', lineHeight: 1.5 }}>
-                Este alumno ya registró 2 {typeLabel?.plural}. No se pueden registrar más con este motivo.
-              </div>
-              <div style={{ display: 'flex', gap: 10, marginTop: 2 }}>
-                <button onClick={onClose} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#6b7280', cursor: 'pointer', fontSize: 14, fontFamily: 'inherit' }}>Cerrar</button>
-              </div>
-            </>
-          ) : (
-            <>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                <div>
-                  <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>Fecha de la clase</label>
-                  <input type="date" value={date} onChange={e => setDate(e.target.value)} style={inputStyle} />
-                </div>
-                <div>
-                  <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>Hora (España)</label>
-                  <input type="time" value={time} onChange={e => setTime(e.target.value)} style={inputStyle} />
-                </div>
-              </div>
-              {needsTranscript ? (
-                <div>
-                  <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>
-                    Transcript de la clase <span style={{ color: '#ef4444' }}>*</span>
-                  </label>
-                  <textarea
-                    value={transcript}
-                    onChange={e => { setTranscript(e.target.value); setError(''); }}
-                    rows={6}
-                    placeholder="Pega aquí el texto que genera Fathom al terminar la sesión..."
-                    style={{ ...inputStyle, resize: 'vertical', lineHeight: 1.5 }}
-                  />
-                  <div style={{ fontSize: 11, color: words >= 30 ? '#1E9E3A' : '#6b7280', marginTop: 5 }}>
-                    {words} palabras{words < 30 ? ' · mínimo 30' : ''}
-                  </div>
-                </div>
-              ) : (
-                <div style={{ fontSize: 11.5, color: '#b45309', background: 'rgba(255,196,0,0.1)', border: '1px solid rgba(255,196,0,0.3)', borderRadius: 8, padding: '8px 10px', lineHeight: 1.5 }}>
-                  Este tipo de clase <b>SÍ genera cobro</b> (tarifa normal del alumno), pero solo se permite hasta 2 veces. Llevás <b>{typeCount}</b> de 2 registradas. No requiere transcript.
-                </div>
-              )}
-              <div>
-                <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>
-                  Comentario {needsTranscript ? '(opcional)' : <span style={{ color: '#ef4444' }}>*</span>}
-                </label>
-                <textarea value={comment} onChange={e => setComment(e.target.value)} rows={2}
-                  placeholder={needsTranscript ? 'Ej: el alumno llegó tarde...' : 'Detallá el motivo (obligatorio)'}
-                  style={{ ...inputStyle, resize: 'vertical' }} />
-              </div>
-              {error && <div style={{ fontSize: 12, color: '#ef4444' }}>{error}</div>}
-              <div style={{ display: 'flex', gap: 10, marginTop: 2 }}>
-                <button onClick={onClose} disabled={saving} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#6b7280', cursor: saving ? 'not-allowed' : 'pointer', fontSize: 14, fontFamily: 'inherit' }}>Cancelar</button>
-                <button onClick={handleSave} disabled={!canSave || checking} style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: canSave && !checking ? '#1E9E3A' : '#d1d5db', color: 'white', cursor: canSave && !checking ? 'pointer' : 'not-allowed', fontSize: 14, fontWeight: 700, fontFamily: 'inherit' }}>
-                  {checking ? 'Verificando...' : saving ? 'Guardando...' : 'Guardar registro'}
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-
-        {dupe && (
-          <DuplicateDialog
-            check={dupe.check}
-            onCancel={() => setDupe(null)}
-            onConfirm={() => {
-              const replaceId = dupe.check.kind === 'replace' ? dupe.check.row.id : null;
-              setDupe(null);
-              persist(dupe.hash, replaceId);
-            }}
-          />
-        )}
-      </div>
-    </div>
-  );
-}
 
 function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignments: Assignment[] }) {
   const {
@@ -475,66 +173,25 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
   }
 
   /**
-   * Guardar una clase desde "Añadir clase":
-   *   1) el registro en class_records (tipo, hora, comentario) — igual que antes,
-   *      pero SIN captura: se pasa null al parámetro de archivo.
-   *   2) si el tipo requiere transcript, se GUARDA en class_analyses (segundo
-   *      factor de verificación del cálculo de finanzas) y recién después se
-   *      analiza con IA.
-   *
-   * El orden importa: antes se analizaba primero y, si la IA fallaba o tardaba,
-   * la clase no llegaba a registrarse. Ahora el guardado no depende de la IA.
+   * Guardar una clase desde "Añadir clase". Toda la escritura vive en
+   * saveTeacherClass (components/AddClassModal), compartida con la vista semanal
+   * /clases: guarda el transcript primero y analiza después, para que un fallo o
+   * una demora de la IA no le haga perder la clase al profesor.
    */
   async function handleAddClass(
     studentName: string, date: string, time: string | undefined,
     transcript: string, classType: ClassRecordType, comment: string,
     transcriptHashValue: string, replaceId: string | null,
   ) {
-    // Faltas/cancelaciones (sin transcript): solo la constancia, como antes.
-    if (!transcript.trim()) {
-      if (!replaceId) await registerClassRecord(teacher.id, studentName, date, time, null, classType, comment);
-      await loadFinanceData();
-      return;
-    }
-
-    const asgn = myAssignments.find(a => a.studentName === studentName);
-    const base = {
-      transcript: transcript.trim(),
-      studentName,
-      teacherName: teacher.name,
-      studentId: asgn?.studentId ?? null,
-      teacherId: teacher.id,
-      plan: asgn?.plan ?? null,
-      level: asgn?.studentLevel ?? null,
-      classDate: date,
-      transcriptHash: transcriptHashValue || null,
-      replaceId,
-    };
-    // Guardar el transcript (rápido, sin IA) y luego analizarlo. La validación ya
-    // no cancela nada: como mucho deja la clase pendiente de revisión del equipo.
-    const result = await registerClassWithTranscript(base);
-
-    if (!replaceId) {
-      await registerClassRecord(teacher.id, studentName, date, time, null, classType, comment);
-    }
-    // La clase ya está guardada y validada acá; el informe de IA va por detrás.
-    if (result.validation && result.validation.decision !== 'ok') {
-      setValidationNotice({ title: result.validation.teacherTitle, body: result.validation.teacherBody });
-    } else {
-      setValidationNotice({
-        title: 'Clase guardada ✓',
-        body: 'La clase quedó registrada y cuenta para tu pago. El análisis se completará en unos instantes; no hace falta que esperes.',
-      });
-    }
+    const result = await saveTeacherClass({
+      teacher, myAssignments, studentName, date, time, transcript, classType, comment,
+      transcriptHash: transcriptHashValue, replaceId, registerClassRecord,
+    });
+    if (result.notice) setValidationNotice(result.notice);
     // Solo se vuelve a avisar si el informe falla: si sale bien, no hay nada que
     // contarle al profesor que no vea ya en la ficha del alumno.
-    result.analysis.then(({ analyzed }) => {
-      if (!analyzed) {
-        setValidationNotice({
-          title: 'Análisis pendiente',
-          body: 'La clase quedó registrada y cuenta para tu pago. El informe de IA no se pudo generar; puedes reintentarlo desde la ficha del alumno, en Seguimiento.',
-        });
-      }
+    result.analysis?.then(({ analyzed }) => {
+      if (!analyzed) setValidationNotice(ANALYSIS_FAILED_NOTICE);
     });
     await loadFinanceData();
     // La detección de hitos ocurre en el barrido de MyClassesTab (useEffect), que

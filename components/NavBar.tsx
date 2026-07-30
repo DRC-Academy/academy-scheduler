@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/AuthContext';
 import { NotificationBell } from '@/components/NotificationBell';
-import { Search, Users, Calendar, Wallet, Settings, Menu, X, GraduationCap, CalendarCheck } from 'lucide-react';
+import { Search, Users, Calendar, CalendarDays, Wallet, Settings, Menu, X, GraduationCap, CalendarCheck } from 'lucide-react';
 import { Button } from '@/components/ui';
 import { PresentationEmailReminder } from '@/components/PresentationEmailReminder';
 
@@ -14,6 +14,9 @@ const navItems = [
   { href: '/setter',            label: 'Buscar',            icon: Search,      roles: ['setter', 'admin'] },
   { href: '/students',          label: 'Alumnos',           icon: Users,       roles: ['setter', 'admin'] },
   { href: '/teacher',           label: 'Calendario',        icon: Calendar,    roles: ['teacher'] },
+  // Vista OPERATIVA de la semana (clases del día a día, subida de transcripts).
+  // No confundir con /mis-clases, que es la de pago y se muestra como "Finanzas".
+  { href: '/clases',            label: 'Mis clases',        icon: CalendarDays, roles: ['teacher'] },
   { href: '/mis-alumnos',       label: 'Alumnos',           icon: GraduationCap, roles: ['teacher'] },
   // /mis-clases conserva su URL (para no romper enlaces), pero se muestra como "Finanzas".
   { href: '/mis-clases',        label: 'Finanzas',          icon: Wallet,      roles: ['teacher'] },
