@@ -14,7 +14,8 @@ import { isAssignableCell, withBaseState } from '@/lib/cells';
 import { checkSubscription, clearSubscriptionCache, subBadge, subCategory, type SubscriptionInfo, type SubCategory } from '@/lib/useSubscriptionStatus';
 import { isValidEmail } from '@/lib/validation';
 import { CambiarProfesorModal } from '@/components/CambiarProfesorModal';
-import { Student, Grid, Assignment } from '@/types';
+import { PresentationModal } from '@/components/PresentationModal';
+import { Student, Grid, Assignment, Teacher } from '@/types';
 
 // Detecta viewport mobile (< breakpoint). Alterna tabla (desktop) ↔ cards (mobile).
 function useIsMobile(breakpoint = 1024): boolean {
@@ -502,8 +503,9 @@ function AccessModal({ student, onConfirm, onCancel }: {
 
 function StudentsContent() {
   const {
-    students, assignments, deleteStudent, updateStudent, removeAssignment,
-    getTeacherGrid, updateTeacherGrid, updateAssignmentSlots, updateAssignmentStartDate, reloadAll,
+    students, assignments, teachers, deleteStudent, updateStudent, removeAssignment,
+    getTeacherGrid, updateTeacherGrid, updateAssignmentSlots, updateAssignmentStartDate,
+    updateMeetLink, reloadAll,
   } = useTeachers();
   const { user } = useAuth();
   const [search, setSearch] = useState('');
@@ -515,6 +517,10 @@ function StudentsContent() {
   const [activatingStudent, setActivatingStudent] = useState<DisplayStudent | null>(null);
   const [accessStudent, setAccessStudent] = useState<DisplayStudent | null>(null);
   const [changeTeacher, setChangeTeacher] = useState<{ student: DisplayStudent; assignment: Assignment } | null>(null);
+  // Correo de presentación desde el admin: mismo modal que usa el profesor, para
+  // reenviarlo o recuperarlo cuando el profe no lo mandó. Guarda la assignment y
+  // el profesor al que pertenece (el modal necesita los dos).
+  const [presentationFor, setPresentationFor] = useState<{ assignment: Assignment; teacher: Teacher } | null>(null);
   const [subFilter, setSubFilter] = useState<'all' | SubCategory>('all');
   const [subInfo, setSubInfo] = useState<Record<string, SubscriptionInfo>>({});
   const [verifyingSubs, setVerifyingSubs] = useState(false);
@@ -854,6 +860,18 @@ function StudentsContent() {
                                 {hasTeacher && (
                                   <MenuItem onClick={() => { setMenuOpenId(null); setChangeTeacher({ student: s, assignment: studentAssignments[0] }); }}>🔄 Cambiar de profesor</MenuItem>
                                 )}
+                                {/* Correo de presentación: sirve para recuperarlo o
+                                    reenviarlo cuando el profesor no lo mandó. */}
+                                {hasTeacher && (() => {
+                                  const asgn = studentAssignments[0];
+                                  const prof = teachers.find(t => t.id === asgn.teacherId);
+                                  if (!prof) return null;
+                                  return (
+                                    <MenuItem onClick={() => { setMenuOpenId(null); setPresentationFor({ assignment: asgn, teacher: prof }); }}>
+                                      ✉️ Correo de presentación{asgn.presentationEmailSent ? ' (reenviar)' : ''}
+                                    </MenuItem>
+                                  );
+                                })()}
                                 {!hasTeacher && (
                                   <MenuItem onClick={() => { setMenuOpenId(null); router.push('/setter'); }}>🔗 Vincular</MenuItem>
                                 )}
@@ -988,6 +1006,20 @@ function StudentsContent() {
           currentAssignment={changeTeacher.assignment}
           onClose={() => setChangeTeacher(null)}
           onDone={() => setChangeTeacher(null)}
+        />
+      )}
+
+      {/* Correo de presentación. Es el MISMO modal que usa el profesor
+          (components/PresentationModal): arma el cuerpo listo para copiar con el
+          botón "Copiar", así el admin puede recuperarlo o reenviarlo. */}
+      {presentationFor && (
+        <PresentationModal
+          assignment={presentationFor.assignment}
+          teacher={presentationFor.teacher}
+          students={students}
+          updateMeetLink={updateMeetLink}
+          onClose={() => setPresentationFor(null)}
+          onSent={() => { setPresentationFor(null); reloadAll(); }}
         />
       )}
 

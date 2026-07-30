@@ -2,6 +2,7 @@
 import { useState, useMemo, useEffect, type CSSProperties } from 'react';
 import { useTeachers } from '@/lib/TeachersContext';
 import { isAssignableCell } from '@/lib/cells';
+import { TransferError } from '@/lib/db';
 import { AssignmentEmailModal } from '@/components/AssignmentEmailModal';
 import { Teacher, Assignment, AssignedSlot, Grid } from '@/types';
 
@@ -156,8 +157,15 @@ export function CambiarProfesorModal({
         availability: newSlots.map(s => `${s.day} ${s.hour}`).join(', '),
       });
       setDoneMsg(`✅ ${currentAssignment.studentName} transferido a ${newTeacher.name}`);
-    } catch {
-      setError('No se pudo completar el cambio. Reintentá.');
+    } catch (err) {
+      // Un TransferError sabe QUÉ se alcanzó a hacer: eso es lo que hay que
+      // mostrar. "Reintentá" a secas era lo peor posible, porque si el fallo dejó
+      // el cambio a medias reintentar podía duplicar el desastre en vez de
+      // arreglarlo (así quedó Izaro Gaztañaga en julio de 2026).
+      console.error('[CambiarProfesorModal] falló la transferencia:', err);
+      setError(err instanceof TransferError
+        ? err.userMessage
+        : 'No se pudo completar el cambio. Revisá "Auditoría de vínculos" en el panel de admin antes de reintentar.');
       setSaving(false);
     }
   }

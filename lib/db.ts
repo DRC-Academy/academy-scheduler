@@ -241,13 +241,43 @@ export async function dbSaveTeacherGrid(teacherId: string, grid: Grid): Promise<
   // se quedó sin celdas en ESTE guardado (ver reconcileAssignmentStatus).
   const previous = await dbGetTeacherGrid(teacherId);
 
-  await supabase
+  const { error } = await supabase
     .from('teacher_calendars')
     .upsert({
       teacher_id: teacherId,
       grid:       grid,
       updated_at: new Date().toISOString(),
     }, { onConflict: 'teacher_id' });
+
+  // El error se registra pero NO se lanza: el autoguardado del calendario llama
+  // a esta función en cada clic y romper ahí dejaría al profesor sin poder tocar
+  // su grid. Para las operaciones donde un fallo silencioso deja el sistema
+  // inconsistente (transferencias) está saveTeacherGridOrThrow.
+  if (error) console.error(`[db] No se pudo guardar el grid de ${teacherId}:`, error);
+
+  await reconcileAssignmentStatus(teacherId, previous, grid);
+}
+
+/**
+ * Igual que dbSaveTeacherGrid pero LANZA si la escritura falla.
+ *
+ * Existe porque el upsert de arriba se traga el error: en una transferencia eso
+ * significa que el calendario de un profesor puede no haberse guardado y el
+ * resto de la operación sigue como si nada, dejando el estado partido (que es
+ * exactamente lo que pasó con Izaro Gaztañaga en julio de 2026).
+ */
+async function saveTeacherGridOrThrow(teacherId: string, grid: Grid): Promise<void> {
+  const previous = await dbGetTeacherGrid(teacherId);
+
+  const { error } = await supabase
+    .from('teacher_calendars')
+    .upsert({
+      teacher_id: teacherId,
+      grid:       grid,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'teacher_id' });
+
+  if (error) throw new Error(`No se pudo guardar el calendario de ${teacherId}: ${error.message}`);
 
   await reconcileAssignmentStatus(teacherId, previous, grid);
 }
@@ -1046,6 +1076,25 @@ export interface AuditResult {
   duplicateEmails: Array<{ email: string; total: number; names: string; students: Array<{ id: string; name: string; hasAssignment: boolean }> }>;
   // E) Alumnos con más de una assignment.
   multipleAssignments: Array<{ studentId: string; studentName: string; total: number; teachers: string }>;
+  // F) Assignment que apunta a un profesor pero el alumno ocupa el calendario de
+  //    OTRO. Es la firma de una transferencia que quedó a medias (caso Izaro).
+  misplacedStudents: MisplacedStudent[];
+}
+
+/** Alumno cuya assignment y cuyo calendario dicen profesores distintos. */
+export interface MisplacedStudent {
+  assignmentId: string;
+  studentName: string;
+  /** Profesor al que apunta la assignment (el que se ve en "Alumnos"). */
+  assignedTeacherId: string;
+  assignedTeacherName: string;
+  /** Profesor en cuyo calendario está de verdad. Si hay varios, el primero. */
+  gridTeacherId: string;
+  gridTeacherName: string;
+  /** Los otros calendarios donde también aparece (raro, pero se informa). */
+  otherGridTeachers: string[];
+  /** Horarios que ocupa en el calendario de gridTeacher. Es la verdad a aplicar. */
+  gridSlots: AssignedSlot[];
 }
 
 export async function dbAuditStudentAssignments(): Promise<AuditResult> {
@@ -1105,7 +1154,104 @@ export async function dbAuditStudentAssignments(): Promise<AuditResult> {
       teachers: arr.map(a => a.teacherName).join(' / '),
     }));
 
-  return { studentsWithoutAssignment, orphanAssignments, nameMismatches, duplicateEmails, multipleAssignments };
+  const misplacedStudents = await dbFindMisplacedStudents(assignments);
+
+  return {
+    studentsWithoutAssignment, orphanAssignments, nameMismatches,
+    duplicateEmails, multipleAssignments, misplacedStudents,
+  };
+}
+
+/**
+ * F — Alumnos cuya assignment apunta a un profesor pero que ocupan el calendario
+ * de OTRO. Es la firma exacta de una transferencia interrumpida: el calendario
+ * ya se movió y la ficha no, o al revés.
+ *
+ * La pertenencia la decide el GRID (misma regla que getStudentsForTeacher), así
+ * que el calendario es la verdad y la assignment es lo que hay que corregir.
+ * Un alumno SIN celdas en ningún calendario no cuenta acá: ese es el caso
+ * "huérfano", que ya cubre scripts/diagnose-orphan-assignments.
+ */
+export async function dbFindMisplacedStudents(known?: Assignment[]): Promise<MisplacedStudent[]> {
+  const [assignments, teachers, calendars] = await Promise.all([
+    known ? Promise.resolve(known) : dbGetAssignments(),
+    dbGetTeachers(),
+    supabase.from('teacher_calendars').select('teacher_id, grid'),
+  ]);
+  if (calendars.error) {
+    console.error('[db] No se pudieron leer los calendarios para la auditoría:', calendars.error);
+    return [];
+  }
+
+  const teacherName = (id: string) => teachers.find(t => t.id === id)?.name ?? id;
+
+  // alumno normalizado → profesor → horarios que ocupa en su grid
+  const owners = new Map<string, Map<string, AssignedSlot[]>>();
+  for (const row of (calendars.data ?? []) as Array<{ teacher_id: string; grid: Grid }>) {
+    for (const [key, cell] of Object.entries(row.grid ?? {})) {
+      const student = baseStudentOf(cell);
+      if (!student) continue;
+      const usc = key.lastIndexOf('_');
+      if (usc < 0) continue;
+      const slot: AssignedSlot = { day: key.slice(0, usc), hour: key.slice(usc + 1) };
+      const k = normKey(student);
+      if (!owners.has(k)) owners.set(k, new Map());
+      const byTeacher = owners.get(k)!;
+      if (!byTeacher.has(row.teacher_id)) byTeacher.set(row.teacher_id, []);
+      byTeacher.get(row.teacher_id)!.push(slot);
+    }
+  }
+
+  const out: MisplacedStudent[] = [];
+  for (const a of assignments) {
+    if ((a.status ?? 'active') !== 'active') continue;
+    const byTeacher = owners.get(normKey(a.studentName));
+    if (!byTeacher || byTeacher.size === 0) continue;   // sin celdas: es "huérfano", no "descolocado"
+    if (byTeacher.has(a.teacherId)) continue;           // coincide: todo bien
+
+    // Gana el calendario con más celdas suyas (el horario real del alumno).
+    const ranked = [...byTeacher.entries()].sort((x, y) => y[1].length - x[1].length);
+    const [gridTeacherId, gridSlots] = ranked[0];
+    out.push({
+      assignmentId: a.id,
+      studentName: a.studentName,
+      assignedTeacherId: a.teacherId,
+      assignedTeacherName: a.teacherName || teacherName(a.teacherId),
+      gridTeacherId,
+      gridTeacherName: teacherName(gridTeacherId),
+      otherGridTeachers: ranked.slice(1).map(([id]) => teacherName(id)),
+      gridSlots: gridSlots.sort((x, y) => parseInt(x.hour) - parseInt(y.hour)),
+    });
+  }
+  return out;
+}
+
+/**
+ * Repara un alumno descolocado: reapunta su assignment al profesor en cuyo
+ * calendario está de verdad, con los horarios que ocupa allí.
+ *
+ * NO toca ningún calendario a propósito. En el caso Izaro, el calendario del
+ * profesor viejo ya no la tenía y sus horarios de esa hora eran de otra alumna:
+ * "liberar las celdas del profesor anterior" habría borrado a esa otra alumna.
+ * Si además quedaran celdas del alumno en el calendario viejo, la auditoría lo
+ * vuelve a detectar en la siguiente pasada.
+ */
+export async function dbRepairMisplacedStudent(m: MisplacedStudent): Promise<void> {
+  const teachers = await dbGetTeachers();
+  const dest = teachers.find(t => t.id === m.gridTeacherId);
+  if (!dest) throw new Error(`No existe el profesor ${m.gridTeacherId}`);
+
+  const { error } = await supabase.from('assignments').update({
+    teacher_id:    dest.id,
+    teacher_name:  dest.name,
+    teacher_email: dest.email,
+    slots:         m.gridSlots,
+    weekly_hours:  m.gridSlots.length,
+    availability:  m.gridSlots.map(s => `${s.day} ${s.hour}`).join(', '),
+  }).eq('id', m.assignmentId);
+
+  if (error) throw new Error(`No se pudo reparar a ${m.studentName}: ${error.message}`);
+  console.log(`[audit] ${m.studentName}: assignment reapuntada a ${dest.name} con ${m.gridSlots.length} horario(s)`);
 }
 
 // Vincula una assignment a un alumno real (corrige id + sincroniza datos).
@@ -2904,13 +3050,124 @@ export interface ChangeTeacherParams {
   startDate?: string | null;
 }
 
-// Transfiere un alumno de un profesor a otro (punto 1). Libera las celdas del
-// profesor anterior, ocupa las del nuevo, reapunta la assignment (mantiene
-// student_id/start_date), registra el evento de scoring según el motivo y notifica
-// a ambos profesores. Recalcula el score de ambos.
+/**
+ * Fallo de una transferencia, con el detalle de QUÉ alcanzó a hacerse.
+ *
+ * Sin esto el usuario solo veía "algo falló" y no había forma de saber si el
+ * alumno quedó con el profesor viejo, con el nuevo, o a medio camino.
+ */
+export class TransferError extends Error {
+  /** Pasos que SÍ se completaron, en orden. */
+  readonly completed: string[];
+  /** Paso que falló. */
+  readonly failedStep: string;
+
+  constructor(failedStep: string, completed: string[], cause: unknown) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    super(`Falló en "${failedStep}": ${detail}`);
+    this.name = 'TransferError';
+    this.failedStep = failedStep;
+    this.completed = completed;
+  }
+
+  /** Mensaje listo para mostrarle al usuario, con el estado real del sistema. */
+  get userMessage(): string {
+    const hecho = this.completed.length
+      ? `Lo que SÍ se hizo: ${this.completed.join('; ')}.`
+      : 'No se llegó a modificar nada.';
+    return `El cambio de profesor no se completó (falló en: ${this.failedStep}). ${hecho} `
+         + 'Revisá "Auditoría de vínculos" en el panel de admin para completarlo.';
+  }
+}
+
+/**
+ * Transfiere un alumno de un profesor a otro (punto 1).
+ *
+ * ORDEN DE ESCRITURA — importa, y no es el orden "natural":
+ *   1. Validar TODO antes de escribir nada.
+ *   2. Ocupar las celdas del profesor NUEVO.
+ *   3. Reapuntar la assignment  ← esta escritura es la que CONFIRMA el cambio.
+ *   4. Liberar las celdas del profesor ANTERIOR.
+ *   5. Scoring y notificaciones (best-effort: si fallan, el cambio ya está hecho).
+ *
+ * Antes se liberaba primero al profesor anterior y la assignment se actualizaba
+ * en tercer lugar, sin comprobar el error de ninguna escritura. Si la assignment
+ * fallaba, el alumno quedaba fuera del calendario viejo, dentro del nuevo, y
+ * asignado al profesor viejo — sin ningún aviso. Eso es lo que le pasó a Izaro
+ * Gaztañaga (julio 2026).
+ *
+ * Con el orden nuevo, un fallo antes del paso 3 deja el sistema COHERENTE: el
+ * alumno sigue con su profesor de siempre y lo único que queda es una celda de
+ * más en el calendario del profesor nuevo, que se ve y se corrige a mano.
+ */
 export async function dbChangeStudentTeacher(p: ChangeTeacherParams): Promise<void> {
-  // 1) Liberar celdas del profesor ANTERIOR (por slots exactos o por nombre).
-  const oldGrid = await dbGetTeacherGrid(p.from.id);
+  const completed: string[] = [];
+  const log = (msg: string) => console.log(`[transfer ${p.studentName}] ${msg}`);
+
+  // ── 1) Validaciones previas: nada se escribe hasta que todo esto pase ───────
+  if (!p.newSlots.length) {
+    throw new TransferError('validación', [], new Error('no se indicó ningún horario para el profesor nuevo'));
+  }
+  if (p.from.id === p.to.id) {
+    throw new TransferError('validación', [], new Error('el profesor de origen y el de destino son el mismo'));
+  }
+
+  const [asgRow, newGrid, oldGrid] = await Promise.all([
+    supabase.from('assignments').select('id').eq('id', p.assignmentId).maybeSingle(),
+    dbGetTeacherGrid(p.to.id),
+    dbGetTeacherGrid(p.from.id),
+  ]);
+  if (asgRow.error || !asgRow.data) {
+    throw new TransferError('validación', [], new Error(`la assignment ${p.assignmentId} ya no existe`));
+  }
+
+  // Ninguna celda destino puede tener YA un alumno recurrente distinto: pisarla
+  // borraría a ese alumno de su horario sin dejar rastro.
+  const ocupadas = p.newSlots
+    .map(s => ({ key: `${s.day}_${s.hour}`, owner: baseStudentOf(newGrid[`${s.day}_${s.hour}`]) }))
+    .filter(x => x.owner && !_cellIsStudent(x.owner, p.studentName));
+  if (ocupadas.length) {
+    const detalle = ocupadas.map(x => `${x.key} (${x.owner})`).join(', ');
+    throw new TransferError('validación', [], new Error(`${p.to.name} ya tiene alumno en ${detalle}`));
+  }
+  log('validaciones OK');
+
+  // ── 2) Ocupar las celdas del profesor NUEVO ────────────────────────────────
+  const updatedNew: Grid = { ...newGrid };
+  for (const s of p.newSlots) {
+    updatedNew[`${s.day}_${s.hour}`] = withBaseState(updatedNew[`${s.day}_${s.hour}`], 'ocupado', p.studentName);
+  }
+  try {
+    await saveTeacherGridOrThrow(p.to.id, updatedNew);
+    completed.push(`se ocuparon los horarios en el calendario de ${p.to.name}`);
+    log(`calendario de ${p.to.name} ocupado`);
+  } catch (err) {
+    throw new TransferError(`ocupar el calendario de ${p.to.name}`, completed, err);
+  }
+
+  // ── 3) Reapuntar la assignment — ESTA es la que confirma el cambio ─────────
+  //    Se reinicia el email de presentación: created_at = ahora (el contador de
+  //    24 h se ancla en created_at, ver getPresentationEmailStatus) y se borra el
+  //    estado de enviado, para que el NUEVO profesor tenga sus 24 h completas para
+  //    presentarse sin penalización de scoring.
+  const { error: asgError } = await supabase.from('assignments').update({
+    teacher_id:   p.to.id,
+    teacher_name: p.to.name,
+    teacher_email: p.to.email,
+    slots:        p.newSlots,
+    weekly_hours: p.weeklyHours,
+    availability: p.newSlots.map(s => `${s.day} ${s.hour}`).join(', '),
+    presentation_email_sent:    false,
+    presentation_email_sent_at: null,
+    created_at:                 new Date().toISOString(),
+  }).eq('id', p.assignmentId);
+  if (asgError) {
+    throw new TransferError('reapuntar la ficha del alumno al profesor nuevo', completed, asgError);
+  }
+  completed.push(`el alumno quedó asignado a ${p.to.name}`);
+  log(`assignment reapuntada a ${p.to.name}`);
+
+  // ── 4) Liberar las celdas del profesor ANTERIOR ────────────────────────────
   const updatedOld: Grid = { ...oldGrid };
   const oldKeys = new Set(p.oldSlots.map(s => `${s.day}_${s.hour}`));
   let cleared = 0;
@@ -2925,70 +3182,59 @@ export async function dbChangeStudentTeacher(p: ChangeTeacherParams): Promise<vo
       cleared++;
     }
   }
-  if (cleared > 0) await dbSaveTeacherGrid(p.from.id, updatedOld);
-
-  // 2) Ocupar celdas del profesor NUEVO con el nombre del alumno.
-  const newGrid = await dbGetTeacherGrid(p.to.id);
-  const updatedNew: Grid = { ...newGrid };
-  for (const s of p.newSlots) {
-    const key = `${s.day}_${s.hour}`;
-    updatedNew[key] = withBaseState(updatedNew[key], 'ocupado', p.studentName);
+  if (cleared > 0) {
+    try {
+      await saveTeacherGridOrThrow(p.from.id, updatedOld);
+      completed.push(`se liberaron ${cleared} horario(s) de ${p.from.name}`);
+      log(`calendario de ${p.from.name}: ${cleared} celda(s) liberadas`);
+    } catch (err) {
+      throw new TransferError(`liberar el calendario de ${p.from.name}`, completed, err);
+    }
   }
-  await dbSaveTeacherGrid(p.to.id, updatedNew);
 
-  // 3) Reapuntar la assignment al nuevo profesor + nuevos horarios.
-  //    Se reinicia el email de presentación: created_at = ahora (el contador de
-  //    24 h se ancla en created_at, ver getPresentationEmailStatus) y se borra el
-  //    estado de enviado, para que el NUEVO profesor tenga sus 24 h completas para
-  //    presentarse sin penalización de scoring.
-  await supabase.from('assignments').update({
-    teacher_id:   p.to.id,
-    teacher_name: p.to.name,
-    teacher_email: p.to.email,
-    slots:        p.newSlots,
-    weekly_hours: p.weeklyHours,
-    availability: p.newSlots.map(s => `${s.day} ${s.hour}`).join(', '),
-    presentation_email_sent:    false,
-    presentation_email_sent_at: null,
-    created_at:                 new Date().toISOString(),
-  }).eq('id', p.assignmentId);
+  // ── 5) Scoring y notificaciones: BEST-EFFORT ───────────────────────────────
+  // El cambio ya está hecho y es coherente. Un fallo acá no puede tirar abajo la
+  // operación ni mostrarle un error al usuario: solo se registra para los logs.
+  try {
+    if (p.reason !== 'reorg') {
+      const eventType = p.reason === 'alumno' ? 'cambio_por_alumno' : 'cambio_por_profesor';
+      await dbAddScoringEvent({
+        teacherId:   p.from.id,
+        teacherName: p.from.name,
+        eventType:   eventType as ScoringEvent['eventType'],
+        points:      EVENT_POINTS[eventType],
+        euros:       0,
+        note:        `Cambio de profesor — ${p.studentName} transferido a ${p.to.name}`,
+        createdBy:   'sistema',
+        studentRef:  p.studentName,
+      });
+    }
 
-  // 4) Evento de scoring para el profesor anterior según el motivo del cambio.
-  if (p.reason !== 'reorg') {
-    const eventType = p.reason === 'alumno' ? 'cambio_por_alumno' : 'cambio_por_profesor';
-    await dbAddScoringEvent({
-      teacherId:   p.from.id,
-      teacherName: p.from.name,
-      eventType:   eventType as ScoringEvent['eventType'],
-      points:      EVENT_POINTS[eventType],
-      euros:       0,
-      note:        `Cambio de profesor — ${p.studentName} transferido a ${p.to.name}`,
-      createdBy:   'sistema',
-      studentRef:  p.studentName,
+    // Notificar al profesor NUEVO (misma notificación + email Resend que una
+    // asignación nueva), con los datos del alumno y los horarios recién asignados.
+    await dbNotifyNewAssignment(p.to.id, p.studentName, p.studentEmail, {
+      plan: p.plan, level: p.level, slots: p.newSlots, startDate: p.startDate,
     });
+
+    // Notificar al profesor ANTERIOR.
+    await supabase.from('notifications').insert({
+      id:          `notif_transfer_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      target_user: p.from.id,
+      target_role: null,
+      title:       'ℹ️ Alumno transferido',
+      body:        `${p.studentName} fue transferido a otro profesor.`,
+      type:        'student_transferred',
+      read_by:     [],
+      created_at:  new Date().toISOString(),
+      created_by:  'sistema',
+    });
+
+    // Recalcular el score/retención de ambos (el anterior perdió, el nuevo ganó).
+    await Promise.all([dbRecalculateTeacherScore(p.from.id), dbRecalculateTeacherScore(p.to.id)]);
+    log('scoring y notificaciones OK');
+  } catch (err) {
+    console.error(`[transfer ${p.studentName}] el cambio se completó, pero fallaron los avisos/scoring:`, err);
   }
-
-  // 5) Notificar al profesor NUEVO (misma notificación + email Resend que una
-  //    asignación nueva), con los datos del alumno y los horarios recién asignados.
-  await dbNotifyNewAssignment(p.to.id, p.studentName, p.studentEmail, {
-    plan: p.plan, level: p.level, slots: p.newSlots, startDate: p.startDate,
-  });
-
-  // 6) Notificar al profesor ANTERIOR.
-  await supabase.from('notifications').insert({
-    id:          `notif_transfer_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-    target_user: p.from.id,
-    target_role: null,
-    title:       'ℹ️ Alumno transferido',
-    body:        `${p.studentName} fue transferido a otro profesor.`,
-    type:        'student_transferred',
-    read_by:     [],
-    created_at:  new Date().toISOString(),
-    created_by:  'sistema',
-  });
-
-  // Recalcular el score/retención de ambos (el anterior perdió, el nuevo ganó).
-  await Promise.all([dbRecalculateTeacherScore(p.from.id), dbRecalculateTeacherScore(p.to.id)]);
 }
 
 // Elimina una assignment y libera las celdas del alumno en el grid del profesor.

@@ -12,6 +12,7 @@ import { Teacher, Grid, Assignment, ScoringEvent, ScoringEventType } from '@/typ
 import { EVENT_POINTS, EVENT_EUROS, calcRegisteredClassNumber, dbUpdateAssignmentStartDate, dbGetAllNotifications,
   dbAuditStudentAssignments, dbRelinkAssignment, dbSyncAssignmentName, dbMergeDuplicateStudents, dbSyncStudentAssignments,
   dbDiagnoseAllCalendars, dbSyncAllCalendarsToAssignments, dbCreateFullLink, CalendarDiagnosisAllRow, AuditResult,
+  dbRepairMisplacedStudent,
   findDuplicateTeacherAssignments, type DuplicateAssignmentGroup, type DeleteTeacherResult } from '@/lib/db';
 import { CambiarProfesorModal } from '@/components/CambiarProfesorModal';
 import { CrearVinculoModal } from '@/components/CrearVinculoModal';
@@ -2666,6 +2667,7 @@ function AuditPanel() {
     for (const c of result.nameMismatches) rows.push(['C - Nombre inconsistente', q(c.nameStudents), q(c.nameAssignments), q(c.teacherName)].join(','));
     for (const d of result.duplicateEmails) rows.push(['D - Email duplicado', q(d.email), q(d.names), q(d.total)].join(','));
     for (const e of result.multipleAssignments) rows.push(['E - Multiples asignaciones', q(e.studentName), q(e.teachers), q(e.total)].join(','));
+    for (const f of result.misplacedStudents) rows.push(['F - Cambio de profesor a medias', q(f.studentName), q(`ficha: ${f.assignedTeacherName}`), q(`calendario: ${f.gridTeacherName}`)].join(','));
     const blob = new Blob([rows.join('\n')], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -2679,6 +2681,7 @@ function AuditPanel() {
     result.orphanAssignments.length === 0 &&
     result.nameMismatches.length === 0 &&
     result.duplicateEmails.length === 0 &&
+    result.misplacedStudents.length === 0 &&
     visibleMultiples.length === 0;
 
   const relinkStudents = students.filter(s => {
@@ -2799,6 +2802,41 @@ function AuditPanel() {
                       <div key={`${m.studentId}|${m.studentName}`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, fontSize: 12.5, flexWrap: 'wrap' }}>
                         <span><b style={{ color: 'var(--text-primary)' }}>{m.studentName}</b> <span style={{ color: 'var(--text-muted)' }}>· {m.total} profesores: {m.teachers}</span></span>
                         <button onClick={() => toggleReviewed(`${m.studentId}|${m.studentName}`)} style={auditBtn('var(--text-secondary)', 'transparent', 'var(--border)')}>Marcar como revisado</button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* F — transferencias que quedaron a medias. Va primero visualmente
+                  por color (rojo) porque es la única sección donde el alumno está
+                  literalmente en dos sitios distintos según a quién le preguntes. */}
+              {result.misplacedStudents.length > 0 && (
+                <div style={auditCard}>
+                  <div style={auditSectionTitle('#dc2626')}>
+                    F · Cambios de profesor a medias ({result.misplacedStudents.length})
+                  </div>
+                  <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginBottom: 10, fontStyle: 'italic' }}>
+                    La ficha del alumno dice un profesor y el calendario dice otro. Reparar reapunta la ficha
+                    al profesor del calendario, con los horarios que ocupa ahí. No se toca ningún calendario.
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+                    {result.misplacedStudents.map(m => (
+                      <div key={m.assignmentId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, fontSize: 12.5, flexWrap: 'wrap' }}>
+                        <span>
+                          ⚠️ <b style={{ color: 'var(--text-primary)' }}>{m.studentName}</b>
+                          <span style={{ color: 'var(--text-muted)' }}>
+                            {' '}· asignada a <b>{m.assignedTeacherName}</b> pero ocupa el calendario
+                            de <b>{m.gridTeacherName}</b> ({m.gridSlots.map(s => `${s.day} ${s.hour}`).join(', ')})
+                            {m.otherGridTeachers.length > 0 && ` · también en: ${m.otherGridTeachers.join(', ')}`}
+                          </span>
+                        </span>
+                        <button
+                          disabled={busy === m.assignmentId}
+                          onClick={() => withBusy(m.assignmentId, async () => { await dbRepairMisplacedStudent(m); })}
+                          style={auditBtn('#dc2626', 'rgba(239,68,68,0.08)', 'rgba(239,68,68,0.35)')}>
+                          {busy === m.assignmentId ? 'Reparando…' : `Reparar → ${m.gridTeacherName}`}
+                        </button>
                       </div>
                     ))}
                   </div>
