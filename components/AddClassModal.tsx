@@ -137,10 +137,12 @@ export const ANALYSIS_FAILED_NOTICE = {
 
 // ── Aviso de transcript duplicado ─────────────────────────────────────────────
 /**
- * Tres casos:
- *   · blocked      → texto idéntico ya registrado para ESTA clase: no se guarda.
- *   · other-class  → texto idéntico de otro alumno/fecha: se puede confirmar.
- *   · replace      → ya hay transcript de esta clase: se ofrece reemplazarlo.
+ * Dos casos, y NINGUNO impide guardar:
+ *   · duplicate → texto EXACTAMENTE igual a otro de este alumno: se avisa por si
+ *                 fue un pegado por error, y se puede subir igual.
+ *   · replace   → ya hay transcript de esta clase: se ofrece reemplazarlo.
+ *
+ * Un transcript parecido pero no idéntico es otra clase: no se dice nada.
  */
 function DuplicateDialog({ check, onCancel, onConfirm }: {
   check: DupeCheck; onCancel: () => void; onConfirm: () => void;
@@ -149,23 +151,17 @@ function DuplicateDialog({ check, onCancel, onConfirm }: {
 
   const when = check.row.class_date ? shortDate(check.row.class_date) : 'fecha desconocida';
 
-  const copy = check.kind === 'blocked'
+  const copy = check.kind === 'duplicate'
     ? {
-        title: 'Este transcript ya fue registrado',
-        body: `Ya existe exactamente este mismo texto para ${check.row.student_name} el ${when}. No hace falta subirlo otra vez.`,
-        confirm: null,
+        title: 'Este transcript es idéntico a uno ya subido',
+        body: `Este transcript es idéntico a uno que ya subiste para ${check.row.student_name} el ${when}. Si es correcto y querés subirlo de todos modos, confirmá.`,
+        confirm: 'Subir de todos modos',
       }
-    : check.kind === 'other-class'
-      ? {
-          title: '¿Es el transcript correcto?',
-          body: `Este transcript parece ser el mismo que ya subiste para ${check.row.student_name} el ${when}. ¿Estás seguro de que es correcto?`,
-          confirm: 'Confirmar igualmente',
-        }
-      : {
-          title: 'Ya existe un transcript para esta clase',
-          body: `Registraste una clase con ${check.row.student_name} el ${when}. ¿Querés reemplazar el transcript existente? Se volverá a analizar con el texto nuevo.`,
-          confirm: 'Reemplazar',
-        };
+    : {
+        title: 'Ya existe un transcript para esta clase',
+        body: `Registraste una clase con ${check.row.student_name} el ${when}. ¿Querés reemplazar el transcript existente? Se volverá a analizar con el texto nuevo.`,
+        confirm: 'Reemplazar',
+      };
 
   return (
     <div
@@ -176,7 +172,7 @@ function DuplicateDialog({ check, onCancel, onConfirm }: {
     >
       <div style={{ background: '#fff', borderRadius: 14, padding: 24, width: '100%', maxWidth: 420 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 8 }}>
-          <span style={{ width: 9, height: 9, borderRadius: '50%', background: check.kind === 'blocked' ? '#dc4a38' : '#e0912f' }} />
+          <span style={{ width: 9, height: 9, borderRadius: '50%', background: '#e0912f' }} />
           <span style={{ fontSize: 16, fontWeight: 700, color: '#1a1c1a' }}>{copy.title}</span>
         </div>
         <p style={{ fontSize: 13.5, color: '#5f6360', lineHeight: 1.65, margin: '0 0 18px' }}>{copy.body}</p>
@@ -185,7 +181,7 @@ function DuplicateDialog({ check, onCancel, onConfirm }: {
             onClick={onCancel}
             style={{ flex: 1, padding: '10px', borderRadius: 9, border: '1px solid var(--border)', background: 'transparent', color: '#5f6360', cursor: 'pointer', fontSize: 13.5, fontFamily: 'inherit' }}
           >
-            {copy.confirm ? 'Cancelar' : 'Cerrar'}
+            Cancelar
           </button>
           {copy.confirm && (
             <button
@@ -323,7 +319,7 @@ export function AddClassModal({
     // Las faltas/cancelaciones no llevan transcript: nada que verificar.
     if (!needsTranscript) { await persist('', null); return; }
 
-    const hash = transcriptHash(transcript);
+    const hash = await transcriptHash(transcript);
     setChecking(true);
     let result: DupeCheck;
     try {

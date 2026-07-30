@@ -654,7 +654,7 @@ function PendingTranscriptModal({ pending, assignment, profile, ficha, teacher, 
 
   async function handleSave() {
     if (!canSave) return;
-    const hash = transcriptHash(text);
+    const hash = await transcriptHash(text);
     setBusy(true);
     let res: DupeCheck;
     try {
@@ -708,21 +708,16 @@ function PendingTranscriptModal({ pending, assignment, profile, ficha, teacher, 
         {dupe && dupe.kind !== 'none' && (
           <div style={{ marginTop: 16, padding: '13px 15px', borderRadius: 10, background: '#fdf3e7', border: '1px solid #f2e2c9' }}>
             <div style={{ fontSize: 13.5, color: '#9a6516', lineHeight: 1.6, marginBottom: 10 }}>
-              {dupe.kind === 'blocked'
-                ? 'Este mismo texto ya está registrado para esta clase.'
-                : dupe.kind === 'other-class'
-                  ? `Este transcript parece el mismo que subiste para ${dupe.row.student_name}. ¿Seguro que es el correcto?`
-                  : 'Ya hay un transcript para esta clase. Se reemplazará por el nuevo.'}
+              {dupe.kind === 'duplicate'
+                ? `Este transcript es idéntico a uno que ya subiste para ${dupe.row.student_name}${dupe.row.class_date ? ` el ${dupe.row.class_date}` : ''}. Si es correcto y querés subirlo de todos modos, confirmá.`
+                : 'Ya hay un transcript para esta clase. Se reemplazará por el nuevo.'}
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
-              <button onClick={() => setDupe(null)} style={{ ...btnSecondary, flex: 1 }}>
-                {dupe.kind === 'blocked' ? 'Cerrar' : 'Cancelar'}
+              <button onClick={() => setDupe(null)} style={{ ...btnSecondary, flex: 1 }}>Cancelar</button>
+              {/* Nunca se deja al profesor trabado: siempre puede continuar. */}
+              <button onClick={async () => { setDupe(null); persist(await transcriptHash(text)); }} style={{ ...btnPrimary, flex: 1 }}>
+                {dupe.kind === 'duplicate' ? 'Subir de todos modos' : 'Continuar'}
               </button>
-              {dupe.kind !== 'blocked' && (
-                <button onClick={() => { const d = dupe; setDupe(null); persist(transcriptHash(text)); void d; }} style={{ ...btnPrimary, flex: 1 }}>
-                  Continuar
-                </button>
-              )}
             </div>
           </div>
         )}

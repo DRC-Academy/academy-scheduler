@@ -86,6 +86,24 @@ export function flagLabel(flag: string): string {
   return FLAG_LABELS[flag] ?? flag;
 }
 
+/**
+ * Señales INFORMATIVAS: se calculan, se guardan y las ve el admin, pero NO
+ * mandan la clase a revisión por sí solas ni le dicen nada al profesor.
+ *
+ * `alta_similitud` está acá desde julio de 2026. Compara por shingles contra las
+ * últimas 5 transcripciones del profesor SIN mirar de qué alumno son, así que un
+ * profe con varias clases del mismo nivel superaba el umbral del 35% de rutina y
+ * la clase iba a "a revisar" sin motivo. Sigue viva porque es la única señal que
+ * detecta un transcript reciclado de otra clase — pero como pista para el admin,
+ * no como veredicto.
+ */
+export const INFO_ONLY_FLAGS = new Set<string>(['alta_similitud']);
+
+/** Señales que SÍ pesan en la decisión (todo lo que no sea informativo). */
+export function decisiveFlags(flags: string[]): string[] {
+  return flags.filter(f => !INFO_ONLY_FLAGS.has(f));
+}
+
 function countMatches(text: string, re: RegExp): number {
   const m = text.match(re);
   return m ? m.length : 0;

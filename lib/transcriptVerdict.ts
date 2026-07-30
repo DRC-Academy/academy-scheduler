@@ -25,7 +25,7 @@
 import 'server-only';   // arrastra el SDK de Anthropic: nunca debe entrar al bundle del navegador
 
 import {
-  validateTranscriptStructure, SCORE_SEVERE, SCORE_CLEAN, SCORE_AUTO_APPROVE,
+  validateTranscriptStructure, decisiveFlags, SCORE_SEVERE, SCORE_CLEAN, SCORE_AUTO_APPROVE,
   type ValidationResult,
 } from '@/lib/transcriptValidation';
 import { runTranscriptCrossChecks, type CrossCheckResult } from '@/lib/transcriptCrossCheck';
@@ -122,7 +122,8 @@ export async function computeTranscriptVerdict(input: VerdictInput): Promise<Tra
   // ── Capa 3 — solo en zona gris o si hay flags de capa 2 ──
   let ai: TranscriptAuthenticity | null = null;
   let aiRan = false;
-  if (!input.skipAI && shouldRunAI(structure.score, cross.flags.length)) {
+  // La similitud sola no justifica gastar una llamada a la IA: es informativa.
+  if (!input.skipAI && shouldRunAI(structure.score, decisiveFlags(cross.flags).length)) {
     const res = await verifyTranscriptAI({
       transcript: input.transcript,
       teacherName: input.teacherName,
@@ -161,8 +162,11 @@ export function decideTranscript(args: {
 }): TranscriptDecision {
   const { score, flags, ai } = args;
   const aiDoubts = !!ai && ai.authentic === false && ai.confidence >= 40;
+  // Las señales informativas (alta_similitud) se guardan y las ve el admin, pero
+  // no mandan la clase a revisión por sí solas. Ver INFO_ONLY_FLAGS.
+  const decisive = decisiveFlags(flags);
 
   if (score < SCORE_SEVERE) return 'blocked';
-  if (score < SCORE_CLEAN || flags.length > 0 || aiDoubts) return 'review';
+  if (score < SCORE_CLEAN || decisive.length > 0 || aiDoubts) return 'review';
   return 'ok';
 }
