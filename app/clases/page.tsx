@@ -25,7 +25,7 @@ const EMPTY_FORM_INDEX: FormIndex = { byId: new Map(), byName: new Map() };
 function ClasesContent() {
   const { user } = useAuth();
   const {
-    teachers, students, classRecords, classAnalyses,
+    teachers, students, classRecords, classAnalyses, classJoinLogs,
     updateMeetLink, logClassJoin, addRescheduleRecord, registerClassRecord,
     loadFinanceData, reloadAll,
   } = useTeachers();
@@ -100,6 +100,7 @@ function ClasesContent() {
               students={students}
               classRecords={classRecords}
               classAnalyses={classAnalyses}
+              classJoinLogs={classJoinLogs}
               grid={grid}
               onGridChange={handleGridChange}
               updateMeetLink={updateMeetLink}

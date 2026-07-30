@@ -71,6 +71,46 @@ export function hourLabel(hour: string): string {
   return isNaN(h) ? hour : `${String(h).padStart(2, '0')}:00`;
 }
 
+/** Lunes (ISO) de la semana que contiene una fecha 'YYYY-MM-DD'. */
+export function mondayIsoOfIso(iso: string): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  if (!y || !m || !d) return iso;
+  const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+  return addDaysIso(iso, dow === 0 ? -6 : 1 - dow);
+}
+
+/** Fecha corta para la UI: '2026-07-28' → '28 jul'. */
+export function shortDateLabel(iso: string): string {
+  const d = new Date(iso + 'T12:00:00Z');
+  if (isNaN(d.getTime())) return iso;
+  const month = d.toLocaleDateString('es-ES', { month: 'short', timeZone: 'UTC' }).replace('.', '');
+  return `${d.getUTCDate()} ${month}`;
+}
+
+/** Cabecera de un día en la vista semanal: 'Lunes 27'. */
+export function dayHeadingLabel(iso: string): string {
+  const d = new Date(iso + 'T12:00:00Z');
+  if (isNaN(d.getTime())) return iso;
+  const day = d.toLocaleDateString('es-ES', { weekday: 'long', timeZone: 'UTC' });
+  return `${day.charAt(0).toUpperCase()}${day.slice(1)} ${d.getUTCDate()}`;
+}
+
+/**
+ * Días de la semana (lunes → sábado) que contiene la fecha dada. Son SEIS y no
+ * siete porque el grid del calendario no tiene domingo: un séptimo día solo
+ * podría salir vacío.
+ */
+export function weekDaysOf(iso: string): string[] {
+  const monday = mondayIsoOfIso(iso);
+  return Array.from({ length: 6 }, (_, i) => addDaysIso(monday, i));
+}
+
+/** Rango legible de una semana: "27 jul — 1 ago". */
+export function weekRangeLabel(iso: string): string {
+  const days = weekDaysOf(iso);
+  return `${shortDateLabel(days[0])} — ${shortDateLabel(days[days.length - 1])}`;
+}
+
 // ── Clases de una fecha ───────────────────────────────────────────────────────
 
 export interface TeacherClass {

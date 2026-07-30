@@ -24,6 +24,7 @@ import { isMilestone, getMilestoneSlides, MILESTONES, MILESTONE_SLIDES, MILESTON
 import {
   classesForDate, recoveriesForDate, addDaysIso, isoDateLocal, dayNameFromDate, mondayIsoOf,
   rescheduledTargetFor, cancellationFor, cancellationLabel, transcriptForClass, hourLabel,
+  weekDaysOf, weekRangeLabel, dayHeadingLabel,
   type TeacherClass as TodayClass,
 } from '@/lib/teacherClasses';
 import { useClassJoin } from '@/components/JoinClass';
@@ -32,9 +33,27 @@ import { PresentationModal } from '@/components/PresentationModal';
 import FormStatusBadge from '@/components/FormStatusBadge';
 import { lookupToken, formStateOf, type FormTokenInfo } from '@/lib/formClient';
 import { fmtDateDMY, stripProtocol, usePresentationSent, PresentationEmailBadge } from '@/components/teacherPanelUi';
-import type { Grid, Teacher, Assignment, Student, ClassRecord, ClassRecordType } from '@/types';
+import type { Grid, Teacher, Assignment, Student, ClassRecord, ClassRecordType, ClassJoinLog } from '@/types';
 
 export type FormIndex = { byId: Map<string, FormTokenInfo>; byName: Map<string, FormTokenInfo> };
+
+/** Rango a la vista: un día o la semana entera (lunes → sábado). */
+type RangeMode = 'day' | 'week';
+
+/** Filtro de la lista. 'sin_transcript' es el que cierra el pago. */
+type ClassFilter = 'todas' | 'pendientes' | 'dadas' | 'sin_transcript';
+
+const RANGE_TABS: Array<{ id: RangeMode; label: string }> = [
+  { id: 'day',  label: 'Día' },
+  { id: 'week', label: 'Semana' },
+];
+
+const FILTER_TABS: Array<{ id: ClassFilter; label: string }> = [
+  { id: 'todas',          label: 'Todas' },
+  { id: 'pendientes',     label: 'Por dar' },
+  { id: 'dadas',          label: 'Ya dadas' },
+  { id: 'sin_transcript', label: 'Sin transcript' },
+];
 
 // El modal "Email de presentación" se importa desde components/PresentationModal.
 
@@ -253,13 +272,15 @@ function CancelClassModal({ studentName, currentDate, currentHour, saving, onCon
 }
 
 // ─── Teacher Upcoming Classes Tab ─────────────────────────────────────────────
-export function MisClasesPanel({ teacher, myAssignments, students, classRecords, classAnalyses, grid, onGridChange, updateMeetLink, logClassJoin, addRescheduleRecord, registerClassRecord, onDataChanged, formIndex, refreshFormIndex }: {
+export function MisClasesPanel({ teacher, myAssignments, students, classRecords, classAnalyses, classJoinLogs, grid, onGridChange, updateMeetLink, logClassJoin, addRescheduleRecord, registerClassRecord, onDataChanged, formIndex, refreshFormIndex }: {
   teacher: Teacher;
   myAssignments: Assignment[];
   students: Student[];
   classRecords: ClassRecord[];
   /** Transcripts ya guardados, para saber qué clase dada sigue sin cerrar. */
   classAnalyses: ClassTranscriptRef[];
+  /** Ingresos registrados, para vincular cada transcript con SU clase. */
+  classJoinLogs: ClassJoinLog[];
   /** Se llama tras guardar un transcript, para refrescar los datos de la pantalla. */
   onDataChanged: () => Promise<void> | void;
   grid: Grid;
@@ -278,8 +299,12 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
   const [presentationModal, setPresentationModal] = useState<Assignment | null>(null);
   const { isSent, markSent } = usePresentationSent(teacher.id);
   const [toast, setToast] = useState<string | null>(null);
-  // Navegador de fechas: desplazamiento en días respecto de hoy (0 = hoy).
+  // Navegador de fechas: desplazamiento en días respecto de hoy (0 = hoy). En
+  // modo semana las flechas lo mueven de 7 en 7, así que la fecha ancla siempre
+  // cae dentro de la semana que se está mirando.
   const [dayOffset, setDayOffset] = useState(0);
+  const [range, setRange] = useState<RangeMode>('day');
+  const [filter, setFilter] = useState<ClassFilter>('todas');
   // Fila cuyo menú "⋯" está abierto (una sola a la vez).
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [subInfo, setSubInfo] = useState<Record<string, SubscriptionInfo>>({});
@@ -351,38 +376,24 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
   });
   const subEmailForAssignment = join.emailFor;
 
-  // Lista del día = FUENTE 1 (slots recurrentes) + FUENTE 2 (recuperaciones del
-  // grid que caen en este día), unidas y ordenadas por hora.
-  // Sin useMemo a propósito: son dos filtros sobre unas pocas decenas de
-  // elementos y el compilador de React lo memoiza solo. El useMemo manual que
-  // había aquí le impedía optimizar el componente entero.
-  const todayClasses = [
-    ...classesForDate(myAssignments, viewIso),
-    ...recoveriesForDate(grid, viewIso, myAssignments),
-  ].sort((x, y) => parseInt(x.hour) - parseInt(y.hour));
+  // Días a la vista: uno en modo "Día", los seis de la semana (lun→sáb) en modo
+  // "Semana". El grid del calendario no tiene domingo, así que un séptimo día
+  // solo podría salir vacío.
+  const visibleDays = range === 'week' ? weekDaysOf(viewIso) : [viewIso];
 
   type ClassStatus = 'passed' | 'inprogress' | 'next' | 'future';
-  function statusOf(c: TodayClass): ClassStatus {
+  function statusOf(c: TodayClass, dateIso: string): ClassStatus {
     if (currentDecimal < 0) return 'future';        // aún sin reloj (antes de montar)
     // Un día ANTERIOR a hoy está dado entero, y uno posterior está entero por dar.
     // Antes esto devolvía 'future' para todo lo que no fuera hoy, así que las
     // clases de ayer se pintaban como si estuvieran por darse.
-    if (viewIso < todayIso) return 'passed';
-    if (viewIso > todayIso) return 'future';
+    if (dateIso < todayIso) return 'passed';
+    if (dateIso > todayIso) return 'future';
     const h = parseInt(c.hour);
     if (h <= currentDecimal && h + 1 > currentDecimal) return 'inprogress';
     if (h + 1 <= currentDecimal) return 'passed';
     return 'future';
   }
-  // The "next" class is the earliest one that has not started yet.
-  const nextKey = isToday
-    ? todayClasses.find(c => parseInt(c.hour) > currentDecimal)?.key ?? null
-    : null;
-
-  // Las clases YA DADAS no se esconden: van en la misma lista, en su hora, con
-  // su estado. Los contadores de la cabecera resumen el día de un vistazo.
-  const passedCount  = todayClasses.filter(c => statusOf(c) === 'passed').length;
-  const pendingCount = todayClasses.length - passedCount;
 
   // Reprogramación / cancelación de una clase puntual. Las dos preguntas se
   // resuelven en lib/teacherClasses: una reprogramación deja `rescheduledTo` en
@@ -402,20 +413,74 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     return transcriptForClass(classAnalyses, teacher.id, c.studentName, date);
   }
 
+  /**
+   * Ingreso ("Ingresar a clase") de esa clase concreta. Es lo que vincula el
+   * transcript con la clase de forma EXPLÍCITA: al guardarlo se manda su id y
+   * finanzas empareja por id en vez de adivinar por proximidad de fechas.
+   */
+  function joinLogOf(c: TodayClass, date: string) {
+    const name = c.studentName.trim().toLowerCase();
+    const mine = classJoinLogs.filter(l =>
+      l.teacherId === teacher.id && l.studentName.trim().toLowerCase() === name && l.scheduledDate === date,
+    );
+    // Con varios ingresos el mismo día gana el de la misma hora.
+    const h = parseInt(c.hour);
+    return mine.find(l => parseInt(l.scheduledTime) === h) ?? mine[0];
+  }
+
+  /** ¿Esta clase se dio de verdad? (no reprogramada ni cancelada) */
+  function isRealClass(c: TodayClass, date: string) {
+    return !rescheduledFor(c.studentName, date) && !cancelledFor(c.studentName, date);
+  }
+
+  // ── Días con sus clases, ya filtrados ────────────────────────────────────────
+  // Sin useMemo a propósito: son unos pocos filtros sobre decenas de elementos.
+  const dayGroups = visibleDays.map(iso => {
+    const all = [
+      ...classesForDate(myAssignments, iso),
+      ...recoveriesForDate(grid, iso, myAssignments),
+    ].sort((x, y) => parseInt(x.hour) - parseInt(y.hour));
+
+    const shown = all.filter(c => {
+      if (filter === 'todas') return true;
+      const passed = statusOf(c, iso) === 'passed';
+      if (filter === 'pendientes') return !passed && isRealClass(c, iso);
+      if (filter === 'dadas')      return passed && isRealClass(c, iso);
+      // 'sin_transcript': lo que le falta al profesor para cobrar esas clases.
+      return passed && isRealClass(c, iso) && !transcriptOf(c, iso);
+    });
+
+    return { iso, all, shown };
+  });
+
+  const allVisible = dayGroups.flatMap(g => g.all.map(c => ({ c, iso: g.iso })));
+  const shownCount = dayGroups.reduce((n, g) => n + g.shown.length, 0);
+
+  // "Próxima" = la primera clase de HOY que aún no empezó, esté donde esté.
+  const nextKey = (() => {
+    const today = dayGroups.find(g => g.iso === todayIso);
+    return today?.all.find(c => parseInt(c.hour) > currentDecimal)?.key ?? null;
+  })();
+
+  // Resumen del rango a la vista. Las clases YA DADAS no se esconden: van en la
+  // lista, en su hora, con su estado.
+  const passedCount  = allVisible.filter(x => statusOf(x.c, x.iso) === 'passed').length;
+  const pendingCount = allVisible.length - passedCount;
+
   // Clases dadas que siguen sin transcript: es lo que le falta al profesor para
   // que cuenten en su pago, así que se avisa arriba del todo.
-  const missingTranscripts = todayClasses.filter(
-    c => statusOf(c) === 'passed' && !transcriptOf(c, viewIso)
-      && !rescheduledFor(c.studentName, viewIso) && !cancelledFor(c.studentName, viewIso),
+  const missingTranscripts = allVisible.filter(
+    x => statusOf(x.c, x.iso) === 'passed' && isRealClass(x.c, x.iso) && !transcriptOf(x.c, x.iso),
   );
 
-  // Unique emails of every student visible in this tab (today + next 2 days, y
-  // además el día que se esté mirando con el navegador de fechas — si no, al
-  // navegar lejos el badge de suscripción se quedaría cargando para siempre).
+  // Emails de todos los alumnos a la vista (los días que se están mostrando, más
+  // hoy y los dos siguientes). Si no se cubriera el rango visible, al navegar
+  // lejos el badge de suscripción se quedaría cargando para siempre.
+  const visibleDaysKey = visibleDays.join('|');
   const visibleEmails = useMemo(() => {
     const set = new Set<string>();
-    for (const off of new Set([0, 1, 2, dayOffset])) {
-      const iso = addDaysIso(todayIso, off);
+    const isos = new Set([...visibleDays, todayIso, addDaysIso(todayIso, 1), addDaysIso(todayIso, 2)]);
+    for (const iso of isos) {
       for (const c of [...classesForDate(myAssignments, iso), ...recoveriesForDate(grid, iso, myAssignments)]) {
         const e = subEmailForAssignment(c.assignment);
         if (e) set.add(e);
@@ -423,7 +488,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     }
     return [...set].sort();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [myAssignments, students, grid, dayOffset]);
+  }, [myAssignments, students, grid, visibleDaysKey, todayIso]);
   const emailsKey = visibleEmails.join('|');
 
   // Fetch all subscription states once when the tab opens (parallel, in-memory).
@@ -450,22 +515,31 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     return subBadge(subInfo[e]);
   }
 
-  // Assignments today missing a meet link (deduped by assignment)
+  // Alumnos a la vista sin enlace de Meet definido (uno por assignment). Solo
+  // tiene sentido avisarlo de las clases que aún se van a dar.
   const missingSeen = new Set<string>();
   const missingLinks: TodayClass[] = [];
-  for (const c of todayClasses) {
-    if (!c.meetLink && !missingSeen.has(c.assignment.id)) {
+  for (const { c, iso } of allVisible) {
+    if (!c.meetLink && statusOf(c, iso) !== 'passed' && !missingSeen.has(c.assignment.id)) {
       missingSeen.add(c.assignment.id);
       missingLinks.push(c);
     }
   }
   const missingNames = missingLinks.map(c => c.studentName.split(' ')[0]);
 
-  // Etiqueta del navegador: "Martes, 21 jul" (con "Hoy"/"Mañana" cuando aplica).
-  const dateLabel = new Date(viewIso + 'T12:00:00Z').toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'short', timeZone: 'UTC' })
-    .replace(/\.$/, '')
-    .replace(/^(\w)/, m => m.toUpperCase());
-  const relLabel = dayOffset === 0 ? 'Hoy' : dayOffset === 1 ? 'Mañana' : dayOffset === -1 ? 'Ayer' : null;
+  // Etiqueta del navegador: "Martes, 21 jul" en modo día, "27 jul — 1 ago" en
+  // modo semana (con "Hoy"/"Mañana" cuando aplica).
+  const dateLabel = range === 'week'
+    ? weekRangeLabel(viewIso)
+    : new Date(viewIso + 'T12:00:00Z').toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'short', timeZone: 'UTC' })
+        .replace(/\.$/, '')
+        .replace(/^(\w)/, m => m.toUpperCase());
+  const relLabel = range === 'week'
+    ? (visibleDays.includes(todayIso) ? 'Esta semana' : null)
+    : dayOffset === 0 ? 'Hoy' : dayOffset === 1 ? 'Mañana' : dayOffset === -1 ? 'Ayer' : null;
+  // En modo semana el botón "Hoy" ya está en la semana actual si hoy es visible.
+  const atToday = range === 'week' ? visibleDays.includes(todayIso) : isToday;
+  const step = range === 'week' ? 7 : 1;
 
   async function handleRescheduleConfirm(data: { reason: RescheduleReason; reasonLabel: string; newDate: string; newTime: string }) {
     if (!rescheduleModal) return;
@@ -564,6 +638,10 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     const result = await saveTeacherClass({
       teacher, myAssignments, studentName, date, time, transcript, classType, comment,
       transcriptHash: hash, replaceId, registerClassRecord,
+      // Vínculo EXPLÍCITO con el ingreso de esa clase: con él, finanzas empareja
+      // transcript e ingreso por id en vez de por proximidad de fechas, así que
+      // la clase queda verificada por sus dos factores sin ambigüedad.
+      joinLogId: transcriptFor ? joinLogOf(transcriptFor.c, transcriptFor.date)?.id ?? null : null,
     });
     if (result.notice) setSaveNotice(result.notice);
     // Solo se vuelve a avisar si el informe de IA falla: la clase ya está guardada.
@@ -777,9 +855,9 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     );
   }
 
-  // Resolves the visual status, promoting the earliest not-started class to "next".
-  function rowStatus(c: TodayClass): ClassStatus {
-    const s = statusOf(c);
+  // Estado visual de la fila: promociona a "próxima" la primera de hoy sin empezar.
+  function rowStatus(c: TodayClass, dateIso: string): ClassStatus {
+    const s = statusOf(c, dateIso);
     if (s === 'future' && c.key === nextKey) return 'next';
     return s;
   }
@@ -792,7 +870,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
           {/* Resumen del día: cuántas quedan y cuántas ya diste. Antes solo decía
               el total, que no distingue "me faltan 4" de "ya terminé". */}
           <div className="mc-count">
-            {todayClasses.length === 0 ? 'Sin clases' : (
+            {allVisible.length === 0 ? 'Sin clases' : (
               <span className="mc-summary">
                 {pendingCount > 0 && (
                   <span><b>{pendingCount}</b> por dar</span>
@@ -806,12 +884,44 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
           </div>
         </div>
 
-        {/* Navegador de fechas */}
+        {/* Navegador: día a día o semana a semana según el modo. */}
         <div className="mc-nav">
-          <button className="mc-nav-btn" aria-label="Día anterior" onClick={() => setDayOffset(o => o - 1)}>‹</button>
+          <button className="mc-nav-btn" aria-label={range === 'week' ? 'Semana anterior' : 'Día anterior'}
+            onClick={() => setDayOffset(o => o - step)}>‹</button>
           <span className="mc-nav-label">{dateLabel}</span>
-          <button className="mc-nav-btn" aria-label="Día siguiente" onClick={() => setDayOffset(o => o + 1)}>›</button>
-          <button className="mc-today-btn" onClick={() => setDayOffset(0)} disabled={isToday}>Hoy</button>
+          <button className="mc-nav-btn" aria-label={range === 'week' ? 'Semana siguiente' : 'Día siguiente'}
+            onClick={() => setDayOffset(o => o + step)}>›</button>
+          <button className="mc-today-btn" onClick={() => setDayOffset(0)} disabled={atToday}>Hoy</button>
+        </div>
+      </div>
+
+      {/* Rango (día / semana) y filtro. La semana es lunes → sábado: el grid del
+          calendario no tiene domingo, así que un séptimo día saldría vacío. */}
+      <div className="mc-controls">
+        <div className="mc-segment" role="tablist" aria-label="Rango">
+          {RANGE_TABS.map(t => (
+            <button key={t.id} role="tab" aria-selected={range === t.id}
+              className={`mc-segment-btn${range === t.id ? ' is-active' : ''}`}
+              onClick={() => setRange(t.id)}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="mc-chips">
+          {FILTER_TABS.map(f => {
+            // El contador del filtro que cierra el pago se muestra siempre: es el
+            // que le dice al profesor cuánto le queda por hacer.
+            const badge = f.id === 'sin_transcript' && missingTranscripts.length > 0
+              ? missingTranscripts.length : null;
+            return (
+              <button key={f.id}
+                className={`mc-chip${filter === f.id ? ' is-active' : ''}${badge ? ' is-warn' : ''}`}
+                onClick={() => setFilter(f.id)}>
+                {f.label}{badge ? ` · ${badge}` : ''}
+              </button>
+            );
+          })}
         </div>
       </div>
 
@@ -825,17 +935,18 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
         </div>
       )}
 
-      {/* Transcripts pendientes del día: es lo que le falta al profesor para que
-          esas clases cuenten en su pago, así que va arriba y no escondido. */}
-      {missingTranscripts.length > 0 && (
+      {/* Transcripts pendientes del rango a la vista: es lo que le falta al
+          profesor para que esas clases cuenten en su pago. Va arriba, no
+          escondido, y el botón lleva al filtro que las aísla. */}
+      {missingTranscripts.length > 0 && filter !== 'sin_transcript' && (
         <div className="mc-banner">
           <div style={{ flex: 1 }}>
-            {missingTranscripts.length} clase{missingTranscripts.length !== 1 ? 's' : ''} de este día sin transcript:{' '}
-            {missingTranscripts.map(c => c.studentName.split(' ')[0]).join(', ')}
+            {missingTranscripts.length} clase{missingTranscripts.length !== 1 ? 's' : ''} sin transcript{' '}
+            {range === 'week' ? 'esta semana' : 'este día'}:{' '}
+            {[...new Set(missingTranscripts.map(x => x.c.studentName.split(' ')[0]))].join(', ')}
           </div>
-          <button className="mc-btn mc-btn-ghost"
-            onClick={() => setTranscriptFor({ c: missingTranscripts[0], date: viewIso })}>
-            Añadir transcript
+          <button className="mc-btn mc-btn-ghost" onClick={() => setFilter('sin_transcript')}>
+            Ver solo esas
           </button>
         </div>
       )}
@@ -855,18 +966,48 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
         </div>
       )}
 
-      {/* Clases del día seleccionado */}
-      {todayClasses.length === 0 ? (
+      {/* Clases del rango. UNA sola lista por hora, con las clases dadas en su
+          sitio: antes iban plegadas detrás de un desplegable y en los días
+          anteriores ni siquiera existían como "dadas", así que el profesor no
+          tenía dónde verlas ni dónde cerrarlas con el transcript. */}
+      {allVisible.length === 0 ? (
         <div className="mc-empty">
-          {isToday ? 'No tienes clases hoy.' : 'No tienes clases este día.'}
+          {range === 'week'
+            ? 'No tienes clases esta semana.'
+            : isToday ? 'No tienes clases hoy.' : 'No tienes clases este día.'}
+        </div>
+      ) : shownCount === 0 ? (
+        <div className="mc-empty">
+          Ninguna clase {range === 'week' ? 'de la semana' : 'del día'} coincide con este filtro.
+          <div style={{ marginTop: 12 }}>
+            <button className="mc-btn mc-btn-ghost" onClick={() => setFilter('todas')}>Ver todas</button>
+          </div>
+        </div>
+      ) : range === 'day' ? (
+        <div className="mc-list">
+          {dayGroups[0].shown.map(c => (
+            <ClassRow key={c.key} c={c} status={rowStatus(c, dayGroups[0].iso)} date={dayGroups[0].iso} />
+          ))}
         </div>
       ) : (
-        // UNA sola lista por hora, con las clases dadas en su sitio. Antes las
-        // pasadas iban plegadas detrás de un desplegable y en los días anteriores
-        // ni siquiera existían como "dadas": el profesor no tenía dónde verlas ni
-        // dónde cerrarlas con el transcript.
-        <div className="mc-list">
-          {todayClasses.map(c => <ClassRow key={c.key} c={c} status={rowStatus(c)} date={viewIso} />)}
+        // Semana: las mismas tarjetas, agrupadas bajo la cabecera de cada día.
+        <div className="mc-week">
+          {dayGroups.filter(g => g.shown.length > 0).map(g => (
+            <div key={g.iso}>
+              <div className={`mc-daystrip${g.iso === todayIso ? ' is-today' : ''}`}>
+                <span className="mc-daystrip-name">{dayHeadingLabel(g.iso)}</span>
+                {g.iso === todayIso && <span className="mc-daystrip-hoy">Hoy</span>}
+                <span className="mc-daystrip-count">
+                  {g.shown.length} clase{g.shown.length === 1 ? '' : 's'}
+                </span>
+              </div>
+              <div className="mc-list">
+                {g.shown.map(c => (
+                  <ClassRow key={c.key} c={c} status={rowStatus(c, g.iso)} date={g.iso} />
+                ))}
+              </div>
+            </div>
+          ))}
         </div>
       )}
 

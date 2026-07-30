@@ -411,6 +411,48 @@ label {
 .mc-today-btn:hover:not(:disabled) { background: #eaf5ec; }
 .mc-today-btn:disabled { color: var(--mc-t3); cursor: default; }
 
+/* Controles: rango (día/semana) + filtros */
+.mc-controls {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap; margin-bottom: 16px;
+}
+.mc-segment {
+  display: inline-flex; gap: 2px; padding: 3px;
+  background: var(--mc-card); border: 1px solid var(--mc-border); border-radius: 10px;
+}
+.mc-segment-btn {
+  border: none; background: transparent; border-radius: 8px;
+  padding: 7px 16px; cursor: pointer; font-family: inherit;
+  font-size: 13px; font-weight: 600; color: var(--mc-t2);
+}
+.mc-segment-btn:hover { color: var(--mc-t1); }
+.mc-segment-btn.is-active { background: #1E9E3A; color: #fff; }
+
+.mc-chips { display: flex; gap: 7px; flex-wrap: wrap; }
+.mc-chip {
+  border: 1px solid var(--mc-border); background: var(--mc-card); border-radius: 999px;
+  padding: 7px 14px; cursor: pointer; font-family: inherit;
+  font-size: 12.5px; font-weight: 600; color: var(--mc-t2); white-space: nowrap;
+}
+.mc-chip:hover { background: var(--mc-page); color: var(--mc-t1); }
+/* El filtro con trabajo pendiente se destaca aunque no esté seleccionado. */
+.mc-chip.is-warn { border-color: #f0dcc2; background: #fdf3e7; color: #9a6516; }
+.mc-chip.is-active { border-color: #1E9E3A; background: #eaf5ec; color: #1f7a3d; }
+
+/* Semana: las mismas tarjetas, con la cabecera de cada día encima */
+.mc-week { display: flex; flex-direction: column; gap: 18px; }
+.mc-daystrip {
+  display: flex; align-items: center; gap: 9px;
+  padding: 0 2px 9px; margin-bottom: 10px; border-bottom: 1px solid var(--mc-border);
+}
+.mc-daystrip-name { font-size: 14px; font-weight: 600; color: var(--mc-t1); }
+.mc-daystrip.is-today .mc-daystrip-name { color: #1f7a3d; }
+.mc-daystrip-hoy {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase;
+  color: #fff; background: #1E9E3A; border-radius: 999px; padding: 2px 8px;
+}
+.mc-daystrip-count { font-size: 12.5px; color: var(--mc-t3); margin-left: auto; }
+
 /* Tarjeta de clase */
 .mc-list { display: flex; flex-direction: column; gap: 10px; }
 .mc-card {
@@ -559,6 +601,17 @@ label {
   .mc-nav-btn { width: 44px; height: 44px; }
   .mc-nav-label { min-width: 0; flex: 1; }
   .mc-today-btn { min-height: 44px; }
+
+  /* Controles: el rango ocupa el ancho y los filtros se deslizan en una fila. */
+  .mc-controls { flex-direction: column; align-items: stretch; gap: 10px; }
+  .mc-segment { width: 100%; }
+  .mc-segment-btn { flex: 1; min-height: 42px; }
+  .mc-chips {
+    flex-wrap: nowrap; overflow-x: auto; padding-bottom: 2px;
+    -webkit-overflow-scrolling: touch; scrollbar-width: none;
+  }
+  .mc-chips::-webkit-scrollbar { display: none; }
+  .mc-chip { min-height: 40px; display: inline-flex; align-items: center; }
 
   .mc-card { padding: 14px; }
   .mc-row {

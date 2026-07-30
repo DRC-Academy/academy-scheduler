@@ -60,6 +60,13 @@ export interface SaveClassArgs {
   transcriptHash: string;
   replaceId: string | null;
   registerClassRecord: RegisterClassRecordFn;
+  /**
+   * Ingreso ("Ingresar a clase") al que pertenece este transcript. Cuando viene,
+   * el vínculo con la clase es EXPLÍCITO y manda sobre la fecha: finanzas empareja
+   * transcript e ingreso por id en vez de adivinar por proximidad de fechas, que
+   * es lo que fallaba cuando un alumno tenía clases en días seguidos.
+   */
+  joinLogId?: string | null;
 }
 
 export interface SaveClassResult {
@@ -83,7 +90,7 @@ export interface SaveClassResult {
 export async function saveTeacherClass(args: SaveClassArgs): Promise<SaveClassResult> {
   const {
     teacher, myAssignments, studentName, date, time, transcript, classType, comment,
-    transcriptHash: hash, replaceId, registerClassRecord,
+    transcriptHash: hash, replaceId, registerClassRecord, joinLogId,
   } = args;
 
   // Faltas/cancelaciones (sin transcript): solo la constancia.
@@ -104,6 +111,7 @@ export async function saveTeacherClass(args: SaveClassArgs): Promise<SaveClassRe
     classDate: date,
     transcriptHash: hash || null,
     replaceId,
+    joinLogId: joinLogId ?? null,
   });
 
   if (!replaceId) {
