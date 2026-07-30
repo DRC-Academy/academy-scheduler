@@ -1,12 +1,12 @@
-// ── Clases del profesor: horario recurrente → clases con FECHA ────────────────
+﻿// ── Clases del profesor: horario recurrente → clases con FECHA ────────────────
 //
-// Fuente ÚNICA que expande el horario de un profesor a las clases reales de un
-// día o de una semana. Estas funciones vivían como privadas dentro del panel del
-// profesor (pestaña "Mis clases" de /teacher); se sacaron acá para que la vista
-// semanal /clases muestre EXACTAMENTE las mismas clases, sin una segunda
-// expansión que pudiera divergir.
+// Fuente ÚNICA que expande el horario de un profesor a las clases reales de una
+// fecha, más las constancias que la apagan (cancelada / reprogramada) y el
+// transcript que la cierra. Vivía como código privado dentro del panel del
+// profesor; se sacó acá para que la agenda (/clases) y la cabecera del
+// Calendario ("Próxima clase") no puedan calcular clases distintas.
 //
-// Dos fuentes, igual que en el panel:
+// Dos fuentes:
 //   1. Slots recurrentes del alumno (grid → assignment.slots) en su día de la semana.
 //   2. Celdas de recuperación del grid ('bloqueado' con alumno + weekDate) cuya
 //      fecha real cae en el día pedido.
@@ -63,23 +63,6 @@ export function mondayIsoOf(d: Date): string {
   const monday = new Date(d);
   monday.setDate(d.getDate() + diff);
   return isoDateLocal(monday);
-}
-
-/** Lunes (ISO) de la semana que contiene una fecha 'YYYY-MM-DD'. */
-export function mondayIsoOfIso(iso: string): string {
-  const [y, m, d] = iso.split('-').map(Number);
-  if (!y || !m || !d) return iso;
-  const dt = new Date(Date.UTC(y, m - 1, d));
-  const dow = dt.getUTCDay();
-  return addDaysIso(iso, dow === 0 ? -6 : 1 - dow);
-}
-
-/** Hora de la clase como rango legible: '16' | '16:00' → '16:00 - 17:00'. */
-export function hourRangeLabel(hour: string): string {
-  const h = parseInt(hour, 10);
-  if (isNaN(h)) return hour;
-  const pad = (n: number) => String(((n % 24) + 24) % 24).padStart(2, '0');
-  return `${pad(h)}:00 - ${pad(h + 1)}:00`;
 }
 
 /** Hora de la clase normalizada a 'HH:00'. */
@@ -172,14 +155,6 @@ export function recoveriesForDate(grid: Grid, dateIso: string, assignments: Assi
   return list;
 }
 
-/** Las dos fuentes unidas y ordenadas por hora: todas las clases de una fecha. */
-export function allClassesForDate(assignments: Assignment[], grid: Grid, dateIso: string): TeacherClass[] {
-  return [
-    ...classesForDate(assignments, dateIso),
-    ...recoveriesForDate(grid, dateIso, assignments),
-  ].sort((x, y) => parseInt(x.hour) - parseInt(y.hour));
-}
-
 // ── Constancias que apagan una clase (cancelada / reprogramada) ───────────────
 
 const CANCEL_TYPES = new Set<string>([
@@ -243,129 +218,4 @@ export function transcriptForClass(
     (t.class_date || (t.analyzed_at ?? '').slice(0, 10)) === dateIso &&
     !!t.transcript && t.transcript.trim().length > 0,
   );
-}
-
-// ── Semana completa ───────────────────────────────────────────────────────────
-
-/** Momento de la clase respecto de ahora (hora de España). */
-export type ClassTiming = 'past' | 'live' | 'next' | 'future';
-
-/** Marca puntual que apaga la clase: no se va a dar en esa fecha. */
-export type ClassMark = 'none' | 'cancelled' | 'rescheduled';
-
-export interface WeekClass extends TeacherClass {
-  timing: ClassTiming;
-  mark: ClassMark;
-  /** Tipo de la constancia de cancelación (solo si mark === 'cancelled'). */
-  cancelledType?: ClassRecordType;
-  /** Fecha a la que se movió (solo si mark === 'rescheduled'). */
-  rescheduledTo?: string;
-  /** ¿Es una clase que el profesor da de verdad ese día? */
-  counts: boolean;
-}
-
-export interface WeekDay {
-  iso: string;
-  /** 'Lunes', 'Martes', … */
-  dayName: string;
-  /** Número de día del mes (28). */
-  dayNumber: number;
-  isToday: boolean;
-  /** Día anterior a hoy (hora de España). */
-  isPast: boolean;
-  classes: WeekClass[];
-  /** Clases que se dan de verdad (excluye canceladas y reprogramadas). */
-  activeCount: number;
-}
-
-export interface BuildWeekOptions {
-  assignments: Assignment[];
-  grid: Grid;
-  /** Lunes de la semana a construir, 'YYYY-MM-DD'. */
-  mondayIso: string;
-  classRecords: ClassRecord[];
-  teacherId: string;
-  /** Hoy EN ESPAÑA, 'YYYY-MM-DD'. */
-  todayIso: string;
-  /** Hora decimal en España (hora + minuto/60). Negativa = aún desconocida. */
-  nowDecimal: number;
-  /** Días a construir desde el lunes. 6 = lunes→sábado (por defecto), 7 incluye domingo. */
-  dayCount?: number;
-}
-
-/**
- * Los días de la semana con sus clases ya resueltas: pasada / en curso / próxima
- * / futura, y si está cancelada o reprogramada.
- *
- * Por defecto son SEIS (lunes → sábado): el grid del calendario no tiene domingo,
- * así que una séptima columna solo podría salir vacía.
- *
- * NO oculta nada: las clases ya dadas vienen en la lista con `timing: 'past'`.
- * Es la diferencia con la agenda del panel, que las separa y las pliega.
- */
-export function buildTeacherWeek(opts: BuildWeekOptions): WeekDay[] {
-  const { assignments, grid, mondayIso, classRecords, teacherId, todayIso, nowDecimal, dayCount = 6 } = opts;
-
-  const days: WeekDay[] = [];
-  for (let i = 0; i < dayCount; i++) {
-    const iso = addDaysIso(mondayIso, i);
-    const classes: WeekClass[] = allClassesForDate(assignments, grid, iso).map(c => {
-      // Una fila de recuperación es el DESTINO de un movimiento: nunca se pinta
-      // como reprogramada ni cancelada por la constancia de la fecha original.
-      const rescheduledTo = c.isRecovery ? null : rescheduledTargetFor(classRecords, teacherId, c.studentName, iso);
-      const cancelledType = c.isRecovery ? null : cancellationFor(classRecords, teacherId, c.studentName, iso);
-      const mark: ClassMark = rescheduledTo ? 'rescheduled' : cancelledType ? 'cancelled' : 'none';
-      return {
-        ...c,
-        timing: timingOf(iso, c.hour, todayIso, nowDecimal),
-        mark,
-        cancelledType: cancelledType ?? undefined,
-        rescheduledTo: rescheduledTo ?? undefined,
-        counts: mark === 'none',
-      };
-    });
-
-    days.push({
-      iso,
-      dayName: dayNameFromIso(iso),
-      dayNumber: Number(iso.slice(8, 10)),
-      isToday: iso === todayIso,
-      isPast: iso < todayIso,
-      classes,
-      activeCount: classes.filter(c => c.counts).length,
-    });
-  }
-
-  // "Próxima" = la primera clase de HOY que aún no empezó. Se marca después de
-  // construir los días para no tener que adivinarlo clase a clase.
-  const today = days.find(d => d.isToday);
-  const upcoming = today?.classes.find(c => c.timing === 'future' && c.counts);
-  if (upcoming) upcoming.timing = 'next';
-
-  return days;
-}
-
-/** Pasada / en curso / futura de UNA clase, con la hora de España del llamador. */
-export function timingOf(dateIso: string, hour: string, todayIso: string, nowDecimal: number): ClassTiming {
-  if (nowDecimal < 0) return 'future';           // aún sin reloj (antes de montar)
-  if (dateIso < todayIso) return 'past';
-  if (dateIso > todayIso) return 'future';
-  const h = parseInt(hour, 10);
-  if (isNaN(h)) return 'future';
-  if (h + 1 <= nowDecimal) return 'past';
-  if (h <= nowDecimal) return 'live';
-  return 'future';
-}
-
-/** Fecha corta para la UI: '2026-07-28' → '28 jul'. */
-export function shortDateLabel(iso: string): string {
-  const d = new Date(iso + 'T12:00:00Z');
-  if (isNaN(d.getTime())) return iso;
-  const month = d.toLocaleDateString('es-ES', { month: 'short', timeZone: 'UTC' }).replace('.', '');
-  return `${d.getUTCDate()} ${month}`;
-}
-
-/** Rango legible de la semana: "28 jul al 2 ago" (lunes → sábado por defecto). */
-export function weekRangeLabel(mondayIso: string, dayCount = 6): string {
-  return `${shortDateLabel(mondayIso)} al ${shortDateLabel(addDaysIso(mondayIso, dayCount - 1))}`;
 }
