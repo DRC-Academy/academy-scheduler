@@ -14,8 +14,8 @@ import { isAssignableCell, withBaseState } from '@/lib/cells';
 import { checkSubscription, clearSubscriptionCache, subBadge, subCategory, type SubscriptionInfo, type SubCategory } from '@/lib/useSubscriptionStatus';
 import { isValidEmail } from '@/lib/validation';
 import { CambiarProfesorModal } from '@/components/CambiarProfesorModal';
-import { PresentationModal } from '@/components/PresentationModal';
-import { Student, Grid, Assignment, Teacher } from '@/types';
+import { AssignmentEmailModal } from '@/components/AssignmentEmailModal';
+import { Student, Grid, Assignment } from '@/types';
 
 // Detecta viewport mobile (< breakpoint). Alterna tabla (desktop) ↔ cards (mobile).
 function useIsMobile(breakpoint = 1024): boolean {
@@ -504,8 +504,7 @@ function AccessModal({ student, onConfirm, onCancel }: {
 function StudentsContent() {
   const {
     students, assignments, teachers, deleteStudent, updateStudent, removeAssignment,
-    getTeacherGrid, updateTeacherGrid, updateAssignmentSlots, updateAssignmentStartDate,
-    updateMeetLink, reloadAll,
+    getTeacherGrid, updateTeacherGrid, updateAssignmentSlots, updateAssignmentStartDate, reloadAll,
   } = useTeachers();
   const { user } = useAuth();
   const [search, setSearch] = useState('');
@@ -517,10 +516,10 @@ function StudentsContent() {
   const [activatingStudent, setActivatingStudent] = useState<DisplayStudent | null>(null);
   const [accessStudent, setAccessStudent] = useState<DisplayStudent | null>(null);
   const [changeTeacher, setChangeTeacher] = useState<{ student: DisplayStudent; assignment: Assignment } | null>(null);
-  // Correo de presentación desde el admin: mismo modal que usa el profesor, para
-  // reenviarlo o recuperarlo cuando el profe no lo mandó. Guarda la assignment y
-  // el profesor al que pertenece (el modal necesita los dos).
-  const [presentationFor, setPresentationFor] = useState<{ assignment: Assignment; teacher: Teacher } | null>(null);
+  // Email de asignación al profesor ("Nueva asignación: …"), el mismo que arma el
+  // setter al asignar. Se puede reabrir desde acá para recuperarlo o reenviarlo
+  // si no llegó. La assignment se guarda ya con el destinatario resuelto.
+  const [assignmentEmailFor, setAssignmentEmailFor] = useState<Assignment | null>(null);
   const [subFilter, setSubFilter] = useState<'all' | SubCategory>('all');
   const [subInfo, setSubInfo] = useState<Record<string, SubscriptionInfo>>({});
   const [verifyingSubs, setVerifyingSubs] = useState(false);
@@ -860,18 +859,24 @@ function StudentsContent() {
                                 {hasTeacher && (
                                   <MenuItem onClick={() => { setMenuOpenId(null); setChangeTeacher({ student: s, assignment: studentAssignments[0] }); }}>🔄 Cambiar de profesor</MenuItem>
                                 )}
-                                {/* Correo de presentación: sirve para recuperarlo o
-                                    reenviarlo cuando el profesor no lo mandó. */}
-                                {hasTeacher && (() => {
-                                  const asgn = studentAssignments[0];
-                                  const prof = teachers.find(t => t.id === asgn.teacherId);
-                                  if (!prof) return null;
-                                  return (
-                                    <MenuItem onClick={() => { setMenuOpenId(null); setPresentationFor({ assignment: asgn, teacher: prof }); }}>
-                                      ✉️ Correo de presentación{asgn.presentationEmailSent ? ' (reenviar)' : ''}
-                                    </MenuItem>
-                                  );
-                                })()}
+                                {/* Email de asignación al profesor: para recuperarlo
+                                    o reenviarlo si no llegó cuando se asignó. */}
+                                {hasTeacher && (
+                                  <MenuItem onClick={() => {
+                                    setMenuOpenId(null);
+                                    const asgn = studentAssignments[0];
+                                    // El destinatario es el correo de avisos del profesor
+                                    // si lo tiene definido; si no, el de login. Misma
+                                    // regla que usa el cambio de profesor.
+                                    const prof = teachers.find(t => t.id === asgn.teacherId);
+                                    setAssignmentEmailFor({
+                                      ...asgn,
+                                      teacherEmail: prof?.notificationEmail?.trim() || prof?.email || asgn.teacherEmail,
+                                    });
+                                  }}>
+                                    ✉️ Email de asignación al profesor
+                                  </MenuItem>
+                                )}
                                 {!hasTeacher && (
                                   <MenuItem onClick={() => { setMenuOpenId(null); router.push('/setter'); }}>🔗 Vincular</MenuItem>
                                 )}
@@ -1009,17 +1014,16 @@ function StudentsContent() {
         />
       )}
 
-      {/* Correo de presentación. Es el MISMO modal que usa el profesor
-          (components/PresentationModal): arma el cuerpo listo para copiar con el
-          botón "Copiar", así el admin puede recuperarlo o reenviarlo. */}
-      {presentationFor && (
-        <PresentationModal
-          assignment={presentationFor.assignment}
-          teacher={presentationFor.teacher}
-          students={students}
-          updateMeetLink={updateMeetLink}
-          onClose={() => setPresentationFor(null)}
-          onSent={() => { setPresentationFor(null); reloadAll(); }}
+      {/* Email de asignación al profesor. Es el MISMO modal y el mismo cuerpo que
+          se muestra al asignar desde el setter (components/AssignmentEmailModal →
+          buildAssignmentEmail): asunto "Nueva asignación: …", listo para copiar o
+          abrir en el cliente de correo. */}
+      {assignmentEmailFor && (
+        <AssignmentEmailModal
+          assignment={assignmentEmailFor}
+          title="📧 Email de asignación al profesor"
+          banner={`Reenvío del aviso a ${assignmentEmailFor.teacherName} por ${assignmentEmailFor.studentName}.`}
+          onClose={() => setAssignmentEmailFor(null)}
         />
       )}
 
