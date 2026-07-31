@@ -2794,6 +2794,48 @@ export interface FlaggedTranscriptsResult {
 // Si las columnas de validación no están migradas se devuelve `missingColumns`
 // en vez de una lista vacía a secas: antes la pestaña se veía vacía como si todo
 // estuviera en orden, cuando en realidad la consulta fallaba con un 42703.
+/** Cola de validación esperando al admin. Ver `dbCountPendingValidations`. */
+export interface PendingValidationSummary {
+  total: number;
+  /** Fecha de la clase más antigua que sigue esperando ('YYYY-MM-DD'). */
+  oldestDate: string | null;
+  /** Días que lleva esperando esa clase. 0 si no hay cola. */
+  oldestDays: number;
+}
+
+/**
+ * Cuántas transcripciones esperan a que el admin las mire, y desde cuándo.
+ *
+ * Consulta LIGERA a propósito (no trae la columna `transcript`, que son decenas
+ * de miles de caracteres por fila): la usa el badge de la pestaña, que se carga
+ * en cada visita al panel. Mientras la cola no se veía desde fuera, llegó a
+ * acumular 19 clases —la más vieja de 4 días— que no le contaban a nadie.
+ */
+export async function dbCountPendingValidations(): Promise<PendingValidationSummary> {
+  const { data, error } = await supabase
+    .from('class_analyses')
+    .select('class_date, analyzed_at')
+    .eq('validation_status', 'review');
+
+  if (error || !data) {
+    // Sin la columna (migración sin correr) no hay cola que mostrar: se calla.
+    if (error && error.code !== '42703' && error.code !== 'PGRST204') {
+      console.error('[db] No se pudo contar la cola de validación:', error);
+    }
+    return { total: 0, oldestDate: null, oldestDays: 0 };
+  }
+
+  const fechas = (data as Array<{ class_date: string | null; analyzed_at: string | null }>)
+    .map(r => r.class_date || (r.analyzed_at ?? '').slice(0, 10))
+    .filter(Boolean)
+    .sort();
+  const oldestDate = fechas[0] ?? null;
+  const oldestDays = oldestDate
+    ? Math.max(0, Math.round((Date.now() - new Date(oldestDate + 'T00:00:00').getTime()) / 86_400_000))
+    : 0;
+  return { total: data.length, oldestDate, oldestDays };
+}
+
 export async function dbGetFlaggedTranscripts(): Promise<FlaggedTranscriptsResult> {
   const { data, error } = await supabase
     .from('class_analyses')

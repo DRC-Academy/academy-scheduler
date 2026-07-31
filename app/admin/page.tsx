@@ -12,7 +12,7 @@ import { Teacher, Grid, Assignment, ScoringEvent, ScoringEventType } from '@/typ
 import { EVENT_POINTS, EVENT_EUROS, calcRegisteredClassNumber, dbUpdateAssignmentStartDate, dbGetAllNotifications,
   dbAuditStudentAssignments, dbRelinkAssignment, dbSyncAssignmentName, dbMergeDuplicateStudents, dbSyncStudentAssignments,
   dbDiagnoseAllCalendars, dbSyncAllCalendarsToAssignments, dbCreateFullLink, CalendarDiagnosisAllRow, AuditResult,
-  dbRepairMisplacedStudent,
+  dbRepairMisplacedStudent, dbCountPendingValidations, type PendingValidationSummary,
   findDuplicateTeacherAssignments, type DuplicateAssignmentGroup, type DeleteTeacherResult } from '@/lib/db';
 import { CambiarProfesorModal } from '@/components/CambiarProfesorModal';
 import { CrearVinculoModal } from '@/components/CrearVinculoModal';
@@ -3258,6 +3258,11 @@ function AdminContent() {
     const t = searchParams.get('tab');
     if (t && (ADMIN_TABS as readonly string[]).includes(t)) setActiveTab(t as AdminTab);
   }, [searchParams]);
+  // Cola de validación pendiente, para el badge de la pestaña. Consulta ligera
+  // (sin la columna `transcript`), una vez por visita al panel.
+  const [pendingValidations, setPendingValidations] = useState<PendingValidationSummary>({ total: 0, oldestDate: null, oldestDays: 0 });
+  useEffect(() => { dbCountPendingValidations().then(setPendingValidations).catch(() => {}); }, []);
+
   const [editCalendarTeacher, setEditCalendarTeacher] = useState<Teacher | null>(null);
   const [editTeacher, setEditTeacher] = useState<Teacher | null>(null);
   const [specialtyFilter, setSpecialtyFilter] = useState<string>('');
@@ -3338,6 +3343,21 @@ function AdminContent() {
               className={`adm-tab${activeTab === tab.id ? ' is-active' : ''}`}
               onClick={() => setActiveTab(tab.id)}>
               {tab.label}
+              {/* Cola de validación: mientras no se vio desde fuera, se acumularon
+                  clases que no le contaban a nadie. Ámbar a partir de 3 días
+                  esperando, que es cuando deja de ser un retraso normal. */}
+              {tab.id === 'validacion' && pendingValidations.total > 0 && (
+                <span
+                  title={`${pendingValidations.total} transcripciones esperando validación · la más antigua del ${pendingValidations.oldestDate} (${pendingValidations.oldestDays} días)`}
+                  style={{
+                    marginLeft: 6, fontSize: 10.5, fontWeight: 700, padding: '1px 7px', borderRadius: 999,
+                    background: pendingValidations.oldestDays >= 3 ? 'rgba(255,196,0,0.22)' : 'var(--bg-surface-3)',
+                    color: pendingValidations.oldestDays >= 3 ? '#8a6d00' : 'var(--text-muted)',
+                    border: pendingValidations.oldestDays >= 3 ? '1px solid rgba(255,196,0,0.5)' : '1px solid transparent',
+                  }}>
+                  {pendingValidations.total}
+                </span>
+              )}
             </button>
           ))}
         </div>

@@ -16,6 +16,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { getSpainParts } from '@/components/VisualCalendar';
 import { registerClassWithTranscript } from '@/lib/aiClient';
 import { checkTranscriptDuplicates, transcriptHash, type DupeCheck } from '@/lib/transcriptDupes';
+import { quickTranscriptCheck } from '@/lib/transcriptValidation';
 import type { Teacher, Assignment, ClassRecord, ClassRecordType } from '@/types';
 
 // Etiquetas singular/plural por tipo de falta (para los mensajes de límite).
@@ -228,6 +229,11 @@ export interface AddClassModalProps {
   lockClass?: boolean;
   /** Texto del recuadro verde de contexto. Si no viene, se usa el de Finanzas. */
   contextNote?: React.ReactNode;
+  /**
+   * Duración de la clase en horas (2 en una sesión de celdas contiguas). Calibra
+   * el aviso de "esto parece el resumen": una clase de 2h espera más texto.
+   */
+  durationHours?: number;
   onClose: () => void;
   onSaved: (
     studentName: string, date: string, time: string | undefined, transcript: string,
@@ -237,7 +243,7 @@ export interface AddClassModalProps {
 }
 
 export function AddClassModal({
-  teacher, myAssignments, classRecords, initial, title, lockClass, contextNote, onClose, onSaved,
+  teacher, myAssignments, classRecords, initial, title, lockClass, contextNote, durationHours, onClose, onSaved,
 }: AddClassModalProps) {
   // Se extrae a una variable para que el memo dependa del nombre y no del objeto
   // `initial` entero (que el llamador puede recrear en cada render).
@@ -295,6 +301,14 @@ export function AddClassModal({
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [studentName, date]);
+
+  // Aviso PREVIO: las dos señales que mandan un transcript a la cola de revisión
+  // y que el profesor puede corregir en el momento (pegar el texto completo con
+  // marcas de tiempo en vez del resumen). Comparte umbrales con el validador.
+  const quick = useMemo(
+    () => quickTranscriptCheck(transcript, { durationMinutes: (durationHours ?? 1) * 60 }),
+    [transcript, durationHours],
+  );
 
   // Normal/recuperación: TRANSCRIPT obligatorio (segundo factor de verificación).
   // Falta/cancelación: comentario obligatorio y bloqueado al llegar a 2 de ese tipo.
@@ -417,7 +431,36 @@ export function AddClassModal({
                   />
                   <div style={{ fontSize: 11, color: words >= 30 ? '#1E9E3A' : '#6b7280', marginTop: 5 }}>
                     {words} palabras{words < 30 ? ' · mínimo 30' : ''}
+                    {quick.timestamps > 0 && ` · ${quick.timestamps} marcas de tiempo`}
                   </div>
+
+                  {/* Aviso ANTES de guardar. No bloquea (nunca se le impide
+                      registrar la clase): le dice qué va a pasar si guarda esto,
+                      que es justo lo que nadie le decía y llenó la cola de
+                      revisión con clases que él daba por entregadas. */}
+                  {/* Dispara por LONGITUD, no por falta de marcas de tiempo: un
+                      transcript largo sin marcas es un caso real y frecuente (el
+                      profe copia solo el texto), y avisar ahí sería ruido que
+                      enseña a ignorar el aviso. Medido sobre las 98 clases reales:
+                      así se marcan 19 de las 20 que acabaron en revisión. */}
+                  {words >= 30 && quick.tooShort && (
+                    <div style={{ marginTop: 8, fontSize: 12, lineHeight: 1.55, color: '#8a6d00', background: 'rgba(255,196,0,0.12)', border: '1px solid rgba(255,196,0,0.5)', borderRadius: 8, padding: '9px 11px' }}>
+                      <b style={{ color: '#7a6000' }}>
+                        {quick.looksLikeSummary
+                          ? 'Esto parece el RESUMEN de Fathom, no la transcripción'
+                          : 'El texto es más corto de lo esperable'}
+                      </b>
+                      <div style={{ marginTop: 3 }}>
+                        Son {quick.words} palabras y una clase
+                        de {durationHours && durationHours > 1 ? `${durationHours} h` : '60 min'} suele
+                        tener {quick.minWords}+.{quick.noTimestamps && ' Tampoco se ven marcas de tiempo (0:00, 12:34).'}{' '}
+                        En Fathom, abrí la pestaña <b>Transcript</b> y copiá el texto completo — no el <i>Summary</i> ni las notas.
+                      </div>
+                      <div style={{ marginTop: 5, color: '#7a6000' }}>
+                        Podés guardarlo igual, pero irá a <b>revisión del equipo</b> y no contará para tu pago hasta que lo validen.
+                      </div>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div style={{ fontSize: 11.5, color: '#b45309', background: 'rgba(255,196,0,0.1)', border: '1px solid rgba(255,196,0,0.3)', borderRadius: 8, padding: '8px 10px', lineHeight: 1.5 }}>

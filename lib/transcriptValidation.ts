@@ -34,6 +34,53 @@ export interface ValidationResult {
 
 const SCORE_BASE = 50;
 
+// ── Señales compartidas con el aviso previo del modal ─────────────────────────
+// El modal de "Añadir transcript" avisa al profesor ANTES de guardar cuando el
+// texto tiene la pinta del RESUMEN de Fathom en vez de la transcripción. Para que
+// ese aviso y esta validación no puedan discrepar, los dos umbrales viven acá y
+// los usan las dos: si el modal usara sus propios números, avisaría de cosas que
+// el validador acepta (o peor, callaría ante las que manda a revisión).
+
+/** Marcas de tiempo tipo 0:00 / 12:34 / 1:05:22. */
+export const TIMESTAMP_RE = /\b\d{1,2}:\d{2}(?::\d{2})?\b/g;
+
+/** Palabras mínimas esperables para una clase de esa duración. */
+export function minWordsFor(durationMinutes: number): number {
+  return durationMinutes >= 60 ? 800 : durationMinutes >= 30 ? 400 : 200;
+}
+
+export interface QuickCheck {
+  words: number;
+  timestamps: number;
+  minWords: number;
+  tooShort: boolean;
+  noTimestamps: boolean;
+  /**
+   * Las dos señales a la vez. En la práctica es la firma del resumen de Fathom:
+   * un texto redactado, corto y sin marcas de tiempo. Es lo que llenó la cola de
+   * revisión con clases que el profesor daba por entregadas.
+   */
+  looksLikeSummary: boolean;
+}
+
+/**
+ * Comprobación BARATA del texto, para avisar mientras el profesor lo pega. No
+ * decide nada: la validación de verdad (score + flags) corre en el servidor al
+ * guardar. Acá solo se miran las dos señales que puede corregir en el momento.
+ */
+export function quickTranscriptCheck(
+  transcript: string,
+  opts: { durationMinutes?: number } = {},
+): QuickCheck {
+  const text = (transcript ?? '').trim();
+  const words = text ? text.split(/\s+/).filter(Boolean).length : 0;
+  const timestamps = (text.match(TIMESTAMP_RE) ?? []).length;
+  const minWords = minWordsFor(opts.durationMinutes ?? 60);
+  const tooShort = words > 0 && words < minWords;
+  const noTimestamps = words > 0 && timestamps === 0;
+  return { words, timestamps, minWords, tooShort, noTimestamps, looksLikeSummary: tooShort && noTimestamps };
+}
+
 /** Por debajo de esto la señal es máxima (aviso severo al admin). NO bloquea. */
 export const SCORE_SEVERE = 15;
 /**
@@ -134,9 +181,8 @@ export function validateTranscriptStructure(
 
   // ── MARCADORES POSITIVOS ────────────────────────────────────────────────────
 
-  // Timestamps tipo 0:00 / 12:34 / 1:05:22.
-  const tsRegex = /\b\d{1,2}:\d{2}(?::\d{2})?\b/g;
-  const tsMatches = text.match(tsRegex) ?? [];
+  // Timestamps tipo 0:00 / 12:34 / 1:05:22 (misma expresión que el aviso del modal).
+  const tsMatches = text.match(TIMESTAMP_RE) ?? [];
   const timestampCount = tsMatches.length;
   if (timestampCount >= 10) score += 30;
   else if (timestampCount >= 3) score += 15;
@@ -221,8 +267,8 @@ export function validateTranscriptStructure(
     flags.push('lenguaje_de_resumen');
   }
 
-  // Longitud insuficiente para la duración.
-  const minWords = durationMinutes >= 60 ? 800 : durationMinutes >= 30 ? 400 : 200;
+  // Longitud insuficiente para la duración (mismo umbral que el aviso del modal).
+  const minWords = minWordsFor(durationMinutes);
   if (wordCount < minWords) {
     score -= 25;
     flags.push('demasiado_corto');

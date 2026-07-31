@@ -16,7 +16,10 @@
 import { useState, useEffect, useMemo, type CSSProperties } from 'react';
 import { cellKey, getSpainParts, spainWallClockToEpoch } from '@/components/VisualCalendar';
 import { calcRegisteredClassNumber } from '@/lib/db';
-import { classCategoryBadge, type ClassTranscriptRef } from '@/lib/finance';
+import {
+  classCategoryBadge, transcriptStateOf, transcriptStateBadge, transcriptNeedsTeacher,
+  type ClassTranscriptRef,
+} from '@/lib/finance';
 import { planFieldsOf } from '@/lib/productUtils';
 import { baseCellOf } from '@/lib/cells';
 import { checkSubscription, subBadge, type SubscriptionInfo } from '@/lib/useSubscriptionStatus';
@@ -419,6 +422,16 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
   }
 
   /**
+   * ¿Esta clase espera algo del PROFESOR respecto al transcript? Solo si falta o
+   * se lo rechazaron. Una clase con el transcript en revisión ya está hecha de su
+   * lado y no puede seguir contándose entre "las que le faltan": eso es lo que le
+   * hacía repegar transcripts que ya estaban guardados.
+   */
+  function needsTranscriptFor(c: TodayClass, date: string) {
+    return transcriptNeedsTeacher(transcriptStateOf(transcriptOf(c, date)));
+  }
+
+  /**
    * Ingreso ("Ingresar a clase") de esa clase concreta. Es lo que vincula el
    * transcript con la clase de forma EXPLÍCITA: al guardarlo se manda su id y
    * finanzas empareja por id en vez de adivinar por proximidad de fechas.
@@ -458,7 +471,8 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
       if (filter === 'pendientes') return !passed && isRealClass(c, iso);
       if (filter === 'dadas')      return passed && isRealClass(c, iso);
       // 'sin_transcript': lo que le falta al profesor para cobrar esas clases.
-      return passed && isRealClass(c, iso) && !transcriptOf(c, iso);
+      // Las que están en revisión NO entran: ya hizo su parte.
+      return passed && isRealClass(c, iso) && needsTranscriptFor(c, iso);
     });
 
     return { iso, all, shown };
@@ -481,7 +495,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
   // Clases dadas que siguen sin transcript: es lo que le falta al profesor para
   // que cuenten en su pago, así que se avisa arriba del todo.
   const missingTranscripts = allVisible.filter(
-    x => statusOf(x.c, x.iso) === 'passed' && isRealClass(x.c, x.iso) && !transcriptOf(x.c, x.iso),
+    x => statusOf(x.c, x.iso) === 'passed' && isRealClass(x.c, x.iso) && needsTranscriptFor(x.c, x.iso),
   );
 
   // Emails de todos los alumnos a la vista (los días que se están mostrando, más
@@ -682,7 +696,14 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     const inactive = rescheduled || cancelled;
 
     const hasLink = !!c.meetLink;
-    const hasTranscript = !!transcriptOf(c, date);
+    // Estado REAL del transcript (fuente única, lib/finance). Antes acá bastaba
+    // con que existiera texto y se pintaba "Transcript subido" en verde, mientras
+    // finanzas —que además exige la validación— decía "Sin subir" de la MISMA
+    // clase. El profesor veía las dos pantallas contradecirse.
+    const tState = transcriptStateOf(transcriptOf(c, date));
+    const tBadge = transcriptStateBadge(tState);
+    // Solo es tarea suya si falta o se lo rechazaron: "en revisión" no lo es.
+    const needsTranscript = transcriptNeedsTeacher(tState);
     const hoursBadge = durationBadgeLabel(c.durationHours);
     const menuId  = `${c.key}_${date}`;
     const menuOpen = openMenu === menuId;
@@ -722,7 +743,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
       'mc-card',
       passed && ' is-passed',
       inactive && ' is-inactive',
-      passed && !inactive && (hasTranscript ? ' is-done' : ' needs-transcript'),
+      passed && !inactive && (needsTranscript ? ' needs-transcript' : ' is-done'),
     ].filter(Boolean).join('');
 
     return (
@@ -767,9 +788,10 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
                 {rescheduled ? 'Reprogramada' : cancelLabel}
               </span>
             ) : passed ? (
-              <span className={`mc-status ${hasTranscript ? 'is-ready' : 'is-missing'}`}>
-                <span className="mc-dot" style={{ background: hasTranscript ? '#16a34a' : '#e0912f' }} />
-                {hasTranscript ? 'Transcript subido' : 'Falta el transcript'}
+              // Cuatro estados: subido / en revisión / rechazado / falta.
+              <span className="mc-status" style={{ background: tBadge.bg, color: tBadge.color }}>
+                <span className="mc-dot" style={{ background: tBadge.dot }} />
+                {tBadge.label}
               </span>
             ) : (
               <span className={`mc-status ${hasLink ? 'is-ready' : 'is-missing'}`}>
@@ -784,12 +806,16 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
               ) : cancelled ? (
                 <button className="mc-btn mc-btn-ghost" disabled>{cancelLabel}</button>
               ) : passed ? (
-                // La clase ya se dio: lo único que queda por hacer es cerrarla con
-                // el transcript. Es la acción principal de la fila, no un extra.
+                // La clase ya se dio. Si falta el transcript (o se lo rechazaron),
+                // subirlo es LA acción de la fila. Si ya está subido —esperando
+                // validación o validado— el botón baja a secundario: sirve para
+                // corregirlo, no para "completarlo".
                 <button
-                  className={`mc-btn ${hasTranscript ? 'mc-btn-ghost' : 'mc-btn-primary'}`}
+                  className={`mc-btn ${needsTranscript ? 'mc-btn-primary' : 'mc-btn-ghost'}`}
                   onClick={() => setTranscriptFor({ c, date })}>
-                  {hasTranscript ? 'Reemplazar transcript' : '📝 Añadir transcript'}
+                  {tState === 'none' ? '📝 Añadir transcript'
+                    : tState === 'rejected' ? '📝 Subir el correcto'
+                    : 'Reemplazar transcript'}
                 </button>
               ) : hasLink ? (
                 <button className="mc-btn mc-btn-primary" onClick={() => join.join(c)} disabled={join.checkingKey === c.key}>
@@ -1072,6 +1098,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
               las <b>{hourLabel(transcriptFor.c.hour)}</b>. Pegá el transcript de Fathom para cerrarla.</>
             )
           }
+          durationHours={transcriptFor.c.durationHours}
           onClose={() => setTranscriptFor(null)}
           onSaved={handleSaveTranscript}
         />

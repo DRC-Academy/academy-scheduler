@@ -7,7 +7,7 @@ import { LastUpdated } from '@/components/LastUpdated';
 import { getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
-import { calculateTeacherFinance, recordVerification, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge, rowHoursLabel, durationBadge, sessionBreakdownLabel } from '@/lib/finance';
+import { calculateTeacherFinance, recordVerification, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge, rowHoursLabel, durationBadge, sessionBreakdownLabel, transcriptStateBadge, transcriptNeedsTeacher } from '@/lib/finance';
 import { dbGetAssignmentsByTeacher, calcRegisteredClassNumber } from '@/lib/db';
 import { maybeSendMilestoneEmail } from '@/lib/milestoneEmails';
 import { AddClassModal, saveTeacherClass, ANALYSIS_FAILED_NOTICE } from '@/components/AddClassModal';
@@ -212,14 +212,25 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
     ) ?? null;
   }
 
-  // Alertas de clases a revisar: se indica exactamente cuál de los dos factores
-  // falta (ingreso por el botón Meet o transcript).
+  // Alertas de clases a revisar: se indica exactamente qué falta y, sobre todo,
+  // SI le toca hacer algo al profesor.
+  //
+  // Antes esto decía "falta subir transcript" en cuanto `hasTranscript` era false
+  // — y ese campo también es false cuando el transcript está subido y esperando
+  // validación. El profesor lo volvía a pegar, el detector de duplicados le decía
+  // que era idéntico, se revalidaba igual y el mensaje no cambiaba: un bucle sin
+  // salida sobre clases que ya estaban completas de su lado.
   const reviewAlerts = finance.rows.filter(r => r.status === 'a_revisar').map(r => ({
     studentName: r.studentName, date: r.date, hour: r.hour,
-    hasTranscript: r.hasTranscript, classType: r.classType,
-    missing: !r.hasTranscript
-      ? 'subir transcript en Añadir clase'
-      : 'ingresar con el botón Meet',
+    transcriptState: r.transcriptState, classType: r.classType, hasJoinLog: r.hasJoinLog,
+    // Solo se ofrece el botón de pegar cuando pegar sirve de algo.
+    canPaste: transcriptNeedsTeacher(r.transcriptState),
+    // Orden de prioridad: lo que el profesor puede hacer AHORA, primero.
+    missing:
+      r.transcriptState === 'rejected' ? 'el equipo rechazó el transcript: subí el correcto'
+    : r.transcriptState === 'none'     ? 'subir transcript en Añadir clase'
+    : !r.hasJoinLog                    ? 'ingresar con el botón Meet (no quedó registro de acceso)'
+    :                                    'nada de tu parte: el equipo está validando el transcript',
   }));
 
   // Penalizaciones del mes: CUALQUIER evento con euros negativos (falta sin aviso
@@ -376,6 +387,8 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                               // Sesión de 2h: UNA fila que vale 2 clases (2× tarifa).
                               const dur = durationBadge(r.durationHours);
                               const sessionNote = sessionBreakdownLabel(r);
+                              // Estado del transcript (fuente única, lib/finance).
+                              const ts = transcriptStateBadge(r.transcriptState);
                               return (
                                 <tr key={i} className={r.status === 'a_revisar' ? 'is-review' : undefined}>
                                   {/* Fecha */}
@@ -406,13 +419,13 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                                       {ct && <span className="mcf-tag" style={{ background: ct.bg, color: ct.color }}>{plainLabel(ct.label)}</span>}
                                     </span>
                                   </td>
-                                  {/* Transcript — segundo factor de verificación */}
+                                  {/* Transcript — segundo factor de verificación.
+                                      Cuatro estados, no dos: "Sin subir" y "En
+                                      revisión" no le piden lo mismo al profesor. */}
                                   <td>
                                     {isFalta
                                       ? <span style={{ color: '#a4a7a1' }}>—</span>
-                                      : r.hasTranscript
-                                        ? <span className="mcf-tag" style={{ background: '#eaf5ec', color: '#1f7a3d' }}>Subido</span>
-                                        : <span className="mcf-tag" style={{ background: '#fdf3e7', color: '#9a6516' }}>Sin subir</span>}
+                                      : <span className="mcf-tag" style={{ background: ts.bg, color: ts.color }}>{ts.label}</span>}
                                   </td>
                                   {/* Suscripción */}
                                   <td>
@@ -442,19 +455,25 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                                       r.status === 'excede_limite_tipo'
                                         ? <span className="mcf-tag" style={{ background: '#fdf3e7', color: '#9a6516' }}>Supera 2 · revisión admin</span>
                                         : <span style={{ color: '#1f7a3d', fontWeight: 600 }}>Cobrable</span>
-                                    ) : !r.hasTranscript ? (
+                                    ) : transcriptNeedsTeacher(r.transcriptState) ? (
                                       <button
                                         onClick={() => openAddClass({ studentName: g.name, date: r.date, classType: r.classType })}
                                         title="Pegá el transcript de esta clase para verificarla"
                                         style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 9px', borderRadius: 7, border: '1px solid rgba(224,145,47,0.45)', background: '#fdf3e7', color: '#9a6516', cursor: 'pointer', fontSize: 12, fontWeight: 700, fontFamily: 'inherit' }}
                                       >
-                                        + Añadir transcript
+                                        {r.transcriptState === 'rejected' ? '+ Subir el correcto' : '+ Añadir transcript'}
                                       </button>
                                     ) : complete ? (
                                       <span style={{ color: '#1f7a3d', fontWeight: 600 }}>Completo</span>
-                                    ) : (
+                                    ) : !r.hasJoinLog ? (
                                       <span style={{ color: '#a4a7a1' }} title="No se puede falsear el ingreso">
                                         Recordá usar &apos;Ingresar a clase&apos;
+                                      </span>
+                                    ) : (
+                                      // Transcript subido y esperando al equipo: no
+                                      // hay nada que el profesor pueda hacer acá.
+                                      <span style={{ color: '#3b5b9e', fontWeight: 600 }} title="El equipo está validando el transcript">
+                                        En revisión
                                       </span>
                                     )}
                                   </td>
@@ -555,10 +574,11 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                       <div className="mcf-review-who">{a.studentName} · {finShortDate(a.date)}</div>
                       <div className="mcf-review-note">Falta: {a.missing}</div>
                     </div>
-                    {/* Si lo que falta es el transcript, el profe puede pegarlo acá
-                        mismo (abre "Añadir clase" prellenado). Si lo que falta es el
-                        ingreso por Meet, no hay acción: solo se registra en vivo. */}
-                    {!a.hasTranscript && (
+                    {/* El botón aparece SOLO si pegar cambia algo: falta el
+                        transcript o el equipo lo rechazó. Si está en revisión, o si
+                        lo que falta es el ingreso por Meet, no hay acción posible y
+                        ofrecerla sería mandarlo a repetir trabajo en vano. */}
+                    {a.canPaste && (
                       <button
                         onClick={() => openAddClass({ studentName: a.studentName, date: a.date, classType: a.classType })}
                         title="Pegá el transcript de esta clase para verificarla"

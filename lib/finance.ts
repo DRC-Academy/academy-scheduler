@@ -62,6 +62,12 @@ export interface ClassFinanceRow {
   // Segundo factor de verificación. Desde el cambio de sistema es el TRANSCRIPT
   // (class_analyses.transcript no vacío), no la captura de pantalla.
   hasTranscript: boolean;  // solo aplica a tipo normal/recuperacion
+  /**
+   * Estado real del transcript. `hasTranscript` es `transcriptState === 'ok'`;
+   * la UI necesita los cuatro estados para no decirle al profesor que suba algo
+   * que ya subió y está esperando validación.
+   */
+  transcriptState: TranscriptState;
   hasMeetLink: boolean;    // la assignment del alumno tiene meet_link definido
   punctuality?: 'on_time' | 'late' | 'very_late';
   manuallyApproved: boolean;
@@ -180,11 +186,50 @@ export interface ClassTranscriptRef {
   validation_status?: string | null;
 }
 
-// Un transcript verifica la clase (segundo factor) salvo que esté pendiente de
-// revisión o rechazado por el admin. Legacy (sin columna / null) → válido.
+/**
+ * Estado de la transcripción de una clase. FUENTE ÚNICA: todo lo que quiera
+ * hablar del transcript (finanzas, "Mis clases", los avisos al profesor) tiene
+ * que preguntarle a esta función.
+ *
+ * Existe porque había DOS respuestas para la misma clase: la agenda miraba solo
+ * si había texto y decía "Transcript subido" en verde, mientras finanzas exigía
+ * además la validación y decía "Sin subir". El profesor veía las dos pantallas
+ * contradecirse en 24 clases y, peor, el panel le pedía subir un transcript que
+ * ya estaba guardado — con un botón que al pulsarlo no cambiaba nada.
+ *
+ *   'none'     → no hay texto: el profesor tiene que subirlo.
+ *   'review'   → subido y guardado, esperando al equipo. NO es acción suya.
+ *   'rejected' → el equipo lo rechazó: hay que subir el correcto.
+ *   'ok'       → verifica la clase (segundo factor). Legacy sin columna → 'ok'.
+ */
+export type TranscriptState = 'none' | 'review' | 'rejected' | 'ok';
+
+export function transcriptStateOf(t: ClassTranscriptRef | undefined | null): TranscriptState {
+  if (!t || !hasText(t)) return 'none';
+  if (t.validation_status === 'rejected') return 'rejected';
+  if (t.validation_status === 'review') return 'review';
+  return 'ok';
+}
+
+/** ¿El profesor tiene algo que hacer con este transcript? */
+export function transcriptNeedsTeacher(state: TranscriptState): boolean {
+  return state === 'none' || state === 'rejected';
+}
+
+/** Etiqueta y color del estado. Misma fuente para las dos pantallas. */
+export function transcriptStateBadge(state: TranscriptState):
+  { label: string; color: string; bg: string; dot: string } {
+  switch (state) {
+    case 'ok':       return { label: 'Transcript subido', color: '#1f7a3d', bg: '#eaf5ec', dot: '#16a34a' };
+    case 'review':   return { label: 'En revisión del equipo', color: '#3b5b9e', bg: '#eef1f8', dot: '#2563eb' };
+    case 'rejected': return { label: 'Transcript rechazado', color: '#b91c1c', bg: 'rgba(239,68,68,0.10)', dot: '#dc2626' };
+    default:         return { label: 'Falta el transcript', color: '#9a6516', bg: '#fdf3e7', dot: '#e0912f' };
+  }
+}
+
+// Un transcript verifica la clase (segundo factor) SOLO si está validado.
 function transcriptCounts(t: ClassTranscriptRef | undefined): boolean {
-  if (!t || !hasText(t)) return false;
-  return t.validation_status !== 'review' && t.validation_status !== 'rejected';
+  return transcriptStateOf(t) === 'ok';
 }
 
 /** Fecha efectiva de un análisis: class_date y, si falta, el día de analyzed_at. */
@@ -389,6 +434,7 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     const isFaltaType  = classType === 'falta_sin_aviso' || classType === 'cancelacion_hora';
     // Segundo factor: transcript con texto Y validado (no en revisión/rechazado).
     // Las faltas/cancelaciones tienen sus propias reglas y no lo requieren.
+    const transcriptState = transcriptStateOf(c.transcript);
     const isTranscript = transcriptCounts(c.transcript) && isNormalType;
     const hasMeetLink = !!(a?.meetLink && a.meetLink.trim());
 
@@ -432,7 +478,7 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
       date: c.date, hour, studentName: c.studentName, plan,
       planCategory: planClass.type, planLabel: planClass.displayName,
       weeklyHours, antiquityDays, rate, durationHours, billingUnits: durationHours, status,
-      classType, hasJoinLog: join, hasTranscript: isTranscript, hasMeetLink, punctuality, manuallyApproved: approved,
+      classType, hasJoinLog: join, hasTranscript: isTranscript, transcriptState, hasMeetLink, punctuality, manuallyApproved: approved,
       subscriptionStatus, subAtJoin, subAtRecord,
     });
   }
