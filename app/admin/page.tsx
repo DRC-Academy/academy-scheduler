@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useMemo, Fragment, Suspense } from 'react';
+import { useState, useEffect, useMemo, useRef, Fragment, Suspense } from 'react';
 import { NavBar } from '@/components/NavBar';
 import { StatusBadge } from '@/components/StatusBadge';
 import { AuthGuard } from '@/components/AuthGuard';
@@ -7,7 +7,8 @@ import { PullToRefresh } from '@/components/PullToRefresh';
 import { VisualCalendar, buildGridFromTeacher, getSpainParts } from '@/components/VisualCalendar';
 import { useTeachers } from '@/lib/TeachersContext';
 import { useAuth } from '@/lib/AuthContext';
-import { mockAlerts } from '@/lib/mock-data';
+// `mockAlerts` ya no se usa: las alertas del dashboard salen de la auditoría real
+// (ver el bloque "Conflictos REALES" más abajo).
 import { Teacher, Grid, Assignment, ScoringEvent, ScoringEventType } from '@/types';
 import { EVENT_POINTS, EVENT_EUROS, calcRegisteredClassNumber, dbUpdateAssignmentStartDate, dbGetAllNotifications,
   dbAuditStudentAssignments, dbRelinkAssignment, dbSyncAssignmentName, dbMergeDuplicateStudents, dbSyncStudentAssignments,
@@ -532,8 +533,23 @@ interface EmailRow {
   createdAt: string;
 }
 
-function PresentationEmailsTab({ assignments, nowMs }: { assignments: Assignment[]; nowMs: number }) {
-  const [filter, setFilter] = useState<'pending' | 'sent' | 'all'>('pending');
+/** Filtros de la pestaña Emails. Los dos de estado son a los que llevan los
+ *  contadores del dashboard, así que sus ids viajan en la URL (?filter=…). */
+export type EmailFilter = 'pending' | 'at_risk' | 'overdue' | 'sent' | 'all';
+export const EMAIL_FILTERS: readonly EmailFilter[] = ['pending', 'at_risk', 'overdue', 'sent', 'all'];
+
+function PresentationEmailsTab({ assignments, nowMs, initialFilter }: {
+  assignments: Assignment[];
+  nowMs: number;
+  /** Filtro con el que se aterriza al llegar desde un contador del dashboard. */
+  initialFilter?: EmailFilter;
+}) {
+  const [filter, setFilter] = useState<EmailFilter>(initialFilter ?? 'pending');
+
+  // Al llegar desde un contador (o al cambiarlo en la URL) se respeta ese filtro:
+  // el admin hizo clic en "En riesgo" y tiene que ver exactamente esos.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { if (initialFilter) setFilter(initialFilter); }, [initialFilter]);
 
   const rows = useMemo<EmailRow[]>(() => {
     const mapped = assignments.map(a => {
@@ -559,93 +575,116 @@ function PresentationEmailsTab({ assignments, nowMs }: { assignments: Assignment
   }, [assignments, nowMs]);
 
   const pendingCount = rows.filter(r => !r.sent).length;
+  const atRiskCount  = rows.filter(r => r.statusKind === 'at_risk').length;
   const overdueCount = rows.filter(r => r.statusKind === 'overdue').length;
-  const visible = rows.filter(r => filter === 'all' || (filter === 'pending' ? !r.sent : r.sent));
 
-  const filters = [
+  const visible = rows.filter(r => {
+    switch (filter) {
+      case 'all':     return true;
+      case 'sent':    return r.sent;
+      case 'at_risk': return r.statusKind === 'at_risk';
+      case 'overdue': return r.statusKind === 'overdue';
+      default:        return !r.sent;
+    }
+  });
+
+  const filters: Array<{ id: EmailFilter; label: string; tone?: string }> = [
     { id: 'pending', label: `Pendientes${pendingCount > 0 ? ` (${pendingCount})` : ''}` },
+    { id: 'at_risk', label: `En riesgo${atRiskCount > 0 ? ` (${atRiskCount})` : ''}`, tone: '#e0912f' },
+    { id: 'overdue', label: `Fuera de tiempo${overdueCount > 0 ? ` (${overdueCount})` : ''}`, tone: '#dc4a38' },
     { id: 'sent',    label: 'Enviados' },
     { id: 'all',     label: 'Todos' },
-  ] as const;
+  ];
 
   return (
     <div>
       <div style={{ display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
         {filters.map(f => {
           const active = filter === f.id;
+          // El filtro activo se marca en verde DRC; los de estado conservan su
+          // color (ámbar / rojo) en el texto para que se reconozcan de un vistazo.
+          const accent = active ? '#1E9E3A' : (f.tone ?? 'var(--text-secondary)');
           return (
             <button key={f.id} onClick={() => setFilter(f.id)}
-              style={{ padding: '4px 12px', borderRadius: 20, border: `1.5px solid ${active ? '#1E9E3A' : 'var(--border)'}`, background: active ? 'rgba(30,158,58,0.1)' : 'transparent', color: active ? '#1E9E3A' : 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, fontWeight: active ? 700 : 500, fontFamily: 'inherit' }}>
+              style={{ padding: '4px 12px', borderRadius: 20, border: `1.5px solid ${active ? '#1E9E3A' : 'var(--border)'}`, background: active ? 'rgba(30,158,58,0.1)' : 'transparent', color: accent, cursor: 'pointer', fontSize: 12, fontWeight: active ? 700 : 500, fontFamily: 'inherit' }}>
               {f.label}
             </button>
           );
         })}
-        {overdueCount > 0 && (
-          <span style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 700, color: '#ef4444' }}>
-            🔴 {overdueCount} fuera de tiempo
-          </span>
-        )}
       </div>
 
       {visible.length === 0 ? (
         <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '32px 14px', textAlign: 'center', fontSize: 13, color: 'var(--text-muted)' }}>
-          {filter === 'pending' ? '✅ No hay emails de presentación pendientes.' : 'No hay asignaciones que mostrar.'}
+          {filter === 'pending' ? '✅ No hay emails de presentación pendientes.'
+            : filter === 'at_risk' ? '✅ Ninguno en riesgo: no hay presentaciones pendientes de más de 12 h.'
+            : filter === 'overdue' ? '✅ Ninguno fuera de tiempo: no hay presentaciones pendientes de más de 24 h.'
+            : 'No hay asignaciones que mostrar.'}
         </div>
       ) : (
         <>
-          {/* Desktop: table */}
-          <div className="desk-only" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
-            <div style={{ overflowX: 'auto', maxHeight: 500, overflowY: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}>
-                  <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)' }}>
-                    {['Alumno', 'Profesor', 'Estado', 'Retraso', 'Asignada'].map(h => (
-                      <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {visible.map(r => {
-                    const st = PRES_STATUS_STYLE[r.statusKind];
-                    return (
-                      <tr key={r.id} style={{ borderBottom: '1px solid var(--border)' }}>
-                        <td style={{ padding: '11px 14px', fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{r.studentName}</td>
-                        <td style={{ padding: '11px 14px', fontSize: 13, color: 'var(--text-secondary)' }}>{r.teacherName}</td>
-                        <td style={{ padding: '11px 14px' }}>
-                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 9px', borderRadius: 20, background: st.bg, border: `1px solid ${st.border}`, color: st.color, fontSize: 11, fontWeight: 700 }}>
-                            {r.statusLabel}
-                          </span>
-                        </td>
-                        <td style={{ padding: '11px 14px', fontSize: 13, fontWeight: r.sent ? 400 : 700, color: r.sent ? 'var(--text-muted)' : st.color }}>
-                          {r.sent ? '—' : formatDelay(r.delayHours)}
-                        </td>
-                        <td style={{ padding: '11px 14px', fontSize: 12, color: 'var(--text-muted)' }}>
-                          {new Date(r.createdAt).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' })}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+          {/* Desktop: tabla. SIN caja: la lista fluye con la página y usa el
+              scroll del navegador. Antes vivía dentro de un contenedor de
+              `maxHeight: 500` con su propio `overflowY`, así que con más de una
+              docena de asignaciones el admin tenía que hacer scroll DENTRO de un
+              recuadro para ver el resto — y el recuadro no crecía nunca.
+              Solo se conserva el scroll HORIZONTAL, que es del ancho de la tabla
+              y evita que la página entera se desplace de lado. */}
+          <div className="desk-only" style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 620 }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                  {['Alumno', 'Profesor', 'Estado', 'Retraso', 'Asignada'].map(h => (
+                    <th key={h} style={{ padding: '0 16px 10px', textAlign: 'left', fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {visible.map((r, i) => {
+                  const st = PRES_STATUS_STYLE[r.statusKind];
+                  return (
+                    // Separador de 1px entre filas en vez de bordes de caja.
+                    <tr key={r.id} style={{ borderBottom: i === visible.length - 1 ? 'none' : '1px solid var(--border)' }}>
+                      <td style={{ padding: '14px 16px', fontSize: 13.5, fontWeight: 600, color: 'var(--text-primary)' }}>{r.studentName}</td>
+                      <td style={{ padding: '14px 16px', fontSize: 13, color: 'var(--text-secondary)' }}>{r.teacherName}</td>
+                      <td style={{ padding: '14px 16px' }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 9px', borderRadius: 20, background: st.bg, border: `1px solid ${st.border}`, color: st.color, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap' }}>
+                          {r.statusLabel}
+                        </span>
+                      </td>
+                      <td style={{ padding: '14px 16px', fontSize: 13, fontWeight: r.sent ? 400 : 700, color: r.sent ? 'var(--text-muted)' : st.color, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+                        {r.sent ? '—' : formatDelay(r.delayHours)}
+                      </td>
+                      <td style={{ padding: '14px 16px', fontSize: 12, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                        {new Date(r.createdAt).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' })}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
 
-          {/* Mobile: cards */}
-          <div className="mob-only" style={{ flexDirection: 'column', gap: 10 }}>
-            {visible.map(r => {
+          {/* Mobile: lista separada por líneas, no tarjetas apiladas: mismo
+              contenido, sin el peso visual de un borde por cada email. */}
+          {/* Sin `flexDirection` inline: .mob-only fuerza `display: block`, así
+              que el flex/gap que había acá nunca llegó a aplicarse. */}
+          <div className="mob-only">
+            {visible.map((r, i) => {
               const st = PRES_STATUS_STYLE[r.statusKind];
               return (
-                <div key={r.id} style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: 14 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                <div key={r.id} style={{ padding: '13px 2px', borderBottom: i === visible.length - 1 ? 'none' : '1px solid var(--border)' }}>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 3 }}>
                     <div style={{ flex: 1, minWidth: 0, fontWeight: 700, fontSize: 14, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.studentName}</div>
-                    {!r.sent && <span style={{ fontSize: 13, fontWeight: 700, color: st.color, flexShrink: 0 }}>{formatDelay(r.delayHours)}</span>}
+                    {!r.sent && <span style={{ fontSize: 13, fontWeight: 700, color: st.color, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>{formatDelay(r.delayHours)}</span>}
                   </div>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 9 }}>
-                    {r.teacherName} · asignada el {new Date(r.createdAt).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 20, background: st.bg, border: `1px solid ${st.border}`, color: st.color, fontSize: 11, fontWeight: 700 }}>
+                      {r.statusLabel}
+                    </span>
+                    <span style={{ fontSize: 11.5, color: 'var(--text-muted)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {r.teacherName} · {new Date(r.createdAt).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}
+                    </span>
                   </div>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 9px', borderRadius: 20, background: st.bg, border: `1px solid ${st.border}`, color: st.color, fontSize: 11, fontWeight: 700 }}>
-                    {r.statusLabel}
-                  </span>
                 </div>
               );
             })}
@@ -3222,12 +3261,27 @@ function DuplicatesBanner() {
 // ─── Admin Content ────────────────────────────────────────────────────────────
 // Contenedor colapsable para las herramientas del resumen. Cerrado por defecto:
 // son acciones de mantenimiento puntuales, no información de consulta diaria.
-function AdminTool({ title, desc, children }: {
+function AdminTool({ title, desc, children, openSignal }: {
   title: string; desc: string; children: React.ReactNode;
+  /**
+   * Cada incremento abre la herramienta y la trae a la vista. Lo usa el contador
+   * de "Conflictos" del dashboard: el admin hace clic en el número y aterriza en
+   * la lista de casos, en vez de tener que buscar el desplegable a mano.
+   */
+  openSignal?: number;
 }) {
   const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => {
+    if (!openSignal) return;   // 0 / undefined = nadie ha pedido abrirla
+    setOpen(true);
+    ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [openSignal]);
+
   return (
-    <div className="adm-card adm-tool">
+    <div className="adm-card adm-tool" ref={ref}>
       <button className="adm-tool-head" aria-expanded={open} onClick={() => setOpen(o => !o)}>
         <span className="adm-tool-title">
           {title}
@@ -3253,15 +3307,57 @@ function AdminContent() {
   // pestaña con la URL (sistema externo) para aterrizar en Avisos; la pestaña
   // sigue siendo estado local para que cambiarla no cueste un round-trip de red.
   const searchParams = useSearchParams();
+  const router = useRouter();
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => {
     const t = searchParams.get('tab');
     if (t && (ADMIN_TABS as readonly string[]).includes(t)) setActiveTab(t as AdminTab);
   }, [searchParams]);
+
+  // Filtro de la pestaña Emails, también en la URL: así el enlace se puede
+  // compartir o recargar y sigue mostrando lo mismo.
+  const emailFilterParam = searchParams.get('filter');
+  const emailsFilter = (EMAIL_FILTERS as readonly string[]).includes(emailFilterParam ?? '')
+    ? (emailFilterParam as EmailFilter)
+    : undefined;
+
+  /** Contadores del dashboard → pestaña Emails con el filtro correspondiente. */
+  const goToEmails = (filter: EmailFilter) => {
+    router.push(`/admin?tab=emails&filter=${filter}`, { scroll: true });
+  };
   // Cola de validación pendiente, para el badge de la pestaña. Consulta ligera
   // (sin la columna `transcript`), una vez por visita al panel.
   const [pendingValidations, setPendingValidations] = useState<PendingValidationSummary>({ total: 0, oldestDate: null, oldestDays: 0 });
   useEffect(() => { dbCountPendingValidations().then(setPendingValidations).catch(() => {}); }, []);
+
+  // ── Conflictos REALES ──────────────────────────────────────────────────────
+  // Hasta ahora este contador salía de `mockAlerts`, un array fijo de lib/mock-data:
+  // decía "2" pasara lo que pasara en la academia. Ahora sale de la auditoría de
+  // vínculos, que es la que sabe de verdad qué está descuadrado.
+  //
+  // Se carga en segundo plano (lee todos los calendarios) y hasta que llega se
+  // muestra "·" en vez de 0: un cero mientras carga sería otra forma de mentir.
+  const [audit, setAudit] = useState<AuditResult | null>(null);
+  useEffect(() => { dbAuditStudentAssignments().then(setAudit).catch(() => {}); }, []);
+
+  /**
+   * Qué cuenta como conflicto. Se EXCLUYE `multipleAssignments`: un alumno con
+   * dos profesores es válido en la academia (la propia auditoría lo dice y ofrece
+   * marcarlo como revisado), así que contarlo daría un número siempre alto que
+   * nadie miraría.
+   */
+  const conflictGroups = audit ? [
+    { label: 'Alumnos sin asignación',        n: audit.studentsWithoutAssignment.length },
+    { label: 'Asignaciones huérfanas',        n: audit.orphanAssignments.length },
+    { label: 'Nombres desincronizados',       n: audit.nameMismatches.length },
+    { label: 'Alumnos duplicados',            n: audit.duplicateEmails.length },
+    { label: 'Cambios de profesor a medias',  n: audit.misplacedStudents.length },
+    { label: 'Clases de 2h que no cuadran',   n: audit.contiguityMismatches.length },
+  ].filter(g => g.n > 0) : [];
+  const conflicts = audit ? conflictGroups.reduce((s, g) => s + g.n, 0) : null;
+
+  // Abre la Auditoría de vínculos y la trae a la vista (contador "Conflictos").
+  const [auditSignal, setAuditSignal] = useState(0);
 
   const [editCalendarTeacher, setEditCalendarTeacher] = useState<Teacher | null>(null);
   const [editTeacher, setEditTeacher] = useState<Teacher | null>(null);
@@ -3293,7 +3389,6 @@ function AdminContent() {
   const activeTeachers  = teachers.filter(t => t.status !== 'vacation').length;
   const totalClasses    = teachers.reduce((a, t) => a + t.upcomingClasses.length, 0);
   const totalFreeSpots  = teachers.reduce((a, t) => a + t.freeSpots, 0);
-  const conflicts       = mockAlerts.filter(a => a.type === 'conflict').length;
   const blockedCount    = teachers.filter(t => t.isBlocked).length;
 
   // Punto de severidad de cada alerta (ya no se usan fondos ni iconos).
@@ -3370,19 +3465,40 @@ function AdminContent() {
               { label: 'Activos',       value: activeTeachers,  sub: `de ${teachers.length}`, alert: false },
               { label: 'Clases semana', value: totalClasses,    sub: 'confirmadas',           alert: false },
               { label: 'Cupos libres',  value: totalFreeSpots,  sub: 'disponibles',           alert: false },
-              { label: 'Conflictos',    value: conflicts,       sub: conflicts > 0 ? 'requieren atención' : 'sin conflictos', alert: conflicts > 0 },
+              {
+                label: 'Conflictos',
+                value: conflicts ?? '·',
+                sub: conflicts == null ? 'revisando…' : conflicts > 0 ? 'ver el detalle' : 'sin conflictos',
+                alert: (conflicts ?? 0) > 0,
+                // Solo es clickable si hay algo que mirar.
+                onClick: conflicts ? () => setAuditSignal(n => n + 1) : undefined,
+                title: conflictGroups.map(g => `${g.n} · ${g.label}`).join('\n'),
+              },
               { label: 'Alumnos',       value: students.length, sub: 'registrados',           alert: false },
               { label: 'Bloqueados',    value: blockedCount,    sub: 'baja retención',        alert: blockedCount > 0 },
-            ].map(s => (
-              <div key={s.label} className="adm-card adm-kpi">
-                <div className="adm-kpi-label">{s.label}</div>
-                <div className={`adm-kpi-value${s.alert ? ' is-alert' : ''}`}>
-                  {s.alert && <span className="adm-dot" style={{ background: '#dc4a38' }} />}
-                  {s.value}
-                </div>
-                <div className="adm-kpi-sub">{s.sub}</div>
-              </div>
-            ))}
+            ].map(s => {
+              const clickable = 'onClick' in s && !!s.onClick;
+              const Tag = clickable ? 'button' : 'div';
+              return (
+                <Tag
+                  key={s.label}
+                  className={`adm-card adm-kpi${clickable ? ' is-clickable' : ''}`}
+                  onClick={clickable ? s.onClick : undefined}
+                  title={('title' in s && s.title) || undefined}
+                  {...(clickable ? { type: 'button' as const } : {})}
+                >
+                  <div className="adm-kpi-label">
+                    {s.label}
+                    {clickable && <span aria-hidden className="adm-kpi-arrow">›</span>}
+                  </div>
+                  <div className={`adm-kpi-value${s.alert ? ' is-alert' : ''}`}>
+                    {s.alert && <span className="adm-dot" style={{ background: '#dc4a38' }} />}
+                    {s.value}
+                  </div>
+                  <div className="adm-kpi-sub">{s.sub}</div>
+                </Tag>
+              );
+            })}
           </div>
 
           {/* Emails de presentación */}
@@ -3393,19 +3509,30 @@ function AdminContent() {
                 {presPendingStatuses.length} pendiente{presPendingStatuses.length !== 1 ? 's' : ''}
               </span>
             </div>
+            {/* Cada contador lleva a la pestaña Emails con SU filtro puesto: el
+                admin hace clic en "En riesgo" y ve esos, sin volver a filtrar. */}
             <div className="adm-tiles">
               {[
-                { label: 'Pendientes a tiempo',    value: presOnTimeCount,  tone: 'is-ok',    dot: '#16a34a' },
-                { label: 'En riesgo (>12h)',       value: presAtRiskCount,  tone: 'is-warn',  dot: '#e0912f' },
-                { label: 'Fuera de tiempo (>24h)', value: presOverdueCount, tone: 'is-alert', dot: '#dc4a38' },
+                { label: 'Pendientes a tiempo',    value: presOnTimeCount,  tone: 'is-ok',    dot: '#16a34a', filter: 'pending' as const },
+                { label: 'En riesgo (>12h)',       value: presAtRiskCount,  tone: 'is-warn',  dot: '#e0912f', filter: 'at_risk' as const },
+                { label: 'Fuera de tiempo (>24h)', value: presOverdueCount, tone: 'is-alert', dot: '#dc4a38', filter: 'overdue' as const },
               ].map(c => (
-                <div key={c.label} className={`adm-tile ${c.tone}`}>
+                <button
+                  key={c.label}
+                  type="button"
+                  className={`adm-tile ${c.tone} is-clickable`}
+                  onClick={() => goToEmails(c.filter)}
+                  title={`Ver ${c.label.toLowerCase()} en la pestaña Emails`}
+                >
                   <div className="adm-tile-value">
                     <span className="adm-dot" style={{ background: c.dot }} />
                     {c.value}
                   </div>
-                  <div className="adm-tile-label">{c.label}</div>
-                </div>
+                  <div className="adm-tile-label">
+                    {c.label}
+                    <span aria-hidden className="adm-kpi-arrow">›</span>
+                  </div>
+                </button>
               ))}
             </div>
           </div>
@@ -3415,6 +3542,7 @@ function AdminContent() {
             <AdminTool
               title="Auditoría de vínculos"
               desc="Revisa la coherencia entre alumnos, asignaciones y fichas."
+              openSignal={auditSignal}
             >
               <AuditPanel />
             </AdminTool>
@@ -3446,8 +3574,16 @@ function AdminContent() {
           <div className="adm-bottom">
             <div className="adm-card">
               <div className="adm-sec-head">Alertas</div>
+              {/* Alertas REALES. Antes esta lista salía de `mockAlerts`: cinco
+                  mensajes fijos escritos a mano ("Agustín supera 40 clases
+                  semanales…") que nombraban profesores de verdad y no respondían
+                  a ningún dato. Ahora sale de la misma auditoría que alimenta el
+                  contador de Conflictos, así que las dos cosas no pueden
+                  contradecirse. */}
               <div className="adm-list">
-                {blockedCount === 0 && mockAlerts.length === 0 ? (
+                {audit == null ? (
+                  <div className="adm-empty">Revisando…</div>
+                ) : blockedCount === 0 && conflictGroups.length === 0 ? (
                   <div className="adm-empty">Sin alertas.</div>
                 ) : (
                   <>
@@ -3459,11 +3595,20 @@ function AdminContent() {
                         </span>
                       </div>
                     )}
-                    {mockAlerts.map(alert => (
-                      <div key={alert.id} className="adm-alert">
-                        <span className="adm-dot" style={{ background: alertColors[alert.severity], marginTop: 4 }} />
-                        <span className="adm-alert-text">{alert.message}</span>
-                      </div>
+                    {conflictGroups.map(g => (
+                      <button
+                        key={g.label}
+                        type="button"
+                        className="adm-alert adm-alert-link"
+                        onClick={() => setAuditSignal(n => n + 1)}
+                        title="Abrir la auditoría de vínculos"
+                      >
+                        <span className="adm-dot" style={{ background: alertColors.high, marginTop: 4 }} />
+                        <span className="adm-alert-text">
+                          {g.n} · {g.label}
+                          <span aria-hidden className="adm-kpi-arrow">›</span>
+                        </span>
+                      </button>
                     ))}
                   </>
                 )}
@@ -3805,7 +3950,7 @@ function AdminContent() {
               <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)' }}>Emails de presentación</div>
               <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3 }}>Estado del email de bienvenida por alumno. Los pendientes con más retraso, arriba.</div>
             </div>
-            <PresentationEmailsTab assignments={assignments} nowMs={nowMs} />
+            <PresentationEmailsTab assignments={assignments} nowMs={nowMs} initialFilter={emailsFilter} />
           </div>
         )}
 
