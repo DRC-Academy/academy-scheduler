@@ -67,6 +67,11 @@ export interface SaveClassArgs {
    * es lo que fallaba cuando un alumno tenía clases en días seguidos.
    */
   joinLogId?: string | null;
+  /**
+   * Duración de la clase en horas. Una sesión de 2 celdas contiguas manda 2: el
+   * transcript cubre las dos horas y la validación se calibra con esa duración.
+   */
+  durationHours?: number;
 }
 
 export interface SaveClassResult {
@@ -90,7 +95,7 @@ export interface SaveClassResult {
 export async function saveTeacherClass(args: SaveClassArgs): Promise<SaveClassResult> {
   const {
     teacher, myAssignments, studentName, date, time, transcript, classType, comment,
-    transcriptHash: hash, replaceId, registerClassRecord, joinLogId,
+    transcriptHash: hash, replaceId, registerClassRecord, joinLogId, durationHours,
   } = args;
 
   // Faltas/cancelaciones (sin transcript): solo la constancia.
@@ -112,6 +117,7 @@ export async function saveTeacherClass(args: SaveClassArgs): Promise<SaveClassRe
     transcriptHash: hash || null,
     replaceId,
     joinLogId: joinLogId ?? null,
+    durationMinutes: durationHours && durationHours > 1 ? durationHours * 60 : null,
   });
 
   if (!replaceId) {

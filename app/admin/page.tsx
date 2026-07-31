@@ -1997,7 +1997,15 @@ function ClassLogTab() {
                       <td style={{ padding: '10px 14px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>
                         {new Date(r.date + 'T00:00:00').toLocaleDateString('es-ES', { day: '2-digit', month: 'short' })}
                       </td>
-                      <td style={{ padding: '10px 14px', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 600 }}>{r.hour}</td>
+                      {/* Rango completo: una sesión de 2h es UNA fila "12:00 - 14:00". */}
+                      <td style={{ padding: '10px 14px', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 600 }}>
+                        {r.hoursLabel || r.hour}
+                        {r.durationHours > 1 && (
+                          <span style={{ marginLeft: 6, fontSize: 10.5, fontWeight: 700, padding: '1px 6px', borderRadius: 999, background: 'rgba(30,158,58,0.12)', color: '#1E9E3A' }}>
+                            {r.durationHours}h
+                          </span>
+                        )}
+                      </td>
                       <td style={{ padding: '10px 14px', whiteSpace: 'nowrap' }}>
                         <button onClick={() => setExpandedTeacher(prev => prev === r.teacherId ? null : r.teacherId)}
                           style={{ background: 'none', border: 'none', color: '#1E9E3A', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit', padding: 0, textAlign: 'left' }}>
@@ -2837,6 +2845,36 @@ function AuditPanel() {
                           style={auditBtn('#dc2626', 'rgba(239,68,68,0.08)', 'rgba(239,68,68,0.35)')}>
                           {busy === m.assignmentId ? 'Reparando…' : `Reparar → ${m.gridTeacherName}`}
                         </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* G — clases de 2h que solo ve una de las dos fuentes. NO hay botón
+                  de reparación a propósito: cuál de las dos fuentes tiene razón lo
+                  decide una persona mirando el horario real del alumno, y darle a
+                  un botón podría hacer que se cobre el doble por una clase de 1h. */}
+              {result.contiguityMismatches.length > 0 && (
+                <div style={auditCard}>
+                  <div style={auditSectionTitle('#b45309')}>
+                    G · Clases de 2h que no cuadran ({result.contiguityMismatches.length})
+                  </div>
+                  <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginBottom: 10, fontStyle: 'italic' }}>
+                    Dos horas seguidas del mismo alumno se tratan como UNA clase de 2h (cuenta como 2 para el pago).
+                    Acá el calendario y la ficha del alumno no dicen lo mismo, así que hay que revisar cuál refleja
+                    el horario real antes de que se liquide el mes.
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                    {result.contiguityMismatches.map(m => (
+                      <div key={`${m.teacherId}|${m.studentName}|${m.day}`} style={{ fontSize: 12.5, lineHeight: 1.6 }}>
+                        <b style={{ color: 'var(--text-primary)' }}>{m.studentName}</b>
+                        <span style={{ color: 'var(--text-muted)' }}>
+                          {' '}· {m.teacherName} · {m.day} · calendario: <b>{m.gridHours.join(' + ')}</b>
+                          {' '}({m.gridDuration > 1 ? `sesión de ${m.gridDuration}h` : 'suelta'})
+                          {' '}· ficha: <b>{m.slotHours.join(' + ')}</b>
+                          {' '}({m.slotDuration > 1 ? `sesión de ${m.slotDuration}h` : 'suelta'})
+                        </span>
                       </div>
                     ))}
                   </div>

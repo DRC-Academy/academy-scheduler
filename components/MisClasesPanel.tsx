@@ -25,8 +25,12 @@ import {
   classesForDate, recoveriesForDate, addDaysIso, isoDateLocal, dayNameFromDate, mondayIsoOf,
   rescheduledTargetFor, cancellationFor, cancellationLabel, transcriptForClass, hourLabel,
   weekDaysOf, weekRangeLabel, dayHeadingLabel,
-  type TeacherClass as TodayClass,
+  groupContiguousClasses, sessionHoursLabel,
+  // Todas las clases de esta vista son SESIONES ya agrupadas: dos celdas
+  // contiguas del mismo alumno llegan acá como una sola clase de 2h.
+  type TeacherSession as TodayClass,
 } from '@/lib/teacherClasses';
+import { durationBadgeLabel, hourNum } from '@/lib/sessions';
 import { useClassJoin } from '@/components/JoinClass';
 import { AddClassModal, saveTeacherClass, ANALYSIS_FAILED_NOTICE } from '@/components/AddClassModal';
 import { PresentationModal } from '@/components/PresentationModal';
@@ -389,9 +393,10 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     // clases de ayer se pintaban como si estuvieran por darse.
     if (dateIso < todayIso) return 'passed';
     if (dateIso > todayIso) return 'future';
-    const h = parseInt(c.hour);
-    if (h <= currentDecimal && h + 1 > currentDecimal) return 'inprogress';
-    if (h + 1 <= currentDecimal) return 'passed';
+    // Una sesión de 2h está EN CURSO durante todo su rango (17:00–19:00), no solo
+    // la primera hora: `endHourNum` ya es inicio + duración.
+    if (c.startHourNum <= currentDecimal && c.endHourNum > currentDecimal) return 'inprogress';
+    if (c.endHourNum <= currentDecimal) return 'passed';
     return 'future';
   }
 
@@ -423,9 +428,12 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     const mine = classJoinLogs.filter(l =>
       l.teacherId === teacher.id && l.studentName.trim().toLowerCase() === name && l.scheduledDate === date,
     );
-    // Con varios ingresos el mismo día gana el de la misma hora.
-    const h = parseInt(c.hour);
-    return mine.find(l => parseInt(l.scheduledTime) === h) ?? mine[0];
+    // Con varios ingresos el mismo día gana el que cae DENTRO de la sesión: en una
+    // clase de 2h el acceso puede estar registrado a cualquiera de sus dos horas.
+    return mine.find(l => {
+      const h = hourNum(l.scheduledTime);
+      return h >= c.startHourNum && h < c.endHourNum;
+    }) ?? mine[0];
   }
 
   /** ¿Esta clase se dio de verdad? (no reprogramada ni cancelada) */
@@ -436,10 +444,13 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
   // ── Días con sus clases, ya filtrados ────────────────────────────────────────
   // Sin useMemo a propósito: son unos pocos filtros sobre decenas de elementos.
   const dayGroups = visibleDays.map(iso => {
-    const all = [
+    // Las dos fuentes (slots recurrentes + celdas de recuperación del grid) pasan
+    // por la MISMA agrupación: dos celdas contiguas del mismo alumno salen como
+    // una sola card de 2h, con un botón de transcript y un solo "Ingresar".
+    const all = groupContiguousClasses([
       ...classesForDate(myAssignments, iso),
       ...recoveriesForDate(grid, iso, myAssignments),
-    ].sort((x, y) => parseInt(x.hour) - parseInt(y.hour));
+    ], teacher.id);
 
     const shown = all.filter(c => {
       if (filter === 'todas') return true;
@@ -642,6 +653,9 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
       // transcript e ingreso por id en vez de por proximidad de fechas, así que
       // la clase queda verificada por sus dos factores sin ambigüedad.
       joinLogId: transcriptFor ? joinLogOf(transcriptFor.c, transcriptFor.date)?.id ?? null : null,
+      // Un solo transcript cubre TODA la sesión: la validación tiene que saber
+      // que son 2 horas y no juzgarlo como si fuera una clase de 60 minutos.
+      durationHours: transcriptFor?.c.durationHours ?? 1,
     });
     if (result.notice) setSaveNotice(result.notice);
     // Solo se vuelve a avisar si el informe de IA falla: la clase ya está guardada.
@@ -669,6 +683,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
 
     const hasLink = !!c.meetLink;
     const hasTranscript = !!transcriptOf(c, date);
+    const hoursBadge = durationBadgeLabel(c.durationHours);
     const menuId  = `${c.key}_${date}`;
     const menuOpen = openMenu === menuId;
     const sent    = isSent(c.studentName);
@@ -704,7 +719,8 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
       <div className={`mc-card${passed ? ' is-passed' : ''}`} style={inactive ? { opacity: 0.5 } : undefined}>
         <div className="mc-row">
           <div className="mc-left">
-            <div className="mc-hour">{c.hour}</div>
+            {/* Rango completo de la sesión: "17:00 - 19:00" en una clase de 2h. */}
+            <div className="mc-hour">{sessionHoursLabel(c)}</div>
             <div className={`mc-accent${inProgress ? ' is-live' : isNext ? ' is-next' : ''}`} />
             <div className="mc-avatar">{c.studentName.charAt(0).toUpperCase()}</div>
           </div>
@@ -712,6 +728,8 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
           <div className="mc-main">
             <div className="mc-nameline">
               <span className={`mc-name${inactive ? ' is-struck' : ''}`}>{c.studentName}</span>
+              {/* Sesión de varias horas: una sola clase que cuenta como N. */}
+              {hoursBadge && <span className="mc-badge-hours" title={`Sesión de ${c.durationHours} horas seguidas · cuenta como ${c.billingUnits} clases`}>{hoursBadge}</span>}
               {c.isRecovery && <span className="mc-badge-recovery">Recuperación</span>}
               {rescheduled && <span className="mc-badge-resched">Reprogramada → {fmtDateDMY(rescheduledTo)}</span>}
               {cancelled && <span className="mc-badge-resched">{cancelLabel}</span>}
@@ -1032,8 +1050,17 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
             time: hourLabel(transcriptFor.c.hour),
           }}
           contextNote={
-            <>Clase de <b>{transcriptFor.c.studentName}</b> del <b>{fmtDateDMY(transcriptFor.date)}</b> a
-            las <b>{hourLabel(transcriptFor.c.hour)}</b>. Pegá el transcript de Fathom para cerrarla.</>
+            transcriptFor.c.durationHours > 1 ? (
+              // Sesión de 2h: UN transcript cubre las dos horas y cierra la clase
+              // entera. No hay que subirlo dos veces.
+              <>Sesión de <b>{transcriptFor.c.durationHours}h</b> con <b>{transcriptFor.c.studentName}</b> del{' '}
+              <b>{fmtDateDMY(transcriptFor.date)}</b>, de <b>{sessionHoursLabel(transcriptFor.c)}</b>. Pegá
+              el transcript completo: uno solo cierra toda la sesión y cuenta
+              como <b>{transcriptFor.c.billingUnits} clases</b>.</>
+            ) : (
+              <>Clase de <b>{transcriptFor.c.studentName}</b> del <b>{fmtDateDMY(transcriptFor.date)}</b> a
+              las <b>{hourLabel(transcriptFor.c.hour)}</b>. Pegá el transcript de Fathom para cerrarla.</>
+            )
           }
           onClose={() => setTranscriptFor(null)}
           onSaved={handleSaveTranscript}

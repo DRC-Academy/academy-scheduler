@@ -58,6 +58,8 @@ interface Body {
   transcriptHash?: string | null;
   replaceId?: string | null;
   joinLogId?: string | null;
+  /** 120 en una sesión de 2h (celdas contiguas). Por defecto, 60. */
+  durationMinutes?: number | null;
 }
 
 export async function POST(request: Request): Promise<Response> {
@@ -339,7 +341,11 @@ async function afterAnalysis(args: {
   // Como mucho la degrada a revisión; nunca borra ni descarta el registro.
   if (args.validationStatus !== 'ok') return;
   try {
-    const structure = validateTranscriptStructure(args.transcript, { durationMinutes: 60 });
+    // Duración REAL de la clase: 120 en una sesión de 2h. La IA verificadora
+    // recibe lo mismo, para no juzgar como sospechoso un transcript que dura el
+    // doble simplemente porque la clase también duraba el doble.
+    const durationMinutes = body.durationMinutes ?? 60;
+    const structure = validateTranscriptStructure(args.transcript, { durationMinutes });
     if (!shouldRunAI(structure.score, 0)) return;
 
     const res = await verifyTranscriptAI({
@@ -347,6 +353,7 @@ async function afterAnalysis(args: {
       teacherName: body.teacherName?.trim() || '',
       studentName,
       level: body.level,
+      durationMinutes,
     });
     const ai = res.data;
     if (!ai) return;

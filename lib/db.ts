@@ -3,6 +3,7 @@ import { triggerEmail } from './emailClient';
 import { baseStateOf, baseStudentOf, withBaseState, assignableCellKeys, puntualCellDates } from './cells';
 import { minutesLateSpain } from './spainTime';
 import { fetchOpenAlertState } from './interventionsClient';
+import { findContiguityMismatches, type ContiguityMismatch } from './teacherClasses';
 import { Teacher, Student, Assignment, AppUser, Grid, TeacherStatus, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, AssignedSlot, EmailPreferences } from '@/types';
 
 // ── AUTH ─────────────────────────────────────────────────────────────────────
@@ -1079,6 +1080,10 @@ export interface AuditResult {
   // F) Assignment que apunta a un profesor pero el alumno ocupa el calendario de
   //    OTRO. Es la firma de una transferencia que quedó a medias (caso Izaro).
   misplacedStudents: MisplacedStudent[];
+  // G) Clases de 2h que solo ve UNA de las dos fuentes: el calendario dice horas
+  //    contiguas y los slots no, o al revés. Se informa y no se toca: inventar la
+  //    contigüidad que falta haría cobrar 2 por una clase de 1 hora.
+  contiguityMismatches: ContiguityMismatch[];
 }
 
 /** Alumno cuya assignment y cuyo calendario dicen profesores distintos. */
@@ -1154,12 +1159,39 @@ export async function dbAuditStudentAssignments(): Promise<AuditResult> {
       teachers: arr.map(a => a.teacherName).join(' / '),
     }));
 
-  const misplacedStudents = await dbFindMisplacedStudents(assignments);
+  const [misplacedStudents, contiguityMismatches] = await Promise.all([
+    dbFindMisplacedStudents(assignments),
+    dbFindContiguityMismatches(assignments),
+  ]);
 
   return {
     studentsWithoutAssignment, orphanAssignments, nameMismatches,
-    duplicateEmails, multipleAssignments, misplacedStudents,
+    duplicateEmails, multipleAssignments, misplacedStudents, contiguityMismatches,
   };
+}
+
+/**
+ * G — Alumnos cuya contigüidad NO coincide entre el calendario del profesor y los
+ * slots de su assignment. Es lo que decide si una clase vale 1 o 2, así que una
+ * discrepancia entre las dos fuentes hay que verla, no resolverla adivinando.
+ */
+export async function dbFindContiguityMismatches(known?: Assignment[]): Promise<ContiguityMismatch[]> {
+  const [assignments, teachers, calendars] = await Promise.all([
+    known ? Promise.resolve(known) : dbGetAssignments(),
+    dbGetTeachers(),
+    supabase.from('teacher_calendars').select('teacher_id, grid'),
+  ]);
+  if (calendars.error) {
+    console.error('[db] No se pudieron leer los calendarios para la auditoría de 2h:', calendars.error);
+    return [];
+  }
+
+  const out: ContiguityMismatch[] = [];
+  for (const row of (calendars.data ?? []) as Array<{ teacher_id: string; grid: Grid }>) {
+    const name = teachers.find(t => t.id === row.teacher_id)?.name ?? row.teacher_id;
+    out.push(...findContiguityMismatches(row.grid ?? {}, assignments, { id: row.teacher_id, name }));
+  }
+  return out.sort((a, b) => a.teacherName.localeCompare(b.teacherName) || a.studentName.localeCompare(b.studentName));
 }
 
 /**

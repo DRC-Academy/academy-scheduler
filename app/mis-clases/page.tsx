@@ -7,7 +7,7 @@ import { LastUpdated } from '@/components/LastUpdated';
 import { getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
-import { calculateTeacherFinance, recordVerification, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge } from '@/lib/finance';
+import { calculateTeacherFinance, recordVerification, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge, rowHoursLabel, durationBadge, sessionBreakdownLabel } from '@/lib/finance';
 import { dbGetAssignmentsByTeacher, calcRegisteredClassNumber } from '@/lib/db';
 import { maybeSendMilestoneEmail } from '@/lib/milestoneEmails';
 import { AddClassModal, saveTeacherClass, ANALYSIS_FAILED_NOTICE } from '@/components/AddClassModal';
@@ -52,7 +52,7 @@ function daysDiff(aIso: string, bIso: string): number {
 
 function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignments: Assignment[] }) {
   const {
-    students, classRecords, classJoinLogs, financeRates, financePayments, scoringEvents, manualApprovals,
+    students, classRecords, classJoinLogs, classAnalyses, financeRates, financePayments, scoringEvents, manualApprovals,
     registerClassRecord, loadFinanceData,
   } = useTeachers();
 
@@ -109,11 +109,15 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
 
   // Resumen de pago (cálculo de finanzas).
   const payment = financePayments.find(p => p.teacherId === teacher.id && p.monthYear === monthYear) ?? null;
+  // classAnalyses es el SEGUNDO FACTOR de verificación (el transcript). Sin él,
+  // este cálculo daba `hasTranscript: false` en todas las filas y el profesor veía
+  // "a revisar" y €0 pagables aunque hubiera subido todos los transcripts — el
+  // panel del admin, que sí los pasa, decía otra cosa sobre las mismas clases.
   const finance = useMemo(() => calculateTeacherFinance({
     teacherId: teacher.id, teacherName: teacher.name, monthYear,
-    assignments: myAssignments, joinLogs: classJoinLogs, classRecords, rates: financeRates,
+    assignments: myAssignments, joinLogs: classJoinLogs, classRecords, classAnalyses, rates: financeRates,
     scoringEvents, students, manualApprovals, payment,
-  }), [teacher.id, teacher.name, monthYear, myAssignments, classJoinLogs, classRecords, financeRates, scoringEvents, students, manualApprovals, payment]);
+  }), [teacher.id, teacher.name, monthYear, myAssignments, classJoinLogs, classRecords, classAnalyses, financeRates, scoringEvents, students, manualApprovals, payment]);
 
   const todayIso = getSpainParts(new Date()).dateStr;
 
@@ -154,12 +158,15 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
 
       const pagables = rows.filter(r => r.status === 'pagable');
       const aRevisar = rows.filter(r => r.status === 'a_revisar');
-      const subtotal = pagables.reduce((s, r) => s + r.rate, 0);
+      // Todo en CLASES (unidades), no en filas: una sesión de 2h es una fila que
+      // vale 2 clases y 2× la tarifa.
+      const unitsOf = (rs: ClassFinanceRow[]) => rs.reduce((s, r) => s + r.billingUnits, 0);
+      const subtotal = pagables.reduce((s, r) => s + r.rate * r.billingUnits, 0);
 
       return {
         name, rows, plan, planTypeLabel, level, startDate, antiquityToday, isExStudent,
         oldRate, newRate, currentRate, rateChanged, changeIso, prevDayLabel,
-        subtotal, total: rows.length, pagablesCount: pagables.length, aRevisarCount: aRevisar.length,
+        subtotal, total: unitsOf(rows), pagablesCount: unitsOf(pagables), aRevisarCount: unitsOf(aRevisar),
         hasReview: aRevisar.length > 0,
       };
     });
@@ -366,6 +373,9 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                               const complete = r.hasJoinLog && r.hasTranscript;
                               const sub = subscriptionBadge(r.subscriptionStatus);
                               const subDiffer = r.subAtJoin && r.subAtRecord && r.subAtJoin !== r.subAtRecord;
+                              // Sesión de 2h: UNA fila que vale 2 clases (2× tarifa).
+                              const dur = durationBadge(r.durationHours);
+                              const sessionNote = sessionBreakdownLabel(r);
                               return (
                                 <tr key={i} className={r.status === 'a_revisar' ? 'is-review' : undefined}>
                                   {/* Fecha */}
@@ -384,8 +394,11 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                                       )}
                                     </span>
                                   </td>
-                                  {/* Hora */}
-                                  <td style={{ color: '#1a1c1a', fontWeight: 600 }}>{r.hour || '—'}</td>
+                                  {/* Hora — rango completo si es una sesión de 2h */}
+                                  <td style={{ color: '#1a1c1a', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                                    {r.hour ? rowHoursLabel(r) : '—'}
+                                    {dur && <span className="mcf-tag" style={{ marginLeft: 5, background: dur.bg, color: dur.color }}>{dur.label}</span>}
+                                  </td>
                                   {/* Ingreso (+ tipo de clase) */}
                                   <td>
                                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
@@ -413,8 +426,16 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                                       )}
                                     </span>
                                   </td>
-                                  {/* Tarifa */}
-                                  <td style={{ color: '#1a1c1a', fontWeight: 600 }}>€{r.rate.toFixed(2)}</td>
+                                  {/* Tarifa — tarifa × unidades (2× en una sesión de 2h) */}
+                                  <td style={{ color: '#1a1c1a', fontWeight: 600, whiteSpace: 'nowrap' }}
+                                    title={sessionNote ?? undefined}>
+                                    €{(r.rate * r.billingUnits).toFixed(2)}
+                                    {r.billingUnits > 1 && (
+                                      <span style={{ display: 'block', fontSize: 10.5, fontWeight: 600, color: '#5f6360' }}>
+                                        cuenta como {r.billingUnits}
+                                      </span>
+                                    )}
+                                  </td>
                                   {/* Acción */}
                                   <td>
                                     {isFalta ? (

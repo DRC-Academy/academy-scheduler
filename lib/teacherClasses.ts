@@ -18,6 +18,11 @@
 
 import type { Assignment, ClassRecord, ClassRecordType, Grid } from '@/types';
 import type { ClassTranscriptRef } from '@/lib/finance';
+import { baseStateOf, baseStudentOf } from '@/lib/cells';
+import {
+  contiguousRunLength, groupByContiguousHour, hourNum, hourText, nkName,
+  sessionIdOf, sessionRangeLabel,
+} from '@/lib/sessions';
 
 export const DAY_NAMES_BY_JSDAY = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 
@@ -193,6 +198,208 @@ export function recoveriesForDate(grid: Grid, dateIso: string, assignments: Assi
     });
   }
   return list;
+}
+
+// ── SESIONES: celdas contiguas del mismo alumno = UNA clase larga ─────────────
+//
+// Fuente ÚNICA de la agrupación. La usan TODAS las vistas que listan clases del
+// profesor (Calendario, Mis clases, Próxima clase, Asistencias) para que ninguna
+// siga viendo dos clases sueltas de 1h donde hay una sesión de 2h.
+//
+// La regla de contigüidad vive en lib/sessions (primitivas puras compartidas).
+// Acá se le suma lo que sabe este módulo: qué dos clases son "el mismo alumno el
+// mismo día" y qué NO se puede fusionar.
+
+/** Clase del profesor ya agrupada: una sesión de 1, 2 o más horas seguidas. */
+export interface TeacherSession extends TeacherClass {
+  /** `${teacherId}|${alumno}|${fecha}|${horaInicio}`. Derivado, nunca persistido. */
+  sessionId: string;
+  /** Hora de inicio como número (17 para 17:00). */
+  startHourNum: number;
+  /** Hora de fin, EXCLUSIVA: una sesión 17–19 tiene endHourNum 19. */
+  endHourNum: number;
+  /** Nº de celdas contiguas: 2 para 17:00+18:00. */
+  durationHours: number;
+  /** Lo que vale la sesión para el pago y para el límite mensual. = durationHours. */
+  billingUnits: number;
+  /** Horas que la componen, en orden: ['17:00', '18:00']. */
+  hours: string[];
+  /** Las clases de 1h originales, por si alguna vista necesita el detalle. */
+  parts: TeacherClass[];
+}
+
+/**
+ * ¿Estas dos clases de 1h pertenecen a la misma sesión? (la contigüidad horaria
+ * la comprueba `groupByContiguousHour` aparte).
+ *
+ * NO se fusiona una clase recurrente con una recuperación aunque estén pegadas:
+ * la recuperación tiene identidad propia (`recoveryFor`: qué clase repone) y su
+ * propio tipo en class_records. Fundirlas perdería ese vínculo y registraría como
+ * 'normal' una hora que es de recuperación. Dos recuperaciones contiguas del
+ * mismo alumno SÍ son una sesión de 2h (es el caso real de Cristina Montoro el
+ * 29/07: dos registros de recuperación a las 14:00 y 15:00).
+ */
+function sameSessionClass(a: TeacherClass, b: TeacherClass): boolean {
+  return a.date === b.date
+    && nkName(a.studentName) === nkName(b.studentName)
+    && !!a.isRecovery === !!b.isRecovery;
+}
+
+/** Convierte una racha de clases contiguas en la sesión que representan. */
+function toSession(run: TeacherClass[], teacherId: string): TeacherSession {
+  const first = run[0];
+  const start = hourNum(first.hour);
+  const duration = run.length;
+  return {
+    // Se conserva la `key` de la primera hora: es única y ya la usan las vistas
+    // como identidad de fila (spinner de "Ingresar a clase", "próxima clase"…).
+    ...first,
+    sessionId:    sessionIdOf(teacherId, first.studentName, first.date, start),
+    startHourNum: start,
+    endHourNum:   start + duration,
+    durationHours: duration,
+    billingUnits: duration,
+    hours:        run.map(c => hourText(hourNum(c.hour))),
+    parts:        run,
+  };
+}
+
+/**
+ * Agrupa las clases de un profesor en sesiones. Dos (o más) celdas contiguas del
+ * mismo alumno el mismo día salen como UNA sesión con su duración; el resto salen
+ * como sesiones de 1 hora, así el llamador trabaja siempre con el mismo tipo.
+ *
+ * Acepta las clases de CUALQUIERA de las dos fuentes (slots recurrentes y celdas
+ * de recuperación del grid) y las agrupa con la misma regla, que es lo que evita
+ * que cada pantalla invente su propia definición de "clase de 2h".
+ */
+export function groupContiguousClasses(classes: TeacherClass[], teacherId: string): TeacherSession[] {
+  // Por fecha: dos clases de días distintos nunca son la misma sesión, y
+  // groupByContiguousHour solo mira la hora.
+  const byDate = new Map<string, TeacherClass[]>();
+  for (const c of classes) {
+    const arr = byDate.get(c.date);
+    if (arr) arr.push(c); else byDate.set(c.date, [c]);
+  }
+
+  const sessions: TeacherSession[] = [];
+  for (const [, sameDay] of byDate) {
+    // Y por alumno: el orden por hora de dos alumnos intercalados (A 17:00,
+    // B 18:00) no puede encadenarse, y separarlos antes lo hace evidente.
+    const byStudent = new Map<string, TeacherClass[]>();
+    for (const c of sameDay) {
+      const k = nkName(c.studentName);
+      const arr = byStudent.get(k);
+      if (arr) arr.push(c); else byStudent.set(k, [c]);
+    }
+    for (const [, ofStudent] of byStudent) {
+      for (const run of groupByContiguousHour(ofStudent, c => c.hour, sameSessionClass)) {
+        sessions.push(toSession(run, teacherId));
+      }
+    }
+  }
+
+  return sessions.sort((x, y) => x.date.localeCompare(y.date) || x.startHourNum - y.startHourNum);
+}
+
+/** "17:00 - 19:00" (2h) o "17:00" (1h). Fuente única del rango que se muestra. */
+export function sessionHoursLabel(s: { hour: string; durationHours: number }): string {
+  return sessionRangeLabel(s.hour, s.durationHours);
+}
+
+// ── Inconsistencias de contigüidad entre el grid y las assignments ────────────
+
+/**
+ * Un alumno cuyas horas contiguas NO coinciden entre las dos fuentes: el grid
+ * del profesor (lo que se ve en el calendario) y `assignments.slots` (de donde
+ * salen las clases de la agenda). Se INFORMA, nunca se corrige sola: inventar la
+ * contigüidad en la fuente que no la tiene es exactamente lo que haría que un
+ * profesor cobre 2 por una clase de 1 hora.
+ */
+export interface ContiguityMismatch {
+  teacherId: string;
+  teacherName: string;
+  studentName: string;
+  day: string;
+  gridHours: string[];
+  slotHours: string[];
+  /** Duración máxima contigua según cada fuente (2 = sesión de 2h). */
+  gridDuration: number;
+  slotDuration: number;
+}
+
+/** Horas de la racha contigua más larga de una lista de horas. */
+function maxRun(hours: number[]): number {
+  let best = 0;
+  for (const h of hours) best = Math.max(best, contiguousRunLength(hours, h));
+  return best;
+}
+
+/**
+ * Compara, alumno por alumno y día por día, la contigüidad que ve el grid con la
+ * que ven los slots de la assignment. Solo mira el estado RECURRENTE del grid
+ * (`baseStateOf`/`baseStudentOf`): una recuperación puntual de esta semana no es
+ * un horario fijo y no debe contar como sesión de 2h del alumno de fondo.
+ */
+export function findContiguityMismatches(
+  grid: Grid,
+  assignments: Assignment[],
+  teacher: { id: string; name: string },
+): ContiguityMismatch[] {
+  // Grid → alumno|día → horas recurrentes ocupadas.
+  const gridHours = new Map<string, number[]>();
+  for (const [key, cell] of Object.entries(grid ?? {})) {
+    if (baseStateOf(cell) !== 'ocupado') continue;
+    const student = baseStudentOf(cell);
+    if (!student) continue;
+    const usc = key.lastIndexOf('_');
+    if (usc < 0) continue;
+    const day = key.slice(0, usc);
+    const h = hourNum(key.slice(usc + 1));
+    if (!GRID_DAY_ORDER.includes(day) || !Number.isFinite(h)) continue;
+    const k = `${nkName(student)}|${day}`;
+    const arr = gridHours.get(k);
+    if (arr) arr.push(h); else gridHours.set(k, [h]);
+  }
+
+  // Slots → alumno|día → horas.
+  const slotHours = new Map<string, number[]>();
+  const nameOf = new Map<string, string>();
+  for (const a of assignments) {
+    if (a.teacherId !== teacher.id) continue;
+    for (const s of a.slots ?? []) {
+      const h = hourNum(s.hour);
+      if (!Number.isFinite(h)) continue;
+      const k = `${nkName(a.studentName)}|${s.day}`;
+      nameOf.set(k, a.studentName);
+      const arr = slotHours.get(k);
+      if (arr) arr.push(h); else slotHours.set(k, [h]);
+    }
+  }
+
+  const out: ContiguityMismatch[] = [];
+  // Solo los alumnos presentes en LAS DOS fuentes: que un alumno falte entero de
+  // una de ellas es otro problema (huérfanos / transferencias a medias), y ya
+  // tiene su propia sección en la auditoría.
+  for (const [k, slotsOf] of slotHours) {
+    const gridOf = gridHours.get(k);
+    if (!gridOf) continue;
+    const gridDuration = maxRun(gridOf);
+    const slotDuration = maxRun(slotsOf);
+    if (gridDuration === slotDuration) continue;
+    const [, day] = k.split('|');
+    out.push({
+      teacherId: teacher.id,
+      teacherName: teacher.name,
+      studentName: nameOf.get(k) ?? k.split('|')[0],
+      day,
+      gridHours: [...gridOf].sort((a, b) => a - b).map(hourText),
+      slotHours: [...slotsOf].sort((a, b) => a - b).map(hourText),
+      gridDuration,
+      slotDuration,
+    });
+  }
+  return out;
 }
 
 // ── Constancias que apagan una clase (cancelada / reprogramada) ───────────────

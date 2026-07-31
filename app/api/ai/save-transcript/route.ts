@@ -29,6 +29,8 @@ interface Body {
   transcriptHash?: string | null;
   joinLogId?: string | null;
   replaceId?: string | null;
+  /** 120 en una sesión de 2h (celdas contiguas). Por defecto, 60. */
+  durationMinutes?: number | null;
 }
 
 export async function POST(request: Request): Promise<Response> {
@@ -60,6 +62,9 @@ export async function POST(request: Request): Promise<Response> {
       level:       body.level,
       excludeId:   body.replaceId,
       skipAI:      true,
+      // Sesión de 2h: el transcript cubre 120 minutos y los umbrales de duración
+      // se calibran con eso, no con una clase de 60 que nunca existió.
+      durationMinutes: body.durationMinutes ?? undefined,
     });
   } catch (err) {
     // La validación NUNCA debe impedir guardar la clase: si se cae, se guarda

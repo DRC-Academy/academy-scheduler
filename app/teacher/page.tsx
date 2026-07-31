@@ -13,7 +13,7 @@ import { useTeachers } from '@/lib/TeachersContext';
 import { calcRegisteredClassNumber, dbCheckStudentExists, dbSetStudentProduct, dbEnsureStudentAndAssignment, dbSaveTeacherCalendarHours, getTeacherAssignments } from '@/lib/db';
 import { planBadgeStyle } from '@/lib/productUtils';
 import { isAssignableCell, withBaseState, baseStudentOf } from '@/lib/cells';
-import { isoDateLocal, classesForDate } from '@/lib/teacherClasses';
+import { isoDateLocal, classesForDate, groupContiguousClasses, sessionHoursLabel } from '@/lib/teacherClasses';
 import { StudentAutofillCard } from '@/components/StudentAutofillCard';
 import { useStudentAutofill } from '@/lib/useStudentAutofill';
 import { usePresentationSent, presentationBtnStyle, PresentationEmailBadge } from '@/components/teacherPanelUi';
@@ -1384,10 +1384,15 @@ function TeacherContent() {
   // Cabecera: día y hora de España, la misma referencia que la agenda. Antes usaba
   // la hora local del navegador y podía anunciar la clase de otro día.
   const spainHeader = getSpainParts(new Date());
-  const todayClassesHeader = classesForDate(myAssignments, spainHeader.dateStr);
-  const nextClassHeader = todayClassesHeader.find(c => parseInt(c.hour) + 1 > spainHeader.hour + spainHeader.minute / 60);
+  // Agrupada como en el resto de la app: una sesión de 2h es UNA clase que sigue
+  // en curso hasta su hora de fin (endHourNum), no hasta la hora siguiente.
+  const todayClassesHeader = groupContiguousClasses(
+    classesForDate(myAssignments, spainHeader.dateStr), teacher.id,
+  );
+  const nowDecimalHeader = spainHeader.hour + spainHeader.minute / 60;
+  const nextClassHeader = todayClassesHeader.find(c => c.endHourNum > nowDecimalHeader);
   const nextClassLabel = nextClassHeader
-    ? `Hoy ${nextClassHeader.hour} · ${nextClassHeader.studentName}`
+    ? `Hoy ${sessionHoursLabel(nextClassHeader)} · ${nextClassHeader.studentName}`
     : 'Sin clases hoy';
 
   const headerLevel = (teacher.currentLevel as 1 | 2 | 3) ?? 1;

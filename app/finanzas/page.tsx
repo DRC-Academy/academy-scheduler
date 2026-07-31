@@ -7,7 +7,7 @@ import { LastUpdated } from '@/components/LastUpdated';
 import { getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
-import { calculateTeacherFinance, TeacherFinanceResult, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge, SUBSCRIPTION_STATUS_OPTIONS } from '@/lib/finance';
+import { calculateTeacherFinance, TeacherFinanceResult, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge, rowHoursLabel, SUBSCRIPTION_STATUS_OPTIONS } from '@/lib/finance';
 import { classifyPlan } from '@/lib/productUtils';
 import { dbRevertPenalty } from '@/lib/db';
 import { Assignment, ScoringEvent } from '@/types';
@@ -73,7 +73,16 @@ function ClassDetailRows({ result, studentName, onApproveReview, onApproveExceed
                     {subDiffer && <span style={{ cursor: 'help' }} title={`Al ingresar: ${subscriptionBadge(r.subAtJoin).label.replace(/^[^ ]+ /, '')} · Al registrar: ${subscriptionBadge(r.subAtRecord).label.replace(/^[^ ]+ /, '')}`}>ℹ️</span>}
                   </span>
                 </td>
-                <td style={{ padding: '7px 14px', whiteSpace: 'nowrap', color: 'var(--text-primary)' }}>€{r.rate.toFixed(2)}</td>
+                {/* Importe = tarifa × unidades. Una sesión de 2h cobra 2× la tarifa. */}
+                <td style={{ padding: '7px 14px', whiteSpace: 'nowrap', color: 'var(--text-primary)' }}
+                  title={r.billingUnits > 1 ? `${r.billingUnits} × €${r.rate.toFixed(2)}` : undefined}>
+                  €{(r.rate * r.billingUnits).toFixed(2)}
+                  {r.billingUnits > 1 && (
+                    <span style={{ marginLeft: 5, fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 999, background: 'rgba(30,158,58,0.12)', color: '#1E9E3A' }}>
+                      {r.durationHours}h ×{r.billingUnits}
+                    </span>
+                  )}
+                </td>
                 <td style={{ padding: '7px 14px', whiteSpace: 'nowrap' }}>
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
                     <span style={{ fontSize: 10.5, padding: '2px 8px', borderRadius: 10, background: st.bg, color: st.color, fontWeight: 700 }}>{st.label}</span>
@@ -129,7 +138,9 @@ function StudentDetailTable({ result, assignments, onApproveReview, onApproveExc
             {students.map(([name, rows]) => {
               const asgn = assignments.find(a => a.teacherId === result.teacherId && a.studentName === name);
               const pagables = rows.filter(r => r.status === 'pagable');
-              const subtotal = pagables.reduce((s, r) => s + r.rate, 0);
+              // En unidades: una sesión de 2h son 2 clases pagables y 2× la tarifa.
+              const pagableUnits = pagables.reduce((s, r) => s + r.billingUnits, 0);
+              const subtotal = pagables.reduce((s, r) => s + r.rate * r.billingUnits, 0);
               const antiquity = rows[0]?.antiquityDays ?? 0;
               const rate = rows[0]?.rate ?? 0;
               const isOpen = openStudent === name;
@@ -142,7 +153,10 @@ function StudentDetailTable({ result, assignments, onApproveReview, onApproveExc
                     <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>{asgn?.startDate ? finDateShort(asgn.startDate) : '—'}</td>
                     <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>{antiquity}d</td>
                     <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', color: 'var(--text-primary)' }}>€{rate.toFixed(2)}</td>
-                    <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 600 }}>{pagables.length}</td>
+                    <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 600 }}
+                      title={pagableUnits !== pagables.length ? `${pagables.length} sesiones · ${pagableUnits} clases (alguna es de 2h)` : undefined}>
+                      {pagableUnits}
+                    </td>
                     <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', color: '#1E9E3A', fontWeight: 700 }}>€{subtotal.toFixed(2)}</td>
                     <td style={{ padding: '9px 14px', whiteSpace: 'nowrap' }}>
                       {hasReview
@@ -261,12 +275,16 @@ function FinanceTab() {
   ];
 
   function exportCsv() {
-    const lines = ['Profesor,Alumno,Fecha,Tarifa,Estado,Total profesor'];
+    // Horas/Cuenta como: una sesión de 2h es una fila que vale 2 clases, así que
+    // el importe de la fila es tarifa × unidades y el CSV tiene que decirlo.
+    const lines = ['Profesor,Alumno,Fecha,Hora,Horas,Cuenta como,Tarifa,Importe,Estado,Total profesor'];
     for (const r of visible) {
       for (const row of r.rows) {
         lines.push([
           `"${r.teacherName}"`, `"${row.studentName}"`, row.date,
-          row.rate.toFixed(2), row.status, r.totalAPagar.toFixed(2),
+          `"${rowHoursLabel(row)}"`, row.durationHours, row.billingUnits,
+          row.rate.toFixed(2), (row.rate * row.billingUnits).toFixed(2),
+          row.status, r.totalAPagar.toFixed(2),
         ].join(','));
       }
     }

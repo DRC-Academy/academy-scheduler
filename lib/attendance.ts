@@ -6,6 +6,7 @@
 
 import type { Assignment, ClassJoinLog } from '@/types';
 import { minutesLateSpain } from '@/lib/spainTime';
+import { groupByContiguousHour, hourNum, hourText, sessionRangeLabel } from '@/lib/sessions';
 
 export type AttendanceStatus =
   | 'on_time' | 'late' | 'very_late'   // ingresó (según puntualidad del log)
@@ -16,7 +17,12 @@ export type AttendanceStatus =
 export interface LogRow {
   id: string;
   date: string;
+  /** Hora de INICIO. Una sesión de 2h es UNA fila, no dos. */
   hour: string;
+  /** Duración en horas: 2 cuando el alumno tiene dos celdas contiguas ese día. */
+  durationHours: number;
+  /** "12:00 - 14:00" para una sesión de 2h; "12:00" para una de 1h. */
+  hoursLabel: string;
   teacherId: string;
   teacherName: string;
   studentName: string;
@@ -92,9 +98,12 @@ export function buildAttendanceRows(opts: {
   const consumedLogs = new Set<string>();
   const relevant = assignments.filter(a => !teacherId || a.teacherId === teacherId);
 
+  // Índice por hora NUMÉRICA para que '12:00' y '12' sean la misma hora.
+  const logKey = (teacher: string, student: string, date: string, hour: string | number) =>
+    `${teacher}|${student}|${date}|${hourNum(hour)}`;
   const logByKey = new Map<string, ClassJoinLog>();
   for (const log of joinLogs) {
-    logByKey.set(`${log.teacherId}|${log.studentName}|${log.scheduledDate}|${log.scheduledTime}`, log);
+    logByKey.set(logKey(log.teacherId, log.studentName, log.scheduledDate, log.scheduledTime), log);
   }
 
   const start = new Date(fromDate + 'T00:00:00');
@@ -104,20 +113,49 @@ export function buildAttendanceRows(opts: {
   const maxDays = 370;
   for (const a of relevant) {
     const hasLink = !!a.meetLink;
+
+    // Horario del alumno agrupado en SESIONES: dos slots contiguos el mismo día
+    // (12:00 + 13:00) son una sola clase de 2h, así que generan UNA fila.
+    const sessionsByDay = new Map<string, number[][]>();
+    for (const slot of a.slots ?? []) {
+      const arr = sessionsByDay.get(slot.day);
+      const h = hourNum(slot.hour);
+      if (!Number.isFinite(h)) continue;
+      if (arr) arr.push([h]); else sessionsByDay.set(slot.day, [[h]]);
+    }
+    for (const [day, singles] of sessionsByDay) {
+      const hours = singles.map(x => x[0]);
+      sessionsByDay.set(day, groupByContiguousHour(hours, h => h, () => true));
+    }
+
     const cursor = new Date(start);
     let dayCount = 0;
     while (cursor <= end && dayCount <= maxDays) {
       const dayName = DAY_NAMES_BY_JSDAY[cursor.getDay()];
-      for (const slot of a.slots) {
-        if (slot.day !== dayName) continue;
+      for (const run of sessionsByDay.get(dayName) ?? []) {
         const dateIso = isoDate(cursor);
-        const key = `${a.teacherId}|${a.studentName}|${dateIso}|${slot.hour}`;
-        const log = logByKey.get(key);
+        const startHour = run[0];
+        const durationHours = run.length;
+        const hour = hourText(startHour);
+        const hoursLabel = sessionRangeLabel(startHour, durationHours);
+        const id = `${a.id}_${dateIso}_${hour}`;
+
+        // UN acceso dentro del rango de la sesión la valida ENTERA. Antes se
+        // exigía un log por hora exacta, así que la segunda hora de una clase de
+        // 2h salía siempre "🔴 No ingresó" aunque el profesor hubiera entrado.
+        let log: ClassJoinLog | undefined;
+        for (const h of run) {
+          const k = logKey(a.teacherId, a.studentName, dateIso, h);
+          const found = logByKey.get(k);
+          // Todas las horas de la sesión quedan consumidas: si no, el ingreso de
+          // la segunda hora reaparecería abajo como una fila suelta duplicada.
+          consumedLogs.add(k);
+          if (found && !log) log = found;
+        }
+
         if (log) {
-          consumedLogs.add(key);
           rows.push({
-            id: `${a.id}_${dateIso}_${slot.hour}`,
-            date: dateIso, hour: slot.hour,
+            id, date: dateIso, hour, durationHours, hoursLabel,
             teacherId: a.teacherId, teacherName: a.teacherName, studentName: a.studentName,
             joinedAt: log.clickedAt, status: log.punctuality, hasLink,
             subscriptionStatus: log.subscriptionStatus, enteredWithoutActive: log.enteredWithoutActive,
@@ -128,15 +166,14 @@ export function buildAttendanceRows(opts: {
           if (dateIso < todayIso) {
             status = 'missed';
           } else if (dateIso === todayIso) {
-            const startMinutes = (parseInt(slot.hour) || 0) * 60;
+            const startMinutes = startHour * 60;
             status = startMinutes < nowMinutes ? 'missed' : 'pending';
           } else if (includeFuture) {
             status = 'upcoming';
           }
           if (status) {
             rows.push({
-              id: `${a.id}_${dateIso}_${slot.hour}`,
-              date: dateIso, hour: slot.hour,
+              id, date: dateIso, hour, durationHours, hoursLabel,
               teacherId: a.teacherId, teacherName: a.teacherName, studentName: a.studentName,
               status, hasLink,
             });
@@ -148,21 +185,36 @@ export function buildAttendanceRows(opts: {
     }
   }
 
-  // Logs que no matchean un slot actual (p. ej. el horario cambió después).
+  // Logs que no matchean un slot actual (p. ej. el horario cambió después, o una
+  // clase dada fuera del horario fijo). Se agrupan con la MISMA regla: dos
+  // accesos contiguos del mismo alumno el mismo día son una sesión de 2h, no dos
+  // clases sueltas — así esta vista dice lo mismo que finanzas.
+  const leftovers = new Map<string, ClassJoinLog[]>();
   for (const log of joinLogs) {
     if (teacherId && log.teacherId !== teacherId) continue;
     if (log.scheduledDate < fromDate || log.scheduledDate > toDate) continue;
-    const key = `${log.teacherId}|${log.studentName}|${log.scheduledDate}|${log.scheduledTime}`;
+    const key = logKey(log.teacherId, log.studentName, log.scheduledDate, log.scheduledTime);
     if (consumedLogs.has(key)) continue;
-    const linked = assignments.find(a => a.teacherId === log.teacherId && a.studentName === log.studentName);
-    rows.push({
-      id: log.id,
-      date: log.scheduledDate, hour: log.scheduledTime,
-      teacherId: log.teacherId, teacherName: log.teacherName, studentName: log.studentName,
-      joinedAt: log.clickedAt, status: log.punctuality, hasLink: !!linked?.meetLink,
-      subscriptionStatus: log.subscriptionStatus, enteredWithoutActive: log.enteredWithoutActive,
-      subscriptionDaysRemaining: log.subscriptionDaysRemaining,
-    });
+    consumedLogs.add(key);   // dos clics a la misma hora no son dos clases
+    const k = `${log.teacherId}|${log.studentName}|${log.scheduledDate}`;
+    const arr = leftovers.get(k);
+    if (arr) arr.push(log); else leftovers.set(k, [log]);
+  }
+  for (const logs of leftovers.values()) {
+    for (const run of groupByContiguousHour(logs, l => l.scheduledTime, () => true)) {
+      const first = run[0];
+      const linked = assignments.find(a => a.teacherId === first.teacherId && a.studentName === first.studentName);
+      rows.push({
+        id: first.id,
+        date: first.scheduledDate, hour: hourText(hourNum(first.scheduledTime)),
+        durationHours: run.length,
+        hoursLabel: sessionRangeLabel(first.scheduledTime, run.length),
+        teacherId: first.teacherId, teacherName: first.teacherName, studentName: first.studentName,
+        joinedAt: first.clickedAt, status: first.punctuality, hasLink: !!linked?.meetLink,
+        subscriptionStatus: first.subscriptionStatus, enteredWithoutActive: first.enteredWithoutActive,
+        subscriptionDaysRemaining: first.subscriptionDaysRemaining,
+      });
+    }
   }
 
   return rows;

@@ -153,7 +153,9 @@ function AsistenciasContent() {
   }, [teacher, myAssignments, classJoinLogs, fromDate, toDate, todayIso, nowMinutes]);
 
   const allClasses = useMemo<ClassRow[]>(() => rows.map(r => ({
-    id: r.id, date: r.date, time: fmtHour(r.hour), alumno: r.studentName,
+    // hoursLabel ya trae el rango de la sesión ("12:00 - 14:00" en una clase de
+    // 2h); fmtHour cubre las filas sueltas de logs viejos con la hora a secas.
+    id: r.id, date: r.date, time: fmtHour(r.hoursLabel || r.hour), alumno: r.studentName,
     sinEnlace: !r.hasLink, estado: toEstado(r.status),
     horaIngreso: r.joinedAt ? new Date(r.joinedAt).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }) : '',
   })), [rows]);

@@ -17,6 +17,7 @@
 
 import { Assignment, ClassJoinLog, ClassRecord, FinanceRate, ScoringEvent, FinancePayment, Student, ClassRecordType, FinanceManualApproval } from '@/types';
 import { classifyPlan, classifyFor, planBadgeStyle, type PlanClassification } from '@/lib/productUtils';
+import { contiguousRunLength, hourNum, hourText, runStartHour, sessionRangeLabel } from '@/lib/sessions';
 
 const DAY_NAMES_BY_JSDAY = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 
@@ -44,6 +45,17 @@ export interface ClassFinanceRow {
   weeklyHours: number;
   antiquityDays: number;
   rate: number;
+  /**
+   * Duración de la SESIÓN en horas: 2 si el alumno tiene dos celdas contiguas ese
+   * día (17:00 + 18:00). Se deriva de la contigüidad, no hay columna que lo diga.
+   */
+  durationHours: number;
+  /**
+   * Lo que vale esta fila: `rate * billingUnits` y `billingUnits` unidades del
+   * límite mensual. Una sesión de 2h es UN registro que vale 2, nunca dos filas
+   * (ver el comentario de los candidatos, más abajo).
+   */
+  billingUnits: number;
   status: ClassFinanceStatus;
   classType: ClassRecordType;
   hasJoinLog: boolean;
@@ -63,7 +75,10 @@ export interface TeacherFinanceResult {
   teacherName: string;
   monthYear: string;
   rows: ClassFinanceRow[];
+  /** Cuentan CLASES (suma de billingUnits): una sesión de 2h suma 2. */
   totalPagable: number;
+  /** Nº de filas/sesiones del mes. Difiere de los anteriores si hay clases de 2h. */
+  totalSesiones: number;
   totalARevisar: number;
   totalExcedeLimite: number;
   totalExcedeLimiteTipo: number;
@@ -106,6 +121,46 @@ function slotHourForDate(a: Assignment | undefined, dateIso: string): string {
   if (!a) return '';
   const dayName = DAY_NAMES_BY_JSDAY[new Date(dateIso + 'T00:00:00').getDay()];
   return (a.slots ?? []).find(s => s.day === dayName)?.hour ?? '';
+}
+
+// TODAS las horas del horario recurrente del alumno ese día de la semana. De acá
+// sale la duración de la sesión: dos slots pegados (17:00 y 18:00) = 2 horas.
+function slotHoursForDate(a: Assignment | undefined, dateIso: string): number[] {
+  if (!a) return [];
+  const dayName = DAY_NAMES_BY_JSDAY[new Date(dateIso + 'T00:00:00').getDay()];
+  return (a.slots ?? []).filter(s => s.day === dayName).map(s => hourNum(s.hour)).filter(Number.isFinite);
+}
+
+/**
+ * Duración y hora de INICIO de la clase de ese alumno ese día. Dos fuentes, y se
+ * toma la MAYOR porque cada una cubre un caso que la otra no ve:
+ *   · el horario recurrente (assignment.slots) → la sesión fija de 2h del alumno,
+ *     aunque ese día el profesor solo haya registrado un ingreso;
+ *   · las horas realmente observadas (ingresos + registros de esa fecha) → las
+ *     recuperaciones y las clases fuera de horario, que no están en los slots.
+ * Ambas exigen contigüidad REAL: dos clases sueltas el mismo día (14:00 y 18:00)
+ * siguen valiendo 1, porque un único acceso no puede dar fe de las dos.
+ *
+ * El inicio se recalcula a partir de la racha y NO se hereda del dato que ancló la
+ * fila: con dos ingresos (14:00 y 15:00) el que queda guardado es el último, y la
+ * sesión se habría mostrado como "15:00 - 17:00" en vez de "14:00 - 16:00".
+ */
+function sessionSpanFor(
+  a: Assignment | undefined, dateIso: string, anchorHour: string, observed: Set<number>,
+): { durationHours: number; startHour: string } {
+  const anchor = hourNum(anchorHour);
+  if (!Number.isFinite(anchor)) return { durationHours: 1, startHour: anchorHour };
+
+  let durationHours = 1;
+  let start = anchor;
+  for (const hours of [slotHoursForDate(a, dateIso), [...observed]]) {
+    const len = contiguousRunLength(hours, anchor);
+    if (len > durationHours) {
+      durationHours = len;
+      start = runStartHour(hours, anchor);
+    }
+  }
+  return { durationHours, startHour: hourText(start) };
 }
 
 /**
@@ -218,11 +273,21 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
   // Candidatos (alumno + fecha) del mes: provienen de los logs y los records
   // (las únicas fuentes de "esta clase ocurrió"). Un record se fusiona con un
   // candidato del mismo alumno a ±1 día (tolerancia captura subida un día corrido).
+  //
+  // OJO con el doble conteo: un candidato es UNA clase (alumno + fecha), y una
+  // sesión de 2h produce UN candidato aunque haya dos ingresos y dos registros
+  // (el segundo de cada tipo se descarta más abajo). Por eso la sesión de 2h se
+  // cobra multiplicando la fila por `billingUnits` y NO añadiendo una segunda
+  // fila: si se hicieran las dos cosas, se pagaría 4× una clase de 2h.
   interface Cand {
     studentName: string; date: string;
     log?: ClassJoinLog; record?: ClassRecord; transcript?: ClassTranscriptRef;
+    /** Horas OBSERVADAS ese día (de los ingresos y registros de esa MISMA fecha). */
+    hours: Set<number>;
   }
   const cands: Cand[] = [];
+  const newCand = (studentName: string, date: string): Cand =>
+    ({ studentName, date, hours: new Set<number>() });
 
   const sameStudent = (c: Cand, student: string) => nkey(c.studentName) === nkey(student);
 
@@ -251,8 +316,12 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
   for (const l of myLogs) {
     if (!inMonth(l.scheduledDate)) continue;
     let c = cands.find(x => sameStudent(x, l.studentName) && x.date === l.scheduledDate);
-    if (!c) { c = { studentName: l.studentName, date: l.scheduledDate }; cands.push(c); }
+    if (!c) { c = newCand(l.studentName, l.scheduledDate); cands.push(c); }
+    // El segundo ingreso del día PISA al primero (una sesión = un acceso), pero su
+    // hora queda registrada: es una de las pruebas de que la sesión duró 2 horas.
     c.log = l;
+    const h = hourNum(l.scheduledTime);
+    if (Number.isFinite(h)) c.hours.add(h);
   }
   for (const r of myRecords) {
     // Constancias que NO cuentan para el pago (clase no dada): 'reprogramada'
@@ -261,8 +330,14 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     if (r.classType === 'reprogramada' || r.classType === 'cancelada_con_preaviso' || r.classType === 'falta_con_aviso') continue;
     if (!inMonth(r.classDate)) continue;
     let c = matchCand(r.studentName, r.classDate, 1, x => !!x.record);
-    if (!c) { c = { studentName: r.studentName, date: r.classDate }; cands.push(c); }
+    if (!c) { c = newCand(r.studentName, r.classDate); cands.push(c); }
     if (!c.record) c.record = r;
+    // Solo si el registro es de ESE día: los que se emparejan con tolerancia de
+    // ±1 día pertenecen a otra fecha y su hora no describe esta sesión.
+    if (c.date === r.classDate) {
+      const h = hourNum(r.classTime ?? '');
+      if (Number.isFinite(h)) c.hours.add(h);
+    }
   }
   // El transcript es TERCERA fuente de candidatos: una clase con transcript pero
   // sin ingreso ni record debe aparecer como 'a_revisar', no desaparecer del
@@ -283,7 +358,7 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     // 2) Respaldo por fecha, solo para lo añadido a mano (sin vínculo).
     if (!inMonth(d)) continue;
     let c = matchCand(t.student_name, d, 1, x => !!x.transcript);
-    if (!c) { c = { studentName: t.student_name, date: d }; cands.push(c); }
+    if (!c) { c = newCand(t.student_name, d); cands.push(c); }
     if (!c.transcript) c.transcript = t;
   }
 
@@ -318,7 +393,10 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     const tier: 'nuevo' | 'antiguo' = antiquityDays < 30 ? 'nuevo' : 'antiguo';
     const rate = findRate(rates, planType, tier);  // tarifa normal del alumno (también para faltas)
     const weeklyHours = a?.weeklyHours ?? 0;
-    const hour = firstNonEmpty(log?.scheduledTime, record?.classTime, slotHourForDate(a, c.date));
+    const anchorHour = firstNonEmpty(log?.scheduledTime, record?.classTime, slotHourForDate(a, c.date));
+    // Sesión de 2h (celdas contiguas) → la fila vale 2. Aplica también a faltas y
+    // cancelaciones: si la clase perdida era de 2 horas, la constancia vale 2.
+    const { durationHours, startHour: hour } = sessionSpanFor(a, c.date, anchorHour, c.hours);
 
     // Estado de suscripción: prioriza el del join log (momento real de la clase).
     const subAtJoin = log?.subscriptionStatus;
@@ -341,7 +419,7 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     rows.push({
       date: c.date, hour, studentName: c.studentName, plan,
       planCategory: planClass.type, planLabel: planClass.displayName,
-      weeklyHours, antiquityDays, rate, status,
+      weeklyHours, antiquityDays, rate, durationHours, billingUnits: durationHours, status,
       classType, hasJoinLog: join, hasTranscript: isTranscript, hasMeetLink, punctuality, manuallyApproved: approved,
       subscriptionStatus, subAtJoin, subAtRecord,
     });
@@ -357,15 +435,20 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
   const countable = rows
     .filter(r => (r.status === 'pagable' || r.status === 'a_revisar') && (r.classType === 'normal' || r.classType === 'recuperacion'))
     .sort((x, y) => x.date.localeCompare(y.date) || x.studentName.localeCompare(y.studentName));
+  // El límite se descuenta en UNIDADES, no en filas: una sesión de 2h consume 2
+  // de las 9 del plan de 2h/semana. Las dos magnitudes están en horas
+  // (monthlyLimit sale de weeklyHours, que es slots.length), así que la unidad
+  // coincide. Una sesión que no entra entera queda 'excede_limite' completa: no
+  // se parte en "una hora sí y otra no".
   const usedByStudent = new Map<string, number>();
   for (const row of countable) {
     const k = nkey(row.studentName);
     const limit = limitByStudent.has(k) ? limitByStudent.get(k)! : Infinity; // ex-alumnos: sin límite
     const used = usedByStudent.get(k) ?? 0;
-    if (used + 1 > limit && !row.manuallyApproved) {
+    if (used + row.billingUnits > limit && !row.manuallyApproved) {
       row.status = 'excede_limite';
     } else {
-      usedByStudent.set(k, used + 1);
+      usedByStudent.set(k, used + row.billingUnits);
     }
   }
 
@@ -378,9 +461,14 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
   const excedeTipo = rows.filter(r => r.status === 'excede_limite_tipo');
   const noCobrable = rows.filter(r => r.status === 'no_cobrable');
 
-  const montoPagable  = pagables.reduce((s, r) => s + r.rate, 0);
-  const montoARevisar = revisar.reduce((s, r) => s + r.rate, 0);
-  const montoRetenido = excede.reduce((s, r) => s + r.rate, 0) + excedeTipo.reduce((s, r) => s + r.rate, 0);
+  // Importe de una fila = tarifa × unidades. Una sesión de 2h cobra 2× la tarifa
+  // de esa clase (respetando la tarifa por antigüedad y tipo de plan ya resuelta).
+  const amount = (r: ClassFinanceRow) => r.rate * r.billingUnits;
+  const units  = (rs: ClassFinanceRow[]) => rs.reduce((s, r) => s + r.billingUnits, 0);
+
+  const montoPagable  = pagables.reduce((s, r) => s + amount(r), 0);
+  const montoARevisar = revisar.reduce((s, r) => s + amount(r), 0);
+  const montoRetenido = excede.reduce((s, r) => s + amount(r), 0) + excedeTipo.reduce((s, r) => s + amount(r), 0);
 
   // Alerta: ¿alguna clase pagable tuvo suscripción ≠ active al momento de darse?
   const hasInactiveSubPayable = pagables.some(r => r.subscriptionStatus && r.subscriptionStatus !== 'active');
@@ -415,16 +503,43 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
 
   return {
     teacherId, teacherName, monthYear, rows,
-    totalPagable: pagables.length,
-    totalARevisar: revisar.length,
-    totalExcedeLimite: excede.length,
-    totalExcedeLimiteTipo: excedeTipo.length,
-    totalNoCobrable: noCobrable.length,
+    // Los totales cuentan CLASES, no filas: una sesión de 2h son 2 clases
+    // pagables (una sola fila con billingUnits = 2).
+    totalPagable: units(pagables),
+    totalARevisar: units(revisar),
+    totalExcedeLimite: units(excede),
+    totalExcedeLimiteTipo: units(excedeTipo),
+    totalNoCobrable: units(noCobrable),
+    totalSesiones: rows.length,
     hasInactiveSubPayable,
     montoPagable, montoARevisar, montoRetenido,
     bonusFromScoring, penaltiesFromScoring, totalAPagar,
     paymentStatus, paidAt,
   };
+}
+
+// ── Sesiones de 2h en el desglose ─────────────────────────────────────────────
+
+/** Rango horario de la fila: "17:00 - 19:00" si es una sesión de 2h, "17:00" si no. */
+export function rowHoursLabel(row: { hour: string; durationHours?: number }): string {
+  return sessionRangeLabel(row.hour, row.durationHours ?? 1);
+}
+
+/**
+ * Explicación de por qué esa fila vale más de una clase, para que el profesor no
+ * tenga que deducirlo del importe. null cuando la clase dura una hora.
+ */
+export function sessionBreakdownLabel(row: ClassFinanceRow): string | null {
+  if ((row.billingUnits ?? 1) <= 1) return null;
+  const total = (row.rate * row.billingUnits).toFixed(2);
+  return `Sesión de ${row.durationHours}h con ${row.studentName} — cuenta como ${row.billingUnits} (€${total})`;
+}
+
+/** Badge discreto "2h"/"3h" en verde DRC. null si la clase dura una hora. */
+export function durationBadge(durationHours?: number):
+  { label: string; color: string; bg: string } | null {
+  if (!durationHours || durationHours <= 1) return null;
+  return { label: `${durationHours}h`, color: '#1E9E3A', bg: 'rgba(30,158,58,0.12)' };
 }
 
 // Verificación visible para el profesor (sección "Mis clases"): ¿hubo ingreso?

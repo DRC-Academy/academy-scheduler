@@ -153,6 +153,12 @@ export interface AnalyzeArgs {
   replaceId?: string | null;
   /** Ingreso al que pertenece la clase (vínculo explícito con finanzas). */
   joinLogId?: string | null;
+  /**
+   * Duración REAL de la clase en minutos. Una sesión de 2 horas (celdas
+   * contiguas) manda 120: el transcript cubre las dos horas y la validación tiene
+   * que juzgarlo como lo que es. Sin esto, el verificador da por hecho 60 minutos.
+   */
+  durationMinutes?: number | null;
 }
 
 /** Sólo analiza: no guarda nada (el profesor revisa antes). */
@@ -229,6 +235,7 @@ export async function saveTranscriptOnly(args: AnalyzeArgs): Promise<{
       transcriptHash: args.transcriptHash,
       joinLogId: args.joinLogId,
       replaceId: args.replaceId,
+      durationMinutes: args.durationMinutes,
     },
     'No se pudo guardar la clase.',
   );
@@ -257,6 +264,7 @@ export async function runAnalysisFor(args: AnalyzeArgs & { analysisId: string })
         classDate: args.classDate,
         studentProfile: args.studentProfile,
         classHistory: args.classHistory,
+        durationMinutes: args.durationMinutes,
       },
       'No se pudo generar el análisis.',
     );

@@ -4,6 +4,7 @@ import { Grid, Cell, CellState } from '@/types';
 import { Button } from '@/components/ui';
 import { isPuntualState, baseCellOf, baseStudentOf, isAssignableCell } from '@/lib/cells';
 import { getSpainParts } from '@/lib/spainTime';
+import { hourNum, nkName, sessionRangeLabel } from '@/lib/sessions';
 
 export const DAYS = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 
@@ -467,16 +468,61 @@ export function VisualCalendar(props: Props) {
 
   const activeDay = dayPicked ?? (todayColIndex >= 0 ? todayColIndex : 0);
 
+  // ── Sesiones de varias horas ────────────────────────────────────────────────
+  // Dos o más celdas contiguas del MISMO alumno son UNA clase de N horas (misma
+  // regla que lib/sessions, que es la que usan la agenda y finanzas). Se calcula
+  // sobre las celdas YA RESUELTAS de la semana a la vista (`getCell`), no sobre el
+  // grid crudo: una recuperación puntual tapa el horario de fondo solo esa semana
+  // y no debe fabricar ni romper una sesión en las demás.
+  type RunInfo = { length: number; index: number; label: string };
+  const sessionRuns = new Map<string, RunInfo>();
+  for (const day of DAYS) {
+    let run: string[] = [];
+    const flush = () => {
+      if (run.length >= 2) {
+        const label = sessionRangeLabel(run[0], run.length);
+        run.forEach((h, i) => sessionRuns.set(cellKey(day, h), { length: run.length, index: i, label }));
+      }
+      run = [];
+    };
+    for (const hour of hours) {
+      const cell = getCell(day, hour);
+      const student = cell.state === 'ocupado' ? nkName(cell.student) : '';
+      const prev = run[run.length - 1];
+      const chains = !!student && !!prev
+        && nkName(getCell(day, prev).student) === student
+        && hourNum(hour) === hourNum(prev) + 1;
+      if (chains) {
+        run.push(hour);
+      } else {
+        flush();
+        if (student) run = [hour];
+      }
+    }
+    flush();
+  }
+  const runFor = (day: string, hour: string): RunInfo | undefined => sessionRuns.get(cellKey(day, hour));
+
+  /** Clases del bloque para que las celdas de una sesión se vean unidas. */
+  function runClass(run: RunInfo | undefined): string {
+    if (!run) return '';
+    if (run.index === 0) return ' is-run is-run-start';
+    if (run.index === run.length - 1) return ' is-run is-run-end';
+    return ' is-run is-run-mid';
+  }
+
   // Contenido visual de una celda, compartido por la grilla y la agenda móvil.
-  function blockContent(cell: Cell) {
+  function blockContent(cell: Cell, run?: RunInfo) {
     if (cell.state === 'no_work') {
       return props.mode === 'teacher' ? <div className="vc-b-name">No work</div> : null;
     }
     if (cell.state === 'ocupado') {
       return (
         <>
+          {/* Badge "2h"/"3h" en la esquina, solo en la primera celda de la sesión. */}
+          {run && run.index === 0 && <span className="vc-hours-badge">{run.length}h</span>}
           <div className="vc-b-name">{cell.student || 'Ocupado'}</div>
-          <div className="vc-b-sub">Semanal</div>
+          <div className="vc-b-sub">{run ? (run.index === 0 ? run.label : 'continúa') : 'Semanal'}</div>
         </>
       );
     }
@@ -499,8 +545,12 @@ export function VisualCalendar(props: Props) {
     return <div className="vc-b-name">{props.mode === 'setter' ? '+ Asignar' : 'Libre'}</div>;
   }
 
-  function cellTitle(cell: Cell) {
-    if (cell.state === 'ocupado' && cell.student) return `${cell.student} · Semanal`;
+  function cellTitle(cell: Cell, run?: RunInfo) {
+    if (cell.state === 'ocupado' && cell.student) {
+      return run
+        ? `${cell.student} · Sesión de ${run.length}h (${run.label}) · cuenta como ${run.length} clases`
+        : `${cell.student} · Semanal`;
+    }
     if (cell.state === 'bloqueado') {
       // baseStudent: el horario ya tiene un alumno fijo; la recuperación ocupa solo
       // esta semana y en las demás la celda vuelve a ser suya.
@@ -579,6 +629,7 @@ export function VisualCalendar(props: Props) {
         {hours.map(hour => {
           const day  = DAYS[activeDay];
           const cell = getCell(day, hour);
+          const run  = runFor(day, hour);
           const isTodayCol = activeDay === todayColIndex;
           const dimPast = isTodayCol && currentHour >= 0 && parseInt(hour) < currentHour;
           return (
@@ -588,12 +639,12 @@ export function VisualCalendar(props: Props) {
                 <div className="vc-h-ar">{toAR(hour)}</div>
               </div>
               <div
-                className={`vc-block${isClickable(cell) ? ' is-clickable' : ''}${dimPast ? ' is-past' : ''}`}
+                className={`vc-block${isClickable(cell) ? ' is-clickable' : ''}${dimPast ? ' is-past' : ''}${runClass(run)}`}
                 style={blockStyle(cell)}
-                title={cellTitle(cell)}
+                title={cellTitle(cell, run)}
                 onClick={() => handleCellClick(day, hour)}
               >
-                {blockContent(cell)}
+                {blockContent(cell, run)}
               </div>
             </div>
           );
@@ -630,6 +681,7 @@ export function VisualCalendar(props: Props) {
                 </td>
                 {DAYS.map((day, colIdx) => {
                   const cell = getCell(day, hour);
+                  const run  = runFor(day, hour);
                   const hlCell = isHighlighted(day, hour);
 
                   const isTodayCol = colIdx === todayColIndex;
@@ -647,11 +699,11 @@ export function VisualCalendar(props: Props) {
                         </div>
                       )}
                       <div
-                        className={`vc-block${isClickable(cell) ? ' is-clickable' : ''}${dimPast ? ' is-past' : ''}${hlCell ? ' is-highlight' : ''}`}
+                        className={`vc-block${isClickable(cell) ? ' is-clickable' : ''}${dimPast ? ' is-past' : ''}${hlCell ? ' is-highlight' : ''}${runClass(run)}`}
                         style={blockStyle(cell)}
-                        title={cellTitle(cell)}
+                        title={cellTitle(cell, run)}
                       >
-                        {blockContent(cell)}
+                        {blockContent(cell, run)}
                       </div>
                     </td>
                   );
