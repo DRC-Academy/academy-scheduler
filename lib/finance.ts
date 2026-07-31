@@ -203,20 +203,32 @@ export interface CalcInput {
   assignments: Assignment[];         // se filtran por teacher adentro
   joinLogs: ClassJoinLog[];
   classRecords: ClassRecord[];
-  /** Transcripciones: SEGUNDO FACTOR de verificación (reemplaza a la captura). */
-  classAnalyses?: ClassTranscriptRef[];
+  /**
+   * Transcripciones: SEGUNDO FACTOR de verificación (reemplaza a la captura).
+   *
+   * OBLIGATORIO, y no por gusto: mientras fue opcional con default `[]`, el panel
+   * del admin no lo pasaba y calculaba TODAS las clases como 'a_revisar' — el
+   * profesor veía 16 clases pagables y el admin, cero, sin ningún error a la
+   * vista. Un dato que cambia el resultado no puede omitirse en silencio: si
+   * falta, tiene que romper la compilación, no devolver un número plausible.
+   * Pasá `[]` solo si de verdad no hay transcripciones que considerar.
+   */
+  classAnalyses: ClassTranscriptRef[];
   rates: FinanceRate[];
   scoringEvents: ScoringEvent[];
-  students?: Student[];              // para el fallback de plan
-  manualApprovals?: FinanceManualApproval[];
-  payment?: FinancePayment | null;   // si existe y está 'paid' → congelado
+  /** Fallback de plan → determina la TARIFA. Obligatorio por el mismo motivo. */
+  students: Student[];
+  /** Aprobaciones del admin: fuerzan a 'pagable'. Obligatorio por el mismo motivo. */
+  manualApprovals: FinanceManualApproval[];
+  /** Pago del mes; `null` si no existe. Si está 'paid', el mes queda congelado. */
+  payment: FinancePayment | null;
 }
 
 // Calcula la liquidación de UN profesor para un mes.
 export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult {
   const {
     teacherId, teacherName, monthYear, assignments, joinLogs, classRecords,
-    classAnalyses = [], rates, scoringEvents, students = [], manualApprovals = [], payment,
+    classAnalyses, rates, scoringEvents, students, manualApprovals, payment,
   } = input;
 
   const myAssignments = assignments.filter(a => a.teacherId === teacherId);

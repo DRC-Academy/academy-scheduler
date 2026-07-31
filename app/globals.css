@@ -460,11 +460,45 @@ label {
   border-radius: 16px; padding: 16px 18px;
   box-shadow: 0 1px 2px rgba(16,24,16,0.04);
 }
-/* Clase ya dada: apagada pero LEGIBLE. Antes bajaba a 0.6 de opacidad porque
-   vivía plegada en un desplegable; ahora convive con las demás en la lista, y
-   con una acción pendiente (subir el transcript) que tiene que verse. */
+/* ── Clase YA DADA ────────────────────────────────────────────────────────────
+   La tarjeta se apaga para que se lea de un vistazo que esa clase ya pasó, pero
+   la opacidad NO se aplica a la tarjeta entera: eso apagaría también el botón, y
+   justamente el botón es lo único que le queda por hacer al profesor. Se atenúa
+   el CONTENIDO (hora, avatar, nombre, curso) y la columna de acción se deja a
+   plena intensidad.
+
+   Dos estados distintos, porque significan cosas distintas:
+     · .needs-transcript → dada y DEBE el transcript: apagada + botón resaltado.
+     · .is-done          → dada y cerrada: apagada entera, no hay nada pendiente. */
 .mc-card.is-passed { background: #fafbf9; border-color: #eceee8; }
-.mc-card.is-passed .mc-name { color: var(--mc-t2); }
+/* `:not(.is-inactive)`: una clase reprogramada o cancelada ya apaga la tarjeta
+   ENTERA, y apagar además su contenido lo dejaría al 25% e ilegible. */
+.mc-card.is-inactive { opacity: 0.5; }
+.mc-card.is-passed:not(.is-inactive) .mc-hour,
+.mc-card.is-passed:not(.is-inactive) .mc-avatar,
+.mc-card.is-passed:not(.is-inactive) .mc-name,
+.mc-card.is-passed:not(.is-inactive) .mc-course,
+.mc-card.is-passed:not(.is-inactive) .mc-meta,
+.mc-card.is-passed:not(.is-inactive) .mc-tag,
+.mc-card.is-passed:not(.is-inactive) .mc-badge-hours,
+.mc-card.is-passed:not(.is-inactive) .mc-foot { opacity: 0.5; }
+.mc-card.is-passed:not(.is-inactive) .mc-avatar { filter: grayscale(0.7); }
+
+/* Cerrada: también se apaga la columna derecha ("Transcript subido" +
+   "Reemplazar transcript"), que ahí ya no es una acción pendiente. */
+.mc-card.is-passed.is-done .mc-right { opacity: 0.5; }
+
+/* Falta el transcript: la acción es lo ÚNICO que queda encendido en la tarjeta.
+   El contraste contra el resto apagado es el que comunica "esto es lo que te
+   falta", así que el botón se refuerza con un halo verde DRC en vez de con más
+   tamaño (que rompería la alineación de la lista). */
+.mc-card.is-passed.needs-transcript .mc-status.is-missing { font-weight: 700; }
+.mc-card.is-passed.needs-transcript .mc-btn-primary {
+  box-shadow: 0 0 0 3px rgba(30,158,58,0.16), 0 1px 2px rgba(16,24,16,0.10);
+}
+.mc-card.is-passed.needs-transcript .mc-btn-primary:hover {
+  box-shadow: 0 0 0 3px rgba(30,158,58,0.26), 0 1px 2px rgba(16,24,16,0.10);
+}
 
 .mc-row {
   display: grid;

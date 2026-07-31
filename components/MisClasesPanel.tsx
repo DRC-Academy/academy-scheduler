@@ -715,8 +715,18 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
       return `Desde ${sd.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })} · ${dias} día${dias !== 1 ? 's' : ''}`;
     })();
 
+    // Estado visual de la tarjeta. Una clase ya dada se apaga para que se vea de
+    // un vistazo que pasó, y se distingue si todavía debe el transcript (entonces
+    // el botón queda encendido como única acción viva) o si ya está cerrada.
+    const cardClass = [
+      'mc-card',
+      passed && ' is-passed',
+      inactive && ' is-inactive',
+      passed && !inactive && (hasTranscript ? ' is-done' : ' needs-transcript'),
+    ].filter(Boolean).join('');
+
     return (
-      <div className={`mc-card${passed ? ' is-passed' : ''}`} style={inactive ? { opacity: 0.5 } : undefined}>
+      <div className={cardClass}>
         <div className="mc-row">
           <div className="mc-left">
             {/* Rango completo de la sesión: "17:00 - 19:00" en una clase de 2h. */}

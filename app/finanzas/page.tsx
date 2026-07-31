@@ -188,7 +188,7 @@ function StudentDetailTable({ result, assignments, onApproveReview, onApproveExc
 function FinanceTab() {
   const { user } = useAuth();
   const {
-    teachers, students, assignments, classJoinLogs, classRecords, financeRates, financePayments,
+    teachers, students, assignments, classJoinLogs, classRecords, classAnalyses, financeRates, financePayments,
     scoringEvents, manualApprovals,
     loadFinanceData, markPaymentAsPaid, approveReviewClass, approveExceedLimitClass,
   } = useTeachers();
@@ -241,9 +241,13 @@ function FinanceTab() {
       .filter(t => !teacherFilter || t.id === teacherFilter)
       .map(t => {
         const payment = financePayments.find(p => p.teacherId === t.id && p.monthYear === monthYear) ?? null;
+        // MISMAS entradas que la vista del profesor (app/mis-clases) y que la
+        // liquidación (TeachersContext.markPaymentAsPaid). Si esta llamada y esa
+        // no reciben lo mismo, el admin y el profesor ven finanzas distintas del
+        // mismo mes — que es exactamente lo que pasaba sin `classAnalyses`.
         return calculateTeacherFinance({
           teacherId: t.id, teacherName: t.name, monthYear,
-          assignments, joinLogs: classJoinLogs, classRecords, rates: financeRates,
+          assignments, joinLogs: classJoinLogs, classRecords, classAnalyses, rates: financeRates,
           scoringEvents, students, manualApprovals, payment,
         });
       })
@@ -252,7 +256,7 @@ function FinanceTab() {
         if (statusFilter === 'pending') return r.paymentStatus !== 'paid';
         return true;
       });
-  }, [teachers, students, teacherFilter, statusFilter, monthYear, assignments, classJoinLogs, classRecords, financeRates, scoringEvents, manualApprovals, financePayments]);
+  }, [teachers, students, teacherFilter, statusFilter, monthYear, assignments, classJoinLogs, classRecords, classAnalyses, financeRates, scoringEvents, manualApprovals, financePayments]);
 
   // Solo mostrar profesores con actividad en el mes (o el filtrado explícito).
   let visible = results.filter(r => teacherFilter || r.rows.length > 0 || r.bonusFromScoring > 0 || r.penaltiesFromScoring < 0 || r.paymentStatus === 'paid');
