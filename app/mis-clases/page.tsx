@@ -9,6 +9,7 @@ import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
 import { calculateTeacherFinance, recordVerification, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge, rowHoursLabel, durationBadge, sessionBreakdownLabel, transcriptStateBadge, transcriptNeedsTeacher } from '@/lib/finance';
 import { dbGetAssignmentsByTeacher, calcRegisteredClassNumber } from '@/lib/db';
+import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { maybeSendMilestoneEmail } from '@/lib/milestoneEmails';
 import { AddClassModal, saveTeacherClass, ANALYSIS_FAILED_NOTICE } from '@/components/AddClassModal';
 import { Teacher, Assignment, ClassRecordType } from '@/types';
@@ -117,7 +118,9 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
     teacherId: teacher.id, teacherName: teacher.name, monthYear,
     assignments: myAssignments, joinLogs: classJoinLogs, classRecords, classAnalyses, rates: financeRates,
     scoringEvents, students, manualApprovals, payment,
-  }), [teacher.id, teacher.name, monthYear, myAssignments, classJoinLogs, classRecords, classAnalyses, financeRates, scoringEvents, students, manualApprovals, payment]);
+    // El calendario decide qué es una clase de 2h (ver lib/finance.sessionSpanFor).
+    gridOccupancy: gridOccupancyOfTeacher(teacher),
+  }), [teacher, monthYear, myAssignments, classJoinLogs, classRecords, classAnalyses, financeRates, scoringEvents, students, manualApprovals, payment]);
 
   const todayIso = getSpainParts(new Date()).dateStr;
 
@@ -629,6 +632,11 @@ function MisClasesContent() {
   }, [teacher?.id]);
 
   const contextAssignments = teacher ? assignments.filter(a => a.teacherId === teacher.id) : [];
+  // Assignments SIN tocar: esta pantalla es el resumen de PAGO, y finanzas no
+  // saca las clases de los slots (salen de ingresos y registros). El horario de
+  // la ficha se conserva a propósito: es el último horario conocido de un alumno
+  // que ya no está en el calendario, y sin él sus sesiones de 2h ya dadas
+  // pasarían a valer 1 (ver lib/finance.sessionSpanFor).
   const myAssignments = directAssignments.length > 0 ? directAssignments : contextAssignments;
 
   return (

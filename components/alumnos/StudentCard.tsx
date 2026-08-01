@@ -75,9 +75,20 @@ export default function StudentCard({ bundle, studentKey, generating, onGenerate
         </div>
       </div>
 
+      {/* Sin horario en el calendario: sigue siendo alumno del profesor, pero
+          ahora mismo no tiene clases. Se dice explícitamente para que no parezca
+          un error de la ficha. */}
       <div className="alu-meta">
-        {[mainSlot, `${analyses.length} ${analyses.length === 1 ? 'clase' : 'clases'}`]
-          .filter(Boolean).join(' · ')}
+        {mainSlot
+          ? [mainSlot, `${analyses.length} ${analyses.length === 1 ? 'clase' : 'clases'}`].join(' · ')
+          : (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: 'rgba(255,196,0,0.18)', color: '#8a6d00', border: '1px solid rgba(255,196,0,0.5)' }}>
+                Actualmente sin tomar clases
+              </span>
+              <span>{analyses.length} {analyses.length === 1 ? 'clase' : 'clases'}</span>
+            </span>
+          )}
       </div>
 
       <div className="alu-foot">

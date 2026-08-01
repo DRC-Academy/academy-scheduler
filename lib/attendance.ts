@@ -6,7 +6,8 @@
 
 import type { Assignment, ClassJoinLog } from '@/types';
 import { minutesLateSpain } from '@/lib/spainTime';
-import { groupByContiguousHour, hourNum, hourText, sessionRangeLabel } from '@/lib/sessions';
+import { contiguousRunLength, groupByContiguousHour, hourNum, hourText, nkName, sessionRangeLabel } from '@/lib/sessions';
+import type { GridOccupancy } from '@/lib/teacherClasses';
 
 export type AttendanceStatus =
   | 'on_time' | 'late' | 'very_late'   // ingresó (según puntualidad del log)
@@ -92,8 +93,14 @@ export function buildAttendanceRows(opts: {
   todayIso: string;          // ISO (hora España)
   nowMinutes: number;        // minutos desde 00:00 (hora España)
   includeFuture?: boolean;   // incluir clases futuras como 'upcoming'
+  /**
+   * Ocupación del CALENDARIO por profesor (`gridOccupancyOfTeacher`). Decide qué
+   * horas seguidas son UNA clase de 2h con un solo acceso esperado. Sin ella se
+   * agrupa por el horario de la ficha, que puede estar desactualizado.
+   */
+  gridOccupancyByTeacher?: Record<string, GridOccupancy>;
 }): LogRow[] {
-  const { assignments, joinLogs, teacherId, fromDate, toDate, todayIso, nowMinutes, includeFuture = false } = opts;
+  const { assignments, joinLogs, teacherId, fromDate, toDate, todayIso, nowMinutes, includeFuture = false, gridOccupancyByTeacher } = opts;
   const rows: LogRow[] = [];
   const consumedLogs = new Set<string>();
   const relevant = assignments.filter(a => !teacherId || a.teacherId === teacherId);
@@ -114,8 +121,11 @@ export function buildAttendanceRows(opts: {
   for (const a of relevant) {
     const hasLink = !!a.meetLink;
 
-    // Horario del alumno agrupado en SESIONES: dos slots contiguos el mismo día
-    // (12:00 + 13:00) son una sola clase de 2h, así que generan UNA fila.
+    // Horario del alumno agrupado en SESIONES: dos horas contiguas el mismo día
+    // (12:00 + 13:00) son una sola clase de 2h, así que generan UNA fila con un
+    // solo acceso esperado. Quien decide si son contiguas es el CALENDARIO
+    // (`gridOccupancy`); la ficha puede haberse quedado con un horario viejo.
+    const occ = gridOccupancyByTeacher?.[a.teacherId];
     const sessionsByDay = new Map<string, number[][]>();
     for (const slot of a.slots ?? []) {
       const arr = sessionsByDay.get(slot.day);
@@ -125,7 +135,17 @@ export function buildAttendanceRows(opts: {
     }
     for (const [day, singles] of sessionsByDay) {
       const hours = singles.map(x => x[0]);
-      sessionsByDay.set(day, groupByContiguousHour(hours, h => h, () => true));
+      const gridHours = occ?.hours.get(`${nkName(a.studentName)}|${day}`);
+      // Solo se encadenan dos horas si el calendario las tiene seguidas.
+      const chain = (x: number, y: number) => {
+        if (!gridOccupancyByTeacher) return true;                 // llamador sin calendario
+        // Con calendario disponible: si no tiene a este alumno ese día, la ficha
+        // está vieja y no se espera un solo acceso para dos horas.
+        if (!gridHours || gridHours.length === 0) return false;
+        const run = contiguousRunLength(gridHours, x);
+        return run > 1 && contiguousRunLength(gridHours, y) === run;
+      };
+      sessionsByDay.set(day, groupByContiguousHour(hours, h => h, chain));
     }
 
     const cursor = new Date(start);

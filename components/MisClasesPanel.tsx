@@ -28,7 +28,7 @@ import {
   classesForDate, recoveriesForDate, addDaysIso, isoDateLocal, dayNameFromDate, mondayIsoOf,
   rescheduledTargetFor, cancellationFor, cancellationLabel, transcriptForClass, hourLabel,
   weekDaysOf, weekRangeLabel, dayHeadingLabel,
-  groupContiguousClasses, sessionHoursLabel,
+  groupContiguousClasses, sessionHoursLabel, gridOccupancyOfTeacher,
   // Todas las clases de esta vista son SESIONES ya agrupadas: dos celdas
   // contiguas del mismo alumno llegan acá como una sola clase de 2h.
   type TeacherSession as TodayClass,
@@ -357,6 +357,12 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     };
   }, [openMenu]);
 
+  // Ocupación del CALENDARIO: es lo que decide si dos horas seguidas son UNA
+  // clase de 2h (un acceso, un transcript). La ficha del alumno puede haberse
+  // quedado con un horario viejo y no puede fabricar una sesión que el calendario
+  // no respalda.
+  const gridOccupancy = useMemo(() => gridOccupancyOfTeacher(teacher), [teacher]);
+
   const refDate = now ?? new Date();
 
   // Current time in Spain (Europe/Madrid) — the calendar's reference timezone.
@@ -463,7 +469,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     const all = groupContiguousClasses([
       ...classesForDate(myAssignments, iso),
       ...recoveriesForDate(grid, iso, myAssignments),
-    ], teacher.id);
+    ], teacher.id, gridOccupancy);
 
     const shown = all.filter(c => {
       if (filter === 'todas') return true;

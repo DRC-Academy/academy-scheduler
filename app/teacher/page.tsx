@@ -11,9 +11,11 @@ import {
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
 import { calcRegisteredClassNumber, dbCheckStudentExists, dbSetStudentProduct, dbEnsureStudentAndAssignment, dbSaveTeacherCalendarHours, getTeacherAssignments } from '@/lib/db';
+import type { StudentLeftGrid } from '@/lib/db';
+import { checkSubscription } from '@/lib/useSubscriptionStatus';
 import { planBadgeStyle } from '@/lib/productUtils';
 import { isAssignableCell, withBaseState, baseStudentOf } from '@/lib/cells';
-import { isoDateLocal, classesForDate, groupContiguousClasses, sessionHoursLabel } from '@/lib/teacherClasses';
+import { isoDateLocal, classesForDate, groupContiguousClasses, sessionHoursLabel, gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { StudentAutofillCard } from '@/components/StudentAutofillCard';
 import { useStudentAutofill } from '@/lib/useStudentAutofill';
 import { usePresentationSent, presentationBtnStyle, PresentationEmailBadge } from '@/components/teacherPanelUi';
@@ -1028,7 +1030,7 @@ type TeacherTab = typeof TEACHER_TABS[number];
 
 function TeacherContent() {
   const { user } = useAuth();
-  const { teachers, students, assignments, scoringEvents, notifications, classRecords, getTeacherGrid, updateTeacherGrid, addStudent, addAssignment, updateAssignmentStartDate, updateAssignmentSlots, reloadAll, updateTeacherSpecialties, loadNotifications, markNotificationRead, updateMeetLink, addRecoveryClass, removeAssignment } = useTeachers();
+  const { teachers, students, assignments, scoringEvents, notifications, classRecords, getTeacherGrid, updateTeacherGrid, addStudent, addAssignment, updateAssignmentStartDate, updateAssignmentSlots, reloadAll, updateTeacherSpecialties, loadNotifications, markNotificationRead, updateMeetLink, addRecoveryClass, removeAssignment, deleteStudent } = useTeachers();
   const [activeTab, setActiveTab] = useState<TeacherTab>('calendar');
 
   // El campanario del header navega a /teacher?tab=notifications. Sincronizamos
@@ -1088,6 +1090,13 @@ function TeacherContent() {
   // Asistencias / Próximas clases / Mis alumnos a los alumnos sin celdas.
   const [myAssignments, setMyAssignments] = useState<Assignment[]>([]);
 
+  // Alumno que se quedó sin horario Y con la suscripción cancelada: se propone
+  // eliminarlo. Se pregunta porque el borrado es irreversible y el calendario
+  // autoguarda en cada clic — mover a alguien de hora deja un instante con cero
+  // celdas, y ahí no se puede borrar a nadie por su cuenta.
+  const [removalPrompt, setRemovalPrompt] = useState<StudentLeftGrid | null>(null);
+  const [removingStudent, setRemovingStudent] = useState(false);
+
   // Firma de la ocupación: cambia solo si cambia QUIÉN ocupa QUÉ celda. Sin esto
   // habría que releer en cada repintado del calendario.
   const gridOccupancy = useMemo(() => Object.entries(grid)
@@ -1115,9 +1124,34 @@ function TeacherContent() {
   async function handleGridChange(g: Grid) {
     setGrid(g);
     setSaveStatus('saving');
-    await updateTeacherGrid(teacher.id, g);
+    const sinHorario = await updateTeacherGrid(teacher.id, g);
     setSaveStatus('saved');
     setTimeout(() => setSaveStatus('idle'), 2000);
+
+    // Alguien se quedó sin ninguna celda. Si su suscripción está CANCELADA se
+    // ofrece eliminarlo del sistema; en cualquier otro estado no pasa nada y
+    // simplemente queda "sin tomar clases", para que mover a un alumno de horario
+    // (liberar una celda y ocupar otra) nunca borre a nadie.
+    for (const s of sinHorario) {
+      if (!s.studentEmail) continue;
+      try {
+        const info = await checkSubscription(s.studentEmail);
+        if (info.status === 'cancelled') { setRemovalPrompt(s); return; }
+      } catch { /* si Woo falla, no se propone borrar nada */ }
+    }
+  }
+
+  /** Confirmación del borrado propuesto (suscripción cancelada). */
+  async function confirmRemoval() {
+    if (!removalPrompt) return;
+    setRemovingStudent(true);
+    try {
+      await deleteStudent(removalPrompt.studentId, removalPrompt.studentName, 'sistema');
+      setRemovalPrompt(null);
+      await reloadAll();
+    } finally {
+      setRemovingStudent(false);
+    }
   }
 
   // Ampliación del rango de horas del calendario. El estado local manda mientras
@@ -1388,6 +1422,7 @@ function TeacherContent() {
   // en curso hasta su hora de fin (endHourNum), no hasta la hora siguiente.
   const todayClassesHeader = groupContiguousClasses(
     classesForDate(myAssignments, spainHeader.dateStr), teacher.id,
+    gridOccupancyOfTeacher(teacher),
   );
   const nowDecimalHeader = spainHeader.hour + spainHeader.minute / 60;
   const nextClassHeader = todayClassesHeader.find(c => c.endHourNum > nowDecimalHeader);
@@ -1592,6 +1627,41 @@ function TeacherContent() {
                 onRecuperacionNeed={handleRecuperacionNeed}
               />
             )}
+          </div>
+        )}
+
+        {/* Alumno sin horario Y con la suscripción cancelada. Es la ÚNICA vía por
+            la que el calendario puede eliminar a alguien, y siempre preguntando:
+            con cualquier otro estado de suscripción no aparece nada y el profesor
+            puede reorganizar horarios con total tranquilidad. */}
+        {removalPrompt && (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 90, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+            onClick={e => { if (e.target === e.currentTarget && !removingStudent) setRemovalPrompt(null); }}
+            role="alertdialog" aria-modal="true">
+            <div style={{ background: '#F7F7F5', border: '2px solid #FFC400', borderRadius: 16, padding: 26, width: '100%', maxWidth: 440 }}>
+              <div style={{ fontSize: 17, fontWeight: 700, color: '#1a1c1a', marginBottom: 8 }}>
+                {removalPrompt.studentName} se quedó sin horario
+              </div>
+              <div style={{ fontSize: 13.5, color: '#5f6360', lineHeight: 1.6, marginBottom: 14 }}>
+                Lo sacaste del calendario y su suscripción figura como <b style={{ color: '#c73a28' }}>cancelada</b>.
+                Podés eliminarlo del sistema o dejarlo asignado por si vuelve.
+              </div>
+              <div style={{ fontSize: 12.5, color: '#5f6360', background: 'rgba(255,196,0,0.12)', border: '1px solid rgba(255,196,0,0.5)', borderRadius: 8, padding: '10px 12px', marginBottom: 18, lineHeight: 1.55 }}>
+                Si lo eliminás se borran su ficha y su asignación, y se registra la baja.
+                <b> Tus clases ya dadas se conservan y se pagan igual.</b> Si solo lo estás
+                moviendo de horario, elegí «Mantener asignado».
+              </div>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button onClick={() => setRemovalPrompt(null)} disabled={removingStudent}
+                  style={{ flex: 1, padding: '11px', borderRadius: 9, border: '1px solid var(--border)', background: '#fff', color: '#3f423f', cursor: removingStudent ? 'not-allowed' : 'pointer', fontSize: 13.5, fontWeight: 600, fontFamily: 'inherit' }}>
+                  Mantener asignado
+                </button>
+                <button onClick={confirmRemoval} disabled={removingStudent}
+                  style={{ flex: 1, padding: '11px', borderRadius: 9, border: 'none', background: removingStudent ? '#d8b8b2' : '#c73a28', color: '#fff', cursor: removingStudent ? 'not-allowed' : 'pointer', fontSize: 13.5, fontWeight: 700, fontFamily: 'inherit' }}>
+                  {removingStudent ? 'Eliminando…' : 'Eliminar del sistema'}
+                </button>
+              </div>
+            </div>
           </div>
         )}
 

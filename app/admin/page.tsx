@@ -14,6 +14,7 @@ import { EVENT_POINTS, EVENT_EUROS, calcRegisteredClassNumber, dbUpdateAssignmen
   dbAuditStudentAssignments, dbRelinkAssignment, dbSyncAssignmentName, dbMergeDuplicateStudents, dbSyncStudentAssignments,
   dbDiagnoseAllCalendars, dbSyncAllCalendarsToAssignments, dbCreateFullLink, CalendarDiagnosisAllRow, AuditResult,
   dbRepairMisplacedStudent, dbCountPendingValidations, type PendingValidationSummary,
+  dbSyncSlotsFromCalendar,
   findDuplicateTeacherAssignments, type DuplicateAssignmentGroup, type DeleteTeacherResult } from '@/lib/db';
 import { CambiarProfesorModal } from '@/components/CambiarProfesorModal';
 import { CrearVinculoModal } from '@/components/CrearVinculoModal';
@@ -23,6 +24,7 @@ import { SpecialtyChip, ToggleChip } from '@/components/ui';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { AppNotification, AssignedSlot } from '@/types';
 import { buildAttendanceRows, PUNCT_STYLE, attendanceSubBadge, minutesLate, isoDate, type LogRow } from '@/lib/attendance';
+import { gridOccupancyOfTeacher, applyGridSlots } from '@/lib/teacherClasses';
 import { HelpTooltip } from '@/components/ui';
 import type { HelpTooltipKey } from '@/lib/help-tooltips';
 import AiRiskTab from '@/components/ai/AiRiskTab';
@@ -700,7 +702,9 @@ function EditCalendarModal({ teacher, onClose, getTeacherGrid, updateTeacherGrid
   teacher: Teacher;
   onClose: () => void;
   getTeacherGrid: (id: string) => Promise<Grid>;
-  updateTeacherGrid: (id: string, grid: Grid) => Promise<void>;
+  // Devuelve los alumnos que quedaron sin horario; acá no se usan (el admin edita
+  // el calendario de otro), pero el tipo tiene que aceptarlos.
+  updateTeacherGrid: (id: string, grid: Grid) => Promise<unknown>;
 }) {
   const [grid, setGrid] = useState<Grid>(buildGridFromTeacher(teacher.timeSlots, teacher.upcomingClasses));
   const [loading, setLoading] = useState(true);
@@ -1889,16 +1893,29 @@ function ClassLogTab() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Ocupación del calendario de cada profesor: decide el horario real de cada
+  // alumno y qué horas seguidas son UNA clase de 2h. Sale de `teacher.upcomingClasses`,
+  // que ya viene cargado — no cuesta ninguna consulta.
+  const occupancyByTeacher = useMemo(
+    () => Object.fromEntries(teachers.map(t => [t.id, gridOccupancyOfTeacher(t)])),
+    [teachers],
+  );
+
   // Filas de asistencia (fuente única: lib/attendance). El admin ve todos los
   // profes (o el filtrado) y NO incluye clases futuras. Orden descendente.
   const baseRows = useMemo<LogRow[]>(() =>
     buildAttendanceRows({
-      assignments, joinLogs: classJoinLogs,
+      // Horarios del CALENDARIO: un alumno sacado del calendario deja de generar
+      // filas de asistencia (antes seguía acumulando "no ingresó" cada semana).
+      assignments: applyGridSlots(assignments, occupancyByTeacher),
+      joinLogs: classJoinLogs,
       teacherId: teacherFilter || undefined,
       fromDate, toDate, todayIso, nowMinutes,
       includeFuture: false,
+      // El calendario de cada profe decide qué son 2h con un solo acceso.
+      gridOccupancyByTeacher: occupancyByTeacher,
     }).sort((x, y) => y.date.localeCompare(x.date) || (parseInt(y.hour) - parseInt(x.hour))),
-  [assignments, classJoinLogs, teacherFilter, fromDate, toDate, todayIso, nowMinutes]);
+  [assignments, classJoinLogs, teacherFilter, fromDate, toDate, todayIso, nowMinutes, occupancyByTeacher]);
 
   // Summary metrics — las clases "Pendiente" (hoy, aún sin pasar) no cuentan como
   // registradas ni como perdidas.
@@ -2891,31 +2908,44 @@ function AuditPanel() {
               )}
 
               {/* G — clases de 2h que solo ve una de las dos fuentes. NO hay botón
-                  de reparación a propósito: cuál de las dos fuentes tiene razón lo
-                  decide una persona mirando el horario real del alumno, y darle a
-                  un botón podría hacer que se cobre el doble por una clase de 1h. */}
+                  reparación es en un solo sentido: la ficha se pone al día con el
+                  calendario, nunca al revés. El calendario es la prueba real de qué
+                  clases y horarios existen — si el profesor acuerda otro horario con
+                  el alumno, se refleja ahí — así que la ficha es su espejo. */}
               {result.contiguityMismatches.length > 0 && (
                 <div style={auditCard}>
                   <div style={auditSectionTitle('#b45309')}>
-                    G · Clases de 2h que no cuadran ({result.contiguityMismatches.length})
+                    G · Fichas desactualizadas respecto al calendario ({result.contiguityMismatches.length})
                   </div>
                   <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginBottom: 10, fontStyle: 'italic' }}>
-                    Dos horas seguidas del mismo alumno se tratan como UNA clase de 2h (cuenta como 2 para el pago).
-                    Acá el calendario y la ficha del alumno no dicen lo mismo, así que hay que revisar cuál refleja
-                    el horario real antes de que se liquide el mes.
+                    El calendario manda: es la prueba real del horario. Estas fichas se quedaron con un horario
+                    viejo, y como de la ficha salen la agenda y la duración de la clase (dos horas seguidas se
+                    pagan como 2), conviene ponerlas al día antes de liquidar el mes. Reparar copia a la ficha
+                    el horario COMPLETO que dice el calendario; no toca ningún calendario.
                   </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-                    {result.contiguityMismatches.map(m => (
-                      <div key={`${m.teacherId}|${m.studentName}|${m.day}`} style={{ fontSize: 12.5, lineHeight: 1.6 }}>
-                        <b style={{ color: 'var(--text-primary)' }}>{m.studentName}</b>
-                        <span style={{ color: 'var(--text-muted)' }}>
-                          {' '}· {m.teacherName} · {m.day} · calendario: <b>{m.gridHours.join(' + ')}</b>
-                          {' '}({m.gridDuration > 1 ? `sesión de ${m.gridDuration}h` : 'suelta'})
-                          {' '}· ficha: <b>{m.slotHours.join(' + ')}</b>
-                          {' '}({m.slotDuration > 1 ? `sesión de ${m.slotDuration}h` : 'suelta'})
-                        </span>
-                      </div>
-                    ))}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+                    {result.contiguityMismatches.map(m => {
+                      const key = `${m.teacherId}|${m.studentName}`;
+                      return (
+                        <div key={`${key}|${m.day}`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, fontSize: 12.5, lineHeight: 1.6, flexWrap: 'wrap' }}>
+                          <span>
+                            <b style={{ color: 'var(--text-primary)' }}>{m.studentName}</b>
+                            <span style={{ color: 'var(--text-muted)' }}>
+                              {' '}· {m.teacherName} · {m.day} · calendario: <b>{m.gridHours.join(' + ')}</b>
+                              {' '}({m.gridDuration > 1 ? `sesión de ${m.gridDuration}h` : 'suelta'})
+                              {' '}· ficha: <b>{m.slotHours.join(' + ')}</b>
+                              {' '}({m.slotDuration > 1 ? `sesión de ${m.slotDuration}h` : 'suelta'})
+                            </span>
+                          </span>
+                          <button
+                            disabled={busy === key}
+                            onClick={() => withBusy(key, async () => { await dbSyncSlotsFromCalendar(m.teacherId, m.studentName); })}
+                            style={auditBtn('#b45309', 'rgba(255,196,0,0.12)', 'rgba(255,196,0,0.5)')}>
+                            {busy === key ? 'Actualizando…' : 'Actualizar ficha desde el calendario'}
+                          </button>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -3273,7 +3303,6 @@ function AdminTool({ title, desc, children, openSignal }: {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
-  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => {
     if (!openSignal) return;   // 0 / undefined = nadie ha pedido abrirla
     setOpen(true);
@@ -3290,6 +3319,94 @@ function AdminTool({ title, desc, children, openSignal }: {
         <span aria-hidden className={`adm-tool-caret${open ? ' is-open' : ''}`}>▼</span>
       </button>
       {open && <div className="adm-tool-body">{children}</div>}
+    </div>
+  );
+}
+
+/**
+ * Un tipo de conflicto del dashboard, con sus casos concretos. El detalle vive
+ * acá y no solo en el contador porque un número suelto ("6 conflictos") no le
+ * dice al admin ni qué pasa ni a quién le pasa.
+ */
+interface ConflictGroup {
+  label: string;
+  help: string;
+  items: Array<{ main: string; detail: string }>;
+}
+
+/**
+ * Detalle de los conflictos: QUÉ pasa, a QUÉ alumno y con QUÉ profesor. El
+ * contador del dashboard abre todos los grupos; cada alerta abre el suyo.
+ * Solo informa — las acciones de reparación viven en la Auditoría de vínculos,
+ * a la que se llega con el botón del pie.
+ */
+function ConflictDetailModal({ groups, onClose, onOpenAudit }: {
+  groups: ConflictGroup[];
+  onClose: () => void;
+  onOpenAudit: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const total = groups.reduce((s, g) => s + g.items.length, 0);
+
+  return (
+    <div
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(4px)', zIndex: 95, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}
+      role="dialog" aria-modal="true" aria-label="Detalle de conflictos"
+    >
+      <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 16, width: '100%', maxWidth: 620, maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '18px 22px 14px', borderBottom: '1px solid var(--border)' }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary)' }}>
+              {groups.length === 1 ? groups[0].label : 'Conflictos detectados'}
+            </div>
+            <div style={{ fontSize: 12.5, color: 'var(--text-muted)', marginTop: 2 }}>
+              {total} caso{total !== 1 ? 's' : ''} que requieren revisión
+            </div>
+          </div>
+          <button onClick={onClose} aria-label="Cerrar"
+            style={{ marginLeft: 'auto', background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: 'var(--text-muted)', lineHeight: 1 }}>
+            ✕
+          </button>
+        </div>
+
+        <div style={{ overflowY: 'auto', padding: '6px 22px 18px' }}>
+          {groups.map(g => (
+            <div key={g.label} style={{ marginTop: 16 }}>
+              {groups.length > 1 && (
+                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>
+                  {g.label} <span style={{ color: 'var(--text-muted)', fontWeight: 500 }}>· {g.items.length}</span>
+                </div>
+              )}
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.55, margin: '4px 0 10px' }}>{g.help}</div>
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
+                {g.items.map((it, i) => (
+                  <div key={i} style={{ padding: '10px 0', borderTop: '1px solid var(--border)' }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text-primary)' }}>{it.main}</div>
+                    <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2, lineHeight: 1.5 }}>{it.detail}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display: 'flex', gap: 10, padding: '14px 22px', borderTop: '1px solid var(--border)' }}>
+          <button onClick={onClose}
+            style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
+            Cerrar
+          </button>
+          <button onClick={onOpenAudit}
+            style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: '#1E9E3A', color: '#fff', cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+            Abrir la auditoría para repararlos
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -3346,15 +3463,53 @@ function AdminContent() {
    * marcarlo como revisado), así que contarlo daría un número siempre alto que
    * nadie miraría.
    */
-  const conflictGroups = audit ? [
-    { label: 'Alumnos sin asignación',        n: audit.studentsWithoutAssignment.length },
-    { label: 'Asignaciones huérfanas',        n: audit.orphanAssignments.length },
-    { label: 'Nombres desincronizados',       n: audit.nameMismatches.length },
-    { label: 'Alumnos duplicados',            n: audit.duplicateEmails.length },
-    { label: 'Cambios de profesor a medias',  n: audit.misplacedStudents.length },
-    { label: 'Clases de 2h que no cuadran',   n: audit.contiguityMismatches.length },
-  ].filter(g => g.n > 0) : [];
-  const conflicts = audit ? conflictGroups.reduce((s, g) => s + g.n, 0) : null;
+  const conflictGroups: ConflictGroup[] = audit ? [
+    {
+      label: 'Alumnos sin asignación',
+      help: 'Están en la tabla de alumnos pero no tienen ninguna asignación con un profesor, así que no aparecen en ninguna agenda.',
+      items: audit.studentsWithoutAssignment.map(s => ({ main: s.name, detail: s.email || 'sin email' })),
+    },
+    {
+      label: 'Asignaciones huérfanas',
+      help: 'La asignación apunta a un alumno que ya no existe en la tabla de alumnos.',
+      items: audit.orphanAssignments.map(a => ({ main: a.studentName, detail: `profe ${a.teacherName} · alumno inexistente (${a.studentId})` })),
+    },
+    {
+      label: 'Nombres desincronizados',
+      help: 'El nombre del alumno en su ficha y en la asignación no coinciden. El cruce por nombre (transcripts, calendario) puede fallar.',
+      items: audit.nameMismatches.map(m => ({ main: m.nameStudents, detail: `en la asignación figura como "${m.nameAssignments}" · profe ${m.teacherName}` })),
+    },
+    {
+      label: 'Alumnos duplicados',
+      help: 'Dos o más fichas de alumno con el mismo email: las clases se reparten entre ellas y ninguna refleja el total.',
+      items: audit.duplicateEmails.map(d => ({ main: d.email, detail: `${d.total} fichas: ${d.names}` })),
+    },
+    {
+      label: 'Cambios de profesor a medias',
+      help: 'La ficha del alumno dice un profesor y el calendario dice otro: una transferencia que quedó sin terminar.',
+      items: audit.misplacedStudents.map(m => ({
+        main: m.studentName,
+        detail: `ficha: ${m.assignedTeacherName} · calendario: ${m.gridTeacherName} (${m.gridSlots.map(s => `${s.day} ${s.hour}`).join(', ')})`,
+      })),
+    },
+    {
+      label: 'Fichas desactualizadas respecto al calendario',
+      help: 'El calendario manda: es la prueba real del horario. Estas fichas se quedaron con uno viejo, y de la ficha salen la agenda y la duración de la clase (dos horas seguidas se pagan como 2). Se arreglan desde la auditoría, copiando el horario del calendario a la ficha.',
+      items: audit.contiguityMismatches.map(m => ({
+        main: `${m.studentName} · ${m.teacherName} · ${m.day}`,
+        detail: `calendario ${m.gridHours.join(' + ')} (${m.gridDuration}h) · ficha ${m.slotHours.join(' + ')} (${m.slotDuration}h)` +
+          ` → hoy se paga como ${m.slotDuration}; según el calendario debería ser ${m.gridDuration}`,
+      })),
+    },
+  ].filter(g => g.items.length > 0) : [];
+  const conflicts = audit ? conflictGroups.reduce((s, g) => s + g.items.length, 0) : null;
+
+  /**
+   * Grupos cuyo detalle se está mirando (null = modal cerrado). Es una lista y no
+   * un grupo suelto porque el contador de Conflictos abre TODOS y cada alerta
+   * abre el suyo, con el mismo modal.
+   */
+  const [conflictDetail, setConflictDetail] = useState<ConflictGroup[] | null>(null);
 
   // Abre la Auditoría de vínculos y la trae a la vista (contador "Conflictos").
   const [auditSignal, setAuditSignal] = useState(0);
@@ -3471,8 +3626,8 @@ function AdminContent() {
                 sub: conflicts == null ? 'revisando…' : conflicts > 0 ? 'ver el detalle' : 'sin conflictos',
                 alert: (conflicts ?? 0) > 0,
                 // Solo es clickable si hay algo que mirar.
-                onClick: conflicts ? () => setAuditSignal(n => n + 1) : undefined,
-                title: conflictGroups.map(g => `${g.n} · ${g.label}`).join('\n'),
+                onClick: conflicts ? () => setConflictDetail(conflictGroups) : undefined,
+                title: conflictGroups.map(g => `${g.items.length} · ${g.label}`).join('\n'),
               },
               { label: 'Alumnos',       value: students.length, sub: 'registrados',           alert: false },
               { label: 'Bloqueados',    value: blockedCount,    sub: 'baja retención',        alert: blockedCount > 0 },
@@ -3600,12 +3755,12 @@ function AdminContent() {
                         key={g.label}
                         type="button"
                         className="adm-alert adm-alert-link"
-                        onClick={() => setAuditSignal(n => n + 1)}
-                        title="Abrir la auditoría de vínculos"
+                        onClick={() => setConflictDetail([g])}
+                        title={`Ver los ${g.items.length} casos`}
                       >
                         <span className="adm-dot" style={{ background: alertColors.high, marginTop: 4 }} />
                         <span className="adm-alert-text">
-                          {g.n} · {g.label}
+                          {g.items.length} · {g.label}
                           <span aria-hidden className="adm-kpi-arrow">›</span>
                         </span>
                       </button>
@@ -3991,6 +4146,14 @@ function AdminContent() {
           onClose={() => setEditCalendarTeacher(null)}
           getTeacherGrid={getTeacherGrid}
           updateTeacherGrid={updateTeacherGrid}
+        />
+      )}
+
+      {conflictDetail && (
+        <ConflictDetailModal
+          groups={conflictDetail}
+          onClose={() => setConflictDetail(null)}
+          onOpenAudit={() => { setConflictDetail(null); setAuditSignal(n => n + 1); }}
         />
       )}
 

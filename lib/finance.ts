@@ -17,7 +17,10 @@
 
 import { Assignment, ClassJoinLog, ClassRecord, FinanceRate, ScoringEvent, FinancePayment, Student, ClassRecordType, FinanceManualApproval } from '@/types';
 import { classifyPlan, classifyFor, planBadgeStyle, type PlanClassification } from '@/lib/productUtils';
-import { contiguousRunLength, hourNum, hourText, runStartHour, sessionRangeLabel } from '@/lib/sessions';
+import { contiguousRunLength, hourNum, hourText, nkName, runStartHour, sessionRangeLabel } from '@/lib/sessions';
+// Solo el TIPO: teacherClasses importa a su vez el tipo ClassTranscriptRef de acá,
+// y los `import type` se borran al compilar, así que no hay ciclo en runtime.
+import type { GridOccupancy } from '@/lib/teacherClasses';
 
 const DAY_NAMES_BY_JSDAY = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 
@@ -129,8 +132,10 @@ function slotHourForDate(a: Assignment | undefined, dateIso: string): string {
   return (a.slots ?? []).find(s => s.day === dayName)?.hour ?? '';
 }
 
-// TODAS las horas del horario recurrente del alumno ese día de la semana. De acá
-// sale la duración de la sesión: dos slots pegados (17:00 y 18:00) = 2 horas.
+// Horas del horario recurrente de la FICHA para ese día de la semana. Ya NO
+// decide la duración (eso lo hace el calendario): solo se usa como último
+// horario conocido de un alumno que ya no está en el calendario, para que su
+// historial no se recalcule a la baja.
 function slotHoursForDate(a: Assignment | undefined, dateIso: string): number[] {
   if (!a) return [];
   const dayName = DAY_NAMES_BY_JSDAY[new Date(dateIso + 'T00:00:00').getDay()];
@@ -153,18 +158,49 @@ function slotHoursForDate(a: Assignment | undefined, dateIso: string): number[] 
  */
 function sessionSpanFor(
   a: Assignment | undefined, dateIso: string, anchorHour: string, observed: Set<number>,
+  occupancy: GridOccupancy,
 ): { durationHours: number; startHour: string } {
   const anchor = hourNum(anchorHour);
   if (!Number.isFinite(anchor)) return { durationHours: 1, startHour: anchorHour };
 
+  // 1) EL CALENDARIO MANDA. Si el alumno tiene horario en el grid ese día, su
+  //    palabra es definitiva: la ficha puede haberse quedado vieja (el profesor
+  //    acordó otro horario y se cambió el calendario), y pagar 2 horas que el
+  //    calendario no tiene ocupadas es cobrar de más.
+  const day = DAY_NAMES_BY_JSDAY[new Date(dateIso + 'T00:00:00').getDay()];
+  const gridHours = occupancy.hours.get(`${nkName(a?.studentName ?? '')}|${day}`);
+  if (gridHours && gridHours.length > 0) {
+    const len = contiguousRunLength(gridHours, anchor);
+    // Si la hora no está en el calendario (len 0) la clase existió igual — hay
+    // ingreso o registro — pero como sesión de una hora: el grid no la respalda.
+    if (len > 0) return { durationHours: len, startHour: hourText(runStartHour(gridHours, anchor)) };
+    return { durationHours: 1, startHour: hourText(anchor) };
+  }
+
+  // 2) El alumno SÍ está en el calendario, pero no ese día: es una recuperación o
+  //    una clase fuera de su horario. Manda lo observado (ingresos y registros).
+  const sigueEnElGrid = [...occupancy.hours.keys()].some(k => k.startsWith(`${nkName(a?.studentName ?? '')}|`));
+  if (sigueEnElGrid) {
+    const len = contiguousRunLength([...observed], anchor);
+    return len > 1
+      ? { durationHours: len, startHour: hourText(runStartHour([...observed], anchor)) }
+      : { durationHours: 1, startHour: hourText(anchor) };
+  }
+
+  // 3) El alumno YA NO ESTÁ en el calendario (lo sacaron, se dio de baja). El grid
+  //    no puede describir un pasado que ya no contiene, así que para el HISTÓRICO
+  //    vale su último horario conocido: la ficha.
+  //
+  //    Sin esto, sacar a alguien del calendario le recortaba al profesor lo ya
+  //    ganado: sus sesiones de 2h pasaban a valer 1 retroactivamente. Y lo
+  //    observado no lo salva, porque una sesión de 2h deja UN solo acceso — que es
+  //    justamente el diseño.
+  const historico = [slotHoursForDate(a, dateIso), [...observed]];
   let durationHours = 1;
   let start = anchor;
-  for (const hours of [slotHoursForDate(a, dateIso), [...observed]]) {
+  for (const hours of historico) {
     const len = contiguousRunLength(hours, anchor);
-    if (len > durationHours) {
-      durationHours = len;
-      start = runStartHour(hours, anchor);
-    }
+    if (len > durationHours) { durationHours = len; start = runStartHour(hours, anchor); }
   }
   return { durationHours, startHour: hourText(start) };
 }
@@ -267,13 +303,20 @@ export interface CalcInput {
   manualApprovals: FinanceManualApproval[];
   /** Pago del mes; `null` si no existe. Si está 'paid', el mes queda congelado. */
   payment: FinancePayment | null;
+  /**
+   * Ocupación del CALENDARIO del profesor (`gridOccupancyOfTeacher`). Es lo que
+   * decide si dos horas seguidas son UNA clase de 2h: el calendario es la prueba
+   * real del horario y la ficha puede estar desactualizada. Obligatorio — sin él
+   * se volvería a pagar por lo que dice una ficha vieja.
+   */
+  gridOccupancy: GridOccupancy;
 }
 
 // Calcula la liquidación de UN profesor para un mes.
 export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult {
   const {
     teacherId, teacherName, monthYear, assignments, joinLogs, classRecords,
-    classAnalyses, rates, scoringEvents, students, manualApprovals, payment,
+    classAnalyses, rates, scoringEvents, students, manualApprovals, payment, gridOccupancy,
   } = input;
 
   const myAssignments = assignments.filter(a => a.teacherId === teacherId);
@@ -454,7 +497,7 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     const anchorHour = firstNonEmpty(log?.scheduledTime, record?.classTime, slotHourForDate(a, c.date));
     // Sesión de 2h (celdas contiguas) → la fila vale 2. Aplica también a faltas y
     // cancelaciones: si la clase perdida era de 2 horas, la constancia vale 2.
-    const { durationHours, startHour: hour } = sessionSpanFor(a, c.date, anchorHour, c.hours);
+    const { durationHours, startHour: hour } = sessionSpanFor(a, c.date, anchorHour, c.hours, gridOccupancy);
 
     // Estado de suscripción: prioriza el del join log (momento real de la clase).
     const subAtJoin = log?.subscriptionStatus;

@@ -237,7 +237,7 @@ export async function dbGetTeacherGrid(teacherId: string): Promise<Grid> {
   return data.grid as Grid;
 }
 
-export async function dbSaveTeacherGrid(teacherId: string, grid: Grid): Promise<void> {
+export async function dbSaveTeacherGrid(teacherId: string, grid: Grid): Promise<StudentLeftGrid[]> {
   // El grid ANTERIOR se lee antes de pisarlo: hace falta para saber qué alumno
   // se quedó sin celdas en ESTE guardado (ver reconcileAssignmentStatus).
   const previous = await dbGetTeacherGrid(teacherId);
@@ -256,7 +256,7 @@ export async function dbSaveTeacherGrid(teacherId: string, grid: Grid): Promise<
   // inconsistente (transferencias) está saveTeacherGridOrThrow.
   if (error) console.error(`[db] No se pudo guardar el grid de ${teacherId}:`, error);
 
-  await reconcileAssignmentStatus(teacherId, previous, grid);
+  return reconcileAssignmentStatus(teacherId, previous, grid);
 }
 
 /**
@@ -297,14 +297,110 @@ async function saveTeacherGridOrThrow(teacherId: string, grid: Grid): Promise<vo
  * Best-effort: si la columna `status` no está migrada, se avisa y el guardado
  * del calendario sigue su curso.
  */
-async function reconcileAssignmentStatus(teacherId: string, before: Grid, after: Grid): Promise<void> {
+const DAY_ORDER_SLOTS = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+
+/** Clave estable de un horario, para comparar dos listas de slots sin ruido de orden. */
+function slotsKey(slots: AssignedSlot[]): string {
+  return [...slots]
+    .map(s => `${DAY_ORDER_SLOTS.indexOf(s.day)}|${String(parseInt(s.hour, 10)).padStart(2, '0')}`)
+    .sort()
+    .join(',');
+}
+
+/** Slots ordenados (día, hora) tal como se guardan en la ficha. */
+function sortSlots(slots: AssignedSlot[]): AssignedSlot[] {
+  return [...slots].sort((a, b) =>
+    DAY_ORDER_SLOTS.indexOf(a.day) - DAY_ORDER_SLOTS.indexOf(b.day) ||
+    parseInt(a.hour, 10) - parseInt(b.hour, 10));
+}
+
+/**
+ * EL CALENDARIO MANDA: copia a la ficha del alumno el horario que dice el grid.
+ *
+ * El calendario es la prueba real de qué clases existen — si el profesor y el
+ * alumno acuerdan otro horario, se refleja ahí — así que `assignments.slots` es
+ * un espejo suyo, no una segunda opinión. De `slots` salen la agenda del
+ * profesor, las asistencias y, sobre todo, la DURACIÓN de la clase: dos horas
+ * seguidas en el grid son una sesión de 2h que se paga doble. Mientras las dos
+ * fuentes pudieron discrepar, hubo alumnos cobrando 2 horas con una sola celda
+ * ocupada en el calendario.
+ *
+ * Solo toca a los alumnos que están EN el grid: al que se quedó sin celdas lo
+ * gestiona el cambio de `status` (su horario se conserva como histórico). Y solo
+ * escribe cuando el horario cambió de verdad, porque esto corre en cada
+ * autoguardado del calendario.
+ */
+async function syncSlotsFromGrid(teacherId: string, grid: Grid, onlyStudent?: string): Promise<number> {
+  const enGrid = groupCellsByStudent(extractOcupadoCells(grid));
+  if (enGrid.size === 0) return 0;
+
+  const assignments = await dbGetAssignmentsByTeacher(teacherId);
+  const objetivo = onlyStudent ? normKey(onlyStudent) : null;
+  let actualizados = 0;
+
+  for (const a of assignments) {
+    if (objetivo && normKey(a.studentName) !== objetivo) continue;
+    const desdeGrid = enGrid.get(normKey(a.studentName));
+    if (!desdeGrid) continue;                                   // no está en el grid → lo ve el status
+    if (slotsKey(desdeGrid.slots) === slotsKey(a.slots ?? [])) continue;   // ya coinciden
+
+    const slots = sortSlots(desdeGrid.slots);
+    const { error } = await supabase.from('assignments').update({
+      slots,
+      weekly_hours: slots.length,
+      availability: slots.map(s => `${s.day} ${s.hour}`).join(', '),
+    }).eq('id', a.id);
+
+    if (error) {
+      console.error(`[db] No se pudo sincronizar el horario de ${a.studentName} desde el calendario:`, error);
+      continue;
+    }
+    actualizados++;
+    console.log(
+      `[db] ${a.studentName}: horario actualizado desde el calendario ` +
+      `(${(a.slots ?? []).length}h → ${slots.length}h).`,
+    );
+  }
+  return actualizados;
+}
+
+/**
+ * Pone la ficha al día con el calendario, a mano. Lo usa la auditoría para los
+ * desajustes que ya existían antes de que el guardado del grid los reconciliara
+ * solo: esos no se corrigen hasta que alguien vuelve a tocar ese calendario.
+ *
+ * Sin `studentName` sincroniza a todos los alumnos de ese profesor.
+ */
+export async function dbSyncSlotsFromCalendar(teacherId: string, studentName?: string): Promise<number> {
+  const grid = await dbGetTeacherGrid(teacherId);
+  return syncSlotsFromGrid(teacherId, grid, studentName);
+}
+
+/** Alumno que acaba de quedarse SIN ninguna celda en el calendario del profesor. */
+export interface StudentLeftGrid {
+  assignmentId: string;
+  studentId: string;
+  studentName: string;
+  studentEmail: string;
+}
+
+async function reconcileAssignmentStatus(
+  teacherId: string, before: Grid, after: Grid,
+): Promise<StudentLeftGrid[]> {
   const namesOf = (g: Grid) => new Set(extractOcupadoCells(g).map(c => normKey(c.student)));
   const antes   = namesOf(before);
   const despues = namesOf(after);
 
   const liberados = [...antes].filter(n => !despues.has(n));     // perdió su última celda
   const recuperados = [...despues].filter(n => !antes.has(n));   // volvió al grid
-  if (liberados.length === 0 && recuperados.length === 0) return;
+
+  // El horario de los que SIGUEN en el grid también se reconcilia: ver
+  // syncSlotsFromGrid. Antes solo se miraba el alta/baja completa, así que un
+  // alumno que pasaba de dos horas seguidas a una conservaba las dos en su ficha
+  // para siempre — y la agenda y finanzas seguían tratándolo como clase de 2h.
+  await syncSlotsFromGrid(teacherId, after);
+
+  if (liberados.length === 0 && recuperados.length === 0) return [];
 
   const assignments = await dbGetAssignmentsByTeacher(teacherId);
   const idsOf = (names: string[]) => {
@@ -325,13 +421,28 @@ async function reconcileAssignmentStatus(teacherId: string, before: Grid, after:
           '[db] La columna assignments.status no existe todavía. ' +
           'Corré supabase-assignment-status.sql para que el calendario pueda retirar alumnos sin borrarlos.',
         );
-        return;   // sin columna no hay nada que reconciliar
+        break;   // sin columna no hay status que reconciliar; el resto sigue igual
       }
       console.error('[db] No se pudo actualizar el status de los assignments:', error);
-      return;
+      break;
     }
     console.log(`[db] ${ids.length} assignment(s) de ${teacherId} marcados '${status}'.`);
   }
+
+  // Quiénes se quedaron sin horario. El llamador decide qué hacer con ellos: si
+  // su suscripción está CANCELADA se eliminan del sistema, y si no, siguen
+  // asignados al profesor como "actualmente sin tomar clases". Esa decisión NO se
+  // toma acá: necesita consultar WooCommerce y, cuando implica borrar, que una
+  // persona lo confirme.
+  const salidos = new Set(liberados);
+  return assignments
+    .filter(a => salidos.has(normKey(a.studentName)))
+    .map(a => ({
+      assignmentId: a.id,
+      studentId:    a.studentId,
+      studentName:  a.studentName,
+      studentEmail: a.studentEmail,
+    }));
 }
 
 /**
@@ -789,11 +900,17 @@ export interface TeacherStudent {
   student: Student | null;
   /** Metadatos. Null si el alumno está en el grid pero no tiene assignment. */
   assignment: Assignment | null;
+  /**
+   * `false` = sigue asignado al profesor pero NO tiene horario en el calendario:
+   * "actualmente sin tomar clases". Antes estos alumnos desaparecían de la lista
+   * sin más, así que el profesor perdía de vista a alguien que seguía siendo suyo.
+   */
+  activo: boolean;
 }
 
 /**
- * Alumnos de un profesor según el grid. Devuelve SOLO los presentes en él: un
- * assignment sin celdas no se incluye (y tampoco se borra ni se toca).
+ * Alumnos de un profesor: los que tienen celdas en el grid (`activo: true`) y los
+ * que conservan su assignment pero se quedaron sin horario (`activo: false`).
  */
 export async function getStudentsForTeacher(teacherId: string): Promise<TeacherStudent[]> {
   const [grid, assignments, students] = await Promise.all([
@@ -812,16 +929,37 @@ export async function getStudentsForTeacher(teacherId: string): Promise<TeacherS
   }
 
   const out: TeacherStudent[] = [];
+  const enGrid = new Set<string>();
   for (const { name, slots } of groupCellsByStudent(extractOcupadoCells(grid)).values()) {
     const k = normKey(name);
+    enGrid.add(k);
     out.push({
       studentName: name,
       slots,
       student:     studentsByName.get(k) ?? null,
       assignment:  asgByName.get(k) ?? null,
+      activo:      true,
     });
   }
-  return out.sort((a, b) => a.studentName.localeCompare(b.studentName, 'es'));
+
+  // Asignados SIN horario: siguen siendo alumnos del profesor, pero ahora mismo
+  // no toman clases. Se muestran al final, sin slots, para que no desaparezcan de
+  // su vista mientras se resuelve si vuelven o se dan de baja.
+  for (const a of asgByName.values()) {
+    const k = normKey(a.studentName);
+    if (enGrid.has(k)) continue;
+    out.push({
+      studentName: a.studentName,
+      slots:       [],
+      student:     studentsByName.get(k) ?? null,
+      assignment:  a,
+      activo:      false,
+    });
+  }
+
+  return out.sort((a, b) =>
+    Number(b.activo) - Number(a.activo) ||
+    a.studentName.localeCompare(b.studentName, 'es'));
 }
 
 /**

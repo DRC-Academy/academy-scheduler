@@ -22,9 +22,10 @@ import {
   dbChangeStudentTeacher, dbAddRescheduleRecord, dbAddRecoveryClass, dbRemoveAssignment,
   dbApplyFaltaSideEffects,
 } from '@/lib/db';
-import type { AffectedTeacher, ChangeTeacherParams, DeleteTeacherResult } from '@/lib/db';
+import type { AffectedTeacher, ChangeTeacherParams, DeleteTeacherResult, StudentLeftGrid } from '@/lib/db';
 import type { AssignedSlot } from '@/types';
 import { calculateTeacherFinance, type ClassTranscriptRef } from '@/lib/finance';
+import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { checkSubscription } from '@/lib/useSubscriptionStatus';
 
 interface TeachersContextType {
@@ -52,7 +53,7 @@ interface TeachersContextType {
   updateStudent: (student: Student) => Promise<void>;
   addAssignment: (a: Assignment) => Promise<void>;
   getTeacherGrid: (teacherId: string, force?: boolean) => Promise<Grid>;
-  updateTeacherGrid: (teacherId: string, grid: Grid) => Promise<void>;
+  updateTeacherGrid: (teacherId: string, grid: Grid) => Promise<StudentLeftGrid[]>;
   updateTeacherRating: (teacherId: string, rating: number) => Promise<void>;
   updateTeacherSpecialties: (teacherId: string, specialties: string[]) => Promise<void>;
   updateTeacherInfo: (teacherId: string, data: { name: string; email: string; specialties: string[]; notificationEmail?: string }) => Promise<void>;
@@ -103,7 +104,7 @@ const TeachersContext = createContext<TeachersContextType>({
   updateStudent:            async () => {},
   addAssignment:            async () => {},
   getTeacherGrid:           async () => ({}),
-  updateTeacherGrid:        async () => {},
+  updateTeacherGrid:        async () => [],
   updateTeacherRating:      async () => {},
   updateTeacherSpecialties: async () => {},
   updateTeacherInfo:        async () => {},
@@ -286,9 +287,13 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     return grid;
   }
 
-  async function updateTeacherGrid(teacherId: string, grid: Grid) {
+  // Devuelve los alumnos que se quedaron SIN ninguna celda con este guardado, para
+  // que la pantalla decida: si su suscripción está cancelada se ofrece eliminarlos
+  // (con confirmación, porque es irreversible), y si no, siguen asignados al
+  // profesor como "actualmente sin tomar clases".
+  async function updateTeacherGrid(teacherId: string, grid: Grid): Promise<StudentLeftGrid[]> {
     setTeacherGrids(prev => ({ ...prev, [teacherId]: grid }));
-    await dbSaveTeacherGrid(teacherId, grid);
+    return dbSaveTeacherGrid(teacherId, grid);
   }
 
   async function updateTeacherRating(teacherId: string, rating: number) {
@@ -524,12 +529,15 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   }
 
   async function markPaymentAsPaid(teacherId: string, monthYear: string) {
-    const teacherName = teachers.find(t => t.id === teacherId)?.name ?? '';
+    const teacher = teachers.find(t => t.id === teacherId);
+    const teacherName = teacher?.name ?? '';
     const existing = financePayments.find(p => p.teacherId === teacherId && p.monthYear === monthYear) ?? null;
     const result = calculateTeacherFinance({
       teacherId, teacherName, monthYear,
       assignments, joinLogs: classJoinLogs, classRecords, classAnalyses, rates: financeRates,
       scoringEvents, students, manualApprovals, payment: existing,
+      // Lo que se LIQUIDA usa la misma fuente que las pantallas: el calendario.
+      gridOccupancy: gridOccupancyOfTeacher(teacher),
     });
     const saved = await dbMarkPaymentPaid(teacherId, teacherName, monthYear, {
       totalClassesPayable: result.totalPagable,

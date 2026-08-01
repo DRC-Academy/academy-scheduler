@@ -13,6 +13,7 @@ import { getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
 import { buildAttendanceRows, isoDate, type LogRow } from '@/lib/attendance';
+import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { getTeacherAssignments } from '@/lib/db';
 import type { Assignment } from '@/types';
 import { checkSubscription, subBadge, resolveSubscriptionEmail, type SubscriptionInfo } from '@/lib/useSubscriptionStatus';
@@ -149,6 +150,8 @@ function AsistenciasContent() {
     return buildAttendanceRows({
       assignments: myAssignments, joinLogs: classJoinLogs, teacherId: teacher.id,
       fromDate, toDate, todayIso, nowMinutes, includeFuture: true,
+      // El calendario decide qué son 2h con un solo acceso.
+      gridOccupancyByTeacher: { [teacher.id]: gridOccupancyOfTeacher(teacher) },
     }).sort((x, y) => x.date.localeCompare(y.date) || (parseInt(x.hour) - parseInt(y.hour)));
   }, [teacher, myAssignments, classJoinLogs, fromDate, toDate, todayIso, nowMinutes]);
 

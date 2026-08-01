@@ -9,6 +9,7 @@ import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
 import { calculateTeacherFinance, TeacherFinanceResult, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge, rowHoursLabel, SUBSCRIPTION_STATUS_OPTIONS } from '@/lib/finance';
 import { classifyPlan } from '@/lib/productUtils';
+import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { dbRevertPenalty } from '@/lib/db';
 import { Assignment, ScoringEvent } from '@/types';
 
@@ -245,10 +246,18 @@ function FinanceTab() {
         // liquidación (TeachersContext.markPaymentAsPaid). Si esta llamada y esa
         // no reciben lo mismo, el admin y el profesor ven finanzas distintas del
         // mismo mes — que es exactamente lo que pasaba sin `classAnalyses`.
+        const occ = gridOccupancyOfTeacher(t);
         return calculateTeacherFinance({
           teacherId: t.id, teacherName: t.name, monthYear,
-          assignments, joinLogs: classJoinLogs, classRecords, classAnalyses, rates: financeRates,
+          // Assignments SIN tocar: finanzas no saca clases de los slots (salen de
+          // ingresos y registros), y necesita el horario de la ficha como último
+          // horario conocido de los alumnos que ya no están en el calendario. Si
+          // se los vaciáramos, sus sesiones de 2h pasadas valdrían 1.
+          assignments,
+          joinLogs: classJoinLogs, classRecords, classAnalyses, rates: financeRates,
           scoringEvents, students, manualApprovals, payment,
+          // El calendario de ESE profesor decide qué es una clase de 2h.
+          gridOccupancy: occ,
         });
       })
       .filter(r => {

@@ -16,7 +16,7 @@
 // profesores en España y en Argentina (ver lib/spainTime.ts). Lo mismo vale para
 // "¿esta clase ya pasó?": se decide con la hora de España que pase el llamador.
 
-import type { Assignment, ClassRecord, ClassRecordType, Grid } from '@/types';
+import type { Assignment, AssignedSlot, ClassRecord, ClassRecordType, Grid } from '@/types';
 import type { ClassTranscriptRef } from '@/lib/finance';
 import { baseStateOf, baseStudentOf } from '@/lib/cells';
 import {
@@ -210,6 +210,91 @@ export function recoveriesForDate(grid: Grid, dateIso: string, assignments: Assi
 // Acá se le suma lo que sabe este módulo: qué dos clases son "el mismo alumno el
 // mismo día" y qué NO se puede fusionar.
 
+// ── EL CALENDARIO MANDA: ocupación recurrente del grid ───────────────────────
+//
+// Una clase es de 2h SOLO si el CALENDARIO tiene dos horas seguidas ocupadas por
+// el mismo alumno. La ficha (`assignments.slots`) es un espejo del calendario y
+// se sincroniza al guardarlo, pero puede estar vieja hasta que se repare; en ese
+// hueco no se puede pedir un solo acceso y un solo transcript para dos horas que
+// el calendario no respalda.
+//
+// La ocupación sale de `teacher.upcomingClasses`, que `dbGetTeachers` ya arma
+// leyendo TODOS los calendarios con `baseStudentOf` (el alumno recurrente, no el
+// que recupera). O sea: dato del grid, sin una consulta extra.
+
+/** Horas ocupadas en el CALENDARIO, por alumno y día. */
+export interface GridOccupancy {
+  /** `${alumno normalizado}|${día}` → horas ocupadas. */
+  hours: Map<string, number[]>;
+}
+
+export function gridOccupancyOfTeacher(
+  teacher: { upcomingClasses?: Array<{ studentName: string; day: string; time: string }> } | null | undefined,
+): GridOccupancy {
+  const hours = new Map<string, number[]>();
+  for (const c of teacher?.upcomingClasses ?? []) {
+    const h = hourNum(c.time);
+    if (!Number.isFinite(h)) continue;
+    const k = `${nkName(c.studentName)}|${c.day}`;
+    const arr = hours.get(k);
+    if (arr) arr.push(h); else hours.set(k, [h]);
+  }
+  return { hours };
+}
+
+/** Ocupación vacía: para los llamadores que aún no tienen el calendario a mano. */
+export const EMPTY_GRID_OCCUPANCY: GridOccupancy = { hours: new Map() };
+
+/**
+ * Longitud de la racha contigua del CALENDARIO que contiene esa hora.
+ * Devuelve null si el alumno no tiene NINGUNA hora ese día en el calendario: ahí
+ * el grid no puede opinar (clases de recuperación, clases fuera de horario) y el
+ * llamador decide con lo que tenga.
+ */
+export function gridRunLength(
+  occ: GridOccupancy | undefined, studentName: string, day: string, hour: string | number,
+): number | null {
+  const list = occ?.hours.get(`${nkName(studentName)}|${day}`);
+  if (!list || list.length === 0) return null;
+  return contiguousRunLength(list, hour);
+}
+
+/** Horario que el CALENDARIO le da a un alumno. Vacío = no tiene clases ahora. */
+export function gridSlotsFor(occ: GridOccupancy, studentName: string): AssignedSlot[] {
+  const out: AssignedSlot[] = [];
+  const name = nkName(studentName);
+  for (const [k, horas] of occ.hours) {
+    const sep = k.lastIndexOf('|');
+    if (k.slice(0, sep) !== name) continue;
+    const day = k.slice(sep + 1);
+    for (const h of [...new Set(horas)].sort((a, b) => a - b)) out.push({ day, hour: hourText(h) });
+  }
+  return out.sort((a, b) =>
+    GRID_DAY_ORDER.indexOf(a.day) - GRID_DAY_ORDER.indexOf(b.day) ||
+    hourNum(a.hour) - hourNum(b.hour));
+}
+
+/**
+ * Reescribe los `slots` de cada assignment con lo que dice el CALENDARIO de su
+ * profesor. Un alumno al que sacaron del calendario queda con `slots: []`, así
+ * que deja de generar clases, filas de asistencia y horarios — sigue asignado,
+ * pero "actualmente sin tomar clases".
+ *
+ * Existe para las pantallas que trabajan con la tabla `assignments` en crudo (el
+ * panel de admin, el resumen de pago del profesor). Las que ya usan
+ * `getTeacherAssignments` reciben los slots del grid de fábrica y no la necesitan.
+ * No hace ninguna consulta: la ocupación sale de `teacher.upcomingClasses`.
+ */
+export function applyGridSlots(
+  assignments: Assignment[], occupancyByTeacher: Record<string, GridOccupancy>,
+): Assignment[] {
+  return assignments.map(a => {
+    const occ = occupancyByTeacher[a.teacherId];
+    if (!occ) return a;             // sin calendario cargado: no se toca nada
+    return { ...a, slots: gridSlotsFor(occ, a.studentName) };
+  });
+}
+
 /** Clase del profesor ya agrupada: una sesión de 1, 2 o más horas seguidas. */
 export interface TeacherSession extends TeacherClass {
   /** `${teacherId}|${alumno}|${fecha}|${horaInicio}`. Derivado, nunca persistido. */
@@ -273,7 +358,16 @@ function toSession(run: TeacherClass[], teacherId: string): TeacherSession {
  * de recuperación del grid) y las agrupa con la misma regla, que es lo que evita
  * que cada pantalla invente su propia definición de "clase de 2h".
  */
-export function groupContiguousClasses(classes: TeacherClass[], teacherId: string): TeacherSession[] {
+export function groupContiguousClasses(
+  classes: TeacherClass[],
+  teacherId: string,
+  /**
+   * Ocupación del CALENDARIO. Dos clases solo se funden en una sesión si el grid
+   * las tiene contiguas para ese alumno. Sin ella (o si el alumno no aparece ese
+   * día en el grid, p. ej. una recuperación) se agrupa por contigüidad a secas.
+   */
+  occupancy?: GridOccupancy,
+): TeacherSession[] {
   // Por fecha: dos clases de días distintos nunca son la misma sesión, y
   // groupByContiguousHour solo mira la hora.
   const byDate = new Map<string, TeacherClass[]>();
@@ -293,7 +387,26 @@ export function groupContiguousClasses(classes: TeacherClass[], teacherId: strin
       if (arr) arr.push(c); else byStudent.set(k, [c]);
     }
     for (const [, ofStudent] of byStudent) {
-      for (const run of groupByContiguousHour(ofStudent, c => c.hour, sameSessionClass)) {
+      // El calendario tiene la última palabra sobre si dos horas son UNA clase.
+      const chain = (a: TeacherClass, b: TeacherClass) => {
+        if (!sameSessionClass(a, b)) return false;
+        // Sin calendario a mano (llamador antiguo) se agrupa por contigüidad.
+        if (!occupancy) return true;
+        // Las recuperaciones son celdas PUNTUALES del grid: no están en la
+        // ocupación recurrente, así que se agrupan por su propia contigüidad —
+        // que también sale del calendario, solo que de otra parte.
+        if (a.isRecovery) return true;
+
+        const day = dayNameFromIso(a.date);
+        const run = gridRunLength(occupancy, a.studentName, day, a.hour);
+        // El calendario no tiene a este alumno ese día: la ficha se quedó vieja
+        // (o la asignación ya no está activa). No se inventa una sesión de 2h
+        // sobre horas que el calendario no respalda.
+        if (run == null) return false;
+        // Solo se funden si el calendario tiene las DOS horas seguidas ocupadas.
+        return run > 1 && gridRunLength(occupancy, b.studentName, day, b.hour) === run;
+      };
+      for (const run of groupByContiguousHour(ofStudent, c => c.hour, chain)) {
         sessions.push(toSession(run, teacherId));
       }
     }
