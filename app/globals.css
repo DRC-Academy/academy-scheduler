@@ -675,10 +675,13 @@ label {
 }
 
 /* ── "Mis clases" — resumen mensual / pagos (/mis-clases) ─────────────────────
-   Capa aislada bajo .mcf. En escritorio el cuerpo es un grid 1fr/380px con la
-   columna derecha sticky; en móvil .mcf-body y .mcf-side pasan a display:contents
-   para que todas las tarjetas sean hijas del mismo flex y puedan reordenarse
-   (total → KPIs → alumnos → a revisar) sin duplicar markup. */
+   Capa aislada bajo .mcf. Layout APILADO en una sola columna, igual en escritorio
+   y en móvil: resumen de pago → KPIs → clases a revisar → detalle por alumno,
+   cada bloque a ancho completo. Hasta el 03/08/2026 era un grid `1fr 380px` con
+   el resumen en un aside sticky; ese aside le quitaba 396px al detalle y era la
+   causa del scroll horizontal al desplegar una clase. Sin columna lateral el
+   orden del DOM ya es el orden visual: no hacen falta `display: contents` ni
+   `order` para reordenar en móvil. */
 .mcf {
   --mcf-card:   #ffffff;
   --mcf-border: #e6e7e2;
@@ -755,10 +758,14 @@ label {
 }
 .mcf-kpi-label { font-size: 12.5px; color: var(--mcf-t3); margin-top: 5px; }
 
-/* Cuerpo en dos columnas */
-.mcf-body { display: grid; grid-template-columns: 1fr 380px; gap: 16px; align-items: start; }
+/* Cuerpo APILADO, una sola columna.
+   Antes era un grid `1fr 380px` con el resumen en un aside sticky a la derecha.
+   De los 1148px útiles, el aside se llevaba 396 con el gap y al detalle le
+   quedaban 752: la tabla de clases pedía 720 de mínimo, así que entraba por
+   veinte píxeles y se desbordaba en cuanto la ventana bajaba de 1180. El
+   resumen le robaba el ancho justo al contenido que hay que leer entero. */
+.mcf-body { display: flex; flex-direction: column; gap: 16px; }
 .mcf-main { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-.mcf-side { position: sticky; top: 20px; display: flex; flex-direction: column; gap: 16px; }
 .mcf-section-title {
   font-size: 12px; font-weight: 600; color: var(--mcf-t3);
   text-transform: uppercase; letter-spacing: 0.06em;
@@ -802,19 +809,28 @@ label {
 .mcf-pill.is-neutral { background: #f0f1ee; color: var(--mcf-t2); }
 .mcf-tag { font-size: 11.5px; font-weight: 600; padding: 2px 9px; border-radius: 999px; white-space: nowrap; }
 
-/* Tarjeta "Total a cobrar" */
+/* Resumen de pago — ancho completo, arriba del todo.
+   El desglose ya no es una lista vertical de etiqueta/valor (formato de columna
+   estrecha): a ancho completo se lee mejor como una fila de cifras que envuelve. */
+.mcf-total-head {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 10px 16px;
+}
 .mcf-amount {
   font-size: 36px; font-weight: 600; letter-spacing: -0.03em;
-  color: var(--mcf-green); line-height: 1.1; margin: 10px 0 12px;
+  color: var(--mcf-green); line-height: 1.1; margin: 8px 0 0;
 }
 .mcf-breakdown {
-  display: flex; flex-direction: column; gap: 9px;
-  border-top: 1px solid var(--mcf-border); padding-top: 14px; margin-top: 14px;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
+  gap: 14px 20px;
+  border-top: 1px solid var(--mcf-border); padding-top: 14px; margin-top: 16px;
 }
-.mcf-brow { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; font-size: 13px; }
+.mcf-brow { display: flex; flex-direction: column; gap: 3px; font-size: 13px; min-width: 0; }
 .mcf-brow-label { color: var(--mcf-t2); }
 .mcf-brow-note { font-size: 11.5px; color: var(--mcf-t4); }
-.mcf-brow-value { font-weight: 600; white-space: nowrap; }
+.mcf-brow-value { font-size: 15px; font-weight: 600; white-space: nowrap; }
+/* El detalle de penalizaciones cruza todas las columnas del desglose. */
+.mcf-pen-detail { grid-column: 1 / -1; }
 
 /* Tarjeta "Clases a revisar" */
 .mcf-counter {
@@ -848,10 +864,40 @@ label {
 .mcf-legend > span { display: inline-flex; align-items: center; gap: 4px; }
 .mcf-cls {
   display: grid; grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px 12px; padding: 12px 18px;
+  gap: 8px 12px; padding: 12px 18px; cursor: pointer;
 }
+.mcf-cls:hover { background: #fafbf9; }
 .mcf-cls + .mcf-cls { border-top: 1px solid var(--mcf-border); }
 .mcf-cls.is-review { background: #fdfaf4; }
+.mcf-cls.is-review:hover { background: #fbf5ea; }
+.mcf-cls-caret { color: var(--mcf-t4); font-size: 11px; }
+
+/* Detalle de UNA clase: se despliega hacia ABAJO y empuja lo que sigue.
+   Los campos van en una rejilla que se reacomoda sola, nunca en una fila larga
+   que desborde. */
+.mcf-cls-detail {
+  grid-column: 1 / -1;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  gap: 12px 18px;
+  margin-top: 4px; padding-top: 12px;
+  border-top: 1px dashed var(--mcf-border);
+}
+.mcf-fld-label {
+  font-size: 11px; color: var(--mcf-t4);
+  text-transform: uppercase; letter-spacing: 0.05em;
+}
+.mcf-fld-value {
+  font-size: 13px; color: var(--mcf-t2); margin-top: 3px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 5px;
+  overflow-wrap: anywhere;
+}
+/* Motivo de "a revisar" y acción: cruzan toda la rejilla. */
+.mcf-cls-reason {
+  grid-column: 1 / -1;
+  font-size: 12.5px; color: #9a6516; background: #fdf3e7;
+  border-radius: 8px; padding: 9px 12px; line-height: 1.5;
+}
+.mcf-cls-cta { grid-column: 1 / -1; justify-self: start; }
 .mcf-cls-when {
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
   font-size: 13.5px; font-weight: 600; color: #1a1c1a;
@@ -859,8 +905,6 @@ label {
 .mcf-cls-time { font-weight: 500; color: var(--mcf-t2); }
 .mcf-cls-amount { font-size: 13.5px; font-weight: 600; color: #1a1c1a; white-space: nowrap; text-align: right; }
 .mcf-cls-note { font-size: 10.5px; font-weight: 500; color: var(--mcf-t3); }
-.mcf-cls-tags { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 5px 7px; align-items: center; }
-.mcf-cls-action { grid-column: 1 / -1; justify-self: start; font-size: 12.5px; }
 .mcf-detail-foot {
   display: flex; align-items: center; justify-content: space-between;
   gap: 10px; flex-wrap: wrap; padding: 12px 18px;
@@ -884,16 +928,15 @@ label {
   .mcf-icon-btn { width: 44px; height: 44px; }
   .mcf-btn { min-height: 44px; }
 
-  /* Reordenado: total → KPIs → alumnos → a revisar */
-  .mcf-body, .mcf-side { display: contents; }
-  .mcf-kpis { grid-template-columns: repeat(2, 1fr); order: 2; }
+  /* El orden ya es total → KPIs → a revisar → alumnos en el propio DOM: no hace
+     falta el `display: contents` + `order` que hacía falta con las dos columnas. */
+  .mcf-kpis { grid-template-columns: repeat(2, 1fr); }
   .mcf-kpi { padding: 14px; }
   .mcf-kpi-value { font-size: 22px; }
-  .mcf-main { order: 3; }
-  .mcf-total { order: 1; }
-  .mcf-review { order: 4; }
 
   .mcf-amount { font-size: 32px; }
+  .mcf-breakdown { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .mcf-cls, .mcf-legend { padding-left: 14px; padding-right: 14px; }
   .mcf-student-head { grid-template-columns: 40px minmax(0,1fr); padding: 14px; }
   .mcf-cols { grid-column: 1 / -1; grid-template-columns: 1fr 1fr; gap: 12px; }
   .mcf-link {

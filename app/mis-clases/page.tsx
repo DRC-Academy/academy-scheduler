@@ -50,6 +50,26 @@ function daysDiff(aIso: string, bIso: string): number {
   return Math.round((new Date(bIso + 'T00:00:00').getTime() - new Date(aIso + 'T00:00:00').getTime()) / 86400000);
 }
 
+/** Estado de la clase, para la fila compacta del acordeón. */
+const STATUS_PILL: Record<string, { label: string; cls: string }> = {
+  pagable:            { label: 'Pagable',        cls: 'is-ok' },
+  a_revisar:          { label: 'A revisar',      cls: 'is-warn' },
+  excede_limite:      { label: 'Excede límite',  cls: 'is-warn' },
+  excede_limite_tipo: { label: 'Supera 2/tipo',  cls: 'is-warn' },
+  no_cobrable:        { label: 'No cobrable',    cls: 'is-neutral' },
+};
+
+/**
+ * Por qué una clase quedó "a revisar", en el orden de prioridad que le sirve al
+ * profesor: primero lo que puede resolver AHORA. Lo usan la lista de avisos y el
+ * detalle desplegado de cada clase, que tienen que decir lo mismo.
+ */
+function missingReason(r: ClassFinanceRow): string {
+  return r.transcriptState === 'rejected' ? 'el equipo rechazó el transcript: subí el correcto'
+    : r.transcriptState === 'none'        ? 'subir transcript en Añadir clase'
+    : !r.hasJoinLog                       ? 'ingresar con el botón Meet (no quedó registro de acceso)'
+    :                                       'nada de tu parte: el equipo está validando el transcript';
+}
 
 function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignments: Assignment[] }) {
   const {
@@ -64,6 +84,8 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
   // registro se emparejará con esa clase (mismo alumno + fecha ±1 día) en finanzas.
   const [addPrefill, setAddPrefill] = useState<{ studentName: string; date: string; classType: ClassRecordType } | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // Acordeón de CADA clase, dentro del acordeón del alumno.
+  const [expandedClass, setExpandedClass] = useState<Set<string>>(new Set());
   // Aviso "pendiente de validación" (Bloque 1) tras guardar una clase que quedó en revisión.
   const [validationNotice, setValidationNotice] = useState<{ title: string; body: string } | null>(null);
   const [showPenalties, setShowPenalties] = useState(false);
@@ -178,6 +200,10 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
     return groups;
   }, [finance, myAssignments, todayIso]);
 
+  function toggleClass(key: string) {
+    setExpandedClass(prev => { const n = new Set(prev); if (n.has(key)) n.delete(key); else n.add(key); return n; });
+  }
+
   function toggle(name: string) {
     setExpanded(prev => { const n = new Set(prev); n.has(name) ? n.delete(name) : n.add(name); return n; });
   }
@@ -228,12 +254,7 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
     transcriptState: r.transcriptState, classType: r.classType, hasJoinLog: r.hasJoinLog,
     // Solo se ofrece el botón de pegar cuando pegar sirve de algo.
     canPaste: transcriptNeedsTeacher(r.transcriptState),
-    // Orden de prioridad: lo que el profesor puede hacer AHORA, primero.
-    missing:
-      r.transcriptState === 'rejected' ? 'el equipo rechazó el transcript: subí el correcto'
-    : r.transcriptState === 'none'     ? 'subir transcript en Añadir clase'
-    : !r.hasJoinLog                    ? 'ingresar con el botón Meet (no quedó registro de acceso)'
-    :                                    'nada de tu parte: el equipo está validando el transcript',
+    missing: missingReason(r),
   }));
 
   // Penalizaciones del mes: CUALQUIER evento con euros negativos (falta sin aviso
@@ -271,7 +292,76 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
       </div>
 
       <div className="mcf-content">
-        {/* KPIs */}
+        {/* ── 1. Resumen de pago — ARRIBA y a ancho completo ──────────────────
+            Estaba en un aside sticky de 380px a la derecha, que le robaba ese
+            ancho al detalle de clases y lo obligaba a desplazarse en horizontal. */}
+        <div className="mcf-card mcf-card-pad mcf-total">
+          <div className="mcf-total-head">
+            <div>
+              <div className="mcf-card-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                Total a cobrar · {monthLabel(monthYear)}
+                <HelpTooltip tooltipKey="finanzas.totalCobrar" position="bottom" />
+              </div>
+              <div className="mcf-amount">€{finance.totalAPagar.toFixed(2)}</div>
+            </div>
+            <span className={`mcf-pill ${finance.paymentStatus === 'paid' ? 'is-ok' : 'is-warn'}`}>
+              <span className="mcf-dot" style={{ background: finance.paymentStatus === 'paid' ? '#16a34a' : '#e0912f' }} />
+              {finance.paymentStatus === 'paid' ? 'Pagado' : 'Pendiente de pago'}
+            </span>
+          </div>
+
+          <div className="mcf-breakdown">
+            <div className="mcf-brow">
+              <span className="mcf-brow-label" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                Clases pagables · {finance.totalPagable}
+                <HelpTooltip tooltipKey="finanzas.pagables" />
+              </span>
+              <span className="mcf-brow-value">€{finance.montoPagable.toFixed(2)}</span>
+            </div>
+            <div className="mcf-brow">
+              <span className="mcf-brow-label" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+                Clases a revisar · {finance.totalARevisar}
+                <span className="mcf-brow-note">pendiente de verificación</span>
+                <HelpTooltip tooltipKey="finanzas.aRevisar" />
+              </span>
+              <span className="mcf-brow-value" style={{ color: '#8b8e88' }}>€{finance.montoARevisar.toFixed(2)}</span>
+            </div>
+            <div className="mcf-brow">
+              <span className="mcf-brow-label" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                Bonos scoring
+                <HelpTooltip tooltipKey="finanzas.bonosScoring" />
+              </span>
+              <span className="mcf-brow-value">€{finance.bonusFromScoring.toFixed(2)}</span>
+            </div>
+            {finance.penaltiesFromScoring < 0 && (
+              <div className="mcf-brow">
+                <span className="mcf-brow-label" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                  Penalizaciones
+                  <button onClick={() => setShowPenalties(s => !s)}
+                    style={{ background: 'none', border: 'none', color: '#c0392b', cursor: 'pointer', fontSize: 11.5, fontWeight: 600, padding: 0, textDecoration: 'underline' }}>
+                    {showPenalties ? 'ocultar' : 'ver detalle'}
+                  </button>
+                </span>
+                <span className="mcf-brow-value" style={{ color: '#c0392b' }}>−€{Math.abs(finance.penaltiesFromScoring).toFixed(2)}</span>
+              </div>
+            )}
+            {showPenalties && monthPenalties.length > 0 && (
+              <div className="mcf-pen-detail" style={{ paddingTop: 10, borderTop: '1px dashed var(--mcf-border)', display: 'flex', flexDirection: 'column', gap: 5 }}>
+                {monthPenalties.map(p => (
+                  <div key={p.id} style={{ fontSize: 12, color: p.reverted ? 'var(--text-muted)' : '#5f6360', display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', textDecoration: p.reverted ? 'line-through' : undefined }}>
+                    <span>{p.note.replace('Falta sin aviso registrada — ', '').replace('alumno ', '').replace('fecha ', '')}</span>
+                    <span style={{ whiteSpace: 'nowrap' }}>
+                      {p.reverted ? <span style={{ textDecoration: 'none', color: '#1f7a3d', marginRight: 6 }}>Revertida por el equipo</span> : null}
+                      −€{Math.abs(p.euros).toFixed(2)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* ── 2. KPIs ── */}
         <div className="mcf-kpis">
           {([
             { label: 'Clases registradas este mes', value: monthRecords.length, dot: null, color: undefined, help: undefined },
@@ -293,7 +383,39 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
         </div>
 
         <div className="mcf-body">
-          {/* ── Izquierda: clases por alumno ── */}
+          {/* ── 3. Clases a revisar — a ancho completo, antes del detalle ── */}
+          {reviewAlerts.length > 0 && (
+            <div className="mcf-card mcf-card-pad mcf-review">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 6 }}>
+                <span className="mcf-card-title">Clases a revisar</span>
+                <span className="mcf-counter">{reviewAlerts.length}</span>
+              </div>
+              {reviewAlerts.map((a, i) => (
+                <div key={i} className="mcf-review-row">
+                  <span className="mcf-dot" style={{ background: '#e0912f', marginTop: 5 }} />
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div className="mcf-review-who">{a.studentName} · {finShortDate(a.date)}</div>
+                    <div className="mcf-review-note">Falta: {a.missing}</div>
+                  </div>
+                  {/* El botón aparece SOLO si pegar cambia algo: falta el
+                      transcript o el equipo lo rechazó. Si está en revisión, o si
+                      lo que falta es el ingreso por Meet, no hay acción posible y
+                      ofrecerla sería mandarlo a repetir trabajo en vano. */}
+                  {a.canPaste && (
+                    <button
+                      onClick={() => openAddClass({ studentName: a.studentName, date: a.date, classType: a.classType })}
+                      title="Pegá el transcript de esta clase para verificarla"
+                      style={{ flexShrink: 0, padding: '6px 11px', borderRadius: 8, border: 'none', background: '#1E9E3A', color: 'white', cursor: 'pointer', fontSize: 12, fontWeight: 700, fontFamily: 'inherit', whiteSpace: 'nowrap' }}
+                    >
+                      Pegar transcript
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* ── 4. Detalle de clases — a ancho completo ── */}
           <div className="mcf-main">
             <div className="mcf-section-title">Clases por alumno</div>
 
@@ -383,74 +505,141 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                           const sessionNote = sessionBreakdownLabel(r);
                           // Estado del transcript (fuente única, lib/finance).
                           const ts = transcriptStateBadge(r.transcriptState);
+                          const st = STATUS_PILL[r.status] ?? STATUS_PILL.no_cobrable;
+                          const clsKey = `${g.name}|${r.date}|${r.hour ?? ''}`;
+                          const clsOpen = expandedClass.has(clsKey);
+                          const canPaste = !isFalta && transcriptNeedsTeacher(r.transcriptState);
                           return (
-                            <div key={i} className={`mcf-cls${r.status === 'a_revisar' ? ' is-review' : ''}`}>
-                              {/* Cuándo: fecha + hora (rango completo si es sesión de 2h) */}
+                            <div key={i} className={`mcf-cls${r.status === 'a_revisar' ? ' is-review' : ''}`}
+                              onClick={() => toggleClass(clsKey)} aria-expanded={clsOpen}>
+
+                              {/* ── Fila compacta: cuándo · estado · importe ── */}
                               <div className="mcf-cls-when">
+                                <span className="mcf-cls-caret" aria-hidden>{clsOpen ? '▾' : '▸'}</span>
                                 {finShortDate(r.date)}
                                 {r.hour && <span className="mcf-cls-time">{rowHoursLabel(r)}</span>}
-                                {dur && <span className="mcf-tag" style={{ background: dur.bg, color: dur.color }}>{dur.label}</span>}
-                                {isExcede && (
-                                  <span className="mcf-dot" style={{ background: '#e0912f' }}
-                                    title={r.status === 'excede_limite_tipo' ? 'Supera las 2 cobrables de este tipo' : 'Excede el límite del plan'} />
-                                )}
-                                {r.manuallyApproved && (
-                                  <span className="mcf-tag" style={{ background: '#eaf5ec', color: '#1f7a3d' }} title="Aprobada manualmente por el admin">admin</span>
-                                )}
-                                {rec?.comment && (
-                                  <span className="mcf-tag" style={{ background: '#f0f1ee', color: '#5f6360', cursor: 'help' }} title={rec.comment}>nota</span>
-                                )}
+                                <span className={`mcf-pill ${st.cls}`}>{st.label}</span>
                               </div>
 
-                              {/* Tarifa — tarifa × unidades (2× en una sesión de 2h) */}
+                              {/* Importe = tarifa × unidades (2× en una sesión de 2h) */}
                               <div className="mcf-cls-amount" title={sessionNote ?? undefined}>
                                 €{(r.rate * r.billingUnits).toFixed(2)}
                                 {r.billingUnits > 1 && <div className="mcf-cls-note">cuenta como {r.billingUnits}</div>}
                               </div>
 
-                              <div className="mcf-cls-tags">
-                                <span className="mcf-tag" style={{ background: ing.bg, color: ing.color }}>{plainLabel(ing.label)}</span>
-                                {ct && <span className="mcf-tag" style={{ background: ct.bg, color: ct.color }}>{plainLabel(ct.label)}</span>}
-                                {/* Transcript — segundo factor de verificación. Cuatro
-                                    estados, no dos: "Sin subir" y "En revisión" no le
-                                    piden lo mismo al profesor. En una falta no aplica. */}
-                                {!isFalta && <span className="mcf-tag" style={{ background: ts.bg, color: ts.color }}>{ts.label}</span>}
-                                <span className="mcf-tag" style={{ background: sub.bg, color: sub.color }}>{plainLabel(sub.label)}</span>
-                                {subDiffer && (
-                                  <span style={{ cursor: 'help', color: '#a4a7a1', fontSize: 12 }}
-                                    title={`Al ingresar: ${plainLabel(subscriptionBadge(r.subAtJoin).label)} · Al registrar: ${plainLabel(subscriptionBadge(r.subAtRecord).label)}`}>
-                                    ·
-                                  </span>
-                                )}
-                              </div>
+                              {/* ── Detalle: se despliega hacia abajo y empuja lo que sigue ── */}
+                              {clsOpen && (
+                                <div className="mcf-cls-detail">
+                                  <div>
+                                    <div className="mcf-fld-label">Tipo de clase</div>
+                                    <div className="mcf-fld-value">
+                                      {ct
+                                        ? <span className="mcf-tag" style={{ background: ct.bg, color: ct.color }}>{plainLabel(ct.label)}</span>
+                                        : 'Normal'}
+                                      {dur && <span className="mcf-tag" style={{ background: dur.bg, color: dur.color }}>{dur.label}</span>}
+                                    </div>
+                                  </div>
 
-                              <div className="mcf-cls-action">
-                                {isFalta ? (
-                                  r.status === 'excede_limite_tipo'
-                                    ? <span className="mcf-tag" style={{ background: '#fdf3e7', color: '#9a6516' }}>Supera 2 · revisión admin</span>
-                                    : <span style={{ color: '#1f7a3d', fontWeight: 600 }}>Cobrable</span>
-                                ) : transcriptNeedsTeacher(r.transcriptState) ? (
-                                  <button
-                                    onClick={() => openAddClass({ studentName: g.name, date: r.date, classType: r.classType })}
-                                    title="Pegá el transcript de esta clase para verificarla"
-                                    style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '5px 11px', borderRadius: 7, border: '1px solid rgba(224,145,47,0.45)', background: '#fdf3e7', color: '#9a6516', cursor: 'pointer', fontSize: 12, fontWeight: 700, fontFamily: 'inherit' }}
-                                  >
-                                    {r.transcriptState === 'rejected' ? '+ Subir el correcto' : '+ Añadir transcript'}
-                                  </button>
-                                ) : complete ? (
-                                  <span style={{ color: '#1f7a3d', fontWeight: 600 }}>Completo</span>
-                                ) : !r.hasJoinLog ? (
-                                  <span style={{ color: '#a4a7a1' }} title="No se puede falsear el ingreso">
-                                    Recordá usar &apos;Ingresar a clase&apos;
-                                  </span>
-                                ) : (
-                                  // Transcript subido y esperando al equipo: no
-                                  // hay nada que el profesor pueda hacer acá.
-                                  <span style={{ color: '#3b5b9e', fontWeight: 600 }} title="El equipo está validando el transcript">
-                                    En revisión
-                                  </span>
-                                )}
-                              </div>
+                                  <div>
+                                    <div className="mcf-fld-label">Tarifa aplicada</div>
+                                    <div className="mcf-fld-value">
+                                      €{r.rate.toFixed(2)}
+                                      {r.billingUnits > 1 && <span className="mcf-cls-note">× {r.billingUnits} (sesión de {r.durationHours}h)</span>}
+                                    </div>
+                                  </div>
+
+                                  <div>
+                                    <div className="mcf-fld-label">Antigüedad</div>
+                                    <div className="mcf-fld-value">{r.antiquityDays} días</div>
+                                  </div>
+
+                                  {/* Los DOS factores que hacen pagable una clase. */}
+                                  <div>
+                                    <div className="mcf-fld-label">Ingreso</div>
+                                    <div className="mcf-fld-value">
+                                      <span className="mcf-tag" style={{ background: ing.bg, color: ing.color }}>{plainLabel(ing.label)}</span>
+                                    </div>
+                                  </div>
+
+                                  <div>
+                                    <div className="mcf-fld-label">Transcript</div>
+                                    <div className="mcf-fld-value">
+                                      {isFalta
+                                        ? <span style={{ color: '#a4a7a1' }}>No aplica en una falta</span>
+                                        : <span className="mcf-tag" style={{ background: ts.bg, color: ts.color }}>{ts.label}</span>}
+                                    </div>
+                                  </div>
+
+                                  <div>
+                                    <div className="mcf-fld-label">Suscripción</div>
+                                    <div className="mcf-fld-value">
+                                      <span className="mcf-tag" style={{ background: sub.bg, color: sub.color }}>{plainLabel(sub.label)}</span>
+                                      {subDiffer && (
+                                        <span style={{ cursor: 'help', color: '#a4a7a1', fontSize: 12 }}
+                                          title={`Al ingresar: ${plainLabel(subscriptionBadge(r.subAtJoin).label)} · Al registrar: ${plainLabel(subscriptionBadge(r.subAtRecord).label)}`}>
+                                          ·
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  {(r.manuallyApproved || rec?.comment) && (
+                                    <div>
+                                      <div className="mcf-fld-label">Marcas</div>
+                                      <div className="mcf-fld-value">
+                                        {r.manuallyApproved && (
+                                          <span className="mcf-tag" style={{ background: '#eaf5ec', color: '#1f7a3d' }}>Aprobada por el equipo</span>
+                                        )}
+                                        {rec?.comment && (
+                                          <span className="mcf-tag" style={{ background: '#f0f1ee', color: '#5f6360', cursor: 'help' }} title={rec.comment}>nota</span>
+                                        )}
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {/* Por qué no cuenta todavía. */}
+                                  {r.status === 'a_revisar' && (
+                                    <div className="mcf-cls-reason">Falta: {missingReason(r)}</div>
+                                  )}
+                                  {isExcede && (
+                                    <div className="mcf-cls-reason">
+                                      {r.status === 'excede_limite_tipo'
+                                        ? 'Supera las 2 cobrables de este tipo en el mes: la revisa el equipo.'
+                                        : 'Excede el límite de clases del plan del alumno: la revisa el equipo.'}
+                                    </div>
+                                  )}
+
+                                  <div className="mcf-cls-cta">
+                                    {isFalta ? (
+                                      <span style={{ color: '#1f7a3d', fontWeight: 600, fontSize: 12.5 }}>
+                                        Cobrable sin transcript
+                                      </span>
+                                    ) : canPaste ? (
+                                      <button
+                                        onClick={e => { e.stopPropagation(); openAddClass({ studentName: g.name, date: r.date, classType: r.classType }); }}
+                                        title="Pegá el transcript de esta clase para verificarla"
+                                        style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '7px 13px', borderRadius: 8, border: '1px solid rgba(224,145,47,0.45)', background: '#fdf3e7', color: '#9a6516', cursor: 'pointer', fontSize: 12.5, fontWeight: 700, fontFamily: 'inherit' }}
+                                      >
+                                        {r.transcriptState === 'rejected' ? '+ Subir el correcto' : '+ Añadir transcript'}
+                                      </button>
+                                    ) : complete ? (
+                                      <span style={{ color: '#1f7a3d', fontWeight: 600, fontSize: 12.5 }}>
+                                        Completo: acceso y transcript verificados
+                                      </span>
+                                    ) : !r.hasJoinLog ? (
+                                      <span style={{ color: '#a4a7a1', fontSize: 12.5 }} title="No se puede falsear el ingreso">
+                                        Recordá usar &apos;Ingresar a clase&apos;
+                                      </span>
+                                    ) : (
+                                      // Transcript subido y esperando al equipo: no
+                                      // hay nada que el profesor pueda hacer acá.
+                                      <span style={{ color: '#3b5b9e', fontWeight: 600, fontSize: 12.5 }} title="El equipo está validando el transcript">
+                                        En revisión por el equipo
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              )}
                             </div>
                           );
                         })}
@@ -468,102 +657,6 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
               );
             })}
           </div>
-
-          {/* ── Derecha (sticky): total y clases a revisar ── */}
-          <aside className="mcf-side">
-            <div className="mcf-card mcf-card-pad mcf-total">
-              <div className="mcf-card-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                Total a cobrar · {monthLabel(monthYear)}
-                <HelpTooltip tooltipKey="finanzas.totalCobrar" position="bottom" />
-              </div>
-              <div className="mcf-amount">€{finance.totalAPagar.toFixed(2)}</div>
-              <span className={`mcf-pill ${finance.paymentStatus === 'paid' ? 'is-ok' : 'is-warn'}`}>
-                <span className="mcf-dot" style={{ background: finance.paymentStatus === 'paid' ? '#16a34a' : '#e0912f' }} />
-                {finance.paymentStatus === 'paid' ? 'Pagado' : 'Pendiente de pago'}
-              </span>
-
-              <div className="mcf-breakdown">
-                <div className="mcf-brow">
-                  <span className="mcf-brow-label" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                    Clases pagables · {finance.totalPagable}
-                    <HelpTooltip tooltipKey="finanzas.pagables" />
-                  </span>
-                  <span className="mcf-brow-value">€{finance.montoPagable.toFixed(2)}</span>
-                </div>
-                <div className="mcf-brow">
-                  <span className="mcf-brow-label" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
-                    Clases a revisar · {finance.totalARevisar}
-                    <span className="mcf-brow-note"> pendiente de verificación</span>
-                    <HelpTooltip tooltipKey="finanzas.aRevisar" />
-                  </span>
-                  <span className="mcf-brow-value" style={{ color: '#8b8e88' }}>€{finance.montoARevisar.toFixed(2)}</span>
-                </div>
-                <div className="mcf-brow">
-                  <span className="mcf-brow-label" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                    Bonos scoring
-                    <HelpTooltip tooltipKey="finanzas.bonosScoring" />
-                  </span>
-                  <span className="mcf-brow-value">€{finance.bonusFromScoring.toFixed(2)}</span>
-                </div>
-                {finance.penaltiesFromScoring < 0 && (
-                  <div className="mcf-brow">
-                    <span className="mcf-brow-label" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                      Penalizaciones
-                      <button onClick={() => setShowPenalties(s => !s)}
-                        style={{ background: 'none', border: 'none', color: '#c0392b', cursor: 'pointer', fontSize: 11.5, fontWeight: 600, padding: 0, textDecoration: 'underline' }}>
-                        {showPenalties ? 'ocultar' : 'ver detalle'}
-                      </button>
-                    </span>
-                    <span className="mcf-brow-value" style={{ color: '#c0392b', fontWeight: 700 }}>−€{Math.abs(finance.penaltiesFromScoring).toFixed(2)}</span>
-                  </div>
-                )}
-                {showPenalties && monthPenalties.length > 0 && (
-                  <div style={{ marginTop: 6, paddingTop: 8, borderTop: '1px dashed var(--border)', display: 'flex', flexDirection: 'column', gap: 5 }}>
-                    {monthPenalties.map(p => (
-                      <div key={p.id} style={{ fontSize: 12, color: p.reverted ? 'var(--text-muted)' : '#5f6360', display: 'flex', justifyContent: 'space-between', gap: 8, textDecoration: p.reverted ? 'line-through' : undefined }}>
-                        <span>{p.note.replace('Falta sin aviso registrada — ', '').replace('alumno ', '').replace('fecha ', '')}</span>
-                        <span style={{ whiteSpace: 'nowrap' }}>
-                          {p.reverted ? <span style={{ textDecoration: 'none', color: '#1f7a3d', marginRight: 6 }}>Revertida por el equipo</span> : null}
-                          −€{Math.abs(p.euros).toFixed(2)}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {reviewAlerts.length > 0 && (
-              <div className="mcf-card mcf-card-pad mcf-review">
-                <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 6 }}>
-                  <span className="mcf-card-title">Clases a revisar</span>
-                  <span className="mcf-counter">{reviewAlerts.length}</span>
-                </div>
-                {reviewAlerts.map((a, i) => (
-                  <div key={i} className="mcf-review-row">
-                    <span className="mcf-dot" style={{ background: '#e0912f', marginTop: 5 }} />
-                    <div style={{ minWidth: 0, flex: 1 }}>
-                      <div className="mcf-review-who">{a.studentName} · {finShortDate(a.date)}</div>
-                      <div className="mcf-review-note">Falta: {a.missing}</div>
-                    </div>
-                    {/* El botón aparece SOLO si pegar cambia algo: falta el
-                        transcript o el equipo lo rechazó. Si está en revisión, o si
-                        lo que falta es el ingreso por Meet, no hay acción posible y
-                        ofrecerla sería mandarlo a repetir trabajo en vano. */}
-                    {a.canPaste && (
-                      <button
-                        onClick={() => openAddClass({ studentName: a.studentName, date: a.date, classType: a.classType })}
-                        title="Pegá el transcript de esta clase para verificarla"
-                        style={{ flexShrink: 0, padding: '6px 11px', borderRadius: 8, border: 'none', background: '#1E9E3A', color: 'white', cursor: 'pointer', fontSize: 12, fontWeight: 700, fontFamily: 'inherit', whiteSpace: 'nowrap' }}
-                      >
-                        Pegar transcript
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </aside>
         </div>
       </div>
 
