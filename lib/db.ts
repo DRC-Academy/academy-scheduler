@@ -1616,8 +1616,20 @@ export async function dbBackupStudentBeforeDelete(
 
   const principal = (studentsRes.data ?? []).find(r => r.id === studentId) ?? (studentsRes.data ?? [])[0] ?? null;
 
-  const { error } = await supabase.from('deleted_students_backup').insert({
-    id:                  `delbak_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+  // IDEMPOTENTE: un intento anterior pudo guardar el backup y fallar al borrar
+  // (el DELETE de students lanza). Al reintentar NO se duplica la copia: se
+  // reescribe la que ya había con los datos frescos. Solo se reutiliza una copia
+  // sin restaurar; si el alumno fue restaurado y vuelve a borrarse, eso es una
+  // baja NUEVA y merece su propia fila.
+  const { data: previo } = await supabase
+    .from('deleted_students_backup')
+    .select('id')
+    .eq('original_student_id', studentId)
+    .not('restored', 'is', true)   // false O null (filas viejas sin el flag)
+    .limit(1)
+    .maybeSingle();
+
+  const fila = {
     original_student_id: studentId,
     student_name:        studentName,
     student_email:       principal?.email ?? assignments[0]?.student_email ?? null,
@@ -1631,7 +1643,14 @@ export async function dbBackupStudentBeforeDelete(
     assignments_data:    assignments,
     deleted_by:          deletedBy ?? null,
     deleted_at:          new Date().toISOString(),
-  });
+  };
+
+  const { error } = previo
+    ? await supabase.from('deleted_students_backup').update(fila).eq('id', previo.id)
+    : await supabase.from('deleted_students_backup').insert({
+        id: `delbak_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        ...fila,
+      });
 
   if (error) {
     if (error.code === '42P01') {
@@ -1645,7 +1664,7 @@ export async function dbBackupStudentBeforeDelete(
   }
 
   console.log(
-    `[dbBackupStudentBeforeDelete] Backup de "${studentName}": ` +
+    `[dbBackupStudentBeforeDelete] Backup de "${studentName}" ${previo ? 'ACTUALIZADO (reintento, no se duplica)' : 'creado'}: ` +
     `${(studentsRes.data ?? []).length} ficha(s), ${profiles.length} perfil(es), ` +
     `${analyses.length} análisis de clase, ${assignments.length} asignación(es).`,
   );
@@ -1679,6 +1698,80 @@ async function releaseStudentReferences(ids: string[], studentName: string): Pro
 }
 
 /**
+ * PRE-FLIGHT del borrado: deja `assignments` en un estado en el que el DELETE de
+ * `students` no pueda fallar, o ABORTA sin haber tocado nada.
+ *
+ * Por qué existe: `assignments.student_id` es `not null references students(id)`
+ * (supabase-schema.sql:68). No se puede nulificar como al resto de hijos — o se
+ * borra la fila, o se re-apunta. Y hay filas corruptas que comparten el
+ * student_id de un alumno con el NOMBRE de otro (auditoría 27/07/2026: la
+ * assignment de "Marina Garcia" apuntaba a la ficha de "Hugo García"). Antes esas
+ * filas se saltaban del DELETE por seguridad, pero seguían apuntando a la ficha:
+ * el borrado de `students` reventaba con assignments_student_id_fkey DESPUÉS de
+ * haber vaciado el grid y borrado el resto (el caso Diego Ruiz).
+ *
+ * Qué hace con cada fila ajena:
+ *   · si su student_name resuelve a UNA ficha real distinta → la RE-APUNTA ahí
+ *     (repara el vínculo corrupto, que es lo correcto con o sin borrado);
+ *   · si no resuelve, o es ambiguo → NO adivina: la registra como bloqueante.
+ *
+ * Con un solo bloqueante lanza, nombrando tabla y filas, y el borrado no empieza.
+ */
+async function preflightStudentDeletion(ids: string[], studentName: string): Promise<void> {
+  const { data, error } = await supabase
+    .from('assignments')
+    .select('id, student_id, student_name, teacher_name')
+    .in('student_id', ids);
+
+  if (error) {
+    throw new Error(
+      `No se pudo comprobar las asignaciones de "${studentName}" antes de borrar: ${error.message}. ` +
+      `No se ha tocado nada.`,
+    );
+  }
+
+  const ajenas = (data ?? []).filter(r => _nk(r.student_name) !== _nk(studentName));
+  if (ajenas.length === 0) return;
+
+  // Resolver cada nombre ajeno a SU ficha. Solo vale un único match exacto
+  // (normalizado) fuera de las fichas que estamos borrando.
+  const nombres = [...new Set(ajenas.map(r => String(r.student_name ?? '')).filter(Boolean))];
+  const dueño = new Map<string, string>();
+  for (const nombre of nombres) {
+    const { data: cand } = await supabase.from('students').select('id, name').ilike('name', nombre);
+    const reales = (cand ?? []).filter(c => !ids.includes(c.id) && _nk(c.name) === _nk(nombre));
+    if (reales.length === 1) dueño.set(_nk(nombre), reales[0].id);
+  }
+
+  const bloqueantes: string[] = [];
+  for (const row of ajenas) {
+    const destino = dueño.get(_nk(row.student_name));
+    const etiqueta = `${row.student_name} · ${row.teacher_name} (assignment ${row.id})`;
+
+    if (!destino) {
+      bloqueantes.push(`${etiqueta} — su nombre no resuelve a ninguna ficha única`);
+      continue;
+    }
+    const { error: upErr } = await supabase
+      .from('assignments').update({ student_id: destino }).eq('id', row.id);
+    if (upErr) {
+      bloqueantes.push(`${etiqueta} — no se pudo re-apuntar: ${upErr.message}`);
+    } else {
+      console.log(`[dbDeleteStudent] Vínculo reparado: "${etiqueta}" ahora apunta a su ficha (${destino}).`);
+    }
+  }
+
+  if (bloqueantes.length > 0) {
+    throw new Error(
+      `No se puede eliminar a "${studentName}": la tabla assignments tiene ${bloqueantes.length} fila(s) ` +
+      `que apuntan a su ficha con el nombre de OTRO alumno y no se pueden reasignar solas:\n` +
+      bloqueantes.map(b => `  · ${b}`).join('\n') +
+      `\nNo se ha borrado ni modificado nada. Corregí esos vínculos a mano y volvé a intentarlo.`,
+    );
+  }
+}
+
+/**
  * ELIMINACIÓN TOTAL de un alumno (acción del ADMIN, o del webhook de Woo).
  *
  * NO es lo que hace el profesor desde su calendario: allí el alumno solo se
@@ -1687,12 +1780,15 @@ async function releaseStudentReferences(ids: string[], studentName: string): Pro
  * llegar hasta acá.
  *
  * Orden (importa, por las claves foráneas contra students(id)):
- *   1. BACKUP completo. Si falla, no se borra nada.
+ *   0. PRE-FLIGHT: deja assignments en estado borrable o aborta sin tocar nada.
+ *   1. BACKUP completo (idempotente). Si falla, no se borra nada.
  *   2. Registro de baja (student_dropouts) + foto de churn + avisos.
  *   3. Assignments y celdas del grid de cada profesor.
  *   4. Hijos con FK a students: class_analyses / form_tokens /
  *      level_test_sessions se NULIFICAN (no se borran), student_profiles se borra.
- *   5. `students`, comprobando el error.
+ *   5. Comprobación final: si algo sigue apuntando a la ficha, se lanza ANTES
+ *      de borrarla (nunca un estado a medias).
+ *   6. `students`, comprobando el error.
  *
  * FINANZAS INTACTAS: class_records, class_join_logs, scoring_events y
  * class_analyses se conservan enteros. Los análisis son el segundo factor de
@@ -1711,7 +1807,17 @@ export async function dbDeleteStudent(
 ): Promise<AffectedTeacher[]> {
   const firstName = studentName.split(' ')[0];
 
-  // PRIMERO el backup, antes de tocar nada. Lanza si falla: sin copia no se borra.
+  // TODAS las fichas del alumno: la principal y las de las altas duplicadas.
+  // Se calcula acá arriba porque manda en el pre-flight, en el borrado de
+  // assignments y en la comprobación final: los tres tienen que mirar el MISMO
+  // conjunto de ids o se quedan filas apuntando a una ficha que ya no está.
+  const idsABorrar = [...new Set([studentId, ...alsoStudentIds].filter(Boolean))];
+
+  // ANTES que nada, ni siquiera el backup: si hay vínculos corruptos que no se
+  // pueden reparar solos, esto lanza con la base intacta.
+  await preflightStudentDeletion(idsABorrar, studentName);
+
+  // Después el backup, antes de tocar nada. Lanza si falla: sin copia no se borra.
   await dbBackupStudentBeforeDelete(studentId, studentName, createdBy, alsoStudentIds);
 
   const [byId, byName] = await Promise.all([
@@ -1872,29 +1978,29 @@ export async function dbDeleteStudent(
   // `students`, sus clases ya dadas deben seguir contando para el pago al
   // profesor (ver lib/finance.ts → "orphan history"). Tampoco se tocan
   // scoring_events (ej. bonos ya cobrados) ni notifications.
-  // GUARD: hay assignments que comparten student_id pero tienen OTRO nombre. Es un
-  // dato corrupto real (auditoría 27/07/2026: la assignment de "Marina Garcia"
-  // apuntaba a la ficha de "Hugo García"), y borrar por id se llevaría por delante
-  // la clase de otra persona. Se avisa por consola y esas filas NO se borran.
-  const { data: mismasFilas } = await supabase
-    .from('assignments').select('id, student_name, teacher_name').eq('student_id', studentId);
-  const ajenas = (mismasFilas ?? []).filter(r => _nk(r.student_name) !== _nk(studentName));
-  if (ajenas.length > 0) {
-    console.warn(
-      `[dbDeleteStudent] ${ajenas.length} asignación(es) comparten el id de "${studentName}" con OTRO nombre ` +
-      `(${ajenas.map(r => `${r.student_name} · ${r.teacher_name}`).join(' | ')}). NO se borran: revisá el vínculo a mano.`,
+  //
+  // Borrado por id sobre TODAS las fichas (antes solo `studentId`: las
+  // assignments que apuntaban a una ficha duplicada sobrevivían y bloqueaban el
+  // DELETE de students). Las filas de nombre ajeno ya no están acá: el
+  // pre-flight las re-apuntó a su dueño o abortó, así que este DELETE es seguro.
+  const { error: asgErr } = await supabase.from('assignments').delete().in('student_id', idsABorrar);
+  if (asgErr) {
+    throw new Error(
+      `No se pudieron borrar las asignaciones de "${studentName}": ${asgErr.message}. ` +
+      `Su copia de seguridad está guardada y la ficha NO se ha borrado.`,
     );
   }
 
-  const idsAjenos = ajenas.map(r => r.id);
-  const borrarPorId = supabase.from('assignments').delete().eq('student_id', studentId);
-  await (idsAjenos.length > 0 ? borrarPorId.not('id', 'in', `(${idsAjenos.join(',')})`) : borrarPorId);
-  await supabase.from('assignments').delete().eq('student_name', studentName);
-
-  // Se borran TODAS las fichas del alumno: la principal y las de las altas
-  // duplicadas. Antes solo se borraba `studentId` y la duplicada quedaba
-  // huérfana en `students`, lista para volver a generar el mismo lío.
-  const idsABorrar = [...new Set([studentId, ...alsoStudentIds].filter(Boolean))];
+  // Y por nombre, para las assignments huérfanas cuyo student_id no apunta a
+  // ninguna ficha conocida. Normalizado (_nk), igual que el resto de la función:
+  // antes era `eq()` exacto y se dejaba atrás cualquier variante de mayúsculas o
+  // espacios sobrantes.
+  const { data: porNombre } = await supabase
+    .from('assignments').select('id, student_name').ilike('student_name', studentName);
+  const idsPorNombre = (porNombre ?? []).filter(r => _nk(r.student_name) === _nk(studentName)).map(r => r.id);
+  if (idsPorNombre.length > 0) {
+    await supabase.from('assignments').delete().in('id', idsPorNombre);
+  }
 
   // ── Hijos con FK a students(id) ────────────────────────────────────────────
   //
@@ -1916,6 +2022,22 @@ export async function dbDeleteStudent(
   if (perfErr && perfErr.code !== '42P01') console.error('[dbDeleteStudent] No se pudo borrar student_profiles por id:', perfErr);
   const { error: perfErr2 } = await supabase.from('student_profiles').delete().in('student_id', idsABorrar);
   if (perfErr2 && perfErr2.code !== '42P01') console.error('[dbDeleteStudent] No se pudo borrar student_profiles por student_id:', perfErr2);
+
+  // RED DE SEGURIDAD: ¿queda algo apuntando a la ficha? `assignments` es la única
+  // FK que puede quedar viva (el resto se nulificó o se borró), así que se
+  // vuelve a mirar. Si quedara algo, lanzar ACÁ es mucho mejor que dejar que
+  // reviente el DELETE: el mensaje dice qué fila lo impide en vez de un error
+  // críptico de Postgres, y es el mismo estado en el que quedó Diego Ruiz.
+  const { data: restantes } = await supabase
+    .from('assignments').select('id, student_name, teacher_name').in('student_id', idsABorrar);
+  if ((restantes ?? []).length > 0) {
+    throw new Error(
+      `No se puede eliminar a "${studentName}": quedan ${restantes!.length} fila(s) en assignments ` +
+      `apuntando a su ficha:\n` +
+      restantes!.map(r => `  · ${r.student_name} · ${r.teacher_name} (assignment ${r.id})`).join('\n') +
+      `\nSu copia de seguridad está guardada y la ficha NO se ha borrado.`,
+    );
+  }
 
   // CRÍTICO: comprobar el error. Un fallo acá deja al alumno vivo en la
   // plataforma después de haberle quitado todo lo demás, que es el peor estado
