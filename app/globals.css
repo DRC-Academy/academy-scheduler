@@ -2175,3 +2175,57 @@ label {
   /* El importe manda: en móvil sube a su propia línea y no compite con el nombre. */
   .afd-student-head { align-items: flex-start; }
 }
+
+/* Lista de profesores del admin: tarjetas, NO tabla.
+   La tabla tenía `min-width: 880px` dentro de un `overflow-x: auto`, y el
+   detalle expandido colgaba de un <td colSpan={8}> suyo. Daba igual que las
+   tarjetas de dentro envolvieran: el <td> medía 880px como mínimo, así que el
+   detalle se desplazaba en horizontal junto con la tabla y nunca se veía
+   entero. Sin tabla no hay ancho mínimo que arrastre a nadie. */
+.afd-list { display: flex; flex-direction: column; gap: var(--space-3); }
+.afd-teacher {
+  background: var(--bg-surface); border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.afd-teacher.is-open { border-color: var(--accent-border); }
+.afd-teacher-head {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: var(--space-3); padding: var(--space-4) var(--space-4) var(--space-3);
+}
+.afd-teacher-name {
+  font-size: var(--fs-title); font-weight: var(--fw-semibold);
+  color: var(--text-primary); overflow-wrap: anywhere; min-width: 0;
+}
+.afd-teacher-right { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+.afd-teacher-amount {
+  font-size: var(--fs-title); font-weight: var(--fw-semibold);
+  color: var(--ok); white-space: nowrap;
+}
+.afd-stats {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(125px, 1fr));
+  gap: var(--space-3); padding: 0 var(--space-4) var(--space-3);
+}
+.afd-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); padding: 0 var(--space-4) var(--space-4); }
+.afd-btn-ghost {
+  padding: 8px 14px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); background: transparent; color: var(--text-secondary);
+  font-family: inherit; font-size: var(--fs-caption); font-weight: var(--fw-semibold); cursor: pointer;
+}
+.afd-btn-ghost:hover { background: var(--bg-surface-2); }
+.afd-btn-pay {
+  padding: 8px 14px; border-radius: var(--radius-sm); border: none;
+  background: var(--accent); color: #fff;
+  font-family: inherit; font-size: var(--fs-caption); font-weight: var(--fw-semibold); cursor: pointer;
+}
+.afd-btn-pay:hover:not(:disabled) { background: var(--accent-hover); }
+.afd-btn-pay:disabled { background: var(--bg-surface-3); color: var(--text-muted); cursor: not-allowed; }
+/* El detalle ya no cuelga de un <td>: es un bloque normal dentro de la tarjeta. */
+.afd-panel { border-top: 1px solid var(--border); padding: var(--space-4); background: var(--bg-base); }
+
+@media (max-width: 640px) {
+  .afd-teacher-head { padding: var(--space-3) var(--space-3) var(--space-2); }
+  .afd-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 0 var(--space-3) var(--space-3); }
+  .afd-actions { padding: 0 var(--space-3) var(--space-3); }
+  .afd-actions > button { flex: 1; min-height: 44px; }
+  .afd-panel { padding: var(--space-3); }
+}

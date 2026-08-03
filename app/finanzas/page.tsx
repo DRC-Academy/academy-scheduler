@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useMemo, Fragment } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { NavBar } from '@/components/NavBar';
 import { AuthGuard } from '@/components/AuthGuard';
 import { PullToRefresh } from '@/components/PullToRefresh';
@@ -418,105 +418,107 @@ function FinanceTab() {
         </button>
       </div>
 
-      {/* Tabla principal por profesor */}
-      <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
-        {visible.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)', fontSize: 14 }}>Sin datos de finanzas para {finMonthLabel(monthYear)}.</div>
-        ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 880 }}>
-              <thead>
-                <tr style={{ background: 'var(--bg-surface-2)', textAlign: 'left' }}>
-                  {['Profesor', 'Pagables', 'A revisar', 'Excede límite', 'Bonos', 'Total', 'Estado', ''].map(h => (
-                    <th key={h} style={{ padding: '10px 14px', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {visible.map(r => {
-                  const isOpen = expandedTeacher === r.teacherId;
-                  return (
-                    <Fragment key={r.teacherId}>
-                      <tr style={{ borderTop: '1px solid var(--border)' }}>
-                        <td style={{ padding: '10px 14px', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 700 }}>{r.teacherName}</td>
-                        <td style={{ padding: '10px 14px', whiteSpace: 'nowrap' }}>{r.totalPagable} <span style={{ color: 'var(--text-muted)' }}>· €{r.montoPagable.toFixed(2)}</span></td>
-                        <td style={{ padding: '10px 14px', whiteSpace: 'nowrap', color: r.totalARevisar > 0 ? '#b45309' : 'var(--text-secondary)' }}>{r.totalARevisar}</td>
-                        <td style={{ padding: '10px 14px', whiteSpace: 'nowrap', color: r.totalExcedeLimite > 0 ? '#ea580c' : 'var(--text-secondary)' }}>{r.totalExcedeLimite} <span style={{ color: 'var(--text-muted)' }}>· €{r.montoRetenido.toFixed(2)}</span></td>
-                        <td style={{ padding: '10px 14px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>€{r.bonusFromScoring.toFixed(2)}</td>
-                        <td style={{ padding: '10px 14px', whiteSpace: 'nowrap', color: '#1E9E3A', fontWeight: 700 }}>
-                          €{r.totalAPagar.toFixed(2)}
-                          {/* Solo el icono: el aviso completo está en la cabecera del
-                              detalle. Como texto ocupaba 150px y era lo que empujaba
-                              la tabla más allá del ancho de la página. */}
-                          {r.hasInactiveSubPayable && (
-                            <span style={{ marginLeft: 5, cursor: 'help' }}
-                              title="Incluye clases pagables donde el alumno NO tenía suscripción activa al momento de darse">
-                              ⚠️
-                            </span>
-                          )}
-                        </td>
-                        <td style={{ padding: '10px 14px', whiteSpace: 'nowrap' }}>
-                          <span style={{ fontSize: 11, padding: '2px 9px', borderRadius: 12, fontWeight: 700, background: r.paymentStatus === 'paid' ? 'rgba(30,158,58,0.12)' : 'rgba(255,196,0,0.15)', color: r.paymentStatus === 'paid' ? '#1E9E3A' : '#b45309' }}>
-                            {r.paymentStatus === 'paid' ? '✅ Pagado' : '⏳ Pendiente'}
-                          </span>
-                        </td>
-                        <td style={{ padding: '10px 14px', whiteSpace: 'nowrap', textAlign: 'right' }}>
-                          <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                            <button onClick={() => setExpandedTeacher(isOpen ? null : r.teacherId)} style={{ padding: '6px 12px', borderRadius: 7, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 11, fontWeight: 600, fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
-                              {isOpen ? 'Ocultar' : 'Ver detalle'}
-                            </button>
-                            {r.paymentStatus !== 'paid' && (
-                              <button onClick={() => handlePay(r.teacherId)} disabled={paying === r.teacherId} style={{ padding: '6px 12px', borderRadius: 7, border: 'none', background: '#1E9E3A', color: 'white', cursor: paying === r.teacherId ? 'not-allowed' : 'pointer', fontSize: 11, fontWeight: 700, fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
-                                {paying === r.teacherId ? '...' : 'Marcar pagado'}
-                              </button>
-                            )}
+      {/* Profesores del mes */}
+      {visible.length === 0 ? (
+        <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)', fontSize: 14 }}>
+          Sin datos de finanzas para {finMonthLabel(monthYear)}.
+        </div>
+      ) : (
+        <div className="afd-list">
+          {visible.map(r => {
+          const isOpen = expandedTeacher === r.teacherId;
+          return (
+            <div key={r.teacherId} className={`afd-teacher${isOpen ? ' is-open' : ''}`}>
+              <div className="afd-teacher-head">
+                <div className="afd-teacher-name">{r.teacherName}</div>
+                <div className="afd-teacher-right">
+                  <span className="afd-pill" style={r.paymentStatus === 'paid' ? PILL_OK : PILL_WARN}>
+                    {r.paymentStatus === 'paid' ? '✅ Pagado' : '⏳ Pendiente'}
+                  </span>
+                  <span className="afd-teacher-amount">
+                    €{r.totalAPagar.toFixed(2)}
+                    {/* Solo el icono: el aviso completo está en la cabecera del detalle. */}
+                    {r.hasInactiveSubPayable && (
+                      <span style={{ marginLeft: 5, cursor: 'help' }}
+                        title="Incluye clases pagables donde el alumno NO tenía suscripción activa al momento de darse">
+                        ⚠️
+                      </span>
+                    )}
+                  </span>
+                </div>
+              </div>
+
+              <div className="afd-stats">
+                <div>
+                  <div className="afd-brow-label">Pagables</div>
+                  <div className="afd-brow-value">{r.totalPagable} · €{r.montoPagable.toFixed(2)}</div>
+                </div>
+                <div>
+                  <div className="afd-brow-label">A revisar</div>
+                  <div className={`afd-brow-value${r.totalARevisar > 0 ? ' is-warn' : ''}`}>{r.totalARevisar}</div>
+                </div>
+                <div>
+                  <div className="afd-brow-label">Excede límite</div>
+                  <div className={`afd-brow-value${r.totalExcedeLimite > 0 ? ' is-warn' : ''}`}>
+                    {r.totalExcedeLimite} · €{r.montoRetenido.toFixed(2)}
+                  </div>
+                </div>
+                <div>
+                  <div className="afd-brow-label">Bonos</div>
+                  <div className="afd-brow-value">€{r.bonusFromScoring.toFixed(2)}</div>
+                </div>
+              </div>
+
+              <div className="afd-actions">
+                <button className="afd-btn-ghost" onClick={() => setExpandedTeacher(isOpen ? null : r.teacherId)} aria-expanded={isOpen}>
+                  {isOpen ? 'Ocultar detalle' : 'Ver detalle'}
+                </button>
+                {r.paymentStatus !== 'paid' && (
+                  <button className="afd-btn-pay" onClick={() => handlePay(r.teacherId)} disabled={paying === r.teacherId}>
+                    {paying === r.teacherId ? '…' : 'Marcar pagado'}
+                  </button>
+                )}
+              </div>
+
+              {isOpen && (
+                  <div className="afd-panel">
+                    <div className="afd">
+                      <TeacherTotalCard result={r} monthLabel={finMonthLabel(monthYear)} />
+                      <StudentDetailList
+                        result={r} assignments={assignments}
+                        onApproveReview={(student, date) => approveReviewClass(r.teacherId, student, date, approvedBy)}
+                        onApproveExceed={(student, date) => approveExceedLimitClass(r.teacherId, student, date, approvedBy)}
+                      />
+                      {penaltiesOf(r.teacherId).length > 0 && (
+                        <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '12px 14px', background: 'var(--bg-surface)' }}>
+                          <div style={{ fontSize: 12.5, fontWeight: 700, color: '#c0392b', marginBottom: 8 }}>Penalizaciones del mes</div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                            {penaltiesOf(r.teacherId).map(p => (
+                              <div key={p.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, fontSize: 12.5, flexWrap: 'wrap' }}>
+                                <span style={{ color: p.reverted ? 'var(--text-muted)' : 'var(--text-secondary)', textDecoration: p.reverted ? 'line-through' : undefined }}>
+                                  {p.note.replace('Falta sin aviso registrada — ', '')} · −€{Math.abs(p.euros).toFixed(2)}
+                                </span>
+                                {p.reverted ? (
+                                  <span style={{ fontSize: 11.5, color: '#1f7a3d', fontWeight: 700, whiteSpace: 'nowrap' }}>Revertida{p.revertedBy ? ` · ${p.revertedBy}` : ''}</span>
+                                ) : (
+                                  <button onClick={() => { setRevertModal(p); setRevertReason(''); }}
+                                    style={{ padding: '4px 11px', borderRadius: 7, border: '1px solid #f0c4bd', background: 'white', color: '#c0392b', cursor: 'pointer', fontSize: 11.5, fontWeight: 700, fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
+                                    Revertir
+                                  </button>
+                                )}
+                              </div>
+                            ))}
                           </div>
-                        </td>
-                      </tr>
-                      {isOpen && (
-                        <tr>
-                          <td colSpan={8} style={{ padding: '0 14px 14px' }}>
-                            <div className="afd">
-                              <TeacherTotalCard result={r} monthLabel={finMonthLabel(monthYear)} />
-                              <StudentDetailList
-                                result={r} assignments={assignments}
-                                onApproveReview={(student, date) => approveReviewClass(r.teacherId, student, date, approvedBy)}
-                                onApproveExceed={(student, date) => approveExceedLimitClass(r.teacherId, student, date, approvedBy)}
-                              />
-                              {penaltiesOf(r.teacherId).length > 0 && (
-                                <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '12px 14px', background: 'var(--bg-surface)' }}>
-                                  <div style={{ fontSize: 12.5, fontWeight: 700, color: '#c0392b', marginBottom: 8 }}>Penalizaciones del mes</div>
-                                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                                    {penaltiesOf(r.teacherId).map(p => (
-                                      <div key={p.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, fontSize: 12.5, flexWrap: 'wrap' }}>
-                                        <span style={{ color: p.reverted ? 'var(--text-muted)' : 'var(--text-secondary)', textDecoration: p.reverted ? 'line-through' : undefined }}>
-                                          {p.note.replace('Falta sin aviso registrada — ', '')} · −€{Math.abs(p.euros).toFixed(2)}
-                                        </span>
-                                        {p.reverted ? (
-                                          <span style={{ fontSize: 11.5, color: '#1f7a3d', fontWeight: 700, whiteSpace: 'nowrap' }}>Revertida{p.revertedBy ? ` · ${p.revertedBy}` : ''}</span>
-                                        ) : (
-                                          <button onClick={() => { setRevertModal(p); setRevertReason(''); }}
-                                            style={{ padding: '4px 11px', borderRadius: 7, border: '1px solid #f0c4bd', background: 'white', color: '#c0392b', cursor: 'pointer', fontSize: 11.5, fontWeight: 700, fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
-                                            Revertir
-                                          </button>
-                                        )}
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
+                        </div>
                       )}
-                    </Fragment>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+                    </div>
+                  </div>
+              )}
+            </div>
+          );
+          })}
+        </div>
+      )}
 
       {/* Modal de reversión de penalización (Bloque 4.5) */}
       {revertModal && (
