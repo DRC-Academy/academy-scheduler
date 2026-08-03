@@ -32,83 +32,125 @@ const FIN_STATUS_STYLE: Record<string, { label: string; color: string; bg: strin
   no_cobrable:        { label: 'No cobrable',       color: 'var(--text-muted)', bg: 'var(--bg-surface-3)' },
 };
 
-function ClassDetailRows({ result, studentName, onApproveReview, onApproveExceed }: {
+const PILL_OK   = { background: 'var(--ok-soft)',   color: 'var(--ok)' };
+const PILL_WARN = { background: 'var(--warn-soft)', color: 'var(--warn)' };
+
+/**
+ * Saldo del mes del profesor. Va ARRIBA del detalle porque es el dato que se
+ * busca al abrirlo: antes solo estaba en una columna de la fila plegada, que es
+ * justo la que se pierde de vista cuando la tabla se desplaza en horizontal.
+ */
+function TeacherTotalCard({ result, monthLabel }: { result: TeacherFinanceResult; monthLabel: string }) {
+  const desglose: Array<{ label: string; value: string; tone?: 'ok' | 'warn' | 'danger' }> = [
+    { label: 'Clases pagables', value: `${result.totalPagable} · €${result.montoPagable.toFixed(2)}` },
+  ];
+  if (result.totalARevisar > 0)
+    desglose.push({ label: 'A revisar', value: `${result.totalARevisar} · €${result.montoARevisar.toFixed(2)}`, tone: 'warn' });
+  if (result.montoRetenido > 0)
+    desglose.push({ label: 'Retenido', value: `€${result.montoRetenido.toFixed(2)}`, tone: 'warn' });
+  if (result.bonusFromScoring > 0)
+    desglose.push({ label: 'Bonos', value: `+€${result.bonusFromScoring.toFixed(2)}`, tone: 'ok' });
+  if (result.penaltiesFromScoring < 0)
+    desglose.push({ label: 'Penalizaciones', value: `−€${Math.abs(result.penaltiesFromScoring).toFixed(2)}`, tone: 'danger' });
+
+  return (
+    <div className="afd-total">
+      <div className="afd-total-head">
+        <div>
+          <div className="afd-total-label">Total a cobrar · {monthLabel}</div>
+          <div className="afd-total-value">€{result.totalAPagar.toFixed(2)}</div>
+        </div>
+        <span className="afd-pill" style={result.paymentStatus === 'paid' ? PILL_OK : PILL_WARN}>
+          {result.paymentStatus === 'paid' ? '✅ Pagado' : '⏳ Pendiente'}
+        </span>
+      </div>
+      {result.hasInactiveSubPayable && (
+        <div style={{ marginTop: 'var(--space-2)', fontSize: 'var(--fs-caption)', color: 'var(--warn)' }}>
+          ⚠️ Incluye clases pagables en las que el alumno no tenía suscripción activa.
+        </div>
+      )}
+      <div className="afd-break">
+        {desglose.map(d => (
+          <div key={d.label}>
+            <div className="afd-brow-label">{d.label}</div>
+            <div className={`afd-brow-value${d.tone ? ` is-${d.tone}` : ''}`}>{d.value}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Clases de un alumno. Una tarjeta por clase en vez de una fila de tabla: los
+ * badges envuelven en lugar de estirar el ancho, así que no hay `min-width` que
+ * obligue a desplazarse en horizontal para leer el estado o el botón de aprobar.
+ */
+function ClassCards({ result, studentName, onApproveReview, onApproveExceed }: {
   result: TeacherFinanceResult;
   studentName: string;
   onApproveReview: (date: string) => void;
   onApproveExceed: (date: string) => void;
 }) {
   const rows = result.rows.filter(r => r.studentName === studentName);
+  if (rows.length === 0) return <div className="afd-empty">Sin clases registradas este mes.</div>;
+
   return (
-    <div style={{ overflowX: 'auto', background: 'var(--bg-surface-2)', borderTop: '1px solid var(--border)' }}>
-      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5, minWidth: 640 }}>
-        <thead>
-          <tr style={{ textAlign: 'left' }}>
-            {['Fecha', 'Ingresó', 'Transcript', 'Suscripción', 'Tarifa', 'Estado', ''].map((h, i) => (
-              <th key={i} style={{ padding: '7px 14px', fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>{h}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r, i) => {
-            const st = FIN_STATUS_STYLE[r.status];
-            const ing = ingresoBadge(r);
-            const ct = classTypeBadge(r.classType);
-            const sub = subscriptionBadge(r.subscriptionStatus);
-            const subDiffer = r.subAtJoin && r.subAtRecord && r.subAtJoin !== r.subAtRecord;
-            return (
-              <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
-                <td style={{ padding: '7px 14px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>{finDateShort(r.date)}</td>
-                <td style={{ padding: '7px 14px', whiteSpace: 'nowrap' }}>
-                  <span style={{ fontSize: 10.5, padding: '2px 8px', borderRadius: 10, background: ing.bg, color: ing.color, fontWeight: 700 }}>{ing.label}</span>
-                </td>
-                {/* Transcript: segundo factor de verificación. */}
-                <td style={{ padding: '7px 14px', whiteSpace: 'nowrap' }}>
-                  {r.hasTranscript
-                    ? <span style={{ fontSize: 10.5, padding: '2px 8px', borderRadius: 10, background: '#eaf5ec', color: '#1f7a3d', fontWeight: 700 }}>Subido</span>
-                    : <span style={{ fontSize: 10.5, padding: '2px 8px', borderRadius: 10, background: '#fdf3e7', color: '#9a6516', fontWeight: 700 }}>No subido</span>}
-                </td>
-                <td style={{ padding: '7px 14px', whiteSpace: 'nowrap' }}>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                    <span style={{ fontSize: 10.5, padding: '2px 8px', borderRadius: 10, background: sub.bg, color: sub.color, fontWeight: 700 }}>{sub.label}</span>
-                    {subDiffer && <span style={{ cursor: 'help' }} title={`Al ingresar: ${subscriptionBadge(r.subAtJoin).label.replace(/^[^ ]+ /, '')} · Al registrar: ${subscriptionBadge(r.subAtRecord).label.replace(/^[^ ]+ /, '')}`}>ℹ️</span>}
-                  </span>
-                </td>
-                {/* Importe = tarifa × unidades. Una sesión de 2h cobra 2× la tarifa. */}
-                <td style={{ padding: '7px 14px', whiteSpace: 'nowrap', color: 'var(--text-primary)' }}
-                  title={r.billingUnits > 1 ? `${r.billingUnits} × €${r.rate.toFixed(2)}` : undefined}>
-                  €{(r.rate * r.billingUnits).toFixed(2)}
-                  {r.billingUnits > 1 && (
-                    <span style={{ marginLeft: 5, fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 999, background: 'rgba(30,158,58,0.12)', color: '#1E9E3A' }}>
-                      {r.durationHours}h ×{r.billingUnits}
-                    </span>
-                  )}
-                </td>
-                <td style={{ padding: '7px 14px', whiteSpace: 'nowrap' }}>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: 10.5, padding: '2px 8px', borderRadius: 10, background: st.bg, color: st.color, fontWeight: 700 }}>{st.label}</span>
-                    {ct && <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 10, background: ct.bg, color: ct.color, fontWeight: 700 }}>{ct.label}</span>}
-                  </span>
-                </td>
-                <td style={{ padding: '7px 14px', whiteSpace: 'nowrap', textAlign: 'right' }}>
-                  {r.manuallyApproved ? (
-                    <span style={{ fontSize: 11, color: '#1E9E3A', fontWeight: 700 }}>✓ Aprobada</span>
-                  ) : result.paymentStatus !== 'paid' && r.status === 'a_revisar' ? (
-                    <button onClick={() => onApproveReview(r.date)} style={{ padding: '4px 10px', borderRadius: 7, border: '1px solid rgba(30,158,58,0.4)', background: 'rgba(30,158,58,0.08)', color: '#1E9E3A', cursor: 'pointer', fontSize: 11, fontWeight: 700, fontFamily: 'inherit' }}>✓ Aprobar manualmente</button>
-                  ) : result.paymentStatus !== 'paid' && (r.status === 'excede_limite' || r.status === 'excede_limite_tipo') ? (
-                    <button onClick={() => onApproveExceed(r.date)} style={{ padding: '4px 10px', borderRadius: 7, border: '1px solid rgba(30,158,58,0.4)', background: 'rgba(30,158,58,0.08)', color: '#1E9E3A', cursor: 'pointer', fontSize: 11, fontWeight: 700, fontFamily: 'inherit' }}>✓ Incluir igual</button>
-                  ) : null}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+    <div className="afd-classes">
+      {rows.map((r, i) => {
+        const st = FIN_STATUS_STYLE[r.status];
+        const ing = ingresoBadge(r);
+        const ct = classTypeBadge(r.classType);
+        const sub = subscriptionBadge(r.subscriptionStatus);
+        const subDiffer = r.subAtJoin && r.subAtRecord && r.subAtJoin !== r.subAtRecord;
+        const editable = result.paymentStatus !== 'paid' && !r.manuallyApproved;
+        return (
+          <div className="afd-class" key={i}>
+            <div className="afd-class-date">{finDateShort(r.date)}</div>
+            {/* Importe = tarifa × unidades. Una sesión de 2h cobra 2× la tarifa. */}
+            <div className="afd-class-amount" title={r.billingUnits > 1 ? `${r.billingUnits} × €${r.rate.toFixed(2)}` : undefined}>
+              €{(r.rate * r.billingUnits).toFixed(2)}
+              {r.billingUnits > 1 && (
+                <span className="afd-pill" style={{ ...PILL_OK, marginLeft: 6 }}>{r.durationHours}h ×{r.billingUnits}</span>
+              )}
+            </div>
+            <div className="afd-badges">
+              <span className="afd-pill" style={{ background: st.bg, color: st.color }}>{st.label}</span>
+              {ct && <span className="afd-pill" style={{ background: ct.bg, color: ct.color }}>{ct.label}</span>}
+              <span className="afd-pill" style={{ background: ing.bg, color: ing.color }}>{ing.label}</span>
+              {/* Transcript: segundo factor de verificación. */}
+              <span className="afd-pill" style={r.hasTranscript ? PILL_OK : PILL_WARN}>
+                {r.hasTranscript ? 'Transcript subido' : 'Sin transcript'}
+              </span>
+              <span className="afd-pill" style={{ background: sub.bg, color: sub.color }}>{sub.label}</span>
+              {subDiffer && (
+                <span style={{ cursor: 'help' }} title={`Al ingresar: ${subscriptionBadge(r.subAtJoin).label.replace(/^[^ ]+ /, '')} · Al registrar: ${subscriptionBadge(r.subAtRecord).label.replace(/^[^ ]+ /, '')}`}>ℹ️</span>
+              )}
+              {r.manuallyApproved && <span className="afd-pill" style={PILL_OK}>✓ Aprobada</span>}
+            </div>
+            {editable && r.status === 'a_revisar' && (
+              <div className="afd-action">
+                <button className="afd-btn" onClick={() => onApproveReview(r.date)}>✓ Aprobar manualmente</button>
+              </div>
+            )}
+            {editable && (r.status === 'excede_limite' || r.status === 'excede_limite_tipo') && (
+              <div className="afd-action">
+                <button className="afd-btn" onClick={() => onApproveExceed(r.date)}>✓ Incluir igual</button>
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
 
-function StudentDetailTable({ result, assignments, onApproveReview, onApproveExceed }: {
+/**
+ * Alumnos del profesor, plegados. La fila plegada deja ver lo que importa para
+ * comparar (nombre, clases, subtotal, estado); al abrir aparecen la ficha y las
+ * clases, sin tabla anidada y por tanto sin scroll lateral.
+ */
+function StudentDetailList({ result, assignments, onApproveReview, onApproveExceed }: {
   result: TeacherFinanceResult;
   assignments: Assignment[];
   onApproveReview: (studentName: string, date: string) => void;
@@ -124,63 +166,78 @@ function StudentDetailTable({ result, assignments, onApproveReview, onApproveExc
   }
   const students = [...byStudent.entries()].sort((a, b) => a[0].localeCompare(b[0]));
 
+  if (students.length === 0) return <div className="afd-empty">Sin clases registradas este mes.</div>;
+
   return (
-    <div style={{ background: 'var(--bg-surface)', border: '1px solid rgba(30,158,58,0.3)', borderRadius: 12, overflow: 'hidden', marginTop: 4 }}>
-      <div style={{ overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 720 }}>
-          <thead>
-            <tr style={{ background: 'var(--bg-surface-2)', textAlign: 'left' }}>
-              {['Alumno', 'Plan', 'Inicio', 'Antigüedad', 'Tarifa', 'Clases pagables', 'Subtotal', 'Estado'].map(h => (
-                <th key={h} style={{ padding: '9px 14px', fontSize: 10.5, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {students.map(([name, rows]) => {
-              const asgn = assignments.find(a => a.teacherId === result.teacherId && a.studentName === name);
-              const pagables = rows.filter(r => r.status === 'pagable');
-              // En unidades: una sesión de 2h son 2 clases pagables y 2× la tarifa.
-              const pagableUnits = pagables.reduce((s, r) => s + r.billingUnits, 0);
-              const subtotal = pagables.reduce((s, r) => s + r.rate * r.billingUnits, 0);
-              const antiquity = rows[0]?.antiquityDays ?? 0;
-              const rate = rows[0]?.rate ?? 0;
-              const isOpen = openStudent === name;
-              const hasReview = rows.some(r => r.status === 'a_revisar');
-              return (
-                <Fragment key={name}>
-                  <tr style={{ borderTop: '1px solid var(--border)', cursor: 'pointer' }} onClick={() => setOpenStudent(isOpen ? null : name)}>
-                    <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 600 }}>{isOpen ? '▾ ' : '▸ '}{name}</td>
-                    <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>{rows[0]?.planLabel ?? '—'}</td>
-                    <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>{asgn?.startDate ? finDateShort(asgn.startDate) : '—'}</td>
-                    <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>{antiquity}d</td>
-                    <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', color: 'var(--text-primary)' }}>€{rate.toFixed(2)}</td>
-                    <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', color: 'var(--text-primary)', fontWeight: 600 }}
-                      title={pagableUnits !== pagables.length ? `${pagables.length} sesiones · ${pagableUnits} clases (alguna es de 2h)` : undefined}>
-                      {pagableUnits}
-                    </td>
-                    <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', color: '#1E9E3A', fontWeight: 700 }}>€{subtotal.toFixed(2)}</td>
-                    <td style={{ padding: '9px 14px', whiteSpace: 'nowrap' }}>
-                      {hasReview
-                        ? <span style={{ fontSize: 10.5, padding: '2px 8px', borderRadius: 10, background: 'rgba(255,196,0,0.15)', color: '#b45309', fontWeight: 700 }}>A revisar</span>
-                        : <span style={{ fontSize: 10.5, padding: '2px 8px', borderRadius: 10, background: 'rgba(30,158,58,0.1)', color: '#1E9E3A', fontWeight: 700 }}>OK</span>}
-                    </td>
-                  </tr>
-                  {isOpen && (
-                    <tr>
-                      <td colSpan={8} style={{ padding: 0 }}>
-                        <ClassDetailRows
-                          result={result} studentName={name}
-                          onApproveReview={date => onApproveReview(name, date)}
-                          onApproveExceed={date => onApproveExceed(name, date)}
-                        />
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
-              );
-            })}
-          </tbody>
-        </table>
+    <div>
+      <div className="afd-section-title">Alumnos ({students.length})</div>
+      <div className="afd-students">
+        {students.map(([name, rows]) => {
+          const asgn = assignments.find(a => a.teacherId === result.teacherId && a.studentName === name);
+          const pagables = rows.filter(r => r.status === 'pagable');
+          // En unidades: una sesión de 2h son 2 clases pagables y 2× la tarifa.
+          const pagableUnits = pagables.reduce((s, r) => s + r.billingUnits, 0);
+          const subtotal = pagables.reduce((s, r) => s + r.rate * r.billingUnits, 0);
+          const antiquity = rows[0]?.antiquityDays ?? 0;
+          const rate = rows[0]?.rate ?? 0;
+          const isOpen = openStudent === name;
+          const hasReview = rows.some(r => r.status === 'a_revisar');
+          return (
+            <div key={name} className={`afd-student${isOpen ? ' is-open' : ''}`}>
+              <button className="afd-student-head" aria-expanded={isOpen}
+                onClick={() => setOpenStudent(isOpen ? null : name)}>
+                <span className="afd-student-name">
+                  <span aria-hidden>{isOpen ? '▾' : '▸'}</span>
+                  <span style={{ overflowWrap: 'anywhere' }}>{name}</span>
+                </span>
+                <span className="afd-student-right">
+                  <span className="afd-student-count">{pagableUnits} {pagableUnits === 1 ? 'clase' : 'clases'}</span>
+                  <span className="afd-pill" style={hasReview ? PILL_WARN : PILL_OK}>{hasReview ? 'A revisar' : 'OK'}</span>
+                  <span className="afd-student-amount">€{subtotal.toFixed(2)}</span>
+                </span>
+              </button>
+
+              {isOpen && (
+                <>
+                  <div className="afd-meta">
+                    <div>
+                      <div className="afd-meta-label">Plan</div>
+                      <div className="afd-meta-value">{rows[0]?.planLabel ?? '—'}</div>
+                    </div>
+                    <div>
+                      <div className="afd-meta-label">Inicio</div>
+                      <div className="afd-meta-value">{asgn?.startDate ? finDateShort(asgn.startDate) : '—'}</div>
+                    </div>
+                    <div>
+                      <div className="afd-meta-label">Antigüedad</div>
+                      <div className="afd-meta-value">{antiquity}d</div>
+                    </div>
+                    <div>
+                      <div className="afd-meta-label">Tarifa</div>
+                      <div className="afd-meta-value">€{rate.toFixed(2)}</div>
+                    </div>
+                    <div>
+                      <div className="afd-meta-label">Clases pagables</div>
+                      <div className="afd-meta-value">
+                        {pagableUnits}
+                        {pagableUnits !== pagables.length && ` (${pagables.length} sesiones)`}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="afd-meta-label">Subtotal</div>
+                      <div className="afd-meta-value" style={{ color: 'var(--ok)', fontWeight: 'var(--fw-semibold)' }}>€{subtotal.toFixed(2)}</div>
+                    </div>
+                  </div>
+                  <ClassCards
+                    result={result} studentName={name}
+                    onApproveReview={date => onApproveReview(name, date)}
+                    onApproveExceed={date => onApproveExceed(name, date)}
+                  />
+                </>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -388,11 +445,14 @@ function FinanceTab() {
                         <td style={{ padding: '10px 14px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>€{r.bonusFromScoring.toFixed(2)}</td>
                         <td style={{ padding: '10px 14px', whiteSpace: 'nowrap', color: '#1E9E3A', fontWeight: 700 }}>
                           €{r.totalAPagar.toFixed(2)}
+                          {/* Solo el icono: el aviso completo está en la cabecera del
+                              detalle. Como texto ocupaba 150px y era lo que empujaba
+                              la tabla más allá del ancho de la página. */}
                           {r.hasInactiveSubPayable && (
-                            <div style={{ fontSize: 10, color: '#ea580c', fontWeight: 600, marginTop: 2, whiteSpace: 'normal', maxWidth: 150 }}
+                            <span style={{ marginLeft: 5, cursor: 'help' }}
                               title="Incluye clases pagables donde el alumno NO tenía suscripción activa al momento de darse">
-                              ⚠️ Incluye clases con suscripción inactiva
-                            </div>
+                              ⚠️
+                            </span>
                           )}
                         </td>
                         <td style={{ padding: '10px 14px', whiteSpace: 'nowrap' }}>
@@ -416,33 +476,36 @@ function FinanceTab() {
                       {isOpen && (
                         <tr>
                           <td colSpan={8} style={{ padding: '0 14px 14px' }}>
-                            <StudentDetailTable
-                              result={r} assignments={assignments}
-                              onApproveReview={(student, date) => approveReviewClass(r.teacherId, student, date, approvedBy)}
-                              onApproveExceed={(student, date) => approveExceedLimitClass(r.teacherId, student, date, approvedBy)}
-                            />
-                            {penaltiesOf(r.teacherId).length > 0 && (
-                              <div style={{ marginTop: 14, border: '1px solid var(--border)', borderRadius: 10, padding: '12px 14px' }}>
-                                <div style={{ fontSize: 12.5, fontWeight: 700, color: '#c0392b', marginBottom: 8 }}>Penalizaciones del mes</div>
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                                  {penaltiesOf(r.teacherId).map(p => (
-                                    <div key={p.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, fontSize: 12.5 }}>
-                                      <span style={{ color: p.reverted ? 'var(--text-muted)' : 'var(--text-secondary)', textDecoration: p.reverted ? 'line-through' : undefined }}>
-                                        {p.note.replace('Falta sin aviso registrada — ', '')} · −€{Math.abs(p.euros).toFixed(2)}
-                                      </span>
-                                      {p.reverted ? (
-                                        <span style={{ fontSize: 11.5, color: '#1f7a3d', fontWeight: 700, whiteSpace: 'nowrap' }}>Revertida{p.revertedBy ? ` · ${p.revertedBy}` : ''}</span>
-                                      ) : (
-                                        <button onClick={() => { setRevertModal(p); setRevertReason(''); }}
-                                          style={{ padding: '4px 11px', borderRadius: 7, border: '1px solid #f0c4bd', background: 'white', color: '#c0392b', cursor: 'pointer', fontSize: 11.5, fontWeight: 700, fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
-                                          Revertir
-                                        </button>
-                                      )}
-                                    </div>
-                                  ))}
+                            <div className="afd">
+                              <TeacherTotalCard result={r} monthLabel={finMonthLabel(monthYear)} />
+                              <StudentDetailList
+                                result={r} assignments={assignments}
+                                onApproveReview={(student, date) => approveReviewClass(r.teacherId, student, date, approvedBy)}
+                                onApproveExceed={(student, date) => approveExceedLimitClass(r.teacherId, student, date, approvedBy)}
+                              />
+                              {penaltiesOf(r.teacherId).length > 0 && (
+                                <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '12px 14px', background: 'var(--bg-surface)' }}>
+                                  <div style={{ fontSize: 12.5, fontWeight: 700, color: '#c0392b', marginBottom: 8 }}>Penalizaciones del mes</div>
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                    {penaltiesOf(r.teacherId).map(p => (
+                                      <div key={p.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, fontSize: 12.5, flexWrap: 'wrap' }}>
+                                        <span style={{ color: p.reverted ? 'var(--text-muted)' : 'var(--text-secondary)', textDecoration: p.reverted ? 'line-through' : undefined }}>
+                                          {p.note.replace('Falta sin aviso registrada — ', '')} · −€{Math.abs(p.euros).toFixed(2)}
+                                        </span>
+                                        {p.reverted ? (
+                                          <span style={{ fontSize: 11.5, color: '#1f7a3d', fontWeight: 700, whiteSpace: 'nowrap' }}>Revertida{p.revertedBy ? ` · ${p.revertedBy}` : ''}</span>
+                                        ) : (
+                                          <button onClick={() => { setRevertModal(p); setRevertReason(''); }}
+                                            style={{ padding: '4px 11px', borderRadius: 7, border: '1px solid #f0c4bd', background: 'white', color: '#c0392b', cursor: 'pointer', fontSize: 11.5, fontWeight: 700, fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
+                                            Revertir
+                                          </button>
+                                        )}
+                                      </div>
+                                    ))}
+                                  </div>
                                 </div>
-                              </div>
-                            )}
+                              )}
+                            </div>
                           </td>
                         </tr>
                       )}
