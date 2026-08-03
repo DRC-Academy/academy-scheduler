@@ -357,134 +357,103 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                   {isOpen && (
                     <div>
                       <div className="mcf-detail">
-                        <table className="mcf-table">
-                          <thead>
-                            <tr>
-                              {([
-                                { h: 'Fecha' }, { h: 'Hora' },
-                                { h: 'Ingreso', help: 'finanzas.ingreso' },
-                                { h: 'Transcript', help: 'finanzas.transcript' },
-                                { h: 'Suscripción', help: 'finanzas.suscripcion' },
-                                { h: 'Tarifa', help: 'finanzas.tarifa' },
-                                { h: 'Acción' },
-                              ] as Array<{ h: string; help?: HelpTooltipKey }>).map(col => (
-                                <th key={col.h}>
-                                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                                    {col.h}
-                                    {col.help && <HelpTooltip tooltipKey={col.help} />}
+                        {/* Las ayudas vivían en las cabeceras de la tabla. Sin
+                            tabla, se conservan acá como leyenda del bloque. */}
+                        <div className="mcf-legend">
+                          {([
+                            { h: 'Ingreso', help: 'finanzas.ingreso' },
+                            { h: 'Transcript', help: 'finanzas.transcript' },
+                            { h: 'Suscripción', help: 'finanzas.suscripcion' },
+                            { h: 'Tarifa', help: 'finanzas.tarifa' },
+                          ] as Array<{ h: string; help: HelpTooltipKey }>).map(col => (
+                            <span key={col.h}>{col.h}<HelpTooltip tooltipKey={col.help} /></span>
+                          ))}
+                        </div>
+                        {g.rows.map((r, i) => {
+                          const rec = recordFor(g.name, r.date);
+                          const ing = ingresoBadge(r);
+                          const ct = classTypeBadge(r.classType);
+                          const isFalta = r.classType === 'falta_sin_aviso' || r.classType === 'cancelacion_hora';
+                          const isExcede = r.status === 'excede_limite' || r.status === 'excede_limite_tipo';
+                          const complete = r.hasJoinLog && r.hasTranscript;
+                          const sub = subscriptionBadge(r.subscriptionStatus);
+                          const subDiffer = r.subAtJoin && r.subAtRecord && r.subAtJoin !== r.subAtRecord;
+                          // Sesión de 2h: UNA fila que vale 2 clases (2× tarifa).
+                          const dur = durationBadge(r.durationHours);
+                          const sessionNote = sessionBreakdownLabel(r);
+                          // Estado del transcript (fuente única, lib/finance).
+                          const ts = transcriptStateBadge(r.transcriptState);
+                          return (
+                            <div key={i} className={`mcf-cls${r.status === 'a_revisar' ? ' is-review' : ''}`}>
+                              {/* Cuándo: fecha + hora (rango completo si es sesión de 2h) */}
+                              <div className="mcf-cls-when">
+                                {finShortDate(r.date)}
+                                {r.hour && <span className="mcf-cls-time">{rowHoursLabel(r)}</span>}
+                                {dur && <span className="mcf-tag" style={{ background: dur.bg, color: dur.color }}>{dur.label}</span>}
+                                {isExcede && (
+                                  <span className="mcf-dot" style={{ background: '#e0912f' }}
+                                    title={r.status === 'excede_limite_tipo' ? 'Supera las 2 cobrables de este tipo' : 'Excede el límite del plan'} />
+                                )}
+                                {r.manuallyApproved && (
+                                  <span className="mcf-tag" style={{ background: '#eaf5ec', color: '#1f7a3d' }} title="Aprobada manualmente por el admin">admin</span>
+                                )}
+                                {rec?.comment && (
+                                  <span className="mcf-tag" style={{ background: '#f0f1ee', color: '#5f6360', cursor: 'help' }} title={rec.comment}>nota</span>
+                                )}
+                              </div>
+
+                              {/* Tarifa — tarifa × unidades (2× en una sesión de 2h) */}
+                              <div className="mcf-cls-amount" title={sessionNote ?? undefined}>
+                                €{(r.rate * r.billingUnits).toFixed(2)}
+                                {r.billingUnits > 1 && <div className="mcf-cls-note">cuenta como {r.billingUnits}</div>}
+                              </div>
+
+                              <div className="mcf-cls-tags">
+                                <span className="mcf-tag" style={{ background: ing.bg, color: ing.color }}>{plainLabel(ing.label)}</span>
+                                {ct && <span className="mcf-tag" style={{ background: ct.bg, color: ct.color }}>{plainLabel(ct.label)}</span>}
+                                {/* Transcript — segundo factor de verificación. Cuatro
+                                    estados, no dos: "Sin subir" y "En revisión" no le
+                                    piden lo mismo al profesor. En una falta no aplica. */}
+                                {!isFalta && <span className="mcf-tag" style={{ background: ts.bg, color: ts.color }}>{ts.label}</span>}
+                                <span className="mcf-tag" style={{ background: sub.bg, color: sub.color }}>{plainLabel(sub.label)}</span>
+                                {subDiffer && (
+                                  <span style={{ cursor: 'help', color: '#a4a7a1', fontSize: 12 }}
+                                    title={`Al ingresar: ${plainLabel(subscriptionBadge(r.subAtJoin).label)} · Al registrar: ${plainLabel(subscriptionBadge(r.subAtRecord).label)}`}>
+                                    ·
                                   </span>
-                                </th>
-                              ))}
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {g.rows.map((r, i) => {
-                              const rec = recordFor(g.name, r.date);
-                              const ing = ingresoBadge(r);
-                              const ct = classTypeBadge(r.classType);
-                              const isFalta = r.classType === 'falta_sin_aviso' || r.classType === 'cancelacion_hora';
-                              const isExcede = r.status === 'excede_limite' || r.status === 'excede_limite_tipo';
-                              const complete = r.hasJoinLog && r.hasTranscript;
-                              const sub = subscriptionBadge(r.subscriptionStatus);
-                              const subDiffer = r.subAtJoin && r.subAtRecord && r.subAtJoin !== r.subAtRecord;
-                              // Sesión de 2h: UNA fila que vale 2 clases (2× tarifa).
-                              const dur = durationBadge(r.durationHours);
-                              const sessionNote = sessionBreakdownLabel(r);
-                              // Estado del transcript (fuente única, lib/finance).
-                              const ts = transcriptStateBadge(r.transcriptState);
-                              return (
-                                <tr key={i} className={r.status === 'a_revisar' ? 'is-review' : undefined}>
-                                  {/* Fecha */}
-                                  <td>
-                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                                      {finShortDate(r.date)}
-                                      {isExcede && (
-                                        <span className="mcf-dot" style={{ background: '#e0912f' }}
-                                          title={r.status === 'excede_limite_tipo' ? 'Supera las 2 cobrables de este tipo' : 'Excede el límite del plan'} />
-                                      )}
-                                      {r.manuallyApproved && (
-                                        <span className="mcf-tag" style={{ background: '#eaf5ec', color: '#1f7a3d' }} title="Aprobada manualmente por el admin">admin</span>
-                                      )}
-                                      {rec?.comment && (
-                                        <span className="mcf-tag" style={{ background: '#f0f1ee', color: '#5f6360', cursor: 'help' }} title={rec.comment}>nota</span>
-                                      )}
-                                    </span>
-                                  </td>
-                                  {/* Hora — rango completo si es una sesión de 2h */}
-                                  <td style={{ color: '#1a1c1a', fontWeight: 600, whiteSpace: 'nowrap' }}>
-                                    {r.hour ? rowHoursLabel(r) : '—'}
-                                    {dur && <span className="mcf-tag" style={{ marginLeft: 5, background: dur.bg, color: dur.color }}>{dur.label}</span>}
-                                  </td>
-                                  {/* Ingreso (+ tipo de clase) */}
-                                  <td>
-                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                                      <span className="mcf-tag" style={{ background: ing.bg, color: ing.color }}>{plainLabel(ing.label)}</span>
-                                      {ct && <span className="mcf-tag" style={{ background: ct.bg, color: ct.color }}>{plainLabel(ct.label)}</span>}
-                                    </span>
-                                  </td>
-                                  {/* Transcript — segundo factor de verificación.
-                                      Cuatro estados, no dos: "Sin subir" y "En
-                                      revisión" no le piden lo mismo al profesor. */}
-                                  <td>
-                                    {isFalta
-                                      ? <span style={{ color: '#a4a7a1' }}>—</span>
-                                      : <span className="mcf-tag" style={{ background: ts.bg, color: ts.color }}>{ts.label}</span>}
-                                  </td>
-                                  {/* Suscripción */}
-                                  <td>
-                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                                      <span className="mcf-tag" style={{ background: sub.bg, color: sub.color }}>{plainLabel(sub.label)}</span>
-                                      {subDiffer && (
-                                        <span style={{ cursor: 'help', color: '#a4a7a1', fontSize: 12 }}
-                                          title={`Al ingresar: ${plainLabel(subscriptionBadge(r.subAtJoin).label)} · Al registrar: ${plainLabel(subscriptionBadge(r.subAtRecord).label)}`}>
-                                          ·
-                                        </span>
-                                      )}
-                                    </span>
-                                  </td>
-                                  {/* Tarifa — tarifa × unidades (2× en una sesión de 2h) */}
-                                  <td style={{ color: '#1a1c1a', fontWeight: 600, whiteSpace: 'nowrap' }}
-                                    title={sessionNote ?? undefined}>
-                                    €{(r.rate * r.billingUnits).toFixed(2)}
-                                    {r.billingUnits > 1 && (
-                                      <span style={{ display: 'block', fontSize: 10.5, fontWeight: 600, color: '#5f6360' }}>
-                                        cuenta como {r.billingUnits}
-                                      </span>
-                                    )}
-                                  </td>
-                                  {/* Acción */}
-                                  <td>
-                                    {isFalta ? (
-                                      r.status === 'excede_limite_tipo'
-                                        ? <span className="mcf-tag" style={{ background: '#fdf3e7', color: '#9a6516' }}>Supera 2 · revisión admin</span>
-                                        : <span style={{ color: '#1f7a3d', fontWeight: 600 }}>Cobrable</span>
-                                    ) : transcriptNeedsTeacher(r.transcriptState) ? (
-                                      <button
-                                        onClick={() => openAddClass({ studentName: g.name, date: r.date, classType: r.classType })}
-                                        title="Pegá el transcript de esta clase para verificarla"
-                                        style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 9px', borderRadius: 7, border: '1px solid rgba(224,145,47,0.45)', background: '#fdf3e7', color: '#9a6516', cursor: 'pointer', fontSize: 12, fontWeight: 700, fontFamily: 'inherit' }}
-                                      >
-                                        {r.transcriptState === 'rejected' ? '+ Subir el correcto' : '+ Añadir transcript'}
-                                      </button>
-                                    ) : complete ? (
-                                      <span style={{ color: '#1f7a3d', fontWeight: 600 }}>Completo</span>
-                                    ) : !r.hasJoinLog ? (
-                                      <span style={{ color: '#a4a7a1' }} title="No se puede falsear el ingreso">
-                                        Recordá usar &apos;Ingresar a clase&apos;
-                                      </span>
-                                    ) : (
-                                      // Transcript subido y esperando al equipo: no
-                                      // hay nada que el profesor pueda hacer acá.
-                                      <span style={{ color: '#3b5b9e', fontWeight: 600 }} title="El equipo está validando el transcript">
-                                        En revisión
-                                      </span>
-                                    )}
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
+                                )}
+                              </div>
+
+                              <div className="mcf-cls-action">
+                                {isFalta ? (
+                                  r.status === 'excede_limite_tipo'
+                                    ? <span className="mcf-tag" style={{ background: '#fdf3e7', color: '#9a6516' }}>Supera 2 · revisión admin</span>
+                                    : <span style={{ color: '#1f7a3d', fontWeight: 600 }}>Cobrable</span>
+                                ) : transcriptNeedsTeacher(r.transcriptState) ? (
+                                  <button
+                                    onClick={() => openAddClass({ studentName: g.name, date: r.date, classType: r.classType })}
+                                    title="Pegá el transcript de esta clase para verificarla"
+                                    style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '5px 11px', borderRadius: 7, border: '1px solid rgba(224,145,47,0.45)', background: '#fdf3e7', color: '#9a6516', cursor: 'pointer', fontSize: 12, fontWeight: 700, fontFamily: 'inherit' }}
+                                  >
+                                    {r.transcriptState === 'rejected' ? '+ Subir el correcto' : '+ Añadir transcript'}
+                                  </button>
+                                ) : complete ? (
+                                  <span style={{ color: '#1f7a3d', fontWeight: 600 }}>Completo</span>
+                                ) : !r.hasJoinLog ? (
+                                  <span style={{ color: '#a4a7a1' }} title="No se puede falsear el ingreso">
+                                    Recordá usar &apos;Ingresar a clase&apos;
+                                  </span>
+                                ) : (
+                                  // Transcript subido y esperando al equipo: no
+                                  // hay nada que el profesor pueda hacer acá.
+                                  <span style={{ color: '#3b5b9e', fontWeight: 600 }} title="El equipo está validando el transcript">
+                                    En revisión
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                       <div className="mcf-detail-foot">
                         <div>
