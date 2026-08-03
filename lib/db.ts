@@ -1670,105 +1670,56 @@ export async function dbBackupStudentBeforeDelete(
   );
 }
 
-/**
- * Suelta las referencias a `students(id)` que impedirían borrar al alumno, SIN
- * perder los datos: pone `student_id = null` en cada tabla hija.
- *
- * `class_analyses` es el caso que importa: conserva student_name, teacher_id,
- * class_date y transcript, que es TODO lo que lee lib/finance.ts. Nulificar el
- * id no cambia ni un euro de la liquidación; borrar las filas, sí.
- *
- * Best-effort por tabla: si alguna no existe todavía (migración sin correr) se
- * avisa y se sigue. El error que de verdad importa lo caza el DELETE de
- * `students`, que ahora sí se comprueba.
- */
-async function releaseStudentReferences(ids: string[], studentName: string): Promise<void> {
-  const tablas = ['class_analyses', 'form_tokens', 'level_test_sessions'] as const;
-
-  for (const tabla of tablas) {
-    const { error } = await supabase.from(tabla).update({ student_id: null }).in('student_id', ids);
-    if (!error) continue;
-    // Tabla o columna inexistentes: la migración de ese módulo no está corrida.
-    if (error.code === '42P01' || error.code === '42703' || error.code === 'PGRST204') {
-      console.warn(`[dbDeleteStudent] ${tabla} no tiene student_id (migración pendiente). Se ignora.`);
-      continue;
-    }
-    console.error(`[dbDeleteStudent] No se pudo soltar la referencia de ${tabla} para "${studentName}":`, error);
-  }
+/** Informe que devuelve la RPC `delete_student_cascade`. */
+interface CascadeReport {
+  ok: boolean;
+  dry_run: boolean;
+  student_name: string;
+  ids: string[];
+  assignment_ids: string[];
+  repaired: Array<{ assignment: string; student_name: string; teacher: string; reapuntada_a: string }>;
+  /** Referencias nulificadas, por `tabla.columna`. */
+  cleared: Record<string, number>;
+  deleted: Record<string, number>;
+  /** Filas que SOBREVIVEN al borrado (finanzas), por tabla. */
+  preserved: Record<string, number>;
 }
 
 /**
- * PRE-FLIGHT del borrado: deja `assignments` en un estado en el que el DELETE de
- * `students` no pueda fallar, o ABORTA sin haber tocado nada.
+ * Borra la cadena entera de dependencias del alumno en UNA transacción de
+ * Postgres (supabase-delete-student-cascade.sql).
  *
- * Por qué existe: `assignments.student_id` es `not null references students(id)`
- * (supabase-schema.sql:68). No se puede nulificar como al resto de hijos — o se
- * borra la fila, o se re-apunta. Y hay filas corruptas que comparten el
- * student_id de un alumno con el NOMBRE de otro (auditoría 27/07/2026: la
- * assignment de "Marina Garcia" apuntaba a la ficha de "Hugo García"). Antes esas
- * filas se saltaban del DELETE por seguridad, pero seguían apuntando a la ficha:
- * el borrado de `students` reventaba con assignments_student_id_fkey DESPUÉS de
- * haber vaciado el grid y borrado el resto (el caso Diego Ruiz).
+ * Antes esto eran doce llamadas sueltas desde el navegador, sin transacción: si
+ * una fallaba a mitad, el alumno se quedaba sin assignments y con el grid del
+ * profesor vaciado pero VIVO en `students` (el caso Diego Ruiz). Y fallaban
+ * siempre por lo mismo: solo se soltaban las FK contra `students(id)`, nunca las
+ * que cuelgan de `assignments(id)` — form_tokens.assignment_id primero,
+ * level_test_sessions.assignment_id justo detrás.
  *
- * Qué hace con cada fila ajena:
- *   · si su student_name resuelve a UNA ficha real distinta → la RE-APUNTA ahí
- *     (repara el vínculo corrupto, que es lo correcto con o sin borrado);
- *   · si no resuelve, o es ambiguo → NO adivina: la registra como bloqueante.
- *
- * Con un solo bloqueante lanza, nombrando tabla y filas, y el borrado no empieza.
+ * Con `dryRun` no escribe nada: devuelve el mismo informe con lo que haría, y
+ * lanza igual si hay vínculos corruptos. Es el pre-flight.
  */
-async function preflightStudentDeletion(ids: string[], studentName: string): Promise<void> {
-  const { data, error } = await supabase
-    .from('assignments')
-    .select('id, student_id, student_name, teacher_name')
-    .in('student_id', ids);
+async function runDeleteCascade(ids: string[], studentName: string, dryRun: boolean): Promise<CascadeReport> {
+  const { data, error } = await supabase.rpc('delete_student_cascade', {
+    p_ids: ids, p_student_name: studentName, p_dry_run: dryRun,
+  });
 
   if (error) {
+    // PGRST202 / 42883: la función no existe todavía (migración sin correr).
+    if (error.code === 'PGRST202' || error.code === '42883') {
+      throw new Error(
+        'Falta la función delete_student_cascade en Supabase: corré supabase-delete-student-cascade.sql ' +
+        'antes de eliminar alumnos. No se ha borrado nada.',
+      );
+    }
+    // Postgres ya revirtió la transacción entera: la base quedó como estaba.
     throw new Error(
-      `No se pudo comprobar las asignaciones de "${studentName}" antes de borrar: ${error.message}. ` +
-      `No se ha tocado nada.`,
+      `No se pudo eliminar a "${studentName}": ${error.message}` +
+      (dryRun ? '' : '\nNo se ha borrado nada: la transacción se revirtió entera.'),
     );
   }
 
-  const ajenas = (data ?? []).filter(r => _nk(r.student_name) !== _nk(studentName));
-  if (ajenas.length === 0) return;
-
-  // Resolver cada nombre ajeno a SU ficha. Solo vale un único match exacto
-  // (normalizado) fuera de las fichas que estamos borrando.
-  const nombres = [...new Set(ajenas.map(r => String(r.student_name ?? '')).filter(Boolean))];
-  const dueño = new Map<string, string>();
-  for (const nombre of nombres) {
-    const { data: cand } = await supabase.from('students').select('id, name').ilike('name', nombre);
-    const reales = (cand ?? []).filter(c => !ids.includes(c.id) && _nk(c.name) === _nk(nombre));
-    if (reales.length === 1) dueño.set(_nk(nombre), reales[0].id);
-  }
-
-  const bloqueantes: string[] = [];
-  for (const row of ajenas) {
-    const destino = dueño.get(_nk(row.student_name));
-    const etiqueta = `${row.student_name} · ${row.teacher_name} (assignment ${row.id})`;
-
-    if (!destino) {
-      bloqueantes.push(`${etiqueta} — su nombre no resuelve a ninguna ficha única`);
-      continue;
-    }
-    const { error: upErr } = await supabase
-      .from('assignments').update({ student_id: destino }).eq('id', row.id);
-    if (upErr) {
-      bloqueantes.push(`${etiqueta} — no se pudo re-apuntar: ${upErr.message}`);
-    } else {
-      console.log(`[dbDeleteStudent] Vínculo reparado: "${etiqueta}" ahora apunta a su ficha (${destino}).`);
-    }
-  }
-
-  if (bloqueantes.length > 0) {
-    throw new Error(
-      `No se puede eliminar a "${studentName}": la tabla assignments tiene ${bloqueantes.length} fila(s) ` +
-      `que apuntan a su ficha con el nombre de OTRO alumno y no se pueden reasignar solas:\n` +
-      bloqueantes.map(b => `  · ${b}`).join('\n') +
-      `\nNo se ha borrado ni modificado nada. Corregí esos vínculos a mano y volvé a intentarlo.`,
-    );
-  }
+  return data as CascadeReport;
 }
 
 /**
@@ -1779,16 +1730,19 @@ async function preflightStudentDeletion(ids: string[], studentName: string): Pro
  * ver reconcileAssignmentStatus + getStudentsForTeacher). El profesor NO puede
  * llegar hasta acá.
  *
- * Orden (importa, por las claves foráneas contra students(id)):
- *   0. PRE-FLIGHT: deja assignments en estado borrable o aborta sin tocar nada.
- *   1. BACKUP completo (idempotente). Si falla, no se borra nada.
- *   2. Registro de baja (student_dropouts) + foto de churn + avisos.
- *   3. Assignments y celdas del grid de cada profesor.
- *   4. Hijos con FK a students: class_analyses / form_tokens /
- *      level_test_sessions se NULIFICAN (no se borran), student_profiles se borra.
- *   5. Comprobación final: si algo sigue apuntando a la ficha, se lanza ANTES
- *      de borrarla (nunca un estado a medias).
- *   6. `students`, comprobando el error.
+ * Orden. La regla es que NADA irreversible ocurra antes de que la transacción
+ * confirme: hasta el 03/08/2026 el grid se vaciaba y la baja se registraba antes
+ * del borrado, así que un fallo dejaba al alumno sin horario pero vivo.
+ *   1. PRE-FLIGHT (RPC en ensayo): lista lo que se va a borrar y aborta si hay
+ *      vínculos corruptos, sin haber tocado nada.
+ *   2. BACKUP completo (idempotente). Si falla, no se borra nada.
+ *   3. Lectura de lo que hace falta después (profesores, alerta abierta) y foto
+ *      de churn: todo esto necesita al alumno VIVO.
+ *   4. RPC `delete_student_cascade`: la cadena entera en una transacción —
+ *      form_tokens/level_test_sessions (assignment_id) → class_analyses/
+ *      form_tokens/level_test_sessions (student_id) → student_profiles →
+ *      assignments → re-verificación → students. Todo o nada.
+ *   5. Solo si la RPC confirmó: baja (student_dropouts), avisos y grid.
  *
  * FINANZAS INTACTAS: class_records, class_join_logs, scoring_events y
  * class_analyses se conservan enteros. Los análisis son el segundo factor de
@@ -1813,9 +1767,17 @@ export async function dbDeleteStudent(
   // conjunto de ids o se quedan filas apuntando a una ficha que ya no está.
   const idsABorrar = [...new Set([studentId, ...alsoStudentIds].filter(Boolean))];
 
-  // ANTES que nada, ni siquiera el backup: si hay vínculos corruptos que no se
-  // pueden reparar solos, esto lanza con la base intacta.
-  await preflightStudentDeletion(idsABorrar, studentName);
+  // ANTES que nada, ni siquiera el backup: el ensayo recorre la cadena entera y
+  // lanza con la base intacta si hay vínculos corruptos que no se pueden reparar
+  // solos. También deja en consola TODO lo que se va a borrar.
+  const plan = await runDeleteCascade(idsABorrar, studentName, true);
+  console.log(
+    `[dbDeleteStudent] Ensayo de "${studentName}": ` +
+    `${plan.assignment_ids.length} assignment(s) a borrar, ` +
+    `referencias a soltar ${JSON.stringify(plan.cleared)}, ` +
+    `a borrar ${JSON.stringify(plan.deleted)}, ` +
+    `se conservan ${JSON.stringify(plan.preserved)}.`,
+  );
 
   // Después el backup, antes de tocar nada. Lanza si falla: sin copia no se borra.
   await dbBackupStudentBeforeDelete(studentId, studentName, createdBy, alsoStudentIds);
@@ -1859,44 +1821,12 @@ export async function dbDeleteStudent(
     `profesores afectados: [${[...teacherIds].join(', ')}]`
   );
 
-  // Registrar la baja (churn) ANTES de borrar el alumno. Sin esto la baja no
-  // dejaría rastro y la retención no podría contarla. `reason`: 'webhook' si lo
-  // dispara el sistema (suscripción cancelada), 'manual' si lo hace un admin.
-  if (teacherIds.size > 0) {
-    const now = new Date().toISOString();
-    const reason = createdBy === 'sistema' ? 'webhook' : 'manual';
-
-    // ¿Se va con una alerta de riesgo sin atender? Es CONTEXTO para el admin (no
-    // penaliza a nadie) y tiene que quedar en la baja: `students` se borra a
-    // continuación, `student_dropouts` no. Ver supabase-interventions.sql.
-    const alerta = await fetchOpenAlertState({ studentId, studentName }).catch(() => null);
-
-    const dropoutRows = [...teacherIds].map((tid, i) => ({
-      id:           `drop_${Date.now()}_${i}`,
-      teacher_id:   tid,
-      student_id:   studentId,
-      student_name: studentName,
-      start_date:   startByTeacher.get(tid) ?? null,
-      dropped_at:   now,
-      reason,
-      created_by:   createdBy ?? null,
-      had_open_alert:    alerta?.hasOpenAlert ?? false,
-      unattended_alerts: alerta?.unattended ?? 0,
-    }));
-
-    let { error: dropErr } = await supabase.from('student_dropouts').insert(dropoutRows);
-    // Migración sin correr: la baja se registra igual, sin el marcador.
-    if (dropErr && (dropErr.code === '42703' || dropErr.code === 'PGRST204')) {
-      console.warn('[dbDeleteStudent] student_dropouts sin las columnas de alertas. Corré supabase-interventions.sql.');
-      ({ error: dropErr } = await supabase.from('student_dropouts').insert(
-        dropoutRows.map(({ had_open_alert, unattended_alerts, ...base }) => {
-          void had_open_alert; void unattended_alerts;
-          return base;
-        }),
-      ));
-    }
-    if (dropErr) console.error('[dbDeleteStudent] Error al registrar la baja (churn):', dropErr);
-  }
+  // ¿Se va con una alerta de riesgo sin atender? Es CONTEXTO para el admin (no
+  // penaliza a nadie) y va en la fila de la baja. Se LEE acá porque necesita al
+  // alumno vivo, pero la baja se ESCRIBE después de que la transacción confirme.
+  const alerta = teacherIds.size > 0
+    ? await fetchOpenAlertState({ studentId, studentName }).catch(() => null)
+    : null;
 
   // Foto de señales de churn ANTES de borrar: es el ejemplo POSITIVO etiquetado
   // que alimenta la predicción de bajas. En DRC las bajas son siempre manuales
@@ -1913,7 +1843,81 @@ export async function dbDeleteStudent(
     teacherName: affectedTeachers[0]?.name ?? null,
   });
 
-  // Notificar a cada profesor afectado antes de limpiar (manual o vía webhook).
+  // ── EL BORRADO, en una sola transacción ────────────────────────────────────
+  //
+  // La cadena entera va acá dentro: form_tokens/level_test_sessions
+  // (assignment_id) → class_analyses/form_tokens/level_test_sessions
+  // (student_id) → student_profiles → assignments → re-verificación → students.
+  // Si algo falla, Postgres revierte hasta el primer update y esta llamada lanza:
+  // el alumno se queda exactamente como estaba, nunca a medias.
+  //
+  // FINANZAS INTACTAS: class_records y class_join_logs ni se tocan (no tienen
+  // student_id, cruzan por student_name) y class_analyses se nulifica en vez de
+  // borrarse — es el segundo factor de verificación del pago en lib/finance.ts.
+  // Tampoco se tocan scoring_events ni notifications.
+  const informe = await runDeleteCascade(idsABorrar, studentName, false);
+
+  console.log(
+    `[dbDeleteStudent] "${studentName}" eliminado en transacción: ` +
+    `borrado ${JSON.stringify(informe.deleted)}, ` +
+    `referencias soltadas ${JSON.stringify(informe.cleared)}, ` +
+    `conservado para finanzas ${JSON.stringify(informe.preserved)}.`,
+  );
+  for (const rep of informe.repaired) {
+    console.log(`[dbDeleteStudent] Vínculo reparado: "${rep.student_name}" · ${rep.teacher} → ficha ${rep.reapuntada_a}`);
+  }
+
+  // ── A PARTIR DE ACÁ, el alumno ya no existe ────────────────────────────────
+  // Todo lo que sigue es rastro y limpieza visual. Va DESPUÉS a propósito: antes
+  // se registraba la baja y se vaciaba el grid primero, así que cada intento
+  // fallido dejaba al profesor sin horario y sumaba una baja duplicada (Virginia
+  // Alfonso Villal acumuló 18 filas en student_dropouts, una por reintento).
+
+  // Registrar la baja (churn): sin esto la retención no podría contarla.
+  // `reason`: 'webhook' si lo dispara el sistema, 'manual' si lo hace un admin.
+  // IDEMPOTENTE: si ya había una baja de este alumno con este profesor no se
+  // vuelve a insertar, porque duplicarla le hunde la retención al profesor.
+  if (teacherIds.size > 0) {
+    const now = new Date().toISOString();
+    const reason = createdBy === 'sistema' ? 'webhook' : 'manual';
+
+    const { data: yaRegistradas } = await supabase
+      .from('student_dropouts').select('teacher_id').in('student_id', idsABorrar);
+    const yaTiene = new Set((yaRegistradas ?? []).map(r => r.teacher_id));
+
+    const dropoutRows = [...teacherIds].filter(tid => !yaTiene.has(tid)).map((tid, i) => ({
+      id:           `drop_${Date.now()}_${i}`,
+      teacher_id:   tid,
+      student_id:   studentId,
+      student_name: studentName,
+      start_date:   startByTeacher.get(tid) ?? null,
+      dropped_at:   now,
+      reason,
+      created_by:   createdBy ?? null,
+      had_open_alert:    alerta?.hasOpenAlert ?? false,
+      unattended_alerts: alerta?.unattended ?? 0,
+    }));
+
+    if (dropoutRows.length > 0) {
+      let { error: dropErr } = await supabase.from('student_dropouts').insert(dropoutRows);
+      // Migración sin correr: la baja se registra igual, sin el marcador.
+      if (dropErr && (dropErr.code === '42703' || dropErr.code === 'PGRST204')) {
+        console.warn('[dbDeleteStudent] student_dropouts sin las columnas de alertas. Corré supabase-interventions.sql.');
+        ({ error: dropErr } = await supabase.from('student_dropouts').insert(
+          dropoutRows.map(({ had_open_alert, unattended_alerts, ...base }) => {
+            void had_open_alert; void unattended_alerts;
+            return base;
+          }),
+        ));
+      }
+      if (dropErr) console.error('[dbDeleteStudent] Error al registrar la baja (churn):', dropErr);
+    }
+    if (yaTiene.size > 0) {
+      console.log(`[dbDeleteStudent] ${yaTiene.size} baja(s) de "${studentName}" ya estaban registradas: no se duplican.`);
+    }
+  }
+
+  // Notificar a cada profesor afectado (manual o vía webhook).
   if (createdBy && teacherIds.size > 0) {
     const now = new Date().toISOString();
     const notifRows = [...teacherIds].map((tid, i) => ({
@@ -1930,6 +1934,7 @@ export async function dbDeleteStudent(
     await supabase.from('notifications').insert(notifRows);
   }
 
+  // Liberar las celdas del grid de cada profesor.
   for (const teacherId of teacherIds) {
     const grid = await dbGetTeacherGrid(teacherId);
     const updated: Grid = { ...grid };
@@ -1969,93 +1974,9 @@ export async function dbDeleteStudent(
     }
   }
 
-  // Se eliminan assignments + student_profiles + students (y se liberan las
-  // celdas del grid). El resto de referencias se nulifican, no se borran.
-  //
-  // IMPORTANTE — historial intacto: NO se borran class_records (capturas) ni
-  // class_join_logs (ingresos), porque son la base del cálculo de finanzas del
-  // mes en curso y de meses anteriores. Aunque el alumno ya no exista en
-  // `students`, sus clases ya dadas deben seguir contando para el pago al
-  // profesor (ver lib/finance.ts → "orphan history"). Tampoco se tocan
-  // scoring_events (ej. bonos ya cobrados) ni notifications.
-  //
-  // Borrado por id sobre TODAS las fichas (antes solo `studentId`: las
-  // assignments que apuntaban a una ficha duplicada sobrevivían y bloqueaban el
-  // DELETE de students). Las filas de nombre ajeno ya no están acá: el
-  // pre-flight las re-apuntó a su dueño o abortó, así que este DELETE es seguro.
-  const { error: asgErr } = await supabase.from('assignments').delete().in('student_id', idsABorrar);
-  if (asgErr) {
-    throw new Error(
-      `No se pudieron borrar las asignaciones de "${studentName}": ${asgErr.message}. ` +
-      `Su copia de seguridad está guardada y la ficha NO se ha borrado.`,
-    );
-  }
-
-  // Y por nombre, para las assignments huérfanas cuyo student_id no apunta a
-  // ninguna ficha conocida. Normalizado (_nk), igual que el resto de la función:
-  // antes era `eq()` exacto y se dejaba atrás cualquier variante de mayúsculas o
-  // espacios sobrantes.
-  const { data: porNombre } = await supabase
-    .from('assignments').select('id, student_name').ilike('student_name', studentName);
-  const idsPorNombre = (porNombre ?? []).filter(r => _nk(r.student_name) === _nk(studentName)).map(r => r.id);
-  if (idsPorNombre.length > 0) {
-    await supabase.from('assignments').delete().in('id', idsPorNombre);
-  }
-
-  // ── Hijos con FK a students(id) ────────────────────────────────────────────
-  //
-  // class_analyses, form_tokens, student_profiles y level_test_sessions
-  // referencian students(id) SIN `on delete cascade`. Mientras existan, Postgres
-  // RECHAZA el DELETE de `students`. Y como el borrado no comprobaba el error, el
-  // alumno se quedaba en la base: perdía sus assignments, se le liberaba el grid
-  // y reaparecía en la lista de Alumnos (y, ya sin asignación, en "Sin asignar").
-  //
-  // Los análisis NO se borran: se les quita el vínculo. Son el segundo factor de
-  // verificación del pago (ver el comentario de la cabecera). El resto de
-  // referencias se nulifican por el mismo motivo: liberar la FK sin perder el
-  // rastro (test de nivel, formulario inicial).
-  await releaseStudentReferences(idsABorrar, studentName);
-
-  // La ficha SÍ se borra (ya está copiada en el backup): no la usa finanzas y es
-  // justo lo que no debe quedar visible para nadie.
-  const { error: perfErr } = await supabase.from('student_profiles').delete().in('id', idsABorrar);
-  if (perfErr && perfErr.code !== '42P01') console.error('[dbDeleteStudent] No se pudo borrar student_profiles por id:', perfErr);
-  const { error: perfErr2 } = await supabase.from('student_profiles').delete().in('student_id', idsABorrar);
-  if (perfErr2 && perfErr2.code !== '42P01') console.error('[dbDeleteStudent] No se pudo borrar student_profiles por student_id:', perfErr2);
-
-  // RED DE SEGURIDAD: ¿queda algo apuntando a la ficha? `assignments` es la única
-  // FK que puede quedar viva (el resto se nulificó o se borró), así que se
-  // vuelve a mirar. Si quedara algo, lanzar ACÁ es mucho mejor que dejar que
-  // reviente el DELETE: el mensaje dice qué fila lo impide en vez de un error
-  // críptico de Postgres, y es el mismo estado en el que quedó Diego Ruiz.
-  const { data: restantes } = await supabase
-    .from('assignments').select('id, student_name, teacher_name').in('student_id', idsABorrar);
-  if ((restantes ?? []).length > 0) {
-    throw new Error(
-      `No se puede eliminar a "${studentName}": quedan ${restantes!.length} fila(s) en assignments ` +
-      `apuntando a su ficha:\n` +
-      restantes!.map(r => `  · ${r.student_name} · ${r.teacher_name} (assignment ${r.id})`).join('\n') +
-      `\nSu copia de seguridad está guardada y la ficha NO se ha borrado.`,
-    );
-  }
-
-  // CRÍTICO: comprobar el error. Un fallo acá deja al alumno vivo en la
-  // plataforma después de haberle quitado todo lo demás, que es el peor estado
-  // posible. Se lanza para que la UI lo diga en vez de cantar un éxito falso.
-  const { error: stuErr } = await supabase.from('students').delete().in('id', idsABorrar);
-  if (stuErr) {
-    console.error('[dbDeleteStudent] El DELETE de students falló:', stuErr);
-    throw new Error(
-      `No se pudo eliminar a "${studentName}" de la tabla de alumnos: ${stuErr.message}. ` +
-      `Su copia de seguridad ya está guardada; revisá qué tabla sigue apuntando a su ficha.`,
-    );
-  }
-
   if (idsABorrar.length > 1) {
     console.log(`[dbDeleteStudent] "${studentName}" tenía ${idsABorrar.length} fichas duplicadas: ${idsABorrar.join(', ')}`);
   }
-
-  console.log(`[dbDeleteStudent] Alumno "${studentName}" eliminado correctamente (historial de clases/finanzas preservado)`);
 
   // Refrescar retención/score/bloqueo de los profesores afectados: ahora que la
   // baja quedó registrada, su tasa de retención cambia.
