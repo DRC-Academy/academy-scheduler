@@ -1030,7 +1030,7 @@ type TeacherTab = typeof TEACHER_TABS[number];
 
 function TeacherContent() {
   const { user } = useAuth();
-  const { teachers, students, assignments, scoringEvents, notifications, classRecords, getTeacherGrid, updateTeacherGrid, addStudent, addAssignment, updateAssignmentStartDate, updateAssignmentSlots, reloadAll, updateTeacherSpecialties, loadNotifications, markNotificationRead, updateMeetLink, addRecoveryClass, removeAssignment, deleteStudent } = useTeachers();
+  const { teachers, students, assignments, scoringEvents, notifications, classRecords, getTeacherGrid, updateTeacherGrid, addStudent, addAssignment, updateAssignmentStartDate, updateAssignmentSlots, reloadAll, updateTeacherSpecialties, loadNotifications, markNotificationRead, updateMeetLink, addRecoveryClass, removeAssignment } = useTeachers();
   const [activeTab, setActiveTab] = useState<TeacherTab>('calendar');
 
   // El campanario del header navega a /teacher?tab=notifications. Sincronizamos
@@ -1090,12 +1090,12 @@ function TeacherContent() {
   // Asistencias / Próximas clases / Mis alumnos a los alumnos sin celdas.
   const [myAssignments, setMyAssignments] = useState<Assignment[]>([]);
 
-  // Alumno que se quedó sin horario Y con la suscripción cancelada: se propone
-  // eliminarlo. Se pregunta porque el borrado es irreversible y el calendario
-  // autoguarda en cada clic — mover a alguien de hora deja un instante con cero
-  // celdas, y ahí no se puede borrar a nadie por su cuenta.
+  // Alumno que se quedó sin horario Y con la suscripción cancelada: se le AVISA
+  // al profesor de lo que acaba de pasar. Nada más: el profesor desvincula, no
+  // elimina. El aviso se limita al caso de suscripción cancelada porque el
+  // calendario autoguarda en cada clic y mover a alguien de hora deja un instante
+  // con cero celdas — sin ese filtro saltaría en cada reorganización de horarios.
   const [removalPrompt, setRemovalPrompt] = useState<StudentLeftGrid | null>(null);
-  const [removingStudent, setRemovingStudent] = useState(false);
 
   // Firma de la ocupación: cambia solo si cambia QUIÉN ocupa QUÉ celda. Sin esto
   // habría que releer en cada repintado del calendario.
@@ -1128,29 +1128,20 @@ function TeacherContent() {
     setSaveStatus('saved');
     setTimeout(() => setSaveStatus('idle'), 2000);
 
-    // Alguien se quedó sin ninguna celda. Si su suscripción está CANCELADA se
-    // ofrece eliminarlo del sistema; en cualquier otro estado no pasa nada y
-    // simplemente queda "sin tomar clases", para que mover a un alumno de horario
-    // (liberar una celda y ocupar otra) nunca borre a nadie.
+    // Alguien se quedó sin ninguna celda: ya está DESVINCULADO de su horario, y
+    // eso es todo lo que pasa. Sigue siendo alumno de este profesor y aparece en
+    // "Mis alumnos" como «Actualmente sin tomar clases» (getStudentsForTeacher →
+    // activo:false), listo para volver a asignarle una celda cuando regrese.
+    //
+    // Si además su suscripción está CANCELADA se le avisa, porque en ese caso el
+    // equipo probablemente tenga que darlo de baja de la plataforma — algo que
+    // hace el admin desde "Alumnos", nunca el profesor desde acá.
     for (const s of sinHorario) {
       if (!s.studentEmail) continue;
       try {
         const info = await checkSubscription(s.studentEmail);
         if (info.status === 'cancelled') { setRemovalPrompt(s); return; }
-      } catch { /* si Woo falla, no se propone borrar nada */ }
-    }
-  }
-
-  /** Confirmación del borrado propuesto (suscripción cancelada). */
-  async function confirmRemoval() {
-    if (!removalPrompt) return;
-    setRemovingStudent(true);
-    try {
-      await deleteStudent(removalPrompt.studentId, removalPrompt.studentName, 'sistema');
-      setRemovalPrompt(null);
-      await reloadAll();
-    } finally {
-      setRemovingStudent(false);
+      } catch { /* si Woo falla, no se avisa de nada: la desvinculación ya está hecha */ }
     }
   }
 
@@ -1630,37 +1621,34 @@ function TeacherContent() {
           </div>
         )}
 
-        {/* Alumno sin horario Y con la suscripción cancelada. Es la ÚNICA vía por
-            la que el calendario puede eliminar a alguien, y siempre preguntando:
-            con cualquier otro estado de suscripción no aparece nada y el profesor
-            puede reorganizar horarios con total tranquilidad. */}
+        {/* Alumno sin horario Y con la suscripción cancelada. AVISO, no decisión:
+            el calendario del profesor DESVINCULA (libera las celdas) y nunca
+            elimina a nadie de la plataforma. Con cualquier otro estado de
+            suscripción no aparece nada y el profesor reorganiza horarios con
+            total tranquilidad. */}
         {removalPrompt && (
           <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 90, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
-            onClick={e => { if (e.target === e.currentTarget && !removingStudent) setRemovalPrompt(null); }}
+            onClick={e => { if (e.target === e.currentTarget) setRemovalPrompt(null); }}
             role="alertdialog" aria-modal="true">
             <div style={{ background: '#F7F7F5', border: '2px solid #FFC400', borderRadius: 16, padding: 26, width: '100%', maxWidth: 440 }}>
               <div style={{ fontSize: 17, fontWeight: 700, color: '#1a1c1a', marginBottom: 8 }}>
-                {removalPrompt.studentName} se quedó sin horario
+                {removalPrompt.studentName} quedó desvinculado de tu horario
               </div>
               <div style={{ fontSize: 13.5, color: '#5f6360', lineHeight: 1.6, marginBottom: 14 }}>
                 Lo sacaste del calendario y su suscripción figura como <b style={{ color: '#c73a28' }}>cancelada</b>.
-                Podés eliminarlo del sistema o dejarlo asignado por si vuelve.
+                Su franja ya está libre para otro alumno.
               </div>
-              <div style={{ fontSize: 12.5, color: '#5f6360', background: 'rgba(255,196,0,0.12)', border: '1px solid rgba(255,196,0,0.5)', borderRadius: 8, padding: '10px 12px', marginBottom: 18, lineHeight: 1.55 }}>
-                Si lo eliminás se borran su ficha y su asignación, y se registra la baja.
-                <b> Tus clases ya dadas se conservan y se pagan igual.</b> Si solo lo estás
-                moviendo de horario, elegí «Mantener asignado».
+              <div style={{ fontSize: 12.5, color: '#3f423f', background: 'rgba(30,158,58,0.10)', border: '1px solid rgba(30,158,58,0.45)', borderRadius: 8, padding: '10px 12px', marginBottom: 18, lineHeight: 1.55 }}>
+                <b>Sigue siendo tu alumno.</b> Lo tenés en «Mis alumnos» con la etiqueta
+                «Actualmente sin tomar clases», con su ficha y su historial intactos: si
+                vuelve, solo tenés que asignarle un horario otra vez.
+                <b> Tus clases ya dadas se conservan y se pagan igual.</b> Darlo de baja de
+                la plataforma lo hace el equipo desde «Alumnos».
               </div>
-              <div style={{ display: 'flex', gap: 10 }}>
-                <button onClick={() => setRemovalPrompt(null)} disabled={removingStudent}
-                  style={{ flex: 1, padding: '11px', borderRadius: 9, border: '1px solid var(--border)', background: '#fff', color: '#3f423f', cursor: removingStudent ? 'not-allowed' : 'pointer', fontSize: 13.5, fontWeight: 600, fontFamily: 'inherit' }}>
-                  Mantener asignado
-                </button>
-                <button onClick={confirmRemoval} disabled={removingStudent}
-                  style={{ flex: 1, padding: '11px', borderRadius: 9, border: 'none', background: removingStudent ? '#d8b8b2' : '#c73a28', color: '#fff', cursor: removingStudent ? 'not-allowed' : 'pointer', fontSize: 13.5, fontWeight: 700, fontFamily: 'inherit' }}>
-                  {removingStudent ? 'Eliminando…' : 'Eliminar del sistema'}
-                </button>
-              </div>
+              <button onClick={() => setRemovalPrompt(null)}
+                style={{ width: '100%', padding: '11px', borderRadius: 9, border: 'none', background: '#1E9E3A', color: '#fff', cursor: 'pointer', fontSize: 13.5, fontWeight: 700, fontFamily: 'inherit' }}>
+                Entendido
+              </button>
             </div>
           </div>
         )}

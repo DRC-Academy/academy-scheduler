@@ -1569,9 +1569,138 @@ async function captureChurnOnDropout(args: {
 }
 
 /**
- * Borra un alumno: assignments, ficha en `students`, celdas del calendario de
- * cada profesor, registro de baja y foto de churn. El HISTORIAL (class_records,
- * class_join_logs, scoring_events) se conserva: es la base contable.
+ * Copia de seguridad COMPLETA de un alumno, ANTES de eliminarlo de la
+ * plataforma. Solo interviene en el borrado del ADMIN: la desvinculación del
+ * profesor no borra nada, así que no genera backup.
+ *
+ * LANZA si el guardado falla. Es deliberado: sin backup no se borra. Perder la
+ * ficha de un alumno que vuelve en tres meses no tiene arreglo, y el admin
+ * prefiere un error a un borrado silencioso e irreversible.
+ *
+ * Requiere haber corrido supabase-student-backup.sql.
+ */
+export async function dbBackupStudentBeforeDelete(
+  studentId: string, studentName: string, deletedBy?: string, alsoStudentIds: string[] = [],
+): Promise<void> {
+  const ids = [...new Set([studentId, ...alsoStudentIds].filter(Boolean))];
+
+  // Se busca por id Y por nombre a propósito: hay fichas duplicadas y filas
+  // huérfanas cuyo student_id no apunta a ninguna de las ids conocidas. En un
+  // backup vale más de sobra que de menos.
+  const [studentsRes, profilesRes, analysesRes, asgById, asgByName] = await Promise.all([
+    supabase.from('students').select('*').in('id', ids),
+    supabase.from('student_profiles').select('*').in('student_id', ids),
+    supabase.from('class_analyses').select('*').in('student_id', ids),
+    supabase.from('assignments').select('*').in('student_id', ids),
+    supabase.from('assignments').select('*').eq('student_name', studentName),
+  ]);
+
+  // Los análisis huérfanos (student_id ya en null por una baja anterior) solo se
+  // localizan por nombre. Se añaden sin duplicar.
+  const analysesByName = await supabase.from('class_analyses').select('*').eq('student_name', studentName);
+  const analyses = [...(analysesRes.data ?? [])];
+  const vistos = new Set(analyses.map(r => r.id));
+  for (const row of (analysesByName.data ?? [])) if (!vistos.has(row.id)) { analyses.push(row); vistos.add(row.id); }
+
+  // Ficha por id o por nombre (student_profiles.id === student_id en el alta
+  // normal, pero las fichas antiguas no siempre rellenaron student_id).
+  const profiles = [...(profilesRes.data ?? [])];
+  if (profiles.length === 0) {
+    const porId = await supabase.from('student_profiles').select('*').in('id', ids);
+    profiles.push(...(porId.data ?? []));
+  }
+
+  const assignments = [...(asgById.data ?? [])];
+  const asgVistas = new Set(assignments.map(r => r.id));
+  for (const row of (asgByName.data ?? [])) if (!asgVistas.has(row.id)) { assignments.push(row); asgVistas.add(row.id); }
+
+  const principal = (studentsRes.data ?? []).find(r => r.id === studentId) ?? (studentsRes.data ?? [])[0] ?? null;
+
+  const { error } = await supabase.from('deleted_students_backup').insert({
+    id:                  `delbak_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    original_student_id: studentId,
+    student_name:        studentName,
+    student_email:       principal?.email ?? assignments[0]?.student_email ?? null,
+    plan:                principal?.plan ?? assignments[0]?.plan ?? null,
+    level:               principal?.level ?? assignments[0]?.student_level ?? null,
+    // El registro COMPLETO, no un resumen: si hay que restaurarlo, el jsonb tiene
+    // que bastar por sí solo. Si había fichas duplicadas se guardan todas.
+    student_data:        (studentsRes.data ?? []).length > 1 ? studentsRes.data : (principal ?? null),
+    profile_data:        profiles.length > 1 ? profiles : (profiles[0] ?? null),
+    class_analyses_data: analyses,
+    assignments_data:    assignments,
+    deleted_by:          deletedBy ?? null,
+    deleted_at:          new Date().toISOString(),
+  });
+
+  if (error) {
+    if (error.code === '42P01') {
+      throw new Error(
+        'Falta la tabla deleted_students_backup: corré supabase-student-backup.sql antes de eliminar alumnos. ' +
+        'No se ha borrado nada.',
+      );
+    }
+    console.error('[dbBackupStudentBeforeDelete] No se pudo guardar el backup:', error);
+    throw new Error(`No se pudo guardar la copia de seguridad de "${studentName}": ${error.message}. No se ha borrado nada.`);
+  }
+
+  console.log(
+    `[dbBackupStudentBeforeDelete] Backup de "${studentName}": ` +
+    `${(studentsRes.data ?? []).length} ficha(s), ${profiles.length} perfil(es), ` +
+    `${analyses.length} análisis de clase, ${assignments.length} asignación(es).`,
+  );
+}
+
+/**
+ * Suelta las referencias a `students(id)` que impedirían borrar al alumno, SIN
+ * perder los datos: pone `student_id = null` en cada tabla hija.
+ *
+ * `class_analyses` es el caso que importa: conserva student_name, teacher_id,
+ * class_date y transcript, que es TODO lo que lee lib/finance.ts. Nulificar el
+ * id no cambia ni un euro de la liquidación; borrar las filas, sí.
+ *
+ * Best-effort por tabla: si alguna no existe todavía (migración sin correr) se
+ * avisa y se sigue. El error que de verdad importa lo caza el DELETE de
+ * `students`, que ahora sí se comprueba.
+ */
+async function releaseStudentReferences(ids: string[], studentName: string): Promise<void> {
+  const tablas = ['class_analyses', 'form_tokens', 'level_test_sessions'] as const;
+
+  for (const tabla of tablas) {
+    const { error } = await supabase.from(tabla).update({ student_id: null }).in('student_id', ids);
+    if (!error) continue;
+    // Tabla o columna inexistentes: la migración de ese módulo no está corrida.
+    if (error.code === '42P01' || error.code === '42703' || error.code === 'PGRST204') {
+      console.warn(`[dbDeleteStudent] ${tabla} no tiene student_id (migración pendiente). Se ignora.`);
+      continue;
+    }
+    console.error(`[dbDeleteStudent] No se pudo soltar la referencia de ${tabla} para "${studentName}":`, error);
+  }
+}
+
+/**
+ * ELIMINACIÓN TOTAL de un alumno (acción del ADMIN, o del webhook de Woo).
+ *
+ * NO es lo que hace el profesor desde su calendario: allí el alumno solo se
+ * desvincula del horario y sigue siendo suyo («Actualmente sin tomar clases»,
+ * ver reconcileAssignmentStatus + getStudentsForTeacher). El profesor NO puede
+ * llegar hasta acá.
+ *
+ * Orden (importa, por las claves foráneas contra students(id)):
+ *   1. BACKUP completo. Si falla, no se borra nada.
+ *   2. Registro de baja (student_dropouts) + foto de churn + avisos.
+ *   3. Assignments y celdas del grid de cada profesor.
+ *   4. Hijos con FK a students: class_analyses / form_tokens /
+ *      level_test_sessions se NULIFICAN (no se borran), student_profiles se borra.
+ *   5. `students`, comprobando el error.
+ *
+ * FINANZAS INTACTAS: class_records, class_join_logs, scoring_events y
+ * class_analyses se conservan enteros. Los análisis son el segundo factor de
+ * verificación del pago (lib/finance.ts): borrarlos pasaría de 'pagable' a
+ * 'a_revisar' las clases ya dadas del mes en curso. Finanzas empareja por
+ * teacher_id + student_name, nunca por student_id, así que nulificarlo es
+ * inocuo. El alumno desaparece igual de todas las vistas porque esas filas solo
+ * se leen a través de su ficha, que ya no existe.
  *
  * `alsoStudentIds`: ids ADICIONALES del mismo alumno cuando está duplicado en
  * `students` (dos altas de la misma persona). Sin esto quedaba la fila huérfana
@@ -1581,6 +1710,9 @@ export async function dbDeleteStudent(
   studentId: string, studentName: string, createdBy?: string, alsoStudentIds: string[] = [],
 ): Promise<AffectedTeacher[]> {
   const firstName = studentName.split(' ')[0];
+
+  // PRIMERO el backup, antes de tocar nada. Lanza si falla: sin copia no se borra.
+  await dbBackupStudentBeforeDelete(studentId, studentName, createdBy, alsoStudentIds);
 
   const [byId, byName] = await Promise.all([
     supabase.from('assignments').select('teacher_id, start_date, created_at').eq('student_id', studentId),
@@ -1731,7 +1863,8 @@ export async function dbDeleteStudent(
     }
   }
 
-  // Solo se eliminan assignments + students (y se liberan las celdas del grid).
+  // Se eliminan assignments + student_profiles + students (y se liberan las
+  // celdas del grid). El resto de referencias se nulifican, no se borran.
   //
   // IMPORTANTE — historial intacto: NO se borran class_records (capturas) ni
   // class_join_logs (ingresos), porque son la base del cálculo de finanzas del
@@ -1762,7 +1895,40 @@ export async function dbDeleteStudent(
   // duplicadas. Antes solo se borraba `studentId` y la duplicada quedaba
   // huérfana en `students`, lista para volver a generar el mismo lío.
   const idsABorrar = [...new Set([studentId, ...alsoStudentIds].filter(Boolean))];
-  await supabase.from('students').delete().in('id', idsABorrar);
+
+  // ── Hijos con FK a students(id) ────────────────────────────────────────────
+  //
+  // class_analyses, form_tokens, student_profiles y level_test_sessions
+  // referencian students(id) SIN `on delete cascade`. Mientras existan, Postgres
+  // RECHAZA el DELETE de `students`. Y como el borrado no comprobaba el error, el
+  // alumno se quedaba en la base: perdía sus assignments, se le liberaba el grid
+  // y reaparecía en la lista de Alumnos (y, ya sin asignación, en "Sin asignar").
+  //
+  // Los análisis NO se borran: se les quita el vínculo. Son el segundo factor de
+  // verificación del pago (ver el comentario de la cabecera). El resto de
+  // referencias se nulifican por el mismo motivo: liberar la FK sin perder el
+  // rastro (test de nivel, formulario inicial).
+  await releaseStudentReferences(idsABorrar, studentName);
+
+  // La ficha SÍ se borra (ya está copiada en el backup): no la usa finanzas y es
+  // justo lo que no debe quedar visible para nadie.
+  const { error: perfErr } = await supabase.from('student_profiles').delete().in('id', idsABorrar);
+  if (perfErr && perfErr.code !== '42P01') console.error('[dbDeleteStudent] No se pudo borrar student_profiles por id:', perfErr);
+  const { error: perfErr2 } = await supabase.from('student_profiles').delete().in('student_id', idsABorrar);
+  if (perfErr2 && perfErr2.code !== '42P01') console.error('[dbDeleteStudent] No se pudo borrar student_profiles por student_id:', perfErr2);
+
+  // CRÍTICO: comprobar el error. Un fallo acá deja al alumno vivo en la
+  // plataforma después de haberle quitado todo lo demás, que es el peor estado
+  // posible. Se lanza para que la UI lo diga en vez de cantar un éxito falso.
+  const { error: stuErr } = await supabase.from('students').delete().in('id', idsABorrar);
+  if (stuErr) {
+    console.error('[dbDeleteStudent] El DELETE de students falló:', stuErr);
+    throw new Error(
+      `No se pudo eliminar a "${studentName}" de la tabla de alumnos: ${stuErr.message}. ` +
+      `Su copia de seguridad ya está guardada; revisá qué tabla sigue apuntando a su ficha.`,
+    );
+  }
+
   if (idsABorrar.length > 1) {
     console.log(`[dbDeleteStudent] "${studentName}" tenía ${idsABorrar.length} fichas duplicadas: ${idsABorrar.join(', ')}`);
   }

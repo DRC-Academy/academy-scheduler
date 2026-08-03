@@ -303,6 +303,10 @@ function DeleteStudentModal({ student, teacherNames, onUnassign, onConfirm, onCa
   const [loadingPhone, setLoadingPhone] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [unassigning, setUnassigning] = useState(false);
+  // El borrado ahora LANZA si el backup o el DELETE fallan (ver dbDeleteStudent).
+  // Sin esto el modal se quedaba en "Eliminando…" para siempre y el admin creía
+  // que había funcionado.
+  const [error, setError] = useState<string | null>(null);
 
   // If there's no local phone, try to get it from WooCommerce (billing.phone).
   useEffect(() => {
@@ -326,7 +330,7 @@ function DeleteStudentModal({ student, teacherNames, onUnassign, onConfirm, onCa
       <div style={{ background: 'var(--bg-surface)', border: '1px solid #35405a', borderRadius: 14, padding: 24, width: '100%', maxWidth: 420 }}>
         <div style={{ fontSize: 24, marginBottom: 10 }}>🗑️</div>
         <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)', marginBottom: 8 }}>
-          Dar de baja a {student.name}
+          Eliminar a {student.name} de la plataforma
         </div>
         <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 16, lineHeight: 1.6 }}>
           Hay dos opciones y no hacen lo mismo. En casi todos los casos quieres la primera.
@@ -334,7 +338,7 @@ function DeleteStudentModal({ student, teacherNames, onUnassign, onConfirm, onCa
 
         {/* Opción por defecto: desvincular. El alumno sigue existiendo y aparece en
             "Sin asignar" del setter, listo para reasignar, con su historial intacto. */}
-        <div style={{ border: '1px solid rgba(30,158,58,0.35)', background: 'rgba(30,158,58,0.06)', borderRadius: 10, padding: '12px 14px', marginBottom: 10 }}>
+        <div style={{ border: '1px solid rgba(30,158,58,0.35)', background: 'rgba(30,158,58,0.06)', borderRadius: 10, padding: '12px 14px', marginBottom: 12 }}>
           <div style={{ fontWeight: 700, fontSize: 13.5, color: '#1f7a3d', marginBottom: 4 }}>Quitar el profesor</div>
           <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.55, marginBottom: 10 }}>
             Se libera {teacherNames.length > 1 ? 'su horario con ' : 'su horario con '}
@@ -350,10 +354,26 @@ function DeleteStudentModal({ student, teacherNames, onUnassign, onConfirm, onCa
           </button>
         </div>
 
-        <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.6, marginBottom: 14 }}>
-          O bien <b>eliminarlo del sistema</b>: se borra su ficha y desaparece de la lista de alumnos.
-          Solo si se ha dado de baja de verdad. El historial de clases se conserva para el pago a los profesores.
+        {/* Eliminación TOTAL. El texto tiene que dejar claras las tres cosas que el
+            admin necesita saber antes de pulsar: desaparece para todos, se guarda
+            copia, y la nómina del mes no se toca. */}
+        <div style={{ border: '1px solid rgba(255,196,0,0.55)', background: 'rgba(255,196,0,0.10)', borderRadius: 10, padding: '12px 14px', marginBottom: 14 }}>
+          <div style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--text-primary)', marginBottom: 4 }}>
+            Eliminar de la plataforma
+          </div>
+          <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+            Esta acción elimina al alumno por completo: dejará de aparecer para ti y para
+            su profesor, y su horario quedará libre. Se guardará una <b>copia de seguridad
+            de su ficha</b> por si regresa en el futuro. Los datos de <b>finanzas del mes
+            en curso no se ven afectados</b>.
+          </div>
         </div>
+
+        {error && (
+          <div style={{ border: '1px solid rgba(239,68,68,0.4)', background: 'rgba(239,68,68,0.1)', borderRadius: 10, padding: '10px 12px', marginBottom: 14, fontSize: 12.5, color: '#dc2626', lineHeight: 1.55 }}>
+            {error}
+          </div>
+        )}
 
         {/* WhatsApp notice */}
         <div style={{ marginBottom: 18 }}>
@@ -376,9 +396,21 @@ function DeleteStudentModal({ student, teacherNames, onUnassign, onConfirm, onCa
             style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: deleting || unassigning ? 'not-allowed' : 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
             Cancelar
           </button>
-          <button onClick={async () => { setDeleting(true); await onConfirm(); }} disabled={deleting || unassigning}
+          <button
+            onClick={async () => {
+              setDeleting(true); setError(null);
+              try {
+                await onConfirm();
+              } catch (e) {
+                // Sin backup no se borra: el mensaje viene de dbDeleteStudent y ya
+                // dice si quedó algo a medias. Se muestra tal cual.
+                setError((e as Error).message || 'No se pudo eliminar al alumno.');
+                setDeleting(false);
+              }
+            }}
+            disabled={deleting || unassigning}
             style={{ flex: 2, padding: '10px', borderRadius: 8, border: '1px solid rgba(239,68,68,0.35)', background: 'rgba(239,68,68,0.15)', color: '#dc2626', cursor: deleting || unassigning ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
-            {deleting ? 'Eliminando...' : 'Eliminar del sistema'}
+            {deleting ? 'Eliminando...' : 'Eliminar alumno'}
           </button>
         </div>
       </div>
