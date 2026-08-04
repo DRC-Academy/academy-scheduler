@@ -11,6 +11,7 @@ import { resend, hasResendKey } from '@/lib/resend';
 import { supabase } from '@/lib/supabase';
 import { MILESTONE_SLIDES } from '@/lib/milestones';
 import { AVOID_ITEMS, NATURAL_REMINDER, type InterventionSuggestion } from '@/lib/interventions';
+import { cleanAiText } from '@/lib/textCleanup';
 
 const FROM = 'DRC Academy <notificaciones@drcacademy.com>';
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '') || 'https://academy-scheduler-aqpt.vercel.app';
@@ -456,6 +457,79 @@ export async function sendBonusAvailableEmail(teacher: TeacherLike, studentName:
     `Bono disponible por ${studentName}`,
   );
   return send('sendBonusAvailableEmail', teacher, subject, html);
+}
+
+// ═══ K) Recordatorio diario: transcripts pendientes ═══════════════════════════
+//
+// Lo dispara el cron de fin de día (app/api/cron/daily-transcript-reminder) con
+// las clases que HOY entraron a finanzas por el ingreso pero siguen sin
+// transcript: están en "pendiente" y todavía no se cobran.
+//
+// UN email por profesor con TODAS sus clases del día, nunca uno por clase.
+
+export interface PendingTranscriptClass {
+  studentName: string;
+  /** Hora de la clase ("17:00" o "17:00 - 19:00" si fue sesión de 2h). */
+  hours?: string;
+  /**
+   * El equipo rechazó el transcript que subió: no es que falte, es que hay que
+   * subir otro. Se dice en la propia línea del alumno para no acusarlo de no
+   * haberlo subido cuando sí lo hizo.
+   */
+  rejected?: boolean;
+}
+
+/**
+ * El texto del correo es fijo y está escrito sin guiones como conectores, pero
+ * pasa igual por cleanAiText: si alguien edita la copia más adelante y mete un
+ * "y así — ya está", se limpia solo en vez de llegar así al profesor.
+ *
+ * Los NOMBRES no se limpian: un nombre no es prosa y "Pérez-López" tiene que
+ * salir tal cual.
+ */
+const copy = (s: string): string => cleanAiText(s);
+
+export async function sendDailyTranscriptReminder(
+  teacher: TeacherLike, classes: PendingTranscriptClass[],
+): Promise<boolean> {
+  if (classes.length === 0) return false;   // sin clases pendientes no se escribe
+
+  const subject = 'Recuerda subir los transcripts de hoy';
+  const varias = classes.length > 1;
+  // Si TODAS son rechazadas, el profesor sí subió algo: la frase no puede decir
+  // que no lo ha subido.
+  const todasRechazadas = classes.every(c => c.rejected);
+  const falta = todasRechazadas ? 'no has subido un transcript válido' : 'no has subido el transcript';
+  const nota = (c: PendingTranscriptClass) =>
+    c.rejected ? ' <span style="color:#9a6516;">· el equipo pidió otro transcript</span>' : '';
+
+  // Un alumno → en la misma frase. Varios → lista con viñetas en amarillo DRC.
+  const lista = varias
+    ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:0 0 16px;">
+  <tr><td style="background-color:#FFF9E0; border-left:4px solid #FFC400; border-radius:8px; padding:14px 18px;">
+${classes.map(c => `    <div style="font-size:14px; color:#1A1A1A; padding:3px 0;">• <strong>${esc(c.studentName)}</strong>${c.hours ? ` <span style="color:#888880;">· ${esc(c.hours)}</span>` : ''}${nota(c)}</div>`).join('\n')}
+  </td></tr>
+</table>`
+    : '';
+
+  const intro = varias
+    ? copy(`Hoy has dado clase con estos alumnos y todavía ${falta} de esas clases:`)
+    : `${copy('Hoy has dado clase con')} <strong>${esc(classes[0].studentName)}</strong>${classes[0].hours ? ` (${esc(classes[0].hours)})` : ''} ${copy(`y todavía ${falta} de esa clase.`)}`;
+
+  const html = baseEmailTemplate(
+    p(`Hola ${esc(teacher.name)}:`) +
+    p(intro) +
+    lista +
+    p(copy('Recuerda que para que la clase quede aprobada y puedas cobrarla, tienes que subir el transcript. Si se te ha olvidado, entra en Fathom, copia el transcript de la clase y pégalo en la ficha del alumno.')) +
+    p(copy('Es rápido y así te aseguras de que todas tus clases queden registradas y se te paguen.')) +
+    ctaButton('Subir transcript', `${APP_URL}/mis-clases`) +
+    p(`${copy('Un saludo,')}<br />${copy('Equipo DRC Academy')}`),
+    varias
+      ? `${classes.length} clases de hoy sin transcript`
+      : `La clase con ${classes[0].studentName} sigue sin transcript`,
+  );
+
+  return send('sendDailyTranscriptReminder', teacher, subject, html);
 }
 
 // ═══ J) Circular del admin ════════════════════════════════════════════════════
