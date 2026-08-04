@@ -35,6 +35,7 @@ import {
 } from '@/lib/teacherClasses';
 import { durationBadgeLabel, hourNum } from '@/lib/sessions';
 import { useClassJoin } from '@/components/JoinClass';
+import { fetchRiskBriefings, briefingFor, type RiskBriefingIndex } from '@/lib/interventionsClient';
 import { AddClassModal, saveTeacherClass, ANALYSIS_FAILED_NOTICE } from '@/components/AddClassModal';
 import { PresentationModal } from '@/components/PresentationModal';
 import FormStatusBadge from '@/components/FormStatusBadge';
@@ -363,6 +364,23 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
   // no respalda.
   const gridOccupancy = useMemo(() => gridOccupancyOfTeacher(teacher), [teacher]);
 
+  // Avisos de riesgo de los alumnos del profesor (lectura ligera: cuatro
+  // columnas de student_profiles, sin los transcripts de la ficha). Alimenta el
+  // pop-up del botón "Ingresar a clase".
+  const [riskBriefings, setRiskBriefings] = useState<RiskBriefingIndex>(new Map());
+  const alumnosDelProfe = useMemo(
+    () => [...new Set(myAssignments.map(a => a.studentName))].sort().join('|'),
+    [myAssignments],
+  );
+  useEffect(() => {
+    let cancelado = false;
+    // Sin alumnos, fetchRiskBriefings devuelve un índice vacío sin consultar nada.
+    fetchRiskBriefings(alumnosDelProfe ? alumnosDelProfe.split('|') : [])
+      .then(idx => { if (!cancelado) setRiskBriefings(idx); })
+      .catch(() => { /* sin aviso: el profesor entra igual a clase */ });
+    return () => { cancelado = true; };
+  }, [alumnosDelProfe]);
+
   const refDate = now ?? new Date();
 
   // Current time in Spain (Europe/Madrid) — the calendar's reference timezone.
@@ -386,6 +404,10 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     onToast: (msg, ms) => showToast(msg, ms),
     getCachedSub: email => subInfo[email],
     onSubResolved: (email, info) => setSubInfo(prev => ({ ...prev, [email]: info })),
+    // Alumnos en riesgo: el protocolo que se le enseña al profesor antes de
+    // abrir el Meet. Si la consulta no llegó todavía, el índice está vacío y el
+    // flujo es exactamente el de siempre.
+    riskFor: name => briefingFor(riskBriefings, name),
   });
   const subEmailForAssignment = join.emailFor;
 

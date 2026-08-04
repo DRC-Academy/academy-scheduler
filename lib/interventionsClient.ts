@@ -5,7 +5,8 @@
 // servidor. Acá el admin únicamente CONSULTA y CIERRA a mano.
 
 import { supabase } from '@/lib/supabase';
-import type { InterventionAuditRow } from '@/lib/interventions';
+import { asIntervention, buildRiskBriefing, type InterventionAuditRow, type RiskBriefing } from '@/lib/interventions';
+import type { RiskSignal } from '@/lib/aiTypes';
 
 const isMissingTable = (e: { code?: string } | null | undefined): boolean =>
   e?.code === '42P01' || e?.code === 'PGRST205' || e?.code === '42703' || e?.code === 'PGRST204';
@@ -33,6 +34,87 @@ export async function fetchInterventionAudits(limit = 300): Promise<AuditsResult
     return { rows: [], missingTable: false };
   }
   return { rows: (data ?? []) as unknown as InterventionAuditRow[], missingTable: false };
+}
+
+// ── Aviso al entrar a clase (pop-up de "Ingresar a clase") ───────────────────
+
+/** Briefings por nombre de alumno normalizado. */
+export type RiskBriefingIndex = Map<string, RiskBriefing>;
+
+const nkName = (s: string) => (s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+
+/**
+ * Lectura LIGERA para el panel de clases del profesor: solo las cinco columnas
+ * que necesita el pop-up, nunca el bundle de la ficha (que arrastra todos los
+ * class_analyses con su transcript entero).
+ *
+ * El filtro por nombre se hace AQUÍ y normalizado, no en la consulta: la ficha y
+ * la assignment del mismo alumno no siempre escriben el nombre igual ("FACU
+ * TEST" contra "Facu Test" existe hoy en la base), y un `.in()` exacto le
+ * habría escondido el protocolo al profesor sin que nadie se enterara. Son unas
+ * decenas de filas de cinco columnas: filtrar en memoria no cuesta nada.
+ */
+export async function fetchRiskBriefings(studentNames: string[]): Promise<RiskBriefingIndex> {
+  const index: RiskBriefingIndex = new Map();
+  const quiero = new Set(studentNames.map(nkName).filter(Boolean));
+  if (quiero.size === 0) return index;
+
+  const { data, error } = await supabase
+    .from('student_profiles')
+    .select('id, student_name, risk_signal, active_intervention, intervention_shown_at');
+
+  if (error) {
+    // Sin las columnas de intervenciones el panel funciona igual: simplemente no
+    // sale el aviso. Nunca debe impedir que el profesor entre a clase.
+    if (isMissingTable(error)) console.warn('[interventionsClient] Faltan columnas de intervenciones. Corré supabase-interventions.sql.');
+    else console.error('[interventionsClient] Error al leer los avisos de riesgo:', error);
+    return index;
+  }
+
+  for (const row of (data ?? []) as unknown as Array<{
+    id: string; student_name: string; risk_signal: string | null;
+    active_intervention: unknown; intervention_shown_at: string | null;
+  }>) {
+    if (!quiero.has(nkName(row.student_name))) continue;
+    const briefing = buildRiskBriefing({
+      studentName:  row.student_name,
+      risk:         (row.risk_signal ?? null) as RiskSignal | null,
+      intervention: asIntervention(row.active_intervention),
+      profileId:    row.id,
+    });
+    if (!briefing) continue;
+    // Varias fichas del mismo alumno: se queda la que tenga protocolo.
+    const previo = index.get(nkName(row.student_name));
+    if (previo && previo.kind === 'protocolo') continue;
+    index.set(nkName(row.student_name), briefing);
+  }
+  return index;
+}
+
+/** Busca el aviso de un alumno en el índice (tolerante al formato del nombre). */
+export function briefingFor(index: RiskBriefingIndex, studentName: string): RiskBriefing | null {
+  return index.get(nkName(studentName)) ?? null;
+}
+
+/**
+ * Deja constancia de que al profesor se le enseñó el protocolo antes de entrar.
+ * Es lo que hace justa la auditoría de la clase siguiente: se juzga contra algo
+ * que consta que vio, y con la marca de cuándo lo vio.
+ *
+ * Best-effort a propósito: si falla, el profesor entra igual a su clase.
+ */
+export async function markInterventionShown(profileId: string): Promise<string | null> {
+  const shownAt = new Date().toISOString();
+  const { error } = await supabase
+    .from('student_profiles')
+    .update({ intervention_shown_at: shownAt })
+    .eq('id', profileId);
+
+  if (error) {
+    console.error('[interventionsClient] No se pudo registrar que se mostró el protocolo:', error);
+    return null;
+  }
+  return shownAt;
 }
 
 export interface OpenAlertState {

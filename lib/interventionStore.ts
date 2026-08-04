@@ -35,6 +35,13 @@ export interface InterventionContext {
 
 const EMPTY_CONTEXT: InterventionContext = { profileId: null, active: null, unattended: 0 };
 
+/** ¿`a` es un instante posterior a `b`? Falso si alguna fecha falta o no parsea. */
+function esPosterior(a: string | null | undefined, b: string | null | undefined): a is string {
+  if (!a || !b) return false;
+  const ta = Date.parse(a), tb = Date.parse(b);
+  return Number.isFinite(ta) && Number.isFinite(tb) && ta > tb;
+}
+
 /**
  * Lee la intervención abierta del alumno antes de analizar la clase nueva.
  *
@@ -48,7 +55,7 @@ export async function loadInterventionContext(args: {
   studentName: string;
   currentAnalysisId?: string | null;
 }): Promise<InterventionContext> {
-  const COLS = 'id, active_intervention, active_intervention_at, unattended_alerts';
+  const COLS = 'id, active_intervention, active_intervention_at, intervention_shown_at, unattended_alerts';
 
   const read = async (cols: string) => {
     if (args.profileId) {
@@ -80,9 +87,20 @@ export async function loadInterventionContext(args: {
   const active = asIntervention(row.active_intervention);
   const sameClass = !!(active?.classAnalysisId && active.classAnalysisId === args.currentAnalysisId);
 
+  // Cuándo se le enseñó el protocolo al profesor (pop-up de "Ingresar a clase").
+  // Solo cuenta si fue DESPUÉS de abrirse la alerta: una marca anterior es de una
+  // intervención ya cerrada y no dice nada de ésta.
+  //
+  // La comparación es por INSTANTE, no por texto: Postgres devuelve la marca como
+  // '...+00:00' y el createdAt del jsonb lo escribe JS como '...Z'. Comparadas
+  // como cadenas, dos formatos distintos del mismo momento (o de un huso con
+  // desfase) dan un resultado arbitrario.
+  const shownAtRaw = typeof row.intervention_shown_at === 'string' ? row.intervention_shown_at : null;
+  const shownAt = esPosterior(shownAtRaw, active?.createdAt) ? shownAtRaw : null;
+
   return {
     profileId:  String(row.id),
-    active:     sameClass ? null : active,
+    active:     sameClass || !active ? null : { ...active, shownAt },
     unattended: Number(row.unattended_alerts ?? 0) || 0,
   };
 }

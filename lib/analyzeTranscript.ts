@@ -30,9 +30,16 @@ export type TranscriptResult = AiResult<TranscriptIA>;
 const INTERVENTION_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['action', 'reconnectHook', 'escalateToSupport', 'channel'],
+  required: ['action', 'steps', 'reconnectHook', 'escalateToSupport', 'channel'],
   properties: {
     action:            { type: 'string',  description: 'Acción concreta y específica para el profesor, una sola, en español de España. Vacío si riskSignal es verde.' },
+    steps: {
+      type: 'array',
+      minItems: 0,
+      maxItems: 4,
+      items: { type: 'string' },
+      description: 'La misma acción desglosada en 2 a 4 pasos accionables y ordenados, cada uno una frase corta que el profesor pueda ejecutar durante la clase. Array vacío si riskSignal es verde.',
+    },
     reconnectHook:     { type: 'string',  description: 'Si el alumno está a 1 o 2 clases de un hito (15 o 30), cómo usar la evaluación de hito como excusa natural para reconectar. Vacío si no aplica.' },
     escalateToSupport: { type: 'boolean', description: 'true solo si el alumno dijo explícitamente que piensa cancelar o dejar las clases.' },
     channel:           { type: 'string',  enum: ['en_clase', 'mensaje_previo', 'escalar_soporte'] },
@@ -98,8 +105,9 @@ Si hay clases anteriores, puntúa la evolución respecto a ellas, no el nivel ab
 Basa el informe únicamente en lo que ocurre en la transcripción. La señal de riesgo es una valoración con consecuencias reales: no la infles por una clase floja aislada ni la rebajes si el alumno expresa que se plantea dejarlo.
 
 SUGERENCIA DE INTERVENCIÓN (interventionSuggestion):
-Si riskSignal es amarillo o rojo, genera una sugerencia de intervención para el profesor. Si es verde, deja action y reconnectHook vacíos, escalateToSupport en false y channel en "en_clase".
+Si riskSignal es amarillo o rojo, genera una sugerencia de intervención para el profesor. Si es verde, deja action y reconnectHook vacíos, steps como array vacío, escalateToSupport en false y channel en "en_clase".
 Cuando generes la sugerencia de intervención:
+- PASOS (steps): desglosa la acción en 2 a 4 pasos accionables y ordenados. Al profesor se le muestran numerados justo antes de entrar a la clase, así que cada paso tiene que ser algo que pueda hacer DURANTE esa clase, en una frase corta y en imperativo. Mal: "mejorar la motivación". Bien: "en los primeros minutos pregúntale qué tal le está yendo con el inglés fuera de clase". Los pasos concretan la acción, no la repiten ni la contradicen.
 - Basala en las señales CONCRETAS detectadas: número de cancelaciones y en qué plazo, caída del porcentaje de participación del alumno, clases previas en amarillo o rojo, días sin clase, y menciones textuales en el transcript (frustración, falta de progreso, intención de dejarlo).
 - La acción debe ser práctica y específica, nunca un consejo genérico. Mal: "presta más atención al alumno". Bien: "al inicio de la próxima clase pregúntale cómo se siente con el progreso y recuérdale lo que ha avanzado desde que empezó".
 - La intervención debe parecer NATURAL, nunca reactiva. El profesor nunca debe dar a entender al alumno que el sistema detectó un problema o que "algo ha fallado".
@@ -108,8 +116,11 @@ Cuando generes la sugerencia de intervención:
 - Redacta en español de España, tono cercano y profesional, sin guiones como conectores.
 
 AUDITORÍA DE SEGUIMIENTO (interventionCheck):
-Solo cuando el mensaje incluya la sugerencia de intervención que recibió el profesor tras la clase anterior. Analiza si en ESTA clase hay señales de que el profesor actuó: preguntó por el progreso o cómo se siente el alumno, ajustó el enfoque, hubo más interacción, cambió el tono respecto a clases anteriores.
-IMPORTANTE: una buena intervención es sutil y puede no ser evidente. Si no estás seguro, marca confidence "baja". No afirmes con confianza alta que no hubo intervención salvo que la clase sea claramente idéntica a las anteriores sin ningún cambio.`;
+Solo cuando el mensaje incluya el protocolo que recibió el profesor tras la clase anterior. Evalúa si en ESTA clase hay señales de que el profesor lo siguió.
+- Audita contra los PASOS CONCRETOS que se le mostraron, uno por uno, no contra una idea general de "intervenir". Si el mensaje dice que el protocolo se le mostró al empezar la clase, es el que tenía delante al entrar.
+- Señales válidas: preguntó por el progreso o por cómo se siente el alumno, ajustó el enfoque, hubo más interacción, cambió el tono respecto a clases anteriores, o cualquier otra cosa que se corresponda con los pasos.
+- En evidence, di qué paso viste cumplido y con qué frase del transcript, o cuál no aparece.
+IMPORTANTE: una buena intervención es sutil y puede no ser evidente. Si no estás seguro, marca confidence "baja". No afirmes con confianza alta que no hubo intervención salvo que la clase sea claramente idéntica a las anteriores sin ningún cambio. Cumplir el espíritu del protocolo cuenta como cumplirlo: no exijas las palabras exactas de cada paso.`;
 
 function buildUserPrompt(input: TranscriptInput): string {
   const header = [
@@ -129,13 +140,23 @@ function buildUserPrompt(input: TranscriptInput): string {
     : '\n\nHistorial de las últimas clases: (no hay clases anteriores analizadas)';
 
   // Alerta abierta de la clase anterior: activa la auditoría de seguimiento.
+  //
+  // Se le pasan los PASOS EXACTOS que el profesor tuvo delante al pulsar
+  // "Ingresar a clase" (y cuándo los vio), para que la auditoría compare contra
+  // eso y no contra una idea genérica de intervención.
   const prev = input.activeIntervention;
+  const pasos = prev?.steps?.length
+    ? `- Protocolo que se le mostró, paso a paso:\n${prev.steps.map((s, i) => `   ${i + 1}) ${s}`).join('\n')}\n`
+    : '';
+  const visto = prev?.shownAt
+    ? `- El profesor vio este protocolo en pantalla al entrar a esta clase (${prev.shownAt}).\n`
+    : '- No consta que se le mostrara el protocolo en pantalla al entrar; puede haberlo recibido solo por aviso.\n';
   const alerta = prev
     ? `\n\nALERTA ABIERTA DE LA CLASE ANTERIOR (señal ${prev.risk}${prev.classNumber != null ? `, clase ${prev.classNumber}` : ''}).
-Esto es lo que se le sugirió al profesor tras esa clase:
+Esto es lo que se le indicó al profesor tras esa clase:
 - Acción sugerida: ${prev.action}
-${prev.reconnectHook ? `- Oportunidad de reconexión: ${prev.reconnectHook}\n` : ''}- Escalado a soporte: ${prev.escalateToSupport ? 'sí' : 'no'}
-Devuelve también interventionCheck evaluando si en ESTA clase hay señales de que el profesor actuó.`
+${pasos}${prev.reconnectHook ? `- Oportunidad de reconexión: ${prev.reconnectHook}\n` : ''}- Escalado a soporte: ${prev.escalateToSupport ? 'sí' : 'no'}
+${visto}Devuelve también interventionCheck evaluando si en ESTA clase hay señales de que el profesor siguió ese protocolo.`
     : '';
 
   return `Analiza la transcripción de esta clase.

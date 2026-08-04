@@ -22,6 +22,15 @@ export type InterventionConfidence = 'alta' | 'media' | 'baja';
 export interface InterventionSuggestion {
   /** Acción concreta y específica para el profesor (una sola). */
   action: string;
+  /**
+   * El protocolo de esa clase en 2 a 4 pasos accionables. Es lo que se le enseña
+   * al profesor al pulsar "Ingresar a clase" y, por tanto, lo EXACTO contra lo
+   * que se audita la clase siguiente.
+   *
+   * Puede venir vacío: las intervenciones creadas antes de que la IA generara
+   * pasos solo tienen `action`, y en ese caso se muestra ese texto tal cual.
+   */
+  steps: string[];
   /** Hito cercano (clase 15/30) como excusa natural para reconectar. Puede ir vacío. */
   reconnectHook: string;
   /** El alumno dijo explícitamente que quiere dejarlo: lo gestiona soporte, no el profesor. */
@@ -36,6 +45,12 @@ export interface ActiveIntervention extends InterventionSuggestion {
   classAnalysisId?: string | null;
   classNumber?: number | null;
   createdAt?: string;
+  /**
+   * Cuándo se le enseñó este protocolo al profesor (el pop-up de "Ingresar a
+   * clase"). Viaja dentro del objeto que se guarda en intervention_audits, así
+   * que el admin puede ver si el profesor llegó a leerlo antes de juzgar.
+   */
+  shownAt?: string | null;
 }
 
 export interface InterventionCheck {
@@ -83,6 +98,22 @@ export const AVOID_ITEMS = [
 
 export const AVOID_TITLE = 'Ver qué evitar';
 
+/**
+ * Aviso para el alumno que está en amarillo o rojo pero todavía no tiene
+ * protocolo generado (la IA no ha llegado a proponer uno). No hay pasos que
+ * enseñar, así que se le pide atención sin inventarse un protocolo concreto.
+ *
+ * Un aviso genérico NO se audita después: no habría contra qué comparar, y por
+ * eso nunca puede contar como alerta no atendida.
+ */
+export const GENERIC_RISK_BRIEFING =
+  'Este alumno muestra señales de riesgo. En esta clase, presta especial atención a cómo se siente ' +
+  'con el progreso y procura que salga con ganas de volver. Mantén un tono natural, sin mencionarle ' +
+  'que se ha detectado nada.';
+
+/** Máximo de pasos del protocolo. Más de cuatro deja de ser accionable. */
+const MAX_STEPS = 4;
+
 const isNonEmpty = (v: unknown): v is string => typeof v === 'string' && v.trim() !== '';
 
 /**
@@ -106,10 +137,24 @@ export function normalizeSuggestion(raw: unknown): InterventionSuggestion | null
 
   return {
     action,
+    steps: normalizeSteps(r.steps),
     reconnectHook: isNonEmpty(r.reconnectHook) ? cleanAiText(r.reconnectHook.trim()) : '',
     escalateToSupport: escalate,
     channel,
   };
+}
+
+/**
+ * Pasos del protocolo, limpios y acotados. Tolera que no vengan (las
+ * intervenciones anteriores al campo `steps`) y que la IA se pase de la cuenta.
+ */
+function normalizeSteps(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter(isNonEmpty)
+    .map(s => cleanAiText(s.trim()))
+    .filter(s => s.length > 0)
+    .slice(0, MAX_STEPS);
 }
 
 /** Igual que normalizeSuggestion pero para la evaluación de la clase siguiente. */
@@ -143,7 +188,80 @@ export function asIntervention(v: unknown): ActiveIntervention | null {
     classAnalysisId: typeof r.classAnalysisId === 'string' ? r.classAnalysisId : null,
     classNumber: typeof r.classNumber === 'number' ? r.classNumber : null,
     createdAt: typeof r.createdAt === 'string' ? r.createdAt : undefined,
+    shownAt: typeof r.shownAt === 'string' ? r.shownAt : null,
   };
+}
+
+// ── El aviso que ve el profesor al entrar a clase ────────────────────────────
+
+/**
+ * Qué enseñarle al profesor al pulsar "Ingresar a clase". FUENTE ÚNICA: la usa
+ * el pop-up y también decide si la clase siguiente se audita contra pasos
+ * concretos, para que no puedan discrepar.
+ *
+ *   'protocolo' → hay intervención abierta: pasos numerados (o la acción suelta
+ *                 si es una alerta anterior a los pasos). Se audita después.
+ *   'generico'  → el alumno está en amarillo o rojo pero nadie ha generado un
+ *                 protocolo. Se avisa, pero NO se audita: no hay pasos que
+ *                 cumplir y no puede contar como alerta no atendida.
+ *   null        → no hay nada que mostrar; el profesor entra directo.
+ */
+export interface RiskBriefing {
+  kind: 'protocolo' | 'generico';
+  studentName: string;
+  risk: RiskSignal;
+  /** Pasos accionables. Vacío en el genérico y en las alertas sin `steps`. */
+  steps: string[];
+  /** Texto de la acción, para las alertas viejas sin pasos y para el genérico. */
+  body: string;
+  reconnectHook: string;
+  escalateToSupport: boolean;
+  /** Ficha sobre la que escribir `intervention_shown_at`. */
+  profileId: string | null;
+  /** true si la clase siguiente puede auditarse contra este protocolo. */
+  auditable: boolean;
+}
+
+export function buildRiskBriefing(args: {
+  studentName: string;
+  risk?: RiskSignal | null;
+  intervention?: ActiveIntervention | null;
+  profileId?: string | null;
+}): RiskBriefing | null {
+  const { studentName, intervention } = args;
+  const profileId = args.profileId ?? null;
+
+  if (intervention) {
+    return {
+      kind: 'protocolo',
+      studentName,
+      // La alerta manda sobre el color de la última clase: sigue abierta hasta
+      // que alguien la cierre, aunque la última clase saliera verde.
+      risk: intervention.risk,
+      steps: intervention.steps ?? [],
+      body: intervention.action,
+      reconnectHook: intervention.reconnectHook,
+      escalateToSupport: intervention.escalateToSupport,
+      profileId,
+      auditable: true,
+    };
+  }
+
+  if (args.risk === 'amarillo' || args.risk === 'rojo') {
+    return {
+      kind: 'generico',
+      studentName,
+      risk: args.risk,
+      steps: [],
+      body: GENERIC_RISK_BRIEFING,
+      reconnectHook: '',
+      escalateToSupport: false,
+      profileId,
+      auditable: false,
+    };
+  }
+
+  return null;
 }
 
 /**

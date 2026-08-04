@@ -17,6 +17,8 @@
 //      lib/useSubscriptionStatus). Si está inactiva, disclaimer con la opción de
 //      entrar igual: el acceso queda marcado como `enteredWithoutActive`.
 //   4. Se abre el Meet y se registra el ingreso en class_join_logs.
+//   5. Si el alumno está en riesgo de baja, ANTES de abrir el Meet se le enseña
+//      al profesor el protocolo de esa clase (ver `riskFor`).
 //
 // El acceso se registra SIEMPRE con la fecha de HOY en España (`todayIso`), no
 // con la fecha de la clase que se está mirando: el ingreso ocurre ahora y no se
@@ -26,6 +28,8 @@ import { useState, type ReactNode } from 'react';
 import { calcRegisteredClassNumber } from '@/lib/db';
 import { isMilestone, getMilestoneSlides, getMilestoneCopy } from '@/lib/milestones';
 import { checkSubscription, type SubscriptionInfo } from '@/lib/useSubscriptionStatus';
+import { markInterventionShown } from '@/lib/interventionsClient';
+import { AVOID_ITEMS, AVOID_TITLE, NATURAL_REMINDER, type RiskBriefing } from '@/lib/interventions';
 import type { Teacher, Student, Assignment, ClassRecord } from '@/types';
 
 /** Lo mínimo que el flujo necesita de una clase. `TeacherClass` lo cumple. */
@@ -58,6 +62,11 @@ export interface UseClassJoinArgs {
   getCachedSub?: (email: string) => SubscriptionInfo | undefined;
   /** Se avisa cuando el flujo verifica un email, para que la pantalla lo cachee. */
   onSubResolved?: (email: string, info: SubscriptionInfo) => void;
+  /**
+   * Protocolo de intervención del alumno, si está en riesgo de baja. Devolver
+   * null (o no pasar la función) deja el flujo exactamente como estaba.
+   */
+  riskFor?: (studentName: string) => RiskBriefing | null;
 }
 
 export interface ClassJoinApi {
@@ -80,13 +89,17 @@ export interface ClassJoinApi {
 export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
   const {
     teacher, students, classRecords, todayIso,
-    logClassJoin, updateMeetLink, onToast, getCachedSub, onSubResolved,
+    logClassJoin, updateMeetLink, onToast, getCachedSub, onSubResolved, riskFor,
   } = args;
 
   const [joinedKeys, setJoined] = useState<Set<string>>(new Set());
   const [checkingKey, setCheckingKey] = useState<string | null>(null);
   const [milestoneModal, setMilestoneModal] = useState<{ c: JoinableClass; classNumber: number } | null>(null);
   const [subModal, setSubModal] = useState<{ c: JoinableClass; status: string; daysRemaining: number | null; endDate: string | null } | null>(null);
+  // Protocolo pendiente de leer. El ingreso YA está registrado cuando esto se
+  // abre: lo único que falta es abrir el Meet, y lo hace el botón del modal.
+  const [riskModal, setRiskModal] = useState<{ c: JoinableClass; briefing: RiskBriefing } | null>(null);
+  const [avoidOpen, setAvoidOpen] = useState(false);
   const [linkModal, setLinkModal] = useState<{ assignment: Assignment; value: string } | null>(null);
   const [savingLink, setSavingLink] = useState(false);
 
@@ -106,12 +119,46 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
   const emailFor = (a: Assignment): string =>
     studentFor(a)?.email?.trim().toLowerCase() || a.studentEmail?.trim().toLowerCase() || '';
 
-  // Abre el Meet y registra el ingreso con el estado de suscripción verificado.
+  /**
+   * Registra el ingreso y abre el Meet.
+   *
+   * Con un alumno en riesgo el orden se INVIERTE: primero se registra el acceso
+   * y el Meet lo abre el botón del pop-up. El registro no se retrasa ni depende
+   * de que el profesor lea nada (la clase entra a finanzas igual, aunque cierre
+   * el aviso), y abrir el Meet desde el clic del botón lo mantiene como gesto de
+   * usuario, que es lo que impide que el navegador bloquee la pestaña.
+   */
   function doJoin(c: JoinableClass, subscriptionStatus: string, enteredWithoutActive: boolean, daysRemaining: number | null = null) {
     if (!c.meetLink || !teacher) return;
-    window.open(normalizeUrl(c.meetLink), '_blank', 'noopener,noreferrer');
+    const briefing = riskFor?.(c.studentName) ?? null;
+
+    if (!briefing) {
+      window.open(normalizeUrl(c.meetLink), '_blank', 'noopener,noreferrer');
+      registrarIngreso(c, subscriptionStatus, enteredWithoutActive, daysRemaining);
+      return;
+    }
+
+    registrarIngreso(c, subscriptionStatus, enteredWithoutActive, daysRemaining);
+    setAvoidOpen(false);
+    setRiskModal({ c, briefing });
+    // Queda constancia de QUÉ vio y CUÁNDO: es contra eso, y solo si consta que
+    // se le mostró, contra lo que se audita la clase siguiente.
+    if (briefing.profileId && briefing.auditable) {
+      markInterventionShown(briefing.profileId).catch(() => { /* best-effort */ });
+    }
+  }
+
+  function registrarIngreso(c: JoinableClass, subscriptionStatus: string, enteredWithoutActive: boolean, daysRemaining: number | null) {
+    if (!teacher) return;
     logClassJoin(teacher.id, teacher.name, c.studentName, todayIso, c.hour, subscriptionStatus, enteredWithoutActive, daysRemaining);
     setJoined(prev => new Set([...prev, c.key]));
+  }
+
+  /** Botón del pop-up: el ingreso ya está registrado, solo falta abrir el Meet. */
+  function abrirMeetTrasProtocolo() {
+    if (!riskModal) return;
+    window.open(normalizeUrl(riskModal.c.meetLink!), '_blank', 'noopener,noreferrer');
+    setRiskModal(null);
   }
 
   // Si la clase a la que se va a ingresar es un hito (1/15/30/50), primero el
@@ -173,6 +220,95 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
 
   const dialogs = (
     <>
+      {/* Protocolo de intervención del alumno en riesgo.
+          NO se puede cerrar por el fondo: la única salida es el botón, que es el
+          que abre el Meet. El ingreso ya quedó registrado antes de abrirse. */}
+      {riskModal && (() => {
+        const b = riskModal.briefing;
+        const rojo = b.risk === 'rojo';
+        return (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 90, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+            <div style={{ background: '#F7F7F5', border: `2px solid ${rojo ? '#dc2626' : '#FFC400'}`, borderRadius: 16, padding: 26, width: '100%', maxWidth: 480, maxHeight: '88vh', overflowY: 'auto' }}>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 4 }}>
+                <span style={{ fontSize: 20 }} aria-hidden>{rojo ? '🔴' : '⚠️'}</span>
+                <span style={{ fontSize: 17, fontWeight: 800, color: '#1a1c1a', lineHeight: 1.3 }}>
+                  {b.studentName} está en riesgo de baja
+                </span>
+              </div>
+              <div style={{ fontSize: 12.5, color: '#8b8e88', marginBottom: 16 }}>
+                El alumno no ve este aviso. Es solo para ti.
+              </div>
+
+              {/* Escalado a soporte: manda sobre todo lo demás. */}
+              {b.escalateToSupport && (
+                <div style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid #dc2626', borderRadius: 10, padding: '12px 14px', marginBottom: 16 }}>
+                  <div style={{ fontSize: 13.5, fontWeight: 700, color: '#b91c1c', marginBottom: 3 }}>
+                    Este caso está escalado a soporte
+                  </div>
+                  <div style={{ fontSize: 13, color: '#7f1d1d', lineHeight: 1.55 }}>
+                    No intentes retenerlo tú solo. El equipo de soporte activa el protocolo de gestión de bajas.
+                  </div>
+                </div>
+              )}
+
+              <div style={{ fontSize: 13.5, fontWeight: 700, color: '#1a1c1a', marginBottom: 8 }}>En esta clase:</div>
+
+              {b.steps.length > 0 ? (
+                <ol style={{ margin: '0 0 16px', paddingLeft: 22, display: 'flex', flexDirection: 'column', gap: 9 }}>
+                  {b.steps.map((s, i) => (
+                    <li key={i} style={{ fontSize: 14, color: '#374151', lineHeight: 1.55 }}>{s}</li>
+                  ))}
+                </ol>
+              ) : (
+                // Alertas anteriores a los pasos, y el aviso genérico: el texto tal cual.
+                <div style={{ fontSize: 14, color: '#374151', lineHeight: 1.6, marginBottom: 16 }}>{b.body}</div>
+              )}
+
+              {b.reconnectHook && (
+                <div style={{ background: 'rgba(30,158,58,0.08)', border: '1px solid rgba(30,158,58,0.35)', borderRadius: 10, padding: '11px 14px', marginBottom: 16 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#1E9E3A', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 3 }}>
+                    Oportunidad
+                  </div>
+                  <div style={{ fontSize: 13.5, color: '#374151', lineHeight: 1.55 }}>{b.reconnectHook}</div>
+                </div>
+              )}
+
+              {/* Qué evitar: plegado, mismos 4 puntos que la ficha y el aviso. */}
+              <button
+                onClick={() => setAvoidOpen(o => !o)}
+                aria-expanded={avoidOpen}
+                style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', background: 'none', border: 'none', padding: '8px 0', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, fontWeight: 700, color: '#9a6516' }}
+              >
+                <span aria-hidden>{avoidOpen ? '▾' : '▸'}</span> {AVOID_TITLE}
+              </button>
+              {avoidOpen && (
+                <ul style={{ margin: '0 0 12px', paddingLeft: 20, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {AVOID_ITEMS.map((item, i) => (
+                    <li key={i} style={{ fontSize: 13, color: '#5f6360', lineHeight: 1.5 }}>{item}</li>
+                  ))}
+                </ul>
+              )}
+
+              <div style={{ fontSize: 12.5, color: '#8b8e88', lineHeight: 1.55, marginBottom: 18, fontStyle: 'italic' }}>
+                {NATURAL_REMINDER}
+              </div>
+
+              <button
+                onClick={abrirMeetTrasProtocolo}
+                autoFocus
+                style={{ width: '100%', padding: '13px', borderRadius: 10, border: 'none', background: '#1E9E3A', color: 'white', cursor: 'pointer', fontSize: 14, fontWeight: 700, fontFamily: 'inherit' }}
+              >
+                Entendido, unirme a la clase
+              </button>
+              <div style={{ fontSize: 11.5, color: '#8b8e88', textAlign: 'center', marginTop: 9 }}>
+                Tu acceso a esta clase ya ha quedado registrado.
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Enlace de Meet del alumno */}
       {linkModal && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
