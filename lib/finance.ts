@@ -5,15 +5,30 @@
 // poder correr tanto en el panel del profesor como en el del admin sin llamadas
 // extra a la base.
 //
-// REGLA DEL DOBLE FACTOR (inclusión de una clase de tipo cobrable):
-//   · Sin class_join_logs Y sin class_records → se IGNORA (no se cuenta).
-//   · Con AL MENOS uno de los dos → se incluye.
-//       - Ambos                → 'pagable' ✅
-//       - Solo uno             → 'a_revisar' ⚠️
-//   · Aprobada manualmente por el admin → 'pagable' (override).
-//   · Supera el límite mensual del plan → 'excede_limite' (salvo aprobación).
-//   · Tipo 'falta_sin_aviso' o 'cancelacion_hora' → 'no_cobrable' (constancia,
-//     nunca suma al total, independientemente de logs/capturas).
+// REGLA DE DOS NIVELES. Son dos preguntas distintas y en este orden:
+//
+//   NIVEL 1 — ¿la clase ENTRA a finanzas?  Lo decide el CLIC en "Unirse a clase".
+//     · Con class_join_log (teacher + alumno + fecha) → entra.
+//     · Sin él → NO EXISTE para el pago: no aparece en el listado del profesor ni
+//       en el del admin, ni siquiera como pendiente. Un registro de "Añadir clase"
+//       o un transcript sueltos NO crean una clase: solo se pegan a una que ya
+//       entró por su ingreso.
+//     · ÚNICA excepción: 'falta_sin_aviso' y 'cancelacion_hora'. El alumno no
+//       vino, así que no puede haber ingreso que las respalde; su entrada es el
+//       registro que el profesor crea a mano (Añadir clase / cancelar la clase).
+//
+//   NIVEL 2 — de las que entraron, ¿cuáles se PAGAN?  Lo decide el TRANSCRIPT.
+//     · Clic + transcript validado → 'pagable' ✅ suma al total.
+//     · Clic sin transcript válido → 'a_revisar' ⚠️ ("pendiente de transcript"):
+//       visible y contabilizada como dada, pero NO suma al total. Al subir el
+//       transcript pasa sola a 'pagable'.
+//
+//   Y encima de los dos niveles, lo de siempre:
+//     · Aprobada manualmente por el admin → 'pagable' (override). Solo puede
+//       aprobar lo que ENTRÓ: sin clic no hay fila que aprobar.
+//     · Supera el límite mensual del plan → 'excede_limite' (salvo aprobación).
+//     · Falta/cancelación más allá de las 2 cobrables de su tipo →
+//       'excede_limite_tipo'.
 
 import { Assignment, ClassJoinLog, ClassRecord, FinanceRate, ScoringEvent, FinancePayment, Student, ClassRecordType, FinanceManualApproval } from '@/types';
 import { classifyPlan, classifyFor, planBadgeStyle, type PlanClassification } from '@/lib/productUtils';
@@ -31,7 +46,19 @@ function monthlyLimit(weeklyHours: number): number {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-// 'excede_limite_tipo' = falta/cancelación más allá de las 2 cobrables por tipo.
+/**
+ * Estado de la clase de cara al pago.
+ *   'pagable'            → clic + transcript validado. Suma al total.
+ *   'a_revisar'          → clic SIN transcript válido: "pendiente de transcript".
+ *                          Visible y contada como dada, pero NO suma al total.
+ *                          (La clave se llama así desde el principio y se guarda
+ *                          en finance_manual_approvals.reason; se conserva para no
+ *                          romper el histórico. La etiqueta que ve la gente sale
+ *                          de `financeStatusBadge`.)
+ *   'excede_limite'      → pasa el límite mensual del plan del alumno.
+ *   'excede_limite_tipo' → falta/cancelación más allá de las 2 cobrables por tipo.
+ * Las clases SIN clic no tienen estado: no llegan a existir (ver nivel 1).
+ */
 export type ClassFinanceStatus = 'pagable' | 'a_revisar' | 'excede_limite' | 'excede_limite_tipo' | 'no_cobrable';
 
 export interface ClassFinanceRow {
@@ -282,6 +309,11 @@ export interface CalcInput {
   teacherName: string;
   monthYear: string;                 // 'YYYY-MM'
   assignments: Assignment[];         // se filtran por teacher adentro
+  /**
+   * Ingresos ("Unirse a clase"). NIVEL 1: es lo que hace que una clase ENTRE a
+   * finanzas. Sin el ingreso, la clase no existe para el pago (única excepción:
+   * faltas y cancelaciones sobre la hora, que entran por su propio registro).
+   */
   joinLogs: ClassJoinLog[];
   classRecords: ClassRecord[];
   /**
@@ -370,9 +402,10 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     arr.slice(0, 2).forEach(r => cobrableTypeRecordIds.add(r.id));
   }
 
-  // Candidatos (alumno + fecha) del mes: provienen de los logs y los records
-  // (las únicas fuentes de "esta clase ocurrió"). Un record se fusiona con un
-  // candidato del mismo alumno a ±1 día (tolerancia captura subida un día corrido).
+  // Candidatos (alumno + fecha) del mes. NIVEL 1: la única fuente que CREA una
+  // clase es el ingreso (class_join_logs); las faltas/cancelaciones, su registro.
+  // Los records normales y los transcripts solo se PEGAN a un candidato que ya
+  // existe, con tolerancia de ±1 día (se suben un día corrido).
   //
   // OJO con el doble conteo: un candidato es UNA clase (alumno + fecha), y una
   // sesión de 2h produce UN candidato aunque haya dos ingresos y dos registros
@@ -430,7 +463,18 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     if (r.classType === 'reprogramada' || r.classType === 'cancelada_con_preaviso' || r.classType === 'falta_con_aviso') continue;
     if (!inMonth(r.classDate)) continue;
     let c = matchCand(r.studentName, r.classDate, 1, x => !!x.record);
-    if (!c) { c = newCand(r.studentName, r.classDate); cands.push(c); }
+    if (!c) {
+      // NIVEL 1: ningún registro CREA una clase. Si no hay ingreso al que pegarse,
+      // la clase no entró a finanzas y el registro no la resucita.
+      //
+      // Salvo la falta y la cancelación sobre la hora: ahí el alumno no vino, no
+      // puede existir un ingreso que las respalde, y su entrada es justamente el
+      // registro que el profesor crea a mano.
+      const traeSuPropiaEntrada = r.classType === 'falta_sin_aviso' || r.classType === 'cancelacion_hora';
+      if (!traeSuPropiaEntrada) continue;
+      c = newCand(r.studentName, r.classDate);
+      cands.push(c);
+    }
     if (!c.record) c.record = r;
     // Solo si el registro es de ESE día: los que se emparejan con tolerancia de
     // ±1 día pertenecen a otra fecha y su hora no describe esta sesión.
@@ -439,10 +483,19 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
       if (Number.isFinite(h)) c.hours.add(h);
     }
   }
-  // El transcript es TERCERA fuente de candidatos: una clase con transcript pero
-  // sin ingreso ni record debe aparecer como 'a_revisar', no desaparecer del
-  // conteo. Misma tolerancia de ±1 día que los records.
-  for (const t of myAnalyses) {
+  // El transcript NO crea clases: es el segundo nivel (decide si la que ya entró
+  // se paga), no el primero. Un transcript sin ingreso al que pegarse se descarta
+  // — antes creaba una fila 'a_revisar' y así una clase sin clic entraba igual al
+  // listado. Misma tolerancia de ±1 día que los records.
+  //
+  // Los que traen vínculo explícito (join_log_id) se procesan PRIMERO: su clase
+  // está dicha, no adivinada. Sin este orden, un transcript suelto —el de una
+  // clase que no entró— podía ocupar por proximidad de fecha el hueco de la clase
+  // vecina y dejarla como pendiente aunque tuviera el suyo propio subido.
+  const analysesPorPrioridad = [...myAnalyses]
+    .sort((a, b) => Number(!!b.join_log_id) - Number(!!a.join_log_id));
+
+  for (const t of analysesPorPrioridad) {
     const d = analysisDate(t);
 
     // 1) Vínculo EXPLÍCITO: el transcript dice a qué ingreso pertenece. No se
@@ -457,8 +510,8 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
 
     // 2) Respaldo por fecha, solo para lo añadido a mano (sin vínculo).
     if (!inMonth(d)) continue;
-    let c = matchCand(t.student_name, d, 1, x => !!x.transcript);
-    if (!c) { c = newCand(t.student_name, d); cands.push(c); }
+    const c = matchCand(t.student_name, d, 1, x => !!x.transcript);
+    if (!c) continue;   // NIVEL 1: sin ingreso al que pegarse, no hay clase.
     if (!c.transcript) c.transcript = t;
   }
 
@@ -514,6 +567,9 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     } else if (approved) {
       status = 'pagable';
     } else {
+      // NIVEL 2. Acá `join` ya es siempre true (sin ingreso la clase no habría
+      // llegado a ser candidata), así que lo único que se decide es el transcript:
+      // con transcript validado se cobra, sin él queda pendiente de subirlo.
       status = (join && isTranscript) ? 'pagable' : 'a_revisar';
     }
 
@@ -616,6 +672,48 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     montoPagable, montoARevisar, montoRetenido,
     bonusFromScoring, penaltiesFromScoring, totalAPagar,
     paymentStatus, paidAt,
+  };
+}
+
+// ── Estados en pantalla ───────────────────────────────────────────────────────
+
+/**
+ * Etiqueta y colores DRC de cada estado. FUENTE ÚNICA para el panel del profesor
+ * y el del admin: antes cada pantalla tenía su propio diccionario y la misma
+ * clase se llamaba distinto en cada una.
+ *
+ * Verde #1E9E3A = entra al total. Amarillo #FFC400 = está, pero todavía no se
+ * cobra. Naranja = retenida por un límite.
+ */
+export function financeStatusBadge(status: ClassFinanceStatus):
+  { label: string; short: string; color: string; bg: string; dot: string } {
+  switch (status) {
+    case 'pagable':
+      return { label: 'Pagable', short: 'Pagable', color: '#1E9E3A', bg: 'rgba(30,158,58,0.12)', dot: '#1E9E3A' };
+    case 'a_revisar':
+      return { label: 'Pendiente de transcript', short: 'Pendiente', color: '#9a6516', bg: 'rgba(255,196,0,0.18)', dot: '#FFC400' };
+    case 'excede_limite':
+      return { label: 'Excede el límite del plan', short: 'Excede límite', color: '#ea580c', bg: 'rgba(249,115,22,0.12)', dot: '#ea580c' };
+    case 'excede_limite_tipo':
+      return { label: 'Supera 2 de este tipo', short: 'Supera 2/tipo', color: '#ea580c', bg: 'rgba(249,115,22,0.12)', dot: '#ea580c' };
+    default:
+      return { label: 'No cobrable', short: 'No cobrable', color: 'var(--text-muted)', bg: 'var(--bg-surface-3)', dot: 'var(--text-muted)' };
+  }
+}
+
+/**
+ * Lo que le falta cobrar al profesor por no haber subido transcripts. Se muestra
+ * SIEMPRE aparte del total: son clases que ya dio y que pasan a pagables solas en
+ * cuanto suba el texto.
+ */
+export function pendingTranscriptSummary(result: Pick<TeacherFinanceResult, 'totalARevisar' | 'montoARevisar'>):
+  { classes: number; amount: number; label: string } | null {
+  if (result.totalARevisar <= 0) return null;
+  const clases = `${result.totalARevisar} clase${result.totalARevisar === 1 ? '' : 's'}`;
+  return {
+    classes: result.totalARevisar,
+    amount: result.montoARevisar,
+    label: `Pendiente de transcript: €${result.montoARevisar.toFixed(2)} en ${clases}`,
   };
 }
 

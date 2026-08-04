@@ -7,7 +7,7 @@ import { LastUpdated } from '@/components/LastUpdated';
 import { getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
-import { calculateTeacherFinance, recordVerification, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge, rowHoursLabel, durationBadge, sessionBreakdownLabel, transcriptStateBadge, transcriptNeedsTeacher } from '@/lib/finance';
+import { calculateTeacherFinance, recordVerification, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge, rowHoursLabel, durationBadge, sessionBreakdownLabel, transcriptStateBadge, transcriptNeedsTeacher, financeStatusBadge, pendingTranscriptSummary } from '@/lib/finance';
 import { dbGetAssignmentsByTeacher, calcRegisteredClassNumber } from '@/lib/db';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { maybeSendMilestoneEmail } from '@/lib/milestoneEmails';
@@ -50,19 +50,17 @@ function daysDiff(aIso: string, bIso: string): number {
   return Math.round((new Date(bIso + 'T00:00:00').getTime() - new Date(aIso + 'T00:00:00').getTime()) / 86400000);
 }
 
-/** Estado de la clase, para la fila compacta del acordeón. */
-const STATUS_PILL: Record<string, { label: string; cls: string }> = {
-  pagable:            { label: 'Pagable',        cls: 'is-ok' },
-  a_revisar:          { label: 'A revisar',      cls: 'is-warn' },
-  excede_limite:      { label: 'Excede límite',  cls: 'is-warn' },
-  excede_limite_tipo: { label: 'Supera 2/tipo',  cls: 'is-warn' },
-  no_cobrable:        { label: 'No cobrable',    cls: 'is-neutral' },
-};
+// Las etiquetas y colores de estado salen de lib/finance (financeStatusBadge):
+// una sola fuente para esta pantalla y la del admin.
 
 /**
- * Por qué una clase quedó "a revisar", en el orden de prioridad que le sirve al
+ * Por qué una clase quedó pendiente, en el orden de prioridad que le sirve al
  * profesor: primero lo que puede resolver AHORA. Lo usan la lista de avisos y el
  * detalle desplegado de cada clase, que tienen que decir lo mismo.
+ *
+ * Con la regla de dos niveles, una clase pendiente SIEMPRE tiene ingreso (sin él
+ * no habría entrado a finanzas), así que lo único que puede faltar es el
+ * transcript. La rama del ingreso queda como red de seguridad.
  */
 function missingReason(r: ClassFinanceRow): string {
   return r.transcriptState === 'rejected' ? 'el equipo rechazó el transcript: subí el correcto'
@@ -241,7 +239,10 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
     ) ?? null;
   }
 
-  // Alertas de clases a revisar: se indica exactamente qué falta y, sobre todo,
+  // Lo que le falta cobrar por no haber subido transcripts (fuente única).
+  const pendiente = pendingTranscriptSummary(finance);
+
+  // Alertas de clases pendientes: se indica exactamente qué falta y, sobre todo,
   // SI le toca hacer algo al profesor.
   //
   // Antes esto decía "falta subir transcript" en cuanto `hasTranscript` era false
@@ -320,12 +321,21 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
             </div>
             <div className="mcf-brow">
               <span className="mcf-brow-label" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
-                Clases a revisar · {finance.totalARevisar}
-                <span className="mcf-brow-note">pendiente de verificación</span>
+                Pendiente de transcript · {finance.totalARevisar}
+                <span className="mcf-brow-note">no suma al total</span>
                 <HelpTooltip tooltipKey="finanzas.aRevisar" />
               </span>
-              <span className="mcf-brow-value" style={{ color: '#8b8e88' }}>€{finance.montoARevisar.toFixed(2)}</span>
+              <span className="mcf-brow-value" style={{ color: '#9a6516' }}>€{finance.montoARevisar.toFixed(2)}</span>
             </div>
+            {/* Lo que le falta cobrar por transcripts sin subir. Va debajo del
+                importe para que quede claro que NO está dentro del total. */}
+            {pendiente && (
+              <div className="mcf-brow" style={{ borderTop: '1px dashed var(--mcf-border)', paddingTop: 8 }}>
+                <span className="mcf-brow-note" style={{ color: '#9a6516' }}>
+                  {pendiente.label}. Al subir el transcript pasan a pagables y se suman solas.
+                </span>
+              </div>
+            )}
             <div className="mcf-brow">
               <span className="mcf-brow-label" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
                 Bonos scoring
@@ -387,9 +397,15 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
           {reviewAlerts.length > 0 && (
             <div className="mcf-card mcf-card-pad mcf-review">
               <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 6 }}>
-                <span className="mcf-card-title">Clases a revisar</span>
+                <span className="mcf-card-title">Pendientes de transcript</span>
                 <span className="mcf-counter">{reviewAlerts.length}</span>
               </div>
+              {pendiente && (
+                <div style={{ fontSize: 12.5, color: '#9a6516', lineHeight: 1.55, marginBottom: 8 }}>
+                  Son clases que ya diste y que <b>todavía no se te pagan</b>: €{pendiente.amount.toFixed(2)} sin cobrar.
+                  En cuanto subas el transcript pasan a pagables.
+                </div>
+              )}
               {reviewAlerts.map((a, i) => (
                 <div key={i} className="mcf-review-row">
                   <span className="mcf-dot" style={{ background: '#e0912f', marginTop: 5 }} />
@@ -447,7 +463,11 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                       </div>
                     </div>
 
-                    {g.hasReview && <span className="mcf-pill is-warn"><span className="mcf-dot" style={{ background: '#e0912f' }} />A revisar</span>}
+                    {g.hasReview && (
+                      <span className="mcf-pill is-warn" title="Clases dadas que aún no se pagan porque falta el transcript">
+                        <span className="mcf-dot" style={{ background: '#FFC400' }} />Pendiente de transcript
+                      </span>
+                    )}
 
                     <div className="mcf-cols">
                       <div>
@@ -505,7 +525,8 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                           const sessionNote = sessionBreakdownLabel(r);
                           // Estado del transcript (fuente única, lib/finance).
                           const ts = transcriptStateBadge(r.transcriptState);
-                          const st = STATUS_PILL[r.status] ?? STATUS_PILL.no_cobrable;
+                          // Estado de pago: misma fuente que el panel del admin.
+                          const st = financeStatusBadge(r.status);
                           const clsKey = `${g.name}|${r.date}|${r.hour ?? ''}`;
                           const clsOpen = expandedClass.has(clsKey);
                           const canPaste = !isFalta && transcriptNeedsTeacher(r.transcriptState);
@@ -518,7 +539,10 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                                 <span className="mcf-cls-caret" aria-hidden>{clsOpen ? '▾' : '▸'}</span>
                                 {finShortDate(r.date)}
                                 {r.hour && <span className="mcf-cls-time">{rowHoursLabel(r)}</span>}
-                                <span className={`mcf-pill ${st.cls}`}>{st.label}</span>
+                                <span className="mcf-pill" style={{ background: st.bg, color: st.color }}>
+                                  <span className="mcf-dot" style={{ background: st.dot }} />
+                                  {st.short}
+                                </span>
                               </div>
 
                               {/* Importe = tarifa × unidades (2× en una sesión de 2h) */}
@@ -646,7 +670,7 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                       </div>
                       <div className="mcf-detail-foot">
                         <div>
-                          Total {g.total} · Pagables <b style={{ color: '#1f7a3d' }}>{g.pagablesCount}</b> · A revisar{' '}
+                          Total {g.total} · Pagables <b style={{ color: '#1f7a3d' }}>{g.pagablesCount}</b> · Pendientes de transcript{' '}
                           <b style={{ color: g.aRevisarCount > 0 ? '#9a6516' : '#1a1c1a' }}>{g.aRevisarCount}</b>
                         </div>
                         <div style={{ fontWeight: 600, color: '#1f7a3d' }}>Subtotal €{g.subtotal.toFixed(2)}</div>

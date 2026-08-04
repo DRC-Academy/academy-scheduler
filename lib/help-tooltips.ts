@@ -8,15 +8,15 @@
 export const helpTexts = {
   // ── Finanzas del profesor (/mis-clases) ──────────────────────────────────────
   finanzas: {
-    ingresoDetectado:  'Se registró tu acceso a la clase con el botón “Ingresar a clase”. Es uno de los dos factores que verifican la clase para el pago.',
-    sinIngreso:        'No hay registro de acceso para esta clase. Solo cuenta el ingreso hecho en vivo con el botón “Ingresar a clase”; no se puede cargar después.',
-    ingreso:           'Cómo entraste a la clase (botón “Ingresar a clase”): a tiempo, tarde o sin registro.',
-    transcript:        'El texto de la clase que genera Fathom, pegado en “Añadir clase”. Es el segundo factor de verificación: sin él, la clase queda “a revisar”.',
+    ingresoDetectado:  'Se registró tu acceso a la clase con el botón “Ingresar a clase”. Es lo que hace que la clase entre a finanzas.',
+    sinIngreso:        'No hay registro de acceso para esta clase. Solo cuenta el ingreso hecho en vivo con el botón “Ingresar a clase”; no se puede cargar después, y sin él la clase no entra al pago.',
+    ingreso:           'Cómo entraste a la clase (botón “Ingresar a clase”): a tiempo, tarde o sin registro. Sin ingreso la clase no aparece en finanzas.',
+    transcript:        'El texto de la clase que genera Fathom, pegado en “Añadir clase”. Decide si la clase se cobra: sin él queda “pendiente de transcript” y no suma al total.',
     suscripcion:       'Estado de la suscripción del alumno en WooCommerce en el momento de la clase.',
     tarifa:            'Tarifa por clase según el tipo de plan del alumno y su antigüedad (menos o más de 30 días).',
-    totalCobrar:       'Estimación de lo que cobrás este mes: suma de las clases pagables más los bonos de scoring.',
-    pagables:          'Clases con los dos factores verificados (ingreso + transcript). Son las que se pagan.',
-    aRevisar:          'Clases con un solo factor (falta el ingreso por Meet o el transcript). No suman al pago hasta completarse.',
+    totalCobrar:       'Lo que cobrás este mes: SOLO las clases pagables (ingreso + transcript), más bonos y menos penalizaciones. Lo pendiente de transcript no está incluido.',
+    pagables:          'Clases con ingreso registrado y transcript subido. Son las que se pagan.',
+    aRevisar:          'Clases que diste y entraron por tu ingreso, pero que todavía no se pagan porque falta el transcript. Al subirlo pasan solas a pagables.',
     bonosScoring:      'Importe de bonos por tu puntaje de desempeño (scoring) que se suma a la liquidación del mes.',
     tipoClase:         'Tipo de registro: clase normal, recuperación, falta sin aviso o cancelación sobre la hora. Solo normal y recuperación cuentan para el seguimiento de clases.',
     pegarTranscript:   'Abre “Añadir clase” con el alumno y la fecha ya cargados para que solo pegues el transcript y verifiques esa clase.',

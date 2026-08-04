@@ -7,11 +7,11 @@ import { LastUpdated } from '@/components/LastUpdated';
 import { getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
-import { calculateTeacherFinance, TeacherFinanceResult, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge, rowHoursLabel, SUBSCRIPTION_STATUS_OPTIONS } from '@/lib/finance';
+import { calculateTeacherFinance, TeacherFinanceResult, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge, rowHoursLabel, financeStatusBadge, pendingTranscriptSummary, transcriptStateBadge, SUBSCRIPTION_STATUS_OPTIONS } from '@/lib/finance';
 import { classifyPlan } from '@/lib/productUtils';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { dbRevertPenalty } from '@/lib/db';
-import { Assignment, ScoringEvent } from '@/types';
+import { Assignment, ScoringEvent, FinanceManualApproval } from '@/types';
 
 // ─── Finance helpers ──────────────────────────────────────────────────────────
 const FIN_MONTHS_ADMIN = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
@@ -24,15 +24,32 @@ function finDateShort(iso: string): string {
   return `${String(d.getDate()).padStart(2, '0')} ${FIN_MONTHS_ADMIN[d.getMonth()].slice(0, 3)}`;
 }
 
-const FIN_STATUS_STYLE: Record<string, { label: string; color: string; bg: string }> = {
-  pagable:            { label: 'Pagable',          color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)' },
-  a_revisar:          { label: 'A revisar',        color: '#b45309', bg: 'rgba(255,196,0,0.15)' },
-  excede_limite:      { label: 'Excede límite',    color: '#ea580c', bg: 'rgba(249,115,22,0.12)' },
-  excede_limite_tipo: { label: 'Supera 2/tipo',    color: '#ea580c', bg: 'rgba(249,115,22,0.12)' },
-  no_cobrable:        { label: 'No cobrable',       color: 'var(--text-muted)', bg: 'var(--bg-surface-3)' },
-};
+// Las etiquetas y colores de estado salen de lib/finance (financeStatusBadge):
+// una sola fuente para esta pantalla y la del profesor.
 
 const PILL_OK   = { background: 'var(--ok-soft)',   color: 'var(--ok)' };
+
+/**
+ * Quién aprobó a mano esa clase y cuándo. Pagar una clase sin transcript es la
+ * única forma de saltarse el nivel 2, así que la fila tiene que poder responder
+ * quién lo decidió sin ir a buscarlo a la base.
+ */
+const nkStudent = (s: string) => (s ?? '').trim().toLowerCase();
+function findApproval(approvals: FinanceManualApproval[], teacherId: string, studentName: string, date: string) {
+  return approvals.find(a =>
+    a.teacherId === teacherId && nkStudent(a.studentName) === nkStudent(studentName) && a.classDate === date);
+}
+function approvalBy(approvals: FinanceManualApproval[], teacherId: string, studentName: string, date: string): string {
+  const a = findApproval(approvals, teacherId, studentName, date);
+  return a?.approvedBy ? ` · ${a.approvedBy}` : '';
+}
+function approvalTrace(approvals: FinanceManualApproval[], teacherId: string, studentName: string, date: string): string {
+  const a = findApproval(approvals, teacherId, studentName, date);
+  if (!a) return 'Aprobada manualmente por el equipo';
+  const cuando = (a.approvedAt ?? '').replace('T', ' ').slice(0, 16);
+  const motivo = a.reason === 'excede_limite_aprobado' ? 'incluida pese a exceder el límite' : 'pagada sin transcript';
+  return `${motivo} — ${a.approvedBy || 'sin registrar'}${cuando ? ` el ${cuando}` : ''}`;
+}
 const PILL_WARN = { background: 'var(--warn-soft)', color: 'var(--warn)' };
 
 /**
@@ -41,11 +58,12 @@ const PILL_WARN = { background: 'var(--warn-soft)', color: 'var(--warn)' };
  * justo la que se pierde de vista cuando la tabla se desplaza en horizontal.
  */
 function TeacherTotalCard({ result, monthLabel }: { result: TeacherFinanceResult; monthLabel: string }) {
+  const pendiente = pendingTranscriptSummary(result);
   const desglose: Array<{ label: string; value: string; tone?: 'ok' | 'warn' | 'danger' }> = [
     { label: 'Clases pagables', value: `${result.totalPagable} · €${result.montoPagable.toFixed(2)}` },
   ];
-  if (result.totalARevisar > 0)
-    desglose.push({ label: 'A revisar', value: `${result.totalARevisar} · €${result.montoARevisar.toFixed(2)}`, tone: 'warn' });
+  if (pendiente)
+    desglose.push({ label: 'Pendiente de transcript', value: `${pendiente.classes} · €${pendiente.amount.toFixed(2)}`, tone: 'warn' });
   if (result.montoRetenido > 0)
     desglose.push({ label: 'Retenido', value: `€${result.montoRetenido.toFixed(2)}`, tone: 'warn' });
   if (result.bonusFromScoring > 0)
@@ -77,6 +95,13 @@ function TeacherTotalCard({ result, monthLabel }: { result: TeacherFinanceResult
           </div>
         ))}
       </div>
+      {/* El total de arriba NO incluye lo pendiente: se dice explícitamente para
+          que nadie sume mentalmente las dos cifras. */}
+      {pendiente && (
+        <div style={{ marginTop: 'var(--space-2)', fontSize: 'var(--fs-caption)', color: '#9a6516' }}>
+          {pendiente.label} — no suma al total hasta que el profesor suba el transcript.
+        </div>
+      )}
     </div>
   );
 }
@@ -86,9 +111,10 @@ function TeacherTotalCard({ result, monthLabel }: { result: TeacherFinanceResult
  * badges envuelven en lugar de estirar el ancho, así que no hay `min-width` que
  * obligue a desplazarse en horizontal para leer el estado o el botón de aprobar.
  */
-function ClassCards({ result, studentName, onApproveReview, onApproveExceed }: {
+function ClassCards({ result, studentName, approvals, onApproveReview, onApproveExceed }: {
   result: TeacherFinanceResult;
   studentName: string;
+  approvals: FinanceManualApproval[];
   onApproveReview: (date: string) => void;
   onApproveExceed: (date: string) => void;
 }) {
@@ -98,9 +124,11 @@ function ClassCards({ result, studentName, onApproveReview, onApproveExceed }: {
   return (
     <div className="afd-classes">
       {rows.map((r, i) => {
-        const st = FIN_STATUS_STYLE[r.status];
+        const st = financeStatusBadge(r.status);
         const ing = ingresoBadge(r);
         const ct = classTypeBadge(r.classType);
+        const ts = transcriptStateBadge(r.transcriptState);
+        const isFalta = r.classType === 'falta_sin_aviso' || r.classType === 'cancelacion_hora';
         const sub = subscriptionBadge(r.subscriptionStatus);
         const subDiffer = r.subAtJoin && r.subAtRecord && r.subAtJoin !== r.subAtRecord;
         const editable = result.paymentStatus !== 'paid' && !r.manuallyApproved;
@@ -118,19 +146,29 @@ function ClassCards({ result, studentName, onApproveReview, onApproveExceed }: {
               <span className="afd-pill" style={{ background: st.bg, color: st.color }}>{st.label}</span>
               {ct && <span className="afd-pill" style={{ background: ct.bg, color: ct.color }}>{ct.label}</span>}
               <span className="afd-pill" style={{ background: ing.bg, color: ing.color }}>{ing.label}</span>
-              {/* Transcript: segundo factor de verificación. */}
-              <span className="afd-pill" style={r.hasTranscript ? PILL_OK : PILL_WARN}>
-                {r.hasTranscript ? 'Transcript subido' : 'Sin transcript'}
-              </span>
+              {/* Transcript: NIVEL 2. Los cuatro estados salen de lib/finance, para
+                  que el admin lea exactamente lo mismo que ve el profesor. Una
+                  falta no lleva transcript, así que ahí no se pide ninguno. */}
+              {isFalta
+                ? <span className="afd-pill" style={{ background: 'var(--bg-surface-3)', color: 'var(--text-muted)' }}>Sin transcript (no aplica)</span>
+                : <span className="afd-pill" style={{ background: ts.bg, color: ts.color }}>{ts.label}</span>}
               <span className="afd-pill" style={{ background: sub.bg, color: sub.color }}>{sub.label}</span>
               {subDiffer && (
                 <span style={{ cursor: 'help' }} title={`Al ingresar: ${subscriptionBadge(r.subAtJoin).label.replace(/^[^ ]+ /, '')} · Al registrar: ${subscriptionBadge(r.subAtRecord).label.replace(/^[^ ]+ /, '')}`}>ℹ️</span>
               )}
-              {r.manuallyApproved && <span className="afd-pill" style={PILL_OK}>✓ Aprobada</span>}
+              {/* Trazabilidad: pagar sin transcript es una decisión manual, así que
+                  la fila dice quién la tomó y cuándo (finance_manual_approvals). */}
+              {r.manuallyApproved && (
+                <span className="afd-pill" style={PILL_OK} title={approvalTrace(approvals, result.teacherId, r.studentName, r.date)}>
+                  ✓ Aprobada{approvalBy(approvals, result.teacherId, r.studentName, r.date)}
+                </span>
+              )}
             </div>
+            {/* Pagar una clase que entró (tiene ingreso) pero sigue sin transcript.
+                No hay botón para las que nunca entraron: sin ingreso no hay fila. */}
             {editable && r.status === 'a_revisar' && (
               <div className="afd-action">
-                <button className="afd-btn" onClick={() => onApproveReview(r.date)}>✓ Aprobar manualmente</button>
+                <button className="afd-btn" onClick={() => onApproveReview(r.date)}>✓ Pagar sin transcript</button>
               </div>
             )}
             {editable && (r.status === 'excede_limite' || r.status === 'excede_limite_tipo') && (
@@ -150,9 +188,10 @@ function ClassCards({ result, studentName, onApproveReview, onApproveExceed }: {
  * comparar (nombre, clases, subtotal, estado); al abrir aparecen la ficha y las
  * clases, sin tabla anidada y por tanto sin scroll lateral.
  */
-function StudentDetailList({ result, assignments, onApproveReview, onApproveExceed }: {
+function StudentDetailList({ result, assignments, approvals, onApproveReview, onApproveExceed }: {
   result: TeacherFinanceResult;
   assignments: Assignment[];
+  approvals: FinanceManualApproval[];
   onApproveReview: (studentName: string, date: string) => void;
   onApproveExceed: (studentName: string, date: string) => void;
 }) {
@@ -181,7 +220,10 @@ function StudentDetailList({ result, assignments, onApproveReview, onApproveExce
           const antiquity = rows[0]?.antiquityDays ?? 0;
           const rate = rows[0]?.rate ?? 0;
           const isOpen = openStudent === name;
-          const hasReview = rows.some(r => r.status === 'a_revisar');
+          // Clases dadas que todavía no se cobran por no tener transcript.
+          const pendientes = rows.filter(r => r.status === 'a_revisar');
+          const hasReview = pendientes.length > 0;
+          const pendienteAmount = pendientes.reduce((s, r) => s + r.rate * r.billingUnits, 0);
           return (
             <div key={name} className={`afd-student${isOpen ? ' is-open' : ''}`}>
               <button className="afd-student-head" aria-expanded={isOpen}
@@ -192,7 +234,10 @@ function StudentDetailList({ result, assignments, onApproveReview, onApproveExce
                 </span>
                 <span className="afd-student-right">
                   <span className="afd-student-count">{pagableUnits} {pagableUnits === 1 ? 'clase' : 'clases'}</span>
-                  <span className="afd-pill" style={hasReview ? PILL_WARN : PILL_OK}>{hasReview ? 'A revisar' : 'OK'}</span>
+                  <span className="afd-pill" style={hasReview ? PILL_WARN : PILL_OK}
+                    title={hasReview ? `€${pendienteAmount.toFixed(2)} sin cobrar por falta de transcript` : undefined}>
+                    {hasReview ? 'Pendiente de transcript' : 'OK'}
+                  </span>
                   <span className="afd-student-amount">€{subtotal.toFixed(2)}</span>
                 </span>
               </button>
@@ -227,9 +272,17 @@ function StudentDetailList({ result, assignments, onApproveReview, onApproveExce
                       <div className="afd-meta-label">Subtotal</div>
                       <div className="afd-meta-value" style={{ color: 'var(--ok)', fontWeight: 'var(--fw-semibold)' }}>€{subtotal.toFixed(2)}</div>
                     </div>
+                    {hasReview && (
+                      <div>
+                        <div className="afd-meta-label">Pendiente de transcript</div>
+                        <div className="afd-meta-value" style={{ color: '#9a6516', fontWeight: 'var(--fw-semibold)' }}>
+                          €{pendienteAmount.toFixed(2)} · {pendientes.length}
+                        </div>
+                      </div>
+                    )}
                   </div>
                   <ClassCards
-                    result={result} studentName={name}
+                    result={result} studentName={name} approvals={approvals}
                     onApproveReview={date => onApproveReview(name, date)}
                     onApproveExceed={date => onApproveExceed(name, date)}
                   />
@@ -335,13 +388,14 @@ function FinanceTab() {
   const sumTotal     = visible.reduce((s, r) => s + r.totalAPagar, 0);
   const sumPagables  = visible.reduce((s, r) => s + r.totalPagable, 0);
   const sumARevisar  = visible.reduce((s, r) => s + r.totalARevisar, 0);
+  const sumPendiente = visible.reduce((s, r) => s + r.montoARevisar, 0);
   const sumRetenido  = visible.reduce((s, r) => s + r.montoRetenido, 0);
 
   const cards = [
-    { label: 'Total a pagar', value: `€${sumTotal.toFixed(2)}`, color: '#1E9E3A' },
-    { label: 'Clases pagables', value: sumPagables, color: 'var(--text-primary)' },
-    { label: 'Clases a revisar', value: sumARevisar, color: sumARevisar > 0 ? '#b45309' : '#1E9E3A' },
-    { label: 'Monto retenido', value: `€${sumRetenido.toFixed(2)}`, color: sumRetenido > 0 ? '#ea580c' : '#1E9E3A' },
+    { label: 'Total a pagar', value: `€${sumTotal.toFixed(2)}`, color: '#1E9E3A', hint: 'Solo clases pagables (ingreso + transcript) más bonos y penalizaciones' },
+    { label: 'Clases pagables', value: sumPagables, color: 'var(--text-primary)', hint: 'Con ingreso registrado y transcript validado' },
+    { label: 'Pendiente de transcript', value: `€${sumPendiente.toFixed(2)}`, color: sumARevisar > 0 ? '#9a6516' : '#1E9E3A', hint: `${sumARevisar} clases dadas con ingreso pero sin transcript: NO suman al total` },
+    { label: 'Monto retenido', value: `€${sumRetenido.toFixed(2)}`, color: sumRetenido > 0 ? '#ea580c' : '#1E9E3A', hint: 'Clases que superan el límite mensual del plan o las 2 por tipo' },
   ];
 
   function exportCsv() {
@@ -378,7 +432,7 @@ function FinanceTab() {
       {/* Cards de resumen */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 14, marginBottom: 18 }}>
         {cards.map(c => (
-          <div key={c.label} style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '16px 18px' }}>
+          <div key={c.label} title={c.hint} style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '16px 18px' }}>
             <div style={{ fontSize: 26, fontWeight: 700, color: c.color }}>{c.value}</div>
             <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginTop: 3 }}>{c.label}</div>
           </div>
@@ -454,8 +508,10 @@ function FinanceTab() {
                   <div className="afd-brow-value">{r.totalPagable} · €{r.montoPagable.toFixed(2)}</div>
                 </div>
                 <div>
-                  <div className="afd-brow-label">A revisar</div>
-                  <div className={`afd-brow-value${r.totalARevisar > 0 ? ' is-warn' : ''}`}>{r.totalARevisar}</div>
+                  <div className="afd-brow-label">Pendiente de transcript</div>
+                  <div className={`afd-brow-value${r.totalARevisar > 0 ? ' is-warn' : ''}`}>
+                    {r.totalARevisar} · €{r.montoARevisar.toFixed(2)}
+                  </div>
                 </div>
                 <div>
                   <div className="afd-brow-label">Excede límite</div>
@@ -485,7 +541,7 @@ function FinanceTab() {
                     <div className="afd">
                       <TeacherTotalCard result={r} monthLabel={finMonthLabel(monthYear)} />
                       <StudentDetailList
-                        result={r} assignments={assignments}
+                        result={r} assignments={assignments} approvals={manualApprovals}
                         onApproveReview={(student, date) => approveReviewClass(r.teacherId, student, date, approvedBy)}
                         onApproveExceed={(student, date) => approveExceedLimitClass(r.teacherId, student, date, approvedBy)}
                       />
@@ -549,34 +605,40 @@ function FinanceTab() {
 }
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
-// Explica las dos condiciones que hacen pagable una clase. Solo informativo.
+// Explica la regla de DOS NIVELES (entrada y pago). Solo informativo.
 function HowItWorksModal({ onClose }: { onClose: () => void }) {
   return (
     <div
       style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
       onClick={e => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div style={{ background: '#fff', borderRadius: 16, width: '100%', maxWidth: 520, maxHeight: '88vh', overflowY: 'auto', padding: 26, fontFamily: "'Public Sans', system-ui, sans-serif" }}>
+      <div style={{ background: '#F7F7F5', borderRadius: 16, width: '100%', maxWidth: 520, maxHeight: '88vh', overflowY: 'auto', padding: 26, fontFamily: "'Public Sans', system-ui, sans-serif" }}>
         <div style={{ fontSize: 18, fontWeight: 700, color: '#1a1c1a', marginBottom: 6 }}>
-          Cómo se aprueba una clase para el pago
+          Cómo entra y cómo se paga una clase
         </div>
         <p style={{ fontSize: 13.5, color: '#5f6360', lineHeight: 1.65, margin: '0 0 18px' }}>
-          Para que una clase sea considerada <b>pagable</b> deben cumplirse DOS condiciones:
+          Son <b>dos preguntas distintas</b>, y en este orden:
         </p>
 
         <ol style={{ margin: '0 0 18px', paddingLeft: 20, display: 'flex', flexDirection: 'column', gap: 14 }}>
           <li>
-            <div style={{ fontSize: 14, fontWeight: 600, color: '#1a1c1a' }}>Acceso mediante el botón</div>
+            <div style={{ fontSize: 14, fontWeight: 600, color: '#1a1c1a' }}>
+              ¿Entra a finanzas? — lo decide el clic en &laquo;Unirse a clase&raquo;
+            </div>
             <div style={{ fontSize: 13.5, color: '#5f6360', lineHeight: 1.6, marginTop: 3 }}>
-              El profesor debe haber accedido a la clase con el botón &laquo;Ingresar a clase&raquo; en
-              &laquo;Mis clases&raquo;. El acceso queda registrado automáticamente con la hora exacta.
+              El acceso queda registrado con la hora exacta y es lo que hace que la clase exista para
+              el pago. <b>Si el profesor no pulsó el botón, la clase no aparece acá</b>: no se cuenta
+              ni siquiera como pendiente, y subir el transcript después no la trae de vuelta.
             </div>
           </li>
           <li>
-            <div style={{ fontSize: 14, fontWeight: 600, color: '#1a1c1a' }}>Transcript subido</div>
+            <div style={{ fontSize: 14, fontWeight: 600, color: '#1a1c1a' }}>
+              ¿Se cobra? — lo decide el transcript
+            </div>
             <div style={{ fontSize: 13.5, color: '#5f6360', lineHeight: 1.6, marginTop: 3 }}>
-              El profesor debe haber subido el transcript de la clase en &laquo;Mis clases&raquo; →
-              &laquo;Añadir clase&raquo;. Es el texto que genera Fathom al finalizar la sesión.
+              De las clases que entraron, se pagan las que tienen el transcript subido y validado
+              (&laquo;Mis clases&raquo; → &laquo;Añadir clase&raquo;, el texto que genera Fathom).
+              Las demás quedan pendientes y pasan a pagables solas en cuanto se sube.
             </div>
           </li>
         </ol>
@@ -586,9 +648,9 @@ function HowItWorksModal({ onClose }: { onClose: () => void }) {
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 18 }}>
           {[
-            { dot: '#16a34a', label: 'Pagable', desc: 'ambas condiciones cumplidas' },
-            { dot: '#e0912f', label: 'A revisar', desc: 'solo una condición cumplida — el admin puede aprobarla manualmente' },
-            { dot: '#a4a7a1', label: 'No incluida', desc: 'ninguna condición cumplida' },
+            { dot: '#1E9E3A', label: 'Pagable', desc: 'clic + transcript validado — suma al total a cobrar' },
+            { dot: '#FFC400', label: 'Pendiente de transcript', desc: 'clic sin transcript: la clase se dio y se ve, pero NO suma al total' },
+            { dot: '#a4a7a1', label: 'No aparece', desc: 'sin clic en «Unirse a clase» la clase no entró a finanzas' },
           ].map(s => (
             <div key={s.label} style={{ display: 'grid', gridTemplateColumns: '9px 1fr', gap: 10, alignItems: 'start' }}>
               <span style={{ width: 9, height: 9, borderRadius: '50%', background: s.dot, marginTop: 6 }} />
@@ -600,8 +662,9 @@ function HowItWorksModal({ onClose }: { onClose: () => void }) {
         </div>
 
         <div style={{ fontSize: 12.5, color: '#9a6516', background: '#fdf3e7', border: '1px solid #f2e2c9', borderRadius: 10, padding: '10px 13px', lineHeight: 1.6, marginBottom: 18 }}>
-          Las clases de tipo &laquo;Falta sin aviso&raquo; y &laquo;Cancelación sobre la hora&raquo; tienen
-          reglas propias y no requieren transcript.
+          Única excepción al clic: <b>falta sin aviso</b> y <b>cancelación sobre la hora</b>. El alumno
+          no vino, así que no puede haber ingreso: entran por el registro que crea el profesor y se
+          cobran las 2 primeras de cada tipo por alumno, sin transcript.
         </div>
 
         <button
@@ -633,7 +696,7 @@ function FinanzasContent() {
               onClick={() => setHowOpen(true)}
               style={{ border: '1px solid var(--border)', background: 'var(--bg-surface)', borderRadius: 9, padding: '8px 14px', fontFamily: 'inherit', fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)', cursor: 'pointer', minHeight: 40 }}
             >
-              ¿Cómo se aprueba una clase?
+              ¿Cómo entra y se paga una clase?
             </button>
           </div>
           <FinanceTab />
