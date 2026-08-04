@@ -44,6 +44,20 @@ export const PUNCT_STYLE: Record<AttendanceStatus, { label: string; color: strin
   upcoming:  { label: '🗓️ Próxima',   color: '#2563eb', bg: 'rgba(37,99,235,0.1)' },
 };
 
+/**
+ * Estilo de un estado, tolerante a valores que no conocemos.
+ *
+ * Acceder a PUNCT_STYLE[estado] directamente devuelve undefined ante un valor
+ * inesperado, y leer `.bg` de ahí tira la pantalla ENTERA: así fue como tres
+ * filas con la puntualidad en español dejaron sin cargar todo el "Registro de
+ * clases". Una fila que no sepamos pintar se pinta en gris; nunca se lleva por
+ * delante a las otras mil.
+ */
+export function punctStyleOf(status: string | null | undefined): { label: string; color: string; bg: string } {
+  return PUNCT_STYLE[status as AttendanceStatus]
+    ?? { label: '— Sin dato', color: 'var(--text-muted)', bg: 'var(--bg-surface-3)' };
+}
+
 const DAY_NAMES_BY_JSDAY = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 
 export function isoDate(d: Date): string {

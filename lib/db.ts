@@ -2721,6 +2721,29 @@ export async function dbUpdateMeetLink(assignmentId: string, link: string): Prom
 
 // ── CLASS JOIN LOGS ───────────────────────────────────────────────────────────
 
+/**
+ * Puntualidad tal como sale de la base, traducida a los tres valores que entiende
+ * la aplicación.
+ *
+ * En `class_join_logs` hay filas antiguas con el valor en español ('a_tiempo'),
+ * que ningún código actual escribe. Nadie las traducía, así que llegaban intactas
+ * a las pantallas: el panel de admin busca el estilo por ese valor y, al no
+ * encontrarlo, la pestaña "Registro de clases" entera dejaba de cargar por tres
+ * filas de hace un mes.
+ *
+ * Un valor desconocido se toma como 'on_time' por el mismo criterio que
+ * calcPunctuality cuando la fecha no es válida: ante la duda, no se penaliza.
+ */
+function normalizePunctuality(v: unknown): ClassJoinLog['punctuality'] {
+  switch (String(v ?? '').trim().toLowerCase()) {
+    case 'late':
+    case 'tarde':      return 'late';
+    case 'very_late':
+    case 'muy_tarde':  return 'very_late';
+    default:           return 'on_time';
+  }
+}
+
 function calcPunctuality(scheduledDate: string, scheduledTime: string, clickedAt: Date): ClassJoinLog['punctuality'] {
   // scheduledTime es "HH:00" en hora de ESPAÑA. Antes se construía la hora
   // programada con `new Date(y, m, d, h)`, que usa la zona del navegador: un
@@ -2788,7 +2811,7 @@ export async function dbGetClassJoinLogs(): Promise<ClassJoinLog[]> {
     scheduledDate: row.scheduled_date,
     scheduledTime: row.scheduled_time,
     clickedAt:     row.clicked_at,
-    punctuality:   row.punctuality,
+    punctuality:   normalizePunctuality(row.punctuality),
     subscriptionStatus:   row.subscription_status ?? undefined,
     enteredWithoutActive: row.entered_without_active ?? false,
     subscriptionDaysRemaining: row.subscription_days_remaining ?? undefined,

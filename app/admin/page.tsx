@@ -23,7 +23,7 @@ import { ALL_SPECIALTIES } from '@/lib/specialties';
 import { SpecialtyChip, ToggleChip } from '@/components/ui';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { AppNotification, AssignedSlot } from '@/types';
-import { buildAttendanceRows, PUNCT_STYLE, attendanceSubBadge, minutesLate, isoDate, type LogRow } from '@/lib/attendance';
+import { buildAttendanceRows, punctStyleOf, attendanceSubBadge, minutesLate, isoDate, type LogRow } from '@/lib/attendance';
 import { gridOccupancyOfTeacher, applyGridSlots } from '@/lib/teacherClasses';
 import { HelpTooltip } from '@/components/ui';
 import type { HelpTooltipKey } from '@/lib/help-tooltips';
@@ -1865,7 +1865,7 @@ function ClassTrackingTab() {
 }
 
 // ─── Class Log Tab (Registro de clases) ───────────────────────────────────────
-// PUNCT_STYLE, attendanceSubBadge, minutesLate, isoDate, LogRow y buildAttendanceRows
+// punctStyleOf, attendanceSubBadge, minutesLate, isoDate, LogRow y buildAttendanceRows
 // viven en lib/attendance (fuente única, compartida con la sección "Asistencias"
 // del profesor).
 
@@ -2047,7 +2047,7 @@ function ClassLogTab() {
               </thead>
               <tbody>
                 {visibleRows.map(r => {
-                  const ps = PUNCT_STYLE[r.status];
+                  const ps = punctStyleOf(r.status);
                   return (
                     <tr key={r.id} style={{ borderTop: '1px solid var(--border)' }}>
                       <td style={{ padding: '10px 14px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>
