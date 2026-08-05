@@ -2272,3 +2272,101 @@ label {
   .afd-actions > button { flex: 1; min-height: 44px; }
   .afd-panel { padding: var(--space-3); }
 }
+
+/* ═══ BANDEJA DE RIESGO (admin → IA y Riesgo) ═══════════════════════════════
+   Las filas son rejillas de UNA línea que nunca deben partirse. Eso necesita
+   media queries de verdad (los estilos inline del resto del panel no pueden
+   expresarlas), así que las columnas viven acá y el componente solo pone la
+   clase. Al estrechar, lo primero que se va es la vista previa de la evidencia:
+   es lo único prescindible, porque el texto completo está en el desplegable. */
+
+.rk-row {
+  display: grid;
+  grid-template-columns: 22px 236px 130px 1fr 158px 108px 22px;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 15px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-top: 1px solid #f1f3ef;
+  font-family: inherit;
+  cursor: pointer;
+}
+.rk-row:hover { background: #fcfdfb; }
+.rk-row.is-sel { background: #f7faf8; }
+
+.rk-verif-row {
+  display: grid;
+  grid-template-columns: 22px 236px 118px 108px 1fr 104px 130px 22px;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 15px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  font-family: inherit;
+  cursor: pointer;
+}
+.rk-verif-row:hover { background: #fcfdfb; }
+.rk-verif-row.is-sel { background: #f7faf8; }
+
+.rk-verif-head {
+  display: grid;
+  grid-template-columns: 22px 236px 118px 108px 1fr 104px 130px 22px;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 18px;
+  background: #fbfcfa;
+  border-bottom: 1px solid #edefea;
+  font-size: 10.8px; font-weight: 800; letter-spacing: .7px;
+  color: #8a9790; text-transform: uppercase;
+}
+
+.rk-detail { display: grid; grid-template-columns: 1fr 296px; gap: 20px; }
+
+.rk-res-row {
+  display: grid; grid-template-columns: 236px 150px 1fr 110px;
+  align-items: center; gap: 14px;
+  padding: 14px 18px; border-bottom: 1px solid #f1f3ef;
+}
+
+.rk-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.rk-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+/* La regla global de arriba pone `width: 100%` a todo input/select. En la barra
+   de herramientas eso hacía que cada <select> ocupara la fila entera y la barra
+   se partiera en tres líneas: aquí vuelven a medir por su contenido. */
+.rk-toolbar select { width: auto; flex: 0 0 auto; max-width: 100%; }
+.rk-toolbar input { width: 100%; }
+
+/* Por debajo de ~1100 px la vista previa deja de caber sin empujar al resto. */
+@media (max-width: 1100px) {
+  .rk-preview { display: none; }
+  .rk-row { grid-template-columns: 22px minmax(0, 1fr) 130px 158px 108px 22px; }
+  .rk-verif-row,
+  .rk-verif-head { grid-template-columns: 22px minmax(0, 1fr) 118px 96px 104px 122px 22px; }
+  .rk-detail { grid-template-columns: 1fr; }
+}
+
+/* Móvil: la rejilla de una línea deja de tener sentido. Cada fila pasa a bloque
+   y los trozos se apilan; sigue sin haber scroll horizontal. */
+@media (max-width: 760px) {
+  .rk-cards { grid-template-columns: 1fr; }
+  .rk-row,
+  .rk-verif-row {
+    grid-template-columns: 22px minmax(0, 1fr) auto;
+    row-gap: 8px;
+    padding: 13px 14px;
+  }
+  .rk-row > .rk-span,
+  .rk-verif-row > .rk-span { grid-column: 2 / -1; }
+  /* El chevron es el último hijo: sin esto caía en una fila propia bajo el botón.
+     Se ancla a la esquina superior derecha, junto al nombre. */
+  .rk-row > .rk-chev,
+  .rk-verif-row > .rk-chev { grid-column: 3; grid-row: 1; align-self: start; }
+  .rk-verif-head { display: none; }
+  .rk-res-row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 6px; }
+  .rk-res-row > .rk-span { grid-column: 1 / -1; }
+}

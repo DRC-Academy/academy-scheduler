@@ -194,3 +194,52 @@ export async function markInterventionAttended(profileId: string): Promise<void>
   }).eq('id', profileId);
   if (error) throw new Error(`No se pudo cerrar la intervención: ${error.message}`);
 }
+
+/** Lo que había en la ficha antes de cerrar la alerta, para poder deshacer. */
+export interface InterventionSnapshot {
+  activeIntervention: unknown;
+  activeInterventionAt: string | null;
+  unattendedAlerts: number;
+}
+
+/**
+ * Lee el estado ANTES de cerrar. Se llama justo antes de markInterventionAttended
+ * porque ese update es destructivo (pone active_intervention a null) y sin la
+ * foto previa el "Deshacer" no tendría qué restaurar.
+ *
+ * Devuelve null si la ficha no se puede leer: quien llama debe cerrar igual, pero
+ * sabiendo que esa fila no se podrá revertir.
+ */
+export async function readInterventionSnapshot(profileId: string): Promise<InterventionSnapshot | null> {
+  const { data, error } = await supabase
+    .from('student_profiles')
+    .select('active_intervention, active_intervention_at, unattended_alerts')
+    .eq('id', profileId)
+    .maybeSingle();
+
+  if (error || !data) {
+    if (error && !isMissingTable(error)) {
+      console.error('[interventionsClient] No se pudo leer la ficha antes de cerrar:', error);
+    }
+    return null;
+  }
+  const row = data as unknown as {
+    active_intervention: unknown; active_intervention_at: string | null; unattended_alerts: number | null;
+  };
+  return {
+    activeIntervention:   row.active_intervention ?? null,
+    activeInterventionAt: row.active_intervention_at ?? null,
+    unattendedAlerts:     Number(row.unattended_alerts ?? 0) || 0,
+  };
+}
+
+/** "Deshacer": devuelve la ficha al estado que tenía antes de cerrar la alerta. */
+export async function restoreIntervention(profileId: string, snap: InterventionSnapshot): Promise<void> {
+  const { error } = await supabase.from('student_profiles').update({
+    active_intervention:    snap.activeIntervention ?? null,
+    active_intervention_at: snap.activeInterventionAt,
+    unattended_alerts:      snap.unattendedAlerts,
+    updated_at:             new Date().toISOString(),
+  }).eq('id', profileId);
+  if (error) throw new Error(`No se pudo deshacer: ${error.message}`);
+}
