@@ -32,6 +32,7 @@ import LevelTestsTab from '@/components/admin/LevelTestsTab';
 import TranscriptValidationTab from '@/components/admin/TranscriptValidationTab';
 import ChurnTab from '@/components/admin/ChurnTab';
 import { triggerEmail } from '@/lib/emailClient';
+import { notificationDirection, notificationTypeInfo, type NotificationDirection } from '@/lib/notificationDirection';
 
 // ─── Edit Teacher Modal ───────────────────────────────────────────────────────
 function EditTeacherModal({ teacher, onClose, onSave, onDelete }: {
@@ -283,37 +284,203 @@ function NotificationsAdminTab() {
         </div>
       </div>
 
-      {/* History */}
-      <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '22px 24px' }}>
-        <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)', marginBottom: 16 }}>📋 Historial de enviadas</div>
-        {loadingNotifs ? (
-          <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)', fontSize: 13 }}>Cargando...</div>
-        ) : allNotifs.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)', fontSize: 13 }}>Sin notificaciones enviadas todavía.</div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {allNotifs.map(n => {
-              const targetTeacher = n.targetUser ? teachers.find(t => t.id === n.targetUser) : null;
-              const dest = targetTeacher ? targetTeacher.name : n.targetRole === 'teacher' ? 'Todos los profesores' : '—';
-              return (
-                <div key={n.id} style={{ background: 'var(--bg-surface-2)', border: '1px solid var(--border)', borderRadius: 10, padding: '14px 18px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)', marginBottom: 4 }}>{n.title}</div>
-                      <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: 8 }}>{n.body}</div>
-                      <div style={{ display: 'flex', gap: 12, fontSize: 11, color: 'var(--text-muted)', flexWrap: 'wrap' }}>
-                        <span>📨 Para: <b style={{ color: 'var(--text-secondary)' }}>{dest}</b></span>
-                        <span>📅 {new Date(n.createdAt).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
-                        <span>👁 Leído por: <b style={{ color: n.readBy.length > 0 ? '#1E9E3A' : 'var(--text-muted)' }}>{n.readBy.length}</b></span>
-                      </div>
-                    </div>
+      {/* Historial: enviadas hacia afuera vs recibidas por el admin */}
+      <NotificationsHistory notifs={allNotifs} loading={loadingNotifs} teachers={teachers} />
+    </div>
+  );
+}
+
+// ─── Historial de comunicaciones (enviadas / recibidas) ───────────────────────
+//
+// Antes esto era una única lista titulada "Historial de enviadas" que en realidad
+// mostraba `select * from notifications`: las alertas dirigidas AL admin (riesgo,
+// transcripciones a revisar, faltas) salían mezcladas con lo que el sistema había
+// mandado a los profesores, y con la etiqueta equivocada. Se separan por
+// destinatario — ver lib/notificationDirection.ts para el criterio.
+
+type DirFilter = 'all' | 'sent' | 'received';
+
+/** Filas por tanda en el historial. */
+const PAGE_SIZE = 50;
+
+/** Verde DRC para lo que salió; ámbar DRC para lo que entró. */
+const DIR_STYLE: Record<NotificationDirection, { label: string; color: string; bg: string; border: string; arrow: string }> = {
+  sent:     { label: 'Enviada',  color: '#1E9E3A', bg: 'rgba(30,158,58,0.10)', border: 'rgba(30,158,58,0.35)', arrow: '↗' },
+  received: { label: 'Recibida', color: '#8a6d00', bg: 'rgba(255,196,0,0.16)', border: 'rgba(255,196,0,0.55)', arrow: '↙' },
+};
+
+function NotificationsHistory({ notifs, loading, teachers }: {
+  notifs: AppNotification[];
+  loading: boolean;
+  teachers: Teacher[];
+}) {
+  const [filter, setFilter] = useState<DirFilter>('all');
+  // El historial pasa de 700 filas. Se pintan por tandas para no volcarlas todas
+  // de golpe: la lista sigue fluyendo con la página (sin scroll interno), solo
+  // que crece a demanda con "Ver más".
+  const [shown, setShown] = useState(PAGE_SIZE);
+
+  // Se clasifica una vez y se ordena por fecha descendente. `dbGetAllNotifications`
+  // ya viene ordenado, pero no dependemos de eso para el orden en pantalla.
+  const rows = useMemo(() => {
+    return notifs
+      .map(n => {
+        const direction = notificationDirection(n);
+        const info      = notificationTypeInfo(n.type, direction);
+        const teacher   = n.targetUser ? teachers.find(t => t.id === n.targetUser) : null;
+        // A quién salió. Si el target_user no matchea ningún profesor (profe
+        // borrado), se dice eso en vez de inventar un nombre.
+        const dest = direction === 'received'
+          ? null
+          : teacher              ? teacher.name
+          : n.targetRole === 'teacher' ? 'Todos los profesores'
+          : n.targetUser         ? 'Profesor no encontrado'
+          : '—';
+        return { n, direction, info, dest };
+      })
+      .sort((a, b) => new Date(b.n.createdAt).getTime() - new Date(a.n.createdAt).getTime());
+  }, [notifs, teachers]);
+
+  const sentCount     = rows.filter(r => r.direction === 'sent').length;
+  const receivedCount = rows.filter(r => r.direction === 'received').length;
+
+  const matching = filter === 'all' ? rows : rows.filter(r => r.direction === filter);
+  const visible  = matching.slice(0, shown);
+  const restantes = matching.length - visible.length;
+
+  // Cambiar de filtro vuelve a empezar por arriba: si el admin venía de "Ver más"
+  // en Todas, no tiene sentido aterrizar en Recibidas ya expandido.
+  function changeFilter(f: DirFilter) {
+    setFilter(f);
+    setShown(PAGE_SIZE);
+  }
+
+  const filters: Array<{ id: DirFilter; label: string }> = [
+    { id: 'all',      label: `Todas (${rows.length})` },
+    { id: 'sent',     label: `Enviadas (${sentCount})` },
+    { id: 'received', label: `Recibidas (${receivedCount})` },
+  ];
+
+  return (
+    <div>
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)' }}>Historial de comunicaciones</div>
+        <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3 }}>
+          <b style={{ color: '#1E9E3A' }}>Enviadas</b>: lo que el sistema comunicó a profesores y alumnos ·{' '}
+          <b style={{ color: '#8a6d00' }}>Recibidas</b>: los avisos dirigidos a ti. Lo más reciente, arriba.
+        </div>
+      </div>
+
+      {/* Filtro segmentado */}
+      <div style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap' }}>
+        {filters.map(f => {
+          const active = filter === f.id;
+          const tone = f.id === 'sent' ? '#1E9E3A' : f.id === 'received' ? '#8a6d00' : 'var(--text-secondary)';
+          return (
+            <button key={f.id} onClick={() => changeFilter(f.id)}
+              style={{
+                padding: '5px 14px', borderRadius: 20,
+                border: `1.5px solid ${active ? (f.id === 'received' ? '#FFC400' : '#1E9E3A') : 'var(--border)'}`,
+                background: active ? (f.id === 'received' ? 'rgba(255,196,0,0.14)' : 'rgba(30,158,58,0.1)') : 'transparent',
+                color: active ? tone : 'var(--text-secondary)',
+                cursor: 'pointer', fontSize: 12.5, fontWeight: active ? 700 : 500, fontFamily: 'inherit',
+              }}>
+              {f.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {loading ? (
+        <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)', fontSize: 13 }}>Cargando...</div>
+      ) : visible.length === 0 ? (
+        <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '32px 14px', textAlign: 'center', fontSize: 13, color: 'var(--text-muted)' }}>
+          {filter === 'sent'     ? 'Todavía no se ha enviado ninguna comunicación.'
+            : filter === 'received' ? 'No tienes avisos recibidos.'
+            : 'Sin comunicaciones todavía.'}
+        </div>
+      ) : (
+        // Sin caja con scroll interno: la lista fluye con la página, separada por
+        // líneas de 1px (mismo criterio que la pestaña de emails).
+        <div>
+          {visible.map((r, i) => {
+            const { n, direction, info, dest } = r;
+            const ds = DIR_STYLE[direction];
+            const last = i === visible.length - 1;
+            return (
+              <div key={n.id} style={{
+                display: 'flex', gap: 12, alignItems: 'flex-start',
+                padding: '15px 2px',
+                borderBottom: last ? 'none' : '1px solid var(--border)',
+              }}>
+                {/* Icono del tipo */}
+                <div style={{ fontSize: 19, lineHeight: 1.3, flexShrink: 0 }}>{info.icon}</div>
+
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  {/* Chips: dirección + tipo. `flexWrap` para que en móvil bajen
+                      de línea en vez de forzar scroll horizontal. */}
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginBottom: 5 }}>
+                    <span style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 4,
+                      padding: '2px 9px', borderRadius: 20,
+                      background: ds.bg, border: `1px solid ${ds.border}`, color: ds.color,
+                      fontSize: 10.5, fontWeight: 700, whiteSpace: 'nowrap',
+                    }}>
+                      {ds.arrow} {ds.label}
+                    </span>
+                    <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-secondary)' }}>
+                      {info.label}
+                    </span>
+                    {/* Canal: solo se marca cuando de verdad salió un correo. */}
+                    {info.email && (
+                      <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>· 📧 email</span>
+                    )}
+                    {info.alsoEmailedToStudent && (
+                      <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>· 📧 email al alumno</span>
+                    )}
+                  </div>
+
+                  <div style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--text-primary)', lineHeight: 1.35, marginBottom: 3 }}>
+                    {n.title}
+                  </div>
+                  {/* `pre-wrap`: varios cuerpos llevan saltos de línea (motivo,
+                      recomendación) que antes se veían como un párrafo corrido. */}
+                  <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.5, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+                    {n.body}
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 12, fontSize: 11, color: 'var(--text-muted)', flexWrap: 'wrap', marginTop: 7 }}>
+                    {direction === 'sent' ? (
+                      <>
+                        <span>Para: <b style={{ color: 'var(--text-secondary)' }}>{dest}</b></span>
+                        <span>
+                          Leído por:{' '}
+                          <b style={{ color: n.readBy.length > 0 ? '#1E9E3A' : 'var(--text-muted)' }}>{n.readBy.length}</b>
+                        </span>
+                      </>
+                    ) : (
+                      <span>Origen: <b style={{ color: 'var(--text-secondary)' }}>{n.createdBy || 'sistema'}</b></span>
+                    )}
+                    <span>{new Date(n.createdAt).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
                   </div>
                 </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
+              </div>
+            );
+          })}
+
+          {restantes > 0 && (
+            <button onClick={() => setShown(s => s + PAGE_SIZE)}
+              style={{
+                width: '100%', marginTop: 16, padding: '11px',
+                borderRadius: 9, border: '1.5px solid var(--border)',
+                background: 'transparent', color: '#1E9E3A',
+                fontSize: 13, fontWeight: 700, fontFamily: 'inherit', cursor: 'pointer',
+              }}>
+              Ver más ({restantes} restante{restantes !== 1 ? 's' : ''})
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
