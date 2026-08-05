@@ -192,8 +192,21 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
     setCheckingKey(null);
 
     if (info.active === true) {
-      doJoin(c, 'active', false);
-      toast('✅ Ingreso registrado');
+      // Se guarda el estado REAL, no un 'active' fijo. Antes se escribía siempre
+      // 'active' y con eso se perdía en el join log —y por tanto en finanzas y en
+      // asistencias— si el alumno entró en 'pendiente de cancelación', por
+      // Oritalk o por activación manual. Todos dan acceso, pero no son lo mismo.
+      doJoin(c, info.status, false, info.daysRemaining);
+      if (info.status === 'pending-cancel') {
+        // Aviso informativo: NO bloquea. El alumno pagó hasta el fin del periodo.
+        const hasta = info.endDate ? new Date(info.endDate) : null;
+        const fecha = hasta && !isNaN(hasta.getTime())
+          ? ` el ${String(hasta.getDate()).padStart(2, '0')}/${String(hasta.getMonth() + 1).padStart(2, '0')}`
+          : '';
+        toast(`✅ Ingreso registrado · La suscripción se cancelará${fecha}, pero el alumno puede seguir tomando clases hasta entonces`, 6000);
+      } else {
+        toast('✅ Ingreso registrado');
+      }
     } else if (info.active === false) {
       setSubModal({ c, status: info.status, daysRemaining: info.daysRemaining, endDate: info.endDate });
     } else {

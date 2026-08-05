@@ -8,6 +8,8 @@ import type { Assignment, ClassJoinLog } from '@/types';
 import { minutesLateSpain } from '@/lib/spainTime';
 import { contiguousRunLength, groupByContiguousHour, hourNum, hourText, nkName, sessionRangeLabel } from '@/lib/sessions';
 import type { GridOccupancy } from '@/lib/teacherClasses';
+// Mismo badge de suscripción que finanzas y que el panel de alumnos.
+import { subscriptionBadge } from '@/lib/finance';
 
 export type AttendanceStatus =
   | 'on_time' | 'late' | 'very_late'   // ingresó (según puntualidad del log)
@@ -81,8 +83,11 @@ export function attendanceSubBadge(r: { joinedAt?: string; subscriptionStatus?: 
       : '';
     return { label: `⚠️ Inactiva (ingresó igual)${days}`, color: '#ea580c', bg: 'rgba(249,115,22,0.12)' };
   }
-  if (r.subscriptionStatus === 'active') return { label: '✅ Activa', color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)' };
-  return { label: '❓ No verificado', color: 'var(--text-muted)', bg: 'var(--bg-surface-3)' };
+  // Antes acá solo se reconocía 'active' y TODO lo demás salía como
+  // "❓ No verificado": un alumno en 'pendiente de cancelación' o 'en espera' se
+  // veía igual que uno sin verificar. Ahora el nombre y el color salen del mismo
+  // mapa que usan el resto de los badges.
+  return subscriptionBadge(r.subscriptionStatus);
 }
 
 /**

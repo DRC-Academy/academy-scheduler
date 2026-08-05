@@ -82,11 +82,19 @@ function TeacherTotalCard({ result, monthLabel }: { result: TeacherFinanceResult
           {result.paymentStatus === 'paid' ? '✅ Pagado' : '⏳ Pendiente'}
         </span>
       </div>
-      {result.hasInactiveSubPayable && (
-        <div style={{ marginTop: 'var(--space-2)', fontSize: 'var(--fs-caption)', color: 'var(--warn)' }}>
-          ⚠️ Incluye clases pagables en las que el alumno no tenía suscripción activa.
+      {/* Estado de la suscripción de las clases pagables. Una línea por estado,
+          para que "pendiente de cancelación" (el alumno estaba al día) no se lea
+          igual que "en espera" (no podía tomar clases). Ninguna cambia el importe. */}
+      {result.payableSubStatuses.map(s => (
+        <div key={s.status} style={{
+          marginTop: 'var(--space-2)', fontSize: 'var(--fs-caption)',
+          color: s.countsAsActive ? 'var(--text-muted)' : 'var(--warn)',
+        }}>
+          {s.countsAsActive ? 'ℹ️' : '⚠️'} {s.count === 1 ? '1 clase pagable' : `${s.count} clases pagables`}
+          {' '}con la suscripción en «{s.label}»
+          {s.countsAsActive ? ' (vigente: el alumno podía tomar clases).' : ' (sin acceso al momento de darse).'}
         </div>
-      )}
+      ))}
       <div className="afd-break">
         {desglose.map(d => (
           <div key={d.label}>
@@ -494,7 +502,9 @@ function FinanceTab() {
                     {/* Solo el icono: el aviso completo está en la cabecera del detalle. */}
                     {r.hasInactiveSubPayable && (
                       <span style={{ marginLeft: 5, cursor: 'help' }}
-                        title="Incluye clases pagables donde el alumno NO tenía suscripción activa al momento de darse">
+                        title={`Clases pagables sin suscripción con acceso: ${
+                          r.payableSubStatuses.filter(s => !s.countsAsActive).map(s => `${s.count} en «${s.label}»`).join(', ')
+                        }`}>
                         ⚠️
                       </span>
                     )}

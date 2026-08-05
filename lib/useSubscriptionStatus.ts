@@ -13,6 +13,10 @@
 
 'use client';
 
+// El mapa de estados de WooCommerce (nombre, color y si dan acceso) es el mismo
+// que usan el endpoint, finanzas y las asistencias. Ver lib/subscriptionAccess.
+import { WOO_STATUS } from '@/lib/subscriptionAccess';
+
 export interface SubscriptionInfo {
   active: boolean | null;                            // true=activa · false=inactiva · null=sin verificar
   status: string;                                    // 'active'|'cancelled'|'on-hold'|'expired'|'pending-cancel'|'not_found'|'error'|'manual_override'|'manual_active'|'one_time_no_access'|'oritalk'
@@ -89,10 +93,20 @@ export function resolveSubscriptionEmail(studentEmail?: string | null, assignmen
   return normEmail(studentEmail) || normEmail(assignmentEmail);
 }
 
+/**
+ * Categoría para los FILTROS de la lista, no para decidir accesos.
+ *
+ * OJO: 'pending' es una categoría propia porque el admin quiere poder filtrarla,
+ * pero esos alumnos SÍ pueden tomar clases. Para saber si alguien tiene acceso se
+ * mira `info.active`, nunca esto.
+ */
 export function subCategory(info: SubscriptionInfo | undefined): SubCategory {
   if (!info) return 'unverified';
-  if (info.active === true) return 'active';                                    // active / manual_active / manual_override
+  // 'pending-cancel' va ANTES del check de `active`: desde que cuenta como activa
+  // (que es lo correcto: el alumno pagó hasta el fin del periodo) caería en
+  // 'active' y el chip "Pendiente cancelar" de la lista quedaría siempre vacío.
   if (info.status === 'pending-cancel') return 'pending';
+  if (info.active === true) return 'active';                                    // active / manual_active / manual_override / oritalk
   if (info.active === null || info.status === 'error' || info.status === 'not_found' || info.status === 'no_email') return 'unverified';
   return 'inactive';   // cancelled, expired, on-hold, one_time_no_access (expirado o sin activar)
 }
@@ -136,16 +150,16 @@ export function subBadge(info: SubscriptionInfo | undefined): { label: string; c
     const tail = info.manualActiveUntil ? ` hasta ${shortDate(info.manualActiveUntil)}` : (info.endDate ? ` hasta ${shortDate(info.endDate)}` : '');
     return { label: `✅ Activa (manual${tail})`, ...green };
   }
-  switch (info.status) {
-    case 'active':         return { label: '✅ Activa', ...green };
-    case 'pending-cancel': {
-      const d = info.daysRemaining;
-      const tail = d != null && d > 0 ? ` (${d} día${d === 1 ? '' : 's'})` : '';
-      return { label: `⏳ Pendiente cancelar${tail}`, color: '#b45309', bg: 'rgba(255,196,0,0.15)' };
-    }
-    case 'on-hold':        return { label: '⚠️ En espera', color: '#ea580c', bg: 'rgba(249,115,22,0.12)' };
-    case 'cancelled':      return { label: '❌ Cancelada', ...red };
-    case 'expired':        return { label: '❌ Expirada', ...red };
-    default:               return { label: '❓ Sin verificar', ...gray }; // error / not_found / no_email
+  // Estados de WooCommerce: nombre, color y si dan acceso salen del mapa único
+  // (lib/subscriptionAccess). Acá solo se decide el icono y la coletilla de días.
+  const woo = WOO_STATUS[info.status];
+  if (woo) {
+    const icon = woo.countsAsActive ? (info.status === 'active' ? '✅' : '⏳') : (info.status === 'on-hold' ? '⚠️' : '❌');
+    // Los días que le quedan solo informan en 'pending-cancel': es el único
+    // estado donde el alumno sigue viniendo y hay una cuenta atrás real.
+    const d = info.daysRemaining;
+    const tail = info.status === 'pending-cancel' && d != null && d > 0 ? ` (${d} día${d === 1 ? '' : 's'})` : '';
+    return { label: `${icon} ${woo.label}${tail}`, color: woo.color, bg: woo.bg };
   }
+  return { label: '❓ Sin verificar', ...gray }; // error / not_found / no_email
 }

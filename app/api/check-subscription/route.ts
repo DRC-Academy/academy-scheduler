@@ -7,7 +7,7 @@ import { supabase } from '@/lib/supabase';
 import { parseHoursFromText, parseHoursFromMeta, detectLevel } from '@/lib/productUtils';
 // La regla de "activo" (Woo OR manual OR Oritalk) vive en un módulo puro para
 // que exista una sola definición. Ver lib/subscriptionAccess.ts.
-import { accessOverrideOf, madridToday } from '@/lib/subscriptionAccess';
+import { accessOverrideOf, isActiveWooStatus, madridToday } from '@/lib/subscriptionAccess';
 
 // Productos de PAGO ÚNICO (case-insensitive, match por "contiene"). Cualquier
 // otro producto se considera de suscripción recurrente.
@@ -189,20 +189,26 @@ async function fetchSubStatus(c: { base: string; ck: string; cs: string }, email
   if (subs.length === 0) {
     return { active: false, status: 'not_found', endDate: null, daysRemaining: null, phone: null, planName: null, startDate: null };
   }
-  // Más reciente por start_date; se prioriza una activa si existe.
+  // Más reciente por start_date; se prioriza una que dé acceso si existe.
   const byRecent = [...subs].sort((a, b) => {
     const da = parseWcDate(a?.start_date)?.getTime() ?? 0;
     const db = parseWcDate(b?.start_date)?.getTime() ?? 0;
     return db - da;
   });
-  const chosen = byRecent.find(s => s?.status === 'active') ?? byRecent[0];
+  // Antes acá solo se buscaba `status === 'active'`. Un alumno con una
+  // 'pending-cancel' vigente y una 'cancelled' más nueva se quedaba con la
+  // cancelada, cuando la que manda es la que todavía le da acceso.
+  const chosen = byRecent.find(s => isActiveWooStatus(s?.status)) ?? byRecent[0];
   const status = String(chosen?.status ?? 'cancelled');
   const endDate = parseWcDate(firstNonEmpty(chosen?.end_date, chosen?.next_payment_date));
   const startDate = toDateStr(firstNonEmpty(chosen?.start_date, chosen?.date_created));
   const planName = (Array.isArray(chosen?.line_items) && typeof chosen.line_items[0]?.name === 'string') ? chosen.line_items[0].name : null;
   const phone = (typeof chosen?.billing?.phone === 'string' && chosen.billing.phone.trim()) ? chosen.billing.phone.trim() : null;
   return {
-    active: status === 'active',
+    // 'active' y 'pending-cancel' dan acceso; 'on-hold', 'cancelled' y 'expired'
+    // no. El criterio vive en lib/subscriptionAccess y lo comparten el badge, el
+    // popup de ingreso y finanzas.
+    active: isActiveWooStatus(status),
     status,
     endDate: endDate ? endDate.toISOString() : null,
     daysRemaining: endDate ? daysFromNow(endDate) : null,

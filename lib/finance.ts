@@ -33,6 +33,9 @@
 import { Assignment, ClassJoinLog, ClassRecord, FinanceRate, ScoringEvent, FinancePayment, Student, ClassRecordType, FinanceManualApproval } from '@/types';
 import { classifyPlan, classifyFor, planBadgeStyle, type PlanClassification } from '@/lib/productUtils';
 import { contiguousRunLength, hourNum, hourText, nkName, runStartHour, sessionRangeLabel } from '@/lib/sessions';
+// Qué estado de suscripción da acceso (y cómo se llama) es UNA sola decisión,
+// compartida con el badge de los alumnos y con el popup de ingreso.
+import { WOO_STATUS, isActiveWooStatus, wooStatusMeta } from '@/lib/subscriptionAccess';
 // Solo el TIPO: teacherClasses importa a su vez el tipo ClassTranscriptRef de acá,
 // y los `import type` se borran al compilar, así que no hay ciclo en runtime.
 import type { GridOccupancy } from '@/lib/teacherClasses';
@@ -106,6 +109,18 @@ export interface ClassFinanceRow {
   subAtRecord?: string;         // estado al registrar la captura (class_records)
 }
 
+/**
+ * Un estado de suscripción presente entre las clases pagables del mes, con
+ * cuántas hubo. `countsAsActive` separa lo informativo (pending-cancel: el alumno
+ * estaba al día) de lo que sí es una anomalía (on-hold, cancelled, expired).
+ */
+export interface SubStatusNote {
+  status: string;
+  label: string;
+  count: number;
+  countsAsActive: boolean;
+}
+
 export interface TeacherFinanceResult {
   teacherId: string;
   teacherName: string;
@@ -119,7 +134,9 @@ export interface TeacherFinanceResult {
   totalExcedeLimite: number;
   totalExcedeLimiteTipo: number;
   totalNoCobrable: number;
-  hasInactiveSubPayable: boolean; // alguna clase pagable tuvo suscripción ≠ active
+  hasInactiveSubPayable: boolean; // alguna clase pagable tuvo suscripción SIN acceso
+  /** Estados ≠ 'active' entre las clases pagables, con su recuento. Ver más abajo. */
+  payableSubStatuses: SubStatusNote[];
   montoPagable: number;
   montoARevisar: number;
   montoRetenido: number;
@@ -627,8 +644,36 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
   const montoARevisar = revisar.reduce((s, r) => s + amount(r), 0);
   const montoRetenido = excede.reduce((s, r) => s + amount(r), 0) + excedeTipo.reduce((s, r) => s + amount(r), 0);
 
-  // Alerta: ¿alguna clase pagable tuvo suscripción ≠ active al momento de darse?
-  const hasInactiveSubPayable = pagables.some(r => r.subscriptionStatus && r.subscriptionStatus !== 'active');
+  // Estado de suscripción de las clases PAGABLES, al momento de darse.
+  //
+  // No es un booleano "activa / no activa": el admin necesita distinguir una
+  // clase de un alumno en 'pending-cancel' —que estaba al día y podía venir— de
+  // una en 'on-hold', que no. Antes las dos caían en el mismo aviso de "no tenía
+  // suscripción activa" porque la condición era `!== 'active'` a secas.
+  //
+  // Nada de esto cambia el importe: lo que decide que una clase se pague sigue
+  // siendo el clic en "Unirse" + el transcript (ver la regla de dos niveles).
+  const payableSubStatuses: SubStatusNote[] = (() => {
+    const counts = new Map<string, number>();
+    for (const r of pagables) {
+      const s = r.subscriptionStatus;
+      if (!s || s === 'active') continue;   // 'active' es lo normal: no se anota
+      counts.set(s, (counts.get(s) ?? 0) + 1);
+    }
+    return [...counts.entries()]
+      .map(([status, count]) => ({
+        status, count,
+        label: subscriptionBadge(status).label.replace(/^\S+\s/, ''),
+        countsAsActive: isActiveWooStatus(status) || status === 'oritalk'
+          || status === 'manual_override' || status === 'manual_active',
+      }))
+      // Primero lo que de verdad es un problema.
+      .sort((a, b) => Number(a.countsAsActive) - Number(b.countsAsActive) || b.count - a.count);
+  })();
+
+  // Se conserva para quien solo quiera el booleano, pero ahora 'pending-cancel'
+  // NO lo dispara: esa clase se dio con la suscripción vigente.
+  const hasInactiveSubPayable = payableSubStatuses.some(s => !s.countsAsActive);
 
   // Eventos de scoring de ESTE mes que afectan al balance. Se excluyen las
   // penalizaciones revertidas (quedan solo como constancia tachada) y sus eventos
@@ -669,6 +714,7 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     totalNoCobrable: units(noCobrable),
     totalSesiones: rows.length,
     hasInactiveSubPayable,
+    payableSubStatuses,
     montoPagable, montoARevisar, montoRetenido,
     bonusFromScoring, penaltiesFromScoring, totalAPagar,
     paymentStatus, paidAt,
@@ -795,26 +841,31 @@ export function classTypeBadge(t: ClassRecordType | undefined):
 }
 
 // Estados de suscripción posibles (para filtros y leyendas).
+// Los estados de Woo salen del mapa único (mismo orden y mismos nombres que los
+// badges); Oritalk y el acceso manual se añaden porque también quedan guardados
+// en el join log y el admin filtra por ellos.
 export const SUBSCRIPTION_STATUS_OPTIONS = [
-  { value: 'active',         label: 'Activa' },
-  { value: 'pending-cancel', label: 'Pendiente cancelar' },
-  { value: 'on-hold',        label: 'En espera' },
-  { value: 'cancelled',      label: 'Cancelada' },
-  { value: 'expired',        label: 'Expirada' },
-  { value: 'not_found',      label: 'No encontrada' },
-  { value: 'error',          label: 'No verificado' },
-] as const;
+  ...Object.entries(WOO_STATUS).map(([value, m]) => ({ value, label: m.label })),
+  { value: 'oritalk',         label: 'Oritalk' },
+  { value: 'manual_override', label: 'Activa (manual)' },
+  { value: 'not_found',       label: 'No encontrada' },
+  { value: 'error',           label: 'No verificado' },
+];
 
 // Badge de la columna "SUSCRIPCIÓN" según el estado guardado.
 export function subscriptionBadge(status?: string):
   { label: string; color: string; bg: string } {
-  switch (status) {
-    case 'active':         return { label: '✅ Activa',              color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)' };
-    case 'pending-cancel': return { label: '⏳ Pendiente cancelar',  color: '#b45309', bg: 'rgba(255,196,0,0.18)' };
-    case 'on-hold':        return { label: '⚠️ En espera',           color: '#ea580c', bg: 'rgba(249,115,22,0.12)' };
-    case 'cancelled':      return { label: '❌ Cancelada',           color: '#dc2626', bg: 'rgba(239,68,68,0.1)' };
-    case 'expired':        return { label: '❌ Expirada',            color: '#dc2626', bg: 'rgba(239,68,68,0.1)' };
-    case 'not_found':      return { label: '❓ No encontrada',       color: 'var(--text-muted)', bg: 'var(--bg-surface-3)' };
-    default:               return { label: '❓ No verificado',       color: 'var(--text-muted)', bg: 'var(--bg-surface-3)' };
+  // Oritalk no es un estado de WooCommerce: es un acceso propio de la academia,
+  // pero llega hasta acá porque el join log guarda el `status` que devolvió la
+  // verificación al momento de la clase.
+  if (status === 'oritalk') return { label: '🔵 Oritalk', color: '#2563eb', bg: 'rgba(37,99,235,0.10)' };
+  if (status === 'manual_override' || status === 'manual_active') {
+    return { label: '✅ Activa (manual)', color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)' };
   }
+  const m = wooStatusMeta(status);
+  const known = status && (status in WOO_STATUS || status === 'not_found');
+  const icon = !known ? '❓'
+    : m.countsAsActive ? (status === 'active' ? '✅' : '⏳')
+    : status === 'on-hold' ? '⚠️' : status === 'not_found' ? '❓' : '❌';
+  return { label: `${icon} ${known ? m.label : 'No verificado'}`, color: m.color, bg: m.bg };
 }

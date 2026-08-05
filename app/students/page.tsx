@@ -785,7 +785,10 @@ function StudentsContent() {
     // Pago único: "Gestionar acceso" siempre visible (admin/setter). Suscripción:
     // "✓ Activar" (override manual) solo cuando no está activa.
     const showAccess   = !isRefreshing && info != null && student.inStudentsTable && isOneTime;
-    const showActivate = !isRefreshing && info != null && student.inStudentsTable && !isOneTime && subCategory(info) !== 'active';
+    // `info.active`, no subCategory: 'pending-cancel' tiene categoría propia para
+    // los filtros pero SÍ da acceso, y ofrecerle "Activar" a un alumno que puede
+    // tomar clases no tiene sentido.
+    const showActivate = !isRefreshing && info != null && student.inStudentsTable && !isOneTime && info.active !== true;
 
     const openAccess = () => setAccessStudent({ ...student, productName: info?.productName ?? student.productName });
 
@@ -961,7 +964,7 @@ function StudentsContent() {
                 const manualOn = isUntilActive(s.manualActiveUntil, today);
                 // "Activar manualmente" solo tiene sentido si el alumno no está ya
                 // activo por suscripción (o por Oritalk, que también da activo).
-                const canActivateManually = subCategory(subInfo[s.email?.trim().toLowerCase() ?? '']) !== 'active';
+                const canActivateManually = subInfo[s.email?.trim().toLowerCase() ?? '']?.active !== true;
                 return (
                   <div key={s.id} style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 14, padding: 16 }}>
                     {/* Fila superior: avatar + nombre/email + badge suscripción + ⋮ */}
