@@ -83,6 +83,7 @@ export async function POST(request: Request): Promise<Response> {
     transcriptHash: body.transcriptHash,
     joinLogId:      body.joinLogId,
     replaceId:      body.replaceId,
+    durationMinutes: body.durationMinutes,
   }, verdict ?? FALLBACK_VERDICT);
 
   if (saved.error || !saved.id) {

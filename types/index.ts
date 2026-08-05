@@ -100,6 +100,8 @@ export interface Student {
   assignedSlots?: Array<{ day: string; hour: string }>;
   notes?: string;
   manualActiveUntil?: string; // 'YYYY-MM-DD' — activación manual / acceso pago único
+  isOritalk?: boolean;        // alumno de Oritalk (tercer origen de "activo")
+  oritalkUntil?: string;      // 'YYYY-MM-DD' — fin del acceso Oritalk
   productType?: 'subscription' | 'one_time'; // tipo de producto WooCommerce
   productName?: string;       // nombre real del producto en WooCommerce
   createdAt: string;

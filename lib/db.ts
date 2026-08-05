@@ -489,6 +489,8 @@ export async function dbGetStudents(): Promise<Student[]> {
     plan:              row.plan,
     notes:             row.notes ?? undefined,
     manualActiveUntil: row.manual_active_until ?? undefined,
+    isOritalk:         row.is_oritalk ?? undefined,
+    oritalkUntil:      row.oritalk_until ?? undefined,
     productType:       row.product_type ?? undefined,
     productName:       row.product_name ?? undefined,
     createdAt:         row.created_at,
@@ -500,6 +502,24 @@ export async function dbGetStudents(): Promise<Student[]> {
 // como suscripción activa sin consultar WooCommerce.
 export async function dbSetStudentManualActive(studentId: string, until: string | null): Promise<void> {
   await supabase.from('students').update({ manual_active_until: until }).eq('id', studentId);
+}
+
+/**
+ * Marca (o desmarca con `until: null`) a un alumno como de Oritalk.
+ *
+ * Es el TERCER origen de "activo", junto a la suscripción de WooCommerce y la
+ * activación manual: mientras `oritalk_until` sea futura el sistema lo trata como
+ * activo sin consultar Woo, y con su propio badge azul. Ver lib/subscriptionAccess.
+ *
+ * Al quitarlo se limpian las dos columnas a la vez: dejar `oritalk_until` con
+ * fecha y `is_oritalk` en false haría que la lista mostrara una fecha de fin de
+ * un estado que ya no existe.
+ */
+export async function dbSetStudentOritalk(studentId: string, until: string | null): Promise<void> {
+  const { error } = await supabase.from('students')
+    .update({ is_oritalk: !!until, oritalk_until: until })
+    .eq('id', studentId);
+  if (error) throw new Error(error.message);
 }
 
 // Guarda el tipo + nombre de producto WooCommerce del alumno (y plan). Resiliente:
@@ -2637,6 +2657,8 @@ export async function dbGetStudentByEmail(email: string): Promise<Student | null
     plan:              data.plan,
     notes:             data.notes ?? undefined,
     manualActiveUntil: data.manual_active_until ?? undefined,
+    isOritalk:         data.is_oritalk ?? undefined,
+    oritalkUntil:      data.oritalk_until ?? undefined,
     productType:       data.product_type ?? undefined,
     productName:       data.product_name ?? undefined,
     createdAt:         data.created_at,
@@ -3138,6 +3160,23 @@ export async function dbGetClassTranscripts(): Promise<import('@/lib/finance').C
 
 // ── VALIDACIÓN DE TRANSCRIPCIONES (Bloque 1) ────────────────────────────────────
 
+/**
+ * Lo que MIRÓ la validación al guardar la clase (columna `validation_details`,
+ * la crea supabase-validation-details.sql). Es null en las filas anteriores a
+ * esa migración: el panel deriva del transcript lo que puede y muestra
+ * "sin dato" en el resto, nunca un valor inventado.
+ */
+export interface TranscriptValidationDetails {
+  /** Contratada: 60, o 120 en una sesión de 2 h. Solo se sabe al registrar. */
+  durationExpectedMin?: number | null;
+  /** Registrada: último timestamp del transcript, en minutos. */
+  durationRecordedMin?: number | null;
+  timestampCount?: number | null;
+  hasAccess?: boolean | null;
+  daysLate?: number | null;
+  similarityPct?: number | null;
+}
+
 export interface FlaggedTranscript {
   id: string;
   teacherId: string | null;
@@ -3151,6 +3190,10 @@ export interface FlaggedTranscript {
   validationStatus: string;   // 'review' | 'approved' | 'rejected' | 'ok'
   reviewedBy: string | null;
   reviewedAt: string | null;
+  /** Ver TranscriptValidationDetails. null → migración sin correr o fila vieja. */
+  details: TranscriptValidationDetails | null;
+  /** Acceso por el botón "Ingresar a clase" enlazado a esta clase, si lo hubo. */
+  joinLogId: string | null;
 }
 
 export interface FlaggedTranscriptsResult {
@@ -3206,15 +3249,37 @@ export async function dbCountPendingValidations(): Promise<PendingValidationSumm
   return { total: data.length, oldestDate, oldestDays };
 }
 
+/** Columnas base: sin ellas la pestaña no puede mostrar nada (falta la migración). */
+const FLAGGED_BASE_COLS =
+  'id, teacher_id, student_name, class_date, analyzed_at, transcript, ' +
+  'transcript_validation_score, transcript_validation_flags, ai_authenticity_check, ' +
+  'validation_status, validation_reviewed_by, validation_reviewed_at';
+/**
+ * Columnas del desplegable del panel. Cada una viene de una migración POSTERIOR,
+ * así que su ausencia no puede hacer que la pestaña se declare rota: si faltan,
+ * se reintenta sin ellas y el detalle enseña "sin dato".
+ */
+const FLAGGED_EXTRA_COLS = 'join_log_id, validation_details';
+
 export async function dbGetFlaggedTranscripts(): Promise<FlaggedTranscriptsResult> {
-  const { data, error } = await supabase
+  // 'auto_approved' entra para que el admin pueda AUDITARLAS, aunque no
+  // requieran ninguna acción suya. 'ok' se queda fuera a propósito: son las
+  // limpias de score < 80, que nunca pasaron por validación.
+  const query = (cols: string) => supabase
     .from('class_analyses')
-    .select('id, teacher_id, student_name, class_date, analyzed_at, transcript, transcript_validation_score, transcript_validation_flags, ai_authenticity_check, validation_status, validation_reviewed_by, validation_reviewed_at')
-    // 'auto_approved' entra para que el admin pueda AUDITARLAS, aunque no
-    // requieran ninguna acción suya. 'ok' se queda fuera a propósito: son las
-    // limpias de score < 80, que nunca pasaron por validación.
+    .select(cols)
     .in('validation_status', ['review', 'approved', 'rejected', 'auto_approved'])
     .order('analyzed_at', { ascending: false });
+
+  let { data, error } = await query(`${FLAGGED_BASE_COLS}, ${FLAGGED_EXTRA_COLS}`);
+
+  // Falta alguna de las opcionales: se reintenta con lo imprescindible. Solo si
+  // ESTE segundo intento también falla estamos ante la migración sin correr.
+  if (error && (error.code === '42703' || error.code === 'PGRST204')) {
+    console.warn('[db] class_analyses no tiene join_log_id / validation_details; el detalle de validación irá incompleto. Corré supabase-validation-details.sql y supabase-join-log-link.sql.');
+    ({ data, error } = await query(FLAGGED_BASE_COLS));
+  }
+
   if (error || !data) {
     const missingColumns = error?.code === '42703' || error?.code === 'PGRST204';
     if (error && !missingColumns) {
@@ -3224,7 +3289,7 @@ export async function dbGetFlaggedTranscripts(): Promise<FlaggedTranscriptsResul
     }
     return { rows: [], missingColumns };
   }
-  const rows = (data as Array<Record<string, unknown>>).map(r => ({
+  const rows = (data as unknown as Array<Record<string, unknown>>).map(r => ({
     id:               r.id as string,
     teacherId:        (r.teacher_id as string) ?? null,
     studentName:      (r.student_name as string) ?? '',
@@ -3237,6 +3302,8 @@ export async function dbGetFlaggedTranscripts(): Promise<FlaggedTranscriptsResul
     validationStatus: (r.validation_status as string) ?? 'review',
     reviewedBy:       (r.validation_reviewed_by as string) ?? null,
     reviewedAt:       (r.validation_reviewed_at as string) ?? null,
+    details:          (r.validation_details as TranscriptValidationDetails) ?? null,
+    joinLogId:        (r.join_log_id as string) ?? null,
   }));
   return { rows, missingColumns: false };
 }
@@ -3284,6 +3351,51 @@ export async function dbReviewTranscript(
       created_by:  'sistema',
     });
   }
+}
+
+/**
+ * Lo mismo, pero para varias clases a la vez: UNA sola escritura con `.in()` y,
+ * si se rechaza, UNA sola inserción de notificaciones.
+ *
+ * Existe por el botón "Aprobar las N" de cada grupo del panel: resolver un grupo
+ * de 4 clases con 4 peticiones encadenadas dejaba la pantalla a medias cuando
+ * fallaba la tercera, y la fila que quedaba en la cola no coincidía con el
+ * contador de la pestaña. En lote, o pasan todas o no pasa ninguna.
+ */
+export async function dbReviewTranscriptsBulk(
+  rows: Array<{ id: string; teacherId: string | null; studentName: string; classDate: string | null }>,
+  decision: 'approved' | 'rejected',
+  reviewerName: string,
+): Promise<void> {
+  if (rows.length === 0) return;
+  const now = new Date().toISOString();
+
+  const { error } = await supabase.from('class_analyses').update({
+    validation_status:      decision,
+    validation_reviewed_by: reviewerName,
+    validation_reviewed_at: now,
+  }).in('id', rows.map(r => r.id));
+  if (error) throw new Error(error.message);
+
+  if (decision !== 'rejected') return;
+
+  const notifs = rows.filter(r => r.teacherId).map((r, i) => ({
+    id:          `notif_txrej_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 6)}`,
+    target_user: r.teacherId,
+    target_role: null,
+    title:       'Revisión de una clase registrada',
+    body:        `La clase de ${r.studentName}${r.classDate ? ` del ${r.classDate}` : ''} no pudo validarse y no se contará para el pago. Si la diste, vuelve a registrarla copiando la transcripción completa de Fathom.`,
+    type:        'transcript_rejected',
+    read_by:     [] as string[],
+    created_at:  now,
+    created_by:  'sistema',
+  }));
+  if (notifs.length === 0) return;
+
+  // El aviso al profesor no puede tumbar un rechazo ya escrito: si falla, la
+  // decisión sigue siendo válida y queda el rastro en el log.
+  const { error: notifError } = await supabase.from('notifications').insert(notifs);
+  if (notifError) console.error('[db] Clases rechazadas, pero no se pudo avisar a los profesores:', notifError);
 }
 
 // ── PREDICCIÓN DE BAJAS (churn) ─────────────────────────────────────────────────

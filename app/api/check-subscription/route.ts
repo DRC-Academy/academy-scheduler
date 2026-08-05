@@ -5,6 +5,9 @@
 
 import { supabase } from '@/lib/supabase';
 import { parseHoursFromText, parseHoursFromMeta, detectLevel } from '@/lib/productUtils';
+// La regla de "activo" (Woo OR manual OR Oritalk) vive en un módulo puro para
+// que exista una sola definición. Ver lib/subscriptionAccess.ts.
+import { accessOverrideOf, madridToday } from '@/lib/subscriptionAccess';
 
 // Productos de PAGO ÚNICO (case-insensitive, match por "contiene"). Cualquier
 // otro producto se considera de suscripción recurrente.
@@ -26,7 +29,7 @@ type ProductType = 'subscription' | 'one_time' | null;
 
 interface SubResult {
   active: boolean | null;
-  status: string;                 // 'active'|'cancelled'|'on-hold'|'expired'|'pending-cancel'|'not_found'|'error'|'manual_override'|'manual_active'|'one_time_no_access'
+  status: string;                 // 'active'|'cancelled'|'on-hold'|'expired'|'pending-cancel'|'not_found'|'error'|'manual_override'|'manual_active'|'one_time_no_access'|'oritalk'
   endDate: string | null;
   daysRemaining: number | null;
   planName: string | null;        // = productName (compat hacia atrás)
@@ -36,6 +39,7 @@ interface SubResult {
   productType: ProductType;
   hoursFromApi: number | null;    // horas detectadas desde WooCommerce
   manualActiveUntil: string | null;
+  oritalkUntil: string | null;    // fecha de fin de Oritalk (null si no es de Oritalk)
   metaData: any[];                // meta_data crudo del line_item
   phone: string | null;
   billingName: string | null;            // nombre del cliente (billing) para autocompletar
@@ -56,13 +60,6 @@ interface RichProduct {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-// Fecha de hoy (YYYY-MM-DD) en hora de España.
-function madridTodayStr(): string {
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Europe/Madrid', year: 'numeric', month: '2-digit', day: '2-digit',
-  }).format(new Date());
-}
-
 function daysFromNow(d: Date): number {
   return Math.max(0, Math.ceil((d.getTime() - Date.now()) / DAY_MS));
 }
@@ -70,7 +67,8 @@ function daysFromNow(d: Date): number {
 const ERROR_RESULT: SubResult = {
   active: null, status: 'error', endDate: null, daysRemaining: null,
   planName: null, productName: null, productVariation: null, productFullName: null,
-  productType: null, hoursFromApi: null, manualActiveUntil: null, metaData: [], phone: null,
+  productType: null, hoursFromApi: null, manualActiveUntil: null, oritalkUntil: null,
+  metaData: [], phone: null,
   billingName: null, subscriptionStartDate: null, detectedLevel: null,
 };
 
@@ -216,11 +214,16 @@ export async function GET(request: Request): Promise<Response> {
   const email = new URL(request.url).searchParams.get('email')?.trim().toLowerCase();
   if (!email) return Response.json({ ...ERROR_RESULT, status: 'error' }, { status: 400 });
 
-  // 1) Alumno en Supabase: manual_active_until + producto persistido + plan local.
-  let student: { id?: string; manual_active_until?: string | null; product_type?: string | null; product_name?: string | null; plan?: string | null } | null = null;
+  // 1) Alumno en Supabase: overrides de acceso + producto persistido + plan local.
+  let student: {
+    id?: string; manual_active_until?: string | null;
+    is_oritalk?: boolean | null; oritalk_until?: string | null;
+    product_type?: string | null; product_name?: string | null; plan?: string | null;
+  } | null = null;
   try {
-    // select('*') para tolerar que product_type/product_name aún no existan en la
-    // BD (migración pendiente): las columnas faltantes simplemente vienen undefined.
+    // select('*') para tolerar que product_type/product_name/is_oritalk aún no
+    // existan en la BD (migración pendiente): las columnas faltantes vienen
+    // undefined y accessOverrideOf las trata como "sin override".
     const { data } = await supabase
       .from('students')
       .select('*')
@@ -228,20 +231,69 @@ export async function GET(request: Request): Promise<Response> {
     student = data;
   } catch { /* sin fila → seguimos */ }
 
-  const today = madridTodayStr();
+  const today = madridToday();
+  // Regla única de acceso: Oritalk vigente > activación manual vigente > Woo.
+  const override = accessOverrideOf(student, today);
   const manualUntil = student?.manual_active_until ?? null;
-  const manualActive = !!manualUntil && manualUntil >= today;
+  const oritalkUntil = student?.is_oritalk ? (student.oritalk_until ?? null) : null;
 
   const creds = wcCreds();
   // ?full=1 → fuerza traer la info rica del pedido (variación + horas + meta),
   // usado por los formularios de asignación. Sin él se usa lo persistido (liviano).
   const full = new URL(request.url).searchParams.get('full') === '1';
 
-  // 2) Producto: usa lo persistido; trae el pedido (info rica) si se pide `full`
+  // 2) ORITALK — se resuelve ANTES de tocar WooCommerce.
+  //
+  // Un alumno de Oritalk es, por definición, uno que Woo da como "sin verificar":
+  // preguntarle a Woo no aporta nada y, peor, si la API está caída o el alumno no
+  // tiene ningún pedido, las ramas de abajo cortan con `error`/`not_found` y el
+  // alumno perdería su acceso por un motivo que nada tiene que ver con él.
+  //
+  // Excepción: con ?full=1 sí se sigue, porque los formularios de asignación
+  // necesitan la info rica del pedido. Ahí Oritalk se aplica más abajo, sobre
+  // `make()`, sin perder el producto.
+  if (override?.kind === 'oritalk' && !full) {
+    const end = new Date(override.until + 'T23:59:59');
+    return Response.json({
+      ...ERROR_RESULT,
+      active: true,
+      status: 'oritalk',
+      endDate: end.toISOString(),
+      daysRemaining: daysFromNow(end),
+      // Lo persistido: un alumno de Oritalk no tiene producto en Woo, pero puede
+      // tener plan cargado a mano y la lista lo muestra en su columna.
+      planName:        student?.product_name ?? student?.plan ?? null,
+      productName:     student?.product_name ?? student?.plan ?? null,
+      productFullName: student?.product_name ?? student?.plan ?? null,
+      productType:     (student?.product_type as ProductType) ?? null,
+      manualActiveUntil: manualUntil,
+      oritalkUntil:      override.until,
+    } satisfies SubResult);
+  }
+
+  // 3) Producto: usa lo persistido; trae el pedido (info rica) si se pide `full`
   //    o si no hay tipo persistido. Lo detectado se persiste (incl. plan).
   let productName = student?.product_name ?? null;
   let productType = (student?.product_type as ProductType) ?? null;
   let rich: RichProduct | null = null;
+
+  // Woo no contestó y no hay producto persistido. Un override vigente vale igual:
+  // el acceso de Oritalk / manual no puede caerse porque WooCommerce esté caído.
+  const woocommerceDown = (): Response => {
+    if (override) {
+      const end = new Date(override.until + 'T23:59:59');
+      return Response.json({
+        ...ERROR_RESULT,
+        active: true,
+        status: override.kind === 'oritalk' ? 'oritalk' : 'manual_override',
+        endDate: end.toISOString(),
+        daysRemaining: daysFromNow(end),
+        manualActiveUntil: manualUntil,
+        oritalkUntil,
+      } satisfies SubResult);
+    }
+    return Response.json({ ...ERROR_RESULT, manualActiveUntil: manualUntil ?? null, oritalkUntil });
+  };
 
   if (full || !productType) {
     const cached = productCache.get(email);
@@ -256,11 +308,11 @@ export async function GET(request: Request): Promise<Response> {
           supabase.from('students').update(updates).eq('id', student.id).then(() => {}, () => {});
         }
       } catch {
-        if (!productType) return Response.json({ ...ERROR_RESULT, manualActiveUntil: manualUntil ?? null });
+        if (!productType) return woocommerceDown();
       }
     } else if (!productType) {
       console.error('[check-subscription] WooCommerce no configurado');
-      return Response.json({ ...ERROR_RESULT, manualActiveUntil: manualUntil ?? null });
+      return woocommerceDown();
     }
   }
 
@@ -278,28 +330,41 @@ export async function GET(request: Request): Promise<Response> {
   const make = (o: Partial<SubResult>): SubResult => ({
     active: false, status: 'error', endDate: null, daysRemaining: null,
     planName: productName, productName, productVariation, productFullName,
-    productType, hoursFromApi, manualActiveUntil: null, metaData, phone: null,
+    productType, hoursFromApi, manualActiveUntil: null, oritalkUntil, metaData, phone: null,
     billingName, subscriptionStartDate: orderDate, detectedLevel,
     ...o,
   });
 
-  // 3) Ningún producto comprado → not_found.
+  // Respuesta de un override vigente (Oritalk o manual). El `status` cambia según
+  // el origen para que el badge sepa de cuál se trata; el `active` es el mismo.
+  const overrideResult = (kind: 'oritalk' | 'manual', until: string) => {
+    const end = new Date(until + 'T23:59:59');
+    return make({
+      active: true,
+      status: kind === 'oritalk' ? 'oritalk' : (productType === 'one_time' ? 'manual_active' : 'manual_override'),
+      endDate: end.toISOString(),
+      daysRemaining: daysFromNow(end),
+      manualActiveUntil: kind === 'manual' ? until : manualUntil,
+      oritalkUntil: kind === 'oritalk' ? until : oritalkUntil,
+    });
+  };
+
+  // 4) Oritalk vigente (solo se llega acá con ?full=1: sin él ya se resolvió arriba).
+  //    Gana sobre todo lo demás, incluso sobre una suscripción activa: es una
+  //    decisión explícita del admin y tiene su propio badge.
+  if (override?.kind === 'oritalk') return Response.json(overrideResult('oritalk', override.until));
+
+  // 5) Ningún producto comprado → not_found.
   if (!productType) return Response.json(make({ active: false, status: 'not_found' }));
 
-  // 4) PAGO ÚNICO → solo cuenta el acceso manual (manual_active_until).
+  // 6) PAGO ÚNICO → solo cuenta el acceso manual (manual_active_until).
   if (productType === 'one_time') {
-    if (manualActive && manualUntil) {
-      const endDate = new Date(manualUntil + 'T23:59:59');
-      return Response.json(make({ active: true, status: 'manual_active', endDate: endDate.toISOString(), daysRemaining: daysFromNow(endDate), manualActiveUntil: manualUntil }));
-    }
+    if (override?.kind === 'manual') return Response.json(overrideResult('manual', override.until));
     return Response.json(make({ active: false, status: 'one_time_no_access', manualActiveUntil: manualUntil ?? null }));
   }
 
-  // 5) SUSCRIPCIÓN. La activación manual sigue teniendo prioridad (override).
-  if (manualActive && manualUntil) {
-    const endDate = new Date(manualUntil + 'T23:59:59');
-    return Response.json(make({ active: true, status: 'manual_override', endDate: endDate.toISOString(), daysRemaining: daysFromNow(endDate), manualActiveUntil: manualUntil }));
-  }
+  // 7) SUSCRIPCIÓN. La activación manual sigue teniendo prioridad (override).
+  if (override?.kind === 'manual') return Response.json(overrideResult('manual', override.until));
 
   if (!creds) return Response.json(make({ active: null, status: 'error' }));
 

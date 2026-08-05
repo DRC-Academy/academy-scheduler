@@ -228,6 +228,7 @@ async function handleSaveWithAnalysis(body: Body, studentName: string): Promise<
     transcriptHash: body.transcriptHash,
     joinLogId:      body.joinLogId,
     replaceId:      body.replaceId,
+    durationMinutes: body.durationMinutes,
   }, verdict ?? NEUTRAL_VERDICT);
 
   if (saved.error || !saved.id) {

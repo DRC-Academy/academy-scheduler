@@ -15,12 +15,14 @@
 
 export interface SubscriptionInfo {
   active: boolean | null;                            // true=activa · false=inactiva · null=sin verificar
-  status: string;                                    // 'active'|'cancelled'|'on-hold'|'expired'|'pending-cancel'|'not_found'|'error'|'manual_override'|'manual_active'|'one_time_no_access'
+  status: string;                                    // 'active'|'cancelled'|'on-hold'|'expired'|'pending-cancel'|'not_found'|'error'|'manual_override'|'manual_active'|'one_time_no_access'|'oritalk'
   daysRemaining: number | null;
   endDate: string | null;
   productType: 'subscription' | 'one_time' | null;
   productName: string | null;
   manualActiveUntil: string | null;
+  /** Fin del acceso Oritalk. Solo viene cuando el alumno es de Oritalk y vigente. */
+  oritalkUntil: string | null;
   fetchedAt: number;
 }
 
@@ -37,7 +39,7 @@ function normEmail(email?: string | null): string {
 
 const NO_EMAIL: SubscriptionInfo = {
   active: null, status: 'no_email', daysRemaining: null, endDate: null,
-  productType: null, productName: null, manualActiveUntil: null, fetchedAt: 0,
+  productType: null, productName: null, manualActiveUntil: null, oritalkUntil: null, fetchedAt: 0,
 };
 
 // Verifica la suscripción de un email. Usa cache (5 min) salvo `force`.
@@ -64,12 +66,13 @@ export async function checkSubscription(email?: string | null, force = false): P
       productType:       data.productType ?? null,
       productName:       data.productName ?? null,
       manualActiveUntil: data.manualActiveUntil ?? null,
+      oritalkUntil:      data.oritalkUntil ?? null,
       fetchedAt:         Date.now(),
     };
     subscriptionCache.set(e, info);
     return info;
   } catch {
-    return { active: null, status: 'error', daysRemaining: null, endDate: null, productType: null, productName: null, manualActiveUntil: null, fetchedAt: Date.now() };
+    return { active: null, status: 'error', daysRemaining: null, endDate: null, productType: null, productName: null, manualActiveUntil: null, oritalkUntil: null, fetchedAt: Date.now() };
   }
 }
 
@@ -108,6 +111,16 @@ export function subBadge(info: SubscriptionInfo | undefined): { label: string; c
   const green = { color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)' };
   const red   = { color: '#dc2626', bg: 'rgba(239,68,68,0.1)' };
   const gray  = { color: 'var(--text-muted)', bg: 'var(--bg-surface-3)' };
+  // Azul: es el único estado activo que NO viene de una compra. El mismo azul que
+  // ya usa el panel de alumnos para el acceso de pago único.
+  const blue  = { color: '#2563eb', bg: 'rgba(37,99,235,0.10)' };
+
+  // ORITALK — gana sobre todo lo demás, incluso sobre una suscripción activa: es
+  // una marca explícita del admin y tiene que verse a simple vista.
+  if (info.status === 'oritalk') {
+    const tail = info.oritalkUntil ? ` hasta ${shortDate(info.oritalkUntil)}` : '';
+    return { label: `🔵 Oritalk${tail}`, ...blue };
+  }
 
   // PAGO ÚNICO
   if (info.productType === 'one_time') {

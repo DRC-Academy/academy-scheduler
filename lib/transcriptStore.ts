@@ -41,6 +41,7 @@ const OPTIONAL_COLUMNS: Record<string, string> = {
   transcript_validation_flags: 'supabase-transcript-validation.sql',
   ai_authenticity_check:       'supabase-transcript-validation.sql',
   validation_status:           'supabase-transcript-validation.sql',
+  validation_details:          'supabase-validation-details.sql',
   transcript_hash:             'supabase-transcript-hash.sql',
   join_log_id:                 'supabase-join-log-link.sql',
 };
@@ -155,6 +156,8 @@ export interface TranscriptRowInput {
   joinLogId?: string | null;
   /** Si viene, se ACTUALIZA esa fila en vez de insertar una nueva. */
   replaceId?: string | null;
+  /** Duración CONTRATADA: 120 en una sesión de 2 h, 60 por defecto. */
+  durationMinutes?: number | null;
 }
 
 /**
@@ -176,6 +179,18 @@ export async function persistTranscript(
     transcript_validation_score: verdict.structure.score,
     transcript_validation_flags: verdict.flags,
     validation_status:           statusForDecision(verdict.decision, verdict.structure.score),
+    // Lo que MIRÓ la validación, no solo su conclusión. El panel del admin lo
+    // enseña en "Datos de la clase" para que el score y la alerta se puedan
+    // contrastar sin abrir el transcript. La duración contratada solo se conoce
+    // acá: si no se guarda, después no hay de dónde sacarla.
+    validation_details: {
+      durationExpectedMin: input.durationMinutes ?? 60,
+      durationRecordedMin: verdict.cross.estimatedDurationMin,
+      timestampCount:      verdict.structure.timestampCount,
+      hasAccess:           verdict.cross.hasAccess,
+      daysLate:            verdict.cross.daysLate,
+      similarityPct:       verdict.cross.similarityPct,
+    },
 
     analysis_status:     'pending',
     analysis_error:      null,

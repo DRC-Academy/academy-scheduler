@@ -1,0 +1,30 @@
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Detalle de validación por clase (rediseño de la pestaña "Validación")
+--
+-- El desplegable de cada fila muestra "Datos de la clase": duración registrada
+-- frente a la contratada, marcas de tiempo y si hubo acceso por el botón. Todo
+-- eso YA se calcula al guardar el transcript (capas 1 y 2 de la validación),
+-- pero hasta ahora se descartaba: en class_analyses solo quedaban el score y los
+-- flags. El panel tenía que re-deducirlo del texto, y la duración CONTRATADA
+-- (60 o 120 minutos según sea una clase suelta o una sesión de 2 h) solo se
+-- conoce en el momento del registro: no hay forma de recuperarla después.
+--
+-- Forma del objeto (todas las claves opcionales, tal cual salen del veredicto):
+--   {
+--     "durationExpectedMin": 60,     -- contratada: 60, o 120 en sesión de 2 h
+--     "durationRecordedMin": 47.5,   -- último timestamp del transcript
+--     "timestampCount": 62,          -- marcas de tiempo detectadas
+--     "hasAccess": true,             -- hubo class_join_log del botón
+--     "daysLate": 0,                 -- días entre la clase y el registro
+--     "similarityPct": 12            -- máxima similitud con otras del profesor
+--   }
+--
+-- Las filas anteriores a esta migración quedan en null. El panel sigue
+-- funcionando: deriva del transcript lo que es derivable (marcas de tiempo y
+-- duración registrada) y muestra "sin dato" en lo que no lo es, en vez de
+-- inventar un 60 que nadie escribió.
+--
+-- Ejecutá este script UNA vez en el SQL editor de Supabase. Es idempotente.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+alter table class_analyses add column if not exists validation_details jsonb;

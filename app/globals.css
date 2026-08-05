@@ -2370,3 +2370,74 @@ label {
   .rk-res-row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 6px; }
   .rk-res-row > .rk-span { grid-column: 1 / -1; }
 }
+
+/* ═══ BANDEJA DE VALIDACIÓN (admin → Validación) ════════════════════════════
+   Mismo criterio que la bandeja de riesgo de arriba: filas de UNA línea que no
+   deben partirse nunca, así que las columnas viven acá y el componente solo
+   pone la clase. Al estrechar, lo primero que se va es el detalle de la alerta:
+   es lo prescindible, porque el texto completo está en el desplegable (y el
+   chip del grupo ya dice de qué motivo se trata). */
+
+.vl-row {
+  display: grid;
+  grid-template-columns: 22px 252px 1fr 128px 96px 108px 22px;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 15px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  font-family: inherit;
+  cursor: pointer;
+}
+.vl-row:hover { background: #fcfdfb; }
+.vl-row.is-sel { background: #f7faf8; }
+
+.vl-detail { display: grid; grid-template-columns: 1fr 296px; gap: 20px; }
+
+/* Los seis pares de "Datos de la clase". */
+.vl-data { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 22px; margin-top: 6px; }
+
+.vl-hist-row,
+.vl-hist-head {
+  display: grid;
+  grid-template-columns: 252px 1fr 128px 96px 190px;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 18px;
+  border-bottom: 1px solid #f1f3ef;
+}
+.vl-hist-head {
+  background: #fbfcfa;
+  border-bottom: 1px solid #edefea;
+  font-size: 10.8px; font-weight: 800; letter-spacing: .7px;
+  color: #8a9790; text-transform: uppercase;
+}
+
+/* Por debajo de ~1100 px el detalle de la alerta deja de caber sin empujar al
+   resto. En el historial cede la misma columna. */
+@media (max-width: 1100px) {
+  .vl-alert { display: none; }
+  .vl-row { grid-template-columns: 22px minmax(0, 1fr) 128px 96px 108px 22px; }
+  .vl-hist-row,
+  .vl-hist-head { grid-template-columns: minmax(0, 1fr) 96px 96px 180px; }
+  .vl-detail { grid-template-columns: 1fr; }
+  .vl-data { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Móvil: la rejilla de una línea deja de tener sentido. */
+@media (max-width: 760px) {
+  .vl-row {
+    grid-template-columns: 22px minmax(0, 1fr) auto;
+    row-gap: 8px;
+    padding: 13px 14px;
+  }
+  .vl-row > .vl-span { grid-column: 2 / -1; }
+  /* El chevron es el último hijo: sin esto caía en una fila propia bajo el
+     botón. Se ancla a la esquina superior derecha, junto al nombre. */
+  .vl-row > .vl-chev { grid-column: 3; grid-row: 1; align-self: start; }
+  .vl-hist-head { display: none; }
+  .vl-hist-row { grid-template-columns: minmax(0, 1fr); row-gap: 6px; }
+  .vl-hist-row > .vl-span { grid-column: 1; }
+}

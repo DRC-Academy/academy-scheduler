@@ -3727,7 +3727,7 @@ function AdminContent() {
     { id: 'classlog',       label: 'Registro de clases' },
     { id: 'leveltests',     label: 'Tests de nivel' },
     { id: 'validacion',     label: 'Validación' },
-    { id: 'ai',             label: 'IA y Riesgo' },
+    { id: 'ai',             label: 'Riesgo' },
     { id: 'bajas',          label: 'Bajas' },
     { id: 'notifications',  label: 'Notificaciones' },
   ] as const;

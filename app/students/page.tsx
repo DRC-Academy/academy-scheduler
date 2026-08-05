@@ -8,7 +8,11 @@ import { LastUpdated } from '@/components/LastUpdated';
 import { useTeachers } from '@/lib/TeachersContext';
 import { useAuth } from '@/lib/AuthContext';
 import { DAYS, cellKey } from '@/components/VisualCalendar';
-import { dbCheckStudentExists, dbSetStudentManualActive, dbActivateOneTimeAccess } from '@/lib/db';
+import { dbCheckStudentExists, dbSetStudentManualActive, dbActivateOneTimeAccess, dbSetStudentOritalk } from '@/lib/db';
+// Misma regla de vigencia que usa el servidor para decidir "activo": acá solo se
+// usa para saber qué opciones ofrecer en el menú, nunca para pintar el badge (eso
+// sale siempre de subBadge, que lee la respuesta de /api/check-subscription).
+import { isUntilActive, madridToday } from '@/lib/subscriptionAccess';
 import { classifyFor, planBadgeStyle } from '@/lib/productUtils';
 import { isAssignableCell, withBaseState } from '@/lib/cells';
 import { checkSubscription, clearSubscriptionCache, subBadge, subCategory, type SubscriptionInfo, type SubCategory } from '@/lib/useSubscriptionStatus';
@@ -57,6 +61,8 @@ interface DisplayStudent {
   productType?: 'subscription' | 'one_time';
   productName?: string;
   manualActiveUntil?: string;
+  isOritalk?: boolean;
+  oritalkUntil?: string;
   inStudentsTable: boolean;
   createdAt: string;
 }
@@ -469,6 +475,63 @@ function ManualActivateModal({ student, onConfirm, onCancel }: {
   );
 }
 
+// ── Oritalk modal ─────────────────────────────────────────────────────────────
+// Marca a un alumno como de Oritalk hasta una fecha. Es el tercer origen de
+// "activo" (ver lib/subscriptionAccess): mientras la fecha sea futura el alumno
+// cuenta como activo en todo el sistema y lleva badge azul.
+function OritalkModal({ student, onConfirm, onCancel }: {
+  student: DisplayStudent;
+  onConfirm: (until: string) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const todayStr = (() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  })();
+  // Por defecto, 30 días — igual que la activación manual.
+  const defaultUntil = (() => {
+    const d = new Date(); d.setDate(d.getDate() + 30);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  })();
+
+  // Editando a un alumno que ya es de Oritalk: se parte de su fecha actual.
+  const [until, setUntil] = useState(student.oritalkUntil || defaultUntil);
+  const [saving, setSaving] = useState(false);
+  const canSave = !!until && until >= todayStr && !saving;
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)', zIndex: 90, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+      onClick={e => { if (e.target === e.currentTarget && !saving) onCancel(); }}>
+      <div style={{ background: 'var(--bg-surface)', border: '1px solid #35405a', borderRadius: 14, padding: 24, width: '100%', maxWidth: 420 }}>
+        <div style={{ fontSize: 24, marginBottom: 10 }}>🔵</div>
+        <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)', marginBottom: 8 }}>
+          Marcar a {student.name} como alumno de Oritalk
+        </div>
+        <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 18, lineHeight: 1.6 }}>
+          Contará como <b style={{ color: 'var(--text-primary)' }}>activo</b> en todo el sistema hasta la
+          fecha que elijas, con su propio badge azul. Al vencer vuelve solo a su estado real de suscripción.
+        </div>
+        <div style={{ marginBottom: 20 }}>
+          <label htmlFor="oritalk-until" style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+            Activo en Oritalk hasta
+          </label>
+          <input id="oritalk-until" type="date" value={until} min={todayStr} onChange={e => setUntil(e.target.value)} style={{ width: '100%' }} />
+        </div>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button onClick={onCancel} disabled={saving}
+            style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: saving ? 'not-allowed' : 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
+            Cancelar
+          </button>
+          <button onClick={async () => { setSaving(true); await onConfirm(until); }} disabled={!canSave}
+            style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: canSave ? '#2563eb' : 'var(--bg-surface-3)', color: canSave ? 'white' : 'var(--text-muted)', cursor: canSave ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+            {saving ? 'Guardando...' : 'Guardar'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── One-time access modal (Gestionar acceso) ──────────────────────────────────
 function AccessModal({ student, onConfirm, onCancel }: {
   student: DisplayStudent;
@@ -547,6 +610,10 @@ function StudentsContent() {
   const [deletingStudent, setDeletingStudent] = useState<DisplayStudent | null>(null);
   const [activatingStudent, setActivatingStudent] = useState<DisplayStudent | null>(null);
   const [accessStudent, setAccessStudent] = useState<DisplayStudent | null>(null);
+  const [oritalkStudent, setOritalkStudent] = useState<DisplayStudent | null>(null);
+  // Confirmación breve tras marcar/activar. La página no tenía ninguna: los
+  // cambios de estado se aplicaban en silencio y no se sabía si habían entrado.
+  const [toast, setToast] = useState<string | null>(null);
   const [changeTeacher, setChangeTeacher] = useState<{ student: DisplayStudent; assignment: Assignment } | null>(null);
   // Email de asignación al profesor ("Nueva asignación: …"), el mismo que arma el
   // setter al asignar. Se puede reabrir desde acá para recuperarlo o reenviarlo
@@ -568,7 +635,7 @@ function StudentsContent() {
   const allStudents = useMemo<DisplayStudent[]>(() => {
     const map = new Map<string, DisplayStudent>();
     for (const s of students) {
-      map.set(s.id, { id: s.id, name: s.name, email: s.email, level: s.level, plan: s.plan ?? '', phone: s.phone ?? '', productType: s.productType, productName: s.productName, manualActiveUntil: s.manualActiveUntil, inStudentsTable: true, createdAt: s.createdAt });
+      map.set(s.id, { id: s.id, name: s.name, email: s.email, level: s.level, plan: s.plan ?? '', phone: s.phone ?? '', productType: s.productType, productName: s.productName, manualActiveUntil: s.manualActiveUntil, isOritalk: s.isOritalk, oritalkUntil: s.oritalkUntil, inStudentsTable: true, createdAt: s.createdAt });
     }
     const studentMatchesAssignment = (s: Student, a: Assignment) =>
       a.studentId === s.id ||
@@ -664,6 +731,32 @@ function StudentsContent() {
   }, [allStudents, search, subFilter, subInfo]);
 
   const visible = filtered.slice(0, visibleCount);
+
+  // Fecha de hoy en hora de España: es la que decide si un `hasta` sigue vigente,
+  // igual que en el servidor.
+  const today = madridToday();
+
+  /** 'YYYY-MM-DD' → 'DD/MM/YYYY', para los mensajes de confirmación. */
+  function longDate(iso: string): string {
+    const d = new Date(iso + 'T00:00:00');
+    if (isNaN(d.getTime())) return iso;
+    return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+  }
+
+  // Tras cambiar el acceso de un alumno hay que invalidar la caché compartida de
+  // suscripciones: si no, el badge seguiría mostrando el estado viejo hasta 5 min.
+  async function afterAccessChange(student: DisplayStudent, message: string) {
+    await reloadAll();
+    await refreshOne(student.email);
+    setToast(message);
+  }
+
+  // Auto-cierre del aviso.
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 5000);
+    return () => clearTimeout(t);
+  }, [toast]);
 
   // Abre WhatsApp con el teléfono del alumno (solo dígitos).
   function openWhatsApp(phone?: string) {
@@ -862,6 +955,13 @@ function StudentsContent() {
                 const clsStyle = planBadgeStyle(cls.type);
                 const menuOpen = menuOpenId === s.id;
                 const hasPhone = !!s.phone?.trim();
+                // Estado de acceso del alumno, para decidir qué ofrece el menú.
+                // La vigencia se mide con la MISMA regla que el servidor.
+                const oritalkOn = !!s.isOritalk && isUntilActive(s.oritalkUntil, today);
+                const manualOn = isUntilActive(s.manualActiveUntil, today);
+                // "Activar manualmente" solo tiene sentido si el alumno no está ya
+                // activo por suscripción (o por Oritalk, que también da activo).
+                const canActivateManually = subCategory(subInfo[s.email?.trim().toLowerCase() ?? '']) !== 'active';
                 return (
                   <div key={s.id} style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 14, padding: 16 }}>
                     {/* Fila superior: avatar + nombre/email + badge suscripción + ⋮ */}
@@ -915,6 +1015,49 @@ function StudentsContent() {
                                 {hasPhone && (
                                   <MenuItem onClick={() => { setMenuOpenId(null); openWhatsApp(s.phone); }}>📱 Enviar WhatsApp</MenuItem>
                                 )}
+
+                                {/* ── Acceso: Oritalk y activación manual ──
+                                    Solo para alumnos con fila propia en `students`:
+                                    los que vienen únicamente de una assignment no
+                                    tienen dónde guardar la fecha. */}
+                                {s.inStudentsTable && (oritalkOn ? (
+                                  <>
+                                    <MenuItem onClick={() => { setMenuOpenId(null); setOritalkStudent(s); }}>
+                                      🔵 Editar fecha de Oritalk
+                                    </MenuItem>
+                                    <MenuItem onClick={async () => {
+                                      setMenuOpenId(null);
+                                      await dbSetStudentOritalk(s.id, null);
+                                      await afterAccessChange(s, `${s.name} ya no es alumno de Oritalk.`);
+                                    }}>
+                                      ⚪ Quitar estado Oritalk
+                                    </MenuItem>
+                                  </>
+                                ) : (
+                                  <MenuItem onClick={() => { setMenuOpenId(null); setOritalkStudent(s); }}>
+                                    🔵 Marcar como alumno de Oritalk
+                                  </MenuItem>
+                                ))}
+
+                                {s.inStudentsTable && (manualOn ? (
+                                  <>
+                                    <MenuItem onClick={() => { setMenuOpenId(null); setActivatingStudent(s); }}>
+                                      ✅ Editar activación manual
+                                    </MenuItem>
+                                    <MenuItem onClick={async () => {
+                                      setMenuOpenId(null);
+                                      await dbSetStudentManualActive(s.id, null);
+                                      await afterAccessChange(s, `Activación manual de ${s.name} desactivada.`);
+                                    }}>
+                                      ⚪ Desactivar activación manual
+                                    </MenuItem>
+                                  </>
+                                ) : canActivateManually && (
+                                  <MenuItem onClick={() => { setMenuOpenId(null); setActivatingStudent(s); }}>
+                                    ✅ Activar manualmente
+                                  </MenuItem>
+                                ))}
+
                                 <MenuItem danger onClick={() => { setMenuOpenId(null); setDeletingStudent(s); }}>🗑️ Eliminar</MenuItem>
                               </div>
                             </>
@@ -1027,14 +1170,44 @@ function StudentsContent() {
         <ManualActivateModal
           student={activatingStudent}
           onConfirm={async (until) => {
-            await dbSetStudentManualActive(activatingStudent.id, until);
+            const s = activatingStudent;
+            await dbSetStudentManualActive(s.id, until);
             setActivatingStudent(null);
-            await reloadAll();
             // Re-verificar la suscripción: ahora devolverá "manual_override".
-            await refreshOne(activatingStudent.email);
+            await afterAccessChange(s, `Alumno activado manualmente hasta ${longDate(until)}.`);
           }}
           onCancel={() => setActivatingStudent(null)}
         />
+      )}
+
+      {oritalkStudent && (
+        <OritalkModal
+          student={oritalkStudent}
+          onConfirm={async (until) => {
+            const s = oritalkStudent;
+            await dbSetStudentOritalk(s.id, until);
+            setOritalkStudent(null);
+            // Re-verificar: ahora /api/check-subscription devolverá "oritalk".
+            await afterAccessChange(s, `Alumno marcado como Oritalk hasta ${longDate(until)}.`);
+          }}
+          onCancel={() => setOritalkStudent(null)}
+        />
+      )}
+
+      {/* Confirmación de los cambios de acceso. */}
+      {toast && (
+        <div role="status" aria-live="polite" style={{
+          position: 'fixed', left: '50%', bottom: 24, transform: 'translateX(-50%)', zIndex: 95,
+          display: 'flex', alignItems: 'center', gap: 10, maxWidth: 'calc(100vw - 32px)',
+          background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12,
+          boxShadow: '0 8px 24px rgba(0,0,0,0.18)', padding: '11px 16px',
+        }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{toast}</span>
+          <button onClick={() => setToast(null)} aria-label="Cerrar aviso"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: 14, fontFamily: 'inherit', lineHeight: 1 }}>
+            ✕
+          </button>
+        </div>
       )}
 
       {changeTeacher && (
