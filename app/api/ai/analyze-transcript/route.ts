@@ -213,6 +213,7 @@ async function handleSaveWithAnalysis(body: Body, studentName: string): Promise<
       transcript,
       level:       body.level,
       excludeId:   body.replaceId,
+      joinLogId:   body.joinLogId,
       skipAI:      true,
     });
   } catch (err) {

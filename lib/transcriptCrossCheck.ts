@@ -19,6 +19,13 @@ export interface CrossCheckInput {
   uploadedAtIso?: string;         // por defecto, ahora
   /** id de la fila actual (al reemplazar) para excluirla de la comparación. */
   excludeId?: string | null;
+  /**
+   * Ingreso al que pertenece este transcript, cuando el cliente lo sabe (el
+   * profesor subió la transcripción desde una clase pendiente, que nace de su
+   * propio class_join_log). Es una certeza, no una coincidencia: evita tener que
+   * volver a adivinar por nombre y fecha.
+   */
+  joinLogId?: string | null;
 }
 
 export interface SimilarMatch {
@@ -38,7 +45,14 @@ export interface CrossCheckResult {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const nkey = (s: string) => (s ?? '').trim().toLowerCase();
+/**
+ * Nombre normalizado SIN TILDES. Antes solo hacía trim+minúsculas, así que
+ * "Claudia González" en el ingreso y "Claudia Gonzalez" en el transcript no
+ * cruzaban y la clase salía marcada como "sin acceso registrado" siendo falso.
+ * Mismo criterio de comparación que usa el resto del proyecto.
+ */
+const nkey = (s: string) =>
+  (s ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
 
 function daysBetween(aIso: string, bIso: string): number {
   const a = new Date(aIso.slice(0, 10) + 'T00:00:00').getTime();
@@ -81,17 +95,24 @@ export async function runTranscriptCrossChecks(input: CrossCheckInput): Promise<
   const uploadedAt = input.uploadedAtIso ?? new Date().toISOString();
 
   // ── A) Existencia del acceso (class_join_logs, tolerancia ±1 día) ──
-  let hasAccess = false;
-  try {
-    const { data } = await supabase
-      .from('class_join_logs')
-      .select('student_name, scheduled_date')
-      .eq('teacher_id', input.teacherId);
-    hasAccess = (data ?? []).some(l =>
-      nkey(l.student_name) === nkey(input.studentName) &&
-      Math.abs(daysBetween(l.scheduled_date, input.classDate)) <= 1);
-  } catch (e) {
-    console.error('[crossCheck] Error al leer class_join_logs:', e);
+  //
+  // Si el transcript viene de una clase pendiente, el cliente ya sabe de qué
+  // ingreso se trata y manda su id: eso es una certeza y se acaba la búsqueda.
+  // Adivinar por nombre y fecha teniendo el vínculo delante solo podía fallar
+  // (nombre escrito distinto, clase movida más de un día).
+  let hasAccess = !!input.joinLogId;
+  if (!hasAccess) {
+    try {
+      const { data } = await supabase
+        .from('class_join_logs')
+        .select('student_name, scheduled_date')
+        .eq('teacher_id', input.teacherId);
+      hasAccess = (data ?? []).some(l =>
+        nkey(l.student_name) === nkey(input.studentName) &&
+        Math.abs(daysBetween(l.scheduled_date, input.classDate)) <= 1);
+    } catch (e) {
+      console.error('[crossCheck] Error al leer class_join_logs:', e);
+    }
   }
   if (!hasAccess) flags.push('sin_acceso_registrado');
 

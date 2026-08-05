@@ -146,9 +146,33 @@ export function flagLabel(flag: string): string {
  */
 export const INFO_ONLY_FLAGS = new Set<string>(['alta_similitud']);
 
+/**
+ * Señales que hablan de NUESTRO REGISTRO, no del transcript.
+ *
+ * `sin_acceso_registrado` no dice nada del texto: dice que no encontramos un
+ * class_join_log que cuadre. Pasa constantemente cuando el profesor entra por el
+ * enlace directo de Meet en vez de pulsar "Ingresar a clase", y también cuando la
+ * clase se movió de día (la búsqueda tolera ±1 día). Lo mismo `registro_tardio`:
+ * subir el transcript tarde no lo hace falso.
+ *
+ * Estas señales siguen viéndose en el panel y siguen mandando a revisión una
+ * clase con estructura dudosa. Lo que ya NO hacen es retener una transcripción
+ * impecable: ver la regla de auto-aprobación en decideTranscript().
+ */
+export const RECORD_ONLY_FLAGS = new Set<string>(['sin_acceso_registrado', 'registro_tardio']);
+
 /** Señales que SÍ pesan en la decisión (todo lo que no sea informativo). */
 export function decisiveFlags(flags: string[]): string[] {
   return flags.filter(f => !INFO_ONLY_FLAGS.has(f));
+}
+
+/**
+ * Señales que cuestionan el CONTENIDO del transcript: que sea generado, corto,
+ * sin habla natural… Es lo único que puede impedir que una transcripción con
+ * estructura perfecta se apruebe sola.
+ */
+export function contentFlags(flags: string[]): string[] {
+  return flags.filter(f => !INFO_ONLY_FLAGS.has(f) && !RECORD_ONLY_FLAGS.has(f));
 }
 
 function countMatches(text: string, re: RegExp): number {

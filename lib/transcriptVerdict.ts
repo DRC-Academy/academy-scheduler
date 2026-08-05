@@ -25,7 +25,8 @@
 import 'server-only';   // arrastra el SDK de Anthropic: nunca debe entrar al bundle del navegador
 
 import {
-  validateTranscriptStructure, decisiveFlags, SCORE_SEVERE, SCORE_CLEAN, SCORE_AUTO_APPROVE,
+  validateTranscriptStructure, contentFlags, decisiveFlags,
+  SCORE_SEVERE, SCORE_CLEAN, SCORE_AUTO_APPROVE,
   type ValidationResult,
 } from '@/lib/transcriptValidation';
 import { runTranscriptCrossChecks, type CrossCheckResult } from '@/lib/transcriptCrossCheck';
@@ -95,6 +96,8 @@ export interface VerdictInput {
   durationMinutes?: number;
   uploadedAtIso?: string;
   excludeId?: string | null;
+  /** Ingreso al que pertenece el transcript, si el cliente lo conoce. */
+  joinLogId?: string | null;
   /** true en el guardado: no se llama a la IA (capa 3), que corre luego aparte. */
   skipAI?: boolean;
 }
@@ -115,6 +118,7 @@ export async function computeTranscriptVerdict(input: VerdictInput): Promise<Tra
     lastTimestampMinutes: structure.lastTimestampMinutes,
     uploadedAtIso: input.uploadedAtIso,
     excludeId: input.excludeId,
+    joinLogId: input.joinLogId,
   });
 
   const flags = Array.from(new Set([...structure.flags, ...cross.flags]));
@@ -167,6 +171,22 @@ export function decideTranscript(args: {
   const decisive = decisiveFlags(flags);
 
   if (score < SCORE_SEVERE) return 'blocked';
+
+  // AUTO-APROBACIÓN de una transcripción impecable.
+  //
+  // Antes, CUALQUIER señal decisiva mandaba la clase a revisión aunque el texto
+  // sacara 100/100. En la práctica eso llenaba la cola de transcripciones
+  // perfectas retenidas por `sin_acceso_registrado`, que no dice nada del texto:
+  // dice que el profesor entró por el enlace directo en vez de pulsar el botón,
+  // o que la clase se movió más de un día. El admin las aprobaba una por una sin
+  // información nueva que aportar.
+  //
+  // Ahora, con la estructura por encima del umbral de auto-aprobación y sin una
+  // sola señal sobre el CONTENIDO, la clase se aprueba sola. Lo que sigue
+  // reteniéndola: prosa generada, texto corto, duración insuficiente, falta de
+  // habla natural y la sospecha de la IA. Ver RECORD_ONLY_FLAGS.
+  if (score >= SCORE_AUTO_APPROVE && contentFlags(flags).length === 0 && !aiDoubts) return 'ok';
+
   if (score < SCORE_CLEAN || decisive.length > 0 || aiDoubts) return 'review';
   return 'ok';
 }

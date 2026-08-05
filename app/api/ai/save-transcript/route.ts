@@ -61,6 +61,8 @@ export async function POST(request: Request): Promise<Response> {
       transcript,
       level:       body.level,
       excludeId:   body.replaceId,
+      // El vínculo explícito con el ingreso: si viene, no hay que adivinarlo.
+      joinLogId:   body.joinLogId,
       skipAI:      true,
       // Sesión de 2h: el transcript cubre 120 minutos y los umbrales de duración
       // se calibran con eso, no con una clase de 60 que nunca existió.
