@@ -1,5 +1,8 @@
-// Cron de FIN DE DÍA (23:59 hora de Argentina): recuerda al profesor los
-// transcripts que le faltan por subir.
+// Cron de FIN DE DÍA (19:00 hora de Argentina = 22:00 UTC): recuerda al profesor
+// los transcripts que le faltan por subir.
+//
+// Antes salía a las 23:59 de Argentina y llegaba de madrugada. A las 19:00 el
+// aviso es útil (todavía da tiempo a subirlo) en vez de molesto.
 //
 // QUÉ AVISA — exactamente las clases en estado "pendiente de transcript" de la
 // regla de dos niveles (ver la cabecera de lib/finance.ts):
@@ -29,6 +32,7 @@ import { supabase } from '@/lib/supabase';
 import { calculateTeacherFinance, rowHoursLabel, transcriptNeedsTeacher } from '@/lib/finance';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { fetchTeacher, sendDailyTranscriptReminder, type PendingTranscriptClass } from '@/lib/emailNotifications';
+import { spainWallClockToEpoch } from '@/lib/spainTime';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -53,13 +57,19 @@ function argentinaParts(now: Date): { dateStr: string; hour: number } {
 
 /**
  * Qué día hay que repasar. Normalmente el de hoy en Argentina, porque el cron
- * dispara a las 23:59.
+ * dispara a las 19:00.
  *
- * Pero si la corrida llega pasada la medianoche (los crons de Vercel en plan
- * Hobby se disparan "dentro de la hora", y un reintento manual puede caer aún
- * más tarde), "hoy" ya sería el día siguiente y el email saldría vacío o no
- * saldría. Entre las 00:00 y las 05:00 se repasa el día que acaba de terminar,
- * que es el que el profesor tiene en la cabeza.
+ * Pero si la corrida llega pasada la medianoche (los crons de Vercel se disparan
+ * "dentro de la hora", y un reintento manual puede caer aún más tarde), "hoy" ya
+ * sería el día siguiente y el email saldría vacío o no saldría. Entre las 00:00 y
+ * las 05:00 se repasa el día que acaba de terminar, que es el que el profesor
+ * tiene en la cabeza.
+ *
+ * OJO al cruce de zonas: las clases se guardan con la fecha ESPAÑOLA y este
+ * cálculo usa la argentina. A las 22:00 UTC las dos coinciden en el mismo día
+ * natural (Madrid va por las 23:00 en invierno o las 00:00 del día siguiente en
+ * verano; Argentina, por las 19:00), así que la fecha que sale de aquí es la
+ * correcta en ambas estaciones.
  */
 function dayToReport(now: Date): string {
   const { dateStr, hour } = argentinaParts(now);
@@ -73,6 +83,26 @@ interface TeacherPending {
   teacherId: string;
   teacherName: string;
   classes: PendingTranscriptClass[];
+}
+
+/**
+ * ¿Ya terminó la clase? Adelantar el correo a las 19:00 de Argentina lo pone a
+ * las 23:00 de Madrid en invierno (en verano, a las 00:00 del día siguiente), y
+ * en la academia hay clases a las 22:00 y a las 23:00 españolas. Sin esta guarda,
+ * medio año el profesor recibiría "te falta el transcript" de una clase que
+ * todavía está dando.
+ *
+ * Las horas de clase son SIEMPRE hora de pared española: la conversión pasa por
+ * spainWallClockToEpoch, que es la única que respeta el horario de verano.
+ * Ante cualquier dato raro se devuelve true (no filtrar): perder un aviso es peor
+ * que mandarlo, y este filtro solo existe para el borde del final del día.
+ */
+function classHasEnded(r: { date: string; hour: string; durationHours?: number }, nowMs: number): boolean {
+  const [h, m] = (r.hour ?? '').split(':').map(Number);
+  if (!Number.isFinite(h)) return true;
+  const start = spainWallClockToEpoch(r.date, h, Number.isFinite(m) ? m : 0);
+  if (!Number.isFinite(start)) return true;
+  return start + (r.durationHours ?? 1) * 3_600_000 <= nowMs;
 }
 
 export async function GET(request: Request): Promise<Response> {
@@ -98,7 +128,7 @@ export async function GET(request: Request): Promise<Response> {
 
   let pendientes: TeacherPending[];
   try {
-    pendientes = await findPending(targetDate, monthYear);
+    pendientes = await findPending(targetDate, monthYear, Date.now());
   } catch (err) {
     console.error('[cron transcript-reminder] Error al calcular las clases pendientes:', err);
     return Response.json({ error: 'Error del servidor' }, { status: 500 });
@@ -148,7 +178,7 @@ export async function GET(request: Request): Promise<Response> {
  * Una sola lectura de cada tabla para todos los profesores; el cálculo por
  * profesor es en memoria.
  */
-async function findPending(targetDate: string, monthYear: string): Promise<TeacherPending[]> {
+async function findPending(targetDate: string, monthYear: string, nowMs: number): Promise<TeacherPending[]> {
   const [
     teachers, students, assignments, joinLogs, classRecords,
     classAnalyses, rates, payments, manualApprovals, scoringEvents,
@@ -175,8 +205,11 @@ async function findPending(targetDate: string, monthYear: string): Promise<Teach
     // su transcript y está esperando al equipo. Decirle "todavía no lo has
     // subido" lo mandaría a pegarlo otra vez, que es el bucle que ya se corrigió
     // en el panel de "Mis clases".
+    //
+    // `classHasEnded` deja fuera las que todavía se están dando (ver arriba).
     const classes = result.rows
-      .filter(r => r.date === targetDate && r.status === 'a_revisar' && transcriptNeedsTeacher(r.transcriptState))
+      .filter(r => r.date === targetDate && r.status === 'a_revisar' && transcriptNeedsTeacher(r.transcriptState)
+        && classHasEnded(r, nowMs))
       .map(r => ({
         studentName: r.studentName,
         hours: r.hour ? rowHoursLabel(r) : undefined,
