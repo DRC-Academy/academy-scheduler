@@ -20,11 +20,11 @@ import {
   dbGetFinanceRates, dbGetFinancePayments, dbMarkPaymentPaid,
   dbGetManualApprovals, dbAddManualApproval,
   dbChangeStudentTeacher, dbAddRescheduleRecord, dbAddRecoveryClass, dbRemoveAssignment,
-  dbApplyFaltaSideEffects,
+  dbApplyFaltaSideEffects, dbRevertStudentAbsence,
 } from '@/lib/db';
 import type { AffectedTeacher, ChangeTeacherParams, DeleteTeacherResult, StudentLeftGrid } from '@/lib/db';
 import type { AssignedSlot } from '@/types';
-import { calculateTeacherFinance, type ClassTranscriptRef } from '@/lib/finance';
+import { calculateTeacherFinance, canMarkStudentAbsence, ABSENCE_CAP_MESSAGE, type ClassTranscriptRef } from '@/lib/finance';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { checkSubscription } from '@/lib/useSubscriptionStatus';
 
@@ -84,6 +84,8 @@ interface TeachersContextType {
   registerClassRecord: (teacherId: string, studentName: string, date: string, time: string | undefined, screenshotFile: File | null, classType?: ClassRecordType, comment?: string) => Promise<void>;
   attachScreenshotToClass: (teacherId: string, studentName: string, date: string, time: string | undefined, screenshotFile: File, comment?: string) => Promise<void>;
   markPaymentAsPaid: (teacherId: string, monthYear: string) => Promise<void>;
+  markStudentAbsence: (teacherId: string, studentName: string, date: string, time: string | undefined, comment?: string) => Promise<void>;
+  revertStudentAbsence: (recordId: string, adminName: string) => Promise<void>;
   approveReviewClass: (teacherId: string, studentName: string, date: string, approvedBy?: string) => Promise<void>;
   approveExceedLimitClass: (teacherId: string, studentName: string, date: string, approvedBy?: string) => Promise<void>;
   changeStudentTeacher: (params: ChangeTeacherParams) => Promise<void>;
@@ -135,6 +137,8 @@ const TeachersContext = createContext<TeachersContextType>({
   registerClassRecord:        async () => {},
   attachScreenshotToClass:    async () => {},
   markPaymentAsPaid:          async () => {},
+  markStudentAbsence:         async () => {},
+  revertStudentAbsence:       async () => {},
   approveReviewClass:         async () => {},
   approveExceedLimitClass:    async () => {},
   changeStudentTeacher:       async () => {},
@@ -505,12 +509,42 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     const record = await dbAddClassRecord(teacherId, teacherName, studentName, date, time, url, classType, comment, subscriptionStatus);
     setClassRecords(prev => [record, ...prev]);
 
-    // Efectos de falta (Bloque 4): penalización -5 € por falta sin aviso + alertas
-    // internas al admin. Best-effort; luego refrescamos scoring para reflejar el balance.
-    if (classType === 'falta_sin_aviso' || classType === 'cancelacion_hora' || classType === 'falta_con_aviso') {
+    // Efectos de falta. La falta DEL ALUMNO ('falta_sin_aviso') ya no dispara
+    // ninguno: no penaliza y no es asunto del profesor. La que sí penaliza es la
+    // cancelación de última hora del propio profesor, y solo ahí hace falta
+    // recargar scoring, porque es lo único que mueve su balance.
+    if (classType === 'cancelada_por_profesor' || classType === 'cancelacion_hora' || classType === 'falta_con_aviso') {
       await dbApplyFaltaSideEffects({ teacherId, teacherName, studentName, classDate: date, classType });
-      if (classType === 'falta_sin_aviso') await loadScoringEvents();
+      if (classType === 'cancelada_por_profesor') await loadScoringEvents();
     }
+  }
+
+  /**
+   * Marca una falta sin aviso DEL ALUMNO sobre una clase que ya entró a finanzas
+   * (tiene ingreso). Es exactamente el mismo registro que crea el selector "Falta
+   * del alumno sin aviso" de "Añadir clase": un class_record de tipo
+   * 'falta_sin_aviso' vía registerClassRecord. Un solo camino, un solo efecto.
+   *
+   * El tope de 2 por alumno y mes se comprueba acá además de en la pantalla: el
+   * botón se deshabilita, pero la comprobación de verdad no puede vivir solo en
+   * el render (dos pestañas abiertas marcarían tres faltas sin enterarse).
+   */
+  async function markStudentAbsence(
+    teacherId: string, studentName: string, date: string, time: string | undefined, comment?: string,
+  ) {
+    const { allowed } = canMarkStudentAbsence(classRecords, teacherId, studentName, date.slice(0, 7));
+    if (!allowed) throw new Error(ABSENCE_CAP_MESSAGE);
+    await registerClassRecord(teacherId, studentName, date, time, null, 'falta_sin_aviso', comment);
+  }
+
+  /** Reversión de una falta del alumno marcada por error (solo admin). */
+  async function revertStudentAbsence(recordId: string, adminName: string) {
+    await dbRevertStudentAbsence({ recordId, adminName });
+    const revertedAt = new Date().toISOString();
+    setClassRecords(prev => prev.map(r =>
+      r.id === recordId
+        ? { ...r, classType: 'falta_sin_aviso_revertida' as ClassRecordType, revertedAt, revertedBy: adminName }
+        : r));
   }
 
   // Adjunta una captura a una clase puntual existente (o la crea para esa fecha).
@@ -610,7 +644,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
       sendNotification, loadNotifications, markNotificationRead, markAllNotificationsRead,
       updateMeetLink, markPresentationSent, logClassJoin, loadClassJoinLogs,
       loadClassRecords, loadFinanceData, registerClassRecord, attachScreenshotToClass,
-      markPaymentAsPaid, approveReviewClass, approveExceedLimitClass,
+      markPaymentAsPaid, markStudentAbsence, revertStudentAbsence, approveReviewClass, approveExceedLimitClass,
       changeStudentTeacher, removeAssignment, addRescheduleRecord, addRecoveryClass,
     }}>
       {children}

@@ -17,6 +17,7 @@ import { getSpainParts } from '@/components/VisualCalendar';
 import { registerClassWithTranscript } from '@/lib/aiClient';
 import { checkTranscriptDuplicates, transcriptHash, type DupeCheck } from '@/lib/transcriptDupes';
 import { quickTranscriptCheck } from '@/lib/transcriptValidation';
+import { canMarkStudentAbsence, isStudentAbsence } from '@/lib/finance';
 import type { Teacher, Assignment, ClassRecord, ClassRecordType } from '@/types';
 
 // Etiquetas singular/plural por tipo de falta (para los mensajes de límite).
@@ -277,14 +278,20 @@ export function AddClassModal({
   const needsTranscript = CLASS_TYPE_OPTIONS.find(o => o.value === classType)?.needsTranscript ?? true;
   const isFaltaType = classType === 'falta_sin_aviso' || classType === 'cancelacion_hora';
 
-  // Cuántos registros de ESE tipo ya tiene el alumno (acumulativo, todo el historial).
+  // Cuántas lleva ya el alumno de ESE tipo. Son dos topes distintos:
+  //   · falta del alumno  → 2 por MES (mismo contador que usa el botón de
+  //     finanzas y el cálculo del pago: canMarkStudentAbsence, lib/finance);
+  //   · cancelación sobre la hora → 2 de todo el historial, como siempre.
   const typeCount = useMemo(() => {
     if (!isFaltaType) return 0;
+    if (isStudentAbsence(classType)) {
+      return canMarkStudentAbsence(classRecords, teacher.id, studentName, (date || '').slice(0, 7)).count;
+    }
     const nk = (x: string) => (x ?? '').trim().toLowerCase();
     return classRecords.filter(r =>
       r.teacherId === teacher.id && nk(r.studentName) === nk(studentName) && r.classType === classType
     ).length;
-  }, [classRecords, teacher.id, studentName, classType, isFaltaType]);
+  }, [classRecords, teacher.id, studentName, classType, isFaltaType, date]);
   const limitReached = isFaltaType && typeCount >= 2;
   const typeLabel = FALTA_TYPE_LABELS[classType];
 
@@ -397,7 +404,9 @@ export function AddClassModal({
           {limitReached ? (
             <>
               <div style={{ fontSize: 13, color: '#dc2626', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.35)', borderRadius: 10, padding: '12px 14px', lineHeight: 1.5 }}>
-                Este alumno ya registró 2 {typeLabel?.plural}. No se pueden registrar más con este motivo.
+                {isStudentAbsence(classType)
+                  ? `Este alumno ya tiene 2 ${typeLabel?.plural} este mes. No se pueden cobrar más.`
+                  : `Este alumno ya registró 2 ${typeLabel?.plural}. No se pueden registrar más con este motivo.`}
               </div>
               <div style={{ display: 'flex', gap: 10, marginTop: 2 }}>
                 <button onClick={onClose} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#6b7280', cursor: 'pointer', fontSize: 14, fontFamily: 'inherit' }}>Cerrar</button>
@@ -464,7 +473,10 @@ export function AddClassModal({
                 </div>
               ) : (
                 <div style={{ fontSize: 11.5, color: '#b45309', background: 'rgba(255,196,0,0.1)', border: '1px solid rgba(255,196,0,0.3)', borderRadius: 8, padding: '8px 10px', lineHeight: 1.5 }}>
-                  Este tipo de clase <b>SÍ genera cobro</b> (tarifa normal del alumno), pero solo se permite hasta 2 veces. Llevás <b>{typeCount}</b> de 2 registradas. No requiere transcript.
+                  Este tipo de clase <b>SÍ genera cobro</b> (tarifa normal del alumno) y <b>no te penaliza</b>:
+                  el que faltó fue el alumno. {isStudentAbsence(classType)
+                    ? <>Se permiten hasta 2 <b>por mes</b>; llevás <b>{typeCount}</b> de 2 este mes, y la clase consume cupo del alumno.</>
+                    : <>Solo se permite hasta 2 veces; llevás <b>{typeCount}</b> de 2 registradas.</>} No requiere transcript.
                 </div>
               )}
               <div>

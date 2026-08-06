@@ -7,7 +7,7 @@ import { LastUpdated } from '@/components/LastUpdated';
 import { getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
-import { calculateTeacherFinance, TeacherFinanceResult, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge, rowHoursLabel, financeStatusBadge, pendingTranscriptSummary, transcriptStateBadge, SUBSCRIPTION_STATUS_OPTIONS } from '@/lib/finance';
+import { calculateTeacherFinance, TeacherFinanceResult, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge, rowHoursLabel, financeStatusBadge, pendingTranscriptSummary, transcriptStateBadge, absenceBreakdownLabel, isStudentAbsence, SUBSCRIPTION_STATUS_OPTIONS } from '@/lib/finance';
 import { classifyPlan } from '@/lib/productUtils';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { dbRevertPenalty } from '@/lib/db';
@@ -119,12 +119,13 @@ function TeacherTotalCard({ result, monthLabel }: { result: TeacherFinanceResult
  * badges envuelven en lugar de estirar el ancho, así que no hay `min-width` que
  * obligue a desplazarse en horizontal para leer el estado o el botón de aprobar.
  */
-function ClassCards({ result, studentName, approvals, onApproveReview, onApproveExceed }: {
+function ClassCards({ result, studentName, approvals, onApproveReview, onApproveExceed, onRevertAbsence }: {
   result: TeacherFinanceResult;
   studentName: string;
   approvals: FinanceManualApproval[];
   onApproveReview: (date: string) => void;
   onApproveExceed: (date: string) => void;
+  onRevertAbsence: (row: ClassFinanceRow) => void;
 }) {
   const rows = result.rows.filter(r => r.studentName === studentName);
   if (rows.length === 0) return <div className="afd-empty">Sin clases registradas este mes.</div>;
@@ -172,6 +173,20 @@ function ClassCards({ result, studentName, approvals, onApproveReview, onApprove
                 </span>
               )}
             </div>
+            {/* Falta sin aviso del alumno: qué se cobró y por qué. Misma frase
+                que ve el profesor en su desglose (fuente única, lib/finance). */}
+            {absenceBreakdownLabel(r) && (
+              <div style={{ fontSize: 12.5, color: '#b45309', lineHeight: 1.5, marginTop: 2 }}>
+                {absenceBreakdownLabel(r)}
+              </div>
+            )}
+            {/* Revertir una falta marcada por error. La clase vuelve a pendiente y
+                deja de contar para el pago, el tope del mes y el cupo del alumno. */}
+            {isStudentAbsence(r.classType) && r.recordId && result.paymentStatus !== 'paid' && (
+              <div className="afd-action">
+                <button className="afd-btn" onClick={() => onRevertAbsence(r)}>↩ Revertir falta</button>
+              </div>
+            )}
             {/* Pagar una clase que entró (tiene ingreso) pero sigue sin transcript.
                 No hay botón para las que nunca entraron: sin ingreso no hay fila. */}
             {editable && r.status === 'a_revisar' && (
@@ -196,12 +211,13 @@ function ClassCards({ result, studentName, approvals, onApproveReview, onApprove
  * comparar (nombre, clases, subtotal, estado); al abrir aparecen la ficha y las
  * clases, sin tabla anidada y por tanto sin scroll lateral.
  */
-function StudentDetailList({ result, assignments, approvals, onApproveReview, onApproveExceed }: {
+function StudentDetailList({ result, assignments, approvals, onApproveReview, onApproveExceed, onRevertAbsence }: {
   result: TeacherFinanceResult;
   assignments: Assignment[];
   approvals: FinanceManualApproval[];
   onApproveReview: (studentName: string, date: string) => void;
   onApproveExceed: (studentName: string, date: string) => void;
+  onRevertAbsence: (row: ClassFinanceRow) => void;
 }) {
   const [openStudent, setOpenStudent] = useState<string | null>(null);
 
@@ -293,6 +309,7 @@ function StudentDetailList({ result, assignments, approvals, onApproveReview, on
                     result={result} studentName={name} approvals={approvals}
                     onApproveReview={date => onApproveReview(name, date)}
                     onApproveExceed={date => onApproveExceed(name, date)}
+                    onRevertAbsence={onRevertAbsence}
                   />
                 </>
               )}
@@ -309,7 +326,7 @@ function FinanceTab() {
   const {
     teachers, students, assignments, classJoinLogs, classRecords, classAnalyses, financeRates, financePayments,
     scoringEvents, manualApprovals,
-    loadFinanceData, markPaymentAsPaid, approveReviewClass, approveExceedLimitClass,
+    loadFinanceData, markPaymentAsPaid, approveReviewClass, approveExceedLimitClass, revertStudentAbsence,
   } = useTeachers();
   const approvedBy = user?.displayName || user?.username || 'admin';
 
@@ -324,6 +341,24 @@ function FinanceTab() {
   const [revertModal, setRevertModal] = useState<ScoringEvent | null>(null);
   const [revertReason, setRevertReason] = useState('');
   const [reverting, setReverting] = useState(false);
+  // Reversión de una falta sin aviso del ALUMNO (otra cosa que la penalización).
+  const [absenceModal, setAbsenceModal] = useState<{ row: ClassFinanceRow; teacherName: string } | null>(null);
+  const [absenceError, setAbsenceError] = useState('');
+  const [revertingAbsence, setRevertingAbsence] = useState(false);
+
+  async function handleRevertAbsence() {
+    if (!absenceModal?.row.recordId) return;
+    setRevertingAbsence(true); setAbsenceError('');
+    try {
+      await revertStudentAbsence(absenceModal.row.recordId, approvedBy);
+      setAbsenceModal(null);
+      await loadFinanceData();
+    } catch (e) {
+      setAbsenceError((e as Error).message || 'No se pudo revertir la falta.');
+    } finally {
+      setRevertingAbsence(false);
+    }
+  }
 
   async function handleRevert() {
     if (!revertModal || !revertReason.trim()) return;
@@ -554,6 +589,7 @@ function FinanceTab() {
                         result={r} assignments={assignments} approvals={manualApprovals}
                         onApproveReview={(student, date) => approveReviewClass(r.teacherId, student, date, approvedBy)}
                         onApproveExceed={(student, date) => approveExceedLimitClass(r.teacherId, student, date, approvedBy)}
+                        onRevertAbsence={row => { setAbsenceModal({ row, teacherName: r.teacherName }); setAbsenceError(''); }}
                       />
                       {penaltiesOf(r.teacherId).length > 0 && (
                         <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '12px 14px', background: 'var(--bg-surface)' }}>
@@ -562,7 +598,7 @@ function FinanceTab() {
                             {penaltiesOf(r.teacherId).map(p => (
                               <div key={p.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, fontSize: 12.5, flexWrap: 'wrap' }}>
                                 <span style={{ color: p.reverted ? 'var(--text-muted)' : 'var(--text-secondary)', textDecoration: p.reverted ? 'line-through' : undefined }}>
-                                  {p.note.replace('Falta sin aviso registrada — ', '')} · −€{Math.abs(p.euros).toFixed(2)}
+                                  {p.note.replace(/^(Falta sin aviso registrada|Cancelación sin antelación) — /, '')} · −€{Math.abs(p.euros).toFixed(2)}
                                 </span>
                                 {p.reverted ? (
                                   <span style={{ fontSize: 11.5, color: '#1f7a3d', fontWeight: 700, whiteSpace: 'nowrap' }}>Revertida{p.revertedBy ? ` · ${p.revertedBy}` : ''}</span>
@@ -583,6 +619,39 @@ function FinanceTab() {
             </div>
           );
           })}
+        </div>
+      )}
+
+      {/* Modal de reversión de una FALTA SIN AVISO DEL ALUMNO.
+          No confundir con el de abajo: aquel devuelve euros de una penalización al
+          profesor; este QUITA una clase que se le estaba pagando. */}
+      {absenceModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+          onClick={e => { if (e.target === e.currentTarget && !revertingAbsence) setAbsenceModal(null); }}>
+          <div style={{ background: '#F7F7F5', border: '1px solid var(--border)', borderRadius: 14, padding: 24, width: '100%', maxWidth: 460 }}>
+            <div style={{ fontWeight: 700, fontSize: 16, color: '#111827', marginBottom: 8 }}>Revertir falta sin aviso</div>
+            <div style={{ fontSize: 13, color: '#5f6360', lineHeight: 1.6, marginBottom: 16 }}>
+              Se quitará la marca de falta de la clase de <b>{absenceModal.row.studentName}</b> del{' '}
+              <b>{absenceModal.row.date}</b> ({absenceModal.teacherName}). La clase vuelve a
+              <b> pendiente de transcript</b>: deja de sumar los{' '}
+              <b>€{(absenceModal.row.rate * absenceModal.row.billingUnits).toFixed(2)}</b> al pago, libera el
+              cupo mensual del alumno y el hueco del tope de faltas del mes. Queda el registro de que
+              la falta existió y de quién la revirtió.
+            </div>
+            {absenceError && (
+              <div style={{ fontSize: 12.5, color: '#c0392b', background: 'rgba(239,68,68,0.08)', borderRadius: 8, padding: '9px 12px', marginBottom: 12 }}>
+                {absenceError}
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button onClick={() => setAbsenceModal(null)} disabled={revertingAbsence}
+                style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#6b7280', cursor: revertingAbsence ? 'not-allowed' : 'pointer', fontSize: 13, fontFamily: 'inherit' }}>Cancelar</button>
+              <button onClick={handleRevertAbsence} disabled={revertingAbsence}
+                style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: revertingAbsence ? '#d1d5db' : '#1E9E3A', color: 'white', cursor: revertingAbsence ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+                {revertingAbsence ? 'Revirtiendo…' : 'Confirmar reversión'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

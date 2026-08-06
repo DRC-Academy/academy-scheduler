@@ -656,8 +656,14 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     const { c, date } = cancelModal;
     setSavingCancel(true);
     try {
-      // >24h → constancia sin penalización; <24h → falta sin aviso (penaliza -5 €).
-      const classType = withNotice ? 'cancelada_con_preaviso' : 'falta_sin_aviso';
+      // Cancela el PROFESOR su propia clase: >24h → constancia sin penalización;
+      // <24h → 'cancelada_por_profesor' (no se cobra y penaliza -5 €).
+      //
+      // Antes lo de <24h se guardaba como 'falta_sin_aviso', el mismo tipo que la
+      // falta DEL ALUMNO. Con un solo tipo para dos culpables opuestos no se podía
+      // decidir el pago: quitar la penalización de la falta del alumno habría hecho
+      // cobrable la cancelación de última hora del profesor.
+      const classType = withNotice ? 'cancelada_con_preaviso' : 'cancelada_por_profesor';
       await registerClassRecord(teacher.id, c.studentName, date, c.hour, null, classType, reason);
       // Email al alumno + aviso al admin (best-effort).
       fetch('/api/classes/cancel', {

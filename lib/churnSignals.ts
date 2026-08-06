@@ -15,6 +15,7 @@ export interface ChurnAnalysisLite { student_name: string; class_date?: string |
 // Tipos de clase que cuentan como "cancelación/ausencia" (señal de desenganche).
 const CANCEL_TYPES = new Set([
   'falta_sin_aviso', 'cancelacion_hora', 'falta_con_aviso', 'reprogramada', 'cancelada_con_preaviso',
+  'cancelada_por_profesor',
 ]);
 
 export interface ChurnSignals {

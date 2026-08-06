@@ -519,6 +519,7 @@ export function findContiguityMismatches(
 
 const CANCEL_TYPES = new Set<string>([
   'cancelada_con_preaviso', 'falta_sin_aviso', 'cancelacion_hora', 'falta_con_aviso',
+  'cancelada_por_profesor',
 ]);
 
 /** Si esa clase (alumno + fecha) se reprogramó, la fecha destino. */
@@ -554,6 +555,7 @@ export function cancellationLabel(type: ClassRecordType | null): string {
     case 'falta_sin_aviso':  return 'Falta sin aviso';
     case 'cancelacion_hora': return 'Cancelada sobre la hora';
     case 'falta_con_aviso':  return 'Falta con aviso';
+    case 'cancelada_por_profesor': return 'Cancelada sin antelación';
     default:                 return 'Cancelada';
   }
 }

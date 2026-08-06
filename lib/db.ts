@@ -2191,9 +2191,22 @@ async function notifyAdmin(title: string, body: string, type: string): Promise<v
 }
 
 // Efectos secundarios al registrar una falta/cancelación (además del class_record):
-//  · 'falta_sin_aviso'  → penalización de -5 € (scoring_event) + alerta admin a las 4.
+//  · 'cancelada_por_profesor' → penalización de -5 € (scoring_event) + alerta al
+//    admin a las 4. Es el profesor cancelando su clase con menos de 24 h.
+//  · 'falta_sin_aviso' (falta DEL ALUMNO) → NINGUNA penalización: el profesor
+//    entró y cumplió. Ni siquiera un contador: no es asunto suyo.
 //  · 'cancelacion_hora'/'falta_con_aviso' → sin penalización económica; se cuentan
 //    y se avisa al admin al superar 3 y al superar 5 (contador interno, no al profe).
+//
+// LO QUE CAMBIÓ Y POR QUÉ: hasta ago/2026, 'falta_sin_aviso' era a la vez la falta
+// del alumno (selector de "Añadir clase") y la cancelación de última hora del
+// profesor (botón "Cancelar clase"), y las dos creaban el -5 €. En la primera
+// estaba al revés —el profesor cumplió, y la clase encima se le pagaba, o sea que
+// el mismo registro le daba la clase y le quitaba 5 €—; en la segunda era correcto.
+// Ahora son dos tipos distintos y cada uno hace lo suyo. El event_type conserva el
+// nombre 'falta_sin_aviso_penalizacion' para no orfanar los 17 eventos ya emitidos
+// ni romper el botón de revertir del panel de finanzas.
+//
 // Best-effort: nunca debe romper el registro de la clase.
 export async function dbApplyFaltaSideEffects(p: {
   teacherId: string; teacherName: string; studentName: string; classDate: string;
@@ -2202,16 +2215,16 @@ export async function dbApplyFaltaSideEffects(p: {
   const monthPrefix = (p.classDate || new Date().toISOString()).slice(0, 7);
 
   try {
-    if (p.classType === 'falta_sin_aviso') {
+    if (p.classType === 'cancelada_por_profesor') {
       // Penalización económica de -5 € en el balance del profesor.
       await dbAddScoringEvent({
         teacherId: p.teacherId, teacherName: p.teacherName,
         eventType: 'falta_sin_aviso_penalizacion', points: 0, euros: -5,
-        note: `Falta sin aviso registrada — alumno ${p.studentName}, fecha ${p.classDate}`,
+        note: `Cancelación sin antelación — alumno ${p.studentName}, fecha ${p.classDate}`,
         createdBy: 'sistema', studentRef: p.studentName,
       });
 
-      // Contador interno (SOLO admin): faltas sin aviso NO revertidas del mes.
+      // Contador interno (SOLO admin): cancelaciones NO revertidas del mes.
       const { data } = await supabase.from('scoring_events')
         .select('created_at, student_ref, reverted')
         .eq('teacher_id', p.teacherId).eq('event_type', 'falta_sin_aviso_penalizacion');
@@ -2219,7 +2232,7 @@ export async function dbApplyFaltaSideEffects(p: {
       if (month.length === 4) {
         const alumnos = [...new Set(month.map(e => e.student_ref).filter(Boolean))].join(', ');
         await notifyAdmin(
-          `${p.teacherName} alcanzó 4 faltas sin aviso`,
+          `${p.teacherName} alcanzó 4 cancelaciones sin antelación`,
           `Revisar situación. Alumnos afectados: ${alumnos || '—'}.`,
           'limite_faltas_admin',
         );
@@ -3096,7 +3109,36 @@ function mapClassRecord(row: any): import('@/types').ClassRecord {
     rescheduledTo:  row.rescheduled_to ?? undefined,
     recoveryForDate: row.recovery_for_date ?? undefined,
     createdAt:     row.created_at,
+    revertedAt:    row.reverted_at ?? undefined,
+    revertedBy:    row.reverted_by ?? undefined,
   };
+}
+
+/**
+ * Revierte una falta sin aviso del alumno marcada por error (solo admin).
+ *
+ * NO borra la fila: le cambia el class_type a 'falta_sin_aviso_revertida', un
+ * valor que el cálculo de finanzas ignora (ver lib/finance.ts). Así la clase
+ * vuelve sola a "pendiente de transcript" —su ingreso sigue ahí—, deja de sumar
+ * al pago, libera el cupo del alumno y el hueco del tope mensual, y queda el
+ * rastro de que la falta existió y de quién la deshizo.
+ *
+ * Resiliente: si la BD todavía no tiene reverted_at/reverted_by, reintenta solo
+ * con el class_type para que la reversión no quede bloqueada por la migración.
+ */
+export async function dbRevertStudentAbsence(p: {
+  recordId: string; adminName: string;
+}): Promise<void> {
+  const revertedAt = new Date().toISOString();
+  const { error } = await supabase.from('class_records')
+    .update({ class_type: 'falta_sin_aviso_revertida', reverted_at: revertedAt, reverted_by: p.adminName })
+    .eq('id', p.recordId);
+  if (error) {
+    const { error: fallback } = await supabase.from('class_records')
+      .update({ class_type: 'falta_sin_aviso_revertida' })
+      .eq('id', p.recordId);
+    if (fallback) throw new Error(fallback.message);
+  }
 }
 
 // Cuenta cuántos registros de un class_type específico existen para un

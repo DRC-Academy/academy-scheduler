@@ -3689,7 +3689,14 @@ function AdminContent() {
   const [emailDetail, setEmailDetail] = useState<string | null>(null);   // profe con el detalle de emails abierto
   const [faltasDetail, setFaltasDetail] = useState<string | null>(null); // profe con el detalle de faltas del mes abierto
 
-  // Contador interno de faltas sin aviso del mes (SOLO admin). Excluye las revertidas.
+  // Contador interno del mes (SOLO admin): cancelaciones del PROFESOR con menos
+  // de 24 h, que son las que penalizan. Excluye las revertidas.
+  //
+  // Sigue contando scoring_events porque son exactamente esas: desde ago/2026 la
+  // falta DEL ALUMNO tiene tipo propio y no emite ninguno, así que este contador
+  // dejó de mezclar los dos casos sin necesidad de tocarlo. El event_type
+  // conserva el nombre viejo ('falta_sin_aviso_penalizacion') para no orfanar los
+  // eventos ya emitidos.
   const faltasMonth = new Date().toISOString().slice(0, 7);
   const faltasOfTeacher = (teacherId: string) => scoringEvents.filter(e =>
     e.teacherId === teacherId && e.eventType === 'falta_sin_aviso_penalizacion' &&
@@ -4082,11 +4089,13 @@ function AdminContent() {
                         {faltasDetail === t.id && (
                           <tr style={{ background: 'var(--bg-surface-2)' }}>
                             <td colSpan={9} style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)' }}>
-                              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 6 }}>{t.name} — Faltas sin aviso de este mes:</div>
+                              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 6 }}>
+                                {t.name} — Cancelaciones sin antelación de este mes:
+                              </div>
                               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                                 {faltasOfTeacher(t.id).map((e, i) => (
                                   <div key={i} style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                                    {e.note.replace('Falta sin aviso registrada — ', '')}
+                                    {e.note.replace(/^(Falta sin aviso registrada|Cancelación sin antelación) — /, '')}
                                   </div>
                                 ))}
                               </div>

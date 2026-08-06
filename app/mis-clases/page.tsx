@@ -7,7 +7,7 @@ import { LastUpdated } from '@/components/LastUpdated';
 import { getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
-import { calculateTeacherFinance, recordVerification, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge, rowHoursLabel, durationBadge, sessionBreakdownLabel, transcriptStateBadge, transcriptNeedsTeacher, financeStatusBadge, pendingTranscriptSummary } from '@/lib/finance';
+import { calculateTeacherFinance, recordVerification, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge, rowHoursLabel, durationBadge, sessionBreakdownLabel, transcriptStateBadge, transcriptNeedsTeacher, financeStatusBadge, pendingTranscriptSummary, canMarkStudentAbsence, absenceBreakdownLabel, ABSENCE_MONTHLY_CAP, ABSENCE_CAP_MESSAGE } from '@/lib/finance';
 import { dbGetAssignmentsByTeacher, calcRegisteredClassNumber } from '@/lib/db';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { maybeSendMilestoneEmail } from '@/lib/milestoneEmails';
@@ -64,15 +64,67 @@ function daysDiff(aIso: string, bIso: string): number {
  */
 function missingReason(r: ClassFinanceRow): string {
   return r.transcriptState === 'rejected' ? 'el equipo rechazó el transcript: subí el correcto'
-    : r.transcriptState === 'none'        ? 'subir transcript en Añadir clase'
+    : r.transcriptState === 'none'        ? 'subir transcript en Añadir clase, o marcar la falta si el alumno no vino'
     : !r.hasJoinLog                       ? 'ingresar con el botón Meet (no quedó registro de acceso)'
     :                                       'nada de tu parte: el equipo está validando el transcript';
+}
+
+/**
+ * Confirmación de "falta sin aviso del alumno". Es una acción que mueve dinero
+ * (la clase pasa a cobrarse) y consume cupo del alumno, así que se dice las dos
+ * cosas antes de confirmar, no después.
+ */
+function AbsenceModal({ studentName, dateLabel, remaining, saving, error, onCancel, onConfirm }: {
+  studentName: string;
+  dateLabel: string;
+  remaining: number;
+  saving: boolean;
+  error: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 120, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+      onClick={e => { if (e.target === e.currentTarget && !saving) onCancel(); }}
+    >
+      <div style={{ background: '#F7F7F5', border: '1px solid #e4e5e1', borderRadius: 14, padding: 24, width: '100%', maxWidth: 440, fontFamily: "'Public Sans', system-ui, sans-serif" }}>
+        <div style={{ fontWeight: 700, fontSize: 16, color: '#1a1c1a', marginBottom: 10 }}>
+          Marcar falta sin aviso — {studentName}, {dateLabel}
+        </div>
+        <p style={{ fontSize: 13.5, color: '#5f6360', lineHeight: 1.65, margin: '0 0 14px' }}>
+          El alumno no se presentó a esta clase. Al marcarla, se te pagará la clase a tarifa
+          normal, sin necesidad de transcript. Puedes marcar un máximo de {ABSENCE_MONTHLY_CAP} faltas
+          sin aviso por alumno al mes. Esta clase contará dentro del cupo mensual del alumno.
+        </p>
+        <div style={{ fontSize: 12.5, color: '#9a6516', background: '#fdf3e7', border: '1px solid #f2e2c9', borderRadius: 10, padding: '10px 13px', lineHeight: 1.55, marginBottom: 16 }}>
+          Te {remaining === 1 ? 'queda 1 falta' : `quedan ${remaining} faltas`} de este alumno este mes
+          (incluida esta).
+        </div>
+        {error && (
+          <div style={{ fontSize: 12.5, color: '#c0392b', background: 'rgba(239,68,68,0.08)', borderRadius: 8, padding: '9px 12px', marginBottom: 12 }}>
+            {error}
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button onClick={onCancel} disabled={saving}
+            style={{ flex: 1, padding: '11px', borderRadius: 8, border: '1px solid #e4e5e1', background: 'transparent', color: '#6b7280', cursor: saving ? 'not-allowed' : 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
+            Cancelar
+          </button>
+          <button onClick={onConfirm} disabled={saving}
+            style={{ flex: 2, padding: '11px', borderRadius: 8, border: 'none', background: saving ? '#d1d5db' : '#1E9E3A', color: 'white', cursor: saving ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+            {saving ? 'Marcando…' : 'Confirmar falta sin aviso'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignments: Assignment[] }) {
   const {
     students, classRecords, classJoinLogs, classAnalyses, financeRates, financePayments, scoringEvents, manualApprovals,
-    registerClassRecord, loadFinanceData,
+    registerClassRecord, loadFinanceData, markStudentAbsence,
   } = useTeachers();
 
   const [monthYear, setMonthYear] = useState(currentMonthYear());
@@ -87,6 +139,27 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
   // Aviso "pendiente de validación" (Bloque 1) tras guardar una clase que quedó en revisión.
   const [validationNotice, setValidationNotice] = useState<{ title: string; body: string } | null>(null);
   const [showPenalties, setShowPenalties] = useState(false);
+  // Falta sin aviso del alumno: clase a confirmar, guardado y error del guardado.
+  const [absence, setAbsence] = useState<{ studentName: string; date: string; time?: string; remaining: number } | null>(null);
+  const [absenceSaving, setAbsenceSaving] = useState(false);
+  const [absenceError, setAbsenceError] = useState('');
+
+  async function confirmAbsence() {
+    if (!absence) return;
+    setAbsenceSaving(true); setAbsenceError('');
+    try {
+      await markStudentAbsence(teacher.id, absence.studentName, absence.date, absence.time,
+        'Falta sin aviso del alumno marcada desde Finanzas: el alumno no se presentó.');
+      setAbsence(null);
+      // El cálculo vive de classRecords/joinLogs, así que se recarga finanzas para
+      // que la fila pase a pagable y el total del mes se actualice al instante.
+      await loadFinanceData();
+    } catch (e) {
+      setAbsenceError(e instanceof Error ? e.message : 'No se pudo marcar la falta.');
+    } finally {
+      setAbsenceSaving(false);
+    }
+  }
 
   const openAddClass = (prefill?: { studentName: string; date: string; classType: ClassRecordType }) => {
     setAddPrefill(prefill ?? null);
@@ -359,7 +432,7 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
               <div className="mcf-pen-detail" style={{ paddingTop: 10, borderTop: '1px dashed var(--mcf-border)', display: 'flex', flexDirection: 'column', gap: 5 }}>
                 {monthPenalties.map(p => (
                   <div key={p.id} style={{ fontSize: 12, color: p.reverted ? 'var(--text-muted)' : '#5f6360', display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', textDecoration: p.reverted ? 'line-through' : undefined }}>
-                    <span>{p.note.replace('Falta sin aviso registrada — ', '').replace('alumno ', '').replace('fecha ', '')}</span>
+                    <span>{p.note.replace(/^(Falta sin aviso registrada|Cancelación sin antelación) — /, '').replace('alumno ', '').replace('fecha ', '')}</span>
                     <span style={{ whiteSpace: 'nowrap' }}>
                       {p.reverted ? <span style={{ textDecoration: 'none', color: '#1f7a3d', marginRight: 6 }}>Revertida por el equipo</span> : null}
                       −€{Math.abs(p.euros).toFixed(2)}
@@ -530,6 +603,17 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                           const clsKey = `${g.name}|${r.date}|${r.hour ?? ''}`;
                           const clsOpen = expandedClass.has(clsKey);
                           const canPaste = !isFalta && transcriptNeedsTeacher(r.transcriptState);
+                          // Falta sin aviso del alumno. Solo se ofrece donde tiene
+                          // sentido: clase pendiente, con ingreso y SIN nada subido.
+                          // Con un transcript en revisión o rechazado la clase sí se
+                          // dio, así que ahí marcar una falta sería mentir.
+                          const canMarkAbsence = r.status === 'a_revisar' && r.hasJoinLog
+                            && r.transcriptState === 'none' && !isFalta
+                            && finance.paymentStatus !== 'paid';
+                          const absenceCap = canMarkAbsence
+                            ? canMarkStudentAbsence(classRecords, teacher.id, g.name, r.date.slice(0, 7))
+                            : null;
+                          const absenceNote = absenceBreakdownLabel(r);
                           return (
                             <div key={i} className={`mcf-cls${r.status === 'a_revisar' ? ' is-review' : ''}`}
                               onClick={() => toggleClass(clsKey)} aria-expanded={clsOpen}>
@@ -621,6 +705,12 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                                     </div>
                                   )}
 
+                                  {/* Cobrada por falta del alumno: se dice con todas
+                                      las letras, con la misma frase que ve el admin. */}
+                                  {absenceNote && (
+                                    <div className="mcf-cls-reason" style={{ color: '#b45309' }}>{absenceNote}</div>
+                                  )}
+
                                   {/* Por qué no cuenta todavía. */}
                                   {r.status === 'a_revisar' && (
                                     <div className="mcf-cls-reason">Falta: {missingReason(r)}</div>
@@ -634,6 +724,29 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                                   )}
 
                                   <div className="mcf-cls-cta">
+                                    {/* Tercera vía a pagable: el alumno no vino. Va
+                                        JUNTO a "Añadir transcript", no en su lugar:
+                                        son las dos salidas de una clase pendiente y
+                                        el profesor elige según lo que pasó. */}
+                                    {canMarkAbsence && absenceCap && (
+                                      absenceCap.allowed ? (
+                                        <button
+                                          onClick={e => {
+                                            e.stopPropagation();
+                                            setAbsenceError('');
+                                            setAbsence({ studentName: g.name, date: r.date, time: r.hour || undefined, remaining: absenceCap.remaining });
+                                          }}
+                                          title="El alumno no se presentó: cobrá la clase a tarifa normal"
+                                          style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '7px 13px', borderRadius: 8, border: '1px solid rgba(180,83,9,0.35)', background: 'rgba(255,196,0,0.20)', color: '#b45309', cursor: 'pointer', fontSize: 12.5, fontWeight: 700, fontFamily: 'inherit' }}
+                                        >
+                                          Marcar falta sin aviso del alumno
+                                        </button>
+                                      ) : (
+                                        <span style={{ color: '#9a6516', fontSize: 12 }} title={ABSENCE_CAP_MESSAGE}>
+                                          {ABSENCE_CAP_MESSAGE}
+                                        </span>
+                                      )
+                                    )}
                                     {isFalta ? (
                                       <span style={{ color: '#1f7a3d', fontWeight: 600, fontSize: 12.5 }}>
                                         Cobrable sin transcript
@@ -692,6 +805,18 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
           initial={addPrefill}
           onClose={() => { setShowAdd(false); setAddPrefill(null); }}
           onSaved={handleAddClass}
+        />
+      )}
+
+      {absence && (
+        <AbsenceModal
+          studentName={absence.studentName}
+          dateLabel={finShortDate(absence.date)}
+          remaining={absence.remaining}
+          saving={absenceSaving}
+          error={absenceError}
+          onCancel={() => { if (!absenceSaving) { setAbsence(null); setAbsenceError(''); } }}
+          onConfirm={confirmAbsence}
         />
       )}
 

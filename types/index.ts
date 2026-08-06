@@ -258,7 +258,20 @@ export interface AppNotification {
 // Tipo de clase registrada por el profesor.
 // 'reprogramada' = constancia de una clase movida a otra fecha; NO cuenta para el
 // pago (la clase se contará cuando efectivamente se dé). Ver lib/finance.ts.
-export type ClassRecordType = 'normal' | 'falta_sin_aviso' | 'cancelacion_hora' | 'recuperacion' | 'reprogramada' | 'falta_con_aviso' | 'cancelada_con_preaviso';
+//
+// 'falta_sin_aviso' = FALTA DEL ALUMNO: el profesor entró y el alumno no se
+// presentó. Es COBRABLE a tarifa normal y NO penaliza al profesor (cumplió él).
+// No confundir con el scoring_event 'falta_sin_aviso_penalizacion', que era el
+// descuento de -5 € que se aplicaba por error a este mismo caso y ya no se emite.
+// 'falta_sin_aviso_revertida' = falta que el admin deshizo: finanzas la ignora
+// por completo (la clase vuelve a pendiente) pero la fila queda como rastro.
+//
+// 'cancelada_por_profesor' = el PROFESOR canceló con menos de 24 h de antelación
+// (botón "Cancelar clase" de Próximas clases). Es lo contrario de la falta del
+// alumno: NO se cobra y sí penaliza -5 €. Tiene tipo propio desde ago/2026 —
+// antes se guardaba también como 'falta_sin_aviso', y ese solapamiento es lo que
+// hacía que la falta del alumno arrastrara una penalización que no le tocaba.
+export type ClassRecordType = 'normal' | 'falta_sin_aviso' | 'falta_sin_aviso_revertida' | 'cancelacion_hora' | 'recuperacion' | 'reprogramada' | 'falta_con_aviso' | 'cancelada_con_preaviso' | 'cancelada_por_profesor';
 
 // Captura de pantalla de una clase dada, subida por el profesor.
 export interface ClassRecord {
@@ -276,6 +289,11 @@ export interface ClassRecord {
   rescheduledTo?: string;      // 'reprogramada': nueva fecha a la que se movió la clase
   recoveryForDate?: string;    // 'recuperacion': fecha de la clase original que se recupera
   createdAt: string;
+  // Reversión de una falta del alumno marcada por error (solo admin). La fila NO
+  // se borra: se le cambia el class_type a 'falta_sin_aviso_revertida' y queda
+  // quién la deshizo y cuándo.
+  revertedAt?: string;
+  revertedBy?: string;
 }
 
 // Aprobación manual de una clase puntual por el admin (tabla finance_manual_approvals).

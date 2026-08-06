@@ -17,8 +17,11 @@
 //       vino, así que no puede haber ingreso que las respalde; su entrada es el
 //       registro que el profesor crea a mano (Añadir clase / cancelar la clase).
 //
-//   NIVEL 2 — de las que entraron, ¿cuáles se PAGAN?  Lo decide el TRANSCRIPT.
+//   NIVEL 2 — de las que entraron, ¿cuáles se PAGAN?  El transcript o la FALTA.
 //     · Clic + transcript validado → 'pagable' ✅ suma al total.
+//     · Clic + falta sin aviso del alumno → 'pagable' ✅ a tarifa normal. El
+//       profesor entró y el alumno no se presentó: no hay clase que transcribir,
+//       pero él cumplió. Máximo 2 por alumno y MES (ver ABSENCE_MONTHLY_CAP).
 //     · Clic sin transcript válido → 'a_revisar' ⚠️ ("pendiente de transcript"):
 //       visible y contabilizada como dada, pero NO suma al total. Al subir el
 //       transcript pasa sola a 'pagable'.
@@ -48,6 +51,68 @@ function monthlyLimit(weeklyHours: number): number {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+// ── Falta sin aviso DEL ALUMNO ────────────────────────────────────────────────
+//
+// El profesor entró (hay ingreso) y el alumno no se presentó. No hay clase que
+// transcribir, así que esta marca es la TERCERA vía —junto al transcript y a la
+// aprobación manual— para que una clase que ya entró pase a pagable.
+//
+// OJO con el nombre: el scoring_event 'falta_sin_aviso_penalizacion' (-5 €) era
+// el descuento que se le aplicaba al PROFESOR por este mismo registro. Estaba al
+// revés (el que faltó fue el alumno) y ya no se emite; ver dbApplyFaltaSideEffects.
+// Este tipo de clase SUMA dinero, nunca resta.
+
+/** Máximo de faltas del alumno cobrables por alumno y MES. */
+export const ABSENCE_MONTHLY_CAP = 2;
+
+/** Registro mínimo de class_records que necesita el conteo de faltas. */
+interface AbsenceRecordRef {
+  id: string;
+  teacherId: string;
+  studentName: string;
+  classDate: string;
+  classType?: ClassRecordType;
+  createdAt?: string;
+}
+
+/** ¿Es una falta del alumno vigente? Las revertidas por el admin no cuentan. */
+export function isStudentAbsence(classType: ClassRecordType | undefined): boolean {
+  return classType === 'falta_sin_aviso';
+}
+
+/**
+ * Faltas del alumno YA marcadas para ese alumno en ese mes, ordenadas por
+ * antigüedad. FUENTE ÚNICA del tope: la usan el cálculo (para decidir cuáles son
+ * cobrables), el botón del profesor y el aviso de "Añadir clase", de modo que lo
+ * que la pantalla promete y lo que el cálculo hace no puedan discrepar.
+ */
+export function studentAbsencesInMonth<T extends AbsenceRecordRef>(
+  records: T[], teacherId: string, studentName: string, monthYear: string,
+): T[] {
+  return records
+    .filter(r =>
+      r.teacherId === teacherId &&
+      isStudentAbsence(r.classType) &&
+      nkey(r.studentName) === nkey(studentName) &&
+      (r.classDate ?? '').slice(0, 7) === monthYear)
+    .sort((a, b) => (a.createdAt ?? '').localeCompare(b.createdAt ?? '') || a.classDate.localeCompare(b.classDate));
+}
+
+/**
+ * ¿Puede el profesor marcar una falta más de ese alumno este mes? Devuelve
+ * también el recuento para que el aviso diga el número exacto sin recontar.
+ */
+export function canMarkStudentAbsence<T extends AbsenceRecordRef>(
+  records: T[], teacherId: string, studentName: string, monthYear: string,
+): { allowed: boolean; count: number; remaining: number } {
+  const count = studentAbsencesInMonth(records, teacherId, studentName, monthYear).length;
+  return { allowed: count < ABSENCE_MONTHLY_CAP, count, remaining: Math.max(0, ABSENCE_MONTHLY_CAP - count) };
+}
+
+/** Aviso de tope alcanzado. Mismo texto en el botón del profesor y en el modal. */
+export const ABSENCE_CAP_MESSAGE =
+  `Este alumno ya tiene ${ABSENCE_MONTHLY_CAP} faltas sin aviso este mes. No se pueden cobrar más.`;
 
 /**
  * Estado de la clase de cara al pago.
@@ -91,6 +156,12 @@ export interface ClassFinanceRow {
   billingUnits: number;
   status: ClassFinanceStatus;
   classType: ClassRecordType;
+  /**
+   * id del class_record que ancló la fila, cuando lo hay. Lo necesita el admin
+   * para revertir una falta del alumno marcada por error: sin él tendría que
+   * volver a buscar la fila por alumno+fecha y podría deshacer la equivocada.
+   */
+  recordId?: string;
   hasJoinLog: boolean;
   // Segundo factor de verificación. Desde el cambio de sistema es el TRANSCRIPT
   // (class_analyses.transcript no vacío), no la captura de pantalla.
@@ -404,17 +475,38 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
   for (const r of myRecords) noteFirst(r.studentName, r.classDate);
   for (const t of myAnalyses) noteFirst(t.student_name, analysisDate(t));
 
-  // Faltas/cancelaciones cobrables: las primeras 2 de CADA tipo por alumno
-  // (acumulativo de TODO el historial, ordenadas por fecha de creación).
+  // Faltas y cancelaciones cobrables. Son DOS topes distintos, a propósito:
+  //
+  //   · Falta del alumno ('falta_sin_aviso') → 2 por alumno y MES. Es una clase
+  //     que el alumno perdió, y lo que se limita es cuántas de ellas puede
+  //     cobrar el profesor cada mes; un tope de por vida haría que un alumno de
+  //     dos años no pudiera faltar nunca más. Se cuenta con la MISMA función que
+  //     usa el botón del profesor (studentAbsencesInMonth), para que el tope que
+  //     se anuncia en pantalla y el que decide el pago no puedan separarse.
+  //
+  //   · Cancelación sobre la hora ('cancelacion_hora') → sigue como estaba: las
+  //     2 primeras de TODO el historial por alumno.
   const cobrableTypeRecordIds = new Set<string>();
-  const byStudentType = new Map<string, ClassRecord[]>();
+
+  const absenceMonths = new Set<string>();
   for (const r of myRecords) {
-    if (r.classType !== 'falta_sin_aviso' && r.classType !== 'cancelacion_hora') continue;
-    const k = `${nkey(r.studentName)}__${r.classType}`;
-    const arr = byStudentType.get(k);
-    if (arr) arr.push(r); else byStudentType.set(k, [r]);
+    if (isStudentAbsence(r.classType)) absenceMonths.add(`${nkey(r.studentName)}__${(r.classDate ?? '').slice(0, 7)}`);
   }
-  for (const arr of byStudentType.values()) {
+  for (const k of absenceMonths) {
+    const [student, month] = k.split('__');
+    studentAbsencesInMonth(myRecords, teacherId, student, month)
+      .slice(0, ABSENCE_MONTHLY_CAP)
+      .forEach(r => cobrableTypeRecordIds.add(r.id));
+  }
+
+  const byStudentCancel = new Map<string, ClassRecord[]>();
+  for (const r of myRecords) {
+    if (r.classType !== 'cancelacion_hora') continue;
+    const k = nkey(r.studentName);
+    const arr = byStudentCancel.get(k);
+    if (arr) arr.push(r); else byStudentCancel.set(k, [r]);
+  }
+  for (const arr of byStudentCancel.values()) {
     arr.sort((a, b) => (a.createdAt ?? '').localeCompare(b.createdAt ?? '') || a.classDate.localeCompare(b.classDate));
     arr.slice(0, 2).forEach(r => cobrableTypeRecordIds.add(r.id));
   }
@@ -477,7 +569,18 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     // Constancias que NO cuentan para el pago (clase no dada): 'reprogramada'
     // (movida), 'cancelada_con_preaviso' (cancelada >24h) y 'falta_con_aviso'
     // (falta avisada). Se ignoran en el conteo.
-    if (r.classType === 'reprogramada' || r.classType === 'cancelada_con_preaviso' || r.classType === 'falta_con_aviso') continue;
+    //
+    // 'cancelada_por_profesor' (canceló él con menos de 24 h) tampoco: la clase
+    // no se dio por decisión suya, así que no se cobra — y encima lleva su
+    // penalización de -5 €. Es el reverso exacto de la falta del alumno.
+    //
+    // 'falta_sin_aviso_revertida' se ignora igual, y por eso la reversión del
+    // admin funciona sin borrar nada: al desaparecer el registro del cálculo, la
+    // clase vuelve sola a 'a_revisar' (sigue teniendo su ingreso) y deja de
+    // contar para el pago, para el tope del mes y para el cupo del alumno.
+    if (r.classType === 'reprogramada' || r.classType === 'cancelada_con_preaviso'
+      || r.classType === 'falta_con_aviso' || r.classType === 'falta_sin_aviso_revertida'
+      || r.classType === 'cancelada_por_profesor') continue;
     if (!inMonth(r.classDate)) continue;
     let c = matchCand(r.studentName, r.classDate, 1, x => !!x.record);
     if (!c) {
@@ -578,9 +681,11 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
 
     let status: ClassFinanceStatus;
     if (isFaltaType) {
-      // Falta/cancelación: cobrable si es de las primeras 2 de ese tipo (o aprobada).
-      const within2 = !!record && cobrableTypeRecordIds.has(record.id);
-      status = (approved || within2) ? 'pagable' : 'excede_limite_tipo';
+      // Falta del alumno / cancelación: cobrable a TARIFA NORMAL si está dentro
+      // de su tope (2 del mes para la falta, 2 del historial para la cancelación)
+      // o si el admin la aprobó. No requiere transcript: no hubo clase que grabar.
+      const withinCap = !!record && cobrableTypeRecordIds.has(record.id);
+      status = (approved || withinCap) ? 'pagable' : 'excede_limite_tipo';
     } else if (approved) {
       status = 'pagable';
     } else {
@@ -594,7 +699,8 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
       date: c.date, hour, studentName: c.studentName, plan,
       planCategory: planClass.type, planLabel: planClass.displayName,
       weeklyHours, antiquityDays, rate, durationHours, billingUnits: durationHours, status,
-      classType, hasJoinLog: join, hasTranscript: isTranscript, transcriptState, hasMeetLink, punctuality, manuallyApproved: approved,
+      classType, recordId: record?.id,
+      hasJoinLog: join, hasTranscript: isTranscript, transcriptState, hasMeetLink, punctuality, manuallyApproved: approved,
       subscriptionStatus, subAtJoin, subAtRecord,
     });
   }
@@ -604,10 +710,14 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
   const limitByStudent = new Map<string, number>();
   for (const a of myAssignments) limitByStudent.set(nkey(a.studentName), monthlyLimit(a.weeklyHours ?? 0));
 
-  // El límite mensual aplica solo a clases normales/recuperación (las faltas
-  // tienen su propio límite de 2 por tipo).
+  // El límite mensual del plan lo consumen las clases normales, las de
+  // recuperación y las FALTAS DEL ALUMNO: si el alumno no viene, esa clase se
+  // perdió y no se recupera, así que gasta una de las de su mes igual que si la
+  // hubiera dado (4 clases al mes, 1 falta → le quedan 3). La cancelación sobre
+  // la hora sigue fuera del cupo: se rige solo por su tope de 2 del historial.
   const countable = rows
-    .filter(r => (r.status === 'pagable' || r.status === 'a_revisar') && (r.classType === 'normal' || r.classType === 'recuperacion'))
+    .filter(r => (r.status === 'pagable' || r.status === 'a_revisar')
+      && (r.classType === 'normal' || r.classType === 'recuperacion' || isStudentAbsence(r.classType)))
     .sort((x, y) => x.date.localeCompare(y.date) || x.studentName.localeCompare(y.studentName));
   // El límite se descuenta en UNIDADES, no en filas: una sesión de 2h consume 2
   // de las 9 del plan de 2h/semana. Las dos magnitudes están en horas
@@ -830,14 +940,37 @@ export function classCategoryBadge(
 }
 
 // Badge del tipo de clase — null para 'normal'. Faltas/cancelaciones son cobrables.
+//
+// La falta del alumno va en ÁMBAR (familia del amarillo DRC) y no en el naranja
+// de antes: el naranja #ea580c ya es el de 'excede límite', y el rojo es el de
+// las penalizaciones. Los tres significan cosas distintas y tenían dos colores
+// entre ellos.
 export function classTypeBadge(t: ClassRecordType | undefined):
   { label: string; color: string; bg: string } | null {
   switch (t) {
-    case 'falta_sin_aviso':  return { label: '🚫 Falta sin aviso (cobrable)', color: '#ea580c', bg: 'rgba(249,115,22,0.12)' };
+    case 'falta_sin_aviso':  return { label: '🚫 Falta sin aviso',            color: '#b45309', bg: 'rgba(255,196,0,0.20)' };
+    case 'falta_sin_aviso_revertida':
+      return { label: '↩️ Falta revertida', color: 'var(--text-muted)', bg: 'var(--bg-surface-3)' };
     case 'cancelacion_hora': return { label: '⏰ Cancelación (cobrable)',     color: '#dc2626', bg: 'rgba(239,68,68,0.1)' };
     case 'recuperacion':     return { label: '📋 Recuperación',               color: '#2563eb', bg: 'rgba(37,99,235,0.1)' };
     default:                 return null;
   }
+}
+
+/**
+ * Línea de desglose de una falta del alumno, para que admin y profesor lean la
+ * misma frase: qué se cobró y por qué, sin tener que deducirlo del badge.
+ * null cuando la fila no es una falta del alumno.
+ */
+export function absenceBreakdownLabel(
+  row: Pick<ClassFinanceRow, 'classType' | 'studentName' | 'date' | 'rate' | 'billingUnits' | 'status'>,
+): string | null {
+  if (!isStudentAbsence(row.classType)) return null;
+  const importe = (row.rate * (row.billingUnits ?? 1)).toFixed(2);
+  const cobro = row.status === 'pagable'
+    ? `${importe} €`
+    : `${importe} € retenidos (supera las ${ABSENCE_MONTHLY_CAP} del mes)`;
+  return `Falta sin aviso — ${row.studentName}, ${row.date} — ${cobro} (el alumno no se presentó)`;
 }
 
 // Estados de suscripción posibles (para filtros y leyendas).
