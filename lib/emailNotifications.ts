@@ -11,7 +11,7 @@ import { resend, hasResendKey } from '@/lib/resend';
 import { supabase } from '@/lib/supabase';
 import { MILESTONE_SLIDES } from '@/lib/milestones';
 import {
-  AVOID_ITEMS, ESCALATED_GUARDRAIL, NATURAL_REMINDER, protocolFor, usableSteps,
+  AVOID_ITEMS, ESCALATED_GUARDRAIL, NATURAL_REMINDER, protocolFor, usableAction,
   type InterventionSuggestion,
 } from '@/lib/interventions';
 import type { RiskSignal } from '@/lib/aiTypes';
@@ -280,8 +280,9 @@ export async function sendInterventionEmail(
     lista.map(t => `<li style="margin-bottom:6px;">${esc(t)}</li>`).join('')
   }</ol>
 </div>`;
-  // La acción solo se muestra si dice algo que el profesor pueda hacer.
-  const accion = usableSteps([s.action]).length > 0 ? s.action : '';
+  // La acción solo se muestra si dice algo que el profesor pueda hacer y no
+  // repite el contexto que va justo encima.
+  const accion = usableAction(s.action, context);
   const subject = escalate
     ? `Escalar a soporte · ${info.studentName}`
     : `Seguimiento recomendado · ${info.studentName}`;

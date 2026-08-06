@@ -248,6 +248,38 @@ export function usableSteps(steps: readonly string[] | undefined | null): string
 const MIN_STEPS = 2;
 
 /**
+ * ¿La acción repite lo que ya dice el contexto? Entonces no es una instrucción,
+ * es el diagnóstico otra vez, y bajo el título "En esta clase:" se lee fatal.
+ *
+ * Caso real: la alerta escalada tenía action "El alumno ha mencionado que se
+ * plantea dejar las clases" y contexto "El alumno ha mencionado que se plantea
+ * dejar las clases y ha cancelado sesiones recientes". El pop-up abría el
+ * protocolo repitiendo el problema en vez de decir qué hacer.
+ */
+const plano = (s: string) => (s ?? '')
+  .normalize('NFD').replace(/[̀-ͯ]/g, '')
+  .toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+
+export function actionRepeatsContext(action: string, context?: string | null): boolean {
+  const a = plano(action);
+  const c = plano(context ?? '');
+  if (!a || !c) return false;
+  return c.includes(a) || a.includes(c);
+}
+
+/**
+ * La acción que merece enseñarse encima de los pasos: solo si el profesor puede
+ * hacer algo con ella y no está repitiendo el contexto.
+ */
+export function usableAction(action: string, context?: string | null): string {
+  const a = (action ?? '').trim();
+  if (!a) return '';
+  if (usableSteps([a]).length === 0) return '';
+  if (actionRepeatsContext(a, context)) return '';
+  return a;
+}
+
+/**
  * El protocolo DEFINITIVO de una alerta: los pasos de la IA si son suficientes,
  * y si no el de respaldo. Fuente única del pop-up, la campanita, el email y la
  * ficha, para que los cuatro le digan al profesor exactamente lo mismo.
@@ -437,6 +469,7 @@ export function buildRiskBriefing(args: {
     // "deja que soporte lo gestione"), entra el respaldo. El pop-up nunca puede
     // abrirse sin decirle al profesor qué hacer durante esa hora.
     const proto = protocolFor(intervention.steps, intervention.risk);
+    const contextoAlerta = (intervention.contextSummary ?? '').trim() || fallbackContext;
     return {
       kind: 'protocolo',
       studentName,
@@ -445,12 +478,13 @@ export function buildRiskBriefing(args: {
       risk: intervention.risk,
       steps: proto.steps,
       usingFallbackSteps: proto.isFallback,
-      // La acción solo se enseña si dice algo que el profesor pueda hacer. Un
-      // "escala el caso a soporte" como cuerpo del aviso es no decirle nada.
-      body: usableSteps([intervention.action]).length > 0 ? intervention.action : '',
+      // La acción solo se enseña si dice algo que el profesor pueda hacer y no
+      // repite el contexto. Un "escala el caso a soporte", o el diagnóstico otra
+      // vez, como cabecera del protocolo es no decirle nada.
+      body: usableAction(intervention.action, contextoAlerta),
       // El contexto de la alerta y, si no lo tiene (alertas viejas), el motivo
       // que quedó en la ficha.
-      previousContext: (intervention.contextSummary ?? '').trim() || fallbackContext,
+      previousContext: contextoAlerta,
       cause: intervention.cause ?? null,
       stillOpenReason: (intervention.stillOpenReason ?? '').trim(),
       reconnectHook: intervention.reconnectHook,
@@ -514,7 +548,7 @@ export function interventionCopy(
   const lista = protocolFor(s.steps, risk).steps;
   const pasos = `En esta clase:\n${lista.map((p, i) => `${i + 1}. ${p}`).join('\n')}`;
   const contexto = (context ?? '').trim() ? `En la última clase: ${context!.trim()}` : '';
-  const accion = usableSteps([s.action]).length > 0 ? s.action : '';
+  const accion = usableAction(s.action, context);
 
   return {
     title: s.escalateToSupport
