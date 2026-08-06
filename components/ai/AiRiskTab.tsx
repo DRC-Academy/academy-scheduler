@@ -29,7 +29,7 @@ import {
   readInterventionSnapshot, restoreIntervention,
   type ChurnedWithAlert, type InterventionSnapshot,
 } from '@/lib/interventionsClient';
-import { asIntervention, type InterventionAuditRow } from '@/lib/interventions';
+import { asIntervention, currentReason, type InterventionAuditRow } from '@/lib/interventions';
 import {
   SEV, SEV_OF, attendance30d, buildHistory, isFiltering, lastReadLabel,
   matchesBase, matchesSeverity, norm, rowsToCsv, sortRows,
@@ -180,6 +180,12 @@ export default function AiRiskTab({ teachers, assignments }: Props) {
       const claseAt = last?.analyzed_at ?? null;
       const usarClase = !!claseRisk && (!fichaAt || (!!claseAt && claseAt > fichaAt));
 
+      // Motivo VIGENTE de la alerta abierta: si sobrevivió a alguna clase, el
+      // actualizado manda sobre el de la clase que la abrió. Sin esto, el admin
+      // leía en la cola un diagnóstico de hace varias clases como si fuera de hoy.
+      const activa = asIntervention(p.active_intervention);
+      const motivoVigente = currentReason(activa);
+
       push({
         id: p.id,
         studentId: p.student_id,
@@ -187,13 +193,13 @@ export default function AiRiskTab({ teachers, assignments }: Props) {
         teacherId,
         teacherName: nameOfTeacher(teacherId),
         risk: usarClase ? claseRisk! : fichaRisk,
-        evidence: (usarClase ? last?.risk_explanation : p.risk_explanation) ?? '',
+        evidence: motivoVigente || ((usarClase ? last?.risk_explanation : p.risk_explanation) ?? ''),
         date: last?.class_date ?? last?.analyzed_at ?? p.last_class_analyzed_at ?? null,
         classNumber: last?.class_number ?? null,
         hasProfile: true,
         riskFromClass: usarClase,
         unattended: Number(p.unattended_alerts ?? 0) || 0,
-        active: asIntervention(p.active_intervention),
+        active: activa,
       });
       for (const k of [p.student_id, `name:${norm(name)}`]) if (k) seen.add(k);
     }

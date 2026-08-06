@@ -59,9 +59,12 @@ export async function fetchRiskBriefings(studentNames: string[]): Promise<RiskBr
   const quiero = new Set(studentNames.map(nkName).filter(Boolean));
   if (quiero.size === 0) return index;
 
+  // `risk_explanation` viaja también: es el contexto de respaldo del pop-up para
+  // las alertas anteriores a `contextSummary` y para el aviso genérico, que sin
+  // él llegaría al profesor sin ningún porqué. Sigue siendo una lectura ligera.
   const { data, error } = await supabase
     .from('student_profiles')
-    .select('id, student_name, risk_signal, active_intervention, intervention_shown_at');
+    .select('id, student_name, risk_signal, risk_explanation, active_intervention, intervention_shown_at');
 
   if (error) {
     // Sin las columnas de intervenciones el panel funciona igual: simplemente no
@@ -72,7 +75,7 @@ export async function fetchRiskBriefings(studentNames: string[]): Promise<RiskBr
   }
 
   for (const row of (data ?? []) as unknown as Array<{
-    id: string; student_name: string; risk_signal: string | null;
+    id: string; student_name: string; risk_signal: string | null; risk_explanation: string | null;
     active_intervention: unknown; intervention_shown_at: string | null;
   }>) {
     if (!quiero.has(nkName(row.student_name))) continue;
@@ -81,6 +84,7 @@ export async function fetchRiskBriefings(studentNames: string[]): Promise<RiskBr
       risk:         (row.risk_signal ?? null) as RiskSignal | null,
       intervention: asIntervention(row.active_intervention),
       profileId:    row.id,
+      riskExplanation: row.risk_explanation,
     });
     if (!briefing) continue;
     // Varias fichas del mismo alumno: se queda la que tenga protocolo.

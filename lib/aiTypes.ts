@@ -14,6 +14,35 @@ export type AiStatus = 'ready' | 'skipped' | 'error';
 
 export type RiskSignal = 'verde' | 'amarillo' | 'rojo';
 
+/**
+ * CAUSA del riesgo. Existe porque el color solo no basta para decidir qué hacer:
+ * un amarillo por vacaciones y un amarillo por desmotivación piden intervenciones
+ * opuestas, y antes los dos llegaban al profesor como "amarillo" a secas.
+ *
+ * 'sin_determinar' es una respuesta legítima y se muestra como tal: es preferible
+ * decir que no se sabe si la ausencia es temporal o desenganche a que la IA lo
+ * adivine y el profesor actúe sobre una causa inventada.
+ */
+export type RiskCause =
+  | 'externa_temporal'      // vacaciones, viaje, trabajo, algo que el alumno contó
+  | 'desmotivacion'         // desenganche, aburrimiento, dudas sobre continuar
+  | 'dificultad_academica'  // se atasca, no ve progreso, el nivel no le encaja
+  | 'sin_determinar'        // no hay información suficiente para saberlo
+  | 'no_aplica';            // clase en verde: no hay riesgo que explicar
+
+export const RISK_CAUSE_META: Record<RiskCause, { label: string; hint: string }> = {
+  externa_temporal:     { label: 'Causa externa temporal', hint: 'El alumno explicó un motivo puntual. No pide intervención de retención.' },
+  desmotivacion:        { label: 'Desmotivación',          hint: 'Señales de desenganche. Pide intervención de reenganche.' },
+  dificultad_academica: { label: 'Dificultad académica',   hint: 'Se atasca o no ve progreso. Pide ajuste pedagógico.' },
+  sin_determinar:       { label: 'Causa sin determinar',   hint: 'No hay información suficiente. Averiguarla es el primer paso.' },
+  no_aplica:            { label: 'Sin riesgo',             hint: '' },
+};
+
+export function isRiskCause(v: unknown): v is RiskCause {
+  return v === 'externa_temporal' || v === 'desmotivacion' || v === 'dificultad_academica'
+    || v === 'sin_determinar' || v === 'no_aplica';
+}
+
 // ── Sistema de avatares (metodología de enseñanza) ────────────────────────────
 // Un avatar = Dominio × Nivel × Tipo de clase. Define el balance de secuencia
 // (input → práctica guiada → producción) que el material debe respetar.
@@ -167,6 +196,15 @@ export interface TranscriptIA {
   progressScore: number;      // 1-10
   riskSignal: RiskSignal;
   riskExplanation: string;
+  /** Causa del riesgo. Decide la intervención tanto como el color. */
+  riskCause?: unknown;
+  /**
+   * Cada cosa detectada con SU acción emparejada. Se genera SIEMPRE, también en
+   * verde: "depende del español" o "ritmo lento" son hallazgos pedagógicos que
+   * merecen una acción aunque el alumno no esté en riesgo de baja. Ver
+   * lib/interventions.ts (el tipo vive allí para no acoplar este archivo).
+   */
+  detections?: unknown;
   nextClassGuide: NextClassGuide;
   /** Sugerencia de intervención (llega vacía si la clase sale en verde). Ver
    *  lib/interventions.ts: los tipos viven allí para no acoplar este archivo. */
@@ -190,6 +228,10 @@ export interface ClassAnalysisRow {
   next_class_guide: NextClassGuide | string | null;
   risk_signal: string | null;
   risk_explanation: string | null;
+  /** Causa del riesgo ('externa_temporal' | 'desmotivacion' | …). Ver RiskCause. */
+  risk_cause?: string | null;
+  /** Detecciones con su acción emparejada (jsonb). Se llena también en verde. */
+  detections?: Array<Record<string, unknown>> | string | null;
   /** Sugerencia de intervención de ESTA clase (ver lib/interventions.ts). */
   intervention_suggestion?: Record<string, unknown> | string | null;
   analyzed_at: string;         // ← el timestamp se llama así, NO created_at

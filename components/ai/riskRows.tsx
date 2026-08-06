@@ -17,6 +17,7 @@ import {
   CONF_STYLE, SEV, cut, formatRowDate, unattendedLabel,
   type HistoryEvent, type RiskRow,
 } from '@/lib/riskInbox';
+import { RiskActionDetail } from '@/components/ai/FichaView';
 
 /**
  * La fila es un `div role="button"`, no un `<button>`: dentro lleva un checkbox y
@@ -196,6 +197,19 @@ export function ColaRow(p: ColaRowProps) {
               : <div style={{ marginTop: 8, fontSize: 13, color: '#8a9790' }}>
                   La IA no dejó explicación para esta alerta.
                 </div>}
+
+            {/* Qué se propuso hacer, con la causa y el motivo actualizado. La
+                evidencia de arriba dice qué pasa; esto dice qué hacer, que es lo
+                que le faltaba al admin para decidir sin abrir la ficha. */}
+            {row.active && (
+              <div style={{ marginTop: 18 }}>
+                <RiskActionDetail
+                  cause={row.active.cause}
+                  stillOpenReason={row.active.stillOpenReason}
+                  intervention={row.active}
+                />
+              </div>
+            )}
 
             {p.history.length > 0 && (
               <>

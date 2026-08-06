@@ -38,7 +38,7 @@ const INTERVENTION_SCHEMA = {
       minItems: 0,
       maxItems: 4,
       items: { type: 'string' },
-      description: 'La misma acción desglosada en 2 a 4 pasos accionables y ordenados, cada uno una frase corta que el profesor pueda ejecutar durante la clase. Array vacío si riskSignal es verde.',
+      description: 'QUÉ HACER DURANTE ESTA CLASE, en 2 a 4 pasos ordenados, cada uno una frase corta en imperativo. Se le muestran al profesor numerados justo antes de entrar. Obligatorio también cuando escalateToSupport es true: ahí son pasos de contención y acompañamiento, nunca "contacta a soporte". Array vacío solo si riskSignal es verde.',
     },
     reconnectHook:     { type: 'string',  description: 'Si el alumno está a 1 o 2 clases de un hito (15 o 30), cómo usar la evaluación de hito como excusa natural para reconectar. Vacío si no aplica.' },
     escalateToSupport: { type: 'boolean', description: 'true solo si el alumno dijo explícitamente que piensa cancelar o dejar las clases.' },
@@ -46,14 +46,37 @@ const INTERVENTION_SCHEMA = {
   },
 } as const;
 
+/**
+ * Cada cosa detectada, con su acción al lado. Tope de 3 a propósito: es lo que
+ * cabe en pantalla, y cada elemento extra alarga el análisis, que corre contra
+ * un timeout ajustado (ver analyzeTranscript, más abajo).
+ */
+const DETECTIONS_SCHEMA = {
+  type: 'array',
+  minItems: 0,
+  maxItems: 3,
+  items: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['finding', 'action'],
+    properties: {
+      finding: { type: 'string', description: 'Qué observaste, en una frase concreta y verificable en el transcript. Ej: "recurre al español cada vez que no encuentra una palabra".' },
+      action:  { type: 'string', description: 'Qué hacer al respecto en la próxima clase, en una frase ejecutable. Ej: "haz los primeros cinco minutos solo en inglés, con apoyo visual". Nunca un consejo genérico.' },
+    },
+  },
+  description: 'De 1 a 3 detecciones con su acción emparejada. Se rellena SIEMPRE, también cuando riskSignal es verde: son hallazgos pedagógicos, no señales de baja.',
+} as const;
+
 const CHECK_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['signsOfIntervention', 'evidence', 'confidence'],
+  required: ['signsOfIntervention', 'evidence', 'confidence', 'stillOpenReason', 'cause'],
   properties: {
     signsOfIntervention: { type: 'boolean', description: '¿Hay señales de que el profesor actuó sobre la alerta anterior?' },
     evidence:            { type: 'string',  description: 'Qué señales de intervención se observaron o su ausencia. Breve, en español.' },
     confidence:          { type: 'string',  enum: ['alta', 'media', 'baja'] },
+    stillOpenReason:     { type: 'string',  description: 'Por qué la alerta sigue abierta HOY, según ESTA clase, en una o dos frases. Es el motivo actualizado, no el de la clase que la abrió: si la situación cambió, dilo. Si no puedes determinar la causa, dilo explícitamente en vez de suponerla. Vacío solo si la alerta debería cerrarse.' },
+    cause:               { type: 'string',  enum: ['externa_temporal', 'desmotivacion', 'dificultad_academica', 'sin_determinar', 'no_aplica'], description: 'Causa VIGENTE del riesgo según esta clase.' },
   },
 } as const;
 
@@ -62,10 +85,12 @@ export const TRANSCRIPT_SCHEMA = {
   additionalProperties: false,
   required: [
     'classTitle', 'classSummary', 'errorsDetected', 'progressNotes', 'topicsCovered',
-    'progressScore', 'riskSignal', 'riskExplanation', 'nextClassGuide', 'interventionSuggestion',
+    'progressScore', 'riskSignal', 'riskExplanation', 'riskCause', 'detections',
+    'nextClassGuide', 'interventionSuggestion',
   ],
   properties: {
     interventionSuggestion: INTERVENTION_SCHEMA,
+    detections: DETECTIONS_SCHEMA,
     classTitle:      { type: 'string', description: 'Título breve y descriptivo de lo que se trabajó, p. ej. "Present Perfect en contexto laboral".' },
     classSummary:    { type: 'string', description: 'Qué se trabajó y cómo fue.' },
     errorsDetected:  { type: 'string', description: 'Errores específicos y patrones.' },
@@ -73,7 +98,8 @@ export const TRANSCRIPT_SCHEMA = {
     topicsCovered:   { type: 'string', description: 'Gramática, vocabulario y habilidades.' },
     progressScore:   { type: 'integer', enum: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], description: 'Progreso general del alumno, de 1 (estancado) a 10 (excelente).' },
     riskSignal:      { type: 'string', enum: ['verde', 'amarillo', 'rojo'] },
-    riskExplanation: { type: 'string', description: 'Por qué ese nivel de riesgo.' },
+    riskExplanation: { type: 'string', description: 'El RAZONAMIENTO, no una etiqueta: qué señales concretas viste (con la frase del alumno o el dato que las respalda) y por qué llevan a ese nivel. Entre 2 y 4 frases, máximo unas 60 palabras. Si el nivel es verde, di brevemente qué sostiene esa lectura.' },
+    riskCause:       { type: 'string', enum: ['externa_temporal', 'desmotivacion', 'dificultad_academica', 'sin_determinar', 'no_aplica'], description: 'Causa del riesgo. "sin_determinar" cuando no hay información suficiente: es una respuesta válida y preferible a suponerla. "no_aplica" solo si riskSignal es verde.' },
     nextClassGuide: {
       type: 'object',
       additionalProperties: false,
@@ -104,14 +130,36 @@ Si hay clases anteriores, puntúa la evolución respecto a ellas, no el nivel ab
 
 Basa el informe únicamente en lo que ocurre en la transcripción. La señal de riesgo es una valoración con consecuencias reales: no la infles por una clase floja aislada ni la rebajes si el alumno expresa que se plantea dejarlo.
 
+POR QUÉ ESE RIESGO (riskExplanation):
+Es el RAZONAMIENTO que lee una persona para decidir qué hacer, no una etiqueta. Di qué señales concretas viste y por qué llevan a ese nivel: cítalas. Sirven las frases textuales del alumno, la caída de su participación respecto a clases anteriores, las cancelaciones y en qué plazo, los días sin clase y las clases previas en amarillo o rojo. Mal: "el alumno muestra desmotivación". Bien: "dijo dos veces que no ve para qué le sirve el inglés y participó bastante menos que en las tres clases anteriores". Entre 2 y 4 frases.
+
+CAUSA DEL RIESGO (riskCause):
+El color dice cuánto preocupa; la causa dice qué hacer, y dos amarillos con causas distintas piden intervenciones opuestas.
+- externa_temporal: el alumno explicó un motivo puntual (vacaciones, viaje, carga de trabajo). No hay desenganche que revertir.
+- desmotivacion: señales de desenganche, aburrimiento o dudas sobre continuar.
+- dificultad_academica: se atasca, no ve progreso o el nivel no le encaja.
+- sin_determinar: hay señales de riesgo pero NO puedes saber a qué se deben. Úsalo sin miedo: es una respuesta correcta y es mucho mejor que inventar una causa sobre la que el profesor va a actuar. Dilo también en riskExplanation, con estas palabras o parecidas: "no hay información suficiente para saber si la ausencia es temporal o una señal de desenganche".
+- no_aplica: solo cuando riskSignal es verde.
+Cuando la causa sea externa_temporal, la intervención NO debe ser de retención: no hay nada que reenganchar en un alumno que avisó de que se iba de viaje.
+
+DETECCIONES CON SU ACCIÓN (detections):
+De 1 a 3, SIEMPRE, sea cual sea la señal de riesgo. Cada una es una pareja: qué observaste y qué hacer al respecto. Un diagnóstico sin acción no le sirve de nada al profesor, así que nunca dejes un finding sin su action.
+- Mal: finding "el alumno depende del español". Bien: finding "recurre al español cada vez que no encuentra una palabra"; action "haz los primeros cinco minutos solo en inglés, con apoyo visual, y dale sinónimos antes de que traduzca".
+- Mal: finding "ritmo lento". Bien: finding "tarda en arrancar y se queda en blanco en los ejercicios largos"; action "propón ejercicios más cortos y dinámicos, de dos o tres minutos, con un cambio de actividad entre medias".
+- El finding tiene que ser verificable en la transcripción y la action tiene que poder ejecutarse en una clase. Nada de "mejorar la motivación" ni "prestar más atención".
+- Las detecciones son PEDAGÓGICAS y van aparte de la señal de riesgo: un alumno en verde con dependencia del español también las lleva.
+
 SUGERENCIA DE INTERVENCIÓN (interventionSuggestion):
 Si riskSignal es amarillo o rojo, genera una sugerencia de intervención para el profesor. Si es verde, deja action y reconnectHook vacíos, steps como array vacío, escalateToSupport en false y channel en "en_clase".
 Cuando generes la sugerencia de intervención:
-- PASOS (steps): desglosa la acción en 2 a 4 pasos accionables y ordenados. Al profesor se le muestran numerados justo antes de entrar a la clase, así que cada paso tiene que ser algo que pueda hacer DURANTE esa clase, en una frase corta y en imperativo. Mal: "mejorar la motivación". Bien: "en los primeros minutos pregúntale qué tal le está yendo con el inglés fuera de clase". Los pasos concretan la acción, no la repiten ni la contradicen.
+- PASOS (steps): son QUÉ HACER DURANTE ESA CLASE, en 2 a 4 pasos ordenados. Al profesor se le muestran numerados justo antes de entrar, así que cada paso tiene que ser algo que pueda ejecutar dentro de la clase, en una frase corta y en imperativo. Mal: "mejorar la motivación". Bien: "en los primeros minutos pregúntale qué tal le está yendo con el inglés fuera de clase". Los pasos concretan la acción, no la repiten ni la contradicen.
 - Basala en las señales CONCRETAS detectadas: número de cancelaciones y en qué plazo, caída del porcentaje de participación del alumno, clases previas en amarillo o rojo, días sin clase, y menciones textuales en el transcript (frustración, falta de progreso, intención de dejarlo).
 - La acción debe ser práctica y específica, nunca un consejo genérico. Mal: "presta más atención al alumno". Bien: "al inicio de la próxima clase pregúntale cómo se siente con el progreso y recuérdale lo que ha avanzado desde que empezó".
+- Ajusta la intervención a riskCause. Si es externa_temporal, la acción es acompañar y retomar el ritmo, no retener. Si es dificultad_academica, es ajustar el nivel o el enfoque. Si es sin_determinar, el primer paso es AVERIGUAR la causa con una pregunta natural, no actuar a ciegas.
 - La intervención debe parecer NATURAL, nunca reactiva. El profesor nunca debe dar a entender al alumno que el sistema detectó un problema o que "algo ha fallado".
-- Si el alumno mencionó EXPLÍCITAMENTE que piensa cancelar o dejar las clases: escalateToSupport = true, y la acción debe indicar escalar al equipo de soporte para activar el protocolo de gestión de bajas, NO que el profesor intente retenerlo solo.
+- ESCALADO A SOPORTE. Si el alumno mencionó EXPLÍCITAMENTE que piensa cancelar o dejar las clases: escalateToSupport = true y la acción indica escalar al equipo de soporte, NO que el profesor intente retenerlo solo.
+  Escalar y actuar NO son excluyentes, y esto es importante: soporte se ocupa de la retención y de la gestión de la baja; el profesor se ocupa de que ESA clase concreta salga bien. Así que, con escalateToSupport en true, los steps siguen siendo OBLIGATORIOS y son pasos de contención y acompañamiento para la clase, nunca "avisa a soporte" (de eso ya se encarga el aviso). Piensa en transmitir tranquilidad, bajar el ritmo si lo ves agobiado, y que el alumno salga de la clase con una sensación positiva.
+  Ejemplo de steps válidos en un caso escalado: "recíbelo con normalidad y no menciones nada de lo que dijo"; "si lo notas agobiado, baja el ritmo y quítale carga a la clase"; "cierra con algo que le salga bien, para que se vaya con una sensación positiva".
 - Si el alumno está a 1 o 2 clases de un hito (15, 30), aprovechá ese hito como motivo natural para reconectar en reconnectHook.
 - Redacta en español de España, tono cercano y profesional, sin guiones como conectores.
 
@@ -120,6 +168,7 @@ Solo cuando el mensaje incluya el protocolo que recibió el profesor tras la cla
 - Audita contra los PASOS CONCRETOS que se le mostraron, uno por uno, no contra una idea general de "intervenir". Si el mensaje dice que el protocolo se le mostró al empezar la clase, es el que tenía delante al entrar.
 - Señales válidas: preguntó por el progreso o por cómo se siente el alumno, ajustó el enfoque, hubo más interacción, cambió el tono respecto a clases anteriores, o cualquier otra cosa que se corresponda con los pasos.
 - En evidence, di qué paso viste cumplido y con qué frase del transcript, o cuál no aparece.
+- POR QUÉ SIGUE ABIERTA (stillOpenReason): si la alerta no se cierra, explica en una o dos frases por qué sigue abierta HOY, a la vista de ESTA clase. Es el motivo actualizado y sustituye al de la clase que la abrió, así que dilo si la situación cambió: puede seguir abierta por lo mismo, por algo distinto, o porque no hay información nueva. Y si no puedes determinar la causa, dilo con todas las letras ("no hay información suficiente para saber si la ausencia es temporal o una señal de desenganche") en vez de repetir la suposición anterior. Devuelve además la causa vigente según esta clase en el campo cause, que puede no ser la de la alerta original.
 IMPORTANTE: una buena intervención es sutil y puede no ser evidente. Si no estás seguro, marca confidence "baja". No afirmes con confianza alta que no hubo intervención salvo que la clase sea claramente idéntica a las anteriores sin ningún cambio. Cumplir el espíritu del protocolo cuenta como cumplirlo: no exijas las palabras exactas de cada paso.`;
 
 function buildUserPrompt(input: TranscriptInput): string {
@@ -151,12 +200,23 @@ function buildUserPrompt(input: TranscriptInput): string {
   const visto = prev?.shownAt
     ? `- El profesor vio este protocolo en pantalla al entrar a esta clase (${prev.shownAt}).\n`
     : '- No consta que se le mostrara el protocolo en pantalla al entrar; puede haberlo recibido solo por aviso.\n';
+  // El motivo VIGENTE de la alerta (el actualizado si ya sobrevivió a alguna
+  // clase). Va en el prompt para que la reevaluación parta de lo último que se
+  // sabe y no del diagnóstico original, que puede tener varias clases de antigüedad.
+  const motivo = prev
+    ? [
+        prev.contextSummary ? `- Qué se detectó entonces: ${prev.contextSummary}` : '',
+        prev.stillOpenReason ? `- Por qué seguía abierta tras la última revisión: ${prev.stillOpenReason}` : '',
+        prev.cause ? `- Causa registrada hasta ahora: ${prev.cause}` : '',
+      ].filter(Boolean).join('\n') + '\n'
+    : '';
+
   const alerta = prev
     ? `\n\nALERTA ABIERTA DE LA CLASE ANTERIOR (señal ${prev.risk}${prev.classNumber != null ? `, clase ${prev.classNumber}` : ''}).
-Esto es lo que se le indicó al profesor tras esa clase:
+${motivo}Esto es lo que se le indicó al profesor tras esa clase:
 - Acción sugerida: ${prev.action}
 ${pasos}${prev.reconnectHook ? `- Oportunidad de reconexión: ${prev.reconnectHook}\n` : ''}- Escalado a soporte: ${prev.escalateToSupport ? 'sí' : 'no'}
-${visto}Devuelve también interventionCheck evaluando si en ESTA clase hay señales de que el profesor siguió ese protocolo.`
+${visto}Devuelve también interventionCheck evaluando si en ESTA clase hay señales de que el profesor siguió ese protocolo, y con qué motivo y causa sigue abierta la alerta a día de hoy.`
     : '';
 
   return `Analiza la transcripción de esta clase.
@@ -178,6 +238,13 @@ ${input.transcript}`;
 // effort 'medium' (antes 'high'): con 'high' un transcript de 60 min se iba por
 // encima del minuto y el análisis fallaba casi siempre. 'medium' entra holgado y
 // el informe mantiene la calidad (el esquema estructurado hace el trabajo duro).
+//
+// PRESUPUESTO DE SALIDA. Los campos que se añadieron después (riskCause,
+// detections, stillOpenReason) llevan tope duro en el esquema —3 detecciones,
+// riskExplanation de unas 60 palabras— justo por esto: el análisis corre contra
+// un timeout ajustado y romperlo es peor que cualquier campo que se gane. Si en
+// algún momento hay que recortar, lo primero que se quita son las `detections`
+// (bajar maxItems), nunca el effort ni el timeout.
 export async function analyzeTranscript(input: TranscriptInput): Promise<TranscriptResult> {
   return askClaudeJson<TranscriptIA>({
     label: 'analyze-transcript',
@@ -187,9 +254,10 @@ export async function analyzeTranscript(input: TranscriptInput): Promise<Transcr
     maxTokens: 12000,
     effort: 'medium',
     timeoutMs: 40_000,
-    // `channel` y `confidence` son enums, no prosa: la limpieza de guiones no
-    // debe tocarlos (hoy no los rompería, pero no dependemos de eso).
-    skipCleanKeys: ['channel', 'confidence'],
+    // `channel`, `confidence`, `riskCause` y `cause` son enums, no prosa: la
+    // limpieza de guiones no debe tocarlos (hoy no los rompería, pero no
+    // dependemos de eso). 'externa_temporal' lleva guion bajo, no guion.
+    skipCleanKeys: ['channel', 'confidence', 'riskCause', 'cause'],
   });
 }
 

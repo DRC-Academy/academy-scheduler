@@ -13,8 +13,8 @@
 // no corridas): PGRST204 / 42703 → se reintenta sin ese grupo de columnas.
 
 import { supabase } from '@/lib/supabase';
-import { isRiskSignal, type TranscriptIA } from '@/lib/aiTypes';
-import { normalizeSuggestion } from '@/lib/interventions';
+import { isRiskCause, isRiskSignal, type TranscriptIA } from '@/lib/aiTypes';
+import { normalizeDetections, normalizeSuggestion } from '@/lib/interventions';
 import { flagLabel } from '@/lib/transcriptValidation';
 import { statusForDecision, type TranscriptVerdict } from '@/lib/transcriptVerdict';
 
@@ -44,6 +44,8 @@ const OPTIONAL_COLUMNS: Record<string, string> = {
   validation_details:          'supabase-validation-details.sql',
   transcript_hash:             'supabase-transcript-hash.sql',
   join_log_id:                 'supabase-join-log-link.sql',
+  detections:                  'supabase-risk-actions.sql',
+  risk_cause:                  'supabase-risk-actions.sql',
 };
 
 /**
@@ -236,6 +238,10 @@ export async function persistAnalysisFields(
     next_class_guide: a.nextClassGuide,
     risk_signal:      isRiskSignal(a.riskSignal) ? a.riskSignal : 'verde',
     risk_explanation: a.riskExplanation,
+    risk_cause:       isRiskCause(a.riskCause) ? a.riskCause : null,
+    // Detecciones con su acción emparejada. Se guardan SIEMPRE, también en las
+    // clases en verde: son hallazgos pedagógicos, no señales de baja.
+    detections:       normalizeDetections(a.detections),
     // Sugerencia de intervención de esta clase (null si la clase salió en verde).
     intervention_suggestion: normalizeSuggestion(a.interventionSuggestion),
 

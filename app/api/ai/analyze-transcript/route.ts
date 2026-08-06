@@ -15,7 +15,7 @@
 
 import { supabase } from '@/lib/supabase';
 import { analyzeTranscript } from '@/lib/analyzeTranscript';
-import { isRiskSignal, type TranscriptIA } from '@/lib/aiTypes';
+import { isRiskCause, isRiskSignal, type TranscriptIA } from '@/lib/aiTypes';
 import { computeTranscriptVerdict, decideTranscript, shouldRunAI, statusForDecision } from '@/lib/transcriptVerdict';
 import { validateTranscriptStructure } from '@/lib/transcriptValidation';
 import { verifyTranscriptAI } from '@/lib/verifyTranscriptAI';
@@ -401,6 +401,13 @@ async function openIntervention(args: {
     return;
   }
 
+  // Contexto que viaja CON la alerta: el razonamiento de la IA sobre esta clase.
+  // Es lo que el pop-up de la clase siguiente enseña como "en la última clase…",
+  // y lo que hace que los pasos lleguen con un motivo detrás en vez de sueltos.
+  const context = (args.analysis.riskExplanation ?? '').trim()
+    || (args.analysis.classSummary ?? '').trim();
+  const cause = isRiskCause(args.analysis.riskCause) ? args.analysis.riskCause : null;
+
   // `afterAnalysis` ya garantiza la ficha (la crea si hace falta), así que acá
   // normalmente hay profileId. El guard queda por si la creación falló.
   if (args.profileId) {
@@ -410,6 +417,8 @@ async function openIntervention(args: {
       risk:        args.risk,
       analysisId:  args.analysisId,
       classNumber: args.classNumber,
+      context,
+      cause,
     });
   } else {
     console.warn(`[analyze-transcript] ${args.studentName}: intervención sin ficha donde guardarla; solo se avisa al profesor.`);
@@ -418,7 +427,7 @@ async function openIntervention(args: {
   if (!args.teacherId) return;   // sin profesor asignado no hay a quién avisar
 
   await notifyTeacherIntervention({
-    teacherId: args.teacherId, studentName: args.studentName, suggestion,
+    teacherId: args.teacherId, studentName: args.studentName, suggestion, context,
   });
 
   // Email: es el único correo ligado a las señales de riesgo y sale solo cuando
@@ -427,7 +436,7 @@ async function openIntervention(args: {
     const teacher = await fetchTeacher(args.teacherId);
     if (teacher) {
       await sendInterventionEmail(teacher, {
-        studentName: args.studentName, suggestion, classNumber: args.classNumber,
+        studentName: args.studentName, suggestion, classNumber: args.classNumber, context,
       });
     }
   } catch (err) {

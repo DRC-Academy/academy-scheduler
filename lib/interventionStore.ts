@@ -13,7 +13,7 @@ import {
   asIntervention, countsAsUnattended, interventionCopy,
   type ActiveIntervention, type InterventionCheck, type InterventionSuggestion,
 } from '@/lib/interventions';
-import type { RiskSignal } from '@/lib/aiTypes';
+import type { RiskCause, RiskSignal } from '@/lib/aiTypes';
 
 const isMissingCol = (e: { code?: string } | null | undefined): boolean =>
   e?.code === 'PGRST204' || e?.code === '42703';
@@ -121,11 +121,25 @@ export async function saveActiveIntervention(args: {
   risk: RiskSignal;
   analysisId?: string | null;
   classNumber?: number | null;
+  /**
+   * Qué se detectó en esta clase (el razonamiento de la IA). Se guarda DENTRO de
+   * la alerta para que el pop-up de "Ingresar a clase" pueda abrir con "en la
+   * última clase pasó X" sin ir a buscarlo a class_analyses en mitad del flujo
+   * de acceso, que es el peor momento posible para una consulta extra.
+   */
+  context?: string | null;
+  cause?: RiskCause | null;
 }): Promise<void> {
   const now = new Date().toISOString();
   const active: ActiveIntervention = {
     ...args.suggestion,
     risk:            args.risk,
+    contextSummary:  (args.context ?? '').trim(),
+    cause:           args.cause ?? null,
+    // Alerta recién abierta: el motivo por el que sigue abierta es, todavía, el
+    // de la clase que la abrió. Se rellena en la primera clase que la mantenga.
+    stillOpenReason: '',
+    refreshedAt:     null,
     classAnalysisId: args.analysisId ?? null,
     classNumber:     args.classNumber ?? null,
     createdAt:       now,
@@ -207,18 +221,56 @@ export async function recordInterventionAudit(args: {
       // Hubo señales: la alerta se cierra. Si la clase nueva vuelve a salir en
       // amarillo/rojo, se abrirá una intervención nueva justo después.
       await clearActiveIntervention(args.profileId);
-    } else if (counted) {
-      // Sin señales y con confianza suficiente: la alerta sigue abierta y el
-      // contador sube. Es un dato para el admin, no una penalización.
-      await updateProfile('unattended_alerts', args.profileId, {
-        unattended_alerts: args.unattendedBefore + 1,
-        updated_at:        new Date().toISOString(),
-      });
+    } else {
+      // La alerta SIGUE ABIERTA. Antes esto solo subía un contador y el texto de
+      // la alerta se quedaba congelado en el de la clase que la abrió, así que el
+      // profesor leía un motivo de hace tres clases. Ahora se reescribe con la
+      // lectura de ESTA clase: puede seguir abierta por lo mismo, por algo
+      // distinto, o sin que se sepa por qué, y eso cambia la intervención.
+      //
+      // Se refresca incluso con confianza baja: la confianza mide si el profesor
+      // intervino, no si el motivo es correcto. Lo que la confianza baja NO hace
+      // es subir el contador de alertas sin atender.
+      await refreshOpenIntervention(args.profileId, args.previous, args.check);
+      if (counted) {
+        await updateProfile('unattended_alerts', args.profileId, {
+          unattended_alerts: args.unattendedBefore + 1,
+          updated_at:        new Date().toISOString(),
+        });
+      }
     }
-    // confidence 'baja' → se registra el audit pero no se toca nada más.
   }
 
   return { counted, consecutive: counted ? await consecutiveUnattended(args.studentId, args.studentName) : 0 };
+}
+
+/**
+ * Actualiza el MOTIVO de una alerta que sigue abierta, sin tocar su protocolo.
+ *
+ * Los pasos y la acción se conservan a propósito: son contra lo que se audita la
+ * clase siguiente, y cambiarlos aquí dejaría al profesor auditado contra un
+ * protocolo que nunca vio. Lo que se actualiza es por qué sigue abierta y la
+ * causa vigente, que es lo que estaba congelado.
+ */
+async function refreshOpenIntervention(
+  profileId: string, previous: ActiveIntervention, check: InterventionCheck,
+): Promise<void> {
+  const reason = (check.stillOpenReason ?? '').trim();
+  const cause = check.cause ?? null;
+  // Análisis anteriores a estos campos: no hay nada nuevo que escribir y se deja
+  // la alerta como estaba en vez de vaciarle el motivo que ya tenía.
+  if (!reason && !cause) return;
+
+  const updated: ActiveIntervention = {
+    ...previous,
+    stillOpenReason: reason || previous.stillOpenReason || '',
+    cause:           cause ?? previous.cause ?? null,
+    refreshedAt:     new Date().toISOString(),
+  };
+  await updateProfile('refreshOpenIntervention', profileId, {
+    active_intervention: updated,
+    updated_at:          new Date().toISOString(),
+  });
 }
 
 /** Cuántas auditorías consecutivas (de la más reciente hacia atrás) no contaron señales. */
@@ -267,8 +319,10 @@ export async function notifyTeacherIntervention(args: {
   teacherId: string;
   studentName: string;
   suggestion: InterventionSuggestion;
+  /** Qué se detectó, para que el aviso abra con el porqué y no con la orden. */
+  context?: string | null;
 }): Promise<void> {
-  const { title, body } = interventionCopy(args.suggestion, args.studentName);
+  const { title, body } = interventionCopy(args.suggestion, args.studentName, args.context ?? '');
   await insertNotification({
     prefix: 'interv', targetUser: args.teacherId,
     title, body, type: 'risk_alert', createdBy: 'ia',

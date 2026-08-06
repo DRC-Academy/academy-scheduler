@@ -29,7 +29,8 @@ import { calcRegisteredClassNumber } from '@/lib/db';
 import { isMilestone, getMilestoneSlides, getMilestoneCopy } from '@/lib/milestones';
 import { checkSubscription, type SubscriptionInfo } from '@/lib/useSubscriptionStatus';
 import { markInterventionShown } from '@/lib/interventionsClient';
-import { AVOID_ITEMS, AVOID_TITLE, NATURAL_REMINDER, type RiskBriefing } from '@/lib/interventions';
+import { AVOID_ITEMS, AVOID_TITLE, ESCALATION_BANNER, NATURAL_REMINDER, type RiskBriefing } from '@/lib/interventions';
+import { RISK_CAUSE_META } from '@/lib/aiTypes';
 import type { Teacher, Student, Assignment, ClassRecord } from '@/types';
 
 /** Lo mínimo que el flujo necesita de una clase. `TeacherClass` lo cumple. */
@@ -253,19 +254,49 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
                 El alumno no ve este aviso. Es solo para ti.
               </div>
 
-              {/* Escalado a soporte: manda sobre todo lo demás. */}
+              {/* CONTEXTO de la clase anterior. Va lo PRIMERO a propósito: una
+                  lista de pasos sin el motivo detrás es una orden, y se ejecuta
+                  peor. El profesor entra sabiendo qué pasó la última vez. */}
+              {b.previousContext && (
+                <div style={{ background: 'white', border: '1px solid #e4e5e1', borderRadius: 10, padding: '11px 14px', marginBottom: 12 }}>
+                  <div style={{ fontSize: 11.5, fontWeight: 800, color: '#8b8e88', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>
+                    En la última clase
+                  </div>
+                  <div style={{ fontSize: 13.5, color: '#374151', lineHeight: 1.55 }}>{b.previousContext}</div>
+                  {/* Por qué la alerta sigue abierta HOY. Solo aparece cuando la
+                      alerta sobrevivió a alguna clase: es el motivo actualizado,
+                      no el de la clase que la abrió. */}
+                  {b.stillOpenReason && (
+                    <div style={{ fontSize: 13, color: '#9a6516', lineHeight: 1.55, marginTop: 8, paddingTop: 8, borderTop: '1px dashed #e4e5e1' }}>
+                      <b>Sigue abierta porque:</b> {b.stillOpenReason}
+                    </div>
+                  )}
+                  {b.cause && b.cause !== 'no_aplica' && (
+                    <div style={{ display: 'inline-block', marginTop: 8, fontSize: 11.5, fontWeight: 700, color: '#5f6360', background: '#f0f1ee', borderRadius: 20, padding: '3px 11px' }}
+                      title={RISK_CAUSE_META[b.cause].hint}>
+                      {RISK_CAUSE_META[b.cause].label}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Escalado a soporte. NO sustituye a los pasos: soporte se ocupa
+                  de la retención y el profesor, de que esta clase salga bien.
+                  Antes este banner era lo único accionable que aparecía. */}
               {b.escalateToSupport && (
                 <div style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid #dc2626', borderRadius: 10, padding: '12px 14px', marginBottom: 16 }}>
                   <div style={{ fontSize: 13.5, fontWeight: 700, color: '#b91c1c', marginBottom: 3 }}>
-                    Este caso está escalado a soporte
+                    {ESCALATION_BANNER.title}
                   </div>
                   <div style={{ fontSize: 13, color: '#7f1d1d', lineHeight: 1.55 }}>
-                    No intentes retenerlo tú solo. El equipo de soporte activa el protocolo de gestión de bajas.
+                    {ESCALATION_BANNER.body}
                   </div>
                 </div>
               )}
 
-              <div style={{ fontSize: 13.5, fontWeight: 700, color: '#1a1c1a', marginBottom: 8 }}>En esta clase:</div>
+              <div style={{ fontSize: 13.5, fontWeight: 700, color: '#1a1c1a', marginBottom: 8 }}>
+                {b.escalateToSupport ? 'Tú, en esta clase:' : 'En esta clase, prueba:'}
+              </div>
 
               {b.steps.length > 0 ? (
                 <ol style={{ margin: '0 0 16px', paddingLeft: 22, display: 'flex', flexDirection: 'column', gap: 9 }}>

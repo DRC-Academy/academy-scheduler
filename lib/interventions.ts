@@ -14,7 +14,52 @@
 //     que el profesor actuó? Alimenta intervention_audits (Bloque 2).
 
 import { cleanAiText } from '@/lib/textCleanup';
-import type { RiskSignal } from '@/lib/aiTypes';
+import { isRiskCause, type RiskCause, type RiskSignal } from '@/lib/aiTypes';
+
+// ── Detecciones con su acción emparejada ─────────────────────────────────────
+
+/**
+ * Una cosa observada en la clase y QUÉ HACER con ella. Van siempre en pareja: el
+ * diagnóstico suelto ("el alumno depende del español") no le sirve de nada al
+ * profesor si no viene con la acción ("haz los primeros cinco minutos solo en
+ * inglés, con apoyo visual").
+ *
+ * Se generan en TODAS las clases, también en verde: el ritmo lento o la
+ * dependencia del español son hallazgos pedagógicos, no señales de baja.
+ */
+export interface Detection {
+  finding: string;
+  action: string;
+}
+
+/** Tope duro. Más de tres deja de leerse y alarga el análisis sin aportar. */
+export const MAX_DETECTIONS = 3;
+
+export function normalizeDetections(raw: unknown): Detection[] {
+  if (!Array.isArray(raw)) return [];
+  const out: Detection[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const r = item as Record<string, unknown>;
+    const finding = isNonEmpty(r.finding) ? cleanAiText(r.finding.trim()) : '';
+    const action  = isNonEmpty(r.action)  ? cleanAiText(r.action.trim())  : '';
+    // Sin las dos mitades no es una detección: un hallazgo sin acción es
+    // exactamente el problema que este campo viene a resolver.
+    if (!finding || !action) continue;
+    out.push({ finding, action });
+    if (out.length >= MAX_DETECTIONS) break;
+  }
+  return out;
+}
+
+/** Lee la columna jsonb `class_analyses.detections` (objeto o string JSON). */
+export function asDetections(v: unknown): Detection[] {
+  if (!v) return [];
+  if (typeof v === 'string') {
+    try { return normalizeDetections(JSON.parse(v)); } catch { return []; }
+  }
+  return normalizeDetections(v);
+}
 
 export type InterventionChannel = 'en_clase' | 'mensaje_previo' | 'escalar_soporte';
 export type InterventionConfidence = 'alta' | 'media' | 'baja';
@@ -41,6 +86,27 @@ export interface InterventionSuggestion {
 /** La sugerencia abierta en la ficha del alumno, con el contexto de su clase. */
 export interface ActiveIntervention extends InterventionSuggestion {
   risk: RiskSignal;
+  /**
+   * Qué se detectó en la clase que abrió la alerta, en una o dos frases. Se
+   * guarda AQUÍ, junto a la alerta, y no se va a buscar a class_analyses cuando
+   * hace falta: el pop-up de "Ingresar a clase" tiene que poder decir "en la
+   * última clase pasó X" sin una segunda consulta en mitad del flujo de acceso.
+   */
+  contextSummary?: string;
+  /** Causa del riesgo. Es lo que hace que la acción encaje con lo que pasa. */
+  cause?: RiskCause | null;
+  /**
+   * Por qué la alerta SIGUE abierta, a fecha de hoy. Se reescribe en cada clase
+   * que la deja abierta (ver recordInterventionAudit).
+   *
+   * Sin esto, el profesor veía el motivo de la clase que la abrió, congelado
+   * para siempre. Y la causa es justo lo que cambia la intervención: si la
+   * ausencia era por vacaciones no hay nada que reenganchar, y si es
+   * desmotivación real, sí.
+   */
+  stillOpenReason?: string;
+  /** Cuándo se actualizó `stillOpenReason` por última vez. */
+  refreshedAt?: string | null;
   /** Clase que originó la alerta. Evita auditar dos veces la misma clase (reintentos). */
   classAnalysisId?: string | null;
   classNumber?: number | null;
@@ -57,6 +123,13 @@ export interface InterventionCheck {
   signsOfIntervention: boolean;
   evidence: string;
   confidence: InterventionConfidence;
+  /**
+   * Por qué la alerta sigue abierta SEGÚN ESTA CLASE, y con qué causa. Es la
+   * reevaluación: la alerta deja de ser una foto de la clase que la abrió.
+   * Puede venir vacío en auditorías de análisis anteriores a este campo.
+   */
+  stillOpenReason?: string;
+  cause?: RiskCause | null;
 }
 
 /** Fila de intervention_audits (snake_case = columnas reales). */
@@ -165,6 +238,8 @@ export function normalizeCheck(raw: unknown): InterventionCheck | null {
   return {
     signsOfIntervention: r.signsOfIntervention,
     evidence: isNonEmpty(r.evidence) ? cleanAiText(r.evidence.trim()) : '',
+    stillOpenReason: isNonEmpty(r.stillOpenReason) ? cleanAiText(r.stillOpenReason.trim()) : '',
+    cause: isRiskCause(r.cause) ? r.cause : null,
     // Ante la duda, la confianza más baja: una auditoría incierta NO cuenta.
     confidence: CONFIDENCES.includes(r.confidence as InterventionConfidence)
       ? (r.confidence as InterventionConfidence)
@@ -185,11 +260,26 @@ export function asIntervention(v: unknown): ActiveIntervention | null {
   return {
     ...base,
     risk,
+    contextSummary: isNonEmpty(r.contextSummary) ? cleanAiText(r.contextSummary.trim()) : '',
+    cause: isRiskCause(r.cause) ? r.cause : null,
+    stillOpenReason: isNonEmpty(r.stillOpenReason) ? cleanAiText(r.stillOpenReason.trim()) : '',
+    refreshedAt: typeof r.refreshedAt === 'string' ? r.refreshedAt : null,
     classAnalysisId: typeof r.classAnalysisId === 'string' ? r.classAnalysisId : null,
     classNumber: typeof r.classNumber === 'number' ? r.classNumber : null,
     createdAt: typeof r.createdAt === 'string' ? r.createdAt : undefined,
     shownAt: typeof r.shownAt === 'string' ? r.shownAt : null,
   };
+}
+
+/**
+ * El motivo VIGENTE de una alerta: el actualizado si la alerta sobrevivió a
+ * alguna clase posterior, y si no el de la clase que la abrió. FUENTE ÚNICA para
+ * que el pop-up, la ficha y el panel del admin no puedan decir cosas distintas
+ * sobre la misma alerta.
+ */
+export function currentReason(i: ActiveIntervention | null | undefined): string {
+  if (!i) return '';
+  return (i.stillOpenReason ?? '').trim() || (i.contextSummary ?? '').trim();
 }
 
 // ── El aviso que ve el profesor al entrar a clase ────────────────────────────
@@ -214,6 +304,17 @@ export interface RiskBriefing {
   steps: string[];
   /** Texto de la acción, para las alertas viejas sin pasos y para el genérico. */
   body: string;
+  /**
+   * Qué pasó en la clase anterior, en una o dos frases. Es lo primero que lee el
+   * profesor: sin contexto, una lista de pasos es una orden sin motivo, y la
+   * intervención se ejecuta peor. Vacío en el aviso genérico y en las alertas
+   * anteriores a este campo.
+   */
+  previousContext: string;
+  /** Causa del riesgo, para que el profesor sepa contra qué está actuando. */
+  cause: RiskCause | null;
+  /** Si la alerta viene de clases anteriores: por qué sigue abierta hoy. */
+  stillOpenReason: string;
   reconnectHook: string;
   escalateToSupport: boolean;
   /** Ficha sobre la que escribir `intervention_shown_at`. */
@@ -227,9 +328,16 @@ export function buildRiskBriefing(args: {
   risk?: RiskSignal | null;
   intervention?: ActiveIntervention | null;
   profileId?: string | null;
+  /**
+   * Motivo guardado en la ficha (`student_profiles.risk_explanation`). Es el
+   * respaldo de contexto para las alertas anteriores a `contextSummary` y para
+   * el aviso genérico, que si no llegaría al profesor sin ningún porqué.
+   */
+  riskExplanation?: string | null;
 }): RiskBriefing | null {
   const { studentName, intervention } = args;
   const profileId = args.profileId ?? null;
+  const fallbackContext = (args.riskExplanation ?? '').trim();
 
   if (intervention) {
     return {
@@ -240,6 +348,11 @@ export function buildRiskBriefing(args: {
       risk: intervention.risk,
       steps: intervention.steps ?? [],
       body: intervention.action,
+      // El contexto de la alerta y, si no lo tiene (alertas viejas), el motivo
+      // que quedó en la ficha.
+      previousContext: (intervention.contextSummary ?? '').trim() || fallbackContext,
+      cause: intervention.cause ?? null,
+      stillOpenReason: (intervention.stillOpenReason ?? '').trim(),
       reconnectHook: intervention.reconnectHook,
       escalateToSupport: intervention.escalateToSupport,
       profileId,
@@ -254,6 +367,9 @@ export function buildRiskBriefing(args: {
       risk: args.risk,
       steps: [],
       body: GENERIC_RISK_BRIEFING,
+      previousContext: fallbackContext,
+      cause: null,
+      stillOpenReason: '',
       reconnectHook: '',
       escalateToSupport: false,
       profileId,
@@ -284,21 +400,40 @@ export function countsAsUnattended(check: InterventionCheck): boolean {
  * (ver el aviso de tipo 'risk_alert' en /teacher y la ficha del alumno).
  */
 export function interventionCopy(
-  s: InterventionSuggestion, studentName: string,
+  s: InterventionSuggestion, studentName: string, context?: string,
 ): { title: string; body: string } {
+  // Los PASOS van en el cuerpo, numerados. Antes solo viajaban al pop-up de
+  // "Ingresar a clase": el profesor que se enteraba por la campanita o por el
+  // email recibía la acción en una línea y nunca veía el protocolo, que es
+  // justamente la parte accionable.
+  const pasos = s.steps.length > 0
+    ? `En esta clase:\n${s.steps.map((p, i) => `${i + 1}. ${p}`).join('\n')}`
+    : '';
+  const contexto = (context ?? '').trim() ? `En la última clase: ${context!.trim()}` : '';
+
   if (s.escalateToSupport) {
     return {
       title: `Escalar a soporte — ${studentName}`,
       body: [
-        s.action,
+        contexto,
+        'Soporte gestionará este caso. No intentes retenerlo tú solo.',
+        // Escalar y actuar NO son excluyentes: soporte se ocupa de la retención
+        // y el profesor, de que ESTA clase salga lo mejor posible.
+        pasos || s.action,
         s.reconnectHook,
-        'Contacta al equipo de soporte para activar el protocolo de gestión de bajas. No intentes retener al alumno tú solo.',
         NATURAL_REMINDER,
       ].filter(Boolean).join('\n\n'),
     };
   }
   return {
     title: `Seguimiento recomendado — ${studentName}`,
-    body: [s.action, s.reconnectHook, NATURAL_REMINDER].filter(Boolean).join('\n\n'),
+    body: [contexto, s.action, pasos, s.reconnectHook, NATURAL_REMINDER].filter(Boolean).join('\n\n'),
   };
 }
+
+/** Copy fijo del banner de escalado. Mismo texto en el pop-up, el aviso y el email. */
+export const ESCALATION_BANNER = {
+  title: 'Soporte gestionará este caso',
+  body: 'No intentes retenerlo tú solo. El equipo de soporte activa el protocolo de gestión de bajas. '
+    + 'Tu trabajo en esta clase es otro: que salga lo mejor posible.',
+};

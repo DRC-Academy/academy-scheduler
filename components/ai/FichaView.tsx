@@ -5,10 +5,14 @@
 
 import { useState, type CSSProperties } from 'react';
 import {
-  RISK_META, asObject, isRiskSignal, isConversacionGuiada,
+  RISK_META, RISK_CAUSE_META, asObject, isRiskSignal, isRiskCause, isConversacionGuiada,
   type ClassAnalysisRow, type FichaIA, type NextClassIA, type TranscriptIA, type RiskSignal,
-  type GeneratedClassIA, type ConversacionGuiadaIA,
+  type RiskCause, type GeneratedClassIA, type ConversacionGuiadaIA,
 } from '@/lib/aiTypes';
+import {
+  ESCALATION_BANNER, asDetections, normalizeSuggestion,
+  type Detection, type InterventionSuggestion,
+} from '@/lib/interventions';
 
 export const DRC = {
   green: '#1E9E3A',
@@ -34,6 +38,133 @@ export function Field({ label, value }: { label: string; value?: string | null }
 export const panelBox: CSSProperties = {
   background: 'white', border: '1px solid #d1d5db', borderRadius: 10, padding: '14px 16px',
 };
+
+// ── Detalle de una alerta: motivo + causa + qué hacer ─────────────────────────
+
+/**
+ * Lo que hay detrás de una señal de riesgo, en un solo bloque. FUENTE ÚNICA de
+ * este "ver detalle": lo usan la ficha del alumno y la cola del admin, porque
+ * una alerta amarilla no puede explicarse distinto según dónde se mire.
+ *
+ * Antes el color llegaba solo: el profesor veía "amarillo" sin el porqué ni la
+ * intervención, y tenía que deducir qué hacer.
+ */
+export function RiskActionDetail({ explanation, cause, stillOpenReason, intervention, detections }: {
+  explanation?: string | null;
+  cause?: RiskCause | null;
+  stillOpenReason?: string | null;
+  intervention?: InterventionSuggestion | null;
+  detections?: Detection[];
+}) {
+  const dets = detections ?? [];
+  const hayAlgo = !!explanation?.trim() || !!stillOpenReason?.trim() || !!intervention || dets.length > 0
+    || (!!cause && cause !== 'no_aplica');
+  if (!hayAlgo) return null;
+
+  const causeMeta = cause && cause !== 'no_aplica' ? RISK_CAUSE_META[cause] : null;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {explanation?.trim() && (
+        <div>
+          <div style={eyebrowStyle}>Motivo</div>
+          <div style={{ fontSize: 13.5, color: '#374151', lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>{explanation}</div>
+        </div>
+      )}
+
+      {/* La causa cambia la intervención tanto como el color: un amarillo por
+          vacaciones y uno por desmotivación no se tratan igual. */}
+      {causeMeta && (
+        <div>
+          <span style={{ display: 'inline-block', fontSize: 11.5, fontWeight: 700, color: '#5f6360', background: '#f0f1ee', border: '1px solid #e4e5e1', borderRadius: 20, padding: '3px 11px' }}>
+            {causeMeta.label}
+          </span>
+          {causeMeta.hint && (
+            <div style={{ fontSize: 12.5, color: '#8b8e88', lineHeight: 1.5, marginTop: 5 }}>{causeMeta.hint}</div>
+          )}
+        </div>
+      )}
+
+      {/* Solo aparece cuando la alerta sobrevivió a alguna clase posterior. */}
+      {stillOpenReason?.trim() && (
+        <div style={{ background: 'rgba(255,196,0,0.12)', border: '1px solid rgba(255,196,0,0.5)', borderRadius: 8, padding: '10px 12px' }}>
+          <div style={{ ...eyebrowStyle, color: '#9a6516' }}>Por qué sigue abierta</div>
+          <div style={{ fontSize: 13, color: '#7a5412', lineHeight: 1.55 }}>{stillOpenReason}</div>
+        </div>
+      )}
+
+      {intervention && (
+        <div>
+          <div style={eyebrowStyle}>Intervención sugerida</div>
+          {intervention.escalateToSupport && (
+            <div style={{ fontSize: 12.5, color: '#b91c1c', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.35)', borderRadius: 8, padding: '8px 11px', marginBottom: 8, lineHeight: 1.5 }}>
+              <b>{ESCALATION_BANNER.title}.</b> {ESCALATION_BANNER.body}
+            </div>
+          )}
+          {intervention.action && (
+            <div style={{ fontSize: 13.5, color: '#374151', lineHeight: 1.55, marginBottom: intervention.steps.length ? 8 : 0 }}>
+              {intervention.action}
+            </div>
+          )}
+          {intervention.steps.length > 0 && (
+            <ol style={{ margin: 0, paddingLeft: 20, display: 'flex', flexDirection: 'column', gap: 5 }}>
+              {intervention.steps.map((s, i) => (
+                <li key={i} style={{ fontSize: 13.5, color: '#374151', lineHeight: 1.5 }}>{s}</li>
+              ))}
+            </ol>
+          )}
+          {intervention.reconnectHook && (
+            <div style={{ fontSize: 12.5, color: DRC.greenDark, marginTop: 8, lineHeight: 1.5 }}>
+              <b>Oportunidad:</b> {intervention.reconnectHook}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Cada cosa detectada con SU acción. Van juntas a propósito: el
+          diagnóstico suelto es justo lo que no le servía al profesor. */}
+      {dets.length > 0 && (
+        <div>
+          <div style={eyebrowStyle}>Detectado en la clase, y qué hacer</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {dets.map((d, i) => (
+              <div key={i} style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: '9px 11px', background: 'white' }}>
+                <div style={{ fontSize: 13, color: '#374151', lineHeight: 1.5 }}>{d.finding}</div>
+                <div style={{ fontSize: 13, color: DRC.greenDark, lineHeight: 1.5, marginTop: 5, paddingTop: 5, borderTop: '1px dashed #e5e7eb' }}>
+                  <b>Prueba:</b> {d.action}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const eyebrowStyle: CSSProperties = {
+  fontSize: 11.5, fontWeight: 800, color: DRC.green,
+  textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4,
+};
+
+/** "Ver detalle" plegable alrededor de RiskActionDetail. */
+export function RiskDetailToggle(props: React.ComponentProps<typeof RiskActionDetail>) {
+  const [open, setOpen] = useState(false);
+  const content = RiskActionDetail(props);
+  if (!content) return null;
+  return (
+    <div>
+      <button
+        onClick={() => setOpen(o => !o)}
+        aria-expanded={open}
+        style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: 'none', border: 'none', padding: '4px 0', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12.5, fontWeight: 700, color: DRC.green }}
+      >
+        <span aria-hidden>{open ? '▾' : '▸'}</span> {open ? 'Ocultar detalle' : 'Ver detalle'}
+      </button>
+      {open && <div style={{ marginTop: 8 }}>{content}</div>}
+    </div>
+  );
+}
 
 // ── Badge de riesgo ───────────────────────────────────────────────────────────
 export function RiskBadge({ risk, compact }: { risk: RiskSignal; compact?: boolean }) {
@@ -232,7 +363,17 @@ function TimelineRow({ row }: { row: ClassAnalysisRow }) {
           <Field label="Errores detectados" value={row.errors_detected} />
           <Field label="Progreso respecto a la anterior" value={row.progress_notes} />
           <Field label="Contenidos" value={row.topics_covered} />
-          {row.risk_explanation && <Field label="Motivo de la señal de riesgo" value={row.risk_explanation} />}
+          {/* Motivo + causa + intervención + detecciones, en un solo bloque y con
+              la misma forma que ve el admin. Sustituye al "Motivo de la señal de
+              riesgo" suelto, que decía por qué pero no qué hacer. */}
+          <div style={{ marginTop: 4, marginBottom: 12 }}>
+            <RiskActionDetail
+              explanation={row.risk_explanation}
+              cause={isRiskCause(row.risk_cause) ? row.risk_cause : null}
+              intervention={normalizeSuggestion(asObject(row.intervention_suggestion))}
+              detections={asDetections(row.detections)}
+            />
+          </div>
           {guide && (
             <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px dashed #e5e7eb' }}>
               <div style={{ fontSize: 12.5, fontWeight: 800, color: '#111827', marginBottom: 8 }}>
@@ -264,10 +405,21 @@ export function TranscriptAnalysisView({ a }: { a: TranscriptIA }) {
         <div style={{ marginTop: 10 }}><ProgressBar score={a.progressScore} /></div>
       </Section>
       <Section icon="🚦" title={`Señal de riesgo: ${m.emoji} ${m.label}`}>
-        <div style={{ padding: '10px 12px', borderRadius: 8, background: m.bg, border: `1px solid ${m.border}`, fontSize: 13, color: m.color, lineHeight: 1.55 }}>
+        <div style={{ padding: '10px 12px', borderRadius: 8, background: m.bg, border: `1px solid ${m.border}`, fontSize: 13, color: m.color, lineHeight: 1.55, marginBottom: 12 }}>
           {a.riskExplanation}
         </div>
+        <RiskActionDetail
+          cause={isRiskCause(a.riskCause) ? a.riskCause : null}
+          intervention={normalizeSuggestion(a.interventionSuggestion)}
+        />
       </Section>
+      {/* Cada detección con su acción. Va en su propia sección y NO dentro del
+          riesgo: se generan también en verde, porque son hallazgos pedagógicos. */}
+      {asDetections(a.detections).length > 0 && (
+        <Section icon="🎯" title="Detectado, y qué hacer">
+          <RiskActionDetail detections={asDetections(a.detections)} />
+        </Section>
+      )}
       <Section icon="✨" title="Guía para la siguiente clase" defaultOpen>
         <Field label="Prioridad" value={a.nextClassGuide?.priority} />
         <Field label="Warm-up" value={a.nextClassGuide?.warmUp} />
