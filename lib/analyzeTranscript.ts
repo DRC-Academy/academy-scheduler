@@ -32,13 +32,13 @@ const INTERVENTION_SCHEMA = {
   additionalProperties: false,
   required: ['action', 'steps', 'reconnectHook', 'escalateToSupport', 'channel'],
   properties: {
-    action:            { type: 'string',  description: 'Acción concreta y específica para el profesor, una sola, en español de España. Vacío si riskSignal es verde.' },
+    action:            { type: 'string',  description: 'Acción concreta que el PROFESOR ejecuta, una sola, en español de España. Nunca "escala el caso a soporte" ni una advertencia de lo que no debe hacer: eso no le sirve durante la clase. Vacío si riskSignal es verde.' },
     steps: {
       type: 'array',
       minItems: 0,
       maxItems: 4,
       items: { type: 'string' },
-      description: 'QUÉ HACER DURANTE ESTA CLASE, en 2 a 4 pasos ordenados, cada uno una frase corta en imperativo. Se le muestran al profesor numerados justo antes de entrar. Obligatorio también cuando escalateToSupport es true: ahí son pasos de contención y acompañamiento, nunca "contacta a soporte". Array vacío solo si riskSignal es verde.',
+      description: 'QUÉ HACE EL PROFESOR DURANTE ESTA CLASE, en 2 a 4 pasos ordenados, cada uno una frase corta que empieza por un verbo de acción. Se le muestran numerados justo antes de entrar. PROHIBIDO: pasos que solo digan lo que no hay que hacer ("no intentes retenerlo"), que deleguen en otro equipo ("deja que soporte lo gestione") o que sean una actitud sin conducta ("mantén un tono cercano"). Obligatorio también cuando escalateToSupport es true: ahí son de contención y acompañamiento. Array vacío solo si riskSignal es verde.',
     },
     reconnectHook:     { type: 'string',  description: 'Si el alumno está a 1 o 2 clases de un hito (15 o 30), cómo usar la evaluación de hito como excusa natural para reconectar. Vacío si no aplica.' },
     escalateToSupport: { type: 'boolean', description: 'true solo si el alumno dijo explícitamente que piensa cancelar o dejar las clases.' },
@@ -157,9 +157,16 @@ Cuando generes la sugerencia de intervención:
 - La acción debe ser práctica y específica, nunca un consejo genérico. Mal: "presta más atención al alumno". Bien: "al inicio de la próxima clase pregúntale cómo se siente con el progreso y recuérdale lo que ha avanzado desde que empezó".
 - Ajusta la intervención a riskCause. Si es externa_temporal, la acción es acompañar y retomar el ritmo, no retener. Si es dificultad_academica, es ajustar el nivel o el enfoque. Si es sin_determinar, el primer paso es AVERIGUAR la causa con una pregunta natural, no actuar a ciegas.
 - La intervención debe parecer NATURAL, nunca reactiva. El profesor nunca debe dar a entender al alumno que el sistema detectó un problema o que "algo ha fallado".
-- ESCALADO A SOPORTE. Si el alumno mencionó EXPLÍCITAMENTE que piensa cancelar o dejar las clases: escalateToSupport = true y la acción indica escalar al equipo de soporte, NO que el profesor intente retenerlo solo.
-  Escalar y actuar NO son excluyentes, y esto es importante: soporte se ocupa de la retención y de la gestión de la baja; el profesor se ocupa de que ESA clase concreta salga bien. Así que, con escalateToSupport en true, los steps siguen siendo OBLIGATORIOS y son pasos de contención y acompañamiento para la clase, nunca "avisa a soporte" (de eso ya se encarga el aviso). Piensa en transmitir tranquilidad, bajar el ritmo si lo ves agobiado, y que el alumno salga de la clase con una sensación positiva.
-  Ejemplo de steps válidos en un caso escalado: "recíbelo con normalidad y no menciones nada de lo que dijo"; "si lo notas agobiado, baja el ritmo y quítale carga a la clase"; "cierra con algo que le salga bien, para que se vaya con una sensación positiva".
+- CADA PASO ES ALGO QUE EL PROFESOR HACE. Empieza por un verbo de acción y describe una conducta ejecutable dentro de la clase. Está PROHIBIDO que un paso:
+  · diga solo lo que NO hay que hacer ("no intentes retenerlo tú solo", "no le presiones"). Eso es una advertencia, no un paso, y ya se le muestra aparte.
+  · delegue en otro equipo ("deja que soporte active el protocolo", "escala el caso"). El profesor no puede ejecutar eso durante su clase.
+  · sea una actitud sin conducta ("mantén un tono cercano", "sé empático"). Convierte la actitud en algo observable: "salúdalo por su nombre y pregúntale por el finde antes de abrir el material".
+  Si te quedas sin pasos afirmativos que proponer, propón los básicos de una buena clase con ese alumno, pero NUNCA devuelvas una lista de advertencias.
+- ESCALADO A SOPORTE (escalateToSupport). Es una MARCA PARA EL EQUIPO, no un mensaje para el profesor: ponla en true si el alumno dijo explícitamente que piensa cancelar o dejar las clases, y no la menciones en action ni en steps.
+  Al profesor le toca dar esa clase igual, durante una hora, y lo que necesita es saber qué hacer en ella. Así que con escalateToSupport en true, action y steps describen QUÉ HACER EN LA CLASE, con más motivo que nunca: contención y acompañamiento. Nada de "avisa a soporte" ni "no hagas nada".
+  Piensa en transmitir calma, bajar el ritmo si lo ves agobiado, y que el alumno salga habiendo pasado una buena hora.
+  Ejemplo de steps válidos en un caso escalado: "recíbelo con normalidad y arranca con algo que ya domine"; "si lo notas tenso, baja el ritmo y proponle una pausa"; "pregúntale cómo lleva el inglés últimamente y escúchalo sin rebatirle"; "cierra recordándole algo concreto que ha mejorado".
+  Ejemplo de steps INVÁLIDOS, que es justo lo que se generaba antes: "no intentes retenerlo tú solo en la clase"; "deja que el equipo de soporte active el protocolo de bajas".
 - Si el alumno está a 1 o 2 clases de un hito (15, 30), aprovechá ese hito como motivo natural para reconectar en reconnectHook.
 - Redacta en español de España, tono cercano y profesional, sin guiones como conectores.
 

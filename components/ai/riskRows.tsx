@@ -207,6 +207,7 @@ export function ColaRow(p: ColaRowProps) {
                   cause={row.active.cause}
                   stillOpenReason={row.active.stillOpenReason}
                   intervention={row.active}
+                  risk={row.active.risk}
                 />
               </div>
             )}

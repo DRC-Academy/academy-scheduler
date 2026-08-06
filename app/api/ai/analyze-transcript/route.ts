@@ -427,7 +427,7 @@ async function openIntervention(args: {
   if (!args.teacherId) return;   // sin profesor asignado no hay a quién avisar
 
   await notifyTeacherIntervention({
-    teacherId: args.teacherId, studentName: args.studentName, suggestion, context,
+    teacherId: args.teacherId, studentName: args.studentName, suggestion, context, risk: args.risk,
   });
 
   // Email: es el único correo ligado a las señales de riesgo y sale solo cuando
@@ -437,6 +437,7 @@ async function openIntervention(args: {
     if (teacher) {
       await sendInterventionEmail(teacher, {
         studentName: args.studentName, suggestion, classNumber: args.classNumber, context,
+        risk: args.risk,
       });
     }
   } catch (err) {

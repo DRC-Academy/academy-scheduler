@@ -173,16 +173,102 @@ export const AVOID_TITLE = 'Ver qué evitar';
 
 /**
  * Aviso para el alumno que está en amarillo o rojo pero todavía no tiene
- * protocolo generado (la IA no ha llegado a proponer uno). No hay pasos que
- * enseñar, así que se le pide atención sin inventarse un protocolo concreto.
+ * protocolo generado (la IA no ha llegado a proponer uno).
  *
  * Un aviso genérico NO se audita después: no habría contra qué comparar, y por
  * eso nunca puede contar como alerta no atendida.
  */
 export const GENERIC_RISK_BRIEFING =
-  'Este alumno muestra señales de riesgo. En esta clase, presta especial atención a cómo se siente ' +
-  'con el progreso y procura que salga con ganas de volver. Mantén un tono natural, sin mencionarle ' +
-  'que se ha detectado nada.';
+  'Este alumno muestra señales de riesgo. Estos pasos valen para cualquier caso: úsalos tal cual.';
+
+// ── Protocolo de respaldo: el pop-up NUNCA se queda sin qué hacer ────────────
+//
+// Existe porque el 06/08/2026 se comprobó que 24 de las 26 alertas abiertas no
+// tenían ni un paso: son anteriores a que la IA generara protocolo, y el pop-up
+// caía al texto de `action`, que en los casos escalados decía "escala el caso al
+// equipo de soporte". El profesor abría el aviso, leía que no hiciera nada y
+// entraba a la clase igual que si no hubiera alerta.
+//
+// Estos pasos son de verdad ejecutables y no dependen de la IA. No sustituyen a
+// un protocolo específico cuando lo hay: solo cubren el hueco.
+
+/** Alumno en ROJO. Contención: que la clase le siente bien, pase lo que pase. */
+export const FALLBACK_STEPS_ROJO: string[] = [
+  'Recíbelo con normalidad y arranca con algo que ya domine, para que los primeros minutos le salgan bien.',
+  'Si lo notas tenso o acelerado, baja el ritmo: proponle una pausa, hablad más despacio y quítale carga a la clase.',
+  'En algún momento natural pregúntale cómo lleva el inglés últimamente, y escucha sin justificarte ni rebatirle.',
+  'Cierra recordándole algo concreto que ha mejorado desde que empezó.',
+];
+
+/** Alumno en AMARILLO. Reenganche: que salga con ganas de volver. */
+export const FALLBACK_STEPS_AMARILLO: string[] = [
+  'Empieza preguntándole qué tal le está yendo con el inglés fuera de clase.',
+  'Ajusta la clase a lo que te diga: si lo ves espeso, cambia a algo más corto y hablado.',
+  'Dale una victoria clara a mitad de clase, algo que le salga bien y lo note.',
+  'Cierra acordando con él qué vais a trabajar la próxima vez.',
+];
+
+export function fallbackSteps(risk: RiskSignal): string[] {
+  return risk === 'rojo' ? FALLBACK_STEPS_ROJO : FALLBACK_STEPS_AMARILLO;
+}
+
+/**
+ * Un paso solo sirve si el profesor puede EJECUTARLO. Se descartan los que:
+ *   · delegan en otro equipo ("deja que soporte active el protocolo"), y
+ *   · solo dicen lo que NO hay que hacer ("no intentes retenerlo tú solo").
+ *
+ * No son inventados: son los pasos reales que la IA generó para los dos únicos
+ * casos escalados que llegaron a tener protocolo. Dos de tres eran así, y con
+ * ellos el pop-up quedaba igual de vacío que sin pasos.
+ *
+ * Lo que NO hay que hacer sigue estando, en su sitio: la lista "qué evitar".
+ */
+const DELEGA = /\b(soporte|equipo de soporte|protocolo de bajas|escala(r|le)?\b|deriva(r)?\b)/i;
+const SOLO_NEGATIVO = /^\s*(no|nunca|evita|jam[áa]s)\b/i;
+
+export function usableSteps(steps: readonly string[] | undefined | null): string[] {
+  if (!Array.isArray(steps)) return [];
+  return steps.filter(s => {
+    const t = (s ?? '').trim();
+    if (!t) return false;
+    if (SOLO_NEGATIVO.test(t)) return false;
+    if (DELEGA.test(t)) return false;
+    return true;
+  });
+}
+
+/**
+ * Mínimo para que una lista de pasos sea un PROTOCOLO y no un apunte suelto.
+ *
+ * Con uno solo no alcanza, y no es teórico: la alerta escalada real de la base
+ * tenía tres pasos y el filtro dejaba uno, "mantén un tono cercano y natural
+ * durante la sesión". Eso es una actitud, no algo que el profesor pueda hacer, y
+ * abrir el pop-up con esa única línea es casi tan inútil como abrirlo vacío.
+ */
+const MIN_STEPS = 2;
+
+/**
+ * El protocolo DEFINITIVO de una alerta: los pasos de la IA si son suficientes,
+ * y si no el de respaldo. Fuente única del pop-up, la campanita, el email y la
+ * ficha, para que los cuatro le digan al profesor exactamente lo mismo.
+ */
+export function protocolFor(
+  steps: readonly string[] | undefined | null, risk: RiskSignal,
+): { steps: string[]; isFallback: boolean } {
+  const propios = usableSteps(steps);
+  return propios.length >= MIN_STEPS
+    ? { steps: propios, isFallback: false }
+    : { steps: fallbackSteps(risk), isFallback: true };
+}
+
+/**
+ * La única advertencia que se le da al profesor de un caso escalado, y va como
+ * guardarraíl al lado del protocolo, no en lugar de él. Decirle "soporte se
+ * encarga" lo dejaba sin nada que hacer durante una hora de clase.
+ */
+export const ESCALATED_GUARDRAIL =
+  'Este alumno ya dijo que se plantea dejarlo, así que no le vendas la academia ni le pidas que se quede: '
+  + 'eso lo empuja para el otro lado. Tu objetivo en esta clase es que se vaya a gusto.';
 
 /** Máximo de pasos del protocolo. Más de cuatro deja de ser accionable. */
 const MAX_STEPS = 4;
@@ -300,8 +386,14 @@ export interface RiskBriefing {
   kind: 'protocolo' | 'generico';
   studentName: string;
   risk: RiskSignal;
-  /** Pasos accionables. Vacío en el genérico y en las alertas sin `steps`. */
+  /**
+   * Pasos accionables. NUNCA viene vacío: si la alerta no trae un protocolo
+   * utilizable se rellena con el de respaldo (ver fallbackSteps). El pop-up no
+   * puede abrirse diciéndole al profesor que no haga nada.
+   */
   steps: string[];
+  /** true si los pasos son los de respaldo y no los que generó la IA. */
+  usingFallbackSteps: boolean;
   /** Texto de la acción, para las alertas viejas sin pasos y para el genérico. */
   body: string;
   /**
@@ -340,14 +432,22 @@ export function buildRiskBriefing(args: {
   const fallbackContext = (args.riskExplanation ?? '').trim();
 
   if (intervention) {
+    // Pasos EJECUTABLES. Si la IA no dejó un protocolo utilizable (las alertas
+    // anteriores al protocolo, o las que solo decían "no intentes retenerlo" y
+    // "deja que soporte lo gestione"), entra el respaldo. El pop-up nunca puede
+    // abrirse sin decirle al profesor qué hacer durante esa hora.
+    const proto = protocolFor(intervention.steps, intervention.risk);
     return {
       kind: 'protocolo',
       studentName,
       // La alerta manda sobre el color de la última clase: sigue abierta hasta
       // que alguien la cierre, aunque la última clase saliera verde.
       risk: intervention.risk,
-      steps: intervention.steps ?? [],
-      body: intervention.action,
+      steps: proto.steps,
+      usingFallbackSteps: proto.isFallback,
+      // La acción solo se enseña si dice algo que el profesor pueda hacer. Un
+      // "escala el caso a soporte" como cuerpo del aviso es no decirle nada.
+      body: usableSteps([intervention.action]).length > 0 ? intervention.action : '',
       // El contexto de la alerta y, si no lo tiene (alertas viejas), el motivo
       // que quedó en la ficha.
       previousContext: (intervention.contextSummary ?? '').trim() || fallbackContext,
@@ -365,7 +465,11 @@ export function buildRiskBriefing(args: {
       kind: 'generico',
       studentName,
       risk: args.risk,
-      steps: [],
+      // Antes esto era un párrafo de buenas intenciones ("presta especial
+      // atención a cómo se siente"). Ahora son pasos, porque un aviso que no se
+      // puede ejecutar no cambia nada de lo que pasa en la clase.
+      steps: fallbackSteps(args.risk),
+      usingFallbackSteps: true,
       body: GENERIC_RISK_BRIEFING,
       previousContext: fallbackContext,
       cause: null,
@@ -401,39 +505,30 @@ export function countsAsUnattended(check: InterventionCheck): boolean {
  */
 export function interventionCopy(
   s: InterventionSuggestion, studentName: string, context?: string,
+  risk: RiskSignal = 'amarillo',
 ): { title: string; body: string } {
-  // Los PASOS van en el cuerpo, numerados. Antes solo viajaban al pop-up de
-  // "Ingresar a clase": el profesor que se enteraba por la campanita o por el
-  // email recibía la acción en una línea y nunca veía el protocolo, que es
-  // justamente la parte accionable.
-  const pasos = s.steps.length > 0
-    ? `En esta clase:\n${s.steps.map((p, i) => `${i + 1}. ${p}`).join('\n')}`
-    : '';
+  // Los PASOS son el cuerpo del aviso, numerados, y con respaldo si la IA no dejó
+  // ninguno utilizable. Antes esto mandaba `action` en una línea, que en los
+  // casos escalados era "escala el caso a soporte": el profesor recibía un aviso
+  // cuyo contenido era que no hiciera nada.
+  const lista = protocolFor(s.steps, risk).steps;
+  const pasos = `En esta clase:\n${lista.map((p, i) => `${i + 1}. ${p}`).join('\n')}`;
   const contexto = (context ?? '').trim() ? `En la última clase: ${context!.trim()}` : '';
+  const accion = usableSteps([s.action]).length > 0 ? s.action : '';
 
-  if (s.escalateToSupport) {
-    return {
-      title: `Escalar a soporte — ${studentName}`,
-      body: [
-        contexto,
-        'Soporte gestionará este caso. No intentes retenerlo tú solo.',
-        // Escalar y actuar NO son excluyentes: soporte se ocupa de la retención
-        // y el profesor, de que ESTA clase salga lo mejor posible.
-        pasos || s.action,
-        s.reconnectHook,
-        NATURAL_REMINDER,
-      ].filter(Boolean).join('\n\n'),
-    };
-  }
   return {
-    title: `Seguimiento recomendado — ${studentName}`,
-    body: [contexto, s.action, pasos, s.reconnectHook, NATURAL_REMINDER].filter(Boolean).join('\n\n'),
+    title: s.escalateToSupport
+      ? `Atención en la próxima clase — ${studentName}`
+      : `Seguimiento recomendado — ${studentName}`,
+    body: [
+      contexto,
+      accion,
+      pasos,
+      // Guardarraíl, no sustituto: el profesor sabe qué NO forzar, pero entra a
+      // la clase con un protocolo que ejecutar.
+      s.escalateToSupport ? ESCALATED_GUARDRAIL : '',
+      s.reconnectHook,
+      NATURAL_REMINDER,
+    ].filter(Boolean).join('\n\n'),
   };
 }
-
-/** Copy fijo del banner de escalado. Mismo texto en el pop-up, el aviso y el email. */
-export const ESCALATION_BANNER = {
-  title: 'Soporte gestionará este caso',
-  body: 'No intentes retenerlo tú solo. El equipo de soporte activa el protocolo de gestión de bajas. '
-    + 'Tu trabajo en esta clase es otro: que salga lo mejor posible.',
-};

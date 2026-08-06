@@ -10,7 +10,11 @@
 import { resend, hasResendKey } from '@/lib/resend';
 import { supabase } from '@/lib/supabase';
 import { MILESTONE_SLIDES } from '@/lib/milestones';
-import { AVOID_ITEMS, ESCALATION_BANNER, NATURAL_REMINDER, type InterventionSuggestion } from '@/lib/interventions';
+import {
+  AVOID_ITEMS, ESCALATED_GUARDRAIL, NATURAL_REMINDER, protocolFor, usableSteps,
+  type InterventionSuggestion,
+} from '@/lib/interventions';
+import type { RiskSignal } from '@/lib/aiTypes';
 import { cleanAiText } from '@/lib/textCleanup';
 
 const FROM = 'DRC Academy <notificaciones@drcacademy.com>';
@@ -256,24 +260,28 @@ export async function sendInterventionEmail(
     studentName: string; suggestion: InterventionSuggestion; classNumber?: number | null;
     /** Qué se detectó en la clase. Abre el email: primero el porqué, luego los pasos. */
     context?: string | null;
+    /** Decide qué protocolo de respaldo usar si la IA no dejó pasos ejecutables. */
+    risk?: RiskSignal;
   },
 ): Promise<boolean> {
   const s = info.suggestion;
   const escalate = s.escalateToSupport;
   const context = (info.context ?? '').trim();
+  const risk: RiskSignal = info.risk ?? (escalate ? 'rojo' : 'amarillo');
 
-  // Los PASOS, numerados. Antes el email llevaba solo `action` en una línea: el
-  // profesor que se enteraba por correo nunca veía el protocolo, que es la parte
-  // que de verdad se puede ejecutar. En el caso escalado son de contención, y
-  // conviven con el aviso de que soporte se encarga de la retención.
-  const stepsBlock = s.steps.length > 0
-    ? `<div style="margin:0 0 16px; padding:14px 16px; border:1px solid #E0E0DA; border-radius:8px; background-color:#FFFFFF;">
+  // Los PASOS, numerados y SIEMPRE presentes: si la IA no dejó ninguno
+  // ejecutable, entra el protocolo de respaldo. Antes el email llevaba solo
+  // `action` en una línea, y en los casos escalados esa línea decía "escala el
+  // caso a soporte": un correo cuyo contenido era que no hiciera nada.
+  const lista = protocolFor(s.steps, risk).steps;
+  const stepsBlock = `<div style="margin:0 0 16px; padding:14px 16px; border:1px solid #E0E0DA; border-radius:8px; background-color:#FFFFFF;">
   <div style="font-size:12px; font-weight:700; color:#1E9E3A; text-transform:uppercase; letter-spacing:0.04em; margin-bottom:8px;">En esta clase</div>
   <ol style="margin:0; padding-left:18px; font-size:14px; line-height:1.65; color:#1A1A1A;">${
-    s.steps.map(t => `<li style="margin-bottom:6px;">${esc(t)}</li>`).join('')
+    lista.map(t => `<li style="margin-bottom:6px;">${esc(t)}</li>`).join('')
   }</ol>
-</div>`
-    : '';
+</div>`;
+  // La acción solo se muestra si dice algo que el profesor pueda hacer.
+  const accion = usableSteps([s.action]).length > 0 ? s.action : '';
   const subject = escalate
     ? `Escalar a soporte · ${info.studentName}`
     : `Seguimiento recomendado · ${info.studentName}`;
@@ -290,12 +298,10 @@ export async function sendInterventionEmail(
     p(`Hola ${esc(teacher.name)},`) +
     p(`<strong>${esc(info.studentName)}</strong> ha mostrado señales de riesgo en su última clase${info.classNumber != null ? ` (clase ${info.classNumber})` : ''}.`) +
     (context ? p(`<strong>En la última clase:</strong> ${esc(context)}`) : '') +
-    // Escalado: el banner dice que soporte se encarga de la retención. NO
-    // sustituye a los pasos: el profesor sigue teniendo trabajo en esa clase.
-    (escalate
-      ? banner('#FDECEC', '#DC2626', '#991B1B', ESCALATION_BANNER.title, ESCALATION_BANNER.body)
-      : banner('#FFF9E0', '#FFC400', '#8A6A00', 'Intervención recomendada', s.action)) +
+    (accion ? banner('#FFF9E0', '#FFC400', '#8A6A00', 'Intervención recomendada', accion) : '') +
     stepsBlock +
+    // Guardarraíl del caso escalado: va DESPUÉS del protocolo, nunca en su lugar.
+    (escalate ? banner('#FFF9E0', '#FFC400', '#8A6A00', 'Ten en cuenta', ESCALATED_GUARDRAIL) : '') +
     (s.reconnectHook ? p(`<strong>Oportunidad:</strong> ${esc(s.reconnectHook)}`) : '') +
     p(`<em>${esc(NATURAL_REMINDER)}</em>`) +
     `<div style="margin:0 0 16px; padding:12px 14px; border:1px solid #E0E0DA; border-radius:8px;">

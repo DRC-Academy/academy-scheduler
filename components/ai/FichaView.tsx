@@ -10,7 +10,7 @@ import {
   type RiskCause, type GeneratedClassIA, type ConversacionGuiadaIA,
 } from '@/lib/aiTypes';
 import {
-  ESCALATION_BANNER, asDetections, normalizeSuggestion,
+  asDetections, normalizeSuggestion, protocolFor,
   type Detection, type InterventionSuggestion,
 } from '@/lib/interventions';
 
@@ -49,12 +49,14 @@ export const panelBox: CSSProperties = {
  * Antes el color llegaba solo: el profesor veía "amarillo" sin el porqué ni la
  * intervención, y tenía que deducir qué hacer.
  */
-export function RiskActionDetail({ explanation, cause, stillOpenReason, intervention, detections }: {
+export function RiskActionDetail({ explanation, cause, stillOpenReason, intervention, detections, risk }: {
   explanation?: string | null;
   cause?: RiskCause | null;
   stillOpenReason?: string | null;
   intervention?: InterventionSuggestion | null;
   detections?: Detection[];
+  /** Nivel de la alerta: decide qué protocolo de respaldo mostrar. */
+  risk?: RiskSignal | null;
 }) {
   const dets = detections ?? [];
   const hayAlgo = !!explanation?.trim() || !!stillOpenReason?.trim() || !!intervention || dets.length > 0
@@ -96,9 +98,13 @@ export function RiskActionDetail({ explanation, cause, stillOpenReason, interven
       {intervention && (
         <div>
           <div style={eyebrowStyle}>Intervención sugerida</div>
+          {/* El admin SÍ necesita saber que el caso está escalado: es su trabajo,
+              no el del profesor. Al profesor no se le dice en ningún sitio que
+              "soporte se encarga", porque lo dejaba sin nada que hacer. */}
           {intervention.escalateToSupport && (
             <div style={{ fontSize: 12.5, color: '#b91c1c', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.35)', borderRadius: 8, padding: '8px 11px', marginBottom: 8, lineHeight: 1.5 }}>
-              <b>{ESCALATION_BANNER.title}.</b> {ESCALATION_BANNER.body}
+              <b>Escalado a soporte.</b> El alumno dijo que se plantea dejarlo: la retención la gestiona el
+              equipo, no el profesor. Al profesor se le da un protocolo de contención para su clase.
             </div>
           )}
           {intervention.action && (
@@ -106,13 +112,25 @@ export function RiskActionDetail({ explanation, cause, stillOpenReason, interven
               {intervention.action}
             </div>
           )}
-          {intervention.steps.length > 0 && (
-            <ol style={{ margin: 0, paddingLeft: 20, display: 'flex', flexDirection: 'column', gap: 5 }}>
-              {intervention.steps.map((s, i) => (
-                <li key={i} style={{ fontSize: 13.5, color: '#374151', lineHeight: 1.5 }}>{s}</li>
-              ))}
-            </ol>
-          )}
+          {(() => {
+            // Lo que ve el admin es lo MISMO que se le enseña al profesor: misma
+            // función, así que no pueden discrepar.
+            const proto = protocolFor(intervention.steps, risk ?? 'amarillo');
+            return (
+              <>
+                <ol style={{ margin: 0, paddingLeft: 20, display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  {proto.steps.map((s, i) => (
+                    <li key={i} style={{ fontSize: 13.5, color: '#374151', lineHeight: 1.5 }}>{s}</li>
+                  ))}
+                </ol>
+                {proto.isFallback && (
+                  <div style={{ fontSize: 12, color: '#8b8e88', marginTop: 6, lineHeight: 1.45 }}>
+                    Protocolo de respaldo: la IA no dejó pasos ejecutables para esta alerta.
+                  </div>
+                )}
+              </>
+            );
+          })()}
           {intervention.reconnectHook && (
             <div style={{ fontSize: 12.5, color: DRC.greenDark, marginTop: 8, lineHeight: 1.5 }}>
               <b>Oportunidad:</b> {intervention.reconnectHook}
@@ -372,6 +390,7 @@ function TimelineRow({ row }: { row: ClassAnalysisRow }) {
               cause={isRiskCause(row.risk_cause) ? row.risk_cause : null}
               intervention={normalizeSuggestion(asObject(row.intervention_suggestion))}
               detections={asDetections(row.detections)}
+              risk={risk}
             />
           </div>
           {guide && (
@@ -411,6 +430,7 @@ export function TranscriptAnalysisView({ a }: { a: TranscriptIA }) {
         <RiskActionDetail
           cause={isRiskCause(a.riskCause) ? a.riskCause : null}
           intervention={normalizeSuggestion(a.interventionSuggestion)}
+          risk={risk}
         />
       </Section>
       {/* Cada detección con su acción. Va en su propia sección y NO dentro del

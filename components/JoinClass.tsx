@@ -29,7 +29,7 @@ import { calcRegisteredClassNumber } from '@/lib/db';
 import { isMilestone, getMilestoneSlides, getMilestoneCopy } from '@/lib/milestones';
 import { checkSubscription, type SubscriptionInfo } from '@/lib/useSubscriptionStatus';
 import { markInterventionShown } from '@/lib/interventionsClient';
-import { AVOID_ITEMS, AVOID_TITLE, ESCALATION_BANNER, NATURAL_REMINDER, type RiskBriefing } from '@/lib/interventions';
+import { AVOID_ITEMS, AVOID_TITLE, ESCALATED_GUARDRAIL, NATURAL_REMINDER, type RiskBriefing } from '@/lib/interventions';
 import { RISK_CAUSE_META } from '@/lib/aiTypes';
 import type { Teacher, Student, Assignment, ClassRecord } from '@/types';
 
@@ -280,33 +280,31 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
                 </div>
               )}
 
-              {/* Escalado a soporte. NO sustituye a los pasos: soporte se ocupa
-                  de la retención y el profesor, de que esta clase salga bien.
-                  Antes este banner era lo único accionable que aparecía. */}
-              {b.escalateToSupport && (
-                <div style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid #dc2626', borderRadius: 10, padding: '12px 14px', marginBottom: 16 }}>
-                  <div style={{ fontSize: 13.5, fontWeight: 700, color: '#b91c1c', marginBottom: 3 }}>
-                    {ESCALATION_BANNER.title}
-                  </div>
-                  <div style={{ fontSize: 13, color: '#7f1d1d', lineHeight: 1.55 }}>
-                    {ESCALATION_BANNER.body}
-                  </div>
-                </div>
-              )}
-
+              {/* EL PROTOCOLO, siempre y lo primero después del contexto.
+                  Ya no hay banner de "soporte se encarga": ocupaba este sitio y
+                  dejaba al profesor una hora de clase por delante sin nada que
+                  hacer. Lo que no hay que forzar va abajo, como guardarraíl. */}
               <div style={{ fontSize: 13.5, fontWeight: 700, color: '#1a1c1a', marginBottom: 8 }}>
-                {b.escalateToSupport ? 'Tú, en esta clase:' : 'En esta clase, prueba:'}
+                En esta clase:
               </div>
 
-              {b.steps.length > 0 ? (
-                <ol style={{ margin: '0 0 16px', paddingLeft: 22, display: 'flex', flexDirection: 'column', gap: 9 }}>
-                  {b.steps.map((s, i) => (
-                    <li key={i} style={{ fontSize: 14, color: '#374151', lineHeight: 1.55 }}>{s}</li>
-                  ))}
-                </ol>
-              ) : (
-                // Alertas anteriores a los pasos, y el aviso genérico: el texto tal cual.
-                <div style={{ fontSize: 14, color: '#374151', lineHeight: 1.6, marginBottom: 16 }}>{b.body}</div>
+              {/* La acción concreta, cuando dice algo ejecutable. */}
+              {b.body && b.steps.length > 0 && (
+                <div style={{ fontSize: 13.5, color: '#5f6360', lineHeight: 1.55, marginBottom: 10 }}>{b.body}</div>
+              )}
+
+              <ol style={{ margin: '0 0 16px', paddingLeft: 22, display: 'flex', flexDirection: 'column', gap: 9 }}>
+                {b.steps.map((s, i) => (
+                  <li key={i} style={{ fontSize: 14, color: '#374151', lineHeight: 1.55 }}>{s}</li>
+                ))}
+              </ol>
+
+              {/* Caso escalado: la ÚNICA advertencia, y va después del protocolo.
+                  El profesor sabe qué no forzar, pero ya sabe qué hacer. */}
+              {b.escalateToSupport && (
+                <div style={{ background: 'rgba(255,196,0,0.14)', border: '1px solid rgba(255,196,0,0.55)', borderRadius: 10, padding: '11px 14px', marginBottom: 16 }}>
+                  <div style={{ fontSize: 13, color: '#7a5412', lineHeight: 1.55 }}>{ESCALATED_GUARDRAIL}</div>
+                </div>
               )}
 
               {b.reconnectHook && (

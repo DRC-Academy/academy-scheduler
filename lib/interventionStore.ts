@@ -321,8 +321,12 @@ export async function notifyTeacherIntervention(args: {
   suggestion: InterventionSuggestion;
   /** Qué se detectó, para que el aviso abra con el porqué y no con la orden. */
   context?: string | null;
+  /** Decide el protocolo de respaldo si la IA no dejó pasos ejecutables. */
+  risk?: RiskSignal;
 }): Promise<void> {
-  const { title, body } = interventionCopy(args.suggestion, args.studentName, args.context ?? '');
+  const { title, body } = interventionCopy(
+    args.suggestion, args.studentName, args.context ?? '', args.risk ?? 'amarillo',
+  );
   await insertNotification({
     prefix: 'interv', targetUser: args.teacherId,
     title, body, type: 'risk_alert', createdBy: 'ia',
