@@ -13,22 +13,40 @@
 -- de assignments reventaba con form_tokens_assignment_id_fkey; al arreglar esa
 -- tabla habría reventado con level_test_sessions_assignment_id_fkey, y así.
 --
--- CADENA COMPLETA (auditada contra producción el 03/08/2026)
+-- LA LISTA DE ESLABONES YA NO SE ESCRIBE A MANO (07/08/2026)
 --
---   students
---   ├── assignments (student_id, NOT NULL)      → BORRAR (no se puede nulificar)
---   │   ├── form_tokens (assignment_id)         → NULIFICAR   ← rompía aquí
---   │   │   └── student_profiles (form_token_id)
---   │   └── level_test_sessions (assignment_id) → NULIFICAR   ← siguiente eslabón
---   │       └── level_test_answers (session_id, ON DELETE CASCADE)
---   ├── class_analyses (student_id)             → NULIFICAR (finanzas)
---   ├── form_tokens (student_id)                → NULIFICAR
---   ├── student_profiles (student_id)           → BORRAR
---   └── level_test_sessions (student_id)        → NULIFICAR
+-- La versión anterior llevaba la cadena escrita a mano, auditada contra
+-- producción el 03/08/2026, y afirmaba que `progress_tokens` guardaba
+-- `student_id` como texto plano sin foreign key. En producción SÍ la tiene
+-- (`progress_tokens_student_id_fkey`), aunque supabase-progress-tokens.sql no la
+-- declara: la tabla se creó en Supabase con el `references` y el archivo del
+-- repo nunca lo reflejó. Resultado: el borrado de Sandra Mesa Blanco reventó
+-- con esa constraint, exactamente el mismo fallo que este archivo decía haber
+-- resuelto.
 --
--- NO son eslabones: churn_snapshots, student_dropouts, intervention_audits y
--- progress_tokens tienen `student_id` como TEXTO PLANO, sin foreign key. Nunca
--- bloquean el borrado y NO se tocan (son la retención y el dataset de churn).
+-- Añadir 'progress_tokens' a la lista habría repetido el error una vez más: la
+-- siguiente tabla que alguien cree con un `references students(id)` volvería a
+-- romperlo, y nadie se enteraría hasta el próximo borrado. Así que la cadena se
+-- DESCUBRE del catálogo de Postgres (pg_constraint) en cada ejecución. Lo que la
+-- base sabe de sí misma no puede quedar desactualizado en un comentario.
+--
+-- CÓMO SE TRATA CADA ESLABÓN DESCUBIERTO
+--   · assignments y student_profiles  → los borra su propio paso (5 y 4).
+--   · tablas de PURGA (v_purge)       → se BORRAN las filas del alumno.
+--   · el resto, columna nulificable   → se NULIFICA (nunca se destruye dato).
+--   · el resto, columna NOT NULL      → BLOQUEA con un mensaje que la nombra, en
+--     vez de reventar con el error críptico de Postgres. Hay que decidir a mano
+--     si esa tabla se borra o se nulifica, y añadirla acá.
+--
+-- POR QUÉ progress_tokens SE BORRA Y NO SE NULIFICA
+-- /progreso/[token] resuelve por `student_id` y, si viene null, CAE AL NOMBRE
+-- (app/progreso/[token]/page.tsx). Un token nulificado seguiría sirviendo la
+-- ficha y las clases de un alumno ya eliminado, durante los 30 días de vigencia
+-- del link y a quien tenga la URL. Nulificar acá no es conservador: es una fuga.
+--
+-- NO son eslabones: churn_snapshots, student_dropouts e intervention_audits
+-- guardan `student_id` como TEXTO PLANO, sin foreign key. Nunca bloquean el
+-- borrado y NO se tocan (son la retención y el dataset de churn).
 --
 -- FINANZAS INTACTAS
 -- `class_records` y `class_join_logs` ni siquiera tienen columna student_id:
@@ -60,7 +78,6 @@ declare
   v_asg_ids      text[] := '{}';
   v_repaired_ids text[] := '{}';
   v_blockers     text[] := '{}';
-  v_tbl          text;
   v_n            bigint;
   v_cnt          bigint;
   v_dest         text;
@@ -70,6 +87,12 @@ declare
   v_deleted      jsonb := '{}'::jsonb;
   v_preserved    jsonb := '{}'::jsonb;
   v_name_nk      text  := lower(btrim(coalesce(p_student_name, '')));
+  f              record;
+  -- Tablas que tienen su propio paso más abajo: el bucle genérico no las toca.
+  v_handled      text[] := array['assignments', 'student_profiles'];
+  -- Tablas cuyas filas se BORRAN con el alumno en vez de nulificarse, porque sin
+  -- él no significan nada y dejarlas vivas es una fuga (ver la cabecera).
+  v_purge        text[] := array['progress_tokens'];
 begin
   if p_ids is null or array_length(p_ids, 1) is null then
     raise exception 'delete_student_cascade: hacen falta las ids del alumno.';
@@ -126,48 +149,113 @@ begin
           and not exists (select 1 from students s
                            where s.id = a.student_id and not (s.id = any(p_ids))));
 
+  v_blockers := '{}'::text[];
+
   -- ── 2. NIVEL 2: soltar lo que cuelga de esas assignments ─────────────────
-  -- Esto es lo que faltaba y hacía fallar el borrado una tabla por vez.
-  foreach v_tbl in array array['form_tokens', 'level_test_sessions'] loop
-    if to_regclass('public.' || v_tbl) is null then continue; end if;
-    begin
+  -- La lista sale del CATÁLOGO, no de un array escrito a mano: cualquier tabla
+  -- que referencie assignments(id) queda cubierta sin volver a tocar esto.
+  for f in
+    select src.relname::text as tbl, att.attname::text as col, att.attnotnull as not_null
+      from pg_constraint c
+      join pg_class     src on src.oid = c.conrelid
+      join pg_class     tgt on tgt.oid = c.confrelid
+      join pg_namespace n   on n.oid   = src.relnamespace
+      join pg_attribute att on att.attrelid = c.conrelid and att.attnum = c.conkey[1]
+     where c.contype = 'f' and n.nspname = 'public'
+       and tgt.relname = 'assignments'
+       and array_length(c.conkey, 1) = 1
+     order by src.relname
+  loop
+    if f.tbl = any(v_purge) then
       if p_dry_run then
-        execute format('select count(*) from %I where assignment_id = any($1)', v_tbl)
+        execute format('select count(*) from %I where %I = any($1)', f.tbl, f.col)
           into v_n using v_asg_ids;
       else
-        execute format('update %I set assignment_id = null where assignment_id = any($1)', v_tbl)
-          using v_asg_ids;
+        execute format('delete from %I where %I = any($1)', f.tbl, f.col) using v_asg_ids;
         get diagnostics v_n = row_count;
       end if;
-      if v_n > 0 then
-        v_cleared := v_cleared || jsonb_build_object(v_tbl || '.assignment_id', v_n);
-      end if;
-    exception
-      when undefined_column then null;  -- migración de ese módulo sin correr
-    end;
+      if v_n > 0 then v_deleted := v_deleted || jsonb_build_object(f.tbl, v_n); end if;
+      continue;
+    end if;
+
+    if f.not_null then
+      v_blockers := v_blockers || format(
+        '%s.%s apunta a assignments y es NOT NULL: no se puede nulificar. Decidí a mano si esa tabla se borra (v_purge) o se conserva.',
+        f.tbl, f.col);
+      continue;
+    end if;
+
+    if p_dry_run then
+      execute format('select count(*) from %I where %I = any($1)', f.tbl, f.col)
+        into v_n using v_asg_ids;
+    else
+      execute format('update %I set %I = null where %I = any($1)', f.tbl, f.col, f.col)
+        using v_asg_ids;
+      get diagnostics v_n = row_count;
+    end if;
+    if v_n > 0 then
+      v_cleared := v_cleared || jsonb_build_object(f.tbl || '.' || f.col, v_n);
+    end if;
   end loop;
 
   -- ── 3. NIVEL 1: soltar las referencias a students(id) ────────────────────
-  -- Nulificar, NO borrar: class_analyses conserva student_name, teacher_id,
-  -- class_date y transcript, que es todo lo que lee finanzas.
-  foreach v_tbl in array array['class_analyses', 'form_tokens', 'level_test_sessions'] loop
-    if to_regclass('public.' || v_tbl) is null then continue; end if;
-    begin
+  -- Por defecto NULIFICAR, no borrar: class_analyses conserva student_name,
+  -- teacher_id, class_date y transcript, que es todo lo que lee finanzas.
+  -- Las de `v_purge` sí se borran (ver la cabecera: un progress_token nulificado
+  -- sigue sirviendo la ficha del alumno por su nombre).
+  for f in
+    select src.relname::text as tbl, att.attname::text as col, att.attnotnull as not_null
+      from pg_constraint c
+      join pg_class     src on src.oid = c.conrelid
+      join pg_class     tgt on tgt.oid = c.confrelid
+      join pg_namespace n   on n.oid   = src.relnamespace
+      join pg_attribute att on att.attrelid = c.conrelid and att.attnum = c.conkey[1]
+     where c.contype = 'f' and n.nspname = 'public'
+       and tgt.relname = 'students'
+       and array_length(c.conkey, 1) = 1
+     order by src.relname
+  loop
+    continue when f.tbl = any(v_handled);   -- assignments y student_profiles: pasos 4 y 5
+
+    if f.tbl = any(v_purge) then
       if p_dry_run then
-        execute format('select count(*) from %I where student_id = any($1)', v_tbl)
+        execute format('select count(*) from %I where %I = any($1)', f.tbl, f.col)
           into v_n using p_ids;
       else
-        execute format('update %I set student_id = null where student_id = any($1)', v_tbl)
-          using p_ids;
+        execute format('delete from %I where %I = any($1)', f.tbl, f.col) using p_ids;
         get diagnostics v_n = row_count;
       end if;
-      if v_n > 0 then
-        v_cleared := v_cleared || jsonb_build_object(v_tbl || '.student_id', v_n);
-      end if;
-    exception
-      when undefined_column then null;
-    end;
+      if v_n > 0 then v_deleted := v_deleted || jsonb_build_object(f.tbl, v_n); end if;
+      continue;
+    end if;
+
+    if f.not_null then
+      v_blockers := v_blockers || format(
+        '%s.%s apunta a students y es NOT NULL: no se puede nulificar. Decidí a mano si esa tabla se borra (v_purge) o se conserva.',
+        f.tbl, f.col);
+      continue;
+    end if;
+
+    if p_dry_run then
+      execute format('select count(*) from %I where %I = any($1)', f.tbl, f.col)
+        into v_n using p_ids;
+    else
+      execute format('update %I set %I = null where %I = any($1)', f.tbl, f.col, f.col)
+        using p_ids;
+      get diagnostics v_n = row_count;
+    end if;
+    if v_n > 0 then
+      v_cleared := v_cleared || jsonb_build_object(f.tbl || '.' || f.col, v_n);
+    end if;
   end loop;
+
+  -- Una tabla NOT NULL que no sabemos tratar corta acá, ANTES de borrar nada, y
+  -- con su nombre en el mensaje. Es el mismo criterio que el pre-flight: no se
+  -- adivina, y lo que ya se nulificó lo revierte la transacción.
+  if array_length(v_blockers, 1) is not null then
+    raise exception E'No se puede eliminar a "%": hay tablas que apuntan a su ficha y no se pueden soltar solas:\n%\nNo se ha modificado nada.',
+      p_student_name, array_to_string(v_blockers, E'\n');
+  end if;
 
   -- ── 4. La ficha IA sí se borra (ya está en el backup) ────────────────────
   -- Por `id` y por `student_id`: en las altas antiguas student_profiles.id ES
@@ -196,18 +284,26 @@ begin
   -- vez del error críptico de Postgres.
   if not p_dry_run then
     v_blockers := '{}'::text[];
-    foreach v_tbl in array array['assignments', 'class_analyses', 'form_tokens',
-                                 'student_profiles', 'level_test_sessions'] loop
-      if to_regclass('public.' || v_tbl) is null then continue; end if;
-      begin
-        execute format('select count(*) from %I where student_id = any($1)', v_tbl)
-          into v_n using p_ids;
-        if v_n > 0 then
-          v_blockers := v_blockers || format('%s.student_id: %s fila(s)', v_tbl, v_n);
-        end if;
-      exception
-        when undefined_column then null;
-      end;
+    -- Misma consulta al catálogo que el paso 3: se comprueban TODAS las FK que
+    -- existen ahora mismo, no las que había el día que se escribió esto. Es lo
+    -- que convierte el error críptico de Postgres en un mensaje con nombre.
+    for f in
+      select src.relname::text as tbl, att.attname::text as col
+        from pg_constraint c
+        join pg_class     src on src.oid = c.conrelid
+        join pg_class     tgt on tgt.oid = c.confrelid
+        join pg_namespace n   on n.oid   = src.relnamespace
+        join pg_attribute att on att.attrelid = c.conrelid and att.attnum = c.conkey[1]
+       where c.contype = 'f' and n.nspname = 'public'
+         and tgt.relname = 'students'
+         and array_length(c.conkey, 1) = 1
+       order by src.relname
+    loop
+      execute format('select count(*) from %I where %I = any($1)', f.tbl, f.col)
+        into v_n using p_ids;
+      if v_n > 0 then
+        v_blockers := v_blockers || format('%s.%s: %s fila(s)', f.tbl, f.col, v_n);
+      end if;
     end loop;
 
     select count(*) into v_n from student_profiles where id = any(p_ids);
