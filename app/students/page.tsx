@@ -910,6 +910,10 @@ function StudentsContent() {
             { id: 'active',     label: 'Activa' },
             { id: 'inactive',   label: 'Inactiva' },
             { id: 'pending',    label: 'Pendiente cancelar' },
+            // Suscripción pagada que todavía no empezó. Va aparte de "Inactiva"
+            // a propósito: con estos alumnos no hay nada que recuperar, solo que
+            // esperar a su fecha de inicio.
+            { id: 'scheduled',  label: 'Programada' },
             { id: 'unverified', label: 'Sin verificar' },
           ] as const).map(chip => (
             <button key={chip.id} onClick={() => { setSubFilter(chip.id); setVisibleCount(50); }}

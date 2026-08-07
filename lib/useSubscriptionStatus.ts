@@ -15,11 +15,11 @@
 
 // El mapa de estados de WooCommerce (nombre, color y si dan acceso) es el mismo
 // que usan el endpoint, finanzas y las asistencias. Ver lib/subscriptionAccess.
-import { WOO_STATUS } from '@/lib/subscriptionAccess';
+import { WOO_STATUS, isScheduledWooStatus } from '@/lib/subscriptionAccess';
 
 export interface SubscriptionInfo {
   active: boolean | null;                            // true=activa · false=inactiva · null=sin verificar
-  status: string;                                    // 'active'|'cancelled'|'on-hold'|'expired'|'pending-cancel'|'not_found'|'error'|'manual_override'|'manual_active'|'one_time_no_access'|'oritalk'
+  status: string;                                    // 'active'|'cancelled'|'on-hold'|'expired'|'pending-cancel'|'scheduled'|'not_found'|'error'|'manual_override'|'manual_active'|'one_time_no_access'|'oritalk'
   daysRemaining: number | null;
   endDate: string | null;
   productType: 'subscription' | 'one_time' | null;
@@ -27,10 +27,16 @@ export interface SubscriptionInfo {
   manualActiveUntil: string | null;
   /** Fin del acceso Oritalk. Solo viene cuando el alumno es de Oritalk y vigente. */
   oritalkUntil: string | null;
+  /**
+   * Inicio de la suscripción ('YYYY-MM-DD'). En una suscripción 'scheduled' es
+   * una fecha FUTURA, y es el dato que responde a "¿desde cuándo puede venir?".
+   * El endpoint ya lo devolvía; sin traerlo hasta acá el badge no podía decirlo.
+   */
+  subscriptionStartDate: string | null;
   fetchedAt: number;
 }
 
-export type SubCategory = 'active' | 'inactive' | 'pending' | 'unverified';
+export type SubCategory = 'active' | 'inactive' | 'pending' | 'scheduled' | 'unverified';
 
 // Cache compartido entre TODOS los componentes (vive en el módulo). Si "Alumnos"
 // ya verificó a María, "Próximas clases" reutiliza el mismo resultado.
@@ -43,7 +49,8 @@ function normEmail(email?: string | null): string {
 
 const NO_EMAIL: SubscriptionInfo = {
   active: null, status: 'no_email', daysRemaining: null, endDate: null,
-  productType: null, productName: null, manualActiveUntil: null, oritalkUntil: null, fetchedAt: 0,
+  productType: null, productName: null, manualActiveUntil: null, oritalkUntil: null,
+  subscriptionStartDate: null, fetchedAt: 0,
 };
 
 // Verifica la suscripción de un email. Usa cache (5 min) salvo `force`.
@@ -71,12 +78,13 @@ export async function checkSubscription(email?: string | null, force = false): P
       productName:       data.productName ?? null,
       manualActiveUntil: data.manualActiveUntil ?? null,
       oritalkUntil:      data.oritalkUntil ?? null,
+      subscriptionStartDate: data.subscriptionStartDate ?? null,
       fetchedAt:         Date.now(),
     };
     subscriptionCache.set(e, info);
     return info;
   } catch {
-    return { active: null, status: 'error', daysRemaining: null, endDate: null, productType: null, productName: null, manualActiveUntil: null, oritalkUntil: null, fetchedAt: Date.now() };
+    return { active: null, status: 'error', daysRemaining: null, endDate: null, productType: null, productName: null, manualActiveUntil: null, oritalkUntil: null, subscriptionStartDate: null, fetchedAt: Date.now() };
   }
 }
 
@@ -106,6 +114,11 @@ export function subCategory(info: SubscriptionInfo | undefined): SubCategory {
   // (que es lo correcto: el alumno pagó hasta el fin del periodo) caería en
   // 'active' y el chip "Pendiente cancelar" de la lista quedaría siempre vacío.
   if (info.status === 'pending-cancel') return 'pending';
+  // 'scheduled' tiene categoría propia y NO cae en 'inactive': un alumno cuyo
+  // plan todavía no empezó no es lo mismo que uno cancelado o vencido. Lo que
+  // hay que hacer con él es esperar, no recuperarlo, y mezclarlos en el mismo
+  // filtro obliga al admin a distinguirlos a ojo fila por fila.
+  if (isScheduledWooStatus(info.status)) return 'scheduled';
   if (info.active === true) return 'active';                                    // active / manual_active / manual_override / oritalk
   if (info.active === null || info.status === 'error' || info.status === 'not_found' || info.status === 'no_email') return 'unverified';
   return 'inactive';   // cancelled, expired, on-hold, one_time_no_access (expirado o sin activar)
@@ -150,16 +163,21 @@ export function subBadge(info: SubscriptionInfo | undefined): { label: string; c
     const tail = info.manualActiveUntil ? ` hasta ${shortDate(info.manualActiveUntil)}` : (info.endDate ? ` hasta ${shortDate(info.endDate)}` : '');
     return { label: `✅ Activa (manual${tail})`, ...green };
   }
-  // Estados de WooCommerce: nombre, color y si dan acceso salen del mapa único
-  // (lib/subscriptionAccess). Acá solo se decide el icono y la coletilla de días.
+  // Estados de WooCommerce: nombre, icono, color y si dan acceso salen TODOS del
+  // mapa único (lib/subscriptionAccess). Acá solo se decide la coletilla, que es
+  // lo único que depende de datos de este alumno y no del estado en abstracto.
   const woo = WOO_STATUS[info.status];
   if (woo) {
-    const icon = woo.countsAsActive ? (info.status === 'active' ? '✅' : '⏳') : (info.status === 'on-hold' ? '⚠️' : '❌');
-    // Los días que le quedan solo informan en 'pending-cancel': es el único
-    // estado donde el alumno sigue viniendo y hay una cuenta atrás real.
+    // La coletilla es la FECHA que le importa a quien mira, y cambia según el
+    // estado: en 'pending-cancel', hasta cuándo conserva el acceso; en
+    // 'scheduled', desde cuándo lo va a tener. En el resto no hay ninguna fecha
+    // que aporte algo, así que no se pone.
     const d = info.daysRemaining;
-    const tail = info.status === 'pending-cancel' && d != null && d > 0 ? ` (${d} día${d === 1 ? '' : 's'})` : '';
-    return { label: `${icon} ${woo.label}${tail}`, color: woo.color, bg: woo.bg };
+    const desde = isScheduledWooStatus(info.status) ? shortDate(info.subscriptionStartDate) : '';
+    const tail = desde ? ` (empieza el ${desde})`
+      : info.status === 'pending-cancel' && d != null && d > 0 ? ` (${d} día${d === 1 ? '' : 's'})`
+      : '';
+    return { label: `${woo.icon} ${woo.label}${tail}`, color: woo.color, bg: woo.bg };
   }
   return { label: '❓ Sin verificar', ...gray }; // error / not_found / no_email
 }

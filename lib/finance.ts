@@ -997,8 +997,9 @@ export function subscriptionBadge(status?: string):
   }
   const m = wooStatusMeta(status);
   const known = status && (status in WOO_STATUS || status === 'not_found');
-  const icon = !known ? '❓'
-    : m.countsAsActive ? (status === 'active' ? '✅' : '⏳')
-    : status === 'on-hold' ? '⚠️' : status === 'not_found' ? '❓' : '❌';
-  return { label: `${icon} ${known ? m.label : 'No verificado'}`, color: m.color, bg: m.bg };
+  // El icono sale del mapa (lib/subscriptionAccess), igual que el nombre y el
+  // color. Antes se reconstruía acá con un ternario propio que solo conocía los
+  // cinco estados de entonces, así que uno nuevo salía siempre con "❓" aunque
+  // estuviera dado de alta en el mapa.
+  return { label: `${m.icon} ${known ? m.label : 'No verificado'}`, color: m.color, bg: m.bg };
 }

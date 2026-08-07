@@ -98,43 +98,70 @@ export interface WooStatusMeta {
   label: string;
   /** ¿Puede tomar clases? */
   countsAsActive: boolean;
+  /**
+   * Emoji del badge. Vive acá y no en cada pantalla: era la última pieza del
+   * estado que seguía duplicada. `useSubscriptionStatus.subBadge` y
+   * `finance.subscriptionBadge` tenían cada una su propio ternario
+   * (`countsAsActive ? '✅' : status === 'on-hold' ? '⚠️' : '❌'`), y ninguno de
+   * los dos podía contemplar un estado nuevo sin tocarse por separado.
+   */
+  icon: string;
   color: string;
   bg: string;
 }
 
 export const WOO_STATUS: Record<string, WooStatusMeta> = {
   active: {
-    label: 'Activa', countsAsActive: true,
+    label: 'Activa', countsAsActive: true, icon: '✅',
     color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)',
   },
   // Cuenta como activa: canceló la renovación, pero el periodo pagado sigue vivo.
   'pending-cancel': {
-    label: 'Pendiente de cancelación', countsAsActive: true,
+    label: 'Pendiente de cancelación', countsAsActive: true, icon: '⏳',
     color: '#b45309', bg: 'rgba(255,196,0,0.18)',
+  },
+  // SUSCRIPCIÓN PROGRAMADA: pagada, pero con fecha de inicio en el FUTURO. Hasta
+  // que llegue esa fecha el alumno NO puede tomar clases, así que no cuenta como
+  // activa.
+  //
+  // Auditoría 07/08/2026 sobre la instalación real (suscripción #33491 de Beatriz
+  // Cuellar): status 'Scheduled', start_date 15/08, próximo pago 15/09, y una nota
+  // del sistema del 06/07 registrando el paso de 'Activa' a 'Scheduled'. Es el
+  // estado propio de la suscripción, no un dato de la próxima acción de pago: en
+  // check-subscription solo se lee `subscription.status`, y la fecha del próximo
+  // pago se lee aparte y únicamente alimenta `endDate`.
+  //
+  // Azul informativo, el mismo que Oritalk: no es un problema que haya que
+  // resolver (como 'on-hold' o 'cancelled'), es una espera. Cuando llegue la
+  // fecha WooCommerce lo pasa solo a 'active' y el alumno se activa sin que haya
+  // que tocar nada acá.
+  scheduled: {
+    label: 'Programada', countsAsActive: false, icon: '🗓️',
+    color: '#2563eb', bg: 'rgba(37,99,235,0.10)',
   },
   // Pago fallido o pausada: NO puede tomar clases. Ámbar oscuro para que se
   // distinga de un vistazo del ámbar de 'pending-cancel', que sí es válida.
   'on-hold': {
-    label: 'En espera', countsAsActive: false,
+    label: 'En espera', countsAsActive: false, icon: '⚠️',
     color: '#92400e', bg: 'rgba(146,64,14,0.12)',
   },
   cancelled: {
-    label: 'Cancelada', countsAsActive: false,
+    label: 'Cancelada', countsAsActive: false, icon: '❌',
     color: '#dc2626', bg: 'rgba(239,68,68,0.1)',
   },
   expired: {
-    label: 'Vencida', countsAsActive: false,
+    label: 'Vencida', countsAsActive: false, icon: '❌',
     color: '#dc2626', bg: 'rgba(239,68,68,0.1)',
   },
 };
 
 const UNKNOWN_STATUS: WooStatusMeta = {
-  label: 'Sin verificar', countsAsActive: false,
+  label: 'Sin verificar', countsAsActive: false, icon: '❓',
   color: 'var(--text-muted)', bg: 'var(--bg-surface-3)',
 };
 
 const NOT_FOUND_STATUS: WooStatusMeta = {
-  label: 'No encontrada', countsAsActive: false,
+  label: 'No encontrada', countsAsActive: false, icon: '❓',
   color: 'var(--text-muted)', bg: 'var(--bg-surface-3)',
 };
 
@@ -152,6 +179,17 @@ export function wooStatusMeta(status: string | null | undefined): WooStatusMeta 
 /** ¿Este estado de WooCommerce permite tomar clases? active y pending-cancel sí. */
 export function isActiveWooStatus(status: string | null | undefined): boolean {
   return wooStatusMeta(status).countsAsActive;
+}
+
+/**
+ * ¿La suscripción está PROGRAMADA y todavía no empezó?
+ *
+ * No es "inactiva" en el sentido de las otras: el alumno pagó y va a empezar. Lo
+ * que cambia es la acción del equipo (esperar, no recuperar), y por eso tiene
+ * badge propio, categoría propia en los filtros y su propio aviso al ingresar.
+ */
+export function isScheduledWooStatus(status: string | null | undefined): boolean {
+  return status === 'scheduled';
 }
 
 /** Estados que permiten tomar clases, en el orden en que se prefieren cuando un

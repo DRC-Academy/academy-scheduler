@@ -96,7 +96,7 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
   const [joinedKeys, setJoined] = useState<Set<string>>(new Set());
   const [checkingKey, setCheckingKey] = useState<string | null>(null);
   const [milestoneModal, setMilestoneModal] = useState<{ c: JoinableClass; classNumber: number } | null>(null);
-  const [subModal, setSubModal] = useState<{ c: JoinableClass; status: string; daysRemaining: number | null; endDate: string | null } | null>(null);
+  const [subModal, setSubModal] = useState<{ c: JoinableClass; status: string; daysRemaining: number | null; endDate: string | null; startDate: string | null } | null>(null);
   // Protocolo pendiente de leer. El ingreso YA está registrado cuando esto se
   // abre: lo único que falta es abrir el Meet, y lo hace el botón del modal.
   const [riskModal, setRiskModal] = useState<{ c: JoinableClass; briefing: RiskBriefing } | null>(null);
@@ -209,7 +209,7 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
         toast('✅ Ingreso registrado');
       }
     } else if (info.active === false) {
-      setSubModal({ c, status: info.status, daysRemaining: info.daysRemaining, endDate: info.endDate });
+      setSubModal({ c, status: info.status, daysRemaining: info.daysRemaining, endDate: info.endDate, startDate: info.subscriptionStartDate });
     } else {
       doJoin(c, 'error', false);
       toast('No se pudo verificar la suscripción, ingreso permitido', 3000);
@@ -422,7 +422,7 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
 
       {/* Disclaimer de suscripción inactiva */}
       {subModal && (() => {
-        const d = subDisclaimer(subModal.c.studentName, subModal.status, subModal.daysRemaining, subModal.endDate);
+        const d = subDisclaimer(subModal.c.studentName, subModal.status, subModal.daysRemaining, subModal.endDate, subModal.startDate);
         return (
           <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 85, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
             onClick={e => { if (e.target === e.currentTarget) setSubModal(null); }}>
@@ -476,15 +476,34 @@ export function normalizeUrl(url: string): string {
 
 function fmtDateDMY(iso: string | null | undefined): string {
   if (!iso) return '';
-  const d = new Date(iso);
+  // Una fecha sola ('YYYY-MM-DD', como subscriptionStartDate) la parsea el motor
+  // como medianoche UTC, y al leerla con getDate() en Argentina (UTC−3) sale el
+  // día ANTERIOR. Se le añade la hora para que se interprete como local: es una
+  // fecha de calendario, no un instante. Las ISO completas no se tocan.
+  const d = new Date(iso.length <= 10 ? `${iso}T00:00:00` : iso);
   if (isNaN(d.getTime())) return '';
   return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
 }
 
 /** Copy + paleta del disclaimer de suscripción, según el estado de WooCommerce. */
-export function subDisclaimer(name: string, status: string, daysRemaining: number | null, endDate: string | null):
+export function subDisclaimer(name: string, status: string, daysRemaining: number | null, endDate: string | null, startDate?: string | null):
   { title: string; body: string; accent: string; bg: string; soft: boolean } {
   switch (status) {
+    // Suscripción PROGRAMADA: pagada, pero empieza en el futuro. No es un
+    // problema de cobro ni una baja, así que no se pinta en rojo ni en ámbar: es
+    // el mismo azul informativo del badge. Aun así NO da acceso, y por eso pasa
+    // por este modal — lo que cambia es que la salida no es "recuperarlo", sino
+    // esperar a la fecha.
+    case 'scheduled': {
+      const desde = fmtDateDMY(startDate);
+      return {
+        title: '🗓️ Suscripción programada',
+        body: desde
+          ? `La suscripción de ${name} todavía no empezó: arranca el ${desde}. Hasta esa fecha no puede tomar clases.`
+          : `La suscripción de ${name} está programada y todavía no empezó. Hasta su fecha de inicio no puede tomar clases.`,
+        accent: '#2563eb', bg: 'rgba(37,99,235,0.06)', soft: true,
+      };
+    }
     case 'pending-cancel':
       if (daysRemaining != null && daysRemaining > 0) {
         return {
