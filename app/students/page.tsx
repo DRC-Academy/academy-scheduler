@@ -17,6 +17,13 @@ import { classifyFor, planBadgeStyle } from '@/lib/productUtils';
 import { isAssignableCell, withBaseState } from '@/lib/cells';
 import { checkSubscription, clearSubscriptionCache, subBadge, subCategory, type SubscriptionInfo, type SubCategory } from '@/lib/useSubscriptionStatus';
 import { isValidEmail } from '@/lib/validation';
+// Semáforo de retención y cuenta atrás del plan: MISMA fuente que la pestaña
+// "Próximos a cancelar" y que el email del cron. El aviso interno enlaza acá, así
+// que lo que ventas necesita para preparar el WhatsApp tiene que verse en la ficha.
+import { useStudentProfiles } from '@/lib/useStudentProfiles';
+import {
+  buildEndingPlans, profileLookup, retentionBadge, endingUrgency, longDateEs,
+} from '@/lib/endingPlans';
 import { CambiarProfesorModal } from '@/components/CambiarProfesorModal';
 import { AssignmentEmailModal } from '@/components/AssignmentEmailModal';
 import { Student, Grid, Assignment } from '@/types';
@@ -627,6 +634,27 @@ function StudentsContent() {
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
   const [visibleCount, setVisibleCount] = useState(50);
   const router = useRouter();
+  const { profiles } = useStudentProfiles();
+
+  // Enlace directo a un alumno: /students?q=<email o nombre>. Es a donde apunta
+  // el aviso interno de "Próximos a cancelar", porque /mis-alumnos/[id] es del
+  // profesor y quien recibe ese email es admin o setter.
+  //
+  // Se lee de `window` y no con useSearchParams a propósito: según los docs de
+  // esta versión de Next, una página estática que llama a useSearchParams desde
+  // un componente cliente TIENE que ir envuelta en <Suspense> o el build de
+  // producción falla ("Missing Suspense boundary with useSearchParams"), y en
+  // desarrollo el fallo no se ve. No vale la pena reestructurar la página por
+  // rellenar un buscador.
+  //
+  // El disable es deliberado: leer la URL es sincronizar con un sistema externo,
+  // que es exactamente para lo que existen los efectos. Corre una sola vez y no
+  // encadena renders (el valor no cambia después del montaje).
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search).get('q');
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (q?.trim()) setSearch(q.trim());
+  }, []);
 
   // Merge students from both sources: students table + assignments.
   // Una assignment ya representada por un alumno de la tabla (por id, email o
@@ -762,6 +790,30 @@ function StudentsContent() {
   function openWhatsApp(phone?: string) {
     const digits = (phone ?? '').replace(/\D/g, '');
     if (digits) window.open(`https://wa.me/${digits}`, '_blank');
+  }
+
+  // Semáforo de retención (progreso + riesgo de la ficha) y cuenta atrás del
+  // plan. Los dos salen de lib/endingPlans, que es lo que alimenta también la
+  // pestaña "Próximos a cancelar" y el email del cron: una sola definición de
+  // "cuántos días le quedan" para las tres.
+  const profileFor = useMemo(() => profileLookup(profiles), [profiles]);
+  const endingByStudent = useMemo(() => {
+    const rows = buildEndingPlans({
+      students: allStudents.map(s => ({
+        id: s.id, name: s.name, email: s.email,
+        productType: s.productType ?? null,
+        productName: s.productName ?? null,
+        plan: s.plan ?? null,
+        manualActiveUntil: s.manualActiveUntil ?? null,
+      })),
+      profiles, today,
+    });
+    return new Map(rows.map(r => [r.studentId, r]));
+  }, [allStudents, profiles, today]);
+
+  function endingFor(s: DisplayStudent): { endDate: string; style: ReturnType<typeof endingUrgency> } | null {
+    const p = endingByStudent.get(s.id);
+    return p ? { endDate: p.endDate, style: endingUrgency(p.daysLeft) } : null;
   }
 
   // Plan a mostrar: productName de WooCommerce (principal) → producto persistido
@@ -962,6 +1014,13 @@ function StudentsContent() {
                 const clsStyle = planBadgeStyle(cls.type);
                 const menuOpen = menuOpenId === s.id;
                 const hasPhone = !!s.phone?.trim();
+                // Semáforo de la ficha y cuenta atrás del plan. Los dos salen de
+                // la MISMA función que "Próximos a cancelar" y que el email del
+                // cron: si esta tarjeta calculara los días por su cuenta, podría
+                // decir 6 donde el aviso dijo 7.
+                const info = profileFor(s);
+                const retention = info ? retentionBadge(info) : null;
+                const ending = endingFor(s);
                 // Estado de acceso del alumno, para decidir qué ofrece el menú.
                 // La vigencia se mide con la MISMA regla que el servidor.
                 const oritalkOn = !!s.isOritalk && isUntilActive(s.oritalkUntil, today);
@@ -979,6 +1038,27 @@ function StudentsContent() {
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--text-primary)', wordBreak: 'break-word' }}>{s.name}</div>
                         <div style={{ fontSize: 12, color: 'var(--text-muted)', wordBreak: 'break-word' }}>{s.email || '—'}</div>
+                        {/* Progreso/riesgo y fin de plan: es la "ficha" que ve
+                            ventas. Admin y setter no pueden abrir
+                            /mis-alumnos/[id] (es del profesor), así que el aviso
+                            de "Próximos a cancelar" enlaza acá y lo que necesita
+                            para preparar el WhatsApp tiene que estar a la vista. */}
+                        {(retention || ending) && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+                            {retention && (
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '2px 9px', borderRadius: 12, fontSize: 11, fontWeight: 700, background: retention.bg, color: retention.color, whiteSpace: 'nowrap' }}>
+                                <span style={{ width: 6, height: 6, borderRadius: 999, background: retention.dot }} />
+                                {retention.label}
+                              </span>
+                            )}
+                            {ending && (
+                              <span title={`El plan termina el ${longDateEs(ending.endDate)}`}
+                                style={{ padding: '2px 9px', borderRadius: 12, fontSize: 11, fontWeight: 700, background: ending.style.bg, color: ending.style.color, whiteSpace: 'nowrap' }}>
+                                Termina en {ending.style.label}
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
                         {s.email && <div style={{ maxWidth: 200 }}>{renderSubBadge(s)}</div>}

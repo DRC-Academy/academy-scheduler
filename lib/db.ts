@@ -493,6 +493,10 @@ export async function dbGetStudents(): Promise<Student[]> {
     oritalkUntil:      row.oritalk_until ?? undefined,
     productType:       row.product_type ?? undefined,
     productName:       row.product_name ?? undefined,
+    // Pueden no existir si supabase-ending-plans.sql aún no se corrió: al ser
+    // `select('*')` vienen undefined y lib/endingPlans las trata como "sin avisar".
+    endingNoticeSentAt:  row.ending_notice_sent_at ?? undefined,
+    endingNoticeForDate: row.ending_notice_for_date ?? undefined,
     createdAt:         row.created_at,
   }));
 }

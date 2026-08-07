@@ -16,6 +16,11 @@ const ONE_TIME_PRODUCTS = [
   'intensivo pet',
   'intensivo general',
   'intensivo cae',
+  // "Curso intensivo de ingles - OFERTA - 5h semanales". Ninguno de los patrones
+  // de arriba lo cazaba (el match es por `includes`, y este no dice "intensivo
+  // general" ni "intensivo pet"), así que 8 alumnos con un intensivo estaban
+  // clasificados como suscripción mensual recurrente. Auditoría del 07/08/2026.
+  'curso intensivo de ingles',
   'empresas preparacion de examenes',
   'empresas ingles general',
   'empresas intensivos',

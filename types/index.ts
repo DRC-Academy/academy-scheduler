@@ -104,6 +104,11 @@ export interface Student {
   oritalkUntil?: string;      // 'YYYY-MM-DD' — fin del acceso Oritalk
   productType?: 'subscription' | 'one_time'; // tipo de producto WooCommerce
   productName?: string;       // nombre real del producto en WooCommerce
+  // Aviso interno de fin de plan ("Próximos a cancelar"). Cuenta como enviado
+  // solo si `endingNoticeForDate` coincide con `manualActiveUntil`: al renovar,
+  // deja de coincidir y el alumno vuelve a poder avisarse. Ver lib/endingPlans.
+  endingNoticeSentAt?: string;   // ISO
+  endingNoticeForDate?: string;  // 'YYYY-MM-DD' — fin del ciclo por el que se avisó
   createdAt: string;
 }
 

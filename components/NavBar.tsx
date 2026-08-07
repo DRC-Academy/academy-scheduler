@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/AuthContext';
 import { NotificationBell } from '@/components/NotificationBell';
-import { Search, Users, Calendar, CalendarDays, Wallet, Settings, Menu, X, GraduationCap, CalendarCheck } from 'lucide-react';
+import { Search, Users, Calendar, CalendarDays, Wallet, Settings, Menu, X, GraduationCap, CalendarCheck, CalendarClock } from 'lucide-react';
 import { Button } from '@/components/ui';
 import { PresentationEmailReminder } from '@/components/PresentationEmailReminder';
 
@@ -13,6 +13,9 @@ import { PresentationEmailReminder } from '@/components/PresentationEmailReminde
 const navItems = [
   { href: '/setter',            label: 'Buscar',            icon: Search,      roles: ['setter', 'admin'] },
   { href: '/students',          label: 'Alumnos',           icon: Users,       roles: ['setter', 'admin'] },
+  // Retención: alumnos a los que se les acaba el plan. Ventas y admin, no el
+  // profesor — la lista es comercial y cruza alumnos de todos los profesores.
+  { href: '/proximos-cancelar', label: 'Próximos a cancelar', icon: CalendarClock, roles: ['setter', 'admin'] },
   { href: '/teacher',           label: 'Calendario',        icon: Calendar,    roles: ['teacher'] },
   // Vista OPERATIVA de la semana (clases del día a día, subida de transcripts).
   // No confundir con /mis-clases, que es la de pago y se muestra como "Finanzas".

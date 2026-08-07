@@ -16,6 +16,7 @@ import {
 } from '@/lib/interventions';
 import type { RiskSignal } from '@/lib/aiTypes';
 import { cleanAiText } from '@/lib/textCleanup';
+import { longDateEs, retentionLine, type EndingPlan } from '@/lib/endingPlans';
 
 const FROM = 'DRC Academy <notificaciones@drcacademy.com>';
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '') || 'https://academy-scheduler-aqpt.vercel.app';
@@ -622,4 +623,77 @@ export async function sendCircularBatch(
     console.error('[EMAIL] circular: excepción en el batch:', err);
     return 0;
   }
+}
+
+// ═══ J) Fin de plan: aviso INTERNO al equipo de ventas ════════════════════════
+//
+// Un SOLO email por corrida con todos los alumnos que entran en la ventana, no
+// uno por alumno. Son pocos (mirando las fechas reales, uno o dos por semana) y
+// varios correos sueltos el mismo día se pisan en la bandeja: la lista junta se
+// lee de un vistazo y se prioriza mejor, que es justo lo que tiene que hacer
+// ventas con esto.
+//
+// No lleva teléfono a propósito: `students.phone` está vacío en los 184 alumnos
+// y el que devuelve WooCommerce solo llega para las suscripciones, nunca para
+// los intensivos, que son la mayoría de esta lista. Prometer una columna que
+// saldría en blanco es peor que no ponerla.
+
+/** Enlace a la ficha del alumno DENTRO de "Alumnos", que es la que admin y
+ *  setter pueden abrir (/mis-alumnos es del profesor). El buscador de la página
+ *  deja al alumno solo en pantalla, con su progreso y su riesgo a la vista. */
+export function studentFichaUrl(plan: Pick<EndingPlan, 'studentEmail' | 'studentName'>): string {
+  const q = plan.studentEmail || plan.studentName;
+  return `${APP_URL}/students?q=${encodeURIComponent(q)}`;
+}
+
+function endingPlanBlock(plan: EndingPlan): string {
+  const dias = plan.daysLeft === 0 ? 'hoy'
+    : plan.daysLeft === 1 ? 'en 1 día'
+    : `en ${plan.daysLeft} días`;
+
+  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:0 0 20px; border-left:3px solid #FFC400; background:#F7F7F5; border-radius:6px;">
+  <tr><td style="padding:14px 16px;">
+    <p style="margin:0 0 10px; font-size:15px;">
+      <strong>${esc(plan.studentName)}</strong> termina su plan ${esc(dias)} (${esc(longDateEs(plan.endDate))}).
+    </p>
+${dataRows([
+  ['Tipo de plan', plan.planLabel],
+  ['Cómo viene',   retentionLine(plan)],
+])}
+    <a href="${esc(studentFichaUrl(plan))}" target="_blank" style="font-size:14px; font-weight:600; color:#1E9E3A; text-decoration:none;">Ver la ficha de ${esc(plan.studentName.split(' ')[0])} &rsaquo;</a>
+  </td></tr>
+</table>`;
+}
+
+/**
+ * Aviso interno de alumnos próximos a terminar su plan. Devuelve true solo si
+ * Resend lo aceptó: el cron NO marca el aviso como enviado si esto da false, así
+ * que un fallo de email hace que se reintente mañana en vez de perderse.
+ */
+export async function sendEndingPlansDigest(plans: EndingPlan[]): Promise<boolean> {
+  if (plans.length === 0) return false;
+
+  const subject = plans.length === 1
+    ? `Alumno próximo a terminar su plan: ${plans[0].studentName}`
+    : `${plans.length} alumnos próximos a terminar su plan`;
+
+  const intro = plans.length === 1
+    ? p('Este alumno termina su plan esta semana. Es el momento de ofrecerle continuidad.')
+    : p(`Estos <strong>${plans.length} alumnos</strong> terminan su plan esta semana. Están ordenados por urgencia: el primero es el que menos tiempo tiene.`);
+
+  const cierre = p(
+    'Contacta por WhatsApp de forma personalizada usando lo que muestra su ficha (qué ha mejorado, en qué sigue flojo) ' +
+    'para proponerle plan de mantenimiento (1h o 2h semanales) o un nuevo intensivo. ' +
+    '<strong>Recuerda: sin suscripción activa no podrá recuperar clases pendientes.</strong>',
+  );
+
+  const html = baseEmailTemplate(
+    intro + plans.map(endingPlanBlock).join('') + cierre +
+    ctaButton('Ver Próximos a cancelar', `${APP_URL}/proximos-cancelar`),
+    plans.length === 1
+      ? `${plans[0].studentName} termina su plan en ${plans[0].daysLeft} días`
+      : `${plans.length} alumnos terminan su plan esta semana`,
+  );
+
+  return sendToAddress('sendEndingPlansDigest', ADMIN_EMAIL, subject, html);
 }
