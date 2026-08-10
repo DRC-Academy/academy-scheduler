@@ -27,6 +27,9 @@ import {
 } from '@/lib/endingPlans';
 import { madridToday } from '@/lib/subscriptionAccess';
 import { sendEndingPlansDigest } from '@/lib/emailNotifications';
+import {
+  sendEndingPlansToZapier, buildEndingPlanPayload, samplePlan,
+} from '@/lib/endingPlansWebhook';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -36,6 +39,7 @@ interface StudentDbRow {
   id: string;
   name: string;
   email: string | null;
+  phone: string | null;
   product_type: string | null;
   product_name: string | null;
   plan: string | null;
@@ -44,12 +48,14 @@ interface StudentDbRow {
   ending_notice_for_date: string | null;
 }
 
+// `phone` va para el webhook a Zapier → Slack: ventas necesita el número a mano
+// para escribirle al alumno sin ir a buscarlo a la ficha.
 const STUDENT_COLS =
-  'id, name, email, product_type, product_name, plan, manual_active_until, ending_notice_sent_at, ending_notice_for_date';
+  'id, name, email, phone, product_type, product_name, plan, manual_active_until, ending_notice_sent_at, ending_notice_for_date';
 // Sin las columnas del aviso: si supabase-ending-plans.sql todavía no se corrió,
 // pedirlas hace fallar la consulta ENTERA (42703) y el cron no avisaría de nadie.
 const STUDENT_COLS_BASE =
-  'id, name, email, product_type, product_name, plan, manual_active_until';
+  'id, name, email, phone, product_type, product_name, plan, manual_active_until';
 
 export async function GET(request: Request): Promise<Response> {
   // Mismo guardián que el resto de los crons: sin CRON_SECRET configurado no se
@@ -64,6 +70,11 @@ export async function GET(request: Request): Promise<Response> {
   }
 
   const today = madridToday();
+  // MODO PRUEBA (?test=1). Dispara SOLO el webhook a Zapier y devuelve el JSON
+  // exacto que se envió, para poder verificarlo en Zapier sin esperar al cron de
+  // las 22:00. No manda el email interno y NO marca a nadie como avisado, así
+  // que se puede repetir las veces que haga falta sin gastar el aviso real.
+  const test = new URL(request.url).searchParams.get('test') === '1';
 
   // 1) Alumnos con fecha de fin. El filtro grueso lo hace la base (no traer 184
   //    filas para descartar 155); la ventana exacta la decide lib/endingPlans.
@@ -97,6 +108,7 @@ export async function GET(request: Request): Promise<Response> {
     id: r.id,
     name: r.name,
     email: r.email,
+    phone: r.phone,
     productType: (r.product_type as 'subscription' | 'one_time' | null) ?? null,
     productName: r.product_name,
     plan: r.plan,
@@ -112,6 +124,25 @@ export async function GET(request: Request): Promise<Response> {
   // 3) Quién entra en la ventana de aviso y todavía no fue avisado.
   const plans = buildEndingPlans({ students, profiles, today, windowDays: ENDING_NOTICE_DAYS });
   const pendientes = plansNeedingNotice(plans, ENDING_NOTICE_DAYS);
+
+  // 3-bis) PRUEBA: un solo POST a Zapier y se corta acá. Se usa un alumno real de
+  // la ventana si lo hay (para ver datos de verdad en Slack) y, si no hay
+  // ninguno, uno de ejemplo marcado como [PRUEBA].
+  if (test) {
+    const plan = pendientes[0] ?? plans[0] ?? samplePlan();
+    const payload = buildEndingPlanPayload(plan);
+    const envio = await sendEndingPlansToZapier([plan]);
+    console.log(`[cron ending-plans] PRUEBA con "${plan.studentName}": ${JSON.stringify(envio)}`);
+    return Response.json({
+      ok: envio.failed === 0,
+      modo: 'prueba',
+      aviso: 'No se envió el email interno ni se marcó a nadie como avisado.',
+      webhookConfigurado: !envio.skipped,
+      alumnoUsado: plan.studentId === 'test' ? 'ejemplo (no hay nadie en la ventana)' : 'real, de la ventana de aviso',
+      payloadEnviado: payload,
+      resultado: envio,
+    });
+  }
 
   if (migracionPendiente) {
     // Sin las columnas no hay anti-duplicado: enviar significaría repetir el
@@ -141,9 +172,16 @@ export async function GET(request: Request): Promise<Response> {
 
   const marcados = await markNotified(pendientes);
 
+  // 5) Webhook a Zapier → Slack. Va AL FINAL y es aditivo: el email interno ya
+  //    salió y el ciclo ya está marcado, así que nada de lo que pase acá puede
+  //    afectar al aviso, que es el canal crítico. `sendEndingPlansToZapier` no
+  //    lanza nunca; sin la variable de entorno configurada devuelve `skipped`.
+  const zapier = await sendEndingPlansToZapier(pendientes);
+
   console.log(
     `[cron ending-plans] ${today}: avisado de ${pendientes.length} alumno(s) ` +
-    `(${pendientes.map(p => `${p.studentName} en ${p.daysLeft}d`).join(', ')}). Marcados: ${marcados}.`,
+    `(${pendientes.map(p => `${p.studentName} en ${p.daysLeft}d`).join(', ')}). Marcados: ${marcados}. ` +
+    `Zapier: ${zapier.skipped ? 'sin configurar' : `${zapier.sent} enviados, ${zapier.failed} fallidos`}.`,
   );
 
   return Response.json({
@@ -152,6 +190,7 @@ export async function GET(request: Request): Promise<Response> {
     enVentana: plans.length,
     avisados: pendientes.length,
     marcados,
+    zapier,
     alumnos: pendientes.map(p => ({ alumno: p.studentName, dias: p.daysLeft, fin: p.endDate })),
   });
 }

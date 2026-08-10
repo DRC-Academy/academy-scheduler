@@ -56,6 +56,8 @@ export interface EndingStudentRow {
   id: string;
   name: string;
   email?: string | null;
+  /** Para el WhatsApp de ventas y el webhook a Zapier. Opcional: hay alumnos sin él. */
+  phone?: string | null;
   productType?: 'subscription' | 'one_time' | null;
   productName?: string | null;
   plan?: string | null;
@@ -80,6 +82,8 @@ export interface EndingPlan {
   studentId: string;
   studentName: string;
   studentEmail: string;
+  /** '' si el alumno no tiene teléfono cargado. */
+  studentPhone: string;
   /** 'YYYY-MM-DD' — último día de acceso INCLUIDO. */
   endDate: string;
   /** Días hasta el fin. 0 = termina hoy. Nunca negativo (los vencidos se excluyen). */
@@ -224,6 +228,7 @@ export function buildEndingPlans(args: {
       studentId:     s.id,
       studentName:   s.name,
       studentEmail:  (s.email ?? '').trim(),
+      studentPhone:  (s.phone ?? '').trim(),
       endDate,
       daysLeft,
       planKind:      kind,
