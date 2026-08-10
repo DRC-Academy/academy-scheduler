@@ -2473,11 +2473,10 @@ label {
 
 /* ── Header interno de la pantalla ─────────────────────────────────────────
    NO es sticky: scrollea con la página, igual que el rail de filtros. El único
-   elemento fijo sigue siendo el header global .tnav, que no se toca. Se conserva
-   el borde inferior como separación con el cuerpo. */
+   elemento fijo sigue siendo el header global .tnav, que no se toca. Sin borde
+   inferior: la separación con el cuerpo la da el espacio, no una raya. */
 .stx-head {
   background: var(--bg-base);
-  border-bottom: 1px solid var(--border);
 }
 .stx-head-inner { max-width: 1180px; margin: 0 auto; padding: 16px 16px 0; }
 .stx-head-top {
