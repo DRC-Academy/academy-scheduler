@@ -25,6 +25,13 @@ const PAGOS_EMAIL = 'pagos@drcacademy.com';
 // Configurable por entorno; si no está, cae en la dirección de pagos de DRC.
 const ADMIN_EMAIL = process.env.ADMIN_NOTIFICATION_EMAIL?.trim() || PAGOS_EMAIL;
 
+// Destinatario del aviso de "Próximos a cancelar". Tiene el suyo propio y NO
+// comparte ADMIN_EMAIL a propósito: ese va a pagos@ y alimenta además las
+// alertas de emails de presentación, que las mira otra persona. Antes iban los
+// tres al mismo buzón, así que cambiar uno cambiaba los otros dos.
+const ENDING_PLANS_EMAIL =
+  process.env.ENDING_PLANS_NOTIFICATION_EMAIL?.trim() || 'info@drcacademy.com';
+
 // ── Preferencias ──────────────────────────────────────────────────────────────
 export type EmailPrefKey =
   | 'new_student' | 'form_completed' | 'presentation_reminder'
@@ -695,5 +702,5 @@ export async function sendEndingPlansDigest(plans: EndingPlan[]): Promise<boolea
       : `${plans.length} alumnos terminan su plan esta semana`,
   );
 
-  return sendToAddress('sendEndingPlansDigest', ADMIN_EMAIL, subject, html);
+  return sendToAddress('sendEndingPlansDigest', ENDING_PLANS_EMAIL, subject, html);
 }
