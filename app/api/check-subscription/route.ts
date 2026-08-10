@@ -4,7 +4,10 @@
 // ante un error de conexión devuelve { active: null } para que el profesor decida.
 
 import { supabase } from '@/lib/supabase';
-import { parseHoursFromText, parseHoursFromMeta, detectLevel } from '@/lib/productUtils';
+import {
+  parseHoursFromText, parseHoursFromMeta, detectLevel,
+  detectCompanyPlan, resolveCompanyPlanUpdate, isCompanyProduct,
+} from '@/lib/productUtils';
 // La regla de "activo" (Woo OR manual OR Oritalk) vive en un módulo puro para
 // que exista una sola definición. Ver lib/subscriptionAccess.ts.
 import { accessOverrideOf, isActiveWooStatus, madridToday } from '@/lib/subscriptionAccess';
@@ -45,6 +48,12 @@ interface SubResult {
   hoursFromApi: number | null;    // horas detectadas desde WooCommerce
   manualActiveUntil: string | null;
   oritalkUntil: string | null;    // fecha de fin de Oritalk (null si no es de Oritalk)
+  // Plan de EMPRESA detectado (pago único con duración en la variación). El
+  // acceso viaja igual en `manualActiveUntil`: esto solo dice que la fecha la
+  // calculó el sistema, para que el badge no lo confunda con una activación
+  // puesta a dedo. Ver lib/productUtils.detectCompanyPlan.
+  companyPlanMonths: number | null;
+  companyPlanStart: string | null;
   metaData: any[];                // meta_data crudo del line_item
   phone: string | null;
   billingName: string | null;            // nombre del cliente (billing) para autocompletar
@@ -73,6 +82,7 @@ const ERROR_RESULT: SubResult = {
   active: null, status: 'error', endDate: null, daysRemaining: null,
   planName: null, productName: null, productVariation: null, productFullName: null,
   productType: null, hoursFromApi: null, manualActiveUntil: null, oritalkUntil: null,
+  companyPlanMonths: null, companyPlanStart: null,
   metaData: [], phone: null,
   billingName: null, subscriptionStartDate: null, detectedLevel: null,
 };
@@ -221,6 +231,27 @@ async function fetchSubStatus(c: { base: string; ck: string; cs: string }, email
   };
 }
 
+/**
+ * Guarda el plan de empresa detectado. Un `until` no nulo además ACTIVA al alumno.
+ *
+ * El reintento importa: si `supabase-company-plans.sql` todavía no se corrió, las
+ * columnas `company_plan_*` no existen y el UPDATE entero falla — incluida la
+ * activación, que es lo único que no puede perderse. En ese caso se reescribe
+ * solo `manual_active_until` y el alumno queda activo igual, sin el detalle del
+ * plan en el badge.
+ */
+async function persistCompanyPlan(
+  studentId: string, months: number | null, start: string | null, until: string | null,
+): Promise<void> {
+  const updates: Record<string, unknown> = { company_plan_months: months, company_plan_start: start };
+  if (until) updates.manual_active_until = until;
+  const { error } = await supabase.from('students').update(updates).eq('id', studentId);
+  if (error) {
+    console.error('[check-subscription] no se pudo guardar el plan de empresa:', error.message);
+    if (until) await supabase.from('students').update({ manual_active_until: until }).eq('id', studentId);
+  }
+}
+
 export async function GET(request: Request): Promise<Response> {
   const email = new URL(request.url).searchParams.get('email')?.trim().toLowerCase();
   if (!email) return Response.json({ ...ERROR_RESULT, status: 'error' }, { status: 400 });
@@ -230,6 +261,7 @@ export async function GET(request: Request): Promise<Response> {
     id?: string; manual_active_until?: string | null;
     is_oritalk?: boolean | null; oritalk_until?: string | null;
     product_type?: string | null; product_name?: string | null; plan?: string | null;
+    company_plan_months?: number | null; company_plan_start?: string | null;
   } | null = null;
   try {
     // select('*') para tolerar que product_type/product_name/is_oritalk aún no
@@ -244,9 +276,15 @@ export async function GET(request: Request): Promise<Response> {
 
   const today = madridToday();
   // Regla única de acceso: Oritalk vigente > activación manual vigente > Woo.
-  const override = accessOverrideOf(student, today);
-  const manualUntil = student?.manual_active_until ?? null;
+  // `override` y `manualUntil` no son constantes porque la detección del plan de
+  // empresa (más abajo) puede activar al alumno DENTRO de esta misma petición: si
+  // se quedaran con el valor de la base, la respuesta diría "sin activar" hasta
+  // la siguiente recarga aunque acabáramos de darle acceso.
+  let override = accessOverrideOf(student, today);
+  let manualUntil = student?.manual_active_until ?? null;
   const oritalkUntil = student?.is_oritalk ? (student.oritalk_until ?? null) : null;
+  let companyPlanMonths = student?.company_plan_months ?? null;
+  let companyPlanStart  = student?.company_plan_start ?? null;
 
   const creds = wcCreds();
   // ?full=1 → fuerza traer la info rica del pedido (variación + horas + meta),
@@ -279,6 +317,7 @@ export async function GET(request: Request): Promise<Response> {
       productType:     (student?.product_type as ProductType) ?? null,
       manualActiveUntil: manualUntil,
       oritalkUntil:      override.until,
+      companyPlanMonths, companyPlanStart,
     } satisfies SubResult);
   }
 
@@ -301,9 +340,10 @@ export async function GET(request: Request): Promise<Response> {
         daysRemaining: daysFromNow(end),
         manualActiveUntil: manualUntil,
         oritalkUntil,
+        companyPlanMonths, companyPlanStart,
       } satisfies SubResult);
     }
-    return Response.json({ ...ERROR_RESULT, manualActiveUntil: manualUntil ?? null, oritalkUntil });
+    return Response.json({ ...ERROR_RESULT, manualActiveUntil: manualUntil ?? null, oritalkUntil, companyPlanMonths, companyPlanStart });
   };
 
   if (full || !productType) {
@@ -327,6 +367,50 @@ export async function GET(request: Request): Promise<Response> {
     }
   }
 
+  // ── PLAN DE EMPRESA ────────────────────────────────────────────────────────
+  //
+  // Los productos "Empresas *" son de pago único y llevan la duración en la
+  // variación ("B1 · 1h semanal · 6 Meses"). Woo no vence un pago único, así que
+  // la fecha de fin la calculamos nosotros desde la fecha del pedido y la
+  // escribimos en `manual_active_until`, que es lo que ya lee la regla de acceso
+  // y la pestaña "Próximos a cancelar".
+  //
+  // Va acá y no en un endpoint aparte porque el pedido YA está traído: detectar
+  // el plan no cuesta ni una llamada más. Se evalúa también cuando `rich` viene
+  // del cache — es cálculo puro sobre datos que ya tenemos.
+  if (rich && student?.id) {
+    const plan = detectCompanyPlan({
+      productName: rich.name, productVariation: rich.variation, orderDate: rich.orderDate,
+    });
+    if (plan) {
+      // "Nunca recorta": la automática no puede quitarle días a un alumno que
+      // tenga una fecha vigente puesta a mano. Ver resolveCompanyPlanUpdate.
+      const decision = resolveCompanyPlanUpdate(plan.until, manualUntil, today);
+      companyPlanMonths = plan.months;
+      companyPlanStart  = plan.start;
+      if (decision.writes) {
+        manualUntil = decision.until;
+        override = accessOverrideOf({ ...student, manual_active_until: decision.until }, today);
+      }
+      // Solo se escribe si algo cambia. Sin esto, cada verificación de un alumno
+      // de empresa reescribiría las mismas tres columnas: el pedido se cachea 5
+      // minutos, pero el cálculo corre igual en cada petición.
+      const yaGuardado =
+        (student.company_plan_months ?? null) === plan.months &&
+        (student.company_plan_start ?? null) === plan.start;
+      if (decision.writes || !yaGuardado) {
+        await persistCompanyPlan(student.id, plan.months, plan.start, decision.writes ? decision.until : null);
+      }
+    } else if (rich.name && !isCompanyProduct(rich.name) && companyPlanMonths != null) {
+      // El alumno cambió a un producto que no es de empresa. Se limpia la marca
+      // para que el badge no siga anunciando un plan que ya no existe. NO se toca
+      // `manual_active_until`: quitarle acceso no es cosa de esta detección.
+      companyPlanMonths = null;
+      companyPlanStart  = null;
+      await persistCompanyPlan(student.id, null, null, null);
+    }
+  }
+
   if (rich?.name) { productName = rich.name; productType = rich.productType; }
   const productVariation = rich?.variation ?? null;
   const productFullName  = rich?.fullName ?? productName;
@@ -341,7 +425,8 @@ export async function GET(request: Request): Promise<Response> {
   const make = (o: Partial<SubResult>): SubResult => ({
     active: false, status: 'error', endDate: null, daysRemaining: null,
     planName: productName, productName, productVariation, productFullName,
-    productType, hoursFromApi, manualActiveUntil: null, oritalkUntil, metaData, phone: null,
+    productType, hoursFromApi, manualActiveUntil: null, oritalkUntil,
+    companyPlanMonths, companyPlanStart, metaData, phone: null,
     billingName, subscriptionStartDate: orderDate, detectedLevel,
     ...o,
   });

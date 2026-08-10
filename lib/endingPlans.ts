@@ -26,6 +26,11 @@
 //     admin a mano, y así está en los datos: 24 de los 25 alumnos one_time
 //     tienen `manual_active_until`.
 //
+//   · Los PLANES DE EMPRESA (ago/2026) entran por la misma puerta y por eso no
+//     hubo que tocar nada acá: su fecha de fin la calcula el sistema (duración de
+//     la variación + fecha del pedido) pero se escribe en el MISMO
+//     `manual_active_until`. Lo único propio es la etiqueta — ver planLabelOf.
+//
 // Efecto lateral bueno: como Woo no aporta fechas, un alumno con suscripción
 // mensual recurrente NO PUEDE colarse acá. El requisito de no molestar a quien se
 // renueva solo se cumple por construcción, no por un filtro que haya que recordar.
@@ -33,7 +38,7 @@
 // Oritalk queda fuera a propósito (decisión del 07/08/2026: "solo los activados
 // manualmente"). Si algún día entra, es añadir su fecha a `endDateOf`.
 
-import { parseHoursFromText } from '@/lib/productUtils';
+import { parseHoursFromText, isCompanyProduct, baseProductName } from '@/lib/productUtils';
 import { madridToday } from '@/lib/subscriptionAccess';
 
 /** Ventana de la PESTAÑA: cuántos días hacia adelante se listan. */
@@ -55,6 +60,8 @@ export interface EndingStudentRow {
   productName?: string | null;
   plan?: string | null;
   manualActiveUntil?: string | null;
+  /** Duración del plan de EMPRESA, si lo es. Solo cambia la etiqueta, no la fecha. */
+  companyPlanMonths?: number | null;
   endingNoticeSentAt?: string | null;
   endingNoticeForDate?: string | null;
 }
@@ -77,7 +84,7 @@ export interface EndingPlan {
   endDate: string;
   /** Días hasta el fin. 0 = termina hoy. Nunca negativo (los vencidos se excluyen). */
   daysLeft: number;
-  planKind: 'intensivo' | 'manual';
+  planKind: 'empresa' | 'intensivo' | 'manual';
   /** "Intensivo PET · 4h/sem" — lo que ve ventas en la columna TIPO DE PLAN. */
   planLabel: string;
   hours: number | null;
@@ -123,15 +130,28 @@ export function noticeSentForCycle(s: EndingStudentRow): boolean {
   return (s.endingNoticeForDate ?? '').slice(0, 10) === end;
 }
 
-/** Tipo de plan legible. El intensivo se reconoce por `product_type` one_time. */
-function planLabelOf(s: EndingStudentRow): { kind: 'intensivo' | 'manual'; label: string; hours: number | null } {
+/**
+ * Tipo de plan legible. El intensivo se reconoce por `product_type` one_time.
+ *
+ * El plan de EMPRESA va aparte aunque también sea one_time: su fecha de fin la
+ * calcula el sistema desde la duración comprada, no la puso nadie a mano, y quien
+ * mira la pestaña necesita saberlo antes de llamar al alumno. Se reconoce por
+ * `companyPlanMonths` y, si la migración todavía no corrió, por el nombre del
+ * producto — así la etiqueta ya es correcta desde el primer despliegue.
+ */
+function planLabelOf(s: EndingStudentRow): { kind: EndingPlan['planKind']; label: string; hours: number | null } {
   const raw = (s.productName ?? s.plan ?? '').trim();
   // El nombre de WooCommerce viene con la variación pegada detrás ("Intensivo
   // PET — 17 pm · Lunes, martes · 06/08/2026"): para la columna sobra todo lo
   // que va tras el guion largo, que es horario y no plan.
-  const base = raw.split('—')[0].trim() || raw;
+  const base = baseProductName(raw);
   const hours = parseHoursFromText(raw);
-  const kind: 'intensivo' | 'manual' = s.productType === 'one_time' ? 'intensivo' : 'manual';
+
+  if (s.companyPlanMonths != null || isCompanyProduct(base)) {
+    const meses = s.companyPlanMonths != null ? ` · ${s.companyPlanMonths} meses` : '';
+    return { kind: 'empresa', label: `${base || 'Plan de empresa'}${meses}`, hours };
+  }
+  const kind = s.productType === 'one_time' ? 'intensivo' : 'manual';
   const label = base || (kind === 'intensivo' ? 'Intensivo' : 'Activación manual');
   return { kind, label, hours };
 }

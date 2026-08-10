@@ -2756,6 +2756,150 @@ function StartDateSyncPanel() {
   );
 }
 
+// ── Planes de EMPRESA: activación automática por duración ────────────────────
+//
+// Los productos "Empresas *" son de pago único y llevan la duración contratada en
+// la variación ("B1 · 1h semanal · 6 Meses"). WooCommerce no vence un pago único,
+// así que la fecha de fin la calcula el sistema (pedido + N meses) y la escribe en
+// `manual_active_until`, el mismo campo que ya usaban las activaciones a mano.
+//
+// Siempre en dos pasos: primero la SIMULACIÓN (GET, no escribe) para ver la tabla,
+// después aplicar (POST). Esto toca el acceso a clase de personas reales.
+type CompanyRowAction = 'set' | 'extend' | 'keep_manual' | 'unchanged' | 'not_company' | 'no_months' | 'no_order' | 'error';
+type CompanyRow = {
+  id: string; name: string; email: string;
+  product: string | null; variation: string | null;
+  months: number | null; start: string | null;
+  computedUntil: string | null; currentUntil: string | null; finalUntil: string | null;
+  result: CompanyRowAction; reason: string;
+};
+type CompanyResult = {
+  applied: boolean; today: string; scanned: number;
+  activated: number; extended: number; keptManual: number; unchanged: number;
+  skipped: number; errors: number; rows: CompanyRow[];
+};
+
+// Cómo se lee cada resultado en la tabla. El color separa lo que CAMBIA (verde)
+// de lo que se deja como estaba (neutro) y de lo que falló (rojo).
+const COMPANY_ACTION_META: Record<CompanyRowAction, { label: string; color: string; bg: string }> = {
+  set:         { label: 'Activado',        color: '#1f7a3d', bg: 'rgba(30,158,58,0.12)' },
+  extend:      { label: 'Extendido',       color: '#1f7a3d', bg: 'rgba(30,158,58,0.12)' },
+  keep_manual: { label: 'Margen manual',   color: '#9a6516', bg: 'rgba(255,196,0,0.18)' },
+  unchanged:   { label: 'Ya estaba bien',  color: 'var(--text-muted)', bg: 'var(--bg-surface-3)' },
+  not_company: { label: 'No es empresa',   color: 'var(--text-muted)', bg: 'var(--bg-surface-3)' },
+  no_months:   { label: 'Sin duración',    color: 'var(--text-muted)', bg: 'var(--bg-surface-3)' },
+  no_order:    { label: 'Pedido sin fecha', color: 'var(--text-muted)', bg: 'var(--bg-surface-3)' },
+  error:       { label: 'Error',           color: '#c73a28', bg: 'rgba(239,68,68,0.10)' },
+};
+
+function CompanyPlanSyncPanel() {
+  const { reloadAll } = useTeachers();
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState<CompanyResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function run(method: 'GET' | 'POST') {
+    setRunning(true); setError(null);
+    try {
+      const res = await fetch('/api/admin/sync-company-plans', { method });
+      const raw = await res.text();
+      let data: Record<string, unknown> = {};
+      try { data = raw ? JSON.parse(raw) : {}; } catch { /* respuesta sin JSON */ }
+      if (!res.ok) {
+        console.error('[sync-company-plans]', res.status, raw.slice(0, 400));
+        throw new Error(typeof data.error === 'string' ? data.error : `Error ${res.status}`);
+      }
+      setResult(data as unknown as CompanyResult);
+      if (method === 'POST') await reloadAll();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo ejecutar la sincronización.');
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  const changing = result ? result.activated + result.extended : 0;
+
+  return (
+    <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
+      <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>Planes de empresa</div>
+      <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', marginTop: 3, lineHeight: 1.5 }}>
+        Lee la duración contratada de la variación (&quot;6 Meses&quot;) y activa al alumno hasta la fecha de fin.
+        Nunca acorta una fecha vigente puesta a mano.
+      </div>
+
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 14 }}>
+        <button onClick={() => run('GET')} disabled={running}
+          style={{ padding: '10px 16px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: running ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
+          {running ? 'Calculando...' : 'Simular (no escribe nada)'}
+        </button>
+        <button onClick={() => run('POST')} disabled={running}
+          style={{ padding: '10px 16px', borderRadius: 8, border: 'none', background: running ? '#8fc7a0' : '#1E9E3A', color: 'white', cursor: running ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+          {running ? 'Aplicando...' : 'Aplicar fechas de fin'}
+        </button>
+      </div>
+
+      {error && <div style={{ marginTop: 12, fontSize: 13, color: '#c73a28', lineHeight: 1.5 }}>{error}</div>}
+
+      {result && (
+        <div style={{ marginTop: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: result.applied ? '#1f7a3d' : 'var(--text-secondary)', lineHeight: 1.6 }}>
+            {result.applied ? '✅ Aplicado' : '🔍 Simulación'} · {result.scanned} alumno{result.scanned !== 1 ? 's' : ''} de empresa ·{' '}
+            {result.activated} activado{result.activated !== 1 ? 's' : ''} · {result.extended} extendido{result.extended !== 1 ? 's' : ''} ·{' '}
+            {result.keptManual} con margen manual · {result.unchanged} sin cambios
+            {result.errors > 0 && <> · <span style={{ color: '#c73a28' }}>{result.errors} error{result.errors !== 1 ? 'es' : ''}</span></>}
+            {!result.applied && changing > 0 && <> — nada escrito todavía.</>}
+          </div>
+
+          <div style={{ marginTop: 12, overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5, minWidth: 720 }}>
+              <thead>
+                <tr style={{ textAlign: 'left', color: 'var(--text-muted)' }}>
+                  <th style={{ padding: '6px 8px', fontWeight: 600 }}>Alumno</th>
+                  <th style={{ padding: '6px 8px', fontWeight: 600 }}>Duración</th>
+                  <th style={{ padding: '6px 8px', fontWeight: 600 }}>Compra</th>
+                  <th style={{ padding: '6px 8px', fontWeight: 600 }}>Fin calculado</th>
+                  <th style={{ padding: '6px 8px', fontWeight: 600 }}>Antes</th>
+                  <th style={{ padding: '6px 8px', fontWeight: 600 }}>Queda</th>
+                  <th style={{ padding: '6px 8px', fontWeight: 600 }}>Resultado</th>
+                </tr>
+              </thead>
+              <tbody>
+                {result.rows.map(r => {
+                  const meta = COMPANY_ACTION_META[r.result] ?? COMPANY_ACTION_META.error;
+                  return (
+                    <tr key={r.id} style={{ borderTop: '1px solid var(--border)' }}>
+                      <td style={{ padding: '7px 8px', color: 'var(--text-primary)', fontWeight: 600 }}>
+                        {r.name}
+                        <div style={{ fontWeight: 400, fontSize: 11, color: 'var(--text-muted)' }}>{r.product ?? '—'}</div>
+                      </td>
+                      <td style={{ padding: '7px 8px', whiteSpace: 'nowrap' }}>{r.months != null ? `${r.months} meses` : '—'}</td>
+                      <td style={{ padding: '7px 8px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>{r.start ?? '—'}</td>
+                      <td style={{ padding: '7px 8px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>{r.computedUntil ?? '—'}</td>
+                      <td style={{ padding: '7px 8px', whiteSpace: 'nowrap', color: 'var(--text-muted)' }}>{r.currentUntil ?? '(vacío)'}</td>
+                      <td style={{ padding: '7px 8px', whiteSpace: 'nowrap', fontWeight: 700, color: 'var(--text-primary)' }}>{r.finalUntil ?? '—'}</td>
+                      <td style={{ padding: '7px 8px', whiteSpace: 'nowrap' }}>
+                        <span title={r.reason} style={{ display: 'inline-block', padding: '2px 9px', borderRadius: 12, fontSize: 11.5, fontWeight: 700, background: meta.bg, color: meta.color }}>
+                          {meta.label}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      <div style={{ marginTop: 10, fontSize: 11.5, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+        Solo entra en esta lógica un producto cuyo nombre en WooCommerce diga &quot;Empresas&quot;. Ningún otro plan se activa
+        automáticamente, aunque su nombre lleve meses.
+      </div>
+    </div>
+  );
+}
+
 // Limpieza de guiones en los textos de IA ya guardados (fichas y análisis).
 // Los textos NUEVOS ya salen limpios: las reglas de estilo van en todos los
 // system prompts y la respuesta pasa por cleanAiDeep (lib/textCleanup.ts).
@@ -3890,6 +4034,7 @@ function AdminContent() {
             >
               <PlanSyncPanel />
               <StartDateSyncPanel />
+              <CompanyPlanSyncPanel />
             </AdminTool>
 
             <AdminTool

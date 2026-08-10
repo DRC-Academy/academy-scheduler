@@ -104,6 +104,12 @@ export interface Student {
   oritalkUntil?: string;      // 'YYYY-MM-DD' — fin del acceso Oritalk
   productType?: 'subscription' | 'one_time'; // tipo de producto WooCommerce
   productName?: string;       // nombre real del producto en WooCommerce
+  // Plan de EMPRESA detectado en WooCommerce (pago único con duración en la
+  // variación). El acceso sigue viviendo en `manualActiveUntil`; estos dos campos
+  // solo registran de dónde salió esa fecha, para que el badge distinga la
+  // activación automática de una manual. Ver lib/productUtils.detectCompanyPlan.
+  companyPlanMonths?: number; // duración contratada, en meses
+  companyPlanStart?: string;  // 'YYYY-MM-DD' — fecha del pedido
   // Aviso interno de fin de plan ("Próximos a cancelar"). Cuenta como enviado
   // solo si `endingNoticeForDate` coincide con `manualActiveUntil`: al renovar,
   // deja de coincidir y el alumno vuelve a poder avisarse. Ver lib/endingPlans.

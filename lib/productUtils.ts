@@ -138,6 +138,184 @@ export function detectLevel(productFullName?: string | null, metaData?: any[] | 
   return matchLevel(productFullName);
 }
 
+// ── Planes de EMPRESA (pago único con duración en meses) ─────────────────────
+//
+// Los productos "Empresas *" son de PAGO ÚNICO y su variación lleva la duración
+// contratada ("B1 · 1h semanal · 6 Meses"). WooCommerce no gestiona vencimiento
+// para un pago único: el alumno compra y listo. Hasta ahora el admin los activaba
+// a mano con `manual_active_until`, con el resultado previsible de que alguno se
+// quedaba sin activar (María José Cabrera: 6 meses comprados, 0 días de acceso).
+//
+// Estas funciones son PURAS y se usan desde tres sitios que no pueden discrepar:
+// /api/check-subscription (al leer el pedido), /api/admin/sync-company-plans
+// (regularización masiva) y, el día que exista, el webhook de compra nueva.
+
+/**
+ * DOBLE FILTRO, primera mitad: ¿es un producto de empresa?
+ *
+ * Se evalúa SOLO contra el nombre del producto (`line_items[0].name`), NUNCA
+ * contra el nombre completo con variación. La variación incluye respuestas de
+ * texto libre del cliente ("Todos los dias", "20h", "-"), así que alguien que
+ * escribiera "en la empresa" en su horario preferido activaría el cálculo de
+ * meses sobre un producto que no es de empresa.
+ *
+ * OJO con `students.product_name`: según qué endpoint lo escribió, guarda el
+ * nombre a secas o el nombre CON la variación pegada (check-subscription escribe
+ * `rich.fullName`, sync-student-plans escribe `prod.productName`). Por eso quien
+ * lea de la base tiene que quedarse con lo anterior al guion largo — para eso
+ * está `baseProductName`.
+ */
+const COMPANY_RE = /\bempresas?\b/;
+
+export function isCompanyProduct(productName?: string | null): boolean {
+  return COMPANY_RE.test(normalizeText(productName ?? ''));
+}
+
+/** "Empresas Ingles General — B1 · 6 Meses" → "Empresas Ingles General". */
+export function baseProductName(fullName?: string | null): string {
+  const raw = (fullName ?? '').trim();
+  return raw.split('—')[0].trim() || raw;
+}
+
+/** Techo de duración aceptada. Fuera de 1–24 se considera un falso positivo. */
+const MAX_PLAN_MONTHS = 24;
+
+// El número tiene que ir PEGADO a "mes": es lo único que distingue la duración
+// del resto de números de la variación ("2h semanales", "20h", el nivel "B1").
+//
+// El `\b` final es la pieza que evita el falso positivo real que hay en la base:
+// el producto "Plan mensual Niños - 1h semanal" contiene "mens", y sin el límite
+// de palabra "1h semanal" de un plan mensual se leería como una duración.
+//
+// Se usa `\b` y no un lookbehind `(?<!\d)` a propósito: este módulo también corre
+// en el navegador del profesor, y el lookbehind no existe en Safari < 16.4.
+const MONTHS_RE = /\b(\d{1,2})\s*mes(?:es)?\b/;
+// "1 Año" → 12. Sobre texto normalizado: normalizeText descompone la ñ y le quita
+// la tilde, así que "Año" llega como "ano".
+const YEARS_RE = /\b(\d{1,2})\s*an[o]s?\b/;
+
+/**
+ * Duración en meses escrita en un texto (el nombre de la variación).
+ *
+ * "3 Meses" → 3 · "6 meses" → 6 · "1 mes" → 1 · "12 Meses" → 12 · "1 Año" → 12
+ * "mensual" → null · "2h semanales" → null · "B1 · 20h" → null
+ *
+ * null = no hay duración detectable. NO es un plan con fecha de fin calculable.
+ */
+export function parseMonthsFromText(text?: string | null): number | null {
+  if (!text) return null;
+  const t = normalizeText(String(text));
+
+  const m = MONTHS_RE.exec(t);
+  if (m) {
+    const n = parseInt(m[1], 10);
+    if (n >= 1 && n <= MAX_PLAN_MONTHS) return n;
+  }
+  const y = YEARS_RE.exec(t);
+  if (y) {
+    const n = parseInt(y[1], 10) * 12;
+    if (n >= 1 && n <= MAX_PLAN_MONTHS) return n;
+  }
+  return null;
+}
+
+/**
+ * Suma de meses de CALENDARIO sobre una fecha 'YYYY-MM-DD'.
+ *
+ * "6 meses" cae el mismo día seis meses después, no 180 días después. Cuando el
+ * día no existe en el mes destino (31/01 + 1 mes) se recorta al último día del
+ * mes, que es el criterio de toda la vida para vencimientos.
+ *
+ * Aritmética en UTC: son fechas de calendario, no instantes, y hacerla en la zona
+ * del servidor haría que un pedido del día 1 saltara al mes anterior.
+ */
+export function addCalendarMonths(iso: string, months: number): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec((iso ?? '').slice(0, 10));
+  if (!m) return null;
+  const y = Number(m[1]), mo = Number(m[2]) - 1, d = Number(m[3]);
+  // Día 0 del mes siguiente al destino = último día del mes destino.
+  const lastDay = new Date(Date.UTC(y, mo + months + 1, 0)).getUTCDate();
+  const end = new Date(Date.UTC(y, mo + months, Math.min(d, lastDay)));
+  return isNaN(end.getTime()) ? null : end.toISOString().slice(0, 10);
+}
+
+export interface CompanyPlan {
+  months: number;
+  /** 'YYYY-MM-DD' — fecha del pedido de WooCommerce. */
+  start: string;
+  /** 'YYYY-MM-DD' — start + months, último día de acceso INCLUIDO. */
+  until: string;
+}
+
+/**
+ * DOBLE FILTRO completo. Devuelve el plan de empresa con su fecha de fin, o null.
+ *
+ * null si falla CUALQUIERA de las tres condiciones: que el producto sea de
+ * empresa, que la variación diga cuántos meses, y que el pedido tenga fecha. Un
+ * producto que no es de empresa no llega nunca al parseo de meses, aunque su
+ * nombre los lleve.
+ */
+export function detectCompanyPlan(args: {
+  productName?: string | null;
+  productVariation?: string | null;
+  orderDate?: string | null;
+}): CompanyPlan | null {
+  if (!isCompanyProduct(baseProductName(args.productName))) return null;
+
+  const months = parseMonthsFromText(args.productVariation);
+  if (months == null) return null;
+
+  const start = (args.orderDate ?? '').slice(0, 10);
+  const until = addCalendarMonths(start, months);
+  if (!until) return null;
+
+  return { months, start, until };
+}
+
+/**
+ * Qué hacer con la fecha calculada frente a la que ya tiene el alumno.
+ *
+ * CRITERIO "NUNCA RECORTA". La automática no puede quitarle acceso a nadie: en
+ * los datos reales cuatro alumnos de empresa tenían margen puesto a mano (hasta
+ * +14 días sobre la fecha del plan), y pisarlo les habría cortado dos semanas de
+ * clases pagadas. Si la calculada es ANTERIOR a una fecha vigente, se respeta la
+ * de la persona y solo se registra el plan detectado.
+ */
+export type CompanyPlanAction = 'set' | 'extend' | 'keep_manual' | 'unchanged';
+
+export interface CompanyPlanDecision {
+  action: CompanyPlanAction;
+  /** Fecha con la que queda el alumno (escriba o no). */
+  until: string;
+  /** ¿Hay que escribir `manual_active_until`? */
+  writes: boolean;
+  reason: string;
+}
+
+export function resolveCompanyPlanUpdate(
+  computedUntil: string,
+  currentUntil: string | null | undefined,
+  today: string,
+): CompanyPlanDecision {
+  const current = (currentUntil ?? '').slice(0, 10).trim();
+
+  if (!current) {
+    return { action: 'set', until: computedUntil, writes: true, reason: 'no tenía fecha de acceso' };
+  }
+  if (current === computedUntil) {
+    return { action: 'unchanged', until: current, writes: false, reason: 'ya coincide con el plan' };
+  }
+  // Vencida: no hay acceso que recortar, la calculada manda (típico de una
+  // renovación detectada tarde).
+  if (current < today) {
+    return { action: 'set', until: computedUntil, writes: true, reason: `la anterior (${current}) ya estaba vencida` };
+  }
+  if (computedUntil > current) {
+    return { action: 'extend', until: computedUntil, writes: true, reason: `renovación: extiende desde ${current}` };
+  }
+  return { action: 'keep_manual', until: current, writes: false, reason: `margen manual vigente hasta ${current}; el plan terminaba el ${computedUntil}` };
+}
+
 // Estilo del badge de categoría según el tipo clasificado.
 export function planBadgeStyle(type: PlanClassification['type']): { color: string; bg: string } {
   switch (type) {

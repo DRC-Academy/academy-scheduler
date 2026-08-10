@@ -16,6 +16,7 @@
 // El mapa de estados de WooCommerce (nombre, color y si dan acceso) es el mismo
 // que usan el endpoint, finanzas y las asistencias. Ver lib/subscriptionAccess.
 import { WOO_STATUS, isScheduledWooStatus } from '@/lib/subscriptionAccess';
+import { addCalendarMonths } from '@/lib/productUtils';
 
 export interface SubscriptionInfo {
   active: boolean | null;                            // true=activa · false=inactiva · null=sin verificar
@@ -27,6 +28,14 @@ export interface SubscriptionInfo {
   manualActiveUntil: string | null;
   /** Fin del acceso Oritalk. Solo viene cuando el alumno es de Oritalk y vigente. */
   oritalkUntil: string | null;
+  /**
+   * Plan de EMPRESA detectado en WooCommerce: duración contratada y fecha del
+   * pedido. El acceso sigue viajando en `manualActiveUntil` — estos dos campos
+   * solo permiten al badge decir que la fecha la calculó el sistema y no una
+   * persona. null = no es un plan de empresa con duración.
+   */
+  companyPlanMonths: number | null;
+  companyPlanStart: string | null;
   /**
    * Inicio de la suscripción ('YYYY-MM-DD'). En una suscripción 'scheduled' es
    * una fecha FUTURA, y es el dato que responde a "¿desde cuándo puede venir?".
@@ -50,6 +59,7 @@ function normEmail(email?: string | null): string {
 const NO_EMAIL: SubscriptionInfo = {
   active: null, status: 'no_email', daysRemaining: null, endDate: null,
   productType: null, productName: null, manualActiveUntil: null, oritalkUntil: null,
+  companyPlanMonths: null, companyPlanStart: null,
   subscriptionStartDate: null, fetchedAt: 0,
 };
 
@@ -78,13 +88,15 @@ export async function checkSubscription(email?: string | null, force = false): P
       productName:       data.productName ?? null,
       manualActiveUntil: data.manualActiveUntil ?? null,
       oritalkUntil:      data.oritalkUntil ?? null,
+      companyPlanMonths: data.companyPlanMonths ?? null,
+      companyPlanStart:  data.companyPlanStart ?? null,
       subscriptionStartDate: data.subscriptionStartDate ?? null,
       fetchedAt:         Date.now(),
     };
     subscriptionCache.set(e, info);
     return info;
   } catch {
-    return { active: null, status: 'error', daysRemaining: null, endDate: null, productType: null, productName: null, manualActiveUntil: null, oritalkUntil: null, subscriptionStartDate: null, fetchedAt: Date.now() };
+    return { active: null, status: 'error', daysRemaining: null, endDate: null, productType: null, productName: null, manualActiveUntil: null, oritalkUntil: null, companyPlanMonths: null, companyPlanStart: null, subscriptionStartDate: null, fetchedAt: Date.now() };
   }
 }
 
@@ -151,10 +163,30 @@ export function subBadge(info: SubscriptionInfo | undefined): { label: string; c
 
   // PAGO ÚNICO
   if (info.productType === 'one_time') {
+    // PLAN DE EMPRESA: la fecha no la puso una persona, la calculó el sistema
+    // desde la variación ("6 Meses") y la fecha del pedido. Distinguirlo importa
+    // porque cambia quién responde si está mal: una fecha automática se arregla
+    // sincronizando, una manual se arregla hablando con quien la puso.
+    const m = info.companyPlanMonths;
+    const planEnd = (m != null && info.companyPlanStart) ? addCalendarMonths(info.companyPlanStart, m) : null;
+
     if (info.status === 'manual_active' && info.manualActiveUntil) {
-      return { label: `🎯 Activo hasta ${shortDate(info.manualActiveUntil)}`, ...green };
+      const hasta = shortDate(info.manualActiveUntil);
+      if (planEnd) {
+        // El admin alargó por encima del plan: se respeta (criterio "nunca
+        // recorta") y se dice, para que no parezca que el cálculo falló.
+        return info.manualActiveUntil > planEnd
+          ? { label: `🏢 Activa (plan ${m}m +margen) hasta ${hasta}`, ...green }
+          : { label: `🏢 Activa (plan ${m}m) hasta ${hasta}`, ...green };
+      }
+      return { label: `🎯 Activo hasta ${hasta}`, ...green };
     }
-    if (info.manualActiveUntil) return { label: '❌ Expirado', ...red }; // tenía fecha y ya pasó
+    // Tenía fecha y ya pasó.
+    if (info.manualActiveUntil) {
+      return planEnd
+        ? { label: `❌ Plan ${m}m vencido ${shortDate(info.manualActiveUntil)}`, ...red }
+        : { label: '❌ Expirado', ...red };
+    }
     return { label: '⚪ Sin activar', ...gray };
   }
 

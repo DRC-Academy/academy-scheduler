@@ -57,6 +57,7 @@ function ProximosCancelarContent() {
         productName: s.productName ?? null,
         plan: s.plan ?? null,
         manualActiveUntil: s.manualActiveUntil ?? null,
+        companyPlanMonths: s.companyPlanMonths ?? null,
         endingNoticeSentAt: s.endingNoticeSentAt ?? null,
         endingNoticeForDate: s.endingNoticeForDate ?? null,
       })),
@@ -180,7 +181,9 @@ function ProximosCancelarContent() {
 
                           <td style={{ padding: '12px 14px', whiteSpace: 'nowrap' }}>
                             <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                              {p.planKind === 'intensivo' ? 'Intensivo · manual' : 'Activación manual'}
+                              {p.planKind === 'empresa' ? 'Empresa · automático'
+                                : p.planKind === 'intensivo' ? 'Intensivo · manual'
+                                : 'Activación manual'}
                             </span>
                           </td>
 

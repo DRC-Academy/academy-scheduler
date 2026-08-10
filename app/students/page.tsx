@@ -68,6 +68,8 @@ interface DisplayStudent {
   productType?: 'subscription' | 'one_time';
   productName?: string;
   manualActiveUntil?: string;
+  /** Duración del plan de empresa, si lo tiene. Solo etiqueta el fin de plan. */
+  companyPlanMonths?: number;
   isOritalk?: boolean;
   oritalkUntil?: string;
   inStudentsTable: boolean;
@@ -663,7 +665,7 @@ function StudentsContent() {
   const allStudents = useMemo<DisplayStudent[]>(() => {
     const map = new Map<string, DisplayStudent>();
     for (const s of students) {
-      map.set(s.id, { id: s.id, name: s.name, email: s.email, level: s.level, plan: s.plan ?? '', phone: s.phone ?? '', productType: s.productType, productName: s.productName, manualActiveUntil: s.manualActiveUntil, isOritalk: s.isOritalk, oritalkUntil: s.oritalkUntil, inStudentsTable: true, createdAt: s.createdAt });
+      map.set(s.id, { id: s.id, name: s.name, email: s.email, level: s.level, plan: s.plan ?? '', phone: s.phone ?? '', productType: s.productType, productName: s.productName, manualActiveUntil: s.manualActiveUntil, companyPlanMonths: s.companyPlanMonths, isOritalk: s.isOritalk, oritalkUntil: s.oritalkUntil, inStudentsTable: true, createdAt: s.createdAt });
     }
     const studentMatchesAssignment = (s: Student, a: Assignment) =>
       a.studentId === s.id ||
@@ -805,6 +807,7 @@ function StudentsContent() {
         productName: s.productName ?? null,
         plan: s.plan ?? null,
         manualActiveUntil: s.manualActiveUntil ?? null,
+        companyPlanMonths: s.companyPlanMonths ?? null,
       })),
       profiles, today,
     });

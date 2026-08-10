@@ -493,6 +493,10 @@ export async function dbGetStudents(): Promise<Student[]> {
     oritalkUntil:      row.oritalk_until ?? undefined,
     productType:       row.product_type ?? undefined,
     productName:       row.product_name ?? undefined,
+    // Plan de empresa detectado en Woo (supabase-company-plans.sql). Si la
+    // migración no se corrió vienen undefined y el badge cae al texto de siempre.
+    companyPlanMonths: row.company_plan_months ?? undefined,
+    companyPlanStart:  row.company_plan_start ?? undefined,
     // Pueden no existir si supabase-ending-plans.sql aún no se corrió: al ser
     // `select('*')` vienen undefined y lib/endingPlans las trata como "sin avisar".
     endingNoticeSentAt:  row.ending_notice_sent_at ?? undefined,
@@ -2678,6 +2682,8 @@ export async function dbGetStudentByEmail(email: string): Promise<Student | null
     oritalkUntil:      data.oritalk_until ?? undefined,
     productType:       data.product_type ?? undefined,
     productName:       data.product_name ?? undefined,
+    companyPlanMonths: data.company_plan_months ?? undefined,
+    companyPlanStart:  data.company_plan_start ?? undefined,
     createdAt:         data.created_at,
   };
 }
