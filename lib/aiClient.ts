@@ -25,16 +25,23 @@ const PROFILE_COLS = `
 // supabase-interventions.sql (ver fetchRiskProfiles: se reintenta sin ellas).
 const PROFILE_COLS_EXTRA = `${PROFILE_COLS}, active_intervention, active_intervention_at, unattended_alerts`;
 
+// SIN `transcript`: estos paneles (IA y Riesgo, ficha del alumno del admin)
+// muestran la señal de riesgo y los resúmenes, nunca el texto — el único sitio
+// que lo renderiza es la pestaña Validación. Pedirlo costaba 11,8 MB por carga.
 const ANALYSIS_COLS = `
-  id, student_id, teacher_id, student_name, class_number, transcript,
+  id, student_id, teacher_id, student_name, class_number, has_transcript,
   class_summary, errors_detected, progress_notes, topics_covered, next_class_guide,
   risk_signal, risk_explanation, analyzed_at, class_date, class_title, next_class_content
 `.replace(/\s+/g, ' ').trim();
+
+/** Respaldo para bases sin la migración de has_transcript. */
+const ANALYSIS_COLS_LEGACY = ANALYSIS_COLS.replace('has_transcript', 'transcript');
 
 // Columnas de migraciones posteriores. Se piden aparte porque si la base todavía
 // no las tiene, Supabase devuelve error 42703 y la consulta ENTERA falla (la
 // página del alumno se quedaría vacía). Se reintenta sin ellas.
 const ANALYSIS_COLS_EXTRA = `${ANALYSIS_COLS}, join_log_id, validation_status, analysis_status, analysis_error`;
+const ANALYSIS_COLS_EXTRA_LEGACY = `${ANALYSIS_COLS_LEGACY}, join_log_id, validation_status, analysis_status, analysis_error`;
 
 const isMissingCol = (e: { code?: string } | null | undefined): boolean =>
   e?.code === '42703' || e?.code === 'PGRST204';
@@ -101,8 +108,11 @@ export async function fetchClassAnalyses(args: {
   };
   if (!args.studentId && !args.studentName?.trim()) return [];
 
+  // Cascada: has_transcript + columnas nuevas → has_transcript solo → texto.
   let { data, error } = await build(ANALYSIS_COLS_EXTRA);
   if (error && isMissingCol(error)) ({ data, error } = await build(ANALYSIS_COLS));
+  if (error && isMissingCol(error)) ({ data, error } = await build(ANALYSIS_COLS_EXTRA_LEGACY));
+  if (error && isMissingCol(error)) ({ data, error } = await build(ANALYSIS_COLS_LEGACY));
   if (error) { console.error('[aiClient] Error al leer class_analyses:', error); return []; }
   return (data ?? []) as unknown as ClassAnalysisRow[];
 }
@@ -114,6 +124,8 @@ export async function fetchAllClassAnalyses(limit = 500): Promise<ClassAnalysisR
 
   let { data, error } = await build(ANALYSIS_COLS_EXTRA);
   if (error && isMissingCol(error)) ({ data, error } = await build(ANALYSIS_COLS));
+  if (error && isMissingCol(error)) ({ data, error } = await build(ANALYSIS_COLS_EXTRA_LEGACY));
+  if (error && isMissingCol(error)) ({ data, error } = await build(ANALYSIS_COLS_LEGACY));
   if (error) { console.error('[aiClient] Error al leer class_analyses:', error); return []; }
   return (data ?? []) as unknown as ClassAnalysisRow[];
 }

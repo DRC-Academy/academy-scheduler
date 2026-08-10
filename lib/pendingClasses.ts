@@ -41,8 +41,14 @@ export function pendingClassesFor(args: {
   // uno: si se comprobara "¿hay algún análisis a ±1 día?" sin consumirlo, un
   // transcript del lunes taparía también la clase del martes y esa clase
   // desaparecería de pendientes para siempre.
+  // `has_transcript` (columna generada) en vez del texto: acá solo interesa si
+  // existe. Se mira el texto únicamente como respaldo, para bases sin la
+  // migración supabase-has-transcript.sql.
+  const tieneTranscript = (a: ClassAnalysisRow): boolean =>
+    typeof a.has_transcript === 'boolean' ? a.has_transcript : !!(a.transcript ?? '').trim();
+
   const freeDates = analyses
-    .filter(a => (a.transcript ?? '').trim() && !(a as { join_log_id?: string | null }).join_log_id)
+    .filter(a => tieneTranscript(a) && !(a as { join_log_id?: string | null }).join_log_id)
     .map(a => a.class_date || (a.analyzed_at ?? '').slice(0, 10))
     .filter(Boolean) as string[];
 

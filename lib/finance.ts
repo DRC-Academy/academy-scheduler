@@ -330,6 +330,17 @@ export interface ClassTranscriptRef {
   student_name: string;
   class_date?: string | null;
   analyzed_at?: string | null;
+  /**
+   * ¿Hay transcripción? Columna GENERADA por Postgres desde el texto
+   * (supabase-has-transcript.sql). Es lo que piden los listados: el cálculo solo
+   * necesita saber si existe, y el texto pesa 30 KB de media por fila.
+   * `undefined` = la migración no se corrió y la consulta cayó al texto.
+   */
+  has_transcript?: boolean | null;
+  /**
+   * El TEXTO. Solo lo trae la lectura explícita del admin en Validación. En los
+   * listados llega siempre `undefined`: ver hasText().
+   */
   transcript?: string | null;
   /** Ingreso al que pertenece este transcript. Cuando viene, manda sobre la fecha. */
   join_log_id?: string | null;
@@ -388,7 +399,16 @@ function analysisDate(t: ClassTranscriptRef): string {
   return (t.class_date || (t.analyzed_at ?? '').slice(0, 10) || '');
 }
 
+/**
+ * ¿Esta clase tiene transcripción?
+ *
+ * Prefiere `has_transcript` (la columna generada) y solo mira el texto si esa
+ * columna no vino — que es el caso mientras la migración no esté corrida. El
+ * orden importa: `has_transcript` es la verdad calculada por Postgres desde el
+ * propio texto, así que cuando está presente no hace falta nada más.
+ */
 function hasText(t: ClassTranscriptRef): boolean {
+  if (typeof t.has_transcript === 'boolean') return t.has_transcript;
   return !!t.transcript && t.transcript.trim().length > 0;
 }
 

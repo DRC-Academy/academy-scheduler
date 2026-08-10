@@ -220,7 +220,16 @@ export interface ClassAnalysisRow {
   teacher_id: string | null;
   student_name: string;
   class_number: number | null;
-  transcript: string;          // NOT NULL en la base
+  /**
+   * ¿Hay transcripción? Columna GENERADA por Postgres (supabase-has-transcript.sql).
+   * Es lo que piden los LISTADOS: saber si existe cuesta 1 byte, el texto 30 KB.
+   */
+  has_transcript?: boolean | null;
+  /**
+   * El TEXTO completo. Los listados ya NO lo piden: llega `undefined`. Solo lo
+   * trae la lectura explícita del admin en la pestaña Validación.
+   */
+  transcript?: string;
   class_summary: string | null;
   errors_detected: string | null;
   progress_notes: string | null;

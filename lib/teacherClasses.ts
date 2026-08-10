@@ -578,6 +578,8 @@ export function transcriptForClass(
     (!t.teacher_id || t.teacher_id === teacherId) &&
     nk(t.student_name) === name &&
     (t.class_date || (t.analyzed_at ?? '').slice(0, 10)) === dateIso &&
-    !!t.transcript && t.transcript.trim().length > 0,
+    // `has_transcript` (columna generada) cuando viene; el texto solo como
+    // respaldo para bases sin supabase-has-transcript.sql.
+    (typeof t.has_transcript === 'boolean' ? t.has_transcript : !!t.transcript && t.transcript.trim().length > 0),
   );
 }

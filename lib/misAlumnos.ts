@@ -32,16 +32,26 @@ const PROFILE_COLS = `
 // alumno se quedaría vacía. Se reintenta sin ellas.
 const PROFILE_COLS_EXTRA = `${PROFILE_COLS}, active_intervention, active_intervention_at, unattended_alerts`;
 
+// SIN `transcript`. El profesor no lee nunca el texto: sus vistas solo muestran
+// el ESTADO (subido / pendiente / en revisión), y para eso alcanza el booleano
+// `has_transcript` (columna generada, ver supabase-has-transcript.sql). Traer el
+// texto costaba 11,8 MB por carga y le ponía en el navegador las transcripciones
+// de los alumnos de todos los demás profesores.
 const ANALYSIS_COLS = `
-  id, student_id, teacher_id, student_name, class_number, transcript,
+  id, student_id, teacher_id, student_name, class_number, has_transcript,
   class_summary, errors_detected, progress_notes, topics_covered, next_class_guide,
   risk_signal, risk_explanation, analyzed_at, class_date, class_title, next_class_content
 `.replace(/\s+/g, ' ').trim();
+
+// Respaldo para bases sin la migración de has_transcript: se pide el texto, como
+// antes. Solo cambia el peso, no el comportamiento.
+const ANALYSIS_COLS_LEGACY = ANALYSIS_COLS.replace('has_transcript', 'transcript');
 
 // Columnas de migraciones posteriores (vínculo con el ingreso, validación, estado
 // del análisis). Si la base no las tiene, Supabase falla la consulta ENTERA con
 // 42703 → se reintenta sin ellas para no dejar la página en blanco.
 const ANALYSIS_COLS_EXTRA = `${ANALYSIS_COLS}, join_log_id, validation_status, analysis_status, analysis_error`;
+const ANALYSIS_COLS_EXTRA_LEGACY = `${ANALYSIS_COLS_LEGACY}, join_log_id, validation_status, analysis_status, analysis_error`;
 
 export interface StudentBundle {
   assignment: Assignment;
@@ -78,10 +88,30 @@ function lookup<T extends { student_id?: string | null; student_name?: string | 
  * `assignments` viene del contexto de la app (ya cargado): es la fuente de verdad.
  */
 export async function loadStudentBundles(assignments: Assignment[]): Promise<StudentBundle[]> {
+  // FILTRO POR PROFESOR EN LA BASE, no en JavaScript.
+  //
+  // Antes esta consulta traía las 361 filas de la tabla y recién después las
+  // cruzaba contra los assignments para decidir qué pintar. El filtro era
+  // cosmético: al profesor con más clases le llegaban igualmente 307
+  // transcripciones de alumnos de otros 19 profesores (8,3 MB) que su navegador
+  // recibía aunque la interfaz no las mostrara. Filtrando acá, esos datos no
+  // viajan.
+  //
+  // Efecto conocido: un alumno que cambió de profesor deja de mostrar, en la
+  // vista del profesor nuevo, las clases que dio con el anterior — son de otro
+  // teacher_id. Hoy afecta a 2 alumnos de 116 (los transferidos).
+  const teacherIds = [...new Set(assignments.map(a => a.teacherId).filter(Boolean))];
+
   const readAnalyses = (cols: string) =>
-    supabase.from('class_analyses').select(cols).order('analyzed_at', { ascending: false });
+    supabase.from('class_analyses').select(cols)
+      .in('teacher_id', teacherIds)
+      .order('analyzed_at', { ascending: false });
   const readProfiles = (cols: string) => supabase.from('student_profiles').select(cols);
   const missingCol = (e: { code?: string } | null) => e?.code === '42703' || e?.code === 'PGRST204';
+
+  // Sin assignments no hay nada que traer, y un `.in()` vacío devolvería la
+  // tabla entera en algunas versiones de PostgREST.
+  if (teacherIds.length === 0) return [];
 
   const [firstProfiles, firstTry] = await Promise.all([
     readProfiles(PROFILE_COLS_EXTRA),
@@ -89,7 +119,12 @@ export async function loadStudentBundles(assignments: Assignment[]): Promise<Stu
   ]);
 
   const profilesRes = missingCol(firstProfiles.error) ? await readProfiles(PROFILE_COLS) : firstProfiles;
-  const analysesRes = missingCol(firstTry.error) ? await readAnalyses(ANALYSIS_COLS) : firstTry;
+  // Cascada: has_transcript + columnas nuevas → has_transcript solo → texto
+  // (base sin la migración de has_transcript).
+  let analysesRes = firstTry;
+  if (missingCol(analysesRes.error)) analysesRes = await readAnalyses(ANALYSIS_COLS);
+  if (missingCol(analysesRes.error)) analysesRes = await readAnalyses(ANALYSIS_COLS_EXTRA_LEGACY);
+  if (missingCol(analysesRes.error)) analysesRes = await readAnalyses(ANALYSIS_COLS_LEGACY);
 
   if (profilesRes.error) console.error('[mis-alumnos] Error al leer student_profiles:', profilesRes.error);
   if (analysesRes.error) console.error('[mis-alumnos] Error al leer class_analyses:', analysesRes.error);

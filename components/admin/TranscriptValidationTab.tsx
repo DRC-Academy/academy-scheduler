@@ -28,7 +28,7 @@ import { useTeachers } from '@/lib/TeachersContext';
 import { useAuth } from '@/lib/AuthContext';
 import {
   dbGetFlaggedTranscripts, dbReviewTranscript, dbReviewTranscriptsBulk, dbReopenTranscript,
-  type FlaggedTranscript,
+  dbGetTranscriptText, type FlaggedTranscript,
 } from '@/lib/db';
 // Los umbrales salen de transcriptValidation (módulo puro), NO de
 // transcriptVerdict: ese es 'server-only' y arrastraría el SDK de Anthropic al
@@ -62,6 +62,20 @@ export default function TranscriptValidationTab() {
   const [loading, setLoading] = useState(true);
   const [missingColumns, setMissingColumns] = useState(false);
   const [viewing, setViewing] = useState<FlaggedTranscript | null>(null);
+  // El texto ya no viaja en el listado (eran 10,4 MB por abrir la pestaña): se
+  // pide de la fila concreta cuando el admin la abre para leerla.
+  const [viewingText, setViewingText] = useState<{ id: string; text: string } | null>(null);
+
+  useEffect(() => {
+    if (!viewing) return;
+    let cancelado = false;
+    const id = viewing.id;
+    // No hace falta limpiar el texto anterior al abrir otra fila: el render
+    // compara `viewingText.id` con la fila abierta, así que un texto viejo nunca
+    // se muestra. Limpiarlo acá sería un setState síncrono dentro del efecto.
+    dbGetTranscriptText(id).then(text => { if (!cancelado) setViewingText({ id, text }); });
+    return () => { cancelado = true; };
+  }, [viewing]);
 
   // ── Estado de la vista ───────────────────────────────────────────────────────
   const [vista, setVista] = useState<Vista>('pend');
@@ -515,7 +529,9 @@ export default function TranscriptValidationTab() {
               <button onClick={() => setViewing(null)} aria-label="Cerrar" style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: '#6b7280' }}>✕</button>
             </div>
             <div style={{ padding: '16px 22px', overflowY: 'auto', whiteSpace: 'pre-wrap', fontSize: 13, lineHeight: 1.6, color: '#1a1c1a', fontFamily: 'ui-monospace, monospace' }}>
-              {viewing.transcript}
+              {viewingText?.id === viewing.id
+                ? (viewingText.text || '(esta clase no tiene texto guardado)')
+                : <span style={{ color: '#6b7280', fontFamily: 'inherit' }}>Cargando transcripción…</span>}
             </div>
             <div style={{ padding: '14px 22px', borderTop: '1px solid var(--border)', display: 'flex', gap: 10, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
               {viewing.validationStatus === 'auto_approved' ? (

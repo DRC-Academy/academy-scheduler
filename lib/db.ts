@@ -3186,25 +3186,41 @@ export async function dbGetClassTranscripts(): Promise<import('@/lib/finance').C
   // reintento fallaba igual, esta función devolvía [] y finanzas se quedaba sin el
   // segundo factor de verificación, con TODAS las clases marcadas "a revisar"
   // aunque tuvieran transcript.
-  const BASE = 'teacher_id, student_name, class_date, analyzed_at, transcript';
+  // `has_transcript` en vez de `transcript`: el cálculo solo necesita saber si
+  // existe (ver finance.hasText), y el texto son 30 KB de media por fila — 11 MB
+  // en total. Esta función se ejecuta en CADA arranque de la app, para todos los
+  // roles, porque loadFinanceData() cuelga del provider que envuelve la
+  // aplicación entera. Pedir el texto acá era la mayor fuente de egress del
+  // proyecto, y además le mandaba al navegador del profesor las transcripciones
+  // de los alumnos de todos los demás.
+  //
+  // Si la migración supabase-has-transcript.sql no está corrida, la columna no
+  // existe y se reintenta con `transcript` — mismo resultado, sin ahorro.
   const OPCIONALES = ['join_log_id', 'validation_status'];
 
-  for (let quitar = 0; quitar <= OPCIONALES.length; quitar++) {
-    const cols = [BASE, ...OPCIONALES.slice(0, OPCIONALES.length - quitar)].join(', ');
-    const { data, error } = await supabase
-      .from('class_analyses')
-      .select(cols)
-      .order('analyzed_at', { ascending: false });
+  for (const señal of ['has_transcript', 'transcript'] as const) {
+    const BASE = `teacher_id, student_name, class_date, analyzed_at, ${señal}`;
 
-    if (!error && data) {
-      if (quitar > 0) {
-        console.warn(`[db] class_analyses sin las columnas [${OPCIONALES.slice(OPCIONALES.length - quitar).join(', ')}]. Faltan migraciones: supabase-join-log-link.sql / supabase-transcript-validation.sql.`);
+    for (let quitar = 0; quitar <= OPCIONALES.length; quitar++) {
+      const cols = [BASE, ...OPCIONALES.slice(0, OPCIONALES.length - quitar)].join(', ');
+      const { data, error } = await supabase
+        .from('class_analyses')
+        .select(cols)
+        .order('analyzed_at', { ascending: false });
+
+      if (!error && data) {
+        if (quitar > 0) {
+          console.warn(`[db] class_analyses sin las columnas [${OPCIONALES.slice(OPCIONALES.length - quitar).join(', ')}]. Faltan migraciones: supabase-join-log-link.sql / supabase-transcript-validation.sql.`);
+        }
+        if (señal === 'transcript') {
+          console.warn('[db] class_analyses sin has_transcript: se está trayendo el TEXTO de todas las transcripciones (~11 MB). Corré supabase-has-transcript.sql.');
+        }
+        return data as unknown as import('@/lib/finance').ClassTranscriptRef[];
       }
-      return data as unknown as import('@/lib/finance').ClassTranscriptRef[];
-    }
-    if (error && error.code !== '42703' && error.code !== 'PGRST204') {
-      console.error('[db] Error al leer class_analyses para finanzas:', error);
-      return [];
+      if (error && error.code !== '42703' && error.code !== 'PGRST204') {
+        console.error('[db] Error al leer class_analyses para finanzas:', error);
+        return [];
+      }
     }
   }
   return [];
@@ -3302,8 +3318,12 @@ export async function dbCountPendingValidations(): Promise<PendingValidationSumm
 }
 
 /** Columnas base: sin ellas la pestaña no puede mostrar nada (falta la migración). */
+// SIN `transcript`: el LISTADO de la cola de validación no muestra el texto, solo
+// score, flags y estado. Traerlo costaba 10,4 MB en cada apertura de la pestaña
+// para mostrar una tabla. El texto se pide aparte, de la fila que el admin abre
+// (dbGetTranscriptText).
 const FLAGGED_BASE_COLS =
-  'id, teacher_id, student_name, class_date, analyzed_at, transcript, ' +
+  'id, teacher_id, student_name, class_date, analyzed_at, ' +
   'transcript_validation_score, transcript_validation_flags, ai_authenticity_check, ' +
   'validation_status, validation_reviewed_by, validation_reviewed_at';
 /**
@@ -3347,7 +3367,9 @@ export async function dbGetFlaggedTranscripts(): Promise<FlaggedTranscriptsResul
     studentName:      (r.student_name as string) ?? '',
     classDate:        (r.class_date as string) ?? null,
     analyzedAt:       (r.analyzed_at as string) ?? null,
-    transcript:       (r.transcript as string) ?? '',
+    // Vacío a propósito: el listado ya no trae el texto. Lo carga el modal al
+    // abrirse, con dbGetTranscriptText(id).
+    transcript:       '',
     score:            (r.transcript_validation_score as number) ?? null,
     flags:            (r.transcript_validation_flags as string[]) ?? [],
     aiCheck:          (r.ai_authenticity_check as FlaggedTranscript['aiCheck']) ?? null,
@@ -3358,6 +3380,33 @@ export async function dbGetFlaggedTranscripts(): Promise<FlaggedTranscriptsResul
     joinLogId:        (r.join_log_id as string) ?? null,
   }));
   return { rows, missingColumns: false };
+}
+
+/**
+ * Texto completo de UNA transcripción. Se llama solo cuando el admin abre una
+ * clase en la pestaña Validación para leerla.
+ *
+ * Es la única lectura del texto que queda en la aplicación: ningún listado lo
+ * trae ya, y ninguna vista del profesor lo pide nunca.
+ *
+ * OJO — hoy esto NO es una restricción de seguridad: la llamada sale del
+ * navegador con la anon key, y con RLS deshabilitado cualquiera que tenga esa
+ * llave puede pedir el texto por su cuenta. Convertirlo en una restricción real
+ * es la tarea pendiente (b): REVOKE de la columna + service role + ruta
+ * admin-only, en la sesión de seguridad.
+ */
+export async function dbGetTranscriptText(analysisId: string): Promise<string> {
+  const { data, error } = await supabase
+    .from('class_analyses')
+    .select('transcript')
+    .eq('id', analysisId)
+    .maybeSingle();
+
+  if (error) {
+    console.error('[db] No se pudo leer el texto de la transcripción:', error);
+    return '';
+  }
+  return (data?.transcript as string) ?? '';
 }
 
 /**
