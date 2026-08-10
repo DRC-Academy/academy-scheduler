@@ -88,7 +88,7 @@ function AbsenceModal({ studentName, dateLabel, remaining, saving, error, onCanc
       style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 120, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
       onClick={e => { if (e.target === e.currentTarget && !saving) onCancel(); }}
     >
-      <div style={{ background: '#F7F7F5', border: '1px solid #e4e5e1', borderRadius: 14, padding: 24, width: '100%', maxWidth: 440, fontFamily: "'Public Sans', system-ui, sans-serif" }}>
+      <div style={{ background: '#F7F7F5', border: '1px solid #e4e5e1', borderRadius: 14, padding: 24, width: '100%', maxWidth: 440, fontFamily: 'var(--font-app)' }}>
         <div style={{ fontWeight: 700, fontSize: 16, color: '#1a1c1a', marginBottom: 10 }}>
           Marcar falta sin aviso — {studentName}, {dateLabel}
         </div>

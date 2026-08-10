@@ -691,7 +691,7 @@ function HowItWorksModal({ onClose }: { onClose: () => void }) {
       style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
       onClick={e => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div style={{ background: '#F7F7F5', borderRadius: 16, width: '100%', maxWidth: 520, maxHeight: '88vh', overflowY: 'auto', padding: 26, fontFamily: "'Public Sans', system-ui, sans-serif" }}>
+      <div style={{ background: '#F7F7F5', borderRadius: 16, width: '100%', maxWidth: 520, maxHeight: '88vh', overflowY: 'auto', padding: 26, fontFamily: 'var(--font-app)' }}>
         <div style={{ fontSize: 18, fontWeight: 700, color: '#1a1c1a', marginBottom: 6 }}>
           Cómo entra y cómo se paga una clase
         </div>
