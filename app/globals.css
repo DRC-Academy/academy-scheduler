@@ -2449,18 +2449,18 @@ label {
   .vl-hist-row > .vl-span { grid-column: 1; }
 }
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-   SETTER (/setter) â€” bloque namespaced `.stx-*`.
+/* ═══════════════════════════════════════════════════════════════════════════
+   SETTER (/setter) — bloque namespaced `.stx-*`.
 
-   Solo lo consume app/setter/page.tsx. Sigue la convenciÃ³n del archivo (bloques
+   Solo lo consume app/setter/page.tsx. Sigue la convención del archivo (bloques
    con prefijo por pantalla: .tnav-, .mc-, .mcf-, .spnav-, .thd-, .vl-) en vez de
-   introducir CSS Modules, que no se usan en ningÃºn sitio del proyecto.
+   introducir CSS Modules, que no se usan en ningún sitio del proyecto.
 
    Todos los valores salen de los design tokens. El "negro tinta" del chrome
    (tabs activas, chips seleccionados, CTA de fila) es --text-primary: se aparta
-   de la regla de acento Ãºnico a propÃ³sito, porque con 27 filas en pantalla el
-   verde dejaba de significar "disponible" y pasaba a ser decoraciÃ³n.
-   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+   de la regla de acento único a propósito, porque con 27 filas en pantalla el
+   verde dejaba de significar "disponible" y pasaba a ser decoración.
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 .stx-page { min-height: 100vh; background: var(--bg-base); }
 .stx-num { font-variant-numeric: tabular-nums; }
@@ -2471,15 +2471,11 @@ label {
   outline-offset: 2px;
 }
 
-/* â”€â”€ Header interno de la pantalla â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-   Se pega POR DEBAJO del header global (.tnav, sticky top:0 z-index:40).
-   --stx-top y --stx-head-h las calcula la propia pantalla midiendo .tnav y este
-   header en vivo (ResizeObserver): no hay altura hardcodeada, y el valor sigue
-   siendo correcto cuando el header global cambia de alto en mÃ³vil. */
+/* ── Header interno de la pantalla ─────────────────────────────────────────
+   NO es sticky: scrollea con la página, igual que el rail de filtros. El único
+   elemento fijo sigue siendo el header global .tnav, que no se toca. Se conserva
+   el borde inferior como separación con el cuerpo. */
 .stx-head {
-  position: sticky;
-  top: var(--stx-top, 0px);
-  z-index: 20;
   background: var(--bg-base);
   border-bottom: 1px solid var(--border);
 }
@@ -2516,7 +2512,7 @@ label {
   cursor: pointer; transition: background 0.15s, color 0.15s;
 }
 .stx-tab:hover { color: var(--text-primary); }
-.stx-tab.is-active { background: var(--text-primary); color: #fff; font-weight: var(--fw-semibold); }
+.stx-tab.is-active { background: var(--accent); color: #fff; font-weight: var(--fw-semibold); }
 .stx-tab-count {
   min-width: 19px; padding: 0 6px; border-radius: 999px;
   font-size: var(--fs-micro); font-weight: var(--fw-semibold); text-align: center;
@@ -2527,19 +2523,15 @@ label {
 .stx-tab-count.is-alert { background: var(--danger); color: #fff; }
 .stx-tab.is-active .stx-tab-count.is-alert { background: rgba(255,255,255,0.22); }
 
-/* â”€â”€ Cuerpo â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€*/
+/* ── Cuerpo ────────────────────────────────────────────────────────────────*/
 .stx-body { max-width: 1180px; margin: 0 auto; padding: 20px 16px 56px; }
 .stx-grid {
   display: grid; align-items: start; gap: 20px;
   grid-template-columns: minmax(0, 300px) minmax(0, 1fr);
 }
 
-/* Rail de filtros: sticky bajo el header interno. */
+/* Rail de filtros: tampoco sticky. Scrollea con la lista. */
 .stx-rail {
-  position: sticky;
-  top: calc(var(--stx-top, 0px) + var(--stx-head-h, 0px) + 16px);
-  max-height: calc(100vh - var(--stx-top, 0px) - var(--stx-head-h, 0px) - 32px);
-  overflow-y: auto; overscroll-behavior: contain;
   background: var(--bg-surface); border: 1px solid var(--border);
   border-radius: var(--radius-md); padding: 16px;
 }
@@ -2561,7 +2553,7 @@ label {
 }
 .stx-hint { margin-top: 8px; font-size: var(--fs-micro); line-height: 1.45; color: var(--text-muted); }
 
-/* Segmentado (DÃ­a + hora / Solo dÃ­a / Solo hora) */
+/* Segmentado (Día + hora / Solo día / Solo hora) */
 .stx-seg { display: flex; padding: 3px; gap: 2px; background: var(--bg-surface-2); border-radius: var(--radius-sm); }
 .stx-seg-btn {
   flex: 1 1 0; min-width: 0; padding: 7px 6px; border: none; border-radius: 4px;
@@ -2571,9 +2563,9 @@ label {
   transition: background 0.15s, color 0.15s;
 }
 .stx-seg-btn:hover { color: var(--text-primary); }
-.stx-seg-btn.is-active { background: var(--text-primary); color: #fff; font-weight: var(--fw-semibold); }
+.stx-seg-btn.is-active { background: var(--accent); color: #fff; font-weight: var(--fw-semibold); }
 
-/* Chips de opciÃ³n (dÃ­as, especialidad) */
+/* Chips de opción (días, especialidad) */
 .stx-opts { display: flex; flex-wrap: wrap; gap: 6px; }
 .stx-opt {
   padding: 6px 12px; border: 1px solid var(--border); border-radius: var(--radius-pill);
@@ -2583,7 +2575,7 @@ label {
 }
 .stx-opt:hover { border-color: var(--border-light); color: var(--text-primary); }
 .stx-opt.is-active {
-  background: var(--text-primary); border-color: var(--text-primary);
+  background: var(--accent); border-color: var(--accent);
   color: #fff; font-weight: var(--fw-semibold);
 }
 
@@ -2598,7 +2590,7 @@ label {
 }
 .stx-hour:hover { border-color: var(--border-light); color: var(--text-primary); }
 .stx-hour.is-active {
-  background: var(--text-primary); border-color: var(--text-primary);
+  background: var(--accent); border-color: var(--accent);
   color: #fff; font-weight: var(--fw-semibold);
 }
 
@@ -2610,7 +2602,7 @@ label {
 }
 .stx-switch input { width: auto; margin: 0; flex-shrink: 0; accent-color: var(--accent); }
 
-/* â”€â”€ Resultados â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€*/
+/* ── Resultados ────────────────────────────────────────────────────────────*/
 .stx-best {
   display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap;
   background: var(--bg-surface); border: 1px solid var(--accent-border);
@@ -2659,8 +2651,8 @@ label {
 .stx-row:hover { background: var(--bg-surface-2); }
 .stx-row.is-blocked { opacity: 0.72; }
 
-/* Reflow: por debajo de ~1150px el bloque de mÃ©tricas + CTA baja a otra lÃ­nea.
-   Es flex-wrap sobre dos bloques con base propia, no una grilla rÃ­gida: asÃ­ el
+/* Reflow: por debajo de ~1150px el bloque de métricas + CTA baja a otra línea.
+   Es flex-wrap sobre dos bloques con base propia, no una grilla rígida: así el
    CTA nunca queda recortado ni pisado por la columna de al lado. */
 .stx-row-main { flex: 1 1 280px; min-width: 0; display: flex; align-items: flex-start; gap: 11px; }
 .stx-row-meta { flex: 1 1 430px; display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap; }
@@ -2690,27 +2682,26 @@ label {
 
 .stx-cta {
   padding: 9px 15px; border: none; border-radius: var(--radius-sm); flex-shrink: 0;
-  background: var(--text-primary); color: #fff;
+  background: var(--accent); color: #fff;
   font-family: inherit; font-size: var(--fs-caption); font-weight: var(--fw-semibold);
-  cursor: pointer; white-space: nowrap; transition: opacity 0.15s;
+  cursor: pointer; white-space: nowrap; transition: background 0.15s;
 }
-.stx-cta:hover { opacity: 0.86; }
-.stx-cta:disabled { background: var(--bg-surface-3); color: var(--text-muted); cursor: not-allowed; opacity: 1; }
+.stx-cta:hover { background: var(--accent-hover); }
+.stx-cta:disabled { background: var(--bg-surface-3); color: var(--text-muted); cursor: not-allowed; }
 .stx-cta-ghost { background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-light); }
-.stx-cta-ghost:hover { background: var(--bg-surface-2); opacity: 1; }
+.stx-cta-ghost:hover { background: var(--bg-surface-2); }
 
 .stx-empty { padding: 56px 24px; text-align: center; }
 .stx-empty-t { font-size: var(--fs-body); font-weight: var(--fw-semibold); color: var(--text-primary); }
 .stx-empty-d { font-size: var(--fs-sm); color: var(--text-secondary); margin: 6px 0 16px; }
 
-/* â”€â”€ Barra mÃ³vil de filtros (oculta en escritorio) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€*/
+/* ── Barra móvil de filtros (oculta en escritorio) ─────────────────────────*/
 .stx-mob { display: none; }
 .stx-rail-actions { display: none; }
 
 @media (max-width: 1000px) {
   .stx-grid { grid-template-columns: minmax(0, 1fr); gap: 14px; }
-  /* El rail deja de ser sticky y pasa a ser panel plegable. */
-  .stx-rail { position: static; max-height: none; overflow: visible; }
+  /* En móvil el rail pasa a ser panel plegable. */
   .stx-rail.is-collapsed { display: none; }
   .stx-mob { display: block; }
   .stx-mob-bar { display: flex; gap: 8px; align-items: stretch; margin-bottom: 10px; }
@@ -2722,7 +2713,7 @@ label {
     color: var(--text-primary); font-family: inherit;
     font-size: var(--fs-sm); font-weight: var(--fw-semibold); cursor: pointer;
   }
-  .stx-mob-toggle.is-on { background: var(--text-primary); border-color: var(--text-primary); color: #fff; }
+  .stx-mob-toggle.is-on { background: var(--accent); border-color: var(--accent); color: #fff; }
   .stx-mob-n {
     min-width: 19px; padding: 0 6px; border-radius: 999px;
     background: var(--bg-surface-3); color: var(--text-secondary);
@@ -2730,13 +2721,13 @@ label {
   }
   .stx-mob-toggle.is-on .stx-mob-n { background: rgba(255,255,255,0.22); color: #fff; }
   /* Chips activos siempre visibles con el panel cerrado: el usuario nunca
-     pierde de vista quÃ© estÃ¡ filtrando. */
+     pierde de vista qué está filtrando. */
   .stx-mob-chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 10px; scrollbar-width: none; }
   .stx-mob-chips::-webkit-scrollbar { display: none; }
   .stx-mob-chips .stx-chip { flex-shrink: 0; min-height: 34px; }
   .stx-rail-actions { display: flex; gap: 8px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
   .stx-rail-actions > * { flex: 1 1 0; min-height: 44px; }
-  /* Targets tÃ¡ctiles â‰¥44px. */
+  /* Targets táctiles ≥44px. */
   .stx-page :is(.stx-opt, .stx-hour, .stx-seg-btn, .stx-tab, .stx-cta) { min-height: 44px; }
   .stx-hours { grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); }
   .stx-sort { margin-left: 0; width: 100%; }
@@ -2762,15 +2753,15 @@ label {
 }
 
 
-/* Utilidad local: bloque que solo existe en escritorio. En mÃ³vil su contenido
+/* Utilidad local: bloque que solo existe en escritorio. En móvil su contenido
    (el buscador por nombre) vive en la barra fija de arriba, para que no aparezca
    dos veces cuando se abre el panel de filtros. */
 .stx-deskonly { display: block; }
 @media (max-width: 1000px) { .stx-deskonly { display: none; } }
 
 /* LastUpdated es un componente COMPARTIDO y trae estilos inline pensados para ir
-   suelto sobre la pÃ¡gina (centrado, 10px, padding inferior). AcÃ¡ vive dentro del
-   sello del header. Se le neutralizan esos dos valores y nada mÃ¡s â€” con
+   suelto sobre la página (centrado, 10px, padding inferior). Acá vive dentro del
+   sello del header. Se le neutralizan esos dos valores y nada más — con
    !important porque son estilos inline del componente, que no se toca. */
 .stx-stamp > div { padding-bottom: 0 !important; font-size: var(--fs-caption) !important; }
 

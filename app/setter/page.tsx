@@ -1,5 +1,5 @@
 'use client';
-import { useState, useMemo, useEffect, useRef } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { NavBar } from '@/components/NavBar';
 import { StatusBadge } from '@/components/StatusBadge';
 import { AuthGuard } from '@/components/AuthGuard';
@@ -918,42 +918,6 @@ function LinkCreateAssign({
 }
 
 // ─── Setter Content ───────────────────────────────────────────────────────────
-// ─── Offsets del sticky interno ───────────────────────────────────────────────
-//
-// El header interno de esta pantalla se pega POR DEBAJO del header global de la
-// app (.tnav, sticky top:0 z-index:40), y el rail de filtros por debajo del
-// interno. Ninguna de las dos alturas es fija: .tnav mide distinto en escritorio
-// y en móvil, y el interno cambia si el título envuelve.
-//
-// No existe ningún token con la altura del header global — y no se puede crear
-// sin tocarlo. Así que se MIDE en vivo (solo lectura, cero mutación sobre el
-// header) y se publica como --stx-top / --stx-head-h en el contenedor de la
-// pantalla, que es lo único que las consume. Alternativa descartada: hardcodear
-// 62px, que se rompe en el primer cambio de la barra.
-function useStickyOffsets(
-  pageRef: React.RefObject<HTMLDivElement | null>,
-  headRef: React.RefObject<HTMLElement | null>,
-) {
-  useEffect(() => {
-    const page = pageRef.current;
-    if (!page) return;
-    const nav = document.querySelector('.tnav');
-
-    const update = () => {
-      const navH = nav?.getBoundingClientRect().height ?? 0;
-      const headH = headRef.current?.getBoundingClientRect().height ?? 0;
-      page.style.setProperty('--stx-top', `${Math.round(navH)}px`);
-      page.style.setProperty('--stx-head-h', `${Math.round(headH)}px`);
-    };
-    update();
-
-    const ro = new ResizeObserver(update);
-    if (nav) ro.observe(nav);
-    if (headRef.current) ro.observe(headRef.current);
-    window.addEventListener('resize', update);
-    return () => { ro.disconnect(); window.removeEventListener('resize', update); };
-  }, [pageRef, headRef]);
-}
 
 /** Orden de la lista. 'suggested' es el orden que ya devolvía `filtered` — es el
  *  valor por defecto para que el rediseño no altere lo que se ve hoy. */
@@ -968,10 +932,6 @@ const SORT_LABELS: Record<SortKey, string> = {
 
 function SetterContent() {
   const { teachers, students, assignments, unassignedStudents, addStudent, addAssignment, reloadAll } = useTeachers();
-
-  const pageRef = useRef<HTMLDivElement>(null);
-  const headRef = useRef<HTMLElement>(null);
-  useStickyOffsets(pageRef, headRef);
 
   const [searchMode, setSearchMode] = useState<'dayhour' | 'day' | 'hour'>('dayhour');
   const [dayOnly, setDayOnly] = useState('Lunes');
@@ -1276,14 +1236,13 @@ function SetterContent() {
   }
 
   return (
-    <div className="stx-page" ref={pageRef}>
+    <div className="stx-page">
       <NavBar />
       <PullToRefresh onRefresh={reloadAll}>
 
-      {/* Header INTERNO de la pantalla. Vive por debajo del header global de la
-          app: se pega a --stx-top (la altura real de .tnav, medida en vivo) y va
-          en z-index 20, por debajo del 40 del global y del 30 de .spnav. */}
-      <header className="stx-head" ref={headRef}>
+      {/* Header INTERNO de la pantalla. No es sticky: scrollea con el contenido.
+          El único elemento fijo de la app sigue siendo el header global .tnav. */}
+      <header className="stx-head">
         <div className="stx-head-inner">
           <div className="stx-head-top">
             <div>
