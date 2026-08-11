@@ -4093,6 +4093,42 @@ export async function dbGetFinanceRates(): Promise<import('@/types').FinanceRate
   }));
 }
 
+// ── FINANCE: PRECIOS DE PLANES (carga manual) ─────────────────────────────────
+
+/**
+ * Precios cargados a mano en `product_prices`. Ver supabase-product-prices.sql.
+ *
+ * Devuelve [] ante CUALQUIER problema, incluida la tabla sin crear todavía
+ * (42P01 / PGRST205). No es pereza: el consumidor es /api/external/payouts, que
+ * el dashboard financiero ya usa en producción para el gasto en profesores. Sin
+ * precios, la facturación sale como "desconocida" y el gasto —que es lo que ese
+ * endpoint servía desde el principio— se sigue entregando igual. Lanzar acá
+ * tumbaría un dato que hoy funciona por culpa de una tabla que es un añadido.
+ */
+export async function dbGetProductPrices(): Promise<import('@/types').ProductPrice[]> {
+  const { data, error } = await supabase.from('product_prices').select('*');
+  if (error) {
+    if (error.code === '42P01' || error.code === 'PGRST205') {
+      console.warn('[db] product_prices no existe todavía: corré supabase-product-prices.sql. Sin precios no hay facturación ni margen, pero el gasto en profesores no se ve afectado.');
+    } else {
+      console.error('[db] no se pudieron leer los precios:', error.message);
+    }
+    return [];
+  }
+  interface PriceRow {
+    id?: unknown; product_name_contains?: unknown; price?: unknown;
+    billing_months?: unknown; active?: unknown; notes?: unknown;
+  }
+  return ((data ?? []) as PriceRow[]).map(row => ({
+    id:                  Number(row.id),
+    productNameContains: String(row.product_name_contains ?? ''),
+    price:               Number(row.price),
+    billingMonths:       Number(row.billing_months ?? 1),
+    active:              row.active !== false,
+    notes:               (row.notes as string | null) ?? null,
+  })).filter(p => p.productNameContains.trim() && Number.isFinite(p.price));
+}
+
 // ── FINANCE: PAYMENTS ─────────────────────────────────────────────────────────
 
 function mapFinancePayment(row: any): import('@/types').FinancePayment {

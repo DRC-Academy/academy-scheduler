@@ -21,14 +21,15 @@
 import {
   dbGetTeachers, dbGetStudents, dbGetAssignments, dbGetScoringEvents,
   dbGetFinanceRates, dbGetFinancePayments, dbGetClassRecords, dbGetClassJoinLogs,
-  dbGetManualApprovals, dbGetClassTranscripts,
+  dbGetManualApprovals, dbGetClassTranscripts, dbGetProductPrices,
 } from '@/lib/db';
 import { calculateTeacherFinance } from '@/lib/finance';
+import { margenDe } from '@/lib/billing';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { madridToday } from '@/lib/subscriptionAccess';
 import type {
   Teacher, Student, Assignment, ScoringEvent, FinanceRate, FinancePayment,
-  ClassRecord, ClassJoinLog, FinanceManualApproval,
+  ClassRecord, ClassJoinLog, FinanceManualApproval, ProductPrice,
 } from '@/types';
 
 // ── "Alumno activo" ──────────────────────────────────────────────────────────
@@ -92,6 +93,10 @@ export interface PayoutDataset {
   classAnalyses: Awaited<ReturnType<typeof dbGetClassTranscripts>>;
   /** Profesores con ≥1 alumno activo AHORA (ver criterio arriba). */
   activeTeacherIds: Set<string>;
+  /** Precios cargados a mano. [] si la tabla aún no existe: el gasto no depende de ellos. */
+  productPrices: ProductPrice[];
+  /** Alumnos activos de cada profesor, para la facturación. teacherId → alumnos. */
+  rosterByTeacher: Map<string, Student[]>;
   loadedAt: number;
 }
 
@@ -108,10 +113,11 @@ export async function loadPayoutDataset(force = false): Promise<PayoutDataset> {
   const [
     teachers, students, assignments, scoringEvents,
     rates, payments, classRecords, joinLogs, manualApprovals, classAnalyses,
+    productPrices,
   ] = await Promise.all([
     dbGetTeachers(), dbGetStudents(), dbGetAssignments(), dbGetScoringEvents(),
     dbGetFinanceRates(), dbGetFinancePayments(), dbGetClassRecords(), dbGetClassJoinLogs(),
-    dbGetManualApprovals(), dbGetClassTranscripts(),
+    dbGetManualApprovals(), dbGetClassTranscripts(), dbGetProductPrices(),
   ]);
 
   const hoy = madridToday();
@@ -124,18 +130,38 @@ export async function loadPayoutDataset(force = false): Promise<PayoutDataset> {
   const byName = new Map(students.map(s => [nk(s.name), s]));
 
   const activeTeacherIds = new Set<string>();
+  // Alumnos de cada profesor para la FACTURACIÓN. Se construye en el mismo
+  // recorrido que `activeTeacherIds` y con el mismo emparejado tolerante: si se
+  // armara aparte, "de quién es este alumno" tendría dos respuestas posibles y
+  // acabarían discrepando, que es el problema que este repo ya tuvo con los
+  // vínculos alumno→profesor.
+  //
+  // Se DEDUPLICA por id: un alumno con dos slots con el mismo profesor tiene dos
+  // assignments, y contarlo dos veces duplicaría su cuota en la facturación.
+  const rosterByTeacher = new Map<string, Student[]>();
+  const seenPorProfesor = new Map<string, Set<string>>();
+
   for (const a of assignments) {
     if ((a.status ?? 'active') !== 'active') continue;
     const s = byId.get(a.studentId) ?? byEmail.get(nk(a.studentEmail)) ?? byName.get(nk(a.studentName));
     if (!s) continue;
     if (VENCIDOS_CONOCIDOS.has(accesoConocidoDe(s, hoy))) continue;
     activeTeacherIds.add(a.teacherId);
+
+    const vistos = seenPorProfesor.get(a.teacherId) ?? new Set<string>();
+    if (vistos.has(s.id)) continue;
+    vistos.add(s.id);
+    seenPorProfesor.set(a.teacherId, vistos);
+
+    const arr = rosterByTeacher.get(a.teacherId) ?? [];
+    arr.push(s);
+    rosterByTeacher.set(a.teacherId, arr);
   }
 
   cached = {
     teachers, students, assignments, scoringEvents, rates, payments,
     classRecords, joinLogs, manualApprovals, classAnalyses,
-    activeTeacherIds, loadedAt: Date.now(),
+    activeTeacherIds, productPrices, rosterByTeacher, loadedAt: Date.now(),
   };
   return cached;
 }
@@ -153,6 +179,25 @@ export interface TeacherPayout {
   classes_payable: number;
   status: PayoutStatus;
   is_active: boolean;
+
+  // ── Facturación y margen (añadido 11/08/2026) ──────────────────────────────
+  //
+  // Dependen de `product_prices`, que se carga A MANO. Mientras esté vacía —o no
+  // exista— todo esto sale en 0/null y `total_amount` sigue funcionando igual:
+  // el gasto en profesores no depende de los precios.
+
+  /** Suma de lo que facturan sus alumnos ese mes. 0 si no hay ningún precio. */
+  facturacion: number;
+  /** facturacion − total_amount. null si NINGÚN alumno tiene precio resuelto. */
+  margen: number | null;
+  alumnos_con_precio: number;
+  alumnos_totales: number;
+  /**
+   * true = falta el precio de al menos un alumno, así que `facturacion` es un
+   * PISO y `margen` está inflado. El dashboard tiene que avisarlo de forma
+   * visible: un margen parcial presentado como definitivo es peor que no darlo.
+   */
+  facturacion_parcial: boolean;
 }
 
 export interface MonthPayouts {
@@ -168,6 +213,14 @@ export interface MonthPayouts {
    * está `teachers_with_amount`.
    */
   active_teachers_now: number;
+
+  /** Facturación del mes = suma de la de todos los profesores. */
+  facturacion_total: number;
+  /** facturacion_total − total_amount. null si ningún profesor tiene facturación. */
+  margen_total: number | null;
+  /** true si a CUALQUIER profesor le falta el precio de algún alumno. */
+  facturacion_parcial: boolean;
+
   teachers: TeacherPayout[];
 }
 
@@ -205,23 +258,54 @@ export function computeMonth(ds: PayoutDataset, monthYear: string): MonthPayouts
     const status: PayoutStatus =
       r.paymentStatus === 'paid' ? 'paid' : isCurrent ? 'en_curso' : 'pending';
 
+    const totalAmount = round2(r.totalAPagar);
+
+    // Alumnos que ya existían en el mes que se pide. Sin este filtro, un alumno
+    // dado de alta en agosto facturaría también en los meses de junio y julio de
+    // una serie histórica, y el margen de meses ya cerrados cambiaría solo porque
+    // el profesor sumó alumnos después.
+    const roster = (ds.rosterByTeacher.get(t.id) ?? [])
+      .filter(s => !s.createdAt || s.createdAt.slice(0, 7) <= monthYear);
+
+    const m = margenDe({
+      students: roster,
+      monthYear,
+      prices: ds.productPrices,
+      totalAPagar: totalAmount,
+    });
+
     return {
       teacher_id: t.id,
       teacher_name: t.name,
       month_year: monthYear,
-      total_amount: round2(r.totalAPagar),
+      total_amount: totalAmount,
       classes_payable: r.totalPagable,
       status,
       is_active: ds.activeTeacherIds.has(t.id),
+      facturacion: m.facturacion,
+      margen: m.margen,
+      alumnos_con_precio: m.alumnosConPrecio,
+      alumnos_totales: m.alumnosTotales,
+      facturacion_parcial: m.facturacionParcial,
     };
   });
+
+  const totalAmount = round2(teachers.reduce((s, t) => s + t.total_amount, 0));
+  const facturacionTotal = round2(teachers.reduce((s, t) => s + t.facturacion, 0));
+  // Ningún profesor con precio resuelto → no hay margen que dar. Es el caso de
+  // `product_prices` vacía: sin esto, el mes entero saldría con un margen
+  // negativo igual al gasto, como si la academia no facturara nada.
+  const algunPrecio = teachers.some(t => t.alumnos_con_precio > 0);
 
   return {
     month_year: monthYear,
     is_current_month: isCurrent,
-    total_amount: round2(teachers.reduce((s, t) => s + t.total_amount, 0)),
+    total_amount: totalAmount,
     teachers_with_amount: teachers.filter(t => t.total_amount !== 0).length,
     active_teachers_now: teachers.filter(t => t.is_active).length,
+    facturacion_total: facturacionTotal,
+    margen_total: algunPrecio ? round2(facturacionTotal - totalAmount) : null,
+    facturacion_parcial: teachers.some(t => t.facturacion_parcial),
     teachers: teachers.sort((a, b) => b.total_amount - a.total_amount || a.teacher_name.localeCompare(b.teacher_name, 'es')),
   };
 }

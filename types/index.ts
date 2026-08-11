@@ -340,3 +340,18 @@ export interface FinanceRate {
   tier: 'nuevo' | 'antiguo';
   rate: number;
 }
+
+// Precio de un plan, cargado a mano en `product_prices`. Alimenta el cálculo de
+// facturación por alumno y, con él, el margen por profesor. Ver lib/billing.ts y
+// supabase-product-prices.sql.
+export interface ProductPrice {
+  id: number;
+  /** Patrón que se busca DENTRO de `students.product_name`. Gana el más largo. */
+  productNameContains: string;
+  price: number;
+  /** 1 = plan recurrente. >1 = pago único repartido sobre esos meses. */
+  billingMonths: number;
+  /** false = producto deliberadamente NO facturable (ej. la matrícula de alta). */
+  active: boolean;
+  notes?: string | null;
+}

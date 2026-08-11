@@ -1,0 +1,43 @@
+patron_nombre_producto,precio_cobrado_eur,meses_que_cubre,alumnos_hoy,tipo,active,notas
+Curso de inglés general - 1h semanal,,1,20,suscripción,true,"Cubre todos los niveles (A1-C1): el nivel va al final del nombre y el patrón no lo incluye. Si el precio varía por nivel, añadí filas más largas."
+Curso de inglés general - 2h semanales,,1,41,suscripción,true,El producto con más alumnos.
+Curso de inglés general - 3h semanales,,1,12,suscripción,true,
+Curso de inglés general - 4h semanales,,1,10,suscripción,true,
+Preparación B1 Preliminary - 1h semanal,,1,3,suscripción,true,
+Preparación B1 Preliminary - 2h semanales,,1,7,suscripción,true,
+Preparación B1 Preliminary - 3h semanales,,1,2,suscripción,true,
+Preparación B1 Preliminary - 4h semanales,,1,2,suscripción,true,
+Preparación B2 First Certificate - 1h semanal,,1,4,suscripción,true,
+Preparación B2 First Certificate - 2h semanales,,1,10,suscripción,true,
+Preparación B2 First Certificate - 3h semanales,,1,4,suscripción,true,
+Preparación B2 First Certificate - 4h semanales,,1,2,suscripción,true,
+Preparación C1 Advanced - 1h semanal,,1,2,suscripción,true,
+Preparación C1 Advanced - 2h semanales,,1,2,suscripción,true,
+Preparación del examen APTIS - 2h semanales,,1,1,suscripción,true,
+Preparación del examen IELTS - 2h semanales,,1,1,suscripción,true,
+Ingles General - 1h semanal,,1,4,suscripción,true,"SIN TILDE. PENDIENTE: confirmar en Woo si sigue publicado o quedó sustituido por ""Curso de inglés general""."
+Ingles General - 2h semanales,,1,3,suscripción,true,SIN TILDE. Misma duda.
+Inglés general,,1,8,suscripción,true,Etiqueta interna (product_type null): no viene de Woo. Es subcadena de casi todo lo demás; solo funciona porque gana el patrón más largo. NO borres las filas largas.
+B1 Exámenes,,1,5,suscripción,true,"Etiqueta interna, sin product_type."
+B2 Exámenes,,1,2,suscripción,true,"Etiqueta interna, sin product_type."
+C1 Exámenes,,1,1,suscripción,true,"Etiqueta interna, sin product_type."
+Intensivos Inglés general,,3,2,pago único,true,"Etiqueta interna, sin product_type."
+Intensivo general,,3,7,pago único,true,Duración aprobada: 3 meses.
+intensivo PET,,3,7,pago único,true,Duración aprobada: 3 meses — confirmada contra la mediana real de los accesos ya cargados a mano (2.5 / 3.3 / 3.0 / 2.3 / 3.0 / 3.0 / 3.2).
+Intensivo FCE,,2,2,pago único,true,Duración aprobada: 2 meses.
+Intensivo CAE,,2,0,pago único,true,Sin alumnos hoy; fila lista por si aparece.
+Curso intensivo de ingles - OFERTA - 5h semanales,,1,8,suscripción,true,"MES A MES, confirmado: se renueva. billing_months=1. Corrige la auditoría del 07/08/2026, que lo había clasificado como pago único en check-subscription."
+Empresas Ingles General,,3,0,pago único,true,"RESPALDO: hoy los 10 alumnos caen en una fila específica de abajo. Se deja para que una combinación nivel×hora no contemplada tenga precio en vez de quedar sin facturar. NO la borres."
+Empresas Ingles General — B1 · 1h semanal,,3,2,pago único,true,"Precio por hora. El nivel va PEGADO entre el producto y las horas, así que hace falta una fila por combinación."
+Empresas Ingles General — B2 · 1h semanal,,3,1,pago único,true,Precio por hora.
+Empresas Ingles General — B1 · 2h semanales,,3,4,pago único,true,Precio por hora. La combinación con más alumnos.
+Empresas Ingles General — B2 · 2h semanales,,3,1,pago único,true,Precio por hora.
+Empresas Ingles General — B1 · 3h semanales,,3,1,pago único,true,Precio por hora.
+Empresas Ingles General — B1 · 4h semanales,,3,1,pago único,true,Precio por hora.
+Empresas Intensivos,,3,0,pago único,true,"RESPALDO: hoy los 2 alumnos caen en la fila específica de abajo. NO la borres."
+Empresas Intensivos — 5h semanales,,3,2,pago único,true,"Precio por hora. Acá la hora va ANTES del nivel, así que una sola fila cubre B1 y B2."
+Empresas Preparacion de Examenes,,3,0,pago único,true,Sin alumnos hoy; fila lista por si aparece.
+Plan mensual de inglés para niños - 2h semanales,,1,1,suscripción,true,
+Plan mensual Niños - 1h semanal,,1,1,suscripción,true,
+Aprende Inglés Hoy: Clases Online 100% Personalizadas,,1,1,suscripción,true,"Alta 04/08/2026, 1 alumno. PENDIENTE: confirmar qué es en Woo."
+Matricula DRC Academy - Inglés General,,1,1,alta única,false,"active=false A PROPÓSITO: cobro de alta, no plan mensual. Con la regla corregida gana igual el patrón más largo y devuelve ""sin precio"", en vez de caer en ""Inglés general"" y facturarse todos los meses."
