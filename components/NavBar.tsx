@@ -138,6 +138,10 @@ export function NavBar() {
           <div className="tnav-links">
             {visible.map(item => (
               <Link key={item.href} href={item.href}
+                // El tutorial resalta la pestaña de destino antes de saltar a ella,
+                // para que el profesor aprenda DÓNDE está la sección y no solo la
+                // vea aparecer. Ancla estable por ruta, no por posición en la barra.
+                data-onboarding={`nav:${item.href}`}
                 className={`tnav-link${path === item.href ? ' is-active' : ''}`}>
                 {item.label}
               </Link>

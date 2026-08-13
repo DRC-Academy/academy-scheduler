@@ -10,12 +10,19 @@
 //            veces que quiera, y no escribe nada.
 //
 // REPARTO DE RESPONSABILIDADES con components/OnboardingTour:
-//   · Acá vive la LÓGICA: quién está en onboarding, qué pasos se cumplieron, el
-//     contador de clases y las escrituras a Supabase.
-//   · La NAVEGACIÓN del recorrido (qué paso se ve, avanzar, retroceder) la lleva
-//     driver.js dentro del Tour. No se duplica acá: tener dos punteros sobre el
-//     mismo recorrido es exactamente lo que hacía que el paso se moviera solo
-//     hacia atrás cuando llegaba una acción real.
+//   · Acá vive el ESTADO: quién está en onboarding, qué pasos se cumplieron, el
+//     contador de clases, las escrituras a Supabase y el PASO ACTUAL.
+//   · El Tour solo PINTA ese paso con driver.js y traduce los clics de
+//     "Siguiente"/"Anterior" en llamadas a `goToStep`.
+//
+// El paso actual vive acá y no dentro de driver.js porque el recorrido CAMBIA DE
+// PANTALLA (el último paso está en Finanzas): al navegar, driver.js se destruye
+// y se reconstruye, así que su índice interno se perdería. Este provider cuelga
+// del layout raíz y sobrevive a las navegaciones de cliente.
+//
+// Sigue habiendo UN solo dueño del puntero —este— para no repetir el fallo de
+// tener dos, que hacía que el paso se moviera solo hacia atrás al llegar una
+// acción real.
 //
 // El progreso se siembra UNA vez desde la fila del profesor. TeachersContext
 // recarga la lista cada 60 s y releerlo en cada recarga pisaría lo que el profesor
@@ -28,7 +35,7 @@ import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
 import {
   ONBOARDING_STEPS, ONBOARDING_TARGET_CLASSES, isAutoOnboarding,
-  type OnboardingStepId,
+  type OnboardingStep, type OnboardingStepId,
 } from '@/lib/onboarding';
 import { dbStartOnboarding, dbSkipOnboarding, dbCompleteOnboardingClass } from '@/lib/onboardingStore';
 
@@ -40,8 +47,10 @@ interface OnboardingApi {
   done: Set<OnboardingStepId>;
   /** Pasos que ahora no aplican. No son checks: solo no frenan el recorrido. */
   notApplicable: Set<OnboardingStepId>;
-  /** Índice del primer paso ni cumplido ni descartado: por ahí arranca el automático. */
-  firstPendingIndex: number;
+  /** Paso a la vista. Vive acá porque el recorrido cruza pantallas. */
+  stepIndex: number;
+  step: OnboardingStep;
+  totalSteps: number;
   classesCompleted: number;
   /** Hay un profesor con sesión: es lo único que pide el botón del header. */
   available: boolean;
@@ -55,6 +64,9 @@ interface OnboardingApi {
   /** "Saltar tutorial": termina el automático (el botón del header sigue). */
   skipAuto: () => void;
   dismissFinished: () => void;
+  goToStep: (index: number) => void;
+  next: () => void;
+  prev: () => void;
 
   /**
    * La pantalla avisa que el profesor hizo la acción REAL de un paso. En modo
@@ -77,9 +89,11 @@ interface OnboardingApi {
 
 const noop = () => {};
 const OnboardingContext = createContext<OnboardingApi>({
-  mode: 'off', done: new Set(), notApplicable: new Set(), firstPendingIndex: 0,
+  mode: 'off', done: new Set(), notApplicable: new Set(),
+  stepIndex: 0, step: ONBOARDING_STEPS[0], totalSteps: ONBOARDING_STEPS.length,
   classesCompleted: 0, available: false, finishedNotice: false,
   openManual: noop, close: noop, skipAuto: noop, dismissFinished: noop,
+  goToStep: noop, next: noop, prev: noop,
   reportAction: noop, markNotApplicable: noop, reportClassCompleted: noop,
 });
 
@@ -109,6 +123,8 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
   );
 
   const [mode, setMode] = useState<OnboardingMode>('off');
+  const [stepIndex, setStepIndex] = useState(0);
+  const stepRef = useRef(0);
   const [done, setDone] = useState<Set<OnboardingStepId>>(new Set());
   const [notApplicable, setNotApplicable] = useState<Set<OnboardingStepId>>(new Set());
   const [classesCompleted, setClassesCompleted] = useState(0);
@@ -138,6 +154,14 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     naRef.current = new Set();
     setDone(new Set());
     setNotApplicable(new Set());
+    stepRef.current = 0;
+    setStepIndex(0);
+  }, []);
+
+  /** Primer paso ni cumplido ni descartado. Es por donde retoma el automático. */
+  const firstPending = useCallback(() => {
+    const i = ONBOARDING_STEPS.findIndex(s => !doneRef.current.has(s.id) && !naRef.current.has(s.id));
+    return i === -1 ? ONBOARDING_STEPS.length - 1 : i;
   }, []);
 
   // Siembra del progreso desde la fila del profesor. Es una sincronización con un
@@ -172,6 +196,9 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
   const openManual = useCallback(() => {
     // El manual pisa al automático mientras está abierto: son el mismo recorrido
     // y dos overlays a la vez no tendría sentido. Al cerrarlo vuelve el automático.
+    // Arranca desde el principio: es un repaso completo, no una continuación.
+    stepRef.current = 0;
+    setStepIndex(0);
     applyMode('manual');
   }, [applyMode]);
 
@@ -209,6 +236,28 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     return true;
   }, [resetChecks]);
 
+  const goToStep = useCallback((index: number) => {
+    const clamped = Math.max(0, Math.min(index, ONBOARDING_STEPS.length - 1));
+    stepRef.current = clamped;
+    setStepIndex(clamped);
+  }, []);
+
+  const next = useCallback(() => goToStep(stepRef.current + 1), [goToStep]);
+  const prev = useCallback(() => goToStep(stepRef.current - 1), [goToStep]);
+
+  /**
+   * Avanza SOLO si el paso que se acaba de cerrar es el que el profesor está
+   * viendo. Si cumplió otro (subió el transcript de una clase vieja estando en el
+   * paso 2), el recorrido se queda donde está: lo que le falta sigue siendo eso.
+   */
+  const avanzarSiEraElActual = useCallback((id: OnboardingStepId) => {
+    if (ONBOARDING_STEPS[stepRef.current]?.id !== id) return;
+    const siguiente = firstPending();
+    // Nunca hacia atrás: un paso anterior sin marcar no debe retroceder el tour.
+    if (siguiente > stepRef.current) goToStep(siguiente);
+    else goToStep(stepRef.current + 1);
+  }, [firstPending, goToStep]);
+
   const reportAction = useCallback((id: OnboardingStepId) => {
     if (modeRef.current !== 'auto') return;
     if (doneRef.current.has(id)) return;
@@ -216,7 +265,8 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     doneRef.current = nextDone;
     if (cerrarCicloSiCompleto(nextDone, naRef.current)) return;
     setDone(nextDone);
-  }, [cerrarCicloSiCompleto]);
+    avanzarSiEraElActual(id);
+  }, [cerrarCicloSiCompleto, avanzarSiEraElActual]);
 
   const markNotApplicable = useCallback((id: OnboardingStepId) => {
     if (modeRef.current !== 'auto') return;
@@ -225,12 +275,8 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     naRef.current = nextNa;
     if (cerrarCicloSiCompleto(doneRef.current, nextNa)) return;
     setNotApplicable(nextNa);
-  }, [cerrarCicloSiCompleto]);
-
-  const firstPendingIndex = useMemo(() => {
-    const i = ONBOARDING_STEPS.findIndex(s => !done.has(s.id) && !notApplicable.has(s.id));
-    return i === -1 ? 0 : i;
-  }, [done, notApplicable]);
+    avanzarSiEraElActual(id);
+  }, [cerrarCicloSiCompleto, avanzarSiEraElActual]);
 
   const reportClassCompleted = useCallback((classKey: string) => {
     if (!teacher || modeRef.current !== 'auto') return;
@@ -255,13 +301,16 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
   }, [teacher, applyMode]);
 
   const api = useMemo<OnboardingApi>(() => ({
-    mode, done, notApplicable, firstPendingIndex, classesCompleted,
+    mode, done, notApplicable, classesCompleted,
+    stepIndex,
+    step: ONBOARDING_STEPS[stepIndex] ?? ONBOARDING_STEPS[0],
+    totalSteps: ONBOARDING_STEPS.length,
     available: !!teacher, finishedNotice,
-    openManual, close, skipAuto, dismissFinished,
+    openManual, close, skipAuto, dismissFinished, goToStep, next, prev,
     reportAction, markNotApplicable, reportClassCompleted,
   }), [
-    mode, done, notApplicable, firstPendingIndex, classesCompleted, teacher, finishedNotice,
-    openManual, close, skipAuto, dismissFinished,
+    mode, done, notApplicable, stepIndex, classesCompleted, teacher, finishedNotice,
+    openManual, close, skipAuto, dismissFinished, goToStep, next, prev,
     reportAction, markNotApplicable, reportClassCompleted,
   ]);
 

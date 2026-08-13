@@ -29,6 +29,14 @@ export interface OnboardingStep {
   title: string;
   /** El PORQUÉ, en una frase. Es lo que hace que el paso no se olvide. */
   why: string;
+  /**
+   * Pantalla donde vive el botón de este paso. El tour NAVEGA solo hasta ella
+   * antes de resaltar: el profesor no tiene que saber en qué sección está cada
+   * cosa, que era justo lo que se le pedía adivinar.
+   */
+  route: string;
+  /** Nombre de la sección, para anunciar el salto ("Te llevo a Finanzas"). */
+  routeLabel: string;
   /** Lado preferido del globo. Es una preferencia: si no entra, se recoloca. */
   side?: StepSide;
   align?: StepAlign;
@@ -53,11 +61,17 @@ export interface OnboardingStep {
   actionable: boolean;
 }
 
+/** Rutas del profesor que recorre el tour. */
+export const RUTA_AGENDA = '/clases';
+export const RUTA_FINANZAS = '/mis-clases';
+
 export const ONBOARDING_STEPS: OnboardingStep[] = [
   {
     id: 'presentation-email',
     title: 'Envía el email de presentación',
     why: 'Es tu primer contacto con un alumno nuevo y se envía una sola vez, dentro de las primeras 24 horas. Pasada esa ventana cuenta como retraso en tu seguimiento.',
+    route: RUTA_AGENDA,
+    routeLabel: 'Mis clases',
     anchors: ['presentation-email'],
     where: 'En "Mis clases", debajo del botón principal de la tarjeta. Solo aparece la primera vez con cada alumno.',
     side: 'left',
@@ -69,6 +83,8 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
     id: 'join-class',
     title: 'Entra a la clase',
     why: 'Este botón registra tu acceso, y ese registro es el primero de los dos factores que hacen que la clase se te pague. No se puede cargar después: entrar al Meet por fuera deja la clase sin registro.',
+    route: RUTA_AGENDA,
+    routeLabel: 'Mis clases',
     anchors: ['join-class', 'set-link'],
     where: 'En "Mis clases", el botón verde de la tarjeta. Si al alumno le falta el enlace de Meet, dirá "Definir enlace": definilo una vez y queda guardado.',
     side: 'left',
@@ -79,6 +95,8 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
     id: 'give-class',
     title: 'Da tu clase con normalidad',
     why: 'Durante la clase no hay nada que tocar acá. Si el alumno está en riesgo de baja, antes de abrir el Meet verás un aviso con el protocolo de esa clase: el alumno no lo ve, es solo para vos.',
+    route: RUTA_AGENDA,
+    routeLabel: 'Mis clases',
     anchors: [],
     where: 'En Google Meet, fuera de la plataforma.',
     actionable: false,
@@ -87,6 +105,8 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
     id: 'add-transcript',
     title: 'Sube el transcript',
     why: 'Es el segundo factor: hasta que no lo subas, la clase figura como "pendiente de transcript" y no suma a tu total a cobrar. Copiá de Fathom la pestaña Transcript completa, no el Summary.',
+    route: RUTA_AGENDA,
+    routeLabel: 'Mis clases',
     anchors: ['add-transcript'],
     where: 'En "Mis clases", en la tarjeta de una clase ya dada. Si no la ves, usá el filtro "Sin transcript".',
     side: 'left',
@@ -94,13 +114,20 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
     actionable: true,
   },
   {
+    // Único paso que vive en OTRA pestaña, y a propósito: el sitio donde se
+    // comprueba que la clase "ya cuenta" es el resumen de pago, no la agenda. El
+    // tour cambia de sección solo para enseñárselo.
     id: 'class-status',
-    title: 'Comprueba que la clase quedó registrada',
-    why: 'Con el acceso registrado y el transcript subido, la clase queda cerrada y cuenta para tu pago. Esta etiqueta te lo dice de un vistazo; el detalle con importes está en Finanzas.',
-    anchors: ['class-status'],
-    where: 'En "Mis clases", la etiqueta de estado de una clase ya dada.',
+    title: 'Comprueba que la clase ya cuenta',
+    why: 'Con el acceso registrado y el transcript subido, la clase pasa a "pagable" y se suma a tu total. Acá lo ves con importes: lo que ya está cerrado y lo que sigue pendiente de transcript.',
+    route: RUTA_FINANZAS,
+    routeLabel: 'Finanzas',
+    // El resumen de Finanzas primero; la etiqueta de la agenda queda de respaldo
+    // por si la navegación no llegó a completarse.
+    anchors: ['payment-summary', 'class-status'],
+    where: 'En "Finanzas", la tarjeta "Total a cobrar" con el desglose del mes.',
     side: 'bottom',
-    align: 'end',
+    align: 'start',
     actionable: false,
   },
 ];

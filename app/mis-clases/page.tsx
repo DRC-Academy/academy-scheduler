@@ -369,7 +369,9 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
         {/* ── 1. Resumen de pago — ARRIBA y a ancho completo ──────────────────
             Estaba en un aside sticky de 380px a la derecha, que le robaba ese
             ancho al detalle de clases y lo obligaba a desplazarse en horizontal. */}
-        <div className="mcf-card mcf-card-pad mcf-total">
+        {/* `data-onboarding`: último paso del tutorial guiado, que trae acá al
+            profesor para enseñarle que la clase cerrada ya suma a su pago. */}
+        <div className="mcf-card mcf-card-pad mcf-total" data-onboarding="payment-summary">
           <div className="mcf-total-head">
             <div>
               <div className="mcf-card-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>

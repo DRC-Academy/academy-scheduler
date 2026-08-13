@@ -34,6 +34,77 @@ export function findAnchor(anchors: string[]): HTMLElement | undefined {
   return undefined;
 }
 
+// ── Flecha señaladora ─────────────────────────────────────────────────────────
+
+/** Lado del elemento donde se coloca la flecha, y hacia dónde apunta. */
+export type PointerSide = 'left' | 'right' | 'top' | 'bottom';
+export interface Pointer { side: PointerSide; x: number; y: number; }
+
+/** Caja que ocupa la flecha con su etiqueta, para decidir si cabe. */
+const FLECHA_W = 150;
+const FLECHA_H = 32;
+
+interface Caja { l: number; t: number; r: number; b: number; }
+const seSolapan = (a: Caja, b: Caja) => a.l < b.r && a.r > b.l && a.t < b.b && a.b > b.t;
+
+/**
+ * Dónde poner la flecha: pegada al elemento, dentro del viewport y SIN quedar
+ * debajo del globo.
+ *
+ * Lo último no es un detalle. El globo se coloca justo al lado del elemento, así
+ * que el primer sitio "natural" para la flecha suele ser exactamente el que el
+ * globo ya ocupa, y la flecha desaparecía detrás de él.
+ */
+export function calcularFlecha(r: DOMRect, popover: Caja | null): Pointer | null {
+  const cy = r.top + r.height / 2;
+  const cx = r.left + r.width / 2;
+  const candidatos: Array<{ p: Pointer; caja: Caja }> = [
+    {
+      p: { side: 'left', x: r.left - 12, y: cy },
+      caja: { l: r.left - 12 - FLECHA_W, t: cy - FLECHA_H / 2, r: r.left - 12, b: cy + FLECHA_H / 2 },
+    },
+    {
+      p: { side: 'right', x: r.right + 12, y: cy },
+      caja: { l: r.right + 12, t: cy - FLECHA_H / 2, r: r.right + 12 + FLECHA_W, b: cy + FLECHA_H / 2 },
+    },
+    {
+      p: { side: 'top', x: cx, y: r.top - 12 },
+      caja: { l: cx - FLECHA_W / 2, t: r.top - 12 - FLECHA_H * 2, r: cx + FLECHA_W / 2, b: r.top - 12 },
+    },
+    {
+      // Debajo, apuntando hacia arriba. Es la que salva el móvil: ahí el globo
+      // ocupa media pantalla por encima del botón y no queda hueco arriba.
+      p: { side: 'bottom', x: cx, y: r.bottom + 12 },
+      caja: { l: cx - FLECHA_W / 2, t: r.bottom + 12, r: cx + FLECHA_W / 2, b: r.bottom + 12 + FLECHA_H * 2 },
+    },
+  ];
+
+  const cabe = (c: Caja) => c.l >= 4 && c.r <= window.innerWidth - 4 && c.t >= 4 && c.b <= window.innerHeight - 4;
+  // Solo un sitio que quepa Y esté libre. Si no hay ninguno NO se dibuja: una
+  // flecha aplastada contra el globo confunde más que la ausencia de flecha, y el
+  // halo del elemento más el pico del globo ya señalan de sobra.
+  return candidatos.find(c => cabe(c.caja) && !(popover && seSolapan(c.caja, popover)))?.p ?? null;
+}
+
+/** Caja del globo de driver.js, si está en pantalla. */
+export function popoverBox(): Caja | null {
+  const r = document.querySelector('.driver-popover')?.getBoundingClientRect();
+  return r ? { l: r.left, t: r.top, r: r.right, b: r.bottom } : null;
+}
+
+/**
+ * Dibujo de la flecha según su orientación.
+ *
+ * Se usa un trazo DISTINTO para la vertical en vez de rotar el horizontal con
+ * CSS: `rotate()` gira el pixelado pero NO la caja de maquetación, así que la
+ * flecha rotada se salía de su hueco y se comía la etiqueta de al lado.
+ */
+export function flechaSvg(side: PointerSide): { viewBox: string; w: number; h: number; d: string } {
+  if (side === 'top')    return { viewBox: '0 0 28 64', w: 28, h: 64, d: 'M14 2 V46 M4 34 L14 46 L24 34' };
+  if (side === 'bottom') return { viewBox: '0 0 28 64', w: 28, h: 64, d: 'M14 62 V18 M4 30 L14 18 L24 30' };
+  return { viewBox: '0 0 64 28', w: 64, h: 28, d: 'M2 14 H46 M34 4 L46 14 L34 24' };
+}
+
 export interface TourOptions {
   /** 'auto' añade el progreso de formación y el enlace "Saltar tutorial". */
   mode: 'auto' | 'manual';
@@ -41,6 +112,13 @@ export interface TourOptions {
   done: () => Set<OnboardingStepId>;
   /** Clases de formación completadas, para el "Clase 3 de 5". */
   classesCompleted: () => number;
+  /**
+   * Avance y retroceso. Los lleva React, NO driver.js: el recorrido cruza
+   * pantallas y en cada salto driver se destruye y se reconstruye, con lo que su
+   * índice interno se perdería. Acá solo se traduce el clic.
+   */
+  onNext: () => void;
+  onPrev: () => void;
   /** "Saltar tutorial" (solo modo automático). */
   onSkip: () => void;
   /** Cierre por la X, Escape o "Terminar". */
@@ -61,6 +139,16 @@ function decorarPopover(
   const done = opts.done();
   popover.wrapper.classList.toggle('is-auto', auto);
   popover.wrapper.classList.toggle('is-done', done.has(step.id));
+
+  // Aviso de cambio de pestaña. El profesor ve ADÓNDE lo lleva el paso siguiente
+  // antes de que la pantalla cambie sola debajo suyo, que sin avisar desorienta.
+  const siguiente = ONBOARDING_STEPS[ONBOARDING_STEPS.indexOf(step) + 1];
+  if (siguiente && siguiente.route !== step.route) {
+    const salto = document.createElement('div');
+    salto.className = 'drc-tour-jump';
+    salto.textContent = `Al continuar te llevo a ${siguiente.routeLabel}`;
+    popover.footer.insertAdjacentElement('beforebegin', salto);
+  }
 
   // "Dónde está": solo si el paso ancla algo y no se encontró el botón. Evita un
   // globo suelto en medio de la pantalla sin decir a qué se refería.
@@ -125,10 +213,14 @@ export function buildTourSteps(opts: TourOptions): DriveStep[] {
       popoverClass: 'drc-tour',
       progressText: `Paso {{current}} de ${ONBOARDING_STEPS.length}`,
       showProgress: true,
-      nextBtnText: i === ONBOARDING_STEPS.length - 1 ? 'Terminar' : 'Siguiente',
-      prevBtnText: 'Anterior',
+      nextBtnText: i === ONBOARDING_STEPS.length - 1 ? 'Terminar' : 'Siguiente →',
+      prevBtnText: '← Anterior',
       doneBtnText: 'Terminar',
       onPopoverRender: popover => decorarPopover(popover, s, opts),
+      // Se intercepta el avance de driver.js: el puntero lo lleva React porque el
+      // recorrido cambia de pantalla (ver TourOptions.onNext).
+      onNextClick: () => (i === ONBOARDING_STEPS.length - 1 ? opts.onClose() : opts.onNext()),
+      onPrevClick: () => opts.onPrev(),
     },
   }));
 }
