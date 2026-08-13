@@ -1587,7 +1587,9 @@ function TeacherContent() {
         </div>
 
         {activeTab === 'calendar' && (
-          <div style={{ background: '#fff', border: '1px solid #e6e7e2', borderRadius: 18, padding: 22, boxShadow: '0 1px 2px rgba(16,24,16,0.04)' }}>
+          // `data-onboarding`: primer paso del tutorial guiado. La disponibilidad
+          // es la condición de todo lo demás (sin celdas libres no hay alumnos).
+          <div data-onboarding="calendar-grid" style={{ background: '#fff', border: '1px solid #e6e7e2', borderRadius: 18, padding: 22, boxShadow: '0 1px 2px rgba(16,24,16,0.04)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
               <div>
                 <div style={{ fontSize: 17, fontWeight: 600, letterSpacing: '-0.01em', color: '#1a1c1a' }}>Mi disponibilidad semanal</div>

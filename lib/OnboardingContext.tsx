@@ -113,6 +113,36 @@ function writeCounted(teacherId: string, keys: Set<string>) {
   try { localStorage.setItem(countedKey(teacherId), JSON.stringify([...keys])); } catch { /* modo privado */ }
 }
 
+/**
+ * Pasos de ORIENTACIÓN ya vistos (`once`). Se guardan aparte de las clases
+ * completadas porque su vida es distinta: una clase se cuenta una vez, pero
+ * "ya sabe dónde está el calendario" tiene que sobrevivir a los cinco ciclos de
+ * la formación y a cerrar sesión.
+ *
+ * En localStorage y no en la base a propósito: es una preferencia de comodidad,
+ * no un dato de negocio, y perderla al cambiar de equipo solo significa que el
+ * profesor ve un paso de más una vez.
+ */
+function onceKey(teacherId: string) { return `drc_onboarding_once_${teacherId}`; }
+
+function readOnce(teacherId: string): Set<OnboardingStepId> {
+  try {
+    const raw = localStorage.getItem(onceKey(teacherId));
+    const ids = raw ? (JSON.parse(raw) as string[]) : [];
+    const validos = new Set(ONBOARDING_STEPS.filter(s => s.once).map(s => s.id as string));
+    return new Set(ids.filter(id => validos.has(id)) as OnboardingStepId[]);
+  } catch { return new Set(); }
+}
+
+function writeOnce(teacherId: string, ids: Set<OnboardingStepId>) {
+  try { localStorage.setItem(onceKey(teacherId), JSON.stringify([...ids])); } catch { /* modo privado */ }
+}
+
+/** Pasos `once` que ya están cumplidos dentro de un conjunto dado. */
+function soloOnce(done: Set<OnboardingStepId>): Set<OnboardingStepId> {
+  return new Set(ONBOARDING_STEPS.filter(s => s.once && done.has(s.id)).map(s => s.id));
+}
+
 export function OnboardingProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const { teachers } = useTeachers();
@@ -149,10 +179,17 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     setMode(m);
   }, []);
 
+  /**
+   * Cierre de ciclo entre clases: se vacían los checks del SOP pero se CONSERVAN
+   * los pasos de orientación (`once`). Sin eso, un profesor en su quinta clase
+   * volvería a recibir "marca tu disponibilidad" y "aquí viven tus alumnos", que
+   * ya vio el primer día.
+   */
   const resetChecks = useCallback(() => {
-    doneRef.current = new Set();
+    const conservados = soloOnce(doneRef.current);
+    doneRef.current = conservados;
     naRef.current = new Set();
-    setDone(new Set());
+    setDone(conservados);
     setNotApplicable(new Set());
     stepRef.current = 0;
     setStepIndex(0);
@@ -182,7 +219,15 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     const completed = teacher.onboardingClassesCompleted ?? 0;
     completedRef.current = completed;
     setClassesCompleted(completed);
-    resetChecks();
+    // Los pasos de orientación ya vistos arrancan cumplidos: el recorrido empieza
+    // donde el profesor lo dejó, no desde cero cada vez que abre la app.
+    const vistos = readOnce(teacher.id);
+    doneRef.current = vistos;
+    naRef.current = new Set();
+    setDone(vistos);
+    setNotApplicable(new Set());
+    stepRef.current = 0;
+    setStepIndex(0);
     countedRef.current = readCounted(teacher.id);
 
     if (isAutoOnboarding(teacher)) {
@@ -263,10 +308,11 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     if (doneRef.current.has(id)) return;
     const nextDone = new Set(doneRef.current).add(id);
     doneRef.current = nextDone;
+    if (teacher) writeOnce(teacher.id, soloOnce(nextDone));
     if (cerrarCicloSiCompleto(nextDone, naRef.current)) return;
     setDone(nextDone);
     avanzarSiEraElActual(id);
-  }, [cerrarCicloSiCompleto, avanzarSiEraElActual]);
+  }, [cerrarCicloSiCompleto, avanzarSiEraElActual, teacher]);
 
   const markNotApplicable = useCallback((id: OnboardingStepId) => {
     if (modeRef.current !== 'auto') return;

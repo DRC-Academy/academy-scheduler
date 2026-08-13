@@ -948,7 +948,8 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
 
             {/* Acción secundaria: enviar la presentación si aún no se envió. */}
             {showPresentationBtn && (
-              <button data-onboarding="presentation-email" className="mc-pres-btn" onClick={() => setPresentationModal(c.assignment)}>
+              <button data-onboarding="presentation-email" className="mc-pres-btn"
+                onClick={() => { setPresentationModal(c.assignment); onboarding.reportAction('presentation-email'); }}>
                 ✉️ Enviar presentación
               </button>
             )}
@@ -1185,7 +1186,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
           students={students}
           updateMeetLink={updateMeetLink}
           onClose={() => setPresentationModal(null)}
-          onSent={name => { markSent(name); onboarding.reportAction('presentation-email'); }}
+          onSent={name => { markSent(name); onboarding.reportAction('pres-mark-sent'); }}
           onFormTokenReady={refreshFormIndex}
         />
       )}

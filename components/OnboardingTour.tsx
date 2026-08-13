@@ -22,10 +22,12 @@ import { usePathname, useRouter } from 'next/navigation';
 import { driver, type Driver } from 'driver.js';
 import 'driver.js/dist/driver.css';
 import { useOnboarding } from '@/lib/OnboardingContext';
-import { buildTourConfig, findAnchor, calcularFlecha, popoverBox, flechaSvg } from '@/lib/tourConfig';
 import {
-  ONBOARDING_STEPS, ONBOARDING_FINISHED_TITLE, ONBOARDING_FINISHED_BODY,
-  formationLabel, RUTA_AGENDA,
+  buildTourConfig, findAnchor, calcularFlecha, popoverBox, flechaSvg,
+  enRutaDelPaso, destinoDelPaso,
+} from '@/lib/tourConfig';
+import {
+  ONBOARDING_FINISHED_TITLE, ONBOARDING_FINISHED_BODY, formationLabel,
 } from '@/lib/onboarding';
 
 import type { Pointer } from '@/lib/tourConfig';
@@ -64,17 +66,22 @@ export function OnboardingTour() {
     runningMode.current = null;
   }, []);
 
-  const enRuta = mode !== 'off' && pathname === step.route;
+  const enRuta = mode !== 'off' && enRutaDelPaso(step, pathname);
 
   // ── Cambio de pestaña ───────────────────────────────────────────────────────
   // El paso manda: si su pantalla no es la que está a la vista, el tour navega. El
   // profesor no tiene que saber en qué sección vive cada botón, que era justo lo
   // que se le pedía adivinar.
+  //
+  // Un paso opcional cuyo destino no se puede resolver (la ficha de un alumno
+  // cuando el profesor todavía no tiene ninguno) se salta en vez de dejar el tour
+  // clavado esperando una pantalla a la que no se puede llegar.
   useEffect(() => {
-    if (mode === 'off') return;
-    if (pathname === step.route) return;
-    router.push(step.route);
-  }, [mode, pathname, step.route, router]);
+    if (mode === 'off' || enRuta) return;
+    const destino = destinoDelPaso(step);
+    if (destino) { router.push(destino); return; }
+    if (step.optional) { next(); return; }
+  }, [mode, enRuta, step, router, next]);
 
   // ── Lanzamiento y avance ────────────────────────────────────────────────────
   useEffect(() => {
@@ -159,19 +166,22 @@ export function OnboardingTour() {
     return () => clearInterval(t);
   }, [mode, enRuta]);
 
-  // Paso opcional sin botón a la vista: se marca como no aplicable para que la
-  // lógica no lo espere. driver.js ya lo salta con `skipMissingElement`; esto es
-  // la contraparte en el contexto.
+  // Paso OPCIONAL cuyo botón no existe en su propia pantalla: se descarta y el
+  // recorrido sigue. Cubre los tres casos reales en los que un paso no aplica:
+  // la presentación ya enviada a ese alumno, un profesor sin alumnos todavía y un
+  // alumno sin formulario respondido (sin ficha que generar).
+  //
+  // Se comprueba SOLO el paso a la vista y estando ya en su ruta: mirar todos los
+  // pasos desde cualquier pantalla descartaría los de las otras secciones, cuyos
+  // botones lógicamente no están.
   useEffect(() => {
-    if (mode !== 'auto' || pathname !== RUTA_AGENDA) return;
+    if (mode !== 'auto' || !enRuta || !step.optional) return;
+    if (doneRef.current.has(step.id) || naRef.current.has(step.id)) return;
     const t = setTimeout(() => {
-      for (const s of ONBOARDING_STEPS) {
-        if (!s.optional || doneRef.current.has(s.id) || naRef.current.has(s.id)) continue;
-        if (!findAnchor(s.anchors)) markNotApplicable(s.id);
-      }
+      if (!findAnchor(step.anchors)) markNotApplicable(step.id);
     }, 2500);
     return () => clearTimeout(t);
-  }, [mode, pathname, markNotApplicable, done, notApplicable]);
+  }, [mode, enRuta, step, markNotApplicable, done, notApplicable]);
 
   if (typeof document === 'undefined') return null;
 

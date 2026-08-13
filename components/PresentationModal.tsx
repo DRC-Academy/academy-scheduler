@@ -10,6 +10,7 @@
 // caso normal con Gmail en el navegador). El flujo es copiar el texto y pegarlo.
 import { useState, useEffect, useMemo, useRef, type CSSProperties } from 'react';
 import { useTeachers } from '@/lib/TeachersContext';
+import { useOnboarding } from '@/lib/OnboardingContext';
 import { classifyFor } from '@/lib/productUtils';
 import { resolveGender, g } from '@/lib/gender';
 import { getOrCreateFormLink } from '@/lib/formClient';
@@ -103,6 +104,9 @@ export function PresentationModal({ assignment, teacher, students, updateMeetLin
   onFormTokenReady?: () => void;
 }) {
   const { markPresentationSent } = useTeachers();
+  // Tutorial guiado: copiar y marcar como enviado son dos pasos distintos, y este
+  // modal es el único sitio donde constan. Con el tutorial cerrado no hace nada.
+  const { reportAction } = useOnboarding();
 
   // Lookup del alumno (email real + plan/producto) para clasificar y prellenar.
   const student = useMemo(() => {
@@ -175,6 +179,7 @@ export function PresentationModal({ assignment, teacher, students, updateMeetLin
       document.body.removeChild(ta);
     }
     await saveMeetIfAny();
+    reportAction('pres-copy');
     setToast('📋 Email copiado. Pégalo en Gmail');
   }
 
@@ -236,11 +241,13 @@ export function PresentationModal({ assignment, teacher, students, updateMeetLin
           <button onClick={onClose} style={{ flex: '1 1 90px', padding: '11px', borderRadius: 8, border: '1px solid #d1d5db', background: 'white', color: '#6b7280', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
             Cancelar
           </button>
-          <button onClick={handleCopy} disabled={!toEmail.trim()}
+          {/* `data-onboarding`: los dos pasos del tutorial que enseñan el salto a
+              Gmail. Es el punto del proceso donde más gente se queda a medias. */}
+          <button onClick={handleCopy} disabled={!toEmail.trim()} data-onboarding="pres-copy"
             style={{ flex: '1 1 120px', padding: '11px', borderRadius: 8, border: '1.5px solid #1E9E3A', background: 'white', color: '#1E9E3A', cursor: toEmail.trim() ? 'pointer' : 'not-allowed', opacity: toEmail.trim() ? 1 : 0.5, fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
             📋 Copiar email
           </button>
-          <button onClick={handleMarkSent} disabled={marking}
+          <button onClick={handleMarkSent} disabled={marking} data-onboarding="pres-mark-sent"
             style={{ flex: '2 1 180px', padding: '11px', borderRadius: 8, border: 'none', background: marking ? '#d1d5db' : '#1E9E3A', color: 'white', cursor: marking ? 'wait' : 'pointer', fontSize: 13, fontWeight: 800, fontFamily: 'inherit' }}>
             {marking ? 'Marcando…' : '✅ Marcar como enviado'}
           </button>

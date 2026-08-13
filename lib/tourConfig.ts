@@ -11,9 +11,6 @@
 import type { Config, DriveStep } from 'driver.js';
 import { ONBOARDING_STEPS, formationLabel, type OnboardingStep, type OnboardingStepId } from '@/lib/onboarding';
 
-/** Ruta donde viven los botones del SOP. El tour se lanza ahí. */
-export const RUTA_CLASES = '/clases';
-
 /**
  * Primer elemento VISIBLE con alguno de los `data-onboarding` del paso.
  *
@@ -84,6 +81,28 @@ export function calcularFlecha(r: DOMRect, popover: Caja | null): Pointer | null
   // flecha aplastada contra el globo confunde más que la ausencia de flecha, y el
   // halo del elemento más el pico del globo ya señalan de sobra.
   return candidatos.find(c => cabe(c.caja) && !(popover && seSolapan(c.caja, popover)))?.p ?? null;
+}
+
+/** ¿La pantalla a la vista es la que pide el paso? */
+export function enRutaDelPaso(step: OnboardingStep, pathname: string): boolean {
+  return step.routeMatch === 'prefix'
+    ? pathname.startsWith(step.route)
+    : pathname === step.route;
+}
+
+/**
+ * A dónde navegar para este paso.
+ *
+ * Con `routeFrom`, la URL sale del href de un enlace que está en la pantalla
+ * ACTUAL: la ficha de un alumno vive en /mis-alumnos/<id> y ese id solo se conoce
+ * mirando la lista. Si el enlace no está (un profesor sin alumnos todavía) no hay
+ * destino, y el paso —que es `optional`— se salta.
+ */
+export function destinoDelPaso(step: OnboardingStep): string | null {
+  if (!step.routeFrom) return step.route;
+  const link = findAnchor([step.routeFrom]) as HTMLAnchorElement | undefined;
+  const href = link?.getAttribute('href');
+  return href || null;
 }
 
 /** Caja del globo de driver.js, si está en pantalla. */

@@ -149,7 +149,10 @@ function MisAlumnosContent() {
             />
           </div>
 
-          <div className="alu-chips" role="group" aria-label="Filtrar alumnos">
+          {/* `data-onboarding`: el tutorial presenta acá la sección. Va en los
+              filtros y no en la parrilla porque estos se pintan siempre, también
+              cuando el profesor todavía no tiene ningún alumno. */}
+          <div className="alu-chips" role="group" aria-label="Filtrar alumnos" data-onboarding="students-list">
             {chips.map(c => (
               <button
                 key={c.id}

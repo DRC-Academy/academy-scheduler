@@ -364,7 +364,11 @@ function StudentPageContent() {
           <LevelTestCard profile={profile} />
         </div>
 
-        <Tabs tabs={TABS} active={tab} onChange={setTab} />
+        {/* `data-onboarding`: último paso del bloque de fichas del tutorial, que
+            explica para qué sirve cada pestaña. */}
+        <div data-onboarding="ficha-tabs">
+          <Tabs tabs={TABS} active={tab} onChange={setTab} />
+        </div>
 
       {tab === 'perfil' && (
         <PerfilTab

@@ -100,6 +100,7 @@ export default function StudentCard({ bundle, studentKey, generating, onGenerate
         ) : state === 'generable' ? (
           <button
             className="alu-gen"
+            data-onboarding="ficha-generate"
             onClick={() => onGenerate(bundle)}
             disabled={generating}
             aria-label={`Generar ficha de IA de ${a.studentName}`}
@@ -116,7 +117,10 @@ export default function StudentCard({ bundle, studentKey, generating, onGenerate
           </span>
         )}
 
-        <Link href={href} className="alu-view" data-student-key={studentKey}>
+        {/* `data-onboarding`: además de resaltarse, el tutorial LEE este href para
+            saber a qué ficha navegar. La URL depende del alumno, así que no puede
+            estar escrita a mano en la definición del paso. */}
+        <Link href={href} className="alu-view" data-student-key={studentKey} data-onboarding="student-open">
           Ver ficha →
         </Link>
       </div>
