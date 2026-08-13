@@ -19,12 +19,19 @@ export type OnboardingStepId =
   | 'add-transcript'
   | 'class-status';
 
+/** Lado preferido del globo respecto del elemento (driver.js lo corrige solo si no entra). */
+export type StepSide = 'top' | 'right' | 'bottom' | 'left';
+export type StepAlign = 'start' | 'center' | 'end';
+
 export interface OnboardingStep {
   id: OnboardingStepId;
   /** Título corto: el QUÉ. */
   title: string;
   /** El PORQUÉ, en una frase. Es lo que hace que el paso no se olvide. */
   why: string;
+  /** Lado preferido del globo. Es una preferencia: si no entra, se recoloca. */
+  side?: StepSide;
+  align?: StepAlign;
   /**
    * Valores de `data-onboarding` a resaltar, en orden de preferencia: se ilumina
    * el PRIMERO que exista en pantalla. La lista existe porque un mismo hueco de
@@ -50,24 +57,28 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
   {
     id: 'presentation-email',
     title: 'Envía el email de presentación',
-    why: 'Es el primer contacto con un alumno nuevo y se envía una sola vez, dentro de las primeras 24 horas. Si se pasa esa ventana, cuenta como retraso en tu seguimiento.',
+    why: 'Es tu primer contacto con un alumno nuevo y se envía una sola vez, dentro de las primeras 24 horas. Pasada esa ventana cuenta como retraso en tu seguimiento.',
     anchors: ['presentation-email'],
-    where: 'En "Mis clases", debajo del botón principal de la tarjeta del alumno. Solo aparece la primera vez con cada alumno.',
+    where: 'En "Mis clases", debajo del botón principal de la tarjeta. Solo aparece la primera vez con cada alumno.',
+    side: 'left',
+    align: 'center',
     optional: true,
     actionable: true,
   },
   {
     id: 'join-class',
     title: 'Entra a la clase',
-    why: 'Este botón es lo que registra tu acceso, y ese registro es el primer factor de los dos que hacen que la clase se te pague. No se puede cargar después: entrar al Meet por fuera deja la clase sin registro.',
+    why: 'Este botón registra tu acceso, y ese registro es el primero de los dos factores que hacen que la clase se te pague. No se puede cargar después: entrar al Meet por fuera deja la clase sin registro.',
     anchors: ['join-class', 'set-link'],
-    where: 'En "Mis clases", el botón verde de la tarjeta. Si el alumno todavía no tiene enlace de Meet, el botón dirá "Definir enlace": definilo una vez y ya queda guardado para siempre.',
+    where: 'En "Mis clases", el botón verde de la tarjeta. Si al alumno le falta el enlace de Meet, dirá "Definir enlace": definilo una vez y queda guardado.',
+    side: 'left',
+    align: 'center',
     actionable: true,
   },
   {
     id: 'give-class',
     title: 'Da tu clase con normalidad',
-    why: 'Durante la clase no hay nada que tocar en la plataforma. Si el alumno está en riesgo de baja, antes de abrir el Meet vas a ver un aviso con el protocolo de esa clase: el alumno no lo ve, es solo para vos.',
+    why: 'Durante la clase no hay nada que tocar acá. Si el alumno está en riesgo de baja, antes de abrir el Meet verás un aviso con el protocolo de esa clase: el alumno no lo ve, es solo para vos.',
     anchors: [],
     where: 'En Google Meet, fuera de la plataforma.',
     actionable: false,
@@ -78,14 +89,18 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
     why: 'Es el segundo factor: hasta que no lo subas, la clase figura como "pendiente de transcript" y no suma a tu total a cobrar. Copiá de Fathom la pestaña Transcript completa, no el Summary.',
     anchors: ['add-transcript'],
     where: 'En "Mis clases", en la tarjeta de una clase ya dada. Si no la ves, usá el filtro "Sin transcript".',
+    side: 'left',
+    align: 'center',
     actionable: true,
   },
   {
     id: 'class-status',
     title: 'Comprueba que la clase quedó registrada',
-    why: 'Con el acceso registrado y el transcript subido, la clase queda cerrada y cuenta para tu pago. El estado de cada tarjeta te lo dice de un vistazo, y el detalle con importes está en Finanzas.',
+    why: 'Con el acceso registrado y el transcript subido, la clase queda cerrada y cuenta para tu pago. Esta etiqueta te lo dice de un vistazo; el detalle con importes está en Finanzas.',
     anchors: ['class-status'],
-    where: 'En "Mis clases", la etiqueta de estado de la tarjeta de una clase ya dada.',
+    where: 'En "Mis clases", la etiqueta de estado de una clase ya dada.',
+    side: 'bottom',
+    align: 'end',
     actionable: false,
   },
 ];

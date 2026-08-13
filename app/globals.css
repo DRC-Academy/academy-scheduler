@@ -345,11 +345,235 @@ label {
 /* ── Inline button spinner ── */
 @keyframes drc-spin { to { transform: rotate(360deg); } }
 
-/* Aro del tutorial guiado (components/OnboardingTour). Late en amarillo DRC para
-   que el botón del paso actual se distinga del resto sin taparlo. */
-@keyframes drc-onb-pulse {
-  0%, 100% { box-shadow: 0 0 0 3px rgba(255,196,0,0.25), 0 0 22px rgba(255,196,0,0.50); }
-  50%      { box-shadow: 0 0 0 6px rgba(255,196,0,0.16), 0 0 30px rgba(255,196,0,0.72); }
+/* ── Tutorial guiado (driver.js) ───────────────────────────────────────────────
+   El overlay, el recorte y la colocación del globo los pone driver.js; acá va
+   SOLO la piel DRC sobre sus clases (.driver-*). Se mantiene separado del resto
+   de la hoja porque son selectores de una librería, no clases de la app.
+
+   El halo del elemento iluminado late en verde DRC. Va sobre .driver-active-element,
+   que es la clase que driver.js pone en el botón del paso actual. */
+@keyframes drc-tour-halo {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(30,158,58,0.38), 0 0 26px 4px rgba(30,158,58,0.42); }
+  50%      { box-shadow: 0 0 0 6px rgba(30,158,58,0.20), 0 0 36px 8px rgba(30,158,58,0.62); }
+}
+
+.driver-active-element {
+  /* El elemento se SUBE por encima del overlay (driver.js lo deja en 10000) en vez
+     de verse solo a través del agujero del SVG. Sin esto el halo quedaría pintado
+     DEBAJO de la penumbra y no se vería: el recorte tiene el tamaño exacto del
+     botón más `stagePadding`, y el resplandor se sale de ahí.
+     Ninguno de los contenedores de la tarjeta (.mc-card, .mc-row, .mc-actions)
+     crea contexto de apilado, así que el z-index sube hasta la raíz. */
+  position: relative;
+  z-index: 10001;
+  border-radius: 10px;
+  animation: drc-tour-halo 2s ease-in-out infinite;
+  /* Sigue siendo pulsable (driver.js le deja pointer-events:auto): es lo que
+     permite que el paso se marque con la acción real y no con "Siguiente". */
+}
+
+/* El recorte del overlay se anima solo (driver.js interpola el path del SVG).
+   Acá solo se alarga un poco la transición para que el foco "se deslice". */
+.driver-popover, .driver-overlay { --driver-animation-duration: 0.4s; }
+
+/* ── Globo ── */
+.driver-popover.drc-tour {
+  font-family: var(--font-app);
+  background: #F7F7F5;
+  color: #1a1c1a;
+  border: 1.5px solid #1E9E3A;
+  border-radius: 14px;
+  box-shadow: 0 14px 38px rgba(0,0,0,0.30);
+  padding: 16px 18px 14px;
+  max-width: min(340px, calc(100vw - 28px));
+}
+.driver-popover.drc-tour .driver-popover-title {
+  font-family: var(--font-app);
+  font-size: 15.5px;
+  font-weight: 800;
+  line-height: 1.35;
+  color: #1a1c1a;
+  margin-bottom: 6px;
+  /* Hueco para la X, que driver.js posiciona en absoluto arriba a la derecha. */
+  padding-right: 26px;
+}
+/* Check verde cuando el paso ya se cumplió con la acción real. */
+.driver-popover.drc-tour.is-done .driver-popover-title::before {
+  content: '✓ ';
+  color: #1E9E3A;
+  font-weight: 800;
+}
+.driver-popover.drc-tour .driver-popover-description {
+  font-family: var(--font-app);
+  font-size: 13px;
+  line-height: 1.6;
+  color: #5f6360;
+  margin-bottom: 12px;
+}
+.driver-popover.drc-tour .driver-popover-arrow { border-width: 8px; }
+/* La flecha calza con el borde verde del globo, no con el gris por defecto. */
+.driver-popover.drc-tour .driver-popover-arrow-side-top    { border-top-color: #1E9E3A; }
+.driver-popover.drc-tour .driver-popover-arrow-side-bottom { border-bottom-color: #1E9E3A; }
+.driver-popover.drc-tour .driver-popover-arrow-side-left   { border-left-color: #1E9E3A; }
+.driver-popover.drc-tour .driver-popover-arrow-side-right  { border-right-color: #1E9E3A; }
+
+/* ── Pie: contador + navegación ── */
+.driver-popover.drc-tour .driver-popover-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+.driver-popover.drc-tour .driver-popover-progress-text {
+  font-size: 11px;
+  font-weight: 800;
+  color: #1E9E3A;
+  background: rgba(30,158,58,0.12);
+  border: 1px solid rgba(30,158,58,0.3);
+  border-radius: 20px;
+  padding: 2px 9px;
+  white-space: nowrap;
+}
+.driver-popover.drc-tour .driver-popover-navigation-btns {
+  display: flex;
+  gap: 7px;
+  margin-left: auto;
+}
+.driver-popover.drc-tour .driver-popover-footer-btn {
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 700;
+  padding: 8px 14px;
+  border-radius: 9px;
+  cursor: pointer;
+  text-shadow: none;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+/* "Anterior" discreto; "Siguiente" en verde DRC. El :last-child es el de avance:
+   driver.js pinta siempre previous → next en ese orden. */
+.driver-popover.drc-tour .driver-popover-footer-btn {
+  background: #fff;
+  border: 1px solid #d9dad5;
+  color: #6b7280;
+}
+.driver-popover.drc-tour .driver-popover-navigation-btns > button:last-child {
+  background: #1E9E3A;
+  border: 1px solid #1E9E3A;
+  color: #fff;
+}
+.driver-popover.drc-tour .driver-popover-navigation-btns > button:last-child:hover {
+  background: #18852f;
+  border-color: #18852f;
+}
+.driver-popover.drc-tour .driver-popover-footer-btn:hover { background: #f0f1ee; }
+.driver-popover.drc-tour .driver-popover-btn-disabled { opacity: 0.45; cursor: not-allowed; }
+.driver-popover.drc-tour .driver-popover-close-btn { color: #8b8e88; }
+.driver-popover.drc-tour .driver-popover-close-btn:hover { color: #1a1c1a; }
+
+/* ── Añadidos propios inyectados en el globo (ver decorarPopover) ── */
+/* Progreso de la formación. Amarillo DRC: es contexto, no la acción del paso. */
+.drc-tour-formacion {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  color: #7a6000;
+  background: rgba(255,196,0,0.16);
+  border: 1px solid rgba(255,196,0,0.5);
+  border-radius: 20px;
+  padding: 2px 9px;
+  margin-bottom: 9px;
+}
+.drc-tour-hint {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: #1f7a3d;
+  background: rgba(30,158,58,0.08);
+  border: 1px solid rgba(30,158,58,0.3);
+  border-radius: 9px;
+  padding: 9px 11px;
+  margin-bottom: 12px;
+}
+/* Solo aparece cuando el botón del paso no está en pantalla. */
+.drc-tour-where {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: #8a6d00;
+  background: rgba(255,196,0,0.12);
+  border: 1px solid rgba(255,196,0,0.5);
+  border-radius: 9px;
+  padding: 9px 11px;
+  margin-bottom: 12px;
+}
+/* "Saltar tutorial": a la izquierda del pie y separado de la navegación, para que
+   no se pulse por inercia al ir dando a "Siguiente". */
+.drc-tour-skip {
+  font-family: inherit;
+  font-size: 12px;
+  color: #8b8e88;
+  background: none;
+  border: none;
+  padding: 8px 2px;
+  cursor: pointer;
+  text-decoration: underline;
+  white-space: nowrap;
+}
+.drc-tour-skip:hover { color: #1a1c1a; }
+
+/* ── Cartel de formación completada ── */
+/* Por encima del globo de driver.js, que se pinta en z-index 1000000000. */
+.drc-tour-done-backdrop {
+  position: fixed; inset: 0; z-index: 1000000001;
+  background: rgba(0,0,0,0.6);
+  backdrop-filter: blur(4px);
+  display: flex; align-items: center; justify-content: center; padding: 16px;
+}
+.drc-tour-done-card {
+  background: #F7F7F5; border: 1.5px solid #1E9E3A; border-radius: 16px;
+  padding: 26px; max-width: 400px; width: 100%; text-align: center;
+  box-shadow: 0 14px 38px rgba(0,0,0,0.3);
+}
+.drc-tour-done-emoji { font-size: 34px; margin-bottom: 6px; }
+.drc-tour-done-title { font-size: 18px; font-weight: 800; color: #1a1c1a; margin-bottom: 8px; }
+.drc-tour-done-body { font-size: 13.5px; color: #5f6360; line-height: 1.6; margin-bottom: 18px; }
+.drc-tour-done-btn {
+  width: 100%; padding: 11px; border-radius: 9px; border: none;
+  background: #1E9E3A; color: #fff; cursor: pointer;
+  font-family: inherit; font-size: 13.5px; font-weight: 700;
+}
+
+/* ── Aviso de formación fuera de /clases ──
+   El profesor entra a la app en el Calendario, no en la agenda, así que sin esto
+   el tour automático no se lanzaría nunca. Discreto y no bloqueante. */
+.drc-tour-nudge {
+  position: fixed;
+  right: 18px; bottom: calc(18px + env(safe-area-inset-bottom));
+  z-index: 60;
+  display: flex; align-items: center; gap: 10px;
+  padding: 11px 16px;
+  border-radius: 30px;
+  border: 1.5px solid #1E9E3A;
+  background: #F7F7F5;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+  cursor: pointer;
+  font-family: inherit; text-align: left;
+  max-width: calc(100vw - 36px);
+}
+.drc-tour-nudge:hover { background: #fff; box-shadow: 0 10px 28px rgba(0,0,0,0.24); }
+.drc-tour-nudge b { display: block; font-size: 12.5px; font-weight: 700; color: #1a1c1a; }
+.drc-tour-nudge-cta { display: block; font-size: 12px; color: #1E9E3A; font-weight: 600; margin-top: 1px; }
+.drc-tour-nudge-dot {
+  width: 9px; height: 9px; border-radius: 50%; background: #FFC400; flex-shrink: 0;
+  box-shadow: 0 0 0 4px rgba(255,196,0,0.25);
+}
+
+/* En móvil el globo ocupa el ancho útil y el pie se apila para que "Saltar" no
+   empuje a "Siguiente" fuera de la tarjeta. */
+@media (max-width: 560px) {
+  .driver-popover.drc-tour { padding: 14px 15px 12px; max-width: calc(100vw - 20px); }
+  .driver-popover.drc-tour .driver-popover-footer { flex-wrap: wrap; row-gap: 10px; }
+  .driver-popover.drc-tour .driver-popover-navigation-btns { width: 100%; margin-left: 0; }
+  .driver-popover.drc-tour .driver-popover-navigation-btns > button { flex: 1; }
+  .drc-tour-skip { order: 3; margin: 0 auto; }
 }
 .drc-spinner {
   display: inline-block;
