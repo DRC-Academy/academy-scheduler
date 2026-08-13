@@ -13,12 +13,12 @@ import type { Teacher } from '@/types';
 export const ONBOARDING_TARGET_CLASSES = 5;
 
 export type OnboardingStepId =
-  // Disponibilidad
-  | 'calendar-grid'
-  // Email de presentación (el bloque más detallado: es donde más se falla)
+  // Email de presentación (abre el recorrido: es lo más urgente y donde más se falla)
   | 'presentation-email'
   | 'pres-copy'
   | 'pres-mark-sent'
+  // Disponibilidad
+  | 'calendar-grid'
   // Alumnos y fichas
   | 'students-list'
   | 'ficha-generate'
@@ -102,28 +102,15 @@ export const RUTA_FICHA = '/mis-alumnos/';
 export const RUTA_FINANZAS = '/mis-clases';
 
 export const ONBOARDING_STEPS: OnboardingStep[] = [
-  // ── 1. Disponibilidad ───────────────────────────────────────────────────────
-  // Va primero porque es la condición de todo lo demás: sin horas libres marcadas
-  // no te asignan alumnos, y sin alumnos no hay nada que enseñar del resto.
-  {
-    id: 'calendar-grid',
-    once: true,
-    title: 'Marca tu disponibilidad',
-    why: 'Cada celda verde es una hora en la que la academia puede asignarte un alumno. Se guarda sola al hacer clic. Si no marcas nada, no te llegan alumnos nuevos.',
-    route: RUTA_CALENDARIO,
-    routeLabel: 'Calendario',
-    anchors: ['calendar-grid'],
-    where: 'En "Calendario", pestaña "Mi calendario": la parrilla de la semana.',
-    side: 'bottom',
-    align: 'start',
-    actionable: false,
-  },
-
-  // ── 2-4. El email de presentación ───────────────────────────────────────────
-  // Tres pasos para lo que en la app es un solo botón, a propósito: el envío NO
-  // ocurre dentro de la plataforma (se copia y se manda desde el Gmail del
-  // profesor) y ese salto es donde más gente se queda a medias, dando por enviado
-  // un correo que solo copió.
+  // ── 1-3. El email de presentación ───────────────────────────────────────────
+  // ABRE el recorrido por decisión expresa: es lo más urgente que tiene encima un
+  // profesor nuevo (la ventana son 24 horas desde que le asignan al alumno) y lo
+  // que más se hace a medias.
+  //
+  // Son tres pasos para lo que en la app es un solo botón, también a propósito: el
+  // envío NO ocurre dentro de la plataforma (se copia y se manda desde el Gmail
+  // del profesor), y ese salto es donde la gente da por enviado un correo que solo
+  // copió.
   {
     id: 'presentation-email',
     title: 'Abre el email de presentación',
@@ -160,6 +147,23 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
     side: 'top',
     align: 'center',
     actionable: true,
+  },
+
+  // ── 4. Disponibilidad ───────────────────────────────────────────────────────
+  // Después del email, no antes: es la condición para que te SIGAN llegando
+  // alumnos, pero el que ya tiene asignado no espera a que ordene su calendario.
+  {
+    id: 'calendar-grid',
+    once: true,
+    title: 'Marca tu disponibilidad',
+    why: 'Cada celda verde es una hora en la que la academia puede asignarte un alumno. Se guarda sola al hacer clic. Si no marcas nada, no te llegan alumnos nuevos.',
+    route: RUTA_CALENDARIO,
+    routeLabel: 'Calendario',
+    anchors: ['calendar-grid'],
+    where: 'En "Calendario", pestaña "Mi calendario": la parrilla de la semana.',
+    side: 'bottom',
+    align: 'start',
+    actionable: false,
   },
 
   // ── 5-8. Alumnos y fichas ───────────────────────────────────────────────────
