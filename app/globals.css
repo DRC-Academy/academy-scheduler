@@ -344,6 +344,13 @@ label {
 
 /* ── Inline button spinner ── */
 @keyframes drc-spin { to { transform: rotate(360deg); } }
+
+/* Aro del tutorial guiado (components/OnboardingTour). Late en amarillo DRC para
+   que el botón del paso actual se distinga del resto sin taparlo. */
+@keyframes drc-onb-pulse {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(255,196,0,0.25), 0 0 22px rgba(255,196,0,0.50); }
+  50%      { box-shadow: 0 0 0 6px rgba(255,196,0,0.16), 0 0 30px rgba(255,196,0,0.72); }
+}
 .drc-spinner {
   display: inline-block;
   width: 13px;
@@ -1933,6 +1940,23 @@ label {
   transition: border-color 0.12s, color 0.12s;
 }
 .tnav-help:hover { border-color: #1E9E3A; color: #1E9E3A; }
+/* Botón "Tutorial" — abre el recorrido guiado a demanda. Solo rol profesor, y
+   disponible siempre: no depende de si está en onboarding automático. */
+.tnav-tutorial {
+  display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0;
+  height: 32px; padding: 0 12px; border-radius: 16px;
+  border: 1.5px solid #e6e7e2; background: transparent;
+  color: #3f423f; font-family: inherit; font-size: 12.5px; font-weight: 600;
+  cursor: pointer; white-space: nowrap;
+  transition: border-color 0.12s, color 0.12s, background 0.12s;
+}
+.tnav-tutorial:hover { border-color: #1E9E3A; color: #1E9E3A; background: #f4faf5; }
+/* En móvil el texto sobra: la barra ya va justa y el ícono se entiende solo.
+   Mismo corte que el resto del header (820px), donde los enlaces pasan al menú. */
+@media (max-width: 820px) {
+  .tnav-tutorial { padding: 0; width: 32px; justify-content: center; border-radius: 50%; }
+  .tnav-tutorial-label { display: none; }
+}
 /* La hamburguesa solo existe en móvil (se muestra en la media query de abajo).
    No usar style inline acá: ganaría al media query y no aparecería nunca. */
 .tnav-burger { display: none; }

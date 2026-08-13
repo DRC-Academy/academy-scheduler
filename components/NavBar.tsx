@@ -4,9 +4,10 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/AuthContext';
 import { NotificationBell } from '@/components/NotificationBell';
-import { Search, Users, Calendar, CalendarDays, Wallet, Settings, Menu, X, GraduationCap, CalendarCheck, CalendarClock } from 'lucide-react';
+import { Search, Users, Calendar, CalendarDays, Wallet, Settings, Menu, X, GraduationCap, CalendarCheck, CalendarClock, LifeBuoy } from 'lucide-react';
 import { Button } from '@/components/ui';
 import { PresentationEmailReminder } from '@/components/PresentationEmailReminder';
+import { useOnboarding } from '@/lib/OnboardingContext';
 
 // Íconos lucide en vez de emojis: /mis-clases y /finanzas usaban los dos el mismo
 // 💰, así que el ícono no distinguía nada.
@@ -39,6 +40,10 @@ export function NavBar() {
   const { user, logout } = useAuth();
   const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
+  // Tutorial a demanda. Se ofrece a CUALQUIER profesor, sin mirar si está en
+  // onboarding automático ni cuántas clases lleva: es un repaso, no una formación.
+  const { openManual } = useOnboarding();
+  const showTutorial = user?.role === 'teacher';
 
   // Cerrar el menú al navegar a otra ruta.
   useEffect(() => { setMenuOpen(false); }, [path]);
@@ -82,6 +87,22 @@ export function NavBar() {
           );
         })}
 
+        {/* Tutorial: misma fila que los enlaces, pero abre el recorrido en vez de
+            navegar. Va acá también para que en móvil no dependa del ícono suelto. */}
+        {showTutorial && (
+          <button
+            onClick={() => { setMenuOpen(false); openManual(); }}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 'var(--space-3)', width: '100%',
+              padding: 'var(--space-4) var(--space-5)', border: 'none', background: 'transparent',
+              fontFamily: 'inherit', fontSize: 'var(--fs-body)', color: 'var(--text-primary)',
+              borderBottom: '1px solid var(--border)', cursor: 'pointer', textAlign: 'left',
+            }}>
+            <LifeBuoy size={18} strokeWidth={2} />
+            Tutorial
+          </button>
+        )}
+
         {/* Usuario + Salir */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: 'var(--space-4) var(--space-5)' }}>
           <div style={{
@@ -124,6 +145,14 @@ export function NavBar() {
           </div>
 
           <div className="tnav-right">
+            {showTutorial && (
+              <button className="tnav-tutorial" onClick={openManual}
+                title="Repasar el proceso de una clase paso a paso"
+                aria-label="Abrir el tutorial">
+                <LifeBuoy size={15} strokeWidth={2} />
+                <span className="tnav-tutorial-label">Tutorial</span>
+              </button>
+            )}
             <Link href="/ayuda" className="tnav-help" title="Centro de ayuda" aria-label="Centro de ayuda">?</Link>
             <NotificationBell compact />
             <span className="tnav-sep" aria-hidden />

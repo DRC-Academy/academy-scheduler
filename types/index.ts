@@ -71,6 +71,11 @@ export interface Teacher {
   // Rango de horas que muestra su calendario (ampliable por el profesor, 6–23).
   calendarStartHour?: number;
   calendarEndHour?: number;
+  // Onboarding guiado. SOLO gobiernan el tutorial AUTOMÁTICO de los profesores
+  // nuevos; el botón "Tutorial" del header no los mira (ver lib/onboarding.ts).
+  onboardingActive?: boolean;
+  onboardingClassesCompleted?: number;
+  onboardingStartedAt?: string;
   libreCells?: string[];         // exact `${day}_${hour}` keys asignables (estado recurrente 'libre')
   puntualCells?: Record<string, string>; // key → 'YYYY-MM-DD' de la marca puntual (recuperación) sobre un horario libre
   internalRating?: number;

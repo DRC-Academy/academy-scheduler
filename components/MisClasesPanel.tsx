@@ -35,6 +35,7 @@ import {
 } from '@/lib/teacherClasses';
 import { durationBadgeLabel, hourNum } from '@/lib/sessions';
 import { useClassJoin } from '@/components/JoinClass';
+import { useOnboarding } from '@/lib/OnboardingContext';
 import { fetchRiskBriefings, briefingFor, type RiskBriefingIndex } from '@/lib/interventionsClient';
 import { AddClassModal, saveTeacherClass, ANALYSIS_FAILED_NOTICE } from '@/components/AddClassModal';
 import { PresentationModal } from '@/components/PresentationModal';
@@ -411,6 +412,22 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
   });
   const subEmailForAssignment = join.emailFor;
 
+  // ── Tutorial guiado ─────────────────────────────────────────────────────────
+  // Esta pantalla es la que tiene los botones del SOP, así que es la que le avisa
+  // al recorrido cuándo el profesor hizo cada acción DE VERDAD. Con el tutorial
+  // cerrado (o en modo manual) estas llamadas no hacen nada.
+  const onboarding = useOnboarding();
+
+  // El ingreso se detecta por `joinedKeys`, que solo crece cuando el acceso quedó
+  // efectivamente registrado en class_join_logs. Envolverlo en el onClick del
+  // botón daría el paso por cumplido aunque el profesor cancelara en el disclaimer
+  // de suscripción o se quedara en el modal del enlace de Meet.
+  const joinedCount = join.joinedKeys.size;
+  useEffect(() => {
+    if (joinedCount > 0) onboarding.reportAction('join-class');
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [joinedCount]);
+
   // Días a la vista: uno en modo "Día", los seis de la semana (lun→sáb) en modo
   // "Semana". El grid del calendario no tiene domingo, así que un séptimo día
   // solo podría salir vacío.
@@ -694,6 +711,9 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     studentName: string, date: string, time: string | undefined, transcript: string,
     classType: ClassRecordType, comment: string, hash: string, replaceId: string | null,
   ) {
+    // La clase a la que pertenece este transcript, capturada ANTES del guardado:
+    // el modal se cierra al terminar y `transcriptFor` vuelve a null.
+    const claseDelTranscript = transcriptFor;
     const result = await saveTeacherClass({
       teacher, myAssignments, studentName, date, time, transcript, classType, comment,
       transcriptHash: hash, replaceId, registerClassRecord,
@@ -710,6 +730,17 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     result.analysis?.then(({ analyzed }) => {
       if (!analyzed) setSaveNotice(ANALYSIS_FAILED_NOTICE);
     });
+
+    // Tutorial: el transcript ya está guardado (no se espera al informe de IA, que
+    // es posterior y puede fallar sin que la clase deje de contar).
+    onboarding.reportAction('add-transcript');
+    // Una clase de formación se completa con sus DOS factores: el ingreso
+    // registrado y el transcript. Sin el ingreso la clase no se paga, así que
+    // tampoco cuenta como clase del onboarding.
+    if (claseDelTranscript && joinLogOf(claseDelTranscript.c, claseDelTranscript.date)) {
+      onboarding.reportClassCompleted(`${claseDelTranscript.date}_${claseDelTranscript.c.key}`);
+    }
+
     await onDataChanged();
   }
 
@@ -823,7 +854,9 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
               </span>
             ) : passed ? (
               // Cuatro estados: subido / en revisión / rechazado / falta.
-              <span className="mc-status" style={{ background: tBadge.bg, color: tBadge.color }}>
+              // Ancla del paso 5 del tutorial ("comprobá que quedó registrada"):
+              // es donde el profesor ve que la clase cerró.
+              <span className="mc-status" data-onboarding="class-status" style={{ background: tBadge.bg, color: tBadge.color }}>
                 <span className="mc-dot" style={{ background: tBadge.dot }} />
                 {tBadge.label}
               </span>
@@ -844,7 +877,11 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
                 // subirlo es LA acción de la fila. Si ya está subido —esperando
                 // validación o validado— el botón baja a secundario: sirve para
                 // corregirlo, no para "completarlo".
+                // `data-onboarding` solo cuando el transcript es tarea suya: con la
+                // clase ya cerrada el botón dice "Reemplazar" y resaltarlo mandaría
+                // a rehacer algo que está hecho.
                 <button
+                  data-onboarding={needsTranscript ? 'add-transcript' : undefined}
                   className={`mc-btn ${needsTranscript ? 'mc-btn-primary' : 'mc-btn-ghost'}`}
                   onClick={() => setTranscriptFor({ c, date })}>
                   {tState === 'none' ? '📝 Añadir transcript'
@@ -852,13 +889,15 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
                     : 'Reemplazar transcript'}
                 </button>
               ) : hasLink ? (
-                <button className="mc-btn mc-btn-primary" onClick={() => join.join(c)} disabled={join.checkingKey === c.key}>
+                <button data-onboarding="join-class" className="mc-btn mc-btn-primary" onClick={() => join.join(c)} disabled={join.checkingKey === c.key}>
                   {join.checkingKey === c.key
                     ? <><span className="drc-spinner" />Verificando…</>
                     : 'Ingresar a clase'}
                 </button>
               ) : (
-                <button className="mc-btn mc-btn-primary" onClick={() => join.openLinkModal(c.assignment, '')}>
+                // Mismo paso del tutorial que "Ingresar a clase": es el hueco que
+                // ocupa cuando al alumno todavía le falta el enlace de Meet.
+                <button data-onboarding="set-link" className="mc-btn mc-btn-primary" onClick={() => join.openLinkModal(c.assignment, '')}>
                   Definir enlace
                 </button>
               )}
@@ -909,7 +948,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
 
             {/* Acción secundaria: enviar la presentación si aún no se envió. */}
             {showPresentationBtn && (
-              <button className="mc-pres-btn" onClick={() => setPresentationModal(c.assignment)}>
+              <button data-onboarding="presentation-email" className="mc-pres-btn" onClick={() => setPresentationModal(c.assignment)}>
                 ✉️ Enviar presentación
               </button>
             )}
@@ -1146,7 +1185,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
           students={students}
           updateMeetLink={updateMeetLink}
           onClose={() => setPresentationModal(null)}
-          onSent={markSent}
+          onSent={name => { markSent(name); onboarding.reportAction('presentation-email'); }}
           onFormTokenReady={refreshFormIndex}
         />
       )}

@@ -136,6 +136,12 @@ export async function dbGetTeachers(): Promise<Teacher[]> {
       // Rango del calendario. Sin migrar (columna ausente) → 9-22, el de siempre.
       calendarStartHour:   row.calendar_start_hour ?? 9,
       calendarEndHour:     row.calendar_end_hour ?? 22,
+      // Onboarding automático. Sin migrar (columna ausente) → `false`: nadie ve
+      // el tutorial automático hasta que se corra supabase-onboarding.sql, y el
+      // botón "Tutorial" del header funciona igual porque no depende de esto.
+      onboardingActive:            row.onboarding_active ?? false,
+      onboardingClassesCompleted:  row.onboarding_classes_completed ?? 0,
+      onboardingStartedAt:         row.onboarding_started_at ?? undefined,
       timeSlots,
       libreCells,
       puntualCells,
