@@ -103,6 +103,14 @@ export async function GET(request: Request): Promise<Response> {
     return Response.json({ error: res.error.message }, { status: 500 });
   }
 
+  // 1-bis) Gestión manual de ventas, en consulta APARTE y best-effort. Suelta a
+  //   propósito: pegada a la de arriba, un 42703 por faltar
+  //   supabase-sales-contact.sql se confundiría con que falta
+  //   supabase-ending-plans.sql y el cron dejaría de avisar de TODOS. Sin estas
+  //   columnas el aviso sale igual; lo único que se pierde es que Slack diga que
+  //   ventas ya llamó a ese alumno.
+  const sales = await readSalesContacts(today);
+
   const rows = (res.data ?? []) as unknown as StudentDbRow[];
   const students: EndingStudentRow[] = rows.map(r => ({
     id: r.id,
@@ -115,6 +123,7 @@ export async function GET(request: Request): Promise<Response> {
     manualActiveUntil: r.manual_active_until,
     endingNoticeSentAt: r.ending_notice_sent_at ?? null,
     endingNoticeForDate: r.ending_notice_for_date ?? null,
+    ...(sales.get(r.id) ?? {}),
   }));
 
   // 2) Fichas, solo para el semáforo del email. Best-effort: sin ficha el aviso
@@ -193,6 +202,43 @@ export async function GET(request: Request): Promise<Response> {
     zapier,
     alumnos: pendientes.map(p => ({ alumno: p.studentName, dias: p.daysLeft, fin: p.endDate })),
   });
+}
+
+type SalesFields = Pick<EndingStudentRow,
+  'salesContactedAt' | 'salesContactResult' | 'salesContactedBy' | 'salesContactForDate'>;
+
+/**
+ * Gestión de ventas por alumno, para que el webhook a Slack pueda decir "a éste
+ * ya lo llamaron". NUNCA rompe el cron: si las columnas no existen todavía
+ * (supabase-sales-contact.sql sin correr) devuelve un mapa vacío y el aviso sale
+ * igual. Este dato es una comodidad, el email es lo crítico.
+ */
+async function readSalesContacts(today: string): Promise<Map<string, SalesFields>> {
+  const { data, error } = await supabase
+    .from('students')
+    .select('id, sales_contacted_at, sales_contact_result, sales_contacted_by, sales_contact_for_date')
+    .not('manual_active_until', 'is', null)
+    .gte('manual_active_until', today);
+
+  if (error) {
+    console.warn(
+      '[cron ending-plans] Sin datos de gestión de ventas (¿falta correr supabase-sales-contact.sql?):',
+      error.message,
+    );
+    return new Map();
+  }
+
+  const out = new Map<string, SalesFields>();
+  for (const r of (data ?? []) as unknown as Array<Record<string, string | null>>) {
+    if (!r.id) continue;
+    out.set(r.id, {
+      salesContactedAt:    r.sales_contacted_at ?? null,
+      salesContactResult:  r.sales_contact_result ?? null,
+      salesContactedBy:    r.sales_contacted_by ?? null,
+      salesContactForDate: r.sales_contact_for_date ?? null,
+    });
+  }
+  return out;
 }
 
 /**

@@ -88,6 +88,12 @@ export interface Teacher {
   lastQuarterlyReset?: string;
 }
 
+/**
+ * En qué quedó la gestión de ventas de un alumno próximo a cancelar.
+ * Los mismos tres valores que acepta el CHECK de la base (supabase-sales-contact.sql).
+ */
+export type SalesContactResult = 'interesado' | 'no_interesado' | 'renovo';
+
 export interface Student {
   id: string;
   name: string;
@@ -115,6 +121,15 @@ export interface Student {
   // deja de coincidir y el alumno vuelve a poder avisarse. Ver lib/endingPlans.
   endingNoticeSentAt?: string;   // ISO
   endingNoticeForDate?: string;  // 'YYYY-MM-DD' — fin del ciclo por el que se avisó
+  // Gestión MANUAL de ventas sobre ese mismo fin de ciclo. NO confundir con el
+  // aviso de arriba: aquél lo marca el sistema al mandar el email interno, éste
+  // lo marca una persona cuando ya habló con el alumno y dice en qué quedó.
+  // Mismo truco del ciclo: vale solo si `salesContactForDate` coincide con
+  // `manualActiveUntil`. Ver lib/endingPlans.salesContactForCycle.
+  salesContactedAt?: string;     // ISO — última vez que se marcó
+  salesContactResult?: SalesContactResult;
+  salesContactedBy?: string;     // quién lo marcó (nombre de la sesión)
+  salesContactForDate?: string;  // 'YYYY-MM-DD' — fin del ciclo gestionado
   createdAt: string;
 }
 

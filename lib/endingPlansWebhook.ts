@@ -53,6 +53,17 @@ export interface EndingPlanWebhookPayload {
   origin: string;
   progress_score: number | null;
   risk_signal: 'verde' | 'amarillo' | 'rojo' | 'sin_datos';
+  /**
+   * Gestión MANUAL de ventas de este ciclo, si ya la hubo. Casi siempre llega
+   * null — el cron dispara a los 7 días y la pestaña se ve desde los 30, así que
+   * lo normal es que ventas todavía no haya llamado — pero cuando viene relleno
+   * le ahorra a quien lee Slack escribirle a alguien que ya está gestionado.
+   *
+   * Campos AÑADIDOS, nunca renombrados: el Zap mapea por nombre exacto y los que
+   * ya existen tienen que seguir llamándose igual.
+   */
+  sales_contact_result: 'interesado' | 'no_interesado' | 'renovo' | null;
+  sales_contacted_at: string | null;
   /** Ficha del alumno en el panel. Mismo enlace que usa la pestaña. */
   student_ficha_url: string;
 }
@@ -77,6 +88,8 @@ export function buildEndingPlanPayload(p: EndingPlan): EndingPlanWebhookPayload 
     origin:            p.planLabel,
     progress_score:    p.progressScore,
     risk_signal:       p.riskSignal ?? 'sin_datos',
+    sales_contact_result: p.salesContact?.result ?? null,
+    sales_contacted_at:   p.salesContact?.at ?? null,
     student_ficha_url: fichaUrl(p),
   };
 }
@@ -160,5 +173,6 @@ export function samplePlan(): EndingPlan {
     endDate: fin, daysLeft: 7,
     planKind: 'empresa', planLabel: 'Empresas Ingles General · 6 meses',
     hours: 2, progressScore: 7, riskSignal: 'amarillo', noticeSent: false,
+    salesContact: null,
   };
 }

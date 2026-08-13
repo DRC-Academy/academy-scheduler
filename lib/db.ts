@@ -4,7 +4,7 @@ import { baseStateOf, baseStudentOf, withBaseState, assignableCellKeys, puntualC
 import { minutesLateSpain } from './spainTime';
 import { fetchOpenAlertState } from './interventionsClient';
 import { findContiguityMismatches, type ContiguityMismatch } from './teacherClasses';
-import { Teacher, Student, Assignment, AppUser, Grid, TeacherStatus, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, AssignedSlot, EmailPreferences } from '@/types';
+import { Teacher, Student, Assignment, AppUser, Grid, TeacherStatus, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, AssignedSlot, EmailPreferences, SalesContactResult } from '@/types';
 
 // ── AUTH ─────────────────────────────────────────────────────────────────────
 
@@ -501,6 +501,12 @@ export async function dbGetStudents(): Promise<Student[]> {
     // `select('*')` vienen undefined y lib/endingPlans las trata como "sin avisar".
     endingNoticeSentAt:  row.ending_notice_sent_at ?? undefined,
     endingNoticeForDate: row.ending_notice_for_date ?? undefined,
+    // Contacto manual de ventas (supabase-sales-contact.sql). Mismo caso: sin la
+    // migración vienen undefined y lib/endingPlans los trata como "sin contactar".
+    salesContactedAt:    row.sales_contacted_at ?? undefined,
+    salesContactResult:  row.sales_contact_result ?? undefined,
+    salesContactedBy:    row.sales_contacted_by ?? undefined,
+    salesContactForDate: row.sales_contact_for_date ?? undefined,
     createdAt:         row.created_at,
   }));
 }
@@ -510,6 +516,47 @@ export async function dbGetStudents(): Promise<Student[]> {
 // como suscripción activa sin consultar WooCommerce.
 export async function dbSetStudentManualActive(studentId: string, until: string | null): Promise<void> {
   await supabase.from('students').update({ manual_active_until: until }).eq('id', studentId);
+}
+
+/**
+ * Registra la gestión de VENTAS de un alumno próximo a cancelar: con quién habló
+ * el equipo, en qué quedó y para qué ciclo.
+ *
+ * Es la contraparte MANUAL del aviso automático del cron: aquél lo escribe
+ * /api/cron/check-ending-plans sobre `ending_notice_*`, éste lo escribe una
+ * persona desde /proximos-cancelar sobre `sales_contact_*`. No se pisan.
+ *
+ * `forDate` es la fecha de fin del ciclo gestionado (`manual_active_until` de
+ * ese momento). Es lo que hace que, al renovar el alumno, el marcador se resetee
+ * solo y ventas pueda volver a gestionarlo al final del ciclo siguiente.
+ *
+ * Devuelve el instante que quedó guardado para que quien llama pinte el dato sin
+ * releer la tabla. Editar un resultado ya guardado pisa las tres columnas: es la
+ * ÚLTIMA gestión lo que se conserva, no un historial (ver supabase-sales-contact.sql).
+ */
+export async function dbSetSalesContact(
+  studentId: string, result: SalesContactResult, by: string, forDate: string,
+): Promise<string> {
+  const now = new Date().toISOString();
+  const { error } = await supabase.from('students').update({
+    sales_contacted_at:     now,
+    sales_contact_result:   result,
+    sales_contacted_by:     by.trim() || null,
+    sales_contact_for_date: forDate,
+  }).eq('id', studentId);
+
+  if (error) {
+    // Acá NO se traga el fallo como en otras migraciones opcionales: si las
+    // columnas no existen, la persona pulsó un botón esperando que quedara
+    // registrado. Callarlo haría que ventas creyera que gestionó a alguien que
+    // mañana vuelve a aparecer sin contactar.
+    if (error.code === 'PGRST204' || error.code === '42703') {
+      throw new Error('Faltan las columnas de ventas: corré supabase-sales-contact.sql en Supabase.');
+    }
+    console.error('[dbSetSalesContact] No se pudo guardar la gestión de ventas:', error);
+    throw new Error(error.message);
+  }
+  return now;
 }
 
 /**

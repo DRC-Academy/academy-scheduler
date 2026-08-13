@@ -1,6 +1,6 @@
 ﻿'use client';
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { Teacher, Student, Assignment, Grid, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, ClassRecord, ClassRecordType, FinanceRate, FinancePayment, FinanceManualApproval, EmailPreferences } from '@/types';
+import { Teacher, Student, Assignment, Grid, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, ClassRecord, ClassRecordType, FinanceRate, FinancePayment, FinanceManualApproval, EmailPreferences, SalesContactResult } from '@/types';
 import {
   dbGetTeachers, dbAddTeacher, dbDeleteTeacher,
   dbGetStudents, dbUpsertStudent, dbDeleteStudent, dbUpdateStudent,
@@ -20,6 +20,7 @@ import {
   dbGetFinanceRates, dbGetFinancePayments, dbMarkPaymentPaid,
   dbGetManualApprovals, dbAddManualApproval,
   dbChangeStudentTeacher, dbAddRescheduleRecord, dbAddRecoveryClass, dbRemoveAssignment,
+  dbSetSalesContact,
   dbApplyFaltaSideEffects, dbRevertStudentAbsence,
 } from '@/lib/db';
 import type { AffectedTeacher, ChangeTeacherParams, DeleteTeacherResult, StudentLeftGrid } from '@/lib/db';
@@ -51,6 +52,8 @@ interface TeachersContextType {
   addStudent: (s: Student) => Promise<void>;
   deleteStudent: (studentId: string, studentName: string, createdBy?: string, alsoStudentIds?: string[]) => Promise<AffectedTeacher[]>;
   updateStudent: (student: Student) => Promise<void>;
+  /** Gestión de ventas de un alumno próximo a cancelar (pestaña /proximos-cancelar). */
+  markSalesContact: (studentId: string, result: SalesContactResult, by: string, forDate: string) => Promise<void>;
   addAssignment: (a: Assignment) => Promise<void>;
   getTeacherGrid: (teacherId: string, force?: boolean) => Promise<Grid>;
   updateTeacherGrid: (teacherId: string, grid: Grid) => Promise<StudentLeftGrid[]>;
@@ -104,6 +107,7 @@ const TeachersContext = createContext<TeachersContextType>({
   addStudent:               async () => {},
   deleteStudent:            async () => [],
   updateStudent:            async () => {},
+  markSalesContact:         async () => {},
   addAssignment:            async () => {},
   getTeacherGrid:           async () => ({}),
   updateTeacherGrid:        async () => [],
@@ -267,6 +271,26 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   async function updateStudent(student: Student) {
     await dbUpdateStudent(student);
     setStudents(prev => prev.map(s => s.id === student.id ? student : s));
+  }
+
+  /**
+   * Registra que ventas ya gestionó a un alumno próximo a cancelar. Primero
+   * escribe y solo después toca el estado local: si la base falla, `dbSetSalesContact`
+   * lanza y la fila sigue mostrándose sin contactar, que es la verdad. Al revés,
+   * el badge aparecería igual y nadie volvería a llamar a ese alumno.
+   *
+   * No llama a reloadAll: con el estado local ya actualizado, la fila se repinta
+   * al instante y el refresco de los 60 s trae la fila real igualmente.
+   */
+  async function markSalesContact(studentId: string, result: SalesContactResult, by: string, forDate: string) {
+    const at = await dbSetSalesContact(studentId, result, by, forDate);
+    setStudents(prev => prev.map(s => s.id === studentId ? {
+      ...s,
+      salesContactedAt:    at,
+      salesContactResult:  result,
+      salesContactedBy:    by,
+      salesContactForDate: forDate,
+    } : s));
   }
 
   async function addAssignment(a: Assignment) {
@@ -633,7 +657,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
       teachers, students, assignments, teacherGrids, loadingTeachers,
       scoringEvents, classCounts, notifications, unassignedStudents, classJoinLogs,
       classRecords, classAnalyses, financeRates, financePayments, manualApprovals, lastUpdated,
-      addTeacher, deleteTeacher, addStudent, deleteStudent, updateStudent, addAssignment,
+      addTeacher, deleteTeacher, addStudent, deleteStudent, updateStudent, markSalesContact, addAssignment,
       getTeacherGrid, updateTeacherGrid, updateTeacherRating,
       updateTeacherSpecialties, updateTeacherInfo, updateTeacherEmailPreferences,
       addScoringEvent, loadScoringEvents, checkAndRunResets,

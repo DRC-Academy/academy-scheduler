@@ -40,6 +40,9 @@
 
 import { parseHoursFromText, isCompanyProduct, baseProductName } from '@/lib/productUtils';
 import { madridToday } from '@/lib/subscriptionAccess';
+import type { SalesContactResult } from '@/types';
+
+export type { SalesContactResult };
 
 /** Ventana de la PESTAÑA: cuántos días hacia adelante se listan. */
 export const ENDING_WINDOW_DAYS = 30;
@@ -66,6 +69,21 @@ export interface EndingStudentRow {
   companyPlanMonths?: number | null;
   endingNoticeSentAt?: string | null;
   endingNoticeForDate?: string | null;
+  // Gestión manual de ventas. Independiente del aviso de arriba: el sistema
+  // avisa, la persona gestiona. Ver supabase-sales-contact.sql.
+  salesContactedAt?: string | null;
+  salesContactResult?: string | null;
+  salesContactedBy?: string | null;
+  salesContactForDate?: string | null;
+}
+
+/** La gestión de ventas de UN ciclo, ya validada. */
+export interface SalesContact {
+  result: SalesContactResult;
+  /** ISO — cuándo se marcó por última vez. */
+  at: string;
+  /** Quién la marcó. '' si la fila es vieja y no lo guardó. */
+  by: string;
 }
 
 /** Lo que se necesita de `student_profiles` para el semáforo. */
@@ -94,8 +112,11 @@ export interface EndingPlan {
   hours: number | null;
   progressScore: number | null;
   riskSignal: RetentionSignal;
-  /** ¿Ya se mandó el aviso interno de ESTE ciclo? */
+  /** ¿Ya se mandó el aviso interno de ESTE ciclo? Lo marca el SISTEMA. */
   noticeSent: boolean;
+  /** Gestión de ventas de ESTE ciclo, o null si todavía no lo contactó nadie.
+   *  Lo marca una PERSONA. No tiene nada que ver con `noticeSent`. */
+  salesContact: SalesContact | null;
 }
 
 const nk = (s: string | null | undefined): string =>
@@ -132,6 +153,34 @@ export function noticeSentForCycle(s: EndingStudentRow): boolean {
   const end = endDateOf(s);
   if (!end || !s.endingNoticeSentAt) return false;
   return (s.endingNoticeForDate ?? '').slice(0, 10) === end;
+}
+
+/**
+ * ¿Ventas ya gestionó a este alumno EN EL CICLO VIGENTE?
+ *
+ * Mismo criterio que el aviso automático y por el mismo motivo: si mirásemos
+ * solo `salesContactedAt`, el alumno que renueva quedaría "ya gestionado" para
+ * siempre y ventas no volvería a llamarle al final del ciclo nuevo — que es
+ * justo el momento de la repesca.
+ *
+ * Devuelve null también si el resultado guardado no es uno de los tres válidos:
+ * un valor raro (fila vieja, edición a mano en Supabase) es más honesto tratarlo
+ * como "sin contactar" que pintar un badge que nadie sabe leer.
+ */
+export function salesContactForCycle(s: EndingStudentRow): SalesContact | null {
+  const end = endDateOf(s);
+  if (!end || !s.salesContactedAt) return null;
+  if ((s.salesContactForDate ?? '').slice(0, 10) !== end) return null;
+  if (!isSalesResult(s.salesContactResult)) return null;
+  return {
+    result: s.salesContactResult as SalesContactResult,
+    at: s.salesContactedAt,
+    by: (s.salesContactedBy ?? '').trim(),
+  };
+}
+
+function isSalesResult(v: unknown): boolean {
+  return v === 'interesado' || v === 'no_interesado' || v === 'renovo';
 }
 
 /**
@@ -237,6 +286,7 @@ export function buildEndingPlans(args: {
       progressScore: profile?.progressScore ?? null,
       riskSignal:    profile?.riskSignal ?? null,
       noticeSent:    noticeSentForCycle(s),
+      salesContact:  salesContactForCycle(s),
     });
   }
 
@@ -295,6 +345,36 @@ export function retentionBadge(p: Pick<EndingPlan, 'progressScore' | 'riskSignal
       return { label: `Desenganchado${score}`, color: '#b91c1c', bg: 'rgba(239,68,68,0.10)', dot: '#dc2626' };
     default:
       return { label: 'Sin datos', color: 'var(--text-muted)', bg: 'var(--bg-surface-3)', dot: 'var(--text-muted)' };
+  }
+}
+
+/**
+ * Los tres resultados de la gestión de ventas, en el orden en que se ofrecen.
+ * Una sola lista para el selector, los filtros y el resumen: si cada sitio
+ * escribiera los suyos, añadir un cuarto resultado obligaría a acordarse de tres
+ * archivos.
+ */
+export const SALES_RESULTS: Array<{ id: SalesContactResult; label: string }> = [
+  { id: 'interesado',    label: 'Interesado' },
+  { id: 'no_interesado', label: 'No interesado' },
+  { id: 'renovo',        label: 'Renovó' },
+];
+
+/**
+ * Colores del badge de gestión. "Renovó" va en verde sólido (es el resultado que
+ * cierra el trabajo y tiene que saltar a la vista de un vistazo), "interesado" en
+ * verde suave (sigue abierto) y "no interesado" en gris (cerrado, pero no es una
+ * alarma: no merece el rojo que en esta pestaña significa "urgente").
+ */
+export function salesBadge(result: SalesContactResult):
+  { label: string; color: string; bg: string; border: string } {
+  switch (result) {
+    case 'renovo':
+      return { label: 'Renovó', color: '#ffffff', bg: '#1E9E3A', border: '#1E9E3A' };
+    case 'interesado':
+      return { label: 'Interesado', color: '#1f7a3d', bg: '#eaf5ec', border: 'rgba(30,158,58,0.35)' };
+    case 'no_interesado':
+      return { label: 'No interesado', color: 'var(--text-secondary)', bg: 'var(--bg-surface-3)', border: 'var(--border)' };
   }
 }
 
