@@ -4,9 +4,13 @@
 // Un solo recorrido (lib/onboarding.ONBOARDING_STEPS) con dos modos de entrada:
 //
 //   'auto'   Profesor NUEVO. Arranca solo durante sus primeras 5 clases, retoma
-//            donde quedó y escribe su progreso en la base.
+//            donde quedó y escribe su progreso en la base. Los pasos que hoy no
+//            aplican se SALTAN: se le está pidiendo que haga cosas, y no se le
+//            puede pedir que pulse un botón que no está.
 //   'manual' Botón "Tutorial" del header. Cualquier profesor, las veces que
-//            quiera, SIEMPRE desde el paso 1, y no escribe NADA en la base.
+//            quiera, SIEMPRE desde el paso 1, y no escribe NADA en la base. Aquí
+//            NO se salta ningún paso: es un repaso del procedimiento completo, y
+//            lo que no se pueda anclar se muestra centrado con su "Dónde está".
 //
 // ── EL MOTOR ─────────────────────────────────────────────────────────────────
 //
@@ -323,9 +327,26 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
         /** false = se muestra el globo sin foco (decisión explícita, con warn). */
         let anclar = true;
 
+        /**
+         * Qué hacer si el paso no se puede anclar, SEGÚN LA VÍA.
+         *
+         * En automático se salta: al profesor nuevo se le está pidiendo que HAGA
+         * cosas, y no se le puede pedir que pulse un botón que hoy no existe (la
+         * presentación ya enviada, ninguna clase por delante).
+         *
+         * En manual NUNCA se salta. El botón "Tutorial" es un repaso del
+         * procedimiento completo, y saltarse en silencio los tres pasos del email
+         * porque justo hoy no hay ninguna presentación pendiente hacía que el
+         * recorrido abriera en "Paso 4 de 12": el profesor ve que le faltan pasos
+         * y parece que el tutorial está roto. Se muestran centrados, con la nota
+         * "Dónde está" explicando en qué pantalla vive ese botón cuando aparece,
+         * que es exactamente lo que un repaso tiene que enseñar.
+         */
+        const siNoSePuede = modeRef.current === 'manual' ? 'center' : step.onMissing;
+
         // 1. Precondición de datos.
         if (step.requires && !step.requires()) {
-          if (step.onMissing === 'skip') { registrarSalto(step, 'no se cumple requires()'); i += dir; continue; }
+          if (siNoSePuede === 'skip') { registrarSalto(step, 'no se cumple requires()'); i += dir; continue; }
           registrarSalto(step, 'no se cumple requires(), se muestra centrado');
           anclar = false;
         }
@@ -334,7 +355,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
         if (!enRutaDelPaso(step, pathnameRef.current)) {
           const destino = destinoDelPaso(step);
           if (!destino) {
-            if (step.onMissing === 'skip') { registrarSalto(step, 'no se pudo resolver su URL'); i += dir; continue; }
+            if (siNoSePuede === 'skip') { registrarSalto(step, 'no se pudo resolver su URL'); i += dir; continue; }
             registrarSalto(step, 'no se pudo resolver su URL, se muestra centrado');
             anclar = false;
           } else {
@@ -342,7 +363,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
             const llego = await waitForRoute(step, ac.signal);
             if (ac.signal.aborted) return;
             if (!llego) {
-              if (step.onMissing === 'skip') { registrarSalto(step, `la ruta ${destino} no cargó en ${ROUTE_TIMEOUT_MS} ms`); i += dir; continue; }
+              if (siNoSePuede === 'skip') { registrarSalto(step, `la ruta ${destino} no cargó en ${ROUTE_TIMEOUT_MS} ms`); i += dir; continue; }
               registrarSalto(step, `la ruta ${destino} no cargó, se muestra centrado`);
               anclar = false;
             }
@@ -370,7 +391,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
           // 5. No apareció: se aplica onMissing y queda constancia. Nunca en silencio.
           if (!el) {
             rutaYaEsperada = step.route;
-            if (step.onMissing === 'skip') {
+            if (siNoSePuede === 'skip') {
               registrarSalto(step, `no apareció "${selectores.join('" ni "')}" en su pantalla`);
               i += dir;
               continue;

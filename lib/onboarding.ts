@@ -43,10 +43,16 @@ export type StepAlign = 'start' | 'center' | 'end';
  * Qué hacer cuando el elemento del paso no aparece:
  *   'skip'   — saltarlo y seguir. Es lo correcto para todo lo que depende de los
  *              datos del profesor (no tiene alumnos, no tiene clases hoy…).
- *   'center' — mostrar el globo centrado, sin foco. SOLO para pasos cuyo
- *              elemento es estructural y debería existir siempre: si falta, es un
- *              fallo nuestro y el texto del paso sigue valiendo. Nunca es
- *              silencioso: el motor deja un warn con el id.
+ *   'center' — mostrar el globo centrado, sin foco, con la nota "Dónde está".
+ *              Para pasos cuyo elemento es estructural y debería existir siempre.
+ *
+ * Nunca es silencioso: el motor deja un warn con el id del paso.
+ *
+ * OJO — esto solo gobierna la vía AUTOMÁTICA. El botón "Tutorial" del header es
+ * un repaso del procedimiento completo, así que ahí NADA se salta: todo lo que no
+ * se pueda anclar se muestra centrado. Saltárselo hacía que el recorrido manual
+ * abriera en "Paso 4 de 12" cuando el profesor no tenía presentaciones
+ * pendientes, y eso se lee como que el tutorial está roto. Ver `irAlPaso`.
  */
 export type OnMissing = 'skip' | 'center';
 
