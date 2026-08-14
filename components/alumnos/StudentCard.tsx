@@ -6,6 +6,7 @@
 // /mis-alumnos/[studentId], que es la ÚNICA implementación. La card enlaza ahí.
 
 import Link from 'next/link';
+import { useOnboardingActions } from '@/lib/OnboardingContext';
 import { fichaFromRow } from '@/lib/aiTypes';
 import { classCategoryBadge } from '@/lib/finance';
 import { planFieldsOf } from '@/lib/productUtils';
@@ -46,6 +47,10 @@ interface Props {
 
 export default function StudentCard({ bundle, studentKey, generating, onGenerate }: Props) {
   const { assignment: a, analyses } = bundle;
+  // Tutorial guiado: los dos pasos de esta tarjeta se declaran `actionable`, o sea
+  // que el globo promete "el paso se marca solo". Antes nadie avisaba de la
+  // acción, así que el check nunca se ponía verde y el recorrido no avanzaba.
+  const { reportAction } = useOnboardingActions();
 
   const level = levelOf(a.studentLevel);
   const badge = level ? (LEVEL_BADGE[level] ?? LEVEL_NEUTRAL) : LEVEL_NEUTRAL;
@@ -101,7 +106,7 @@ export default function StudentCard({ bundle, studentKey, generating, onGenerate
           <button
             className="alu-gen"
             data-onboarding="ficha-generate"
-            onClick={() => onGenerate(bundle)}
+            onClick={() => { reportAction('ficha-generate'); onGenerate(bundle); }}
             disabled={generating}
             aria-label={`Generar ficha de IA de ${a.studentName}`}
           >
@@ -120,7 +125,8 @@ export default function StudentCard({ bundle, studentKey, generating, onGenerate
         {/* `data-onboarding`: además de resaltarse, el tutorial LEE este href para
             saber a qué ficha navegar. La URL depende del alumno, así que no puede
             estar escrita a mano en la definición del paso. */}
-        <Link href={href} className="alu-view" data-student-key={studentKey} data-onboarding="student-open">
+        <Link href={href} className="alu-view" data-student-key={studentKey} data-onboarding="student-open"
+          onClick={() => reportAction('student-open')}>
           Ver ficha →
         </Link>
       </div>

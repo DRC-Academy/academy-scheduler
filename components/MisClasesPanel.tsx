@@ -13,7 +13,7 @@
 //   · Cada clase ya dada tiene "Añadir transcript", que abre el mismo modal y el
 //     mismo guardado que Finanzas (components/AddClassModal).
 
-import { useState, useEffect, useMemo, type CSSProperties } from 'react';
+import { Fragment, useState, useEffect, useMemo, useRef, type CSSProperties } from 'react';
 import { cellKey, getSpainParts, spainWallClockToEpoch } from '@/components/VisualCalendar';
 import { calcRegisteredClassNumber } from '@/lib/db';
 import {
@@ -35,7 +35,8 @@ import {
 } from '@/lib/teacherClasses';
 import { durationBadgeLabel, hourNum } from '@/lib/sessions';
 import { useClassJoin } from '@/components/JoinClass';
-import { useOnboarding } from '@/lib/OnboardingContext';
+import { useOnboardingActions } from '@/lib/OnboardingContext';
+import { registerTourBridge } from '@/lib/tourBridge';
 import { fetchRiskBriefings, briefingFor, type RiskBriefingIndex } from '@/lib/interventionsClient';
 import { AddClassModal, saveTeacherClass, ANALYSIS_FAILED_NOTICE } from '@/components/AddClassModal';
 import { PresentationModal } from '@/components/PresentationModal';
@@ -387,6 +388,18 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
   // Current time in Spain (Europe/Madrid) — the calendar's reference timezone.
   const spain = now ? getSpainParts(now) : null;
   const currentDecimal = spain ? spain.hour + spain.minute / 60 : -1;
+  /**
+   * ¿Ya sabemos qué hora es en España?
+   *
+   * Antes de saberlo, `statusOf` da TODAS las clases por futuras, así que la
+   * tarjeta pinta "Ingresar a clase" aunque la clase fuera esta mañana; en cuanto
+   * entra el reloj el botón se cambia por "Añadir transcript". Es correcto como
+   * estado transitorio, pero NO se puede anunciar como ancla del tutorial: el
+   * recorrido resolvía ese botón, la re-renderización lo reemplazaba, y el paso
+   * se quedaba resaltando un nodo ya desconectado del documento. Mientras el
+   * reloj no esté, esta pantalla no ofrece anclas y el motor simplemente espera.
+   */
+  const relojListo = currentDecimal >= 0;
 
   // HOY es hoy EN ESPAÑA, no en la zona del navegador. Antes se mezclaban las dos
   // y un profesor fuera de España veía el día equivocado (ver dayNameFromIso).
@@ -416,7 +429,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
   // Esta pantalla es la que tiene los botones del SOP, así que es la que le avisa
   // al recorrido cuándo el profesor hizo cada acción DE VERDAD. Con el tutorial
   // cerrado (o en modo manual) estas llamadas no hacen nada.
-  const onboarding = useOnboarding();
+  const onboarding = useOnboardingActions();
 
   // El ingreso se detecta por `joinedKeys`, que solo crece cuando el acceso quedó
   // efectivamente registrado en class_join_logs. Envolverlo en el onClick del
@@ -542,6 +555,44 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
   const missingTranscripts = allVisible.filter(
     x => statusOf(x.c, x.iso) === 'passed' && isRealClass(x.c, x.iso) && needsTranscriptFor(x.c, x.iso),
   );
+
+  // ── Puente con el tutorial guiado ───────────────────────────────────────────
+  //
+  // El recorrido necesita ABRIR el modal del email por su cuenta: los pasos 2 y 3
+  // resaltan botones que solo existen dentro de él. Antes lo daba por abierto, así
+  // que si el profesor no había pulsado el botón del paso 1 esos dos pasos
+  // describían botones ausentes y el globo se quedaba flotando en el centro.
+  //
+  // La condición es la MISMA que decide pintar el botón "Enviar presentación" en
+  // cada tarjeta (`showPresentationBtn`, más abajo): si fueran dos, el tutorial
+  // podría creer que hay algo pendiente cuando la pantalla no muestra nada.
+  const presentacionPendiente = allVisible.find(
+    x => statusOf(x.c, x.iso) !== 'passed' && isRealClass(x.c, x.iso)
+      && !x.c.isRecovery && !x.c.assignment.presentationEmailSent,
+  )?.c.assignment ?? null;
+
+  // Refs y no dependencias del efecto: el puente se registra UNA vez y lee el
+  // valor de ahora cuando el motor pregunta. Con dependencias se daría de alta y
+  // de baja en cada render de la lista.
+  const pendienteRef = useRef(presentacionPendiente);
+  const modalAbiertoRef = useRef(presentationModal);
+  useEffect(() => {
+    pendienteRef.current = presentacionPendiente;
+    modalAbiertoRef.current = presentationModal;
+  });
+
+  useEffect(() => registerTourBridge({
+    hasPresentationPending: () => !!pendienteRef.current,
+    isPresentationModalOpen: () => !!modalAbiertoRef.current,
+    openPresentationModal: () => {
+      if (modalAbiertoRef.current) return true;
+      const a = pendienteRef.current;
+      if (!a) return false;
+      setPresentationModal(a);
+      return true;
+    },
+    closePresentationModal: () => setPresentationModal(null),
+  }), []);
 
   // Emails de todos los alumnos a la vista (los días que se están mostrando, más
   // hoy y los dos siguientes). Si no se cubriera el rango visible, al navegar
@@ -744,7 +795,26 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     await onDataChanged();
   }
 
-  function ClassRow({ c, status, date }: { c: TodayClass; status: ClassStatus; date: string }) {
+  /**
+   * Tarjeta de una clase. Es una FUNCIÓN DE RENDER, no un componente, y la
+   * diferencia importa.
+   *
+   * Está declarada dentro de MisClasesPanel porque usa medio centenar de valores
+   * de su cierre. Mientras se usó como `<ClassRow />`, cada render del panel creaba
+   * un tipo de componente NUEVO y React desmontaba y volvía a montar las treinta
+   * tarjetas, reemplazando todos sus nodos del DOM. Eso tiraba cualquier foco o
+   * scroll interno y, sobre todo, dejaba al tutorial resaltando nodos huérfanos:
+   * resolvía el botón, el panel se re-renderizaba, el nodo moría, y el recorrido se
+   * quedaba señalando el vacío.
+   *
+   * Llamada como función devuelve elementos de HTML normales, cuyos tipos sí son
+   * estables, así que React los reconcilia y CONSERVA los nodos. No usa ningún
+   * hook, que es lo que hace segura la conversión.
+   *
+   * Lo ideal sería sacarla del padre como componente propio; requiere pasarle a
+   * mano todo lo que hoy toma del cierre, y es un refactor aparte de este.
+   */
+  function renderClassRow({ c, status, date }: { c: TodayClass; status: ClassStatus; date: string }) {
     const passed     = status === 'passed';
     const inProgress = status === 'inprogress';
     const isNext     = status === 'next';
@@ -854,9 +924,11 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
               </span>
             ) : passed ? (
               // Cuatro estados: subido / en revisión / rechazado / falta.
-              // Ancla del paso 5 del tutorial ("comprobá que quedó registrada"):
-              // es donde el profesor ve que la clase cerró.
-              <span className="mc-status" data-onboarding="class-status" style={{ background: tBadge.bg, color: tBadge.color }}>
+              // SIN ancla del tutorial: figuraba como respaldo del paso de cierre,
+              // pero ese paso vive en /mis-clases (donde se ve con importes si la
+              // clase ya cuenta) y el motor nunca lo resuelve estando aquí. Un
+              // `data-onboarding` que ningún paso usa es el que acaba pudriéndose.
+              <span className="mc-status" style={{ background: tBadge.bg, color: tBadge.color }}>
                 <span className="mc-dot" style={{ background: tBadge.dot }} />
                 {tBadge.label}
               </span>
@@ -881,7 +953,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
                 // clase ya cerrada el botón dice "Reemplazar" y resaltarlo mandaría
                 // a rehacer algo que está hecho.
                 <button
-                  data-onboarding={needsTranscript ? 'add-transcript' : undefined}
+                  data-onboarding={relojListo && needsTranscript ? 'add-transcript' : undefined}
                   className={`mc-btn ${needsTranscript ? 'mc-btn-primary' : 'mc-btn-ghost'}`}
                   onClick={() => setTranscriptFor({ c, date })}>
                   {tState === 'none' ? '📝 Añadir transcript'
@@ -889,7 +961,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
                     : 'Reemplazar transcript'}
                 </button>
               ) : hasLink ? (
-                <button data-onboarding="join-class" className="mc-btn mc-btn-primary" onClick={() => join.join(c)} disabled={join.checkingKey === c.key}>
+                <button data-onboarding={relojListo ? 'join-class' : undefined} className="mc-btn mc-btn-primary" onClick={() => join.join(c)} disabled={join.checkingKey === c.key}>
                   {join.checkingKey === c.key
                     ? <><span className="drc-spinner" />Verificando…</>
                     : 'Ingresar a clase'}
@@ -897,7 +969,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
               ) : (
                 // Mismo paso del tutorial que "Ingresar a clase": es el hueco que
                 // ocupa cuando al alumno todavía le falta el enlace de Meet.
-                <button data-onboarding="set-link" className="mc-btn mc-btn-primary" onClick={() => join.openLinkModal(c.assignment, '')}>
+                <button data-onboarding={relojListo ? 'set-link' : undefined} className="mc-btn mc-btn-primary" onClick={() => join.openLinkModal(c.assignment, '')}>
                   Definir enlace
                 </button>
               )}
@@ -948,7 +1020,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
 
             {/* Acción secundaria: enviar la presentación si aún no se envió. */}
             {showPresentationBtn && (
-              <button data-onboarding="presentation-email" className="mc-pres-btn"
+              <button data-onboarding={relojListo ? 'presentation-email' : undefined} className="mc-pres-btn"
                 onClick={() => { setPresentationModal(c.assignment); onboarding.reportAction('presentation-email'); }}>
                 ✉️ Enviar presentación
               </button>
@@ -1114,7 +1186,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
       ) : range === 'day' ? (
         <div className="mc-list">
           {dayGroups[0].shown.map(c => (
-            <ClassRow key={c.key} c={c} status={rowStatus(c, dayGroups[0].iso)} date={dayGroups[0].iso} />
+            <Fragment key={c.key}>{renderClassRow({ c, status: rowStatus(c, dayGroups[0].iso), date: dayGroups[0].iso })}</Fragment>
           ))}
         </div>
       ) : (
@@ -1131,7 +1203,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
               </div>
               <div className="mc-list">
                 {g.shown.map(c => (
-                  <ClassRow key={c.key} c={c} status={rowStatus(c, g.iso)} date={g.iso} />
+                  <Fragment key={c.key}>{renderClassRow({ c, status: rowStatus(c, g.iso), date: g.iso })}</Fragment>
                 ))}
               </div>
             </div>

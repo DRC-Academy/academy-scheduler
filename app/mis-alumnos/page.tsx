@@ -5,7 +5,7 @@
 // "sin ficha". Los tres números (activos, sin ficha, contador de cada chip)
 // salen del dato real, no de constantes.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { NavBar } from '@/components/NavBar';
 import { AuthGuard } from '@/components/AuthGuard';
 import { PullToRefresh } from '@/components/PullToRefresh';
@@ -15,6 +15,7 @@ import { useTeachers } from '@/lib/TeachersContext';
 import { getTeacherAssignments } from '@/lib/db';
 import { regenerateFicha } from '@/lib/aiClient';
 import { loadStudentBundles, norm, type StudentBundle } from '@/lib/misAlumnos';
+import { registerTourBridge } from '@/lib/tourBridge';
 import StudentCard, { fichaStateOf, levelOf } from '@/components/alumnos/StudentCard';
 
 // 'all' | 'sin-ficha' | un nivel CEFR concreto.
@@ -103,6 +104,19 @@ function MisAlumnosContent() {
       .filter(matchesFilter)
       .filter(b => !q || norm(b.assignment.studentName).includes(norm(q)));
   }, [bundles, query, matchesFilter]);
+
+  // ── Puente con el tutorial guiado ───────────────────────────────────────────
+  // Los pasos de fichas se saltan solos cuando el profesor todavía no tiene
+  // alumnos: sin este dato el recorrido los intentaba igual y dejaba tres globos
+  // seguidos flotando en el centro de una pantalla vacía.
+  //
+  // Mientras la lista CARGA se responde `true` ("no puedo descartarlo"): un
+  // `false` prematuro se saltaría los pasos por una condición que aún no se sabe.
+  const bundlesRef = useRef({ loading, count: bundles.length });
+  useEffect(() => { bundlesRef.current = { loading, count: bundles.length }; });
+  useEffect(() => registerTourBridge({
+    hasStudents: () => bundlesRef.current.loading || bundlesRef.current.count > 0,
+  }), []);
 
   const chips: Array<{ id: Filter; label: string; count: number }> = [
     { id: 'all', label: 'Todos', count: bundles.length },

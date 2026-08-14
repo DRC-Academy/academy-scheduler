@@ -72,13 +72,18 @@ export function PresentationEmailPopup({ assignments, onSend, onRemindLater }: {
     .sort((x, y) => new Date(x.a.createdAt).getTime() - new Date(y.a.createdAt).getTime());
 
   return (
+    // `drc-modal-*`: el z-index sale de la escala documentada en globals.css
+    // ("ORDEN DE CAPAS DEL TUTORIAL"). Con el 100 que tenía en línea, este aviso
+    // quedaba POR DEBAJO del overlay del tutorial (10000): salía atenuado y sin
+    // responder al ratón, y el profesor no podía ni cerrarlo ni entender por qué.
     <div
-      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+      className="drc-modal-backdrop"
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
       role="dialog"
       aria-modal="true"
       aria-label="Emails de presentación pendientes"
     >
-      <div style={{ background: '#F7F7F5', border: '2px solid #1E9E3A', borderRadius: 16, padding: 24, width: '90%', maxWidth: 540, maxHeight: '90vh', display: 'flex', flexDirection: 'column', boxSizing: 'border-box' }}>
+      <div className="drc-modal" style={{ background: '#F7F7F5', border: '2px solid #1E9E3A', borderRadius: 16, padding: 24, width: '90%', maxWidth: 540, maxHeight: '90vh', display: 'flex', flexDirection: 'column', boxSizing: 'border-box' }}>
         {/* Encabezado */}
         <div style={{ fontWeight: 800, fontSize: 18, color: '#1E9E3A', marginBottom: 6 }}>
           📧 Emails de presentación pendientes

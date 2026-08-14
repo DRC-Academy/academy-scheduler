@@ -2,34 +2,29 @@
 //
 // Fábrica PURA de la config: no toca React ni el contexto, así que el componente
 // real (components/OnboardingTour) y cualquier banco de pruebas construyen el
-// MISMO tour. Sin esto, verificar el acabado visual obligaría a duplicar la
-// config, que es justo la copia que se desincroniza y deja de probar nada.
+// MISMO tour.
+//
+// driver.js aquí es un PINTOR, no un motor. Se le entrega el elemento YA
+// RESUELTO y se le pide que lo resalte, paso a paso, con `highlight()`. No se le
+// pasa la lista de pasos ni se usa su `drive()`.
+//
+// El motivo es el fallo que motivó la reescritura del 14/08/2026: con la lista
+// completa, driver mantenía SU propio índice y, cuando un paso tenía
+// `skipMissingElement` y su botón no estaba, saltaba solo y movía ese índice sin
+// avisar a nadie. React seguía creyendo estar en el paso anterior, y la
+// comprobación "si los índices difieren, mové el tour" pasaba a dar falso: el
+// profesor pulsaba "Siguiente" y no se movía nada. Con `highlight()` driver no
+// tiene índice que desincronizar — solo hay uno, el de React.
 //
 // Se eligió driver.js (MIT, cero dependencias) frente a Shepherd.js e Intro.js,
 // que son AGPL-3.0 y exigirían licencia comercial en una app propietaria servida
 // por red. Ojo: `react-shepherd` es MIT pero arrastra `shepherd.js`, que no lo es.
 import type { Config, DriveStep } from 'driver.js';
-import { ONBOARDING_STEPS, formationLabel, type OnboardingStep, type OnboardingStepId } from '@/lib/onboarding';
-
-/**
- * Primer elemento VISIBLE con alguno de los `data-onboarding` del paso.
- *
- * Anclaje por identificador estable, nunca por posición. Un paso declara VARIAS
- * anclas y gana la primera que exista: el mismo hueco de la tarjeta muestra
- * "Ingresar a clase" o "Definir enlace" según el alumno tenga o no enlace de Meet.
- */
-export function findAnchor(anchors: string[]): HTMLElement | undefined {
-  for (const name of anchors) {
-    const nodes = document.querySelectorAll<HTMLElement>(`[data-onboarding="${name}"]`);
-    for (const el of nodes) {
-      const r = el.getBoundingClientRect();
-      // Tamaño 0 = oculto (display:none, o dentro de un menú cerrado). Resaltarlo
-      // sería un agujero invisible en la esquina de la pantalla.
-      if (r.width > 0 && r.height > 0) return el;
-    }
-  }
-  return undefined;
-}
+import {
+  ONBOARDING_STEPS, formationLabel, selectorsOf,
+  type TourStep, type OnboardingStepId,
+} from '@/lib/onboarding';
+import { findAnchor } from '@/lib/tourEngine';
 
 // ── Flecha señaladora ─────────────────────────────────────────────────────────
 
@@ -84,7 +79,7 @@ export function calcularFlecha(r: DOMRect, popover: Caja | null): Pointer | null
 }
 
 /** ¿La pantalla a la vista es la que pide el paso? */
-export function enRutaDelPaso(step: OnboardingStep, pathname: string): boolean {
+export function enRutaDelPaso(step: TourStep, pathname: string): boolean {
   return step.routeMatch === 'prefix'
     ? pathname.startsWith(step.route)
     : pathname === step.route;
@@ -96,13 +91,12 @@ export function enRutaDelPaso(step: OnboardingStep, pathname: string): boolean {
  * Con `routeFrom`, la URL sale del href de un enlace que está en la pantalla
  * ACTUAL: la ficha de un alumno vive en /mis-alumnos/<id> y ese id solo se conoce
  * mirando la lista. Si el enlace no está (un profesor sin alumnos todavía) no hay
- * destino, y el paso —que es `optional`— se salta.
+ * destino y el paso se salta.
  */
-export function destinoDelPaso(step: OnboardingStep): string | null {
+export function destinoDelPaso(step: TourStep): string | null {
   if (!step.routeFrom) return step.route;
-  const link = findAnchor([step.routeFrom]) as HTMLAnchorElement | undefined;
-  const href = link?.getAttribute('href');
-  return href || null;
+  const link = findAnchor([step.routeFrom]) as HTMLAnchorElement | null;
+  return link?.getAttribute('href') || null;
 }
 
 /** Caja del globo de driver.js, si está en pantalla. */
@@ -131,11 +125,6 @@ export interface TourOptions {
   done: () => Set<OnboardingStepId>;
   /** Clases de formación completadas, para el "Clase 3 de 5". */
   classesCompleted: () => number;
-  /**
-   * Avance y retroceso. Los lleva React, NO driver.js: el recorrido cruza
-   * pantallas y en cada salto driver se destruye y se reconstruye, con lo que su
-   * índice interno se perdería. Acá solo se traduce el clic.
-   */
   onNext: () => void;
   onPrev: () => void;
   /** "Saltar tutorial" (solo modo automático). */
@@ -151,17 +140,21 @@ export interface TourOptions {
  */
 function decorarPopover(
   popover: { wrapper: HTMLElement; footer: HTMLElement; description: HTMLElement },
-  step: OnboardingStep,
+  step: TourStep,
+  index: number,
+  anclado: boolean,
   opts: TourOptions,
 ) {
   const auto = opts.mode === 'auto';
   const done = opts.done();
   popover.wrapper.classList.toggle('is-auto', auto);
   popover.wrapper.classList.toggle('is-done', done.has(step.id));
+  // Marca el globo sin foco: lo lee el CSS para no fingir que señala algo.
+  popover.wrapper.classList.toggle('is-centered', !anclado);
 
   // Aviso de cambio de pestaña. El profesor ve ADÓNDE lo lleva el paso siguiente
   // antes de que la pantalla cambie sola debajo suyo, que sin avisar desorienta.
-  const siguiente = ONBOARDING_STEPS[ONBOARDING_STEPS.indexOf(step) + 1];
+  const siguiente = ONBOARDING_STEPS[index + 1];
   if (siguiente && siguiente.route !== step.route) {
     const salto = document.createElement('div');
     salto.className = 'drc-tour-jump';
@@ -169,9 +162,9 @@ function decorarPopover(
     popover.footer.insertAdjacentElement('beforebegin', salto);
   }
 
-  // "Dónde está": solo si el paso ancla algo y no se encontró el botón. Evita un
-  // globo suelto en medio de la pantalla sin decir a qué se refería.
-  if (step.anchors.length > 0 && !findAnchor(step.anchors)) {
+  // "Dónde está": solo cuando el paso quedó SIN foco. Evita un globo suelto en
+  // medio de la pantalla sin decir a qué se refería.
+  if (!anclado && step.selector) {
     const nota = document.createElement('div');
     nota.className = 'drc-tour-where';
     const etiqueta = document.createElement('b');
@@ -192,7 +185,7 @@ function decorarPopover(
 
   // Paso accionable pendiente: se le avisa de que el botón iluminado es pulsable
   // y que el paso se marca solo al hacerlo.
-  if (step.actionable && !done.has(step.id)) {
+  if (step.actionable && anclado && !done.has(step.id)) {
     const aviso = document.createElement('div');
     aviso.className = 'drc-tour-hint';
     aviso.textContent = 'Podés pulsar el botón iluminado: el paso se marca solo.';
@@ -209,49 +202,58 @@ function decorarPopover(
   popover.footer.insertAdjacentElement('afterbegin', saltar);
 }
 
-export function buildTourSteps(opts: TourOptions): DriveStep[] {
-  return ONBOARDING_STEPS.map((s, i): DriveStep => ({
-    // Función, no selector: se evalúa al llegar al paso y resuelve la lista de
-    // anclas con su fallback. driver.js admite que no haya elemento (globo
-    // centrado), aunque su tipo solo declare `() => Element`.
-    element: s.anchors.length > 0
-      ? (() => findAnchor(s.anchors)) as unknown as () => Element
-      : undefined,
-    // Un paso opcional sin su botón en pantalla se salta solo. Es el caso de la
-    // presentación, que se envía una vez por alumno: sin esto un profesor trabaría
-    // el recorrido en el paso 1 desde su segundo día.
-    skipMissingElement: s.optional === true,
-    // Margen para que la lista de clases termine de cargar antes de dar por
-    // ausente el botón.
-    waitForElement: s.anchors.length > 0 ? 1200 : 0,
+/**
+ * El paso que se le pasa a `driver.highlight()`.
+ *
+ * `element` viene ya resuelto por el motor. `undefined` = globo centrado, y es
+ * una decisión explícita del motor (paso informativo o `onMissing: 'center'`),
+ * nunca el resultado de que driver no encontrara algo por su cuenta.
+ *
+ * OJO con `progressText`: en la ruta de `highlight()` driver NO sustituye
+ * `{{current}}`/`{{total}}` (eso solo ocurre en `drive()`), así que el texto va
+ * ya formado.
+ */
+export function buildHighlight(
+  step: TourStep,
+  index: number,
+  element: HTMLElement | null,
+  opts: TourOptions,
+): DriveStep {
+  const total = ONBOARDING_STEPS.length;
+  const ultimo = index === total - 1;
+  return {
+    element: element ?? undefined,
     popover: {
-      title: s.title,
-      description: s.why,
-      side: s.side ?? 'bottom',
-      align: s.align ?? 'center',
+      title: step.title,
+      description: step.body,
+      side: step.side ?? 'bottom',
+      align: step.align ?? 'center',
       popoverClass: 'drc-tour',
-      progressText: `Paso {{current}} de ${ONBOARDING_STEPS.length}`,
       showProgress: true,
-      nextBtnText: i === ONBOARDING_STEPS.length - 1 ? 'Terminar' : 'Siguiente →',
+      progressText: `Paso ${index + 1} de ${total}`,
+      showButtons: ['next', 'previous', 'close'],
+      disableButtons: index === 0 ? ['previous'] : [],
+      nextBtnText: ultimo ? 'Terminar' : 'Siguiente →',
       prevBtnText: '← Anterior',
       doneBtnText: 'Terminar',
-      onPopoverRender: popover => decorarPopover(popover, s, opts),
-      // Se intercepta el avance de driver.js: el puntero lo lleva React porque el
-      // recorrido cambia de pantalla (ver TourOptions.onNext).
-      onNextClick: () => (i === ONBOARDING_STEPS.length - 1 ? opts.onClose() : opts.onNext()),
+      onPopoverRender: popover => decorarPopover(popover, step, index, !!element, opts),
+      // El puntero lo lleva React: acá solo se traduce el clic.
+      onNextClick: () => (ultimo ? opts.onClose() : opts.onNext()),
       onPrevClick: () => opts.onPrev(),
+      onCloseClick: () => opts.onClose(),
     },
-  }));
+  };
 }
 
-export function buildTourConfig(opts: TourOptions): Config {
+export function buildDriverConfig(opts: TourOptions): Config {
   return {
-    steps: buildTourSteps(opts),
-    // El recorte del overlay se interpola entre pasos: el foco de luz se desliza
-    // al siguiente botón en vez de saltar.
-    animate: true,
+    // Sin `steps`: el recorrido lo lleva el motor (ver cabecera).
+    animate: false,
     duration: 400,
-    smoothScroll: true,
+    // El scroll lo hace el motor con `scrollAnchorIntoView`, que descuenta la
+    // barra superior sticky. El de driver no la conoce y en móvil dejaba el
+    // elemento medio tapado.
+    smoothScroll: false,
     overlayColor: '#0f1410',
     overlayOpacity: 0.68,
     stagePadding: 8,
@@ -267,4 +269,44 @@ export function buildTourConfig(opts: TourOptions): Config {
     showProgress: true,
     onDestroyStarted: opts.onClose,
   };
+}
+
+// ── Validación de anclas (solo desarrollo) ───────────────────────────────────
+
+/**
+ * Recorre los selectores declarados y avisa de los que no están donde deberían.
+ *
+ * Solo puede mirar el documento ACTUAL, así que informa por separado de los pasos
+ * de esta ruta (donde la ausencia es un dato) y de los de otras (donde es lo
+ * esperable).
+ *
+ * También caza DUPLICADOS, pero solo en los pasos que NO están marcados
+ * `multiple`: dos nodos con el mismo `data-onboarding` hacen que el resaltado
+ * dependa del orden del DOM. En una lista eso es lo esperado y correcto (hay un
+ * botón "Añadir transcript" por clase pendiente); en un elemento único es un
+ * error de marcado que haría saltar el foco de un sitio a otro sin motivo.
+ */
+export function validarAnclas(pathname: string): void {
+  if (process.env.NODE_ENV === 'production') return;
+
+  const faltanAqui: string[] = [];
+  const duplicados: string[] = [];
+
+  for (const step of ONBOARDING_STEPS) {
+    for (const sel of selectorsOf(step)) {
+      const nodos = document.querySelectorAll(`[data-onboarding="${sel}"]`);
+      if (nodos.length > 1 && !step.multiple) duplicados.push(`${step.id} → "${sel}" (${nodos.length} nodos)`);
+      if (nodos.length === 0 && enRutaDelPaso(step, pathname)) faltanAqui.push(`${step.id} → "${sel}"`);
+    }
+  }
+
+  if (faltanAqui.length) {
+    console.warn(
+      `[tour] Anclas declaradas que NO están en el DOM de ${pathname}:\n  · ${faltanAqui.join('\n  · ')}\n` +
+      '  (puede ser legítimo: el botón depende de los datos del profesor)',
+    );
+  }
+  if (duplicados.length) {
+    console.error(`[tour] data-onboarding DUPLICADO (el resaltado dependerá del orden del DOM):\n  · ${duplicados.join('\n  · ')}`);
+  }
 }

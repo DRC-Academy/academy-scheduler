@@ -7,7 +7,7 @@ import { NotificationBell } from '@/components/NotificationBell';
 import { Search, Users, Calendar, CalendarDays, Wallet, Settings, Menu, X, GraduationCap, CalendarCheck, CalendarClock, LifeBuoy } from 'lucide-react';
 import { Button } from '@/components/ui';
 import { PresentationEmailReminder } from '@/components/PresentationEmailReminder';
-import { useOnboarding } from '@/lib/OnboardingContext';
+import { useOnboardingActions } from '@/lib/OnboardingContext';
 
 // Íconos lucide en vez de emojis: /mis-clases y /finanzas usaban los dos el mismo
 // 💰, así que el ícono no distinguía nada.
@@ -42,7 +42,7 @@ export function NavBar() {
   const [menuOpen, setMenuOpen] = useState(false);
   // Tutorial a demanda. Se ofrece a CUALQUIER profesor, sin mirar si está en
   // onboarding automático ni cuántas clases lleva: es un repaso, no una formación.
-  const { openManual } = useOnboarding();
+  const { openManual } = useOnboardingActions();
   const showTutorial = user?.role === 'teacher';
 
   // Cerrar el menú al navegar a otra ruta.

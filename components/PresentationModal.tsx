@@ -10,7 +10,9 @@
 // caso normal con Gmail en el navegador). El flujo es copiar el texto y pegarlo.
 import { useState, useEffect, useMemo, useRef, type CSSProperties } from 'react';
 import { useTeachers } from '@/lib/TeachersContext';
-import { useOnboarding } from '@/lib/OnboardingContext';
+import { useOnboardingActions } from '@/lib/OnboardingContext';
+import { emitPresentationModalClosed } from '@/lib/tourBridge';
+import { ANCLA_MODAL_PRESENTACION } from '@/lib/onboarding';
 import { classifyFor } from '@/lib/productUtils';
 import { resolveGender, g } from '@/lib/gender';
 import { getOrCreateFormLink } from '@/lib/formClient';
@@ -106,7 +108,7 @@ export function PresentationModal({ assignment, teacher, students, updateMeetLin
   const { markPresentationSent } = useTeachers();
   // Tutorial guiado: copiar y marcar como enviado son dos pasos distintos, y este
   // modal es el único sitio donde constan. Con el tutorial cerrado no hace nada.
-  const { reportAction } = useOnboarding();
+  const { reportAction } = useOnboardingActions();
 
   // Lookup del alumno (email real + plan/producto) para clasificar y prellenar.
   const student = useMemo(() => {
@@ -123,6 +125,13 @@ export function PresentationModal({ assignment, teacher, students, updateMeetLin
   const [toast, setToast]       = useState<string | null>(null);
   const [marking, setMarking]   = useState(false);   // PATCH de "marcar enviado" en vuelo
   const lastGenRef = useRef(body);
+
+  // Al desmontarse se avisa al tutorial. Si el profesor cierra el modal a mitad
+  // del bloque de tres pasos, el motor salta al primer paso POSTERIOR al bloque:
+  // sin este aviso, driver seguía resaltando un nodo ya desconectado del
+  // documento, cuyo getBoundingClientRect() es todo ceros, y el recorte del
+  // overlay colapsaba a un punto en la esquina superior izquierda.
+  useEffect(() => emitPresentationModalClosed, []);
 
   // Al abrir, resolvemos el link del formulario inicial (reutiliza token vigente
   // o genera uno) para incluirlo en el mismo correo de presentación.
@@ -206,9 +215,16 @@ export function PresentationModal({ assignment, teacher, students, updateMeetLin
   const lightInput: CSSProperties = { width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #d1d5db', background: 'white', color: '#111827', fontSize: 13, fontFamily: 'inherit', boxSizing: 'border-box' };
 
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 90, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+    // `drc-modal-*`: el z-index y los pointer-events viven en globals.css, en el
+    // bloque que documenta el orden de capas frente al tutorial. En línea no
+    // podían: el modal tiene que quedar POR ENCIMA del overlay de driver.js, y ese
+    // valor solo tiene sentido junto al resto de la escala.
+    <div className="drc-modal-backdrop"
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
       onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={{ background: '#F7F7F5', border: '2px solid #1E9E3A', borderRadius: 16, padding: 24, width: '100%', maxWidth: 560, maxHeight: '90vh', overflowY: 'auto' }}>
+      <div className="drc-modal" role="dialog" aria-modal="true" aria-label="Email de presentación"
+        data-onboarding={ANCLA_MODAL_PRESENTACION}
+        style={{ background: '#F7F7F5', border: '2px solid #1E9E3A', borderRadius: 16, padding: 24, width: '100%', maxWidth: 560, maxHeight: '90vh', overflowY: 'auto' }}>
         <div style={{ fontWeight: 800, fontSize: 17, color: '#1E9E3A', marginBottom: 6 }}>
           📧 Email de presentación · {assignment.studentName}
         </div>

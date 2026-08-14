@@ -357,13 +357,38 @@ label {
   50%      { box-shadow: 0 0 0 6px rgba(30,158,58,0.20), 0 0 36px 8px rgba(30,158,58,0.62); }
 }
 
+/* ── ORDEN DE CAPAS DEL TUTORIAL ───────────────────────────────────────────────
+   De abajo hacia arriba. Cualquier capa nueva se añade AQUÍ, no suelta en un
+   componente: el fallo que motivó este bloque fue justo ese, un modal con
+   `z-index: 90` escrito en línea que quedaba por debajo del overlay de driver.
+
+     40         barra superior sticky (.tnav)
+     10000      overlay de driver.js (la penumbra; lo fija driver en línea)
+     10001      elemento resaltado, para que su halo no quede bajo la penumbra
+     10010      overlay del modal        (--z-modal-backdrop)
+     10020      contenido del modal      (--z-modal)
+     10030      flecha señaladora        (--z-tour-pointer)
+     1000000000 globo de driver.js — SIEMPRE lo más alto (lo fija driver.css)
+
+   La regla que importa: el modal va POR ENCIMA de la penumbra de driver. Si va
+   por debajo, su contenido queda atrapado en un contexto de apilado inferior, el
+   halo del botón resaltado se pinta bajo la penumbra y no se ve nada de lo que el
+   paso está señalando. */
+:root {
+  --z-modal-backdrop: 10010;
+  --z-modal: 10020;
+  --z-tour-pointer: 10030;
+}
+
 .driver-active-element {
   /* El elemento se SUBE por encima del overlay (driver.js lo deja en 10000) en vez
      de verse solo a través del agujero del SVG. Sin esto el halo quedaría pintado
      DEBAJO de la penumbra y no se vería: el recorte tiene el tamaño exacto del
      botón más `stagePadding`, y el resplandor se sale de ahí.
      Ninguno de los contenedores de la tarjeta (.mc-card, .mc-row, .mc-actions)
-     crea contexto de apilado, así que el z-index sube hasta la raíz. */
+     crea contexto de apilado, así que el z-index sube hasta la raíz. Dentro del
+     modal sí lo hay, pero ahí no hace falta: el modal entero ya está por encima
+     de la penumbra. */
   position: relative;
   z-index: 10001;
   border-radius: 10px;
@@ -371,6 +396,18 @@ label {
   /* Sigue siendo pulsable (driver.js le deja pointer-events:auto): es lo que
      permite que el paso se marque con la acción real y no con "Siguiente". */
 }
+
+/* ── Modales durante el tutorial ──
+   driver.css aplica `.driver-active * { pointer-events: none }` a TODO el
+   documento y solo devuelve el puntero al elemento resaltado y a su propio globo.
+   Dentro de un modal eso deja el formulario entero muerto: el paso "copia el
+   email" pide pegar el enlace de Meet en un campo que no se podía ni enfocar.
+   Aquí se le devuelve el puntero al modal completo. */
+.drc-modal-backdrop { z-index: var(--z-modal-backdrop); }
+.drc-modal { z-index: var(--z-modal); }
+
+body.driver-active .drc-modal-backdrop,
+body.driver-active .drc-modal-backdrop * { pointer-events: auto; }
 
 /* El recorte del overlay se anima solo (driver.js interpola el path del SVG).
    Acá solo se alarga un poco la transición para que el foco "se deslice". */
@@ -396,6 +433,13 @@ label {
   margin-bottom: 6px;
   /* Hueco para la X, que driver.js posiciona en absoluto arriba a la derecha. */
   padding-right: 26px;
+}
+/* Paso SIN foco: el motor decidió mostrarlo centrado (paso informativo, o
+   `onMissing: 'center'` con su warn en consola). Se marca en el globo para que no
+   parezca que señala algo que el profesor no encuentra: sin esta pista, un globo
+   en mitad de la pantalla se lee como un fallo de posicionamiento. */
+.driver-popover.drc-tour.is-centered {
+  border-style: dashed;
 }
 /* Check verde cuando el paso ya se cumplió con la acción real. */
 .driver-popover.drc-tour.is-done .driver-popover-title::before {
@@ -544,12 +588,13 @@ label {
 }
 
 /* ── Flecha señaladora ──
-   Marca sin ambigüedad DÓNDE hay que pulsar. Va por encima del overlay de
-   driver.js (10000) y por debajo de su globo (1000000000), y nunca intercepta el
-   clic: el botón al que apunta tiene que seguir siendo pulsable. */
+   Marca sin ambigüedad DÓNDE hay que pulsar. Va por encima del contenido del
+   modal (para poder señalar sus botones) y por debajo del globo de driver; nunca
+   intercepta el clic: el botón al que apunta tiene que seguir siendo pulsable.
+   Ver el bloque "ORDEN DE CAPAS DEL TUTORIAL" más arriba. */
 .drc-tour-pointer {
   position: fixed;
-  z-index: 10002;
+  z-index: var(--z-tour-pointer);
   pointer-events: none;
   display: flex;
   align-items: center;
