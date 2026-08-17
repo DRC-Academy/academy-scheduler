@@ -51,6 +51,83 @@ export interface AskClaudeJsonOptions {
   model?: string;
 }
 
+// ── Saneado del esquema antes de enviarlo ─────────────────────────────────────
+//
+// Los structured outputs de la API NO aceptan los parámetros de validación de
+// JSON Schema que están abajo. Si uno se cuela, la petición falla con 400 ANTES
+// de procesarse ("output_config.format.schema: For 'array' type, property
+// 'maxItems' is not supported") y esa función de IA deja de funcionar el 100% de
+// las veces, sin degradación parcial que avise. Pasó con `maxItems` en el
+// análisis de transcripciones: 370 análisis en 'failed' entre el 04/08/2026 y el
+// 17/08/2026, y de paso reventó la generación de la siguiente clase, que analiza
+// el transcript antes de generarla.
+//
+// Los topes y rangos se piden en la `description` del campo, en lenguaje natural
+// ("array de 2 a 4 elementos, nunca más de 4"): el modelo los respeta y el
+// esquema no los impone con un parámetro que la API rechaza.
+//
+// Esto es una RED, no un permiso: los esquemas se escriben ya limpios (el warning
+// avisa si alguno no lo está), pero el filtro vive acá, en el único punto por el
+// que pasan todas las llamadas, para que un esquema nuevo no pueda volver a
+// tumbar una función entera de IA.
+//
+// Lo que NO se arregla quitando una clave, y por tanto sigue siendo regla al
+// escribir esquemas: `additionalProperties` tiene que ser false, todas las
+// propiedades van en `required`, y no se admiten esquemas recursivos.
+const UNSUPPORTED_SCHEMA_KEYS = new Set([
+  // arrays
+  'minItems', 'maxItems', 'uniqueItems', 'contains', 'minContains', 'maxContains',
+  // números
+  'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'multipleOf',
+  // cadenas
+  'minLength', 'maxLength', 'pattern',
+  // objetos
+  'minProperties', 'maxProperties', 'patternProperties', 'propertyNames',
+  'dependentRequired', 'dependentSchemas',
+]);
+
+// Claves cuyo VALOR es un mapa nombre→esquema, no un esquema. Sus claves son
+// nombres de campo nuestros: un campo que se llamara "pattern" o "minimum" no
+// debe desaparecer por llamarse igual que una palabra de JSON Schema.
+const SCHEMA_MAP_KEYS = new Set(['properties', '$defs', 'definitions']);
+
+function sanitizeNode(node: unknown, dropped: string[]): unknown {
+  if (Array.isArray(node)) return node.map(n => sanitizeNode(n, dropped));
+  if (!node || typeof node !== 'object') return node;
+
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+    if (UNSUPPORTED_SCHEMA_KEYS.has(key)) { dropped.push(key); continue; }
+    out[key] = SCHEMA_MAP_KEYS.has(key) ? sanitizeSchemaMap(value, dropped) : sanitizeNode(value, dropped);
+  }
+  return out;
+}
+
+function sanitizeSchemaMap(map: unknown, dropped: string[]): unknown {
+  if (!map || typeof map !== 'object' || Array.isArray(map)) return map;
+  const out: Record<string, unknown> = {};
+  for (const [name, sub] of Object.entries(map as Record<string, unknown>)) {
+    out[name] = sanitizeNode(sub, dropped);   // el NOMBRE se respeta siempre
+  }
+  return out;
+}
+
+/** Quita del esquema los parámetros que la API rechaza. Avisa por consola si había alguno. */
+export function sanitizeSchemaForApi(
+  schema: Record<string, unknown>,
+  label: string,
+): Record<string, unknown> {
+  const dropped: string[] = [];
+  const clean = sanitizeNode(schema, dropped) as Record<string, unknown>;
+  if (dropped.length > 0) {
+    console.warn(
+      `[ai:${label}] El esquema traía parámetros que la API rechaza y se quitaron antes de enviarlo: ` +
+      `${[...new Set(dropped)].join(', ')}. Movelos a la "description" del campo (ej. "array de 2 a 4 elementos").`,
+    );
+  }
+  return clean;
+}
+
 /**
  * Le pide a Claude una respuesta que cumpla `schema` y la devuelve parseada.
  *
@@ -94,7 +171,7 @@ export async function askClaudeJson<T>(opts: AskClaudeJsonOptions): Promise<AiRe
           { type: 'text', text: `${opts.system}\n\n${NO_DASH_RULES}`, cache_control: { type: 'ephemeral' } },
         ],
         output_config: {
-          format: { type: 'json_schema', schema: opts.schema },
+          format: { type: 'json_schema', schema: sanitizeSchemaForApi(opts.schema, opts.label) },
           ...(opts.effort ? { effort: opts.effort } : {}),
         },
         messages: [{ role: 'user', content: opts.prompt }],

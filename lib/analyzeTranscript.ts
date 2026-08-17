@@ -33,12 +33,14 @@ const INTERVENTION_SCHEMA = {
   required: ['action', 'steps', 'reconnectHook', 'escalateToSupport', 'channel'],
   properties: {
     action:            { type: 'string',  description: 'Acción concreta que el PROFESOR ejecuta, una sola, en español de España. Nunca "escala el caso a soporte" ni una advertencia de lo que no debe hacer: eso no le sirve durante la clase. Vacío si riskSignal es verde.' },
+    // El tope (4) va en la DESCRIPCIÓN, no en el esquema: los structured outputs
+    // de la API rechazan minItems/maxItems en los arrays y la petición falla con
+    // 400 antes de procesarse. Ver el comentario de sanitizeSchemaForApi en
+    // lib/anthropic.ts. El modelo respeta el rango si se lo pides en prosa.
     steps: {
       type: 'array',
-      minItems: 0,
-      maxItems: 4,
       items: { type: 'string' },
-      description: 'QUÉ HACE EL PROFESOR DURANTE ESTA CLASE, en 2 a 4 pasos ordenados, cada uno una frase corta que empieza por un verbo de acción. Se le muestran numerados justo antes de entrar. PROHIBIDO: pasos que solo digan lo que no hay que hacer ("no intentes retenerlo"), que deleguen en otro equipo ("deja que soporte lo gestione") o que sean una actitud sin conducta ("mantén un tono cercano"). Obligatorio también cuando escalateToSupport es true: ahí son de contención y acompañamiento. Array vacío solo si riskSignal es verde.',
+      description: 'Array de 2 a 4 elementos, nunca más de 4 (vacío solo si riskSignal es verde). QUÉ HACE EL PROFESOR DURANTE ESTA CLASE, en 2 a 4 pasos ordenados, cada uno una frase corta que empieza por un verbo de acción. Se le muestran numerados justo antes de entrar. PROHIBIDO: pasos que solo digan lo que no hay que hacer ("no intentes retenerlo"), que deleguen en otro equipo ("deja que soporte lo gestione") o que sean una actitud sin conducta ("mantén un tono cercano"). Obligatorio también cuando escalateToSupport es true: ahí son de contención y acompañamiento. Array vacío solo si riskSignal es verde.',
     },
     reconnectHook:     { type: 'string',  description: 'Si el alumno está a 1 o 2 clases de un hito (15 o 30), cómo usar la evaluación de hito como excusa natural para reconectar. Vacío si no aplica.' },
     escalateToSupport: { type: 'boolean', description: 'true solo si el alumno dijo explícitamente que piensa cancelar o dejar las clases.' },
@@ -50,11 +52,12 @@ const INTERVENTION_SCHEMA = {
  * Cada cosa detectada, con su acción al lado. Tope de 3 a propósito: es lo que
  * cabe en pantalla, y cada elemento extra alarga el análisis, que corre contra
  * un timeout ajustado (ver analyzeTranscript, más abajo).
+ *
+ * El tope vive en la DESCRIPCIÓN, no en maxItems: la API rechaza ese parámetro
+ * en las respuestas estructuradas (ver sanitizeSchemaForApi en lib/anthropic.ts).
  */
 const DETECTIONS_SCHEMA = {
   type: 'array',
-  minItems: 0,
-  maxItems: 3,
   items: {
     type: 'object',
     additionalProperties: false,
@@ -64,7 +67,7 @@ const DETECTIONS_SCHEMA = {
       action:  { type: 'string', description: 'Qué hacer al respecto en la próxima clase, en una frase ejecutable. Ej: "haz los primeros cinco minutos solo en inglés, con apoyo visual". Nunca un consejo genérico.' },
     },
   },
-  description: 'De 1 a 3 detecciones con su acción emparejada. Se rellena SIEMPRE, también cuando riskSignal es verde: son hallazgos pedagógicos, no señales de baja.',
+  description: 'Array de 1 a 3 elementos, nunca más de 3: detecciones con su acción emparejada. Se rellena SIEMPRE, también cuando riskSignal es verde: son hallazgos pedagógicos, no señales de baja.',
 } as const;
 
 const CHECK_SCHEMA = {
@@ -247,11 +250,16 @@ ${input.transcript}`;
 // el informe mantiene la calidad (el esquema estructurado hace el trabajo duro).
 //
 // PRESUPUESTO DE SALIDA. Los campos que se añadieron después (riskCause,
-// detections, stillOpenReason) llevan tope duro en el esquema —3 detecciones,
-// riskExplanation de unas 60 palabras— justo por esto: el análisis corre contra
-// un timeout ajustado y romperlo es peor que cualquier campo que se gane. Si en
-// algún momento hay que recortar, lo primero que se quita son las `detections`
-// (bajar maxItems), nunca el effort ni el timeout.
+// detections, stillOpenReason) llevan tope —3 detecciones, riskExplanation de
+// unas 60 palabras— justo por esto: el análisis corre contra un timeout ajustado
+// y romperlo es peor que cualquier campo que se gane. Si en algún momento hay que
+// recortar, lo primero que se quita son las `detections` (bajar el número en su
+// `description`), nunca el effort ni el timeout.
+//
+// OJO: el tope se pide en prosa, en las `description`, NO con maxItems/minItems.
+// La API los rechaza en las respuestas estructuradas y la petición entera falla
+// con 400: fue exactamente el bug que dejó 370 análisis en 'failed' entre el
+// 04/08/2026 y el 17/08/2026. Ver sanitizeSchemaForApi en lib/anthropic.ts.
 export async function analyzeTranscript(input: TranscriptInput): Promise<TranscriptResult> {
   return askClaudeJson<TranscriptIA>({
     label: 'analyze-transcript',
