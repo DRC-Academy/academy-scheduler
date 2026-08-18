@@ -436,6 +436,33 @@ export function selectorsOf(step: TourStep): string[] {
  */
 export const ONBOARDING_SIGNATURE = `${ONBOARDING_STEPS.length}:${ONBOARDING_STEPS.map(s => s.id).join(',')}`;
 
+/**
+ * Qué hay que deshacer al pasar de `desde` a `hacia`. `null` = nada.
+ *
+ * La clave está en que, con `block`, lo que se monta es del BLOQUE y no del paso:
+ * el modal del email lo abren LOS DOS pasos de dentro, con el mismo `onEnter`. El
+ * desmontaje tiene que ser igual de del bloque, y antes no lo era: `onExit` solo
+ * lo declaraba el ÚLTIMO paso, así que retroceder desde el PRIMERO de dentro
+ * ("Pega tu Meet y copia el email") hacia el de fuera ("Abre el email de
+ * presentación") no cerraba nada. El modal se quedaba abierto tapando justo el
+ * botón que ese paso señala.
+ *
+ * Por eso al salir del bloque vale el `onExit` de cualquiera de sus pasos: así un
+ * paso nuevo dentro del bloque no puede reintroducir el fallo por olvidarse de
+ * declararlo.
+ */
+export function exitBetween(
+  desde: TourStep | undefined,
+  hacia: TourStep | undefined,
+): (() => Promise<void>) | null {
+  if (!desde) return null;
+  // Moverse DENTRO del bloque no puede deshacer lo que ese mismo bloque necesita.
+  if (desde.block && hacia?.block === desde.block) return null;
+  if (desde.onExit) return desde.onExit;
+  if (!desde.block) return null;
+  return ONBOARDING_STEPS.find(s => s.block === desde.block && s.onExit)?.onExit ?? null;
+}
+
 export function stepIndexOf(id: OnboardingStepId): number {
   return ONBOARDING_STEPS.findIndex(s => s.id === id);
 }

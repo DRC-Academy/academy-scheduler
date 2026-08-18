@@ -46,7 +46,7 @@ import { useTeachers } from '@/lib/TeachersContext';
 import {
   ONBOARDING_STEPS, ONBOARDING_TARGET_CLASSES, ONBOARDING_SIGNATURE,
   ANCLA_MODAL_PRESENTACION, isAutoOnboarding, selectorsOf, indexAfterBlock,
-  esRutaDeProfesor, type TourStep, type OnboardingStepId,
+  exitBetween, esRutaDeProfesor, type TourStep, type OnboardingStepId,
 } from '@/lib/onboarding';
 import { enRutaDelPaso, destinoDelPaso } from '@/lib/tourConfig';
 import {
@@ -295,13 +295,16 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     setAnchor(null);
 
     try {
-      // Deshacer lo que montó el paso que se abandona (cerrar el modal), pero solo
-      // si el destino sale de su bloque: moverse DENTRO del bloque del email no
-      // puede cerrar el modal que ese mismo bloque necesita.
+      // Deshacer lo que montó el paso que se abandona (cerrar el modal). Vale en
+      // las DOS direcciones: al retroceder del primer paso de dentro del bloque al
+      // de fuera, el modal tapaba el botón que ese paso señala y "Anterior" no
+      // llevaba a ninguna parte visible. Quién sabe deshacerlo lo decide
+      // `exitBetween`, que trata el bloque como una unidad.
       const saliendo = ONBOARDING_STEPS[indexRef.current];
       const destinoPaso = ONBOARDING_STEPS[target];
-      if (saliendo?.onExit && (!saliendo.block || destinoPaso?.block !== saliendo.block)) {
-        await saliendo.onExit();
+      const salida = exitBetween(saliendo, destinoPaso);
+      if (salida) {
+        await salida();
         await waitForElementGone([ANCLA_MODAL_PRESENTACION], { signal: ac.signal });
       }
 
