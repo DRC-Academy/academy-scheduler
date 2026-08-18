@@ -16,6 +16,13 @@
 //   · 'test'       → completó el formulario pero no tiene ninguna sesión de test
 //     terminada. Reloj: form_tokens.completed_at.
 //
+// Hay además alumnos vivos que NO tienen ningún enlace vigente y por tanto no
+// pueden estar en ninguna secuencia: los que nunca recibieron uno (son
+// anteriores al 10/07/2026, cuando se estrenó el formulario) y aquellos a los
+// que el enlace les caducó sin abrirlo. Para esos, `studentsNeedingToken`
+// devuelve a quién hay que generarle uno; el cron lo crea y a partir de ahí
+// entran por la puerta normal.
+//
 // Por qué created_at del token y no la fecha de alta del alumno: el enlace lo
 // genera el profesor cuando le manda el email de presentación, y entre el alta y
 // ese email hay una mediana de 12 días (máximo medido: 53). Contar desde el alta
@@ -48,6 +55,8 @@ export interface FormTokenRow {
   form_reminder_last_sent: string | null;
   test_reminder_count: number | null;
   test_reminder_last_sent: string | null;
+  /** null = enlace del profesor · 'veterano' | 'reactivado' = lo creó el follow-up. */
+  reminder_variant: string | null;
 }
 
 export interface StudentRow {
@@ -68,11 +77,42 @@ export interface DropoutRow {
   student_name: string | null;
 }
 
+export interface AssignmentRow {
+  student_id: string | null;
+  student_name: string | null;
+  teacher_id: string | null;
+  teacher_name: string | null;
+  id?: string | null;
+  plan?: string | null;
+  student_level?: string | null;
+}
+
 export type Sequence = 'formulario' | 'test';
+
+/**
+ * Qué texto le toca. 'veterano' es para el alumno que lleva semanas de clase y
+ * nunca recibió el formulario: escribirle "hemos visto que empezaste tu
+ * registro" sonaría a que no sabemos quién es.
+ */
+export type CopyVariant = 'estandar' | 'veterano';
+
+export function variantOf(token: Pick<FormTokenRow, 'reminder_variant'>): CopyVariant {
+  return token.reminder_variant === 'veterano' ? 'veterano' : 'estandar';
+}
+
+/**
+ * Los enlaces que crea el propio follow-up el alumno no los ha visto nunca, así
+ * que su primer correo sale en la misma corrida: ese email ES la entrega del
+ * enlace, no el recordatorio de algo que ya tenía.
+ */
+export function primerAvisoInmediato(token: Pick<FormTokenRow, 'reminder_variant'>): boolean {
+  return token.reminder_variant === 'veterano' || token.reminder_variant === 'reactivado';
+}
 
 /** Un alumno pendiente, con el paso que le toca hoy (o null si todavía no). */
 export interface PendingEntry {
   sequence: Sequence;
+  variant: CopyVariant;
   token: FormTokenRow;
   student: StudentRow;
   email: string;
@@ -164,6 +204,8 @@ export function nextReminderStep(args: {
   lastSent: string | null;
   baseDate: string;
   now: number;
+  /** El enlace lo creó el follow-up: el primer correo sale ya, sin esperar 2 días. */
+  primeroInmediato?: boolean;
 }): { step: 1 | 2 | 3 | null; days: number; skipReason?: PendingEntry['skipReason'] } {
   const days = daysSince(args.baseDate, args.now);
   const count = Math.max(0, args.count ?? 0);
@@ -173,7 +215,8 @@ export function nextReminderStep(args: {
   const plan = REMINDER_PLAN[count];          // count 0 → paso 1, count 1 → paso 2…
   if (!plan) return { step: null, days, skipReason: 'tope_alcanzado' };
 
-  if (days < plan.minDays) return { step: null, days, skipReason: 'esperando_dias' };
+  const minDays = count === 0 && args.primeroInmediato ? 0 : plan.minDays;
+  if (days < minDays) return { step: null, days, skipReason: 'esperando_dias' };
 
   if (count > 0) {
     const gap = daysSince(args.lastSent, args.now);
@@ -222,11 +265,34 @@ export function buildPendingList(input: BuildPendingInput): PendingEntry[] {
     if (n) testHechoNames.add(n);
   }
 
+  // El último token completado de cada alumno. Hace falta para el caso raro en
+  // que el profesor regeneró el enlace DESPUÉS de que el alumno rellenara el
+  // formulario: el último token está caducado, pero el formulario está hecho y
+  // lo que le falta es la prueba.
+  const completadoPorAlumno = new Map<string, FormTokenRow>();
+  for (const t of tokens) {
+    if (t.status !== 'completed' || !t.completed_at) continue;
+    const k = studentKeyOf(t);
+    const previo = completadoPorAlumno.get(k);
+    if (!previo || new Date(t.completed_at).getTime() > new Date(previo.completed_at!).getTime()) {
+      completadoPorAlumno.set(k, t);
+    }
+  }
+
   const out: PendingEntry[] = [];
 
-  for (const token of latestTokenPerStudent(tokens).values()) {
-    const estado = tokenStateOf(token, now);
-    if (estado === 'expired') continue;
+  for (const ultimo of latestTokenPerStudent(tokens).values()) {
+    let token = ultimo;
+    let estado = tokenStateOf(token, now);
+
+    if (estado === 'expired') {
+      // Caducado sin completar → no hay nada que perseguir hasta que se le
+      // genere un enlace nuevo (de eso se encarga studentsNeedingToken).
+      const completado = completadoPorAlumno.get(studentKeyOf(token));
+      if (!completado) continue;
+      token = completado;
+      estado = 'completed';
+    }
 
     const student =
       (token.student_id ? stById.get(token.student_id) : undefined) ??
@@ -264,8 +330,16 @@ export function buildPendingList(input: BuildPendingInput): PendingEntry[] {
       lastSent = token.test_reminder_last_sent;
     }
 
-    const { step, days, skipReason } = nextReminderStep({ count, lastSent, baseDate, now });
-    out.push({ sequence, token, student, email, baseDate, days, count, lastSent, step, skipReason });
+    const { step, days, skipReason } = nextReminderStep({
+      count, lastSent, baseDate, now,
+      // Solo la secuencia del formulario entrega el enlace por correo; la del
+      // test siempre parte de un formulario que el alumno ya rellenó.
+      primeroInmediato: sequence === 'formulario' && primerAvisoInmediato(token),
+    });
+    out.push({
+      sequence, variant: variantOf(token), token, student, email,
+      baseDate, days, count, lastSent, step, skipReason,
+    });
   }
 
   // Los que hoy reciben algo primero, y dentro de cada grupo el que lleva más
@@ -277,19 +351,119 @@ export function buildPendingList(input: BuildPendingInput): PendingEntry[] {
   });
 }
 
+// ── Alumnos sin ningún enlace vigente ────────────────────────────────────────
+export interface NeedsToken {
+  student: StudentRow;
+  email: string;
+  teacherId: string;
+  teacherName: string;
+  assignmentId: string | null;
+  plan: string | null;
+  level: string | null;
+  /** 'veterano' = nunca tuvo enlace · 'reactivado' = el suyo caducó sin abrirlo. */
+  variant: 'veterano' | 'reactivado';
+}
+
+/**
+ * Alumnos vivos a los que hay que generarles un form_token para poder
+ * perseguirlos. Dos orígenes:
+ *
+ *   · nunca tuvieron enlace. Son casi todos anteriores al 10/07/2026, la fecha
+ *     del primer form_token: no es que su profesor se olvidara, es que la
+ *     función no existía cuando entraron.
+ *   · el enlace les caducó (30 días) sin que lo abrieran ni completaran nada.
+ *
+ * Se exige assignment porque el correo nombra al profesor y porque un alumno sin
+ * profesor asignado no está en clase: perseguirlo con el formulario sobra.
+ */
+export function studentsNeedingToken(input: {
+  tokens: FormTokenRow[];
+  students: StudentRow[];
+  sessions: TestSessionRow[];
+  dropouts: DropoutRow[];
+  assignments: AssignmentRow[];
+  now: number;
+}): NeedsToken[] {
+  const { tokens, students, sessions, dropouts, assignments, now } = input;
+
+  const bajaIds = new Set(dropouts.map(d => d.student_id).filter(Boolean) as string[]);
+  const bajaNames = new Set(dropouts.map(d => norm(d.student_name)).filter(Boolean));
+
+  // Estado del alumno según SUS tokens: si tiene alguno vigente o completado, no
+  // necesita uno nuevo.
+  const tieneVigente = new Set<string>();
+  const tieneCaducado = new Set<string>();
+  for (const t of tokens) {
+    const claves = [studentKeyOf(t), `n:${norm(t.student_name)}`];
+    const estado = tokenStateOf(t, now);
+    for (const k of claves) {
+      if (estado === 'expired') tieneCaducado.add(k);
+      else tieneVigente.add(k);        // pending o completed
+    }
+  }
+
+  // Un alumno que ya hizo la prueba de nivel por otra vía tampoco necesita nada.
+  const testHecho = new Set<string>();
+  for (const s of sessions) {
+    if (s.status !== 'completed') continue;
+    if (s.student_id) testHecho.add(s.student_id);
+    const n = norm(s.student_name || s.candidate_name);
+    if (n) testHecho.add(`n:${n}`);
+  }
+
+  const asgById = new Map<string, AssignmentRow>();
+  const asgByName = new Map<string, AssignmentRow>();
+  for (const a of assignments) {
+    if (a.student_id && !asgById.has(a.student_id)) asgById.set(a.student_id, a);
+    const n = norm(a.student_name);
+    if (n && !asgByName.has(n)) asgByName.set(n, a);
+  }
+
+  const out: NeedsToken[] = [];
+
+  for (const student of students) {
+    const claveId = student.id;
+    const claveNombre = `n:${norm(student.name)}`;
+    if (tieneVigente.has(claveId) || tieneVigente.has(claveNombre)) continue;
+    if (bajaIds.has(student.id) || bajaNames.has(norm(student.name))) continue;
+    if (testHecho.has(claveId) || testHecho.has(claveNombre)) continue;
+
+    const email = student.email?.trim();
+    if (!email) continue;
+
+    const asg = asgById.get(student.id) ?? asgByName.get(norm(student.name));
+    if (!asg?.teacher_id || !asg.teacher_name) continue;
+
+    out.push({
+      student,
+      email,
+      teacherId: asg.teacher_id,
+      teacherName: asg.teacher_name,
+      assignmentId: asg.id ?? null,
+      plan: asg.plan ?? null,
+      level: asg.student_level ?? null,
+      variant: (tieneCaducado.has(claveId) || tieneCaducado.has(claveNombre)) ? 'reactivado' : 'veterano',
+    });
+  }
+
+  return out;
+}
+
 /** Contadores para el panel admin. */
 export interface FollowupSummary {
   pendientesFormulario: number;
   pendientesTest: number;
+  sinEnlace: number;         // alumnos vivos a los que hay que generarles el link
   sinRespuesta: number;      // agotaron los 3 recordatorios y siguen sin completar
   nuncaContactados: number;
   hoyTocan: number;
 }
 
-export function summarize(entries: PendingEntry[]): FollowupSummary {
+export function summarize(entries: PendingEntry[], sinEnlace = 0): FollowupSummary {
   return {
     pendientesFormulario: entries.filter(e => e.sequence === 'formulario').length,
     pendientesTest:       entries.filter(e => e.sequence === 'test').length,
+    sinEnlace,
     sinRespuesta:         entries.filter(e => e.count >= MAX_REMINDERS).length,
     nuncaContactados:     entries.filter(e => e.count === 0).length,
     hoyTocan:             entries.filter(e => e.step !== null).length,

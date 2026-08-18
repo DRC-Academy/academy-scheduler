@@ -14,7 +14,7 @@
 
 import { resend } from '@/lib/resend';
 import { esc } from '@/lib/emailNotifications';
-import { STEP_LABEL, type Sequence } from '@/lib/formReminders';
+import { STEP_LABEL, type Sequence, type CopyVariant } from '@/lib/formReminders';
 
 const FROM = 'DRC Academy <notificaciones@drcacademy.com>';
 
@@ -192,9 +192,71 @@ function testCopy(step: 1 | 2 | 3, input: FollowupEmailInput): Copy {
   };
 }
 
-/** El texto que le toca a esta secuencia y este paso. */
-export function followupCopy(sequence: Sequence, step: 1 | 2 | 3, input: FollowupEmailInput): Copy {
-  return sequence === 'formulario' ? formularioCopy(step, input) : testCopy(step, input);
+// ── Variante veterano: lleva semanas de clase y nunca recibió el formulario ──
+//
+// Son los alumnos anteriores al 10/07/2026, cuando se estrenó el formulario. A
+// alguien que lleva siete semanas dando clase no se le puede escribir "hemos
+// visto que empezaste tu registro": suena a que no sabemos quién es. Aquí el
+// enfoque es el contrario, se da por hecho que ya está dentro y se le pide algo
+// que mejora lo que ya tiene.
+function veteranoCopy(step: 1 | 2 | 3, input: FollowupEmailInput): Copy {
+  const nombre = esc(primerNombre(input.studentName));
+  const profe = input.teacherName?.trim() ? esc(input.teacherName.trim()) : null;
+
+  if (step === 1) {
+    return {
+      subject: `${primerNombre(input.studentName)}, queremos afinar aún más tus clases`,
+      html: studentEmailTemplate(
+        p(`¡Hola ${nombre}!`) +
+        p('Llevas ya unas semanas de clase con nosotros y hay algo que todavía no te hemos pedido: tu ficha de alumno y tu prueba de nivel.') +
+        p(`Son unos minutos y nos sirven para ajustar aún mejor lo que trabajáis${profe ? ` ${profe} y tú` : ''} en cada clase.`) +
+        boton('Completar mi ficha', input.url) +
+        enlaceDeRespaldo(input.url),
+        'Nos faltan tu ficha y tu prueba de nivel para afinar aún más tus clases.',
+      ),
+    };
+  }
+
+  if (step === 2) {
+    return {
+      subject: 'Lo que tus respuestas cambian en tus clases',
+      html: studentEmailTemplate(
+        p(`¡Hola de nuevo, ${nombre}!`) +
+        p('Tu ficha y tu prueba de nivel siguen pendientes, y son las dos cosas que más nos ayudan a personalizar tus clases.') +
+        p(`Con tus respuestas sabemos qué quieres conseguir y cómo aprendes mejor, así que${profe ? ` ${profe}` : ''} puede preparar cada clase alrededor de lo que de verdad te interesa. Con la prueba de nivel confirmamos tu nivel exacto de ahora, que seguramente ya no es el del primer día.`) +
+        boton('Completar ahora', input.url) +
+        enlaceDeRespaldo(input.url),
+        'Tus respuestas son las que nos permiten personalizar tus clases.',
+      ),
+    };
+  }
+
+  return {
+    subject: 'Último recordatorio de tu ficha y tu prueba de nivel',
+    html: studentEmailTemplate(
+      p(`Hola ${nombre},`) +
+      p('Este es nuestro último recordatorio.') +
+      p('Si nos dedicas unos minutos para completar tu ficha y tu prueba de nivel, tus próximas clases se ajustarán mucho mejor a ti.') +
+      boton('Completar mi ficha', input.url) +
+      p('Si tienes cualquier duda, responde a este email y te echamos una mano.') +
+      enlaceDeRespaldo(input.url),
+      'Último recordatorio de tu ficha y tu prueba de nivel.',
+    ),
+  };
+}
+
+/**
+ * El texto que le toca a esta secuencia y este paso.
+ *
+ * La variante 'veterano' solo aplica a la secuencia del formulario: en cuanto lo
+ * completa, el alumno pasa a la del test, donde el "gracias por completar tu
+ * formulario" es cierto para todos.
+ */
+export function followupCopy(
+  sequence: Sequence, step: 1 | 2 | 3, input: FollowupEmailInput, variant: CopyVariant = 'estandar',
+): Copy {
+  if (sequence === 'test') return testCopy(step, input);
+  return variant === 'veterano' ? veteranoCopy(step, input) : formularioCopy(step, input);
 }
 
 /**
@@ -205,9 +267,10 @@ export function followupCopy(sequence: Sequence, step: 1 | 2 | 3, input: Followu
  */
 export async function sendFollowupEmail(
   sequence: Sequence, step: 1 | 2 | 3, input: FollowupEmailInput, to: string,
+  variant: CopyVariant = 'estandar',
 ): Promise<boolean> {
-  const { subject, html } = followupCopy(sequence, step, input);
-  const label = `followup_${sequence}_${step}`;
+  const { subject, html } = followupCopy(sequence, step, input, variant);
+  const label = `followup_${sequence}_${variant}_${step}`;
 
   try {
     const { data, error } = await resend.emails.send({

@@ -9,6 +9,13 @@
 // Tres recordatorios por secuencia (días 2, 5 y 10) y después silencio. Si el
 // alumno completa, desaparece de la lista solo en la corrida siguiente.
 //
+// PASO PREVIO — hay alumnos vivos que no pueden estar en ninguna secuencia
+// porque no tienen enlace: los anteriores al 10/07/2026 (el formulario no
+// existía cuando entraron) y aquellos a los que el suyo caducó sin abrirlo.
+// Antes de nada se les genera uno y entran por la puerta normal. Su primer
+// correo sale en la misma corrida, porque ese email ES la entrega del enlace, y
+// los veteranos lo reciben con un texto propio.
+//
 // ANTI-DUPLICADO — "reservar y luego enviar", como el cron de transcripts. Antes
 // de escribir un correo se incrementa el contador del token con un UPDATE
 // condicionado al valor anterior (.eq(count, step - 1)). Ese update es atómico:
@@ -26,8 +33,9 @@
 import { supabase } from '@/lib/supabase';
 import { getOrCreateTestSession } from '@/lib/levelTest/createSession';
 import {
-  buildPendingList, summarize, STEP_LABEL,
-  type FormTokenRow, type StudentRow, type TestSessionRow, type DropoutRow, type PendingEntry,
+  buildPendingList, summarize, studentsNeedingToken, STEP_LABEL,
+  type FormTokenRow, type StudentRow, type TestSessionRow, type DropoutRow,
+  type AssignmentRow, type PendingEntry, type NeedsToken,
 } from '@/lib/formReminders';
 import { sendFollowupEmail, followupCopy } from '@/lib/studentFollowupEmails';
 
@@ -52,7 +60,8 @@ const NUEVA_VIGENCIA_DIAS = 30;
 const TOKEN_COLS =
   'id, token, student_id, student_name, student_email, teacher_id, teacher_name, ' +
   'assignment_id, plan, level, status, created_at, completed_at, expires_at, ' +
-  'form_reminder_count, form_reminder_last_sent, test_reminder_count, test_reminder_last_sent';
+  'form_reminder_count, form_reminder_last_sent, test_reminder_count, test_reminder_last_sent, ' +
+  'reminder_variant';
 
 function publicBase(request: Request): string {
   const envUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '');
@@ -89,11 +98,12 @@ export async function GET(request: Request): Promise<Response> {
   if (testTo) return enviarPrueba(testTo, base);
 
   // ── Datos ──────────────────────────────────────────────────────────────────
-  const [tk, st, ls, dr] = await Promise.all([
+  const [tk, st, ls, dr, ag] = await Promise.all([
     supabase.from('form_tokens').select(TOKEN_COLS),
     supabase.from('students').select('id, name, email'),
     supabase.from('level_test_sessions').select('student_id, student_name, candidate_name, status'),
     supabase.from('student_dropouts').select('student_id, student_name'),
+    supabase.from('assignments').select('id, student_id, student_name, teacher_id, teacher_name, plan, student_level'),
   ]);
 
   if (tk.error) {
@@ -118,18 +128,35 @@ export async function GET(request: Request): Promise<Response> {
     return Response.json({ error: 'Error del servidor' }, { status: 500 });
   }
   if (dr.error) console.error('[cron form-reminders] Error al leer student_dropouts (se sigue sin ese filtro):', dr.error);
+  if (ag.error) console.error('[cron form-reminders] Error al leer assignments (no se generarán enlaces nuevos):', ag.error);
 
   const now = Date.now();
-  const pendientes = buildPendingList({
-    tokens:   (tk.data ?? []) as unknown as FormTokenRow[],
-    students: (st.data ?? []) as unknown as StudentRow[],
-    sessions: (ls.data ?? []) as unknown as TestSessionRow[],
-    dropouts: (dr.data ?? []) as unknown as DropoutRow[],
+  const students = (st.data ?? []) as unknown as StudentRow[];
+  const sessions = (ls.data ?? []) as unknown as TestSessionRow[];
+  const dropouts = (dr.data ?? []) as unknown as DropoutRow[];
+  let tokens = (tk.data ?? []) as unknown as FormTokenRow[];
+
+  // ── Paso previo: enlaces para quien no tiene ninguno vigente ───────────────
+  const sinEnlace = studentsNeedingToken({
+    tokens, students, sessions, dropouts,
+    assignments: (ag.data ?? []) as unknown as AssignmentRow[],
     now,
   });
 
+  // En dry se simulan en memoria (misma forma de fila, sin insertar nada), para
+  // que la previsualización incluya de verdad a quién le llegaría su enlace hoy.
+  let generados: FormTokenRow[] = [];
+  if (sinEnlace.length > 0) {
+    generados = dry
+      ? sinEnlace.map((n, i) => tokenSimulado(n, now, i))
+      : await generarEnlaces(sinEnlace);
+    tokens = [...tokens, ...generados];
+  }
+
+  const pendientes = buildPendingList({ tokens, students, sessions, dropouts, now });
+
   const tocanHoy = pendientes.filter(e => e.step !== null);
-  const resumen = summarize(pendientes);
+  const resumen = summarize(pendientes, sinEnlace.length);
 
   // ── Modo dry: quién recibiría qué, sin enviar ni escribir ──────────────────
   if (dry) {
@@ -137,6 +164,9 @@ export async function GET(request: Request): Promise<Response> {
       ok: true,
       dry: true,
       resumen,
+      generariaEnlace: sinEnlace.map(n => ({
+        alumno: n.student.name, email: n.email, profesor: n.teacherName, motivo: n.variant,
+      })),
       enviaria: tocanHoy.slice(0, limite).map(e => detalle(e, base)),
       recortadosPorLimite: Math.max(0, tocanHoy.length - limite),
       esperando: pendientes
@@ -215,6 +245,7 @@ export async function GET(request: Request): Promise<Response> {
       e.sequence, step,
       { studentName: e.token.student_name || e.student.name, teacherName: e.token.teacher_name, url: enlace },
       e.email,
+      e.variant,
     );
 
     if (!ok) {
@@ -248,12 +279,61 @@ export async function GET(request: Request): Promise<Response> {
   return Response.json({
     ok: true,
     resumen,
+    enlacesGenerados: generados.length,
     tocabanHoy: tocanHoy.length,
     enviados: enviados.length,
     fallidos: fallidos.length,
     pendientesParaMañana: recortados,
     detalle: { enviados, fallidos },
   });
+}
+
+/**
+ * Crea los form_tokens que faltan, en un solo insert.
+ *
+ * Van con `reminder_variant` para que el follow-up sepa después con qué texto
+ * perseguirlos y que su primer correo sale ya. La vigencia (30 días) la pone el
+ * default de la tabla, igual que en /api/forms/generate-token.
+ */
+async function generarEnlaces(faltantes: NeedsToken[]): Promise<FormTokenRow[]> {
+  const filas = faltantes.map(n => ({
+    id:            `ft_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    token:         crypto.randomUUID(),
+    student_id:    n.student.id,
+    student_name:  n.student.name,
+    student_email: n.email,
+    teacher_id:    n.teacherId,
+    teacher_name:  n.teacherName,
+    assignment_id: n.assignmentId,
+    plan:          n.plan,
+    level:         n.level,
+    status:        'pending',
+    reminder_variant: n.variant,
+  }));
+
+  const { data, error } = await supabase.from('form_tokens').insert(filas).select(TOKEN_COLS);
+  if (error) {
+    console.error('[cron form-reminders] Error al generar los enlaces que faltaban:', error);
+    return [];
+  }
+  console.log(`[cron form-reminders] ${data?.length ?? 0} enlace(s) generados para alumnos que no tenían.`);
+  return (data ?? []) as unknown as FormTokenRow[];
+}
+
+/** Fila de mentira para el modo dry: misma forma, sin tocar la base. */
+function tokenSimulado(n: NeedsToken, now: number, i: number): FormTokenRow {
+  const iso = new Date(now).toISOString();
+  return {
+    id: `dry_${i}`, token: `dry-${i}`,
+    student_id: n.student.id, student_name: n.student.name, student_email: n.email,
+    teacher_id: n.teacherId, teacher_name: n.teacherName, assignment_id: n.assignmentId,
+    plan: n.plan, level: n.level,
+    status: 'pending', created_at: iso, completed_at: null,
+    expires_at: new Date(now + 30 * 86_400_000).toISOString(),
+    form_reminder_count: 0, form_reminder_last_sent: null,
+    test_reminder_count: 0, test_reminder_last_sent: null,
+    reminder_variant: n.variant,
+  };
 }
 
 /** Devuelve el contador a su sitio cuando el correo no llegó a salir. */
@@ -277,19 +357,23 @@ async function renovarVigencia(e: PendingEntry, now: number): Promise<void> {
 
 function detalle(e: PendingEntry, base: string) {
   const step = e.step as 1 | 2 | 3;
-  const enlace = e.sequence === 'formulario'
-    ? `${base}/formulario/${e.token.token}`
-    : '(se resuelve al enviar: reutiliza su prueba vigente o crea una nueva)';
+  const simulado = e.token.id.startsWith('dry_');
+  const enlace = e.sequence !== 'formulario'
+    ? '(se resuelve al enviar: reutiliza su prueba vigente o crea una nueva)'
+    : simulado
+      ? '(enlace nuevo: se genera en la corrida real)'
+      : `${base}/formulario/${e.token.token}`;
   const { subject } = followupCopy(e.sequence, step, {
     studentName: e.token.student_name || e.student.name,
     teacherName: e.token.teacher_name,
-    url: typeof enlace === 'string' ? enlace : '',
-  });
+    url: enlace,
+  }, e.variant);
   return {
     alumno: e.student.name,
     email: e.email,
     profesor: e.token.teacher_name,
     secuencia: e.sequence,
+    texto: e.variant,
     paso: STEP_LABEL[step],
     diasEsperando: e.days,
     recordatoriosPrevios: e.count,
@@ -298,18 +382,23 @@ function detalle(e: PendingEntry, base: string) {
   };
 }
 
-/** Los 6 correos de ejemplo a una dirección. No toca la base. */
+/** Los 9 correos de ejemplo a una dirección. No toca la base. */
 async function enviarPrueba(to: string, base: string): Promise<Response> {
   const ejemplo = {
     studentName: 'Ana García',
     teacherName: 'Sebastián',
     url: `${base}/formulario/00000000-0000-0000-0000-000000000000`,
   };
+  const variantes = [
+    { sequence: 'formulario' as const, variant: 'estandar' as const },
+    { sequence: 'formulario' as const, variant: 'veterano' as const },
+    { sequence: 'test' as const,       variant: 'estandar' as const },
+  ];
   const enviados: string[] = [];
-  for (const sequence of ['formulario', 'test'] as const) {
+  for (const v of variantes) {
     for (const step of [1, 2, 3] as const) {
-      const ok = await sendFollowupEmail(sequence, step, ejemplo, to);
-      if (ok) enviados.push(`${sequence} ${STEP_LABEL[step]}`);
+      const ok = await sendFollowupEmail(v.sequence, step, ejemplo, to, v.variant);
+      if (ok) enviados.push(`${v.sequence}/${v.variant} ${STEP_LABEL[step]}`);
       await sleep(PAUSA_MS);
     }
   }

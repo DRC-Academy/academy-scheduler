@@ -16,8 +16,9 @@ import {
   type LevelTestInfo, type LTState,
 } from '@/lib/levelTestClient';
 import {
-  buildPendingList, summarize, norm, daysSince, MAX_REMINDERS, STEP_LABEL,
-  type FormTokenRow, type StudentRow, type TestSessionRow, type DropoutRow, type FollowupSummary,
+  buildPendingList, summarize, studentsNeedingToken, norm, daysSince, MAX_REMINDERS, STEP_LABEL,
+  type FormTokenRow, type StudentRow, type TestSessionRow, type DropoutRow,
+  type AssignmentRow, type FollowupSummary,
 } from '@/lib/formReminders';
 import type { WritingEvaluation } from '@/lib/levelTest/types';
 import { CEFR_COLOR } from '@/lib/levelTest/constants';
@@ -114,11 +115,12 @@ export default function LevelTestsTab() {
     setLoading(true);
     const now = Date.now();
     setAhora(now);
-    const [idx, stRes, tkRes, drRes] = await Promise.all([
+    const [idx, stRes, tkRes, drRes, agRes] = await Promise.all([
       fetchLevelTestIndex(),
       supabase.from('students').select('id, name, email, form_reminder_count, form_reminder_last_sent, form_reminder_stage'),
-      supabase.from('form_tokens').select('id, token, student_id, student_name, student_email, teacher_id, teacher_name, assignment_id, plan, level, status, created_at, completed_at, expires_at, form_reminder_count, form_reminder_last_sent, test_reminder_count, test_reminder_last_sent'),
+      supabase.from('form_tokens').select('id, token, student_id, student_name, student_email, teacher_id, teacher_name, assignment_id, plan, level, status, created_at, completed_at, expires_at, form_reminder_count, form_reminder_last_sent, test_reminder_count, test_reminder_last_sent, reminder_variant'),
       supabase.from('student_dropouts').select('student_id, student_name'),
+      supabase.from('assignments').select('id, student_id, student_name, teacher_id, teacher_name, plan, student_level'),
     ]);
     setRows(idx.all);
 
@@ -154,13 +156,18 @@ export default function LevelTestsTab() {
     }
     setFollowup(mapa);
 
-    setSummary(summarize(buildPendingList({
+    const datos = {
       tokens:   (tkRes.data ?? []) as unknown as FormTokenRow[],
       students: estudiantes.map(s => ({ id: s.id, name: s.name, email: s.email })),
       sessions: idx.all as unknown as TestSessionRow[],
       dropouts: (drRes.data ?? []) as unknown as DropoutRow[],
       now,
-    })));
+    };
+    const sinEnlace = studentsNeedingToken({
+      ...datos,
+      assignments: (agRes.data ?? []) as unknown as AssignmentRow[],
+    });
+    setSummary(summarize(buildPendingList(datos), sinEnlace.length));
     setLoading(false);
   }
   // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -338,6 +345,7 @@ function FollowupSummaryBar({ summary }: { summary: FollowupSummary }) {
   const items: Array<{ label: string; value: number; hint: string; alerta?: boolean }> = [
     { label: 'Pendientes de formulario', value: summary.pendientesFormulario, hint: 'Recibieron el enlace y no lo han completado' },
     { label: 'Pendientes de prueba',     value: summary.pendientesTest,       hint: 'Completaron el formulario pero no la prueba de nivel' },
+    { label: 'Sin enlace todavía',       value: summary.sinEnlace,            hint: 'Alumnos activos que nunca recibieron el formulario o cuyo enlace caducó. El cron les genera uno y les escribe en su próxima corrida' },
     { label: 'Les toca hoy',             value: summary.hoyTocan,             hint: 'Recibirán un recordatorio en la próxima corrida del cron' },
     { label: 'Sin respuesta',            value: summary.sinRespuesta,         hint: `Agotaron los ${MAX_REMINDERS} recordatorios y siguen sin completar`, alerta: true },
   ];

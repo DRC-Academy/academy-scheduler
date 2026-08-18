@@ -34,6 +34,19 @@ alter table form_tokens add column if not exists form_reminder_last_sent timesta
 alter table form_tokens add column if not exists test_reminder_count     int default 0;
 alter table form_tokens add column if not exists test_reminder_last_sent timestamptz;
 
+-- Quién creó el enlace y con qué texto se persigue. Los enlaces normales los
+-- crea el profesor al mandar su email de presentación y llevan null.
+--   · 'veterano'   → lo creó el follow-up para un alumno que nunca recibió
+--     ninguno (son anteriores al 10/07/2026, cuando se estrenó el formulario).
+--     Lleva un texto propio: a quien lleva semanas de clase no se le puede
+--     escribir "hemos visto que empezaste tu registro".
+--   · 'reactivado' → lo creó el follow-up porque el anterior caducó sin abrirse.
+--     Texto normal.
+-- Los dos son enlaces que el alumno NUNCA ha visto, así que su primer
+-- recordatorio sale en la misma corrida que los crea: ese correo ES la entrega
+-- del enlace, no un recordatorio de algo que ya tenía.
+alter table form_tokens add column if not exists reminder_variant text;
+
 -- Los tokens que ya existían quedan en 0 (nunca recibieron nada), así que entran
 -- a la secuencia por el primer recordatorio aunque su enlace sea de hace semanas.
 update form_tokens set form_reminder_count = 0 where form_reminder_count is null;
