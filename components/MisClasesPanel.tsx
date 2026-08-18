@@ -571,18 +571,33 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
       && !x.c.isRecovery && !x.c.assignment.presentationEmailSent,
   )?.c.assignment ?? null;
 
+  // Las otras dos preguntas del tutorial, con la misma disciplina: la condición
+  // es la que decide pintar cada botón, no una aproximación parecida.
+  //
+  // Sirven para que los pasos "Entra a la clase" y "Sube el transcript" salten
+  // DIRECTOS a su versión explicativa cuando no hay nada que resaltar, en vez de
+  // gastar los 3 s de espera del elemento mirando el globo anterior.
+  const hayClasePorDelante = allVisible.some(x => statusOf(x.c, x.iso) !== 'passed');
+  const faltaAlgunTranscript = missingTranscripts.length > 0;
+
   // Refs y no dependencias del efecto: el puente se registra UNA vez y lee el
   // valor de ahora cuando el motor pregunta. Con dependencias se daría de alta y
   // de baja en cada render de la lista.
   const pendienteRef = useRef(presentacionPendiente);
   const modalAbiertoRef = useRef(presentationModal);
+  const clasePorDelanteRef = useRef(hayClasePorDelante);
+  const faltaTranscriptRef = useRef(faltaAlgunTranscript);
   useEffect(() => {
     pendienteRef.current = presentacionPendiente;
     modalAbiertoRef.current = presentationModal;
+    clasePorDelanteRef.current = hayClasePorDelante;
+    faltaTranscriptRef.current = faltaAlgunTranscript;
   });
 
   useEffect(() => registerTourBridge({
     hasPresentationPending: () => !!pendienteRef.current,
+    hasUpcomingClass: () => clasePorDelanteRef.current,
+    hasClassNeedingTranscript: () => faltaTranscriptRef.current,
     isPresentationModalOpen: () => !!modalAbiertoRef.current,
     openPresentationModal: () => {
       if (modalAbiertoRef.current) return true;

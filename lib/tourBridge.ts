@@ -22,6 +22,10 @@ export interface TourBridge {
   hasStudents: () => boolean;
   /** ¿Hay alguna clase con la presentación pendiente? (lo sabe /clases) */
   hasPresentationPending: () => boolean;
+  /** ¿Hay alguna clase por delante en los días a la vista? (lo sabe /clases) */
+  hasUpcomingClass: () => boolean;
+  /** ¿Hay alguna clase ya dada esperando transcript? (lo sabe /clases) */
+  hasClassNeedingTranscript: () => boolean;
   /** Abre el modal del email de presentación. false = no había ninguno que abrir. */
   openPresentationModal: () => boolean;
   /** Cierra el modal si está abierto. */
@@ -33,6 +37,8 @@ export interface TourBridge {
 const DEFAULTS: TourBridge = {
   hasStudents: () => true,
   hasPresentationPending: () => true,
+  hasUpcomingClass: () => true,
+  hasClassNeedingTranscript: () => true,
   openPresentationModal: () => false,
   closePresentationModal: () => {},
   isPresentationModalOpen: () => false,

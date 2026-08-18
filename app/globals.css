@@ -550,6 +550,51 @@ body.driver-active .drc-modal-backdrop * { pointer-events: auto; }
   padding: 9px 11px;
   margin-bottom: 12px;
 }
+
+/* Maqueta del botón que describe el paso, para cuando el botón REAL no está en
+   pantalla (ver `mockButton` en lib/onboarding y `decorarPopover` en
+   lib/tourConfig). Reproduce el aspecto de .mc-pres-btn a propósito: si un día se
+   rediseñan los botones de la tarjeta, hay que tocar los dos sitios.
+
+   El borde discontinuo y el rótulo son lo que evita que se lea como un botón de
+   verdad y el profesor lo intente pulsar dentro del globo. */
+.drc-tour-mock {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 10px 11px;
+  margin-bottom: 12px;
+  background: #F7F7F5;
+  border: 1px dashed rgba(30,158,58,0.45);
+  border-radius: 9px;
+}
+.drc-tour-mock-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #8b8e88;
+}
+.drc-tour-mock-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: 9px;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: #3f423f;
+  background: #ffffff;
+  border: 1px solid #e6e7e2;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+  /* No es pulsable: que el cursor no prometa lo contrario. */
+  cursor: default;
+  user-select: none;
+}
 /* "Saltar tutorial": a la izquierda del pie y separado de la navegación, para que
    no se pulse por inercia al ir dando a "Siguiente". */
 .drc-tour-skip {

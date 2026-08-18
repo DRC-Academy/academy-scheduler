@@ -176,6 +176,28 @@ function decorarPopover(
     popover.description.insertAdjacentElement('afterend', nota);
   }
 
+  // Maqueta del botón que el paso describe, también solo cuando quedó SIN foco.
+  //
+  // Va DESPUÉS de insertar la nota anterior y también con 'afterend', así queda
+  // ENTRE la descripción y el "Dónde está", que es el orden en que se lee: qué es,
+  // cómo se ve, dónde buscarlo.
+  //
+  // Es DOM, no una captura: una imagen envejece en cuanto alguien retoca el botón
+  // y en móvil se ve borrosa. Y es un <span>, no un <button>: no hace nada, y como
+  // botón un lector de pantalla lo anunciaría como pulsable.
+  if (!anclado && step.mockButton) {
+    const caja = document.createElement('div');
+    caja.className = 'drc-tour-mock';
+    const rotulo = document.createElement('span');
+    rotulo.className = 'drc-tour-mock-label';
+    rotulo.textContent = 'Así se ve el botón';
+    const falso = document.createElement('span');
+    falso.className = 'drc-tour-mock-btn';
+    falso.textContent = step.mockButton.label;
+    caja.append(rotulo, falso);
+    popover.description.insertAdjacentElement('afterend', caja);
+  }
+
   if (!auto) return;
 
   const chip = document.createElement('div');
@@ -188,7 +210,7 @@ function decorarPopover(
   if (step.actionable && anclado && !done.has(step.id)) {
     const aviso = document.createElement('div');
     aviso.className = 'drc-tour-hint';
-    aviso.textContent = 'Podés pulsar el botón iluminado: el paso se marca solo.';
+    aviso.textContent = 'Puedes pulsar el botón iluminado. El paso se marca solo.';
     popover.description.insertAdjacentElement('afterend', aviso);
   }
 
@@ -225,7 +247,10 @@ export function buildHighlight(
     element: element ?? undefined,
     popover: {
       title: step.title,
-      description: step.body,
+      // Sin elemento que señalar, `body` ("pulsa este botón") describiría algo que
+      // no está en pantalla. `bodyWhenMissing` explica el mismo paso sin pedir la
+      // acción. Los pasos que no lo declaran siguen usando `body`.
+      description: element ? step.body : (step.bodyWhenMissing ?? step.body),
       side: step.side ?? 'bottom',
       align: step.align ?? 'center',
       popoverClass: 'drc-tour',
