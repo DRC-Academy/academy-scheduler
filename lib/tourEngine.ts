@@ -102,6 +102,50 @@ export function waitForElement(selectors: string[], opts: WaitOptions = {}): Pro
   return waitFor(() => findAnchor(selectors), subscribeToDom, { timeoutMs: ELEMENT_TIMEOUT_MS, ...opts });
 }
 
+/**
+ * ¿El ancla que ya teníamos SIGUE sirviendo para señalar?
+ *
+ * `isConnected` NO basta, y esto costó el bug del globo en la esquina. Un nodo
+ * que sigue en el documento pero está oculto (un filtro de la lista, un
+ * contenedor plegado, `display:none`) devuelve un rect de ceros. driver.js lo usa
+ * TAL CUAL: `D()` recorta el overlay con ese rect y reposiciona el globo con él,
+ * así que los dos se van a (0,0), la esquina superior izquierda. El tamaño es lo
+ * único que distingue ese caso, y `isVisible` es justo lo que mira.
+ *
+ * Es la MISMA condición con la que `findAnchor` eligió el nodo: si dejó de
+ * cumplirla, ese nodo ya no habría sido elegido y hay que buscar otro.
+ */
+export function anchorSigueValida(el: HTMLElement | null): boolean {
+  return !!el && el.isConnected && isVisible(el);
+}
+
+/**
+ * Espera al ancla, pero SE RINDE ANTES si `renuncia()` pasa a ser cierto.
+ *
+ * Evita el spinner de 3 s cuando no había nada que resaltar. `requires()` se
+ * evalúa antes de navegar, con la pantalla dueña del dato aún sin montar, y el
+ * puente responde entonces "no puedo saberlo" (true). Al montarse sí sabe, y ese
+ * cambio llega con las mismas mutaciones del DOM que ya se están observando: en
+ * cuanto responde que no hay nada, se deja de esperar.
+ *
+ * El tope de tiempo sigue existiendo para el caso en que nadie conteste.
+ */
+export function waitForElementOrGiveUp(
+  selectors: string[],
+  renuncia: () => boolean,
+  opts: WaitOptions = {},
+): Promise<HTMLElement | null> {
+  return waitFor<{ el: HTMLElement | null }>(
+    () => {
+      const el = findAnchor(selectors);
+      if (el) return { el };
+      return renuncia() ? { el: null } : null;
+    },
+    subscribeToDom,
+    { timeoutMs: ELEMENT_TIMEOUT_MS, ...opts },
+  ).then(r => r?.el ?? null);
+}
+
 /** Espera a que DESAPAREZCA todo anclaje de la lista. Se usa al cerrar el modal:
  *  seguir al paso siguiente con el modal aún en el DOM lo resaltaría al vuelo. */
 export function waitForElementGone(selectors: string[], opts: WaitOptions = {}): Promise<boolean> {

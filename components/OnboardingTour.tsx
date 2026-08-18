@@ -22,7 +22,7 @@ import {
   buildDriverConfig, buildHighlight, calcularFlecha, popoverBox, flechaSvg,
   validarAnclas, type Pointer,
 } from '@/lib/tourConfig';
-import { scrollAnchorIntoView } from '@/lib/tourEngine';
+import { scrollAnchorIntoView, anchorSigueValida } from '@/lib/tourEngine';
 import {
   ONBOARDING_FINISHED_TITLE, ONBOARDING_FINISHED_BODY, formationLabel,
   ANCLA_MODAL_PRESENTACION,
@@ -135,9 +135,13 @@ export function OnboardingTour() {
     if (!d) return;
     // El ancla pudo morir entre que el motor la resolvió y este efecto corre: en
     // "Mis clases" los botones cambian en cuanto entra el reloj. Resaltar un nodo
-    // desconectado deja el recorte en 0×0 en la esquina, así que se pide una nueva
-    // y este efecto vuelve a entrar con ella.
-    if (anchor && !anchor.isConnected) { reanchor(); return; }
+    // muerto deja el recorte en 0×0 en la esquina, así que se pide una nueva y este
+    // efecto vuelve a entrar con ella.
+    //
+    // "Muerto" incluye SEGUIR EN EL DOM PERO OCULTO, no solo desconectado: un
+    // filtro de la lista o un contenedor plegado dejan el nodo conectado con rect
+    // de ceros, que es exactamente el caso que mandaba el globo a la esquina.
+    if (anchor && !anchorSigueValida(anchor)) { reanchor(); return; }
     d.highlight(buildHighlight(step, stepIndex, anchor, {
       mode: mode === 'auto' ? 'auto' : 'manual',
       done: () => doneRef.current,
@@ -195,9 +199,9 @@ export function OnboardingTour() {
     let raf = 0;
     let last = '';
     const tick = () => {
-      // Si el nodo se desconectó (el modal se cerró), no se mide: su rect sería
-      // todo ceros y la flecha se iría a la esquina superior izquierda.
-      if (!anchor.isConnected) {
+      // Si el nodo dejó de ser señalable (se cerró el modal, un filtro lo ocultó),
+      // no se mide: su rect sería todo ceros y la flecha se iría a la esquina.
+      if (!anchorSigueValida(anchor)) {
         if (last !== '') { last = ''; setPointer(null); }
       } else {
         const p = calcularFlecha(anchor.getBoundingClientRect(), popoverBox());
@@ -220,7 +224,11 @@ export function OnboardingTour() {
   useEffect(() => {
     if (!activo || mode === 'off' || phase !== 'ready') return;
     const t = window.setInterval(() => {
-      if (anchor && !anchor.isConnected) { reanchor(); return; }
+      // Orden importante: primero se descarta el ancla muerta y se SALE. Llamar a
+      // `refresh()` con ella es literalmente lo que colapsa el recorte y el globo
+      // en la esquina superior izquierda, porque driver reposiciona los dos con su
+      // `getBoundingClientRect()` sin mirar si mide algo.
+      if (anchor && !anchorSigueValida(anchor)) { reanchor(); return; }
       const d = driverRef.current;
       if (d?.isActive()) d.refresh();
     }, 1000);
@@ -287,7 +295,7 @@ export function OnboardingTour() {
         <path d={svg.d} fill="none" stroke="#1E9E3A" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
       <span className="drc-tour-pointer-label">
-        {step.actionable ? 'Pulsá acá' : 'Mirá acá'}
+        {step.actionable ? 'Pulsa aquí' : 'Mira aquí'}
       </span>
     </div>,
     document.body,

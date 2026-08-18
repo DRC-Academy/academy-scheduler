@@ -50,7 +50,7 @@ import {
 } from '@/lib/onboarding';
 import { enRutaDelPaso, destinoDelPaso } from '@/lib/tourConfig';
 import {
-  waitFor, waitForElement, waitForElementGone, ROUTE_TIMEOUT_MS,
+  waitFor, waitForElement, waitForElementOrGiveUp, waitForElementGone, ROUTE_TIMEOUT_MS,
 } from '@/lib/tourEngine';
 import { onPresentationModalClosed } from '@/lib/tourBridge';
 import { dbStartOnboarding, dbSkipOnboarding, dbCompleteOnboardingClass } from '@/lib/onboardingStore';
@@ -383,10 +383,18 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
         let el: HTMLElement | null = null;
         if (anclar && selectores.length > 0) {
           const yaEsperada = rutaYaEsperada === step.route;
-          el = await waitForElement(selectores, {
+          const opciones = {
             signal: ac.signal,
             ...(yaEsperada ? { timeoutMs: ESPERA_CORTA_MS } : {}),
-          });
+          };
+          // Con `requires`, la espera se rinde en cuanto la pantalla ya montada
+          // responde que no hay nada que resaltar. Sin esto, el paso que se muestra
+          // centrado se comía los 3 s enteros de tope: `requires()` se evaluó antes
+          // de navegar, cuando el puente todavía contestaba "no puedo saberlo".
+          const requiere = step.requires;
+          el = requiere
+            ? await waitForElementOrGiveUp(selectores, () => !requiere(), opciones)
+            : await waitForElement(selectores, opciones);
           if (ac.signal.aborted) return;
           // 5. No apareció: se aplica onMissing y queda constancia. Nunca en silencio.
           if (!el) {
@@ -481,13 +489,40 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
    * enterara. No es una transición: no cambia de paso ni toca la ruta.
    */
   const reanchor = useCallback(async () => {
-    if (busyRef.current || modeRef.current === 'off') return;
+    // El estado del tour se consulta a través de esta función, no comparando
+    // `modeRef.current` a pelo. Motivo de tipos, no de estilo: el guard de entrada
+    // estrecharía `modeRef.current` a "auto | manual" y TypeScript mantiene ese
+    // estrechamiento a través del await, que es justo donde el valor SÍ puede haber
+    // cambiado (el profesor cerró el tour mientras esperábamos). Dentro de una
+    // función se lee su tipo real. Va declarada aquí dentro para que `reanchor`
+    // conserve su lista de dependencias vacía: las acciones no pueden cambiar de
+    // identidad nunca (ver la nota de los dos contextos, más abajo).
+    const cerrado = () => modeRef.current === 'off';
+    if (busyRef.current || cerrado()) return;
     const step = ONBOARDING_STEPS[indexRef.current];
     const selectores = selectorsOf(step);
     if (selectores.length === 0) return;
 
+    const indice = indexRef.current;
     const el = await waitForElement(selectores, { timeoutMs: 1500 });
+
+    // El re-anclaje NO es una transición y a propósito no toma `busyRef`, así que
+    // durante esa espera pudo pasar de todo: el profesor cambió de pantalla desde
+    // el menú, el motor avanzó de paso, se cerró el tour. Si el mundo ya no es el
+    // de la entrada, lo que se resolvió aquí no vale y aplicarlo pisaría el estado
+    // bueno con uno caducado.
+    if (cerrado() || busyRef.current) return;
+    if (indexRef.current !== indice) return;
+
     if (el) { setAnchor(prev => (prev === el ? prev : el)); return; }
+
+    // Sin elemento y FUERA de la pantalla del paso: el profesor se fue por su
+    // cuenta. Re-ejecutar el paso lo arrastraría de vuelta con un router.push que
+    // no pidió (de resincronizar se encarga el efecto de la ruta). Se suelta el
+    // ancla muerta para que driver deje de seguirla: con `anchor` a null el pintor
+    // resalta el elemento fantasma centrado en vez de un rect de ceros en la
+    // esquina.
+    if (!enRutaDelPaso(step, pathnameRef.current)) { setAnchor(null); return; }
 
     // El botón ya no está en pantalla, no es que haya cambiado de nodo. Es el
     // caso real de "Mis clases": en el primer pintado, antes de que entre el
