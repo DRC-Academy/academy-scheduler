@@ -2,6 +2,12 @@
 
 // Panel admin: listado de Tests de Nivel generados + generar link + detalle.
 // Lee las sesiones/respuestas con la clave anónima (RLS off, igual que el resto).
+//
+// La columna "Último follow-up" y la barra de contadores muestran el estado del
+// recordatorio automático (app/api/cron/form-reminders). El dato de la celda sale
+// del espejo en students (form_reminder_*); los contadores se calculan con la
+// MISMA función que usa el cron para decidir a quién escribe (buildPendingList),
+// así el panel nunca dice un número distinto del que el cron va a mandar.
 
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabase';
@@ -9,6 +15,10 @@ import {
   fetchLevelTestIndex, generateTestLink, buildTestUrl, testStateOf,
   type LevelTestInfo, type LTState,
 } from '@/lib/levelTestClient';
+import {
+  buildPendingList, summarize, norm, daysSince, MAX_REMINDERS, STEP_LABEL,
+  type FormTokenRow, type StudentRow, type TestSessionRow, type DropoutRow, type FollowupSummary,
+} from '@/lib/formReminders';
 import type { WritingEvaluation } from '@/lib/levelTest/types';
 import { CEFR_COLOR } from '@/lib/levelTest/constants';
 
@@ -26,6 +36,62 @@ function fmtDate(iso: string | null): string {
   return isNaN(d.getTime()) ? '—' : d.toLocaleDateString('es-ES', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
+/** DD/MM/AAAA, el formato pedido para el follow-up. */
+function fmtDayMonthYear(iso: string): string {
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? '—' : d.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' });
+}
+
+// ── Follow-up ────────────────────────────────────────────────────────────────
+interface FollowupInfo { count: number; lastSent: string | null; stage: string | null }
+
+type FollowupCell =
+  | { kind: 'completed' }
+  | { kind: 'none' }
+  | { kind: 'sent'; lastSent: string; count: number; stage: string | null; agotado: boolean; frio: boolean };
+
+/** Días desde el último recordatorio a partir de los cuales la celda se resalta. */
+const DIAS_FRIO = 7;
+
+const STAGE_LABEL: Record<string, string> = {
+  formulario: 'formulario',
+  test: 'prueba de nivel',
+};
+
+function followupCellOf(row: LevelTestInfo, info: FollowupInfo | undefined, now: number): FollowupCell {
+  // Ya completó la prueba: el follow-up dejó de aplicarle.
+  if (testStateOf(row) === 'completed') return { kind: 'completed' };
+  if (!info || !info.lastSent || info.count <= 0) return { kind: 'none' };
+  const dias = daysSince(info.lastSent, now);
+  return {
+    kind: 'sent',
+    lastSent: info.lastSent,
+    count: info.count,
+    stage: info.stage,
+    agotado: info.count >= MAX_REMINDERS,
+    frio: dias > DIAS_FRIO,
+  };
+}
+
+/** Para ordenar: primero los que tienen fecha, y al fondo los que no aplican. */
+function followupSortKey(cell: FollowupCell): { grupo: number; t: number } {
+  if (cell.kind === 'sent') return { grupo: 0, t: new Date(cell.lastSent).getTime() };
+  if (cell.kind === 'none') return { grupo: 1, t: 0 };
+  return { grupo: 2, t: 0 };
+}
+
+const COLUMNS = [
+  { key: 'candidato', label: 'Candidato' },
+  { key: 'email',     label: 'Email' },
+  { key: 'estado',    label: 'Estado' },
+  { key: 'score',     label: 'Score' },
+  { key: 'cefr',      label: 'CEFR' },
+  { key: 'followup',  label: 'Último follow-up', sortable: true },
+  { key: 'creado',    label: 'Creado' },
+  { key: 'expira',    label: 'Expira' },
+  { key: 'acciones',  label: '' },
+] as const;
+
 export default function LevelTestsTab() {
   const [rows, setRows] = useState<LevelTestInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -35,18 +101,79 @@ export default function LevelTestsTab() {
   const [showGen, setShowGen] = useState(false);
   const [detailId, setDetailId] = useState<string | null>(null);
 
+  // Follow-up: índice por alumno + contadores + aviso si falta la migración.
+  const [followup, setFollowup] = useState<Map<string, FollowupInfo>>(new Map());
+  const [summary, setSummary] = useState<FollowupSummary | null>(null);
+  const [faltaSql, setFaltaSql] = useState(false);
+  const [sortFollowup, setSortFollowup] = useState<'none' | 'asc' | 'desc'>('none');
+  // El "ahora" se congela en la carga. Leerlo en cada render haría que la celda
+  // se moviera sola entre renders, y el linter de pureza lo prohíbe con razón.
+  const [ahora, setAhora] = useState(0);
+
   async function load() {
     setLoading(true);
-    const idx = await fetchLevelTestIndex();
+    const now = Date.now();
+    setAhora(now);
+    const [idx, stRes, tkRes, drRes] = await Promise.all([
+      fetchLevelTestIndex(),
+      supabase.from('students').select('id, name, email, form_reminder_count, form_reminder_last_sent, form_reminder_stage'),
+      supabase.from('form_tokens').select('id, token, student_id, student_name, student_email, teacher_id, teacher_name, assignment_id, plan, level, status, created_at, completed_at, expires_at, form_reminder_count, form_reminder_last_sent, test_reminder_count, test_reminder_last_sent'),
+      supabase.from('student_dropouts').select('student_id, student_name'),
+    ]);
     setRows(idx.all);
+
+    // Sin las columnas del follow-up (migración sin correr) la pestaña sigue
+    // funcionando: la columna queda vacía y se avisa arriba.
+    if (stRes.error || tkRes.error) {
+      setFaltaSql(true);
+      setFollowup(new Map());
+      setSummary(null);
+      setLoading(false);
+      return;
+    }
+    setFaltaSql(false);
+
+    const estudiantes = (stRes.data ?? []) as Array<StudentRow & {
+      form_reminder_count: number | null;
+      form_reminder_last_sent: string | null;
+      form_reminder_stage: string | null;
+    }>;
+
+    // Índice tolerante (id → email → nombre), el mismo criterio de matching que
+    // el resto del sistema: hay sesiones de test sin student_id.
+    const mapa = new Map<string, FollowupInfo>();
+    for (const s of estudiantes) {
+      const info: FollowupInfo = {
+        count: s.form_reminder_count ?? 0,
+        lastSent: s.form_reminder_last_sent,
+        stage: s.form_reminder_stage,
+      };
+      mapa.set(`id:${s.id}`, info);
+      if (s.email) mapa.set(`em:${norm(s.email)}`, info);
+      if (s.name) mapa.set(`nm:${norm(s.name)}`, info);
+    }
+    setFollowup(mapa);
+
+    setSummary(summarize(buildPendingList({
+      tokens:   (tkRes.data ?? []) as unknown as FormTokenRow[],
+      students: estudiantes.map(s => ({ id: s.id, name: s.name, email: s.email })),
+      sessions: idx.all as unknown as TestSessionRow[],
+      dropouts: (drRes.data ?? []) as unknown as DropoutRow[],
+      now,
+    })));
     setLoading(false);
   }
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { load(); }, []);
 
+  const infoOf = (r: LevelTestInfo): FollowupInfo | undefined =>
+    (r.student_id ? followup.get(`id:${r.student_id}`) : undefined)
+    ?? (r.candidate_email ? followup.get(`em:${norm(r.candidate_email)}`) : undefined)
+    ?? followup.get(`nm:${norm(r.student_name || r.candidate_name)}`);
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return rows.filter(r => {
+    const base = rows.filter(r => {
       if (status !== 'all' && testStateOf(r) !== status) return false;
       if (cefr !== 'all' && (r.cefr_level || '') !== cefr) return false;
       if (q) {
@@ -56,7 +183,16 @@ export default function LevelTestsTab() {
       }
       return true;
     });
-  }, [rows, status, cefr, query]);
+
+    if (sortFollowup === 'none') return base;
+    return [...base].sort((a, b) => {
+      const ka = followupSortKey(followupCellOf(a, infoOf(a), ahora));
+      const kb = followupSortKey(followupCellOf(b, infoOf(b), ahora));
+      if (ka.grupo !== kb.grupo) return ka.grupo - kb.grupo;   // sin enviar y completados siempre al fondo
+      return sortFollowup === 'asc' ? ka.t - kb.t : kb.t - ka.t;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, status, cefr, query, sortFollowup, followup, ahora]);
 
   const selectStyle = { padding: '7px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface)', color: 'var(--text-primary)', fontSize: 13, fontFamily: 'inherit' } as const;
 
@@ -82,6 +218,14 @@ export default function LevelTestsTab() {
         <button className="adm-btn adm-btn-primary" onClick={() => setShowGen(true)}>Generar link</button>
       </div>
 
+      {faltaSql && (
+        <div style={{ background: 'rgba(255,196,0,0.12)', border: '1px solid rgba(255,196,0,0.5)', borderRadius: 10, padding: '10px 14px', fontSize: 12.5, color: 'var(--text-secondary)', marginBottom: 14 }}>
+          El follow-up automático todavía no está activo: falta ejecutar <b>supabase-form-reminders.sql</b> en Supabase. La columna &quot;Último follow-up&quot; quedará vacía hasta entonces.
+        </div>
+      )}
+
+      {summary && <FollowupSummaryBar summary={summary} />}
+
       {/* Tabla */}
       <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
         {loading ? (
@@ -93,8 +237,25 @@ export default function LevelTestsTab() {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
                 <tr style={{ background: 'var(--bg-surface-2)', textAlign: 'left' }}>
-                  {['Candidato', 'Email', 'Estado', 'Score', 'CEFR', 'Creado', 'Expira', ''].map(h => (
-                    <th key={h} style={{ padding: '10px 14px', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>{h}</th>
+                  {COLUMNS.map(c => (
+                    <th key={c.key}
+                      onClick={'sortable' in c && c.sortable
+                        ? () => setSortFollowup(s => (s === 'asc' ? 'desc' : s === 'desc' ? 'none' : 'asc'))
+                        : undefined}
+                      title={'sortable' in c && c.sortable ? 'Ordenar por la fecha del último recordatorio' : undefined}
+                      style={{
+                        padding: '10px 14px', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)',
+                        textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap',
+                        cursor: 'sortable' in c && c.sortable ? 'pointer' : undefined,
+                        userSelect: 'none',
+                      }}>
+                      {c.label}
+                      {'sortable' in c && c.sortable && (
+                        <span style={{ marginLeft: 5, opacity: sortFollowup === 'none' ? 0.35 : 1 }}>
+                          {sortFollowup === 'desc' ? '↓' : '↑'}
+                        </span>
+                      )}
+                    </th>
                   ))}
                 </tr>
               </thead>
@@ -112,6 +273,7 @@ export default function LevelTestsTab() {
                       <td style={{ padding: '10px 14px', whiteSpace: 'nowrap' }}>
                         {r.cefr_level ? <span style={{ fontWeight: 700, color: CEFR_COLOR[r.cefr_level as keyof typeof CEFR_COLOR] || 'var(--text-primary)' }}>{r.cefr_level}</span> : '—'}
                       </td>
+                      <FollowupCellTd cell={followupCellOf(r, infoOf(r), ahora)} />
                       <td style={{ padding: '10px 14px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{fmtDate(r.created_at)}</td>
                       <td style={{ padding: '10px 14px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{fmtDate(r.expires_at)}</td>
                       <td style={{ padding: '10px 14px', whiteSpace: 'nowrap' }}>
@@ -131,6 +293,70 @@ export default function LevelTestsTab() {
 
       {showGen && <GenerateModal onClose={() => setShowGen(false)} onDone={() => { setShowGen(false); load(); }} />}
       {detailId && <DetailModal id={detailId} onClose={() => setDetailId(null)} />}
+    </div>
+  );
+}
+
+// ── Celda "Último follow-up" ─────────────────────────────────────────────────
+function FollowupCellTd({ cell }: { cell: FollowupCell }) {
+  const td = { padding: '10px 14px', whiteSpace: 'nowrap' as const };
+
+  if (cell.kind === 'completed') {
+    return <td style={{ ...td, color: '#067647', fontSize: 12.5 }}>Completado</td>;
+  }
+  if (cell.kind === 'none') {
+    return <td style={{ ...td, color: 'var(--text-muted)', fontSize: 12.5 }}>Sin enviar</td>;
+  }
+
+  // Ámbar cuando ya se le agotaron los tres recordatorios sin respuesta, o cuando
+  // hace más de una semana del último y sigue sin completar.
+  const alerta = cell.agotado || cell.frio;
+  return (
+    <td style={td}>
+      <div style={{
+        display: 'inline-block',
+        padding: alerta ? '2px 8px' : 0,
+        borderRadius: 8,
+        background: alerta ? 'rgba(255,196,0,0.16)' : undefined,
+        color: alerta ? '#B54708' : 'var(--text-primary)',
+        fontSize: 12.5,
+        fontWeight: alerta ? 600 : 400,
+      }}>
+        {fmtDayMonthYear(cell.lastSent)} · {STEP_LABEL[cell.count] ?? `${cell.count}º recordatorio`}
+      </div>
+      {cell.stage && (
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>
+          {STAGE_LABEL[cell.stage] ?? cell.stage}
+        </div>
+      )}
+    </td>
+  );
+}
+
+// ── Contadores del follow-up ─────────────────────────────────────────────────
+function FollowupSummaryBar({ summary }: { summary: FollowupSummary }) {
+  const items: Array<{ label: string; value: number; hint: string; alerta?: boolean }> = [
+    { label: 'Pendientes de formulario', value: summary.pendientesFormulario, hint: 'Recibieron el enlace y no lo han completado' },
+    { label: 'Pendientes de prueba',     value: summary.pendientesTest,       hint: 'Completaron el formulario pero no la prueba de nivel' },
+    { label: 'Les toca hoy',             value: summary.hoyTocan,             hint: 'Recibirán un recordatorio en la próxima corrida del cron' },
+    { label: 'Sin respuesta',            value: summary.sinRespuesta,         hint: `Agotaron los ${MAX_REMINDERS} recordatorios y siguen sin completar`, alerta: true },
+  ];
+
+  return (
+    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
+      {items.map(it => (
+        <div key={it.label} title={it.hint}
+          style={{
+            flex: '1 1 160px', minWidth: 150,
+            background: 'var(--bg-surface)', border: '1px solid var(--border)',
+            borderRadius: 10, padding: '10px 14px',
+          }}>
+          <div style={{ fontSize: 22, fontWeight: 700, color: it.alerta && it.value > 0 ? '#B54708' : 'var(--text-primary)', lineHeight: 1.1 }}>
+            {it.value}
+          </div>
+          <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 2 }}>{it.label}</div>
+        </div>
+      ))}
     </div>
   );
 }
