@@ -3,6 +3,8 @@
 
 export type LTSection = 'reading_completion' | 'reading_passage' | 'reading_email' | 'writing';
 export type Cefr = 'A1' | 'A2' | 'B1' | 'B2' | 'C1' | 'C2';
+// Dónde cae un texto dentro de su banda MCER (ver constants.cefrToScore).
+export type CefrPosition = 'low' | 'mid' | 'high';
 
 // Pregunta como la recibe el cliente (Reading SIN `correct_answer`).
 export interface LTQuestionPublic {
@@ -39,8 +41,10 @@ export interface LTAnswerLite {
 export interface WritingScoreFeedback { score: number; feedback: string }
 
 export interface WritingEvaluation {
-  score: number;                 // 0–100
-  cefr_level: Cefr;
+  score: number;                 // 0–100 en escala ABSOLUTA; lo deriva el código con cefrToScore(cefr_level, within_level)
+  cefr_level: Cefr;              // nivel que demuestra el texto EN SÍ, no "cuánto cumplió la consigna"
+  within_level: CefrPosition;    // posición dentro de la banda
+  evidence: string;              // justificación en inglés (uso interno)
   grammar: WritingScoreFeedback;
   vocabulary: WritingScoreFeedback;
   coherence: WritingScoreFeedback;

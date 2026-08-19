@@ -1,6 +1,6 @@
 // Constantes del Test de Nivel: mapeos CEFR, orden y tamaño de secciones.
 
-import type { LTSection, Cefr } from './types';
+import type { LTSection, Cefr, CefrPosition } from './types';
 
 export const DIFFICULTY_TO_CEFR: Record<number, Cefr> = {
   1: 'A1', 2: 'A2', 3: 'B1', 4: 'B2', 5: 'C1', 6: 'C2',
@@ -29,15 +29,46 @@ export const SECTION_LABEL: Record<LTSection, string> = {
 export const START_DIFFICULTY = 3;   // arranca en B1
 export const EXPIRES_DEFAULT_DAYS = 7;
 
-// 0–30 A1 · 31–40 A2 · 41–50 B1 · 51–60 B2 · 61–70 C1 · 71–100 C2
+// ÚNICA fuente de verdad de los umbrales: `scoreToCefr` y `cefrToScore` derivan de
+// aquí, así la escala del writing y la del resultado final NUNCA se desalinean.
+// Cada banda es (min, max]; A1 incluye el 0.
+export const CEFR_BANDS: Array<{ level: Cefr; min: number; max: number }> = [
+  { level: 'A1', min: 0,  max: 30 },
+  { level: 'A2', min: 30, max: 40 },
+  { level: 'B1', min: 40, max: 50 },
+  { level: 'B2', min: 50, max: 60 },
+  { level: 'C1', min: 60, max: 70 },
+  { level: 'C2', min: 70, max: 100 },
+];
+
 export function scoreToCefr(score: number): Cefr {
-  if (score <= 30) return 'A1';
-  if (score <= 40) return 'A2';
-  if (score <= 50) return 'B1';
-  if (score <= 60) return 'B2';
-  if (score <= 70) return 'C1';
+  for (const b of CEFR_BANDS) if (score <= b.max) return b.level;
   return 'C2';
 }
+
+const POSITION_FRACTION: Record<CefrPosition, number> = { low: 0.25, mid: 0.5, high: 0.75 };
+
+// Inversa de scoreToCefr: convierte un nivel MCER absoluto (+ dónde cae dentro de la
+// banda) al puntaje 0–100 que representa ese nivel. Se cumple siempre
+// scoreToCefr(cefrToScore(L)) === L, sean cuales sean los umbrales de CEFR_BANDS.
+// Es lo que pone la nota de writing en la MISMA escala absoluta que el reading.
+export function cefrToScore(level: Cefr, position: CefrPosition = 'mid'): number {
+  const b = CEFR_BANDS.find(x => x.level === level) ?? CEFR_BANDS[0];
+  const raw = b.min + POSITION_FRACTION[position] * (b.max - b.min);
+  return Math.round(raw * 100) / 100;
+}
+
+// Descriptores MCER de EXPRESIÓN ESCRITA (en inglés: son la referencia contra la que
+// la IA puntúa el texto, ver lib/evaluateWriting). Distintos de CEFR_DESC, que es la
+// descripción general en español que ve el alumno en la pantalla de resultados.
+export const CEFR_WRITING_DESCRIPTORS: Record<Cefr, string> = {
+  A1: 'Isolated words and memorised phrases. Very simple present-tense sentences, often incomplete. Connectors limited to "and"/"but". Errors are frequent and often block understanding.',
+  A2: 'Short, simple sentences on familiar topics. Simple past and future attempted with a narrow range of structures. Connectors: and, but, because, then. Errors are frequent but meaning usually gets through.',
+  B1: 'Connected text on familiar topics. Reasonable control of common tenses; errors appear as soon as structures get complex. Vocabulary adequate but repetitive and high-frequency. Linkers such as however, although, so.',
+  B2: 'Clear, detailed text. Good control of a range of structures: subordination, passives, conditionals, relative clauses. Errors do not cause misunderstanding. Varied vocabulary with occasional collocation slips. Clear cohesion and a structured argument.',
+  C1: 'Well-structured, fluent text on complex subjects. Consistently high grammatical accuracy. Wide, precise vocabulary including less common and idiomatic items. Controlled register and sophisticated cohesive devices.',
+  C2: 'Near-native. Complex ideas expressed precisely and naturally. Virtually error-free, with subtle nuance and effortless idiomatic and stylistic control.',
+};
 
 export const CEFR_DESC: Record<Cefr, string> = {
   A1: 'Principiante: frases básicas y situaciones cotidianas muy simples.',
