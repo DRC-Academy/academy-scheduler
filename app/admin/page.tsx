@@ -188,8 +188,11 @@ function EditTeacherModal({ teacher, onClose, onSave, onDelete }: {
 function NotificationsAdminTab() {
   const { teachers, sendNotification } = useTeachers();
   const { user } = useAuth();
-  const [targetType, setTargetType] = useState<'all' | 'specific'>('all');
+  const [targetType, setTargetType] = useState<'all' | 'except' | 'specific'>('all');
   const [targetTeacherId, setTargetTeacherId] = useState('');
+  /** Modo "todos excepto": ids que quedan FUERA del envío. */
+  const [excludedIds, setExcludedIds] = useState<string[]>([]);
+  const [sendError, setSendError] = useState<string | null>(null);
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [sending, setSending] = useState(false);
@@ -207,29 +210,47 @@ function NotificationsAdminTab() {
   useEffect(() => { loadAll(); }, []);
 
   async function handleSend() {
-    if (!title.trim() || !body.trim()) return;
-    if (targetType === 'specific' && !targetTeacherId) return;
+    if (!canSend) return;
     setSending(true);
-    await sendNotification({
-      targetUser: targetType === 'specific' ? targetTeacherId : undefined,
-      targetRole: targetType === 'all' ? 'teacher' : undefined,
-      title: title.trim(),
-      body: body.trim(),
-      type: 'circular',
-      createdBy: user?.displayName ?? 'Admin',
-    });
-    // Además del aviso in-app, la circular va por email a quien no la haya
-    // desactivado. Best-effort: si el correo falla, la notificación ya está.
+    setSendError(null);
+
+    // "Todos" y "todos excepto" son la MISMA circular (una fila con
+    // target_role): lo único que cambia es la lista de excluidos. Solo el envío a
+    // un profesor concreto usa target_user.
+    const excluidos = targetType === 'except' ? excludedIds : [];
+
+    try {
+      await sendNotification({
+        targetUser: targetType === 'specific' ? targetTeacherId : undefined,
+        targetRole: targetType === 'specific' ? undefined : 'teacher',
+        excludedUsers: excluidos.length > 0 ? excluidos : undefined,
+        title: title.trim(),
+        body: body.trim(),
+        type: 'circular',
+        createdBy: user?.displayName ?? 'Admin',
+      });
+    } catch (err) {
+      // Antes este fallo era mudo: se limpiaba el formulario y salía "Enviado"
+      // aunque no se hubiera guardado nada.
+      setSendError(err instanceof Error ? err.message : 'No se pudo enviar la notificación.');
+      setSending(false);
+      return;
+    }
+
+    // El correo va DESPUÉS y solo si el aviso in-app se guardó. Al revés, un
+    // profesor podría recibir el email de una circular que no existe en la
+    // plataforma. Best-effort: si el correo falla, la notificación ya está.
     await triggerEmail({
       type: 'circular',
       title: title.trim(),
       body: body.trim(),
       ...(targetType === 'specific'
         ? { teacherId: targetTeacherId }
-        : { allTeachers: true }),
+        : { allTeachers: true, ...(excluidos.length > 0 ? { excludeTeacherIds: excluidos } : {}) }),
     });
     setTitle('');
     setBody('');
+    setExcludedIds([]);
     setSent(true);
     setSending(false);
     setTimeout(() => setSent(false), 2500);
@@ -243,7 +264,14 @@ function NotificationsAdminTab() {
     boxSizing: 'border-box' as const,
   };
 
-  const canSend = !!title.trim() && !!body.trim() && !sending && (targetType === 'all' || !!targetTeacherId);
+  /** A quién le llegaría tal como está el formulario ahora mismo. */
+  const destinatarios = teachers.filter(t => !excludedIds.includes(t.id));
+
+  const canSend = !!title.trim() && !!body.trim() && !sending && (
+    targetType === 'all' ? true
+      : targetType === 'except' ? destinatarios.length > 0
+      : !!targetTeacherId
+  );
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
@@ -253,14 +281,42 @@ function NotificationsAdminTab() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div>
             <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>Destinatario</label>
-            <div style={{ display: 'flex', gap: 8, marginBottom: targetType === 'specific' ? 10 : 0 }}>
-              {(['all', 'specific'] as const).map(t => (
-                <button key={t} onClick={() => { setTargetType(t); setTargetTeacherId(''); }}
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: targetType === 'all' ? 0 : 10 }}>
+              {(['all', 'except', 'specific'] as const).map(t => (
+                <button key={t} onClick={() => { setTargetType(t); setTargetTeacherId(''); setExcludedIds([]); setSendError(null); }}
                   style={{ padding: '7px 16px', borderRadius: 8, border: `1.5px solid ${targetType === t ? '#1E9E3A' : 'var(--border)'}`, background: targetType === t ? 'rgba(30,158,58,0.1)' : 'transparent', color: targetType === t ? '#1E9E3A' : 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontWeight: targetType === t ? 700 : 500, fontFamily: 'inherit' }}>
-                  {t === 'all' ? '👥 Todos los profesores' : '👤 Un profesor específico'}
+                  {t === 'all' ? '👥 Todos los profesores' : t === 'except' ? '🚫 Todos excepto…' : '👤 Un profesor específico'}
                 </button>
               ))}
             </div>
+            {targetType === 'except' && (
+              <div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>
+                  Marca los profesores que <b>no</b> deben recibirla. Al resto le llega igual que una circular normal, también por email.
+                </div>
+                <div style={{ maxHeight: 190, overflowY: 'auto', border: '1.5px solid var(--border)', borderRadius: 8, padding: '5px 4px', background: 'white' }}>
+                  {teachers.length === 0 ? (
+                    <div style={{ padding: '10px 12px', fontSize: 13, color: 'var(--text-muted)' }}>No hay profesores cargados.</div>
+                  ) : teachers.map(t => {
+                    const marcado = excludedIds.includes(t.id);
+                    return (
+                      <label key={t.id}
+                        style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '6px 10px', borderRadius: 6, cursor: 'pointer', fontSize: 13, color: marcado ? '#b91c1c' : '#111827', background: marcado ? 'rgba(220,38,38,0.07)' : 'transparent' }}>
+                        <input type="checkbox" checked={marcado}
+                          onChange={() => setExcludedIds(prev => marcado ? prev.filter(id => id !== t.id) : [...prev, t.id])}
+                          style={{ width: 15, height: 15, accentColor: '#dc2626', cursor: 'pointer' }} />
+                        <span style={{ textDecoration: marcado ? 'line-through' : 'none' }}>{t.name}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <div style={{ fontSize: 12.5, marginTop: 8, fontWeight: destinatarios.length === 0 ? 600 : 500, color: destinatarios.length === 0 ? '#c0392b' : 'var(--text-secondary)' }}>
+                  {destinatarios.length === 0
+                    ? 'Has excluido a todos: no queda nadie a quien enviar.'
+                    : `Se enviará a ${destinatarios.length} de ${teachers.length} profesores.`}
+                </div>
+              </div>
+            )}
             {targetType === 'specific' && (
               <select value={targetTeacherId} onChange={e => setTargetTeacherId(e.target.value)} style={inputStyle}>
                 <option value="">— Seleccionar profesor —</option>
@@ -277,9 +333,17 @@ function NotificationsAdminTab() {
             <textarea value={body} onChange={e => setBody(e.target.value)} placeholder="Escribí el mensaje completo aquí..." rows={4}
               style={{ ...inputStyle, resize: 'vertical' }} />
           </div>
+          {sendError && (
+            <div style={{ fontSize: 12.5, color: '#c0392b', lineHeight: 1.5, fontWeight: 500, background: 'rgba(192,57,43,0.07)', border: '1px solid rgba(192,57,43,0.25)', borderRadius: 8, padding: '9px 11px' }}>
+              {sendError}
+            </div>
+          )}
           <button onClick={handleSend} disabled={!canSend}
             style={{ padding: '11px 20px', borderRadius: 9, border: 'none', background: canSend ? '#1E9E3A' : '#d1d5db', color: 'white', cursor: canSend ? 'pointer' : 'not-allowed', fontSize: 14, fontWeight: 700, fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'center' }}>
-            {sent ? '✅ Enviado' : sending ? '⏳ Enviando...' : '📤 Enviar notificación'}
+            {sent ? '✅ Enviado'
+              : sending ? '⏳ Enviando...'
+              : targetType === 'except' ? `📤 Enviar a ${destinatarios.length} profesor${destinatarios.length === 1 ? '' : 'es'}`
+              : '📤 Enviar notificación'}
           </button>
         </div>
       </div>
@@ -309,6 +373,16 @@ const DIR_STYLE: Record<NotificationDirection, { label: string; color: string; b
   received: { label: 'Recibida', color: '#8a6d00', bg: 'rgba(255,196,0,0.16)', border: 'rgba(255,196,0,0.55)', arrow: '↙' },
 };
 
+/**
+ * "Ana", "Ana y Luis", "Ana, Luis y 3 más". Se corta en dos porque la fila del
+ * historial es de una línea y una circular puede excluir a media plantilla.
+ */
+function nombresDeIds(ids: string[], teachers: Teacher[]): string {
+  const nombres = ids.map(id => teachers.find(t => t.id === id)?.name ?? 'profesor borrado');
+  if (nombres.length <= 2) return nombres.join(' y ');
+  return `${nombres.slice(0, 2).join(', ')} y ${nombres.length - 2} más`;
+}
+
 function NotificationsHistory({ notifs, loading, teachers }: {
   notifs: AppNotification[];
   loading: boolean;
@@ -330,10 +404,14 @@ function NotificationsHistory({ notifs, loading, teachers }: {
         const teacher   = n.targetUser ? teachers.find(t => t.id === n.targetUser) : null;
         // A quién salió. Si el target_user no matchea ningún profesor (profe
         // borrado), se dice eso en vez de inventar un nombre.
+        const excluidos = n.excludedUsers ?? [];
         const dest = direction === 'received'
           ? null
           : teacher              ? teacher.name
-          : n.targetRole === 'teacher' ? 'Todos los profesores'
+          : n.targetRole === 'teacher'
+              ? (excluidos.length === 0
+                  ? 'Todos los profesores'
+                  : `Todos excepto ${nombresDeIds(excluidos, teachers)}`)
           : n.targetUser         ? 'Profesor no encontrado'
           : '—';
         return { n, direction, info, dest };

@@ -100,13 +100,18 @@ export function NotificationBell({ compact = false }: { compact?: boolean } = {}
         table:  'notifications',
       }, (payload: any) => {
         const row = payload.new;
-        const relevant = row.target_user === userId || row.target_role === role;
+        const excluded: string[] = row.excluded_users ?? [];
+        // Una circular "a todos excepto" llega por realtime a TODO el mundo: es
+        // una sola fila con target_role. Quien esté excluido la descarta aquí.
+        const relevant = (row.target_user === userId || row.target_role === role)
+          && !excluded.includes(userId);
         if (!relevant) return;
 
         const fresh: AppNotification = {
           id:         row.id,
           targetUser: row.target_user  ?? undefined,
           targetRole: row.target_role  ?? undefined,
+          excludedUsers: excluded,
           title:      row.title,
           body:       row.body,
           type:       row.type,

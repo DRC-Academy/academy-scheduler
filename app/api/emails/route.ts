@@ -19,6 +19,8 @@ interface Body {
   teacherId?: string;
   /** Circular a todo el equipo: el fan-out se hace aquí, no en el navegador. */
   allTeachers?: boolean;
+  /** Con `allTeachers`: ids que NO reciben la circular ("todos excepto"). */
+  excludeTeacherIds?: string[];
   studentName?: string;
   // new_student
   studentEmail?: string | null;
@@ -50,7 +52,10 @@ export async function POST(request: Request): Promise<Response> {
     if (!body.title || !body.body) {
       return Response.json({ sent: false, error: 'Faltan title y body.' }, { status: 400 });
     }
-    const count = await sendCircularToAll({ title: body.title, body: body.body });
+    const count = await sendCircularToAll(
+      { title: body.title, body: body.body },
+      body.excludeTeacherIds ?? [],
+    );
     return Response.json({ sent: count > 0, count });
   }
 
@@ -112,7 +117,10 @@ export async function POST(request: Request): Promise<Response> {
  * y esos profesores no recibían nada. El batch no tiene ese problema y además
  * es una sola llamada (cabe de sobra: el límite del batch son 100 emails).
  */
-async function sendCircularToAll(notification: { title: string; body: string }): Promise<number> {
+async function sendCircularToAll(
+  notification: { title: string; body: string },
+  excludeTeacherIds: string[] = [],
+): Promise<number> {
   const { data, error } = await supabase
     .from('teachers')
     .select('id, name, email, notification_email, email_preferences');
@@ -122,7 +130,16 @@ async function sendCircularToAll(notification: { title: string; body: string }):
     return 0;
   }
 
-  const teachers: TeacherLike[] = data.map(t => ({
+  // El descarte se hace AQUÍ, con la lista real de la base, y no en el navegador:
+  // el aviso in-app y el correo tienen que salir con la misma lista o un profesor
+  // excluido recibiría el email de algo que no ve en la plataforma.
+  const excluidos = new Set(excludeTeacherIds);
+  const destinatarios = data.filter(t => !excluidos.has(t.id));
+  if (excluidos.size > 0) {
+    console.log(`[api/emails] Circular con exclusiones: ${destinatarios.length} de ${data.length} profesores.`);
+  }
+
+  const teachers: TeacherLike[] = destinatarios.map(t => ({
     id: t.id, name: t.name, email: t.email,
     notificationEmail: t.notification_email,
     emailPreferences: normalizePrefs(t.email_preferences),

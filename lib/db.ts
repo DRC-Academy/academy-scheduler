@@ -2959,6 +2959,9 @@ function mapNotif(row: any): AppNotification {
     id:         row.id,
     targetUser: row.target_user ?? undefined,
     targetRole: row.target_role ?? undefined,
+    // Ausente mientras no se haya corrido supabase-notification-exclusions.sql:
+    // sin columna, ninguna notificación excluye a nadie, que es el estado previo.
+    excludedUsers: row.excluded_users ?? [],
     title:      row.title,
     body:       row.body,
     type:       row.type,
@@ -2971,6 +2974,7 @@ function mapNotif(row: any): AppNotification {
 export async function dbSendNotification(notification: {
   targetUser?: string;
   targetRole?: string;
+  excludedUsers?: string[];
   title: string;
   body: string;
   type: string;
@@ -2978,7 +2982,8 @@ export async function dbSendNotification(notification: {
 }): Promise<AppNotification> {
   const id        = `notif_${Date.now()}`;
   const createdAt = new Date().toISOString();
-  await supabase.from('notifications').insert({
+  const excluidos = notification.excludedUsers ?? [];
+  const { error } = await supabase.from('notifications').insert({
     id,
     target_user: notification.targetUser ?? null,
     target_role: notification.targetRole ?? null,
@@ -2988,7 +2993,27 @@ export async function dbSendNotification(notification: {
     read_by:     [],
     created_at:  createdAt,
     created_by:  notification.createdBy,
+    // Solo se manda cuando hay algo que excluir. Así todo lo que ya existía
+    // sigue funcionando aunque la migración de exclusiones no se haya corrido:
+    // el único envío que exige la columna es el que de verdad la necesita.
+    ...(excluidos.length > 0 ? { excluded_users: excluidos } : {}),
   });
+  if (error) {
+    // Este insert se tragaba el error en silencio y el admin veía "Enviado" sin
+    // que saliera nada. Con exclusiones el caso es concreto y tiene arreglo, así
+    // que se dice qué hacer en vez de fallar de forma opaca.
+    // PGRST204 lo devuelve PostgREST cuando la columna no está en su cache de
+    // esquema; 42703 es el de Postgres para 'column does not exist'. Se comprueba
+    // también el mensaje porque cuál de los dos llega depende de la ruta.
+    const faltaColumna = error.code === 'PGRST204' || error.code === '42703'
+      || /excluded_users/.test(error.message ?? '');
+    console.error('[dbSendNotification] No se pudo guardar la notificación:', error);
+    throw new Error(
+      faltaColumna
+        ? 'Falta correr supabase-notification-exclusions.sql en Supabase: sin esa columna no se puede excluir a nadie.'
+        : 'No se pudo guardar la notificación.',
+    );
+  }
   return {
     id,
     targetUser: notification.targetUser,
@@ -3042,7 +3067,11 @@ export async function dbGetNotificationsForUser(userId: string, role: string): P
     .or(`target_user.eq.${userId},target_role.eq.${role}`)
     .order('created_at', { ascending: false });
   if (error || !data) return [];
-  return data.map(mapNotif);
+  // La exclusión se aplica aquí y no en la consulta a propósito: un filtro
+  // `not.cs` sobre la columna fallaría entero si la migración no está corrida, y
+  // dejaría al profesor sin NINGUNA notificación. Filtrar en memoria degrada bien
+  // (sin columna, `excludedUsers` es [] y no excluye a nadie).
+  return data.map(mapNotif).filter(n => !(n.excludedUsers ?? []).includes(userId));
 }
 
 export async function dbMarkNotificationRead(notificationId: string, userId: string): Promise<void> {
@@ -3063,12 +3092,15 @@ export async function dbGetAllNotifications(): Promise<AppNotification[]> {
 }
 
 export async function dbMarkAllNotificationsRead(userId: string, role: string): Promise<void> {
+  // `select('*')` y no `'id, read_by, excluded_users'`: pedir una columna que
+  // todavía no existe rompería el marcado entero, que hoy funciona.
   const { data } = await supabase
     .from('notifications')
-    .select('id, read_by')
+    .select('*')
     .or(`target_user.eq.${userId},target_role.eq.${role}`);
   if (!data || data.length === 0) return;
-  const unread = data.filter((n: any) => !(n.read_by ?? []).includes(userId));
+  const unread = data.filter((n: any) =>
+    !(n.read_by ?? []).includes(userId) && !(n.excluded_users ?? []).includes(userId));
   if (unread.length === 0) return;
   await Promise.all(unread.map((n: any) =>
     supabase.from('notifications')

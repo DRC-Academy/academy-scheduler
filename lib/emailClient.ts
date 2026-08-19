@@ -7,6 +7,8 @@ interface EmailPayload {
   teacherId?: string;
   /** Circular a todos los profesores (el fan-out lo hace el servidor). */
   allTeachers?: boolean;
+  /** Con `allTeachers`: ids que quedan fuera del envío ("todos excepto"). */
+  excludeTeacherIds?: string[];
   studentName?: string;
   studentEmail?: string | null;
   plan?: string | null;

@@ -276,6 +276,12 @@ export interface AppNotification {
   id: string;
   targetUser?: string;
   targetRole?: string;
+  /**
+   * Ids que NO deben verla aunque encajen con `targetRole`. Es lo que hace
+   * posible la circular "a todos excepto" sin insertar una fila por destinatario.
+   * Vacío o ausente = no excluye a nadie.
+   */
+  excludedUsers?: string[];
   title: string;
   body: string;
   type: string;
