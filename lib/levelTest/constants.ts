@@ -30,15 +30,32 @@ export const START_DIFFICULTY = 3;   // arranca en B1
 export const EXPIRES_DEFAULT_DAYS = 7;
 
 // ÚNICA fuente de verdad de los umbrales: `scoreToCefr` y `cefrToScore` derivan de
-// aquí, así la escala del writing y la del resultado final NUNCA se desalinean.
-// Cada banda es (min, max]; A1 incluye el 0.
+// aquí, así la escala del writing, la del reading y la del resultado final NUNCA
+// se desalinean. Cada banda es (min, max]; A1 incluye el 0.
+//
+// SEXTOS IGUALES (ago/2026). Antes A1 y C2 abarcaban 30 puntos cada uno y las
+// cuatro bandas centrales solo 10: en la zona donde vive casi todo el alumnado,
+// dos puntos cambiaban el nivel, y en los extremos hacían falta treinta.
+//
+// El reparto dejó de ser una decisión sobre datos en cuanto las DOS mitades del
+// test quedaron ancladas a estas mismas bandas: la lectura entra por
+// `cefrToScore(banda, posición)` igual que la escritura, así que el 0–100 no es
+// una medida con significado propio que haya que calibrar, es solo el vehículo
+// para promediar 60/40 dos niveles MCER. Y si el eje solo transporta niveles, los
+// seis tienen que ocupar lo mismo: cualquier otro reparto le da a una banda más
+// peso en el promedio que a otra sin ninguna razón.
+//
+// Se construyen a partir de SIXTH para que la igualdad sea estructural y no seis
+// números a mano que alguien pueda desnivelar sin darse cuenta.
+const SIXTH = 100 / 6;
+
 export const CEFR_BANDS: Array<{ level: Cefr; min: number; max: number }> = [
-  { level: 'A1', min: 0,  max: 30 },
-  { level: 'A2', min: 30, max: 40 },
-  { level: 'B1', min: 40, max: 50 },
-  { level: 'B2', min: 50, max: 60 },
-  { level: 'C1', min: 60, max: 70 },
-  { level: 'C2', min: 70, max: 100 },
+  { level: 'A1', min: 0,         max: SIXTH },
+  { level: 'A2', min: SIXTH,     max: 2 * SIXTH },
+  { level: 'B1', min: 2 * SIXTH, max: 3 * SIXTH },
+  { level: 'B2', min: 3 * SIXTH, max: 4 * SIXTH },
+  { level: 'C1', min: 4 * SIXTH, max: 5 * SIXTH },
+  { level: 'C2', min: 5 * SIXTH, max: 100 },
 ];
 
 export function scoreToCefr(score: number): Cefr {

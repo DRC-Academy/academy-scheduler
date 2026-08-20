@@ -4,8 +4,17 @@
 
 import { supabase } from '@/lib/supabase';
 import { computeNext } from '@/lib/levelTest/server';
+import { GRAND_TOTAL } from '@/lib/levelTest/constants';
 
 export const dynamic = 'force-dynamic';
+
+// Respuestas DISTINTAS de la sesión. Solo se consulta cuando hace falta decidir
+// entre 'expired' y 'abandoned'.
+async function countAnswers(sessionId: string): Promise<number> {
+  const { data } = await supabase
+    .from('level_test_answers').select('question_id').eq('session_id', sessionId);
+  return new Set((data ?? []).map(r => (r as { question_id: string }).question_id)).size;
+}
 
 export async function GET(
   _request: Request,
@@ -37,17 +46,26 @@ export async function GET(
         overall_score: s.overall_score,
         cefr_level: s.cefr_level,
         ai_evaluation: s.ai_evaluation,
+        // Sin nota de escritura, el nivel salió solo de la lectura.
+        provisional: s.writing_score == null,
       },
     });
   }
 
-  // Expirado.
+  // Caducó a medias: no hay nivel y ya no se puede retomar.
+  if (s.status === 'abandoned') return Response.json({ status: 'abandoned' });
+
+  // Expirado. Se distingue del abandono: 'expired' es el enlace que caducó sin
+  // que nadie lo abriera; 'abandoned' es el que se empezó y quedó a medias. Para
+  // el alumno la pantalla es la misma; para el admin no son lo mismo.
   const expired = s.expires_at && new Date(s.expires_at).getTime() < Date.now();
   if (s.status === 'expired' || expired) {
-    if (s.status !== 'expired') {
-      await supabase.from('level_test_sessions').update({ status: 'expired' }).eq('id', s.id);
+    const answered = await countAnswers(s.id);
+    const nuevoEstado = answered > 0 && answered < GRAND_TOTAL ? 'abandoned' : 'expired';
+    if (s.status !== nuevoEstado) {
+      await supabase.from('level_test_sessions').update({ status: nuevoEstado }).eq('id', s.id);
     }
-    return Response.json({ status: 'expired' });
+    return Response.json({ status: nuevoEstado });
   }
 
   // pending → in_progress (empieza el test).
@@ -74,5 +92,9 @@ export async function GET(
     question: next.question,
     progress: next.progress,
     done: next.done,
+    // Lo que el submit va a exigir. El cliente lo usa para no llamar a finalizar
+    // cuando sabe de antemano que la compuerta lo va a rechazar.
+    answered: next.progress.answeredTotal,
+    total: GRAND_TOTAL,
   });
 }

@@ -30,7 +30,10 @@ const PROFILE_COLS = `
 // Igual que con los análisis: si supabase-interventions.sql todavía no se corrió,
 // pedir estas columnas haría fallar la consulta ENTERA (42703) y la página del
 // alumno se quedaría vacía. Se reintenta sin ellas.
-const PROFILE_COLS_EXTRA = `${PROFILE_COLS}, active_intervention, active_intervention_at, unattended_alerts`;
+// level_test_provisional* llegan con supabase-level-test-v2.sql. Van AQUÍ, en el
+// grupo con reintento, y no en PROFILE_COLS: si se pidieran en el grupo base y el
+// SQL no se hubiera corrido, la ficha del alumno se quedaría en blanco.
+const PROFILE_COLS_EXTRA = `${PROFILE_COLS}, active_intervention, active_intervention_at, unattended_alerts, level_test_provisional, level_test_provisional_reason`;
 
 // SIN `transcript`. El profesor no lee nunca el texto: sus vistas solo muestran
 // el ESTADO (subido / pendiente / en revisión), y para eso alcanza el booleano

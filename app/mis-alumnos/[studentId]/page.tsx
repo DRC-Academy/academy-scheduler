@@ -15,6 +15,7 @@ import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
 import { HelpTooltip } from '@/components/ui';
 import { CEFR_COLOR } from '@/lib/levelTest/constants';
+import { INVALID_REASON_LABEL } from '@/lib/levelTest/attemptValidity';
 import { calcRegisteredClassNumber } from '@/lib/db';
 import { loadStudentBundles, norm, type StudentBundle } from '@/lib/misAlumnos';
 import { regenerateFicha } from '@/lib/aiClient';
@@ -509,12 +510,21 @@ function LevelTestCard({ profile }: {
   profile: {
     level_test_cefr?: string | null; level_test_score?: number | null;
     level_test_completed_at?: string | null; level_test_evaluation?: Record<string, unknown> | null;
+    level_test_provisional?: boolean | null; level_test_provisional_reason?: string | null;
   } | null;
 }) {
   const cefr = profile?.level_test_cefr;
   if (!cefr) return null;
   const color = CEFR_COLOR[cefr as keyof typeof CEFR_COLOR] || 'var(--accent)';
   const score = profile?.level_test_score;
+  // Nivel calculado solo con la lectura porque la escritura no se pudo puntuar.
+  // Al profesor SÍ se le dice el motivo real (al alumno no): es lo que necesita
+  // para decidir si repite la prueba o la da por buena.
+  const provisional = !!profile?.level_test_provisional;
+  const motivo = profile?.level_test_provisional_reason;
+  const motivoTexto = motivo && motivo in INVALID_REASON_LABEL
+    ? INVALID_REASON_LABEL[motivo as keyof typeof INVALID_REASON_LABEL]
+    : null;
   const date = profile?.level_test_completed_at
     ? new Date(profile.level_test_completed_at).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' })
     : null;
@@ -528,7 +538,22 @@ function LevelTestCard({ profile }: {
         <span style={{ fontSize: 20, fontWeight: 700, color }}>{cefr}</span>
         {score != null && <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{Math.round(score)}/100</span>}
         {date && <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>· {date}</span>}
+        {provisional && (
+          <span style={{
+            fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 8,
+            background: 'rgba(255,196,0,0.16)', color: '#B54708', textTransform: 'uppercase',
+            letterSpacing: '0.03em',
+          }}>
+            Provisional
+          </span>
+        )}
       </div>
+      {provisional && (
+        <div style={{ marginTop: 8, fontSize: 12.5, color: '#B54708', lineHeight: 1.5 }}>
+          Nivel calculado <b>solo con la comprensión lectora</b>: la expresión escrita no se pudo puntuar.
+          {motivoTexto ? <> Motivo: {motivoTexto.toLowerCase()}.</> : null}
+        </div>
+      )}
       {hasFeedback && (
         <details style={{ marginTop: 8 }}>
           <summary style={{ cursor: 'pointer', color: 'var(--accent)', fontSize: 12.5 }}>Ver feedback de escritura</summary>

@@ -6,7 +6,7 @@
 // Resultados. Diseño standalone con branding DRC (verde, Radio Canada), en línea
 // visual con el formulario inicial. Español de España (tuteo).
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import type { LTQuestionPublic, LTProgress, WritingEvaluation, Cefr } from '@/lib/levelTest/types';
@@ -18,8 +18,20 @@ interface Result {
   overall_score: number | null;
   cefr_level: Cefr | null;
   ai_evaluation: WritingEvaluation | null;
+  // El nivel salió solo de la lectura porque la escritura no se pudo puntuar.
+  provisional?: boolean;
 }
-type Phase = 'loading' | 'invalid' | 'expired' | 'welcome' | 'testing' | 'results';
+type Phase = 'loading' | 'invalid' | 'expired' | 'abandoned' | 'welcome' | 'testing' | 'results' | 'stuck';
+
+// El alumno ve SIEMPRE este texto cuando su escritura no se puntuó, sea porque el
+// filtro la descartó o porque la IA no respondió. Distinguir los dos casos le
+// enseñaría qué dispara el filtro; el motivo real va a la ficha del profesor.
+const AVISO_ESCRITURA = 'No hemos podido evaluar tu redacción, así que este nivel es provisional y se ha calculado solo con la parte de comprensión lectora. Tu asesor lo revisará contigo.';
+
+// Cuántas veces se tolera el ciclo "no hay pregunta → finalizar → todavía falta"
+// antes de parar. Sin este tope, un banco de preguntas agotado a mitad de sección
+// dejaría al alumno esperando delante de un bucle de peticiones.
+const MAX_INTENTOS_FINALIZAR = 3;
 
 export default function TestPage() {
   const params = useParams<{ token: string }>();
@@ -37,6 +49,9 @@ export default function TestPage() {
   const [written, setWritten] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  // Se pone a cero en cuanto llega una pregunta: solo cuenta los intentos
+  // seguidos sin avanzar.
+  const intentosFinalizar = useRef(0);
 
   // Carga inicial: lee la sesión SIN iniciar el test (como la página del form).
   useEffect(() => {
@@ -55,10 +70,12 @@ export default function TestPage() {
           reading_score: data.reading_score, writing_score: data.writing_score,
           overall_score: data.overall_score, cefr_level: data.cefr_level as Cefr | null,
           ai_evaluation: data.ai_evaluation as WritingEvaluation | null,
+          provisional: data.writing_score == null,
         });
         setPhase('results');
         return;
       }
+      if (data.status === 'abandoned') { setPhase('abandoned'); return; }
       const expired = data.expires_at && new Date(data.expires_at).getTime() < Date.now();
       if (data.status === 'expired' || expired) { setPhase('expired'); return; }
       setResuming(data.status === 'in_progress');
@@ -73,9 +90,12 @@ export default function TestPage() {
       const res = await fetch(`/api/level-test/${token}`, { cache: 'no-store' });
       const data = await res.json();
       if (data.status === 'completed') { setResult(data.result); setPhase('results'); return; }
+      if (data.status === 'abandoned') { setPhase('abandoned'); return; }
       if (data.status === 'expired') { setPhase('expired'); return; }
       if (!res.ok || data.status === 'invalid') { setPhase('invalid'); return; }
       if (data.done || !data.question) { await finalize(); return; }
+      // Llegó pregunta: el test avanza y se olvidan los intentos fallidos previos.
+      intentosFinalizar.current = 0;
       setQuestion(data.question); setProgress(data.progress);
       setSelected(null); setWritten('');
       setPhase('testing');
@@ -83,12 +103,28 @@ export default function TestPage() {
     finally { setBusy(false); }
   }
 
+  // Cierra el test. Que el servidor conteste "todavía falta" NO es un error: es la
+  // compuerta de las 17 respuestas, y lo que corresponde es volver a pedir
+  // pregunta. Puede pasar cuando la API no devuelve ninguna (banco de la sección
+  // agotado), y ahí finalize→loadCurrent→finalize se realimentaría: por eso el
+  // tope. Al agotarlo se para con la sesión intacta en 'in_progress', que es lo
+  // que permite retomarla más tarde con el mismo enlace.
   async function finalize() {
     setBusy(true); setError('');
     try {
       const res = await fetch(`/api/level-test/${token}/submit`, { method: 'POST' });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+
+      if (res.status === 409 && data?.incomplete) {
+        intentosFinalizar.current += 1;
+        if (intentosFinalizar.current >= MAX_INTENTOS_FINALIZAR) { setPhase('stuck'); return; }
+        await loadCurrent();
+        return;
+      }
+      if (res.status === 410 && data?.abandoned) { setPhase('abandoned'); return; }
       if (!res.ok) { setError(data?.error || 'No se pudo finalizar el test.'); return; }
+
+      intentosFinalizar.current = 0;
       setResult(data); setPhase('results');
     } catch { setError('No se pudo finalizar el test.'); }
     finally { setBusy(false); }
@@ -122,6 +158,10 @@ export default function TestPage() {
   if (phase === 'loading') return <LoadingScreen />;
   if (phase === 'invalid') return <StatusScreen emoji="🔒" title="Este enlace no es válido" text="Contacta con tu asesor de DRC Academy para obtener uno nuevo." />;
   if (phase === 'expired') return <StatusScreen emoji="⌛" title="Este enlace ya ha expirado" text="Pide uno nuevo a tu asesor de DRC Academy." />;
+  if (phase === 'abandoned') return <StatusScreen emoji="⌛" title="Este test quedó sin terminar" text="El enlace ha caducado antes de completar la prueba, así que no hemos podido calcular tu nivel. Pide uno nuevo a tu asesor de DRC Academy." />;
+  // Se llega aquí cuando no quedan preguntas que servir pero el test tampoco está
+  // completo. La sesión NO se cierra: sigue en curso y el mismo enlace la retoma.
+  if (phase === 'stuck') return <StatusScreen emoji="🔧" title="No podemos continuar ahora mismo" text="Hemos guardado todo lo que has respondido hasta aquí. Vuelve a abrir este mismo enlace más tarde para continuar, o avisa a tu asesor de DRC Academy." />;
 
   if (phase === 'welcome') {
     return (
@@ -305,8 +345,24 @@ function ResultsScreen({ result, name }: { result: Result; name: string }) {
 
           <div className="drc-t-tiles">
             <ScoreTile label="Comprensión lectora" value={Math.round(result.reading_score ?? 0)} />
-            <ScoreTile label="Expresión escrita" value={Math.round(result.writing_score ?? 0)} />
+            {/* Sin nota de escritura se muestra un guion, NUNCA un 0: un cero le
+                diría al alumno que escribió pésimo, y lo que pasó es que no se
+                pudo puntuar. */}
+            <ScoreTile
+              label="Expresión escrita"
+              value={result.writing_score != null ? Math.round(result.writing_score) : null}
+            />
           </div>
+
+          {result.provisional && (
+            <div style={{
+              marginTop: 14, padding: '12px 14px', borderRadius: 10,
+              background: 'rgba(255,196,0,0.14)', border: '1px solid rgba(180,119,7,0.35)',
+              color: '#7a4d05', fontSize: 13.5, lineHeight: 1.55, textAlign: 'left',
+            }}>
+              {AVISO_ESCRITURA}
+            </div>
+          )}
 
           {ev && (
             <div className="drc-t-feedback">
@@ -326,10 +382,12 @@ function ResultsScreen({ result, name }: { result: Result; name: string }) {
   );
 }
 
-function ScoreTile({ label, value }: { label: string; value: number }) {
+function ScoreTile({ label, value }: { label: string; value: number | null }) {
   return (
     <div className="drc-t-tile">
-      <div className="drc-t-tile-val">{value}<span className="drc-t-tile-max">/100</span></div>
+      <div className="drc-t-tile-val">
+        {value != null ? <>{value}<span className="drc-t-tile-max">/100</span></> : '—'}
+      </div>
       <div className="drc-t-tile-lbl">{label}</div>
     </div>
   );

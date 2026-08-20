@@ -42,6 +42,12 @@ export interface WritingScoreFeedback { score: number; feedback: string }
 
 export interface WritingEvaluation {
   score: number;                 // 0–100 en escala ABSOLUTA; lo deriva el código con cefrToScore(cefr_level, within_level)
+  // Segunda barrera contra los intentos que no son intentos. La primera es el
+  // filtro determinista (lib/levelTest/attemptValidity), que corre ANTES y no
+  // gasta tokens; este campo caza lo que aquel no puede ver: galimatías bien
+  // puntuado, copia de la consigna, otro idioma. false ⇒ el resultado del test
+  // sale PROVISIONAL, calculado solo con lectura.
+  is_valid_attempt: boolean;
   cefr_level: Cefr;              // nivel que demuestra el texto EN SÍ, no "cuánto cumplió la consigna"
   within_level: CefrPosition;    // posición dentro de la banda
   evidence: string;              // justificación en inglés (uso interno)

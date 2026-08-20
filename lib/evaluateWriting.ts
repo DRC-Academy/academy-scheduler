@@ -34,10 +34,15 @@ const WRITING_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   required: [
+    'is_valid_attempt',
     'cefr_level', 'within_level', 'evidence', 'grammar', 'vocabulary', 'coherence',
     'task_completion', 'overall_feedback', 'strengths', 'areas_for_improvement',
   ],
   properties: {
+    is_valid_attempt: {
+      type: 'boolean',
+      description: 'false SOLO si el texto no es un intento real de la tarea (galimatías, relleno para llegar al mínimo de palabras, copia de la consigna, otro idioma). Un texto flojo, corto y con errores de un principiante real es true.',
+    },
     cefr_level: {
       type: 'string',
       enum: ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'],
@@ -89,6 +94,11 @@ Rules:
   on what it demonstrates.
 - If the text is filler, off-topic, copied from the prompt, or in another language,
   say so in "evidence" and assign the level the actual English (if any) demonstrates.
+- SEPARATELY from the level, set "is_valid_attempt" to false when the text is not a
+  genuine attempt at the task: gibberish, padding written only to reach the word count,
+  a copy of the prompt, or text in another language. A short, weak, error-ridden text
+  from a real beginner IS a genuine attempt — that is true, not false. When in doubt,
+  true: a wrong false costs a real student their whole writing score.
 - Be strict. Assessors drift upwards; when the evidence sits between two levels, pick
   the lower one and mark within_level as "high".
 - grammar / vocabulary / coherence are 0-100 diagnostic sub-scores on the SAME absolute
@@ -131,5 +141,12 @@ What CEFR level does this text demonstrate?`;
   // El puntaje global lo fija el código, no la IA: mismo eje 0–100 que el reading.
   const level = res.data.cefr_level;
   const position = (res.data.within_level ?? 'mid') as CefrPosition;
-  return { data: { ...res.data, score: cefrToScore(level, position) }, status: res.status };
+  // Si el campo falta (el modelo no cumplió el schema), se asume VÁLIDO. El
+  // sesgo va a favor del alumno: descartar por omisión le costaría su nota de
+  // escritura entera por un fallo que no es suyo.
+  const isValid = res.data.is_valid_attempt !== false;
+  return {
+    data: { ...res.data, is_valid_attempt: isValid, score: cefrToScore(level, position) },
+    status: res.status,
+  };
 }

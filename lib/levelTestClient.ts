@@ -5,8 +5,10 @@
 
 import { supabase } from '@/lib/supabase';
 
-export type LTStatus = 'pending' | 'in_progress' | 'completed' | 'expired';
-export type LTState = 'none' | 'pending' | 'in_progress' | 'completed' | 'expired';
+// 'abandoned' = se empezó y el enlace caducó a medias. Sin nivel y sin vuelta
+// atrás; distinto de 'expired', que es el enlace que caducó sin abrirse nunca.
+export type LTStatus = 'pending' | 'in_progress' | 'completed' | 'expired' | 'abandoned';
+export type LTState = 'none' | 'pending' | 'in_progress' | 'completed' | 'expired' | 'abandoned';
 
 export interface LevelTestInfo {
   id: string;
@@ -21,13 +23,22 @@ export interface LevelTestInfo {
   cefr_level: string | null;
   overall_score: number | null;
   created_at: string;
+  // Llega con supabase-level-test-v2.sql; puede venir undefined si no se corrió.
+  answered_count?: number | null;
 }
 
 export function testStateOf(info: LevelTestInfo | undefined | null): LTState {
   if (!info) return 'none';
   if (info.status === 'completed') return 'completed';
+  if (info.status === 'abandoned') return 'abandoned';
   const expired = info.expires_at && new Date(info.expires_at).getTime() < Date.now();
-  if (info.status === 'expired' || expired) return 'expired';
+  if (info.status === 'expired' || expired) {
+    // La marca 'abandoned' en la base es PEREZOSA: se escribe la próxima vez que
+    // alguien abre el enlace, y un enlace abandonado normalmente no se vuelve a
+    // abrir. Por eso el listado lo deduce en vez de fiarse del estado guardado.
+    const respondidas = info.answered_count ?? 0;
+    return respondidas > 0 && !info.cefr_level ? 'abandoned' : 'expired';
+  }
   if (info.status === 'in_progress') return 'in_progress';
   return 'pending';
 }
@@ -43,13 +54,19 @@ export async function fetchLevelTestIndex(): Promise<{
 }> {
   const byId = new Map<string, LevelTestInfo>();
   const byName = new Map<string, LevelTestInfo>();
-  const { data, error } = await supabase
-    .from('level_test_sessions')
-    .select('id, token, status, expires_at, completed_at, student_id, student_name, candidate_name, candidate_email, cefr_level, overall_score, created_at')
-    .order('created_at', { ascending: false });
+
+  const COLS = 'id, token, status, expires_at, completed_at, student_id, student_name, candidate_name, candidate_email, cefr_level, overall_score, created_at';
+  const read = (cols: string) => supabase
+    .from('level_test_sessions').select(cols).order('created_at', { ascending: false });
+
+  // answered_count llega con supabase-level-test-v2.sql. Si todavía no existe,
+  // pedirla haría fallar la consulta entera (42703) y el listado saldría vacío.
+  let { data, error } = await read(`${COLS}, answered_count`);
+  if (error?.code === '42703') ({ data, error } = await read(COLS));
   if (error || !data) return { all: [], byId, byName };
 
-  const all = data as LevelTestInfo[];
+  // Doble cast: al pasar las columnas como variable, PostgREST pierde el tipo.
+  const all = data as unknown as LevelTestInfo[];
   for (const row of all) {
     if (row.student_id && !byId.has(row.student_id)) byId.set(row.student_id, row);
     const key = norm(row.student_name || row.candidate_name);
@@ -104,7 +121,10 @@ export async function generateTestLink(payload: GenerateTestPayload): Promise<{ 
 export async function getOrCreateTestLink(payload: GenerateTestPayload): Promise<string> {
   const index = await fetchLevelTestIndex();
   const existing = lookupTest(index, { id: payload.studentId, name: payload.studentName });
-  if (existing && testStateOf(existing) !== 'expired') {
+  // Un test abandonado ya no se puede retomar: hace falta enlace nuevo, igual que
+  // con uno expirado.
+  const agotado = existing && ['expired', 'abandoned'].includes(testStateOf(existing));
+  if (existing && !agotado) {
     return buildTestUrl(existing.token);
   }
   const { url } = await generateTestLink(payload);

@@ -1,0 +1,1488 @@
+{
+  "_comment": "Generado por scripts/export-level-test-fixture.mjs. SIN datos personales: solo dificultades, aciertos y puntajes. No editar a mano.",
+  "exported_count": 13,
+  "tests": [
+    {
+      "id": "t01",
+      "stored": {
+        "reading_score": 29.63,
+        "writing_score": 92,
+        "overall_score": 54.58,
+        "cefr_level": "B2"
+      },
+      "final_difficulty": 2,
+      "answers": [
+        {
+          "section": "reading_completion",
+          "difficulty": 3,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 2,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 1,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 1,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 1,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 1,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 2,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 1,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 1,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 2,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 3,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 2,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 1,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 1,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 2,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 3,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "writing",
+          "difficulty": 2,
+          "is_correct": null,
+          "ai_score": 92
+        }
+      ]
+    },
+    {
+      "id": "t02",
+      "stored": {
+        "reading_score": 70.89,
+        "writing_score": 62,
+        "overall_score": 67.33,
+        "cefr_level": "C1"
+      },
+      "final_difficulty": 6,
+      "answers": [
+        {
+          "section": "reading_completion",
+          "difficulty": 3,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 4,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 5,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 6,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 5,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 4,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 5,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 6,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 6,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 5,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 4,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 6,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 6,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 5,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 5,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 4,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "writing",
+          "difficulty": 6,
+          "is_correct": null,
+          "ai_score": 62
+        }
+      ]
+    },
+    {
+      "id": "t03",
+      "stored": {
+        "reading_score": 61.19,
+        "writing_score": 28,
+        "overall_score": 47.91,
+        "cefr_level": "B1"
+      },
+      "final_difficulty": 5,
+      "answers": [
+        {
+          "section": "reading_completion",
+          "difficulty": 3,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 2,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 3,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 4,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 3,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 2,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 3,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 4,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 5,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 6,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 6,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 6,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 5,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 6,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 5,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 4,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "writing",
+          "difficulty": 5,
+          "is_correct": null,
+          "ai_score": 28
+        }
+      ]
+    },
+    {
+      "id": "t04",
+      "stored": {
+        "reading_score": 73.61,
+        "writing_score": 52,
+        "overall_score": 64.97,
+        "cefr_level": "C1"
+      },
+      "final_difficulty": 6,
+      "answers": [
+        {
+          "section": "reading_completion",
+          "difficulty": 3,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 4,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 3,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 4,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 5,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 4,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 3,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 4,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 5,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 6,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 5,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 6,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 6,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 5,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 5,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 4,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "writing",
+          "difficulty": 6,
+          "is_correct": null,
+          "ai_score": 52
+        }
+      ]
+    },
+    {
+      "id": "t05",
+      "stored": {
+        "reading_score": 80,
+        "writing_score": 42,
+        "overall_score": 64.8,
+        "cefr_level": "C1"
+      },
+      "final_difficulty": 5,
+      "answers": [
+        {
+          "section": "reading_completion",
+          "difficulty": 3,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 2,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 3,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 2,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 3,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 2,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 3,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 4,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 5,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 6,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 6,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 6,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 6,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 5,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 5,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 4,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "writing",
+          "difficulty": 5,
+          "is_correct": null,
+          "ai_score": 42
+        }
+      ]
+    },
+    {
+      "id": "t06",
+      "stored": {
+        "reading_score": 51.67,
+        "writing_score": 0,
+        "overall_score": 31,
+        "cefr_level": "A2"
+      },
+      "final_difficulty": 4,
+      "answers": [
+        {
+          "section": "reading_completion",
+          "difficulty": 3,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 2,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 1,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 2,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 3,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 2,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 3,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 4,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 5,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 6,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 5,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 6,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 6,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 5,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 4,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 3,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "writing",
+          "difficulty": 4,
+          "is_correct": null,
+          "ai_score": 0
+        }
+      ]
+    },
+    {
+      "id": "t07",
+      "stored": {
+        "reading_score": 75.31,
+        "writing_score": 62,
+        "overall_score": 69.99,
+        "cefr_level": "C1"
+      },
+      "final_difficulty": 4,
+      "answers": [
+        {
+          "section": "reading_completion",
+          "difficulty": 3,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 4,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 5,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 6,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 6,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 5,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 6,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 6,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 5,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 5,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 4,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 6,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 6,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 5,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 5,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 4,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "writing",
+          "difficulty": 4,
+          "is_correct": null,
+          "ai_score": 62
+        }
+      ]
+    },
+    {
+      "id": "t08",
+      "stored": {
+        "reading_score": 42.86,
+        "writing_score": 55,
+        "overall_score": 47.72,
+        "cefr_level": "B1"
+      },
+      "final_difficulty": 3,
+      "answers": [
+        {
+          "section": "reading_completion",
+          "difficulty": 3,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 4,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 3,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 2,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 3,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 4,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 3,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 2,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 3,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 4,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 4,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 4,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 3,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 4,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 5,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 5,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "writing",
+          "difficulty": 3,
+          "is_correct": null,
+          "ai_score": 55
+        }
+      ]
+    },
+    {
+      "id": "t09",
+      "stored": {
+        "reading_score": 68.12,
+        "writing_score": 0,
+        "overall_score": 40.87,
+        "cefr_level": "B1"
+      },
+      "final_difficulty": 6,
+      "answers": [
+        {
+          "section": "reading_completion",
+          "difficulty": 3,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 4,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 3,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 2,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 3,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 4,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 3,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 4,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 5,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 6,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 6,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 5,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 4,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 5,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 6,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 6,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "writing",
+          "difficulty": 6,
+          "is_correct": null,
+          "ai_score": 0
+        }
+      ]
+    },
+    {
+      "id": "t10",
+      "stored": {
+        "reading_score": 73.97,
+        "writing_score": 45,
+        "overall_score": 62.38,
+        "cefr_level": "C1"
+      },
+      "final_difficulty": 6,
+      "answers": [
+        {
+          "section": "reading_completion",
+          "difficulty": 3,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 4,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 3,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 4,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 5,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 4,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 3,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 4,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 5,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 6,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 6,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 5,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 6,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 6,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 5,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 4,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "writing",
+          "difficulty": 6,
+          "is_correct": null,
+          "ai_score": 45
+        }
+      ]
+    },
+    {
+      "id": "t11",
+      "stored": {
+        "reading_score": 78.48,
+        "writing_score": 42,
+        "overall_score": 63.89,
+        "cefr_level": "C1"
+      },
+      "final_difficulty": 6,
+      "answers": [
+        {
+          "section": "reading_completion",
+          "difficulty": 3,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 4,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 5,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 4,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 5,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 6,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 5,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 6,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 6,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 5,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 4,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 6,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 6,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 5,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 5,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 4,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "writing",
+          "difficulty": 6,
+          "is_correct": null,
+          "ai_score": 42
+        }
+      ]
+    },
+    {
+      "id": "t12",
+      "stored": {
+        "reading_score": 42.62,
+        "writing_score": 72,
+        "overall_score": 54.37,
+        "cefr_level": "B2"
+      },
+      "final_difficulty": 3,
+      "answers": [
+        {
+          "section": "reading_completion",
+          "difficulty": 3,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 2,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 3,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 4,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 3,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 4,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 3,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 4,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 5,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 4,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 5,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 4,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 5,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 4,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 3,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 5,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "writing",
+          "difficulty": 3,
+          "is_correct": null,
+          "ai_score": 72
+        }
+      ]
+    },
+    {
+      "id": "t13",
+      "stored": {
+        "reading_score": 68.57,
+        "writing_score": 37.5,
+        "overall_score": 56.14,
+        "cefr_level": "B2"
+      },
+      "final_difficulty": 5,
+      "answers": [
+        {
+          "section": "reading_completion",
+          "difficulty": 3,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 4,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 3,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 4,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 5,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_completion",
+          "difficulty": 4,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 3,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 4,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 5,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 4,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_passage",
+          "difficulty": 5,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 6,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 6,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 5,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 5,
+          "is_correct": true,
+          "ai_score": null
+        },
+        {
+          "section": "reading_email",
+          "difficulty": 4,
+          "is_correct": false,
+          "ai_score": null
+        },
+        {
+          "section": "writing",
+          "difficulty": 5,
+          "is_correct": null,
+          "ai_score": 37.5
+        }
+      ]
+    }
+  ]
+}

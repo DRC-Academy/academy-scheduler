@@ -21,7 +21,8 @@ import {
   type AssignmentRow, type FollowupSummary,
 } from '@/lib/formReminders';
 import type { WritingEvaluation } from '@/lib/levelTest/types';
-import { CEFR_COLOR } from '@/lib/levelTest/constants';
+import { CEFR_COLOR, GRAND_TOTAL } from '@/lib/levelTest/constants';
+import { INVALID_REASON_LABEL } from '@/lib/levelTest/attemptValidity';
 
 const STATE_META: Record<LTState, { label: string; color: string; bg: string }> = {
   none:        { label: '—',            color: 'var(--text-muted)', bg: 'var(--bg-surface-3)' },
@@ -29,6 +30,9 @@ const STATE_META: Record<LTState, { label: string; color: string; bg: string }> 
   in_progress: { label: 'En curso',     color: '#175cd3', bg: 'rgba(37,99,235,0.1)' },
   completed:   { label: 'Completado',   color: '#067647', bg: 'rgba(30,158,58,0.1)' },
   expired:     { label: 'Expirado',     color: '#b42318', bg: 'rgba(239,68,68,0.1)' },
+  // Se empezó y caducó a medias: no hay nivel. Distinto de 'Expirado', que es el
+  // enlace que nadie llegó a abrir.
+  abandoned:   { label: 'Abandonado',   color: '#B54708', bg: 'rgba(255,196,0,0.16)' },
 };
 
 function fmtDate(iso: string | null): string {
@@ -85,6 +89,7 @@ const COLUMNS = [
   { key: 'candidato', label: 'Candidato' },
   { key: 'email',     label: 'Email' },
   { key: 'estado',    label: 'Estado' },
+  { key: 'progreso',  label: 'Progreso' },
   { key: 'score',     label: 'Score' },
   { key: 'cefr',      label: 'CEFR' },
   { key: 'followup',  label: 'Último follow-up', sortable: true },
@@ -215,6 +220,7 @@ export default function LevelTestsTab() {
             <option value="pending">Pendiente</option>
             <option value="in_progress">En curso</option>
             <option value="completed">Completado</option>
+            <option value="abandoned">Abandonado</option>
             <option value="expired">Expirado</option>
           </select>
           <select value={cefr} onChange={e => setCefr(e.target.value)} style={selectStyle}>
@@ -275,6 +281,11 @@ export default function LevelTestsTab() {
                       <td style={{ padding: '10px 14px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{r.candidate_email || '—'}</td>
                       <td style={{ padding: '10px 14px', whiteSpace: 'nowrap' }}>
                         <span style={{ fontSize: 11, padding: '2px 9px', borderRadius: 12, background: st.bg, color: st.color, fontWeight: 700 }}>{st.label}</span>
+                      </td>
+                      {/* Respuestas sobre el total exigido por el submit. '—' si
+                          todavía no se corrió supabase-level-test-v2.sql. */}
+                      <td style={{ padding: '10px 14px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                        {r.answered_count != null ? `${r.answered_count}/${GRAND_TOTAL}` : '—'}
                       </td>
                       <td style={{ padding: '10px 14px', color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>{r.overall_score != null ? `${Math.round(r.overall_score)}/100` : '—'}</td>
                       <td style={{ padding: '10px 14px', whiteSpace: 'nowrap' }}>
@@ -425,7 +436,28 @@ function GenerateModal({ onClose, onDone }: { onClose: () => void; onDone: () =>
 }
 
 // ── Modal: detalle de un test ────────────────────────────────────────────────
-interface AnswerRow { id: string; section: string; difficulty: number; is_correct: boolean | null; written_response: string | null; ai_score: number | null; ai_feedback: WritingEvaluation | null; }
+interface AnswerRow {
+  id: string; section: string; difficulty: number; is_correct: boolean | null;
+  written_response: string | null; ai_score: number | null; ai_feedback: WritingEvaluation | null;
+  // De supabase-level-test-v2.sql: pueden no existir todavía.
+  invalid_reason?: string | null;
+  target_difficulty?: number | null;
+}
+
+const ANSWER_COLS = 'id, section, difficulty, is_correct, written_response, ai_score, ai_feedback';
+
+// Con reintento: si faltan las columnas nuevas (42703), pedirlas dejaría el
+// detalle vacío en vez de mostrar lo de siempre.
+async function loadAnswers(sessionId: string): Promise<AnswerRow[]> {
+  const q = (cols: string) => supabase
+    .from('level_test_answers').select(cols).eq('session_id', sessionId)
+    .order('answered_at', { ascending: true });
+  const first = await q(`${ANSWER_COLS}, invalid_reason, target_difficulty`);
+  if (!first.error) return (first.data ?? []) as unknown as AnswerRow[];
+  const base = await q(ANSWER_COLS);
+  return (base.data ?? []) as unknown as AnswerRow[];
+}
+
 function DetailModal({ id, onClose }: { id: string; onClose: () => void }) {
   const [session, setSession] = useState<Record<string, unknown> | null>(null);
   const [answers, setAnswers] = useState<AnswerRow[]>([]);
@@ -434,13 +466,13 @@ function DetailModal({ id, onClose }: { id: string; onClose: () => void }) {
   useEffect(() => {
     let alive = true;
     (async () => {
-      const [{ data: s }, { data: a }] = await Promise.all([
+      const [{ data: s }, a] = await Promise.all([
         supabase.from('level_test_sessions').select('*').eq('id', id).maybeSingle(),
-        supabase.from('level_test_answers').select('id, section, difficulty, is_correct, written_response, ai_score, ai_feedback').eq('session_id', id).order('answered_at', { ascending: true }),
+        loadAnswers(id),
       ]);
       if (!alive) return;
       setSession(s as Record<string, unknown> | null);
-      setAnswers((a ?? []) as AnswerRow[]);
+      setAnswers(a);
       setLoading(false);
     })();
     return () => { alive = false; };
@@ -451,6 +483,14 @@ function DetailModal({ id, onClose }: { id: string; onClose: () => void }) {
   const writing = answers.find(a => a.section === 'writing');
   const ev = writing?.ai_feedback;
   const cefr = session?.cefr_level as string | undefined;
+
+  // La escritura no aportó al nivel. El motivo real se muestra AQUÍ y en la ficha
+  // del profesor; al alumno se le da siempre el mismo texto neutro.
+  const provisional = !!session && session.status === 'completed' && session.writing_score == null;
+  const motivo = (writing?.invalid_reason ?? session?.writing_invalid_reason) as string | undefined | null;
+  const motivoTexto = motivo && motivo in INVALID_REASON_LABEL
+    ? INVALID_REASON_LABEL[motivo as keyof typeof INVALID_REASON_LABEL]
+    : null;
 
   return (
     <Overlay onClose={onClose} wide>
@@ -468,7 +508,20 @@ function DetailModal({ id, onClose }: { id: string; onClose: () => void }) {
             <Stat label="CEFR" value={cefr ? <span style={{ color: CEFR_COLOR[cefr as keyof typeof CEFR_COLOR] || 'inherit' }}>{cefr}</span> : '—'} />
             <Stat label="Reading" value={session.reading_score != null ? `${Math.round(session.reading_score as number)}/100 (${readingCorrect}/${readingTotal})` : '—'} />
             <Stat label="Writing" value={session.writing_score != null ? `${Math.round(session.writing_score as number)}/100` : '—'} />
+            <Stat label="Respuestas" value={session.answered_count != null ? `${session.answered_count as number}/${GRAND_TOTAL}` : '—'} />
           </div>
+
+          {provisional && (
+            <div style={{
+              marginBottom: 16, padding: '10px 12px', borderRadius: 9,
+              background: 'rgba(255,196,0,0.14)', border: '1px solid rgba(180,119,7,0.3)',
+              color: '#B54708', fontSize: 12.5, lineHeight: 1.55,
+            }}>
+              <b>Nivel provisional.</b> Salió solo de la comprensión lectora: la expresión escrita
+              no se pudo puntuar.{motivoTexto ? ` Motivo: ${motivoTexto.toLowerCase()}.` : ''}
+              {' '}El alumno solo ve un aviso neutro, sin el motivo.
+            </div>
+          )}
 
           {ev && (
             <div style={{ borderTop: '1px solid var(--border)', paddingTop: 14, marginBottom: 14 }}>

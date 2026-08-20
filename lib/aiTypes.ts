@@ -106,6 +106,11 @@ export interface StudentProfileRow {
   level_test_completed_at: string | null;
   level_test_evaluation: Record<string, unknown> | null;
   level_test_session_id: string | null;
+  // El nivel salió SOLO de la lectura porque la escritura no se pudo puntuar
+  // (intento no válido o IA caída). Opcionales: la consulta los pide en el grupo
+  // con reintento, así que no están si supabase-level-test-v2.sql no se corrió.
+  level_test_provisional?: boolean | null;
+  level_test_provisional_reason?: string | null;
   // Formato anterior (markdown) — se conserva para fichas viejas.
   ai_ficha: string | null;
   ai_status: string | null;
