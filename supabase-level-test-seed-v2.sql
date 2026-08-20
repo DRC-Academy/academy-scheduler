@@ -33,6 +33,14 @@
 -- Es idempotente: cada fila se inserta solo si no hay ya una con el mismo par
 -- (prompt_text, question_text). Correrlo dos veces no duplica.
 --
+-- La comparación ignora los retornos de carro (chr(13)) A PROPÓSITO, y no es
+-- pedantería: este fichero tiene saltos de línea LF, pero el editor SQL de
+-- Supabase es un <textarea> del navegador y al enviar el formulario los
+-- normaliza a CRLF. Los emails de aquí abajo llevan saltos de línea dentro del
+-- texto, así que lo que queda guardado NO es byte a byte lo que hay en el
+-- fichero. Comparando en crudo, una segunda pasada no reconocería esos 18
+-- emails y los insertaría duplicados, sin error y sin que se note.
+--
 -- Ejecutalo UNA vez en el SQL editor de Supabase y después comprobá con
 -- `npm run check:bank`, que tiene que salir en verde y con código 0.
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -56,8 +64,8 @@ from (values
 ) as v(section, cefr_level, difficulty, question_text, options, correct_answer)
 where not exists (
   select 1 from level_test_questions q
-  where coalesce(q.prompt_text, '') = ''
-    and coalesce(q.question_text, '') = v.question_text
+  where replace(coalesce(q.prompt_text, ''), chr(13), '') = ''
+    and replace(coalesce(q.question_text, ''), chr(13), '') = replace(v.question_text, chr(13), '')
 );
 
 -- ══ COMPRENSIÓN DE TEXTOS — 3 por nivel (2 → 5) ═════════════════════════════
@@ -145,8 +153,8 @@ from (values
 ) as v(section, cefr_level, difficulty, prompt_text, question_text, options, correct_answer)
 where not exists (
   select 1 from level_test_questions q
-  where coalesce(q.prompt_text, '') = v.prompt_text
-    and coalesce(q.question_text, '') = v.question_text
+  where replace(coalesce(q.prompt_text, ''), chr(13), '') = replace(v.prompt_text, chr(13), '')
+    and replace(coalesce(q.question_text, ''), chr(13), '') = replace(v.question_text, chr(13), '')
 );
 
 -- ══ COMPRENSIÓN DE EMAILS — 3 por nivel (2 → 5) ═════════════════════════════
@@ -306,8 +314,8 @@ R. Sen$t$,
 ) as v(section, cefr_level, difficulty, prompt_text, question_text, options, correct_answer)
 where not exists (
   select 1 from level_test_questions q
-  where coalesce(q.prompt_text, '') = v.prompt_text
-    and coalesce(q.question_text, '') = v.question_text
+  where replace(coalesce(q.prompt_text, ''), chr(13), '') = replace(v.prompt_text, chr(13), '')
+    and replace(coalesce(q.question_text, ''), chr(13), '') = replace(v.question_text, chr(13), '')
 );
 
 -- ── Comprobación ─────────────────────────────────────────────────────────────

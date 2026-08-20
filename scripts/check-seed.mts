@@ -139,8 +139,13 @@ async function main(): Promise<number> {
   }
 
   // ── Duplicados dentro del fichero ──────────────────────────────────────────
+  // Se ignoran los retornos de carro: el fichero tiene LF, pero el editor SQL de
+  // Supabase es un <textarea> y al enviar normaliza a CRLF, así que lo guardado
+  // no coincide byte a byte con el fichero en los textos multilínea (los emails).
+  // Sin esta normalización, el verificador diría que 18 emails "faltan" cuando ya
+  // están, y el `where not exists` del propio SQL los duplicaría.
   const clave = (f: { prompt_text: string; question_text: string }) =>
-    `${f.prompt_text.trim()}||${f.question_text.trim()}`;
+    `${f.prompt_text.replace(/\r/g, '').trim()}||${f.question_text.replace(/\r/g, '').trim()}`;
   const vistas = new Map<string, number>();
   for (const f of filas) {
     const k = clave(f);
@@ -156,6 +161,7 @@ async function main(): Promise<number> {
 
   let yaEnBase = 0;
   const actuales = new Map<string, number>();
+  const yaPresente = new Set<string>();
   if (error) {
     console.log(`No se ha podido leer el banco actual (${error.message}).`);
     console.log('Se comprueba solo la estructura del fichero, sin proyección.\n');
@@ -163,10 +169,10 @@ async function main(): Promise<number> {
     const existentes = new Set(
       (data ?? []).map(q => {
         const r = q as { prompt_text: string | null; question_text: string | null };
-        return `${(r.prompt_text ?? '').trim()}||${(r.question_text ?? '').trim()}`;
+        return clave({ prompt_text: r.prompt_text ?? '', question_text: r.question_text ?? '' });
       }),
     );
-    for (const f of filas) if (existentes.has(clave(f))) yaEnBase++;
+    for (const f of filas) if (existentes.has(clave(f))) { yaEnBase++; yaPresente.add(clave(f)); }
     for (const q of data ?? []) {
       const r = q as { section: string; difficulty: number; is_active: boolean | null };
       if (r.is_active === false) continue;
@@ -191,13 +197,19 @@ async function main(): Promise<number> {
 
   // ── Proyección sobre el banco ──────────────────────────────────────────────
   if (!error) {
+    // Solo las que de verdad se insertarían: las que ya están no suman otra vez,
+    // o la proyección diría que el banco crece cuando no va a crecer.
     const nuevas = new Map<string, number>();
     for (const f of filas) {
+      if (yaPresente.has(clave(f))) continue;
       const k = `${f.section}|${f.difficulty}`;
       nuevas.set(k, (nuevas.get(k) ?? 0) + 1);
     }
 
-    console.log('Si corrés este fichero, el banco queda así:\n');
+    const aInsertar = filas.length - yaEnBase;
+    console.log(aInsertar === 0
+      ? 'Nada que insertar. El banco ya está así:\n'
+      : `Si corrés este fichero se insertarán ${aInsertar} preguntas y el banco queda así:\n`);
     console.log(`${'SECCIÓN'.padEnd(24)}${'MÍN'.padStart(5)}   ${[1, 2, 3, 4, 5, 6].map(d => `d${d}`.padStart(6)).join('')}`);
     console.log('─'.repeat(67));
 
