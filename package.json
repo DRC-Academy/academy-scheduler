@@ -11,7 +11,8 @@
     "test:watch": "vitest",
     "recalc:reading": "tsx scripts/recalc-reading.mts",
     "check:bank": "tsx scripts/check-bank.mts",
-    "calibrate:writing": "node --conditions=react-server --import tsx scripts/calibrate-writing.mts"
+    "calibrate:writing": "node --conditions=react-server --import tsx scripts/calibrate-writing.mts",
+    "check:seed": "tsx scripts/check-seed.mts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.112.1",
