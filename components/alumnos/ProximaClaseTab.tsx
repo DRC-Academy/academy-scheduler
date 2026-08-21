@@ -9,14 +9,23 @@
 //
 // La clase generada se persiste sola en el endpoint, así que salir de aquí no
 // pierde nada.
+//
+// SIN FICHA la clase se genera igual, en modo GENÉRICO: el profesor elige nivel,
+// contexto y tipo de clase (y si quiere, tema), y la IA calibra por ese avatar
+// sin inventarle biografía al alumno. Antes, el alumno que no había completado
+// el formulario dejaba al profesor sin nada que dar.
 
 import { useState } from 'react';
 import {
   analyzeTranscriptOnly, saveAnalysis, saveTranscriptOnly,
   generateNextClassClient, analysisFromRow,
 } from '@/lib/aiClient';
-import type { ClassAnalysisRow, FichaIA, GeneratedClassIA, TranscriptIA, StudentProfileRow } from '@/lib/aiTypes';
+import type {
+  AvatarDomain, CEFRLevel, ClassAnalysisRow, ClassType, FichaIA, GeneratedClassIA,
+  GenericClassBrief, TranscriptIA, StudentProfileRow,
+} from '@/lib/aiTypes';
 import { isRiskSignal } from '@/lib/aiTypes';
+import { normalizeLevel, viableClassTypes } from '@/lib/drcMethodology';
 import { ClassCard, classToText, copyText } from '@/components/alumnos/ClassContent';
 import { isConversacionGuiada } from '@/lib/aiTypes';
 import { printClassPdf } from '@/lib/classDoc';
@@ -41,11 +50,37 @@ interface Props {
   onNextClass: (nc: GeneratedClassIA) => void;
 }
 
+const LEVELS: CEFRLevel[] = ['A1', 'A2', 'B1', 'B2', 'C1'];
+const DOMAINS: { id: AvatarDomain; label: string; hint: string }[] = [
+  { id: 'social',      label: 'Social',      hint: 'Vida cotidiana, viajes, relaciones' },
+  { id: 'laboral',     label: 'Laboral',     hint: 'Trabajo, reuniones, clientes' },
+  { id: 'educacional', label: 'Educacional', hint: 'Menores y ámbito escolar' },
+];
+const TYPE_LABEL: Record<ClassType, string> = {
+  metodologia_aplicada: 'Metodología aplicada',
+  conversacion_guiada:  'Conversación guiada',
+};
+
 export default function ProximaClaseTab(p: Props) {
   const [stage, setStage] = useState<Stage>('idle');
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+
+  // Clase genérica (alumno sin ficha). El nivel arranca en el de la asignación:
+  // es el único dato de nivel que hay cuando no completó el formulario.
+  const [gLevel, setGLevel] = useState<CEFRLevel>(() => normalizeLevel(p.assignment.studentLevel));
+  const [gDomain, setGDomain] = useState<AvatarDomain>('social');
+  const [gType, setGType] = useState<ClassType>('metodologia_aplicada');
+  const [gFocus, setGFocus] = useState('');
+  const [gContext, setGContext] = useState('');
+  // Estado B sin ficha: "Regenerar" vuelve a abrir el panel en vez de repetir a ciegas.
+  const [gOpen, setGOpen] = useState(false);
+
+  // Conversación guiada no es viable en A1/A2 ni con menores: si el profe cambia
+  // el nivel después de elegirla, el tipo efectivo cae solo a metodología.
+  const viableTypes = viableClassTypes(gLevel, gDomain);
+  const effType: ClassType = viableTypes.includes(gType) ? gType : 'metodologia_aplicada';
 
   // Registro
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
@@ -76,22 +111,41 @@ export default function ProximaClaseTab(p: Props) {
     level: p.assignment.studentLevel,
   };
 
+  /**
+   * Argumentos de generación. Con ficha manda la ficha; sin ella va el encargo
+   * genérico (nivel/dominio/tipo elegidos a mano) y NO se manda perfil: mandar
+   * los dos le daría al modelo un perfil y la orden de ignorarlo.
+   */
+  function generationArgs() {
+    if (p.ficha) return { studentProfile: p.ficha, generic: null, level: p.assignment.studentLevel };
+    const generic: GenericClassBrief = {
+      focus: gFocus.trim() || null,
+      context: gContext.trim() || null,
+    };
+    return {
+      studentProfile: null, generic,
+      level: gLevel, domain: gDomain, classType: effType,
+    };
+  }
+
   // ── Generar clase (estado A, o regenerar) ──
   async function generate(classNumber: number, basedOn: TranscriptIA | null) {
-    if (!p.ficha) return;
     setGenerating(true);
     setError(null);
     try {
       const nc = await generateNextClassClient({
         ...baseArgs,
-        profileId: p.profile?.id ?? '',
+        ...generationArgs(),
         classNumber,
-        studentProfile: p.ficha,
         lastAnalysis: basedOn,
         classHistory: history,
       });
       p.onNextClass(nc);
-      p.onToast('Clase generada y guardada');
+      setGOpen(false);
+      // Sin ficha previa, el endpoint acaba de crear una para colgar la clase:
+      // hay que releer para quedarnos con su id real (lo usa el registro después).
+      if (!p.profile) await p.onRefresh();
+      p.onToast(p.ficha ? 'Clase generada y guardada' : 'Clase genérica generada y guardada');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No se pudo generar la clase.');
     } finally {
@@ -119,22 +173,21 @@ export default function ProximaClaseTab(p: Props) {
       });
       setAnalysis(a);
 
-      // Y encadenamos la siguiente clase: el endpoint ya la persiste.
-      if (p.ficha) {
-        try {
-          const nc = await generateNextClassClient({
-            ...baseArgs,
-            profileId: p.profile?.id ?? '',
-            classNumber: claseDada + 1,
-            studentProfile: p.ficha,
-            lastAnalysis: a,
-            classHistory: [{ clase: claseDada, fecha: date, resumen: a.classSummary, errores: a.errorsDetected }, ...history],
-          });
-          setNewClass(nc);
-        } catch (err) {
-          // El análisis sí lo tenemos: no lo perdemos por fallar la generación.
-          setError(`El análisis salió bien, pero no se pudo generar la siguiente clase: ${err instanceof Error ? err.message : ''}`);
-        }
+      // Y encadenamos la siguiente clase: el endpoint ya la persiste. Sin ficha
+      // sale en modo genérico, pero apoyada en el análisis que acabamos de hacer
+      // — que sí es información real del alumno.
+      try {
+        const nc = await generateNextClassClient({
+          ...baseArgs,
+          ...generationArgs(),
+          classNumber: claseDada + 1,
+          lastAnalysis: a,
+          classHistory: [{ clase: claseDada, fecha: date, resumen: a.classSummary, errores: a.errorsDetected }, ...history],
+        });
+        setNewClass(nc);
+      } catch (err) {
+        // El análisis sí lo tenemos: no lo perdemos por fallar la generación.
+        setError(`El análisis salió bien, pero no se pudo generar la siguiente clase: ${err instanceof Error ? err.message : ''}`);
       }
       setStage('reviewing');
     } catch (err) {
@@ -212,6 +265,75 @@ export default function ProximaClaseTab(p: Props) {
       level: p.assignment.studentLevel,
       classTypeLabel: isConversacionGuiada(nc) ? 'Conversación guiada' : 'Metodología aplicada',
     });
+  }
+
+  /**
+   * Panel de la clase genérica. Es una FUNCIÓN que devuelve JSX, no un componente:
+   * declarar un componente dentro del render lo remonta en cada tecleo y los
+   * campos de texto perderían el foco.
+   */
+  function genericForm(o: { submitLabel: string; classNumber: number; onCancel?: () => void }) {
+    return (
+      <div>
+        <div className="alu-g-grid" style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', marginBottom: 14 }}>
+          <div>
+            <label style={fieldLabelStyle} htmlFor="alu-g-level">Nivel</label>
+            <select id="alu-g-level" value={gLevel} onChange={e => setGLevel(e.target.value as CEFRLevel)} style={inputStyle}>
+              {LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={fieldLabelStyle} htmlFor="alu-g-domain">Contexto</label>
+            <select id="alu-g-domain" value={gDomain} onChange={e => setGDomain(e.target.value as AvatarDomain)} style={inputStyle}>
+              {DOMAINS.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
+            </select>
+            <div style={hintStyle}>{DOMAINS.find(d => d.id === gDomain)?.hint}</div>
+          </div>
+          <div>
+            <label style={fieldLabelStyle} htmlFor="alu-g-type">Tipo de clase</label>
+            <select id="alu-g-type" value={effType} onChange={e => setGType(e.target.value as ClassType)} style={inputStyle}>
+              {viableTypes.map(t => <option key={t} value={t}>{TYPE_LABEL[t]}</option>)}
+            </select>
+            {!viableTypes.includes('conversacion_guiada') && (
+              <div style={hintStyle}>La conversación guiada se habilita de B1 en adelante, y no en educacional.</div>
+            )}
+          </div>
+        </div>
+
+        <label style={fieldLabelStyle} htmlFor="alu-g-focus">Tema o foco de la clase (opcional)</label>
+        <input
+          id="alu-g-focus" value={gFocus} onChange={e => setGFocus(e.target.value)}
+          placeholder="Ej.: past simple para contar experiencias, vocabulario de reuniones..."
+          style={inputStyle}
+        />
+        <div style={hintStyle}>Si lo dejas vacío, la IA elige un tema adecuado al nivel.</div>
+
+        <div style={{ height: 12 }} />
+        <label style={fieldLabelStyle} htmlFor="alu-g-context">Lo que sepas del alumno (opcional)</label>
+        <textarea
+          id="alu-g-context" value={gContext} onChange={e => setGContext(e.target.value)}
+          placeholder="Ej.: trabaja en logística, le cuesta hablar en pasado, viaja a Londres en marzo."
+          className="alu-textarea"
+          style={{ ...inputStyle, minHeight: 76, resize: 'vertical', lineHeight: 1.5 }}
+        />
+        <div style={hintStyle}>Lo que no escribas aquí, la IA no se lo inventa.</div>
+
+        {error && <div style={errStyle}>{error}</div>}
+
+        <div className="alu-btn-row" style={{ display: 'flex', gap: 10, marginTop: 16, flexWrap: 'wrap' }}>
+          <button
+            onClick={() => generate(o.classNumber, lastAnalysis)}
+            disabled={generating}
+            style={{ ...btnPrimary, opacity: generating ? 0.6 : 1 }}
+          >
+            {generating ? 'Generando...' : o.submitLabel}
+          </button>
+          {o.onCancel && (
+            <button onClick={o.onCancel} disabled={generating} style={btnSecondary}>Cancelar</button>
+          )}
+        </div>
+      </div>
+    );
   }
 
   // ═══ ESTADO D — analizando ═══
@@ -327,19 +449,43 @@ export default function ProximaClaseTab(p: Props) {
     return (
       <div>
         <ClassCard nc={p.nextClass} level={p.assignment.studentLevel} />
-        {error && <div style={errStyle}>{error}</div>}
+        {!p.ficha && (
+          <div style={{ ...noteStyle, marginTop: 14 }}>
+            Clase genérica: se generó sin ficha del alumno. Cuando complete el formulario inicial, las clases pasan a salir de su diagnóstico.
+          </div>
+        )}
+        {error && !gOpen && <div style={errStyle}>{error}</div>}
         <div className="alu-btn-row" style={{ display: 'flex', gap: 10, marginTop: 20 }}>
           <button onClick={() => setStage('registering')} style={btnPrimary}>Registrar clase dada</button>
           <button onClick={handleCopy} style={btnSecondary}>{copied ? 'Copiada' : 'Copiar clase completa'}</button>
           <button onClick={() => handlePdf(p.nextClass!)} style={btnSecondary}>PDF</button>
+          {/* Sin ficha, regenerar a ciegas repetiría el mismo encargo: se reabre
+              el panel para que el profe pueda cambiar tema, nivel o tipo. */}
           <button
-            onClick={() => generate(p.nextClass!.classNumber, lastAnalysis)}
+            onClick={() => {
+              setError(null);
+              if (p.ficha) generate(p.nextClass!.classNumber, lastAnalysis);
+              else setGOpen(v => !v);
+            }}
             disabled={generating}
             style={{ ...btnSecondary, opacity: generating ? 0.6 : 1 }}
           >
-            {generating ? 'Generando...' : 'Regenerar'}
+            {generating ? 'Generando...' : gOpen ? 'Cerrar' : 'Regenerar'}
           </button>
         </div>
+
+        {gOpen && !p.ficha && (
+          <div style={{ ...cardStyle, marginTop: 16 }}>
+            <h3 style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 12 }}>
+              Regenerar la clase genérica
+            </h3>
+            {genericForm({
+              submitLabel: 'Regenerar clase',
+              classNumber: p.nextClass.classNumber,
+              onCancel: () => { setGOpen(false); setError(null); },
+            })}
+          </div>
+        )}
       </div>
     );
   }
@@ -347,7 +493,7 @@ export default function ProximaClaseTab(p: Props) {
   // ═══ ESTADO A — sin clase ═══
   return (
     <div style={cardStyle}>
-      <div style={{ fontSize: 14, color: 'var(--text-secondary)', marginBottom: p.ficha ? 16 : 6 }}>
+      <div style={{ fontSize: 14, color: 'var(--text-secondary)', marginBottom: 16 }}>
         No hay clase preparada para este alumno.
       </div>
       {p.ficha ? (
@@ -362,7 +508,17 @@ export default function ProximaClaseTab(p: Props) {
           {error && <div style={errStyle}>{error}</div>}
         </>
       ) : (
-        <div style={{ fontSize: 14, color: 'var(--text-muted)' }}>Genera la ficha del alumno primero.</div>
+        <>
+          <div style={{ ...noteStyle, marginBottom: 18 }}>
+            Este alumno todavía no tiene ficha: no completó el formulario inicial, así que no hay
+            diagnóstico del que partir. Puedes generar igualmente una <strong>clase genérica</strong>:
+            se calibra por nivel y contexto, y no le atribuye al alumno ningún dato que no escribas aquí.
+          </div>
+          {genericForm({
+            submitLabel: p.analyses.length > 0 ? `Generar clase ${p.nextNumber}` : 'Generar clase genérica',
+            classNumber: p.nextNumber,
+          })}
+        </>
       )}
     </div>
   );
@@ -375,4 +531,12 @@ const inputStyle: React.CSSProperties = {
 const errStyle: React.CSSProperties = {
   marginTop: 14, padding: '10px 13px', borderRadius: 8, background: 'rgba(220,38,38,0.07)',
   border: '1px solid rgba(220,38,38,0.3)', color: '#B91C1C', fontSize: 13, lineHeight: 1.5,
+};
+const hintStyle: React.CSSProperties = {
+  fontSize: 12, color: 'var(--text-muted)', marginTop: 5, lineHeight: 1.45,
+};
+const noteStyle: React.CSSProperties = {
+  padding: '11px 13px', borderRadius: 8, background: 'rgba(30,158,58,0.06)',
+  border: '1px solid rgba(30,158,58,0.25)', color: 'var(--text-secondary)',
+  fontSize: 13, lineHeight: 1.55,
 };

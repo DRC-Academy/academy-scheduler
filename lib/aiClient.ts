@@ -8,7 +8,8 @@ import { supabase } from '@/lib/supabase';
 import {
   asObject, isRiskSignal,
   type AvatarDomain, type ClassType, type ClassAnalysisRow, type FichaIA,
-  type GeneratedClassIA, type RiskSignal, type StudentProfileRow, type TranscriptIA,
+  type GeneratedClassIA, type GenericClassBrief, type RiskSignal,
+  type StudentProfileRow, type TranscriptIA,
 } from '@/lib/aiTypes';
 
 export type { StudentProfileRow, ClassAnalysisRow } from '@/lib/aiTypes';
@@ -358,12 +359,22 @@ async function postJson<T>(url: string, body: unknown, fallbackMsg: string): Pro
 }
 
 // ── Siguiente clase ───────────────────────────────────────────────────────────
+/**
+ * Genera (y persiste) la próxima clase.
+ *
+ * Dos modos, y hay que mandar uno: `studentProfile` con la ficha del alumno, o
+ * `generic` para una CLASE GENÉRICA — el alumno sin ficha, donde el profesor
+ * elige nivel/dominio/tipo y opcionalmente tema y contexto.
+ */
 export async function generateNextClassClient(args: {
-  profileId: string;
+  profileId?: string | null;
+  studentId?: string | null;
+  teacherId?: string | null;
   studentName: string;
   teacherName: string;
   classNumber: number;
-  studentProfile: FichaIA;
+  studentProfile?: FichaIA | null;
+  generic?: GenericClassBrief | null;
   lastAnalysis?: TranscriptIA | null;
   classHistory?: unknown[] | null;
   plan?: string | null;

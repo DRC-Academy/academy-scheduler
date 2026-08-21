@@ -340,7 +340,7 @@ export async function ensureProfileId(args: {
     student_name: name,
     student_id:   studentId,
     teacher_id:   args.teacherId ?? null,
-    ai_status:    'auto',          // ← marca: ficha creada desde un análisis
+    ai_status:    'auto',          // ← marca: ficha nacida sola (análisis o clase genérica), no del formulario
     created_at:   now,
     updated_at:   now,
   };

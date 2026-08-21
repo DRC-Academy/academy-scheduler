@@ -65,6 +65,23 @@ export interface FichaIA {
   priorities: string[];      // puntos a trabajar, ordenados de más a menos importante
 }
 
+/**
+ * Encargo de una clase GENÉRICA: la que se genera cuando el alumno todavía no
+ * tiene ficha (no completó el formulario inicial).
+ *
+ * No sustituye a la ficha ni la simula: es lo poco que el profesor sabe de verdad
+ * y decide a mano. El avatar (nivel, dominio, tipo de clase) viaja en los campos
+ * de siempre; acá van sólo los dos textos libres. Su PRESENCIA es la que pone la
+ * generación en modo genérico, y ese modo le prohíbe a la IA inventar biografía
+ * del alumno — el peligro real de pasarle una ficha de mentira.
+ */
+export interface GenericClassBrief {
+  /** Tema, estructura u objetivo que el profesor quiere trabajar. Opcional. */
+  focus?: string | null;
+  /** Lo que el profesor sepa del alumno sin ficha (trabajo, intereses, traba). Opcional. */
+  context?: string | null;
+}
+
 /** Fila de student_profiles (snake_case = columnas reales). */
 export interface StudentProfileRow {
   id: string;
