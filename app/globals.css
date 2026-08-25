@@ -1022,6 +1022,13 @@ body.driver-active .drc-modal-backdrop * { pointer-events: auto; }
   font-size: 11.5px; font-weight: 700; padding: 2px 9px; border-radius: 999px; white-space: nowrap;
   background: rgba(30,158,58,0.12); color: #1a7d31; border: 1px solid rgba(30,158,58,0.35);
 }
+/* Badge de bloque MIXTO (amarillo DRC): una hora normal + una de recuperación
+   seguidas. Se paga entero (2 × tarifa, un solo transcript) pero solo la hora
+   normal gasta clase del cupo mensual del alumno. */
+.mc-badge-mixed {
+  font-size: 11.5px; font-weight: 700; padding: 2px 9px; border-radius: 999px; white-space: nowrap;
+  background: rgba(255,196,0,0.20); color: #8a6d00; border: 1px solid #FFC400;
+}
 /* Badge de clase reprogramada (gris) */
 .mc-badge-resched {
   font-size: 11.5px; font-weight: 600; padding: 2px 9px; border-radius: 999px; white-space: nowrap;

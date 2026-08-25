@@ -8,6 +8,22 @@ export interface TimeSlot {
   usedSpots: number;
 }
 
+/**
+ * Una celda 'bloqueado' ("En recuperación") del calendario, resuelta a la fecha
+ * real que le toca (lunes de `weekDate` + día de la key).
+ *
+ * `recoveryFor` es la fecha de la clase PERDIDA que esta hora salda. Es el dato
+ * que hace que la recuperación no consuma cupo del mes del alumno: no gasta una
+ * clase nueva, salda una que ya se había perdido.
+ */
+export interface RecoveryCell {
+  studentName: string;
+  day: string;            // 'Lunes' … 'Sábado'
+  hour: string;           // 'HH:00'
+  date: string;           // fecha REAL de la recuperación, 'YYYY-MM-DD'
+  recoveryFor?: string;   // fecha de la clase original que se recupera
+}
+
 export interface Vacation {
   from: string;
   to: string;
@@ -78,6 +94,16 @@ export interface Teacher {
   onboardingStartedAt?: string;
   libreCells?: string[];         // exact `${day}_${hour}` keys asignables (estado recurrente 'libre')
   puntualCells?: Record<string, string>; // key → 'YYYY-MM-DD' de la marca puntual (recuperación) sobre un horario libre
+  /**
+   * Celdas de RECUPERACIÓN del calendario, ya resueltas a su fecha real. Salen
+   * del mismo grid que `upcomingClasses` (sin consulta extra), pero por separado
+   * porque son marcas PUNTUALES de una semana: `upcomingClasses` solo lleva el
+   * alumno RECURRENTE (`baseStudentOf`) y por eso una recuperación no aporta
+   * ninguna hora ahí. Sin esta lista, finanzas no puede ver que la hora pegada a
+   * una clase normal es una recuperación del mismo alumno — y paga una sola hora
+   * de las dos. Ver lib/teacherClasses.gridOccupancyOfTeacher.
+   */
+  recoveryCells?: RecoveryCell[];
   internalRating?: number;
   createdAt?: string;
   currentLevel?: number;

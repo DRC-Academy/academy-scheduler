@@ -222,14 +222,33 @@ export function recoveriesForDate(grid: Grid, dateIso: string, assignments: Assi
 // leyendo TODOS los calendarios con `baseStudentOf` (el alumno recurrente, no el
 // que recupera). O sea: dato del grid, sin una consulta extra.
 
+/** Una hora de recuperación del calendario, con la clase perdida que salda. */
+export interface RecoveryHour {
+  hour: number;
+  /** Fecha 'YYYY-MM-DD' de la clase original que esta hora recupera. */
+  recoveryFor?: string;
+}
+
 /** Horas ocupadas en el CALENDARIO, por alumno y día. */
 export interface GridOccupancy {
-  /** `${alumno normalizado}|${día}` → horas ocupadas. */
+  /** `${alumno normalizado}|${día}` → horas ocupadas RECURRENTES. */
   hours: Map<string, number[]>;
+  /**
+   * `${alumno normalizado}|${fecha ISO}` → horas de RECUPERACIÓN de ese día.
+   *
+   * Van aparte de `hours` y con FECHA en vez de día de la semana porque son
+   * marcas puntuales de UNA semana: el martes 15/07 a las 18:00 hay recuperación,
+   * el resto de los martes no. Meterlas en `hours` habría hecho que esa hora
+   * contara como sesión de 2h todas las semanas del año.
+   */
+  recoveries: Map<string, RecoveryHour[]>;
 }
 
 export function gridOccupancyOfTeacher(
-  teacher: { upcomingClasses?: Array<{ studentName: string; day: string; time: string }> } | null | undefined,
+  teacher: {
+    upcomingClasses?: Array<{ studentName: string; day: string; time: string }>;
+    recoveryCells?: Array<{ studentName: string; hour: string; date: string; recoveryFor?: string }>;
+  } | null | undefined,
 ): GridOccupancy {
   const hours = new Map<string, number[]>();
   for (const c of teacher?.upcomingClasses ?? []) {
@@ -239,11 +258,45 @@ export function gridOccupancyOfTeacher(
     const arr = hours.get(k);
     if (arr) arr.push(h); else hours.set(k, [h]);
   }
-  return { hours };
+  const recoveries = new Map<string, RecoveryHour[]>();
+  for (const r of teacher?.recoveryCells ?? []) {
+    const h = hourNum(r.hour);
+    if (!Number.isFinite(h) || !r.date) continue;
+    const k = `${nkName(r.studentName)}|${r.date}`;
+    const arr = recoveries.get(k);
+    if (arr) arr.push({ hour: h, recoveryFor: r.recoveryFor });
+    else recoveries.set(k, [{ hour: h, recoveryFor: r.recoveryFor }]);
+  }
+  return { hours, recoveries };
 }
 
 /** Ocupación vacía: para los llamadores que aún no tienen el calendario a mano. */
-export const EMPTY_GRID_OCCUPANCY: GridOccupancy = { hours: new Map() };
+export const EMPTY_GRID_OCCUPANCY: GridOccupancy = { hours: new Map(), recoveries: new Map() };
+
+/** Horas de recuperación de ese alumno en esa FECHA concreta. Vacío si no hay. */
+export function recoveryHoursOn(
+  occ: GridOccupancy | undefined, studentName: string, dateIso: string,
+): RecoveryHour[] {
+  return occ?.recoveries.get(`${nkName(studentName)}|${dateIso}`) ?? [];
+}
+
+/**
+ * Parte de RECUPERACIÓN que cae dentro de una sesión: las horas de recuperación
+ * del alumno ese día que están en el tramo [startHour, endHour).
+ *
+ * Es lo que convierte "una sesión de 2h" en "1h normal + 1h de recuperación":
+ * `units` es cuántas de las horas cobradas son recuperación (y por tanto NO
+ * consumen cupo del mes) y `dates` las clases perdidas que saldan.
+ */
+export function recoveryPartOfSession(
+  occ: GridOccupancy | undefined, studentName: string, dateIso: string,
+  startHour: number, endHour: number,
+): { units: number; dates: string[] } {
+  const inside = recoveryHoursOn(occ, studentName, dateIso)
+    .filter(r => r.hour >= startHour && r.hour < endHour);
+  const dates = [...new Set(inside.map(r => r.recoveryFor).filter((d): d is string => !!d))].sort();
+  return { units: inside.length, dates };
+}
 
 /**
  * Longitud de la racha contigua del CALENDARIO que contiene esa hora.
@@ -305,8 +358,22 @@ export interface TeacherSession extends TeacherClass {
   endHourNum: number;
   /** Nº de celdas contiguas: 2 para 17:00+18:00. */
   durationHours: number;
-  /** Lo que vale la sesión para el pago y para el límite mensual. = durationHours. */
+  /** Lo que vale la sesión para el pago. = durationHours. */
   billingUnits: number;
+  /**
+   * Cuántas de las `billingUnits` son de RECUPERACIÓN. 0 en una sesión normal,
+   * `billingUnits` en una sesión que es toda recuperación, y 1 en el caso mixto
+   * (1h normal + 1h de recuperación seguidas).
+   *
+   * El profesor cobra las `billingUnits` completas —dio las dos horas—, pero el
+   * cupo mensual del alumno solo consume `billingUnits - recoveryUnits`: la parte
+   * de recuperación salda una clase que ya se había perdido.
+   */
+  recoveryUnits: number;
+  /** Fechas de las clases PERDIDAS que salda esta sesión ('YYYY-MM-DD'). */
+  recoveryDates: string[];
+  /** Sesión MIXTA: parte normal + parte de recuperación en el mismo bloque. */
+  mixedRecovery: boolean;
   /** Horas que la componen, en orden: ['17:00', '18:00']. */
   hours: string[];
   /** Las clases de 1h originales, por si alguna vista necesita el detalle. */
@@ -317,17 +384,22 @@ export interface TeacherSession extends TeacherClass {
  * ¿Estas dos clases de 1h pertenecen a la misma sesión? (la contigüidad horaria
  * la comprueba `groupByContiguousHour` aparte).
  *
- * NO se fusiona una clase recurrente con una recuperación aunque estén pegadas:
- * la recuperación tiene identidad propia (`recoveryFor`: qué clase repone) y su
- * propio tipo en class_records. Fundirlas perdería ese vínculo y registraría como
- * 'normal' una hora que es de recuperación. Dos recuperaciones contiguas del
- * mismo alumno SÍ son una sesión de 2h (es el caso real de Cristina Montoro el
- * 29/07: dos registros de recuperación a las 14:00 y 15:00).
+ * Una clase normal y una recuperación pegadas del MISMO alumno SÍ se fusionan:
+ * son un bloque de 2 horas seguidas con un solo acceso y un solo transcript, y
+ * antes se pagaba una sola de las dos horas.
+ *
+ * Antes estaba prohibido por miedo a perder el vínculo de la recuperación con la
+ * clase que repone. Ya no se pierde: `toSession` guarda `recoveryDates` (las
+ * clases perdidas que salda) y marca la sesión con `mixedRecovery`, así que el
+ * bloque sigue sabiendo exactamente qué hora es normal y qué hora recupera qué.
+ *
+ * Lo que esta función NO deja pasar sigue igual de firme: distinta fecha o
+ * distinto alumno nunca son la misma sesión. (La contigüidad horaria y el
+ * respaldo del calendario los comprueban `groupByContiguousHour` y `chain`.)
  */
 function sameSessionClass(a: TeacherClass, b: TeacherClass): boolean {
   return a.date === b.date
-    && nkName(a.studentName) === nkName(b.studentName)
-    && !!a.isRecovery === !!b.isRecovery;
+    && nkName(a.studentName) === nkName(b.studentName);
 }
 
 /** Convierte una racha de clases contiguas en la sesión que representan. */
@@ -335,15 +407,32 @@ function toSession(run: TeacherClass[], teacherId: string): TeacherSession {
   const first = run[0];
   const start = hourNum(first.hour);
   const duration = run.length;
+
+  // El vínculo de la recuperación NO se pierde al fundir: se recoge de TODAS las
+  // partes del bloque, no solo de la primera. `...first` solo aporta los datos
+  // que son iguales en todas (alumno, fecha, assignment, enlace de Meet).
+  const recoveryParts = run.filter(c => c.isRecovery);
+  const recoveryDates = [...new Set(recoveryParts.map(c => c.recoveryFor).filter((d): d is string => !!d))].sort();
+  const allRecovery = recoveryParts.length === run.length;
+
   return {
     // Se conserva la `key` de la primera hora: es única y ya la usan las vistas
     // como identidad de fila (spinner de "Ingresar a clase", "próxima clase"…).
     ...first,
+    // `isRecovery` describe la sesión ENTERA, no su primera hora: solo es una
+    // recuperación si TODAS sus horas lo son. Sin esto, un bloque que empieza con
+    // la hora de recuperación y sigue con la normal se habría etiquetado entero
+    // como "Recuperación" (y se habría registrado con ese tipo de clase).
+    isRecovery:   allRecovery,
+    recoveryFor:  allRecovery ? first.recoveryFor : recoveryDates[0],
     sessionId:    sessionIdOf(teacherId, first.studentName, first.date, start),
     startHourNum: start,
     endHourNum:   start + duration,
     durationHours: duration,
     billingUnits: duration,
+    recoveryUnits: recoveryParts.length,
+    recoveryDates,
+    mixedRecovery: recoveryParts.length > 0 && !allRecovery,
     hours:        run.map(c => hourText(hourNum(c.hour))),
     parts:        run,
   };
@@ -395,7 +484,13 @@ export function groupContiguousClasses(
         // Las recuperaciones son celdas PUNTUALES del grid: no están en la
         // ocupación recurrente, así que se agrupan por su propia contigüidad —
         // que también sale del calendario, solo que de otra parte.
-        if (a.isRecovery) return true;
+        //
+        // Basta con que UNA de las dos horas lo sea: en el bloque mixto (normal
+        // 17:00 + recuperación 18:00) la prueba de que las dos horas van juntas
+        // es la celda de recuperación, que el profesor puso pegada a la clase
+        // normal. Preguntarle a la ocupación RECURRENTE por la hora de la
+        // recuperación siempre diría que no: ahí esa hora figura libre.
+        if (a.isRecovery || b.isRecovery) return true;
 
         const day = dayNameFromIso(a.date);
         const run = gridRunLength(occupancy, a.studentName, day, a.hour);

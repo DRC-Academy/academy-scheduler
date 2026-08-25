@@ -298,7 +298,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
   updateMeetLink: (assignmentId: string, link: string) => Promise<void>;
   logClassJoin: (teacherId: string, teacherName: string, studentName: string, scheduledDate: string, scheduledTime: string, subscriptionStatus?: string, enteredWithoutActive?: boolean, subscriptionDaysRemaining?: number | null) => Promise<void>;
   addRescheduleRecord: (p: { teacherId: string; teacherName: string; studentName: string; originalDate: string; originalTime?: string; newDate: string; newTime?: string; classType: 'reprogramada' | 'cancelacion_hora'; comment: string }) => Promise<void>;
-  registerClassRecord: (teacherId: string, studentName: string, date: string, time: string | undefined, screenshotFile: File | null, classType?: import('@/types').ClassRecordType, comment?: string) => Promise<void>;
+  registerClassRecord: (teacherId: string, studentName: string, date: string, time: string | undefined, screenshotFile: File | null, classType?: import('@/types').ClassRecordType, comment?: string, recoveryForDate?: string) => Promise<void>;
   formIndex: FormIndex;
   refreshFormIndex: () => void;
 }) {
@@ -790,6 +790,10 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
       // Un solo transcript cubre TODA la sesión: la validación tiene que saber
       // que son 2 horas y no juzgarlo como si fuera una clase de 60 minutos.
       durationHours: transcriptFor?.c.durationHours ?? 1,
+      // Sesión con parte de recuperación (mixta o entera): deja fijado en el
+      // registro qué clase perdida salda. La celda del calendario es una marca de
+      // una semana y se borra; el historial del alumno no puede depender de ella.
+      recoveryForDate: transcriptFor?.c.recoveryDates[0],
     });
     if (result.notice) setSaveNotice(result.notice);
     // Solo se vuelve a avisar si el informe de IA falla: la clase ya está guardada.
@@ -911,6 +915,13 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
               <span className={`mc-name${inactive ? ' is-struck' : ''}`}>{c.studentName}</span>
               {/* Sesión de varias horas: una sola clase que cuenta como N. */}
               {hoursBadge && <span className="mc-badge-hours" title={`Sesión de ${c.durationHours} horas seguidas · cuenta como ${c.billingUnits} clases`}>{hoursBadge}</span>}
+              {/* Bloque MIXTO: una hora normal + una de recuperación seguidas. Se
+                  paga entero, pero solo la hora normal gasta clase del cupo. */}
+              {c.mixedRecovery && (
+                <span className="mc-badge-mixed" title={`Bloque de ${c.durationHours}h: ${c.durationHours - c.recoveryUnits}h normal + ${c.recoveryUnits}h de recuperación · un solo transcript · cuenta como ${c.billingUnits} clases para tu pago`}>
+                  Normal + recuperación
+                </span>
+              )}
               {c.isRecovery && <span className="mc-badge-recovery">Recuperación</span>}
               {rescheduled && <span className="mc-badge-resched">Reprogramada → {fmtDateDMY(rescheduledTo)}</span>}
               {cancelled && <span className="mc-badge-resched">{cancelLabel}</span>}
@@ -923,6 +934,13 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
             </div>
             <div className="mc-course">{c.plan || 'Clase'}{c.level ? ` · ${c.level}` : ''}</div>
             {c.isRecovery && c.recoveryFor && <div className="mc-meta">Recupera clase del {fmtDateDMY(c.recoveryFor)}</div>}
+            {c.mixedRecovery && (
+              <div className="mc-meta">
+                {c.durationHours - c.recoveryUnits}h normal + {c.recoveryUnits}h que recupera
+                {c.recoveryDates.length > 0 && <> la clase del {c.recoveryDates.map(fmtDateDMY).join(' y ')}</>}
+                {' '}· un solo transcript
+              </div>
+            )}
             {desde && !c.isRecovery && <div className="mc-meta">{desde}</div>}
           </div>
 
@@ -1247,7 +1265,17 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
             time: hourLabel(transcriptFor.c.hour),
           }}
           contextNote={
-            transcriptFor.c.durationHours > 1 ? (
+            transcriptFor.c.mixedRecovery ? (
+              // Bloque mixto: un solo transcript cubre la hora normal Y la de
+              // recuperación. Se le dice explícitamente porque antes tenía que
+              // subir dos y solo se le pagaba una de las dos horas.
+              <>Bloque de <b>{transcriptFor.c.durationHours}h</b> con <b>{transcriptFor.c.studentName}</b> del{" "}
+              <b>{fmtDateDMY(transcriptFor.date)}</b>, de <b>{sessionHoursLabel(transcriptFor.c)}</b>:{" "}
+              <b>{transcriptFor.c.durationHours - transcriptFor.c.recoveryUnits}h de clase normal + {transcriptFor.c.recoveryUnits}h de recuperación</b>
+              {transcriptFor.c.recoveryDates.length > 0 && <> (recupera la clase del <b>{transcriptFor.c.recoveryDates.map(fmtDateDMY).join(" y ")}</b>)</>}.
+              Pegá el transcript completo: <b>uno solo cierra las {transcriptFor.c.durationHours} horas</b> y te cuenta
+              como <b>{transcriptFor.c.billingUnits} clases</b>.</>
+            ) : transcriptFor.c.durationHours > 1 ? (
               // Sesión de 2h: UN transcript cubre las dos horas y cierra la clase
               // entera. No hay que subirlo dos veces.
               <>Sesión de <b>{transcriptFor.c.durationHours}h</b> con <b>{transcriptFor.c.studentName}</b> del{' '}

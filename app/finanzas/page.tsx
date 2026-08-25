@@ -7,7 +7,7 @@ import { LastUpdated } from '@/components/LastUpdated';
 import { getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
-import { calculateTeacherFinance, TeacherFinanceResult, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge, rowHoursLabel, financeStatusBadge, pendingTranscriptSummary, transcriptStateBadge, absenceBreakdownLabel, isStudentAbsence, SUBSCRIPTION_STATUS_OPTIONS } from '@/lib/finance';
+import { calculateTeacherFinance, TeacherFinanceResult, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge, rowHoursLabel, financeStatusBadge, pendingTranscriptSummary, transcriptStateBadge, absenceBreakdownLabel, isStudentAbsence, mixedSessionBadge, recoveryCreditLabel, SUBSCRIPTION_STATUS_OPTIONS } from '@/lib/finance';
 import { classifyPlan } from '@/lib/productUtils';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { dbRevertPenalty } from '@/lib/db';
@@ -139,6 +139,10 @@ function ClassCards({ result, studentName, approvals, onApproveReview, onApprove
         const ts = transcriptStateBadge(r.transcriptState);
         const isFalta = r.classType === 'falta_sin_aviso' || r.classType === 'cancelacion_hora';
         const sub = subscriptionBadge(r.subscriptionStatus);
+        // Bloque de 2h "normal + recuperación": por qué paga doble y qué clase
+        // perdida salda. Mismas funciones que usa el panel del profesor.
+        const mixed = mixedSessionBadge(r);
+        const recNote = recoveryCreditLabel(r);
         const subDiffer = r.subAtJoin && r.subAtRecord && r.subAtJoin !== r.subAtRecord;
         const editable = result.paymentStatus !== 'paid' && !r.manuallyApproved;
         return (
@@ -154,6 +158,7 @@ function ClassCards({ result, studentName, approvals, onApproveReview, onApprove
             <div className="afd-badges">
               <span className="afd-pill" style={{ background: st.bg, color: st.color }}>{st.label}</span>
               {ct && <span className="afd-pill" style={{ background: ct.bg, color: ct.color }}>{ct.label}</span>}
+              {mixed && <span className="afd-pill" style={{ background: mixed.bg, color: mixed.color }} title={recNote ?? undefined}>{mixed.label}</span>}
               <span className="afd-pill" style={{ background: ing.bg, color: ing.color }}>{ing.label}</span>
               {/* Transcript: NIVEL 2. Los cuatro estados salen de lib/finance, para
                   que el admin lea exactamente lo mismo que ve el profesor. Una
@@ -178,6 +183,14 @@ function ClassCards({ result, studentName, approvals, onApproveReview, onApprove
             {absenceBreakdownLabel(r) && (
               <div style={{ fontSize: 12.5, color: '#b45309', lineHeight: 1.5, marginTop: 2 }}>
                 {absenceBreakdownLabel(r)}
+              </div>
+            )}
+            {/* Parte de RECUPERACIÓN: por qué la sesión paga las horas que paga y
+                cuántas clases del mes consume de verdad. Misma frase que ve el
+                profesor (fuente única, lib/finance.recoveryCreditLabel). */}
+            {recNote && (
+              <div style={{ fontSize: 12.5, color: '#8a6d00', lineHeight: 1.5, marginTop: 2 }}>
+                {recNote}
               </div>
             )}
             {/* Revertir una falta marcada por error. La clase vuelve a pendiente y

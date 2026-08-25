@@ -1,10 +1,10 @@
 import { supabase } from './supabase';
 import { triggerEmail } from './emailClient';
-import { baseStateOf, baseStudentOf, withBaseState, assignableCellKeys, puntualCellDates } from './cells';
+import { baseStateOf, baseStudentOf, withBaseState, assignableCellKeys, puntualCellDates, puntualDateOf } from './cells';
 import { minutesLateSpain } from './spainTime';
 import { fetchOpenAlertState } from './interventionsClient';
 import { findContiguityMismatches, type ContiguityMismatch } from './teacherClasses';
-import { Teacher, Student, Assignment, AppUser, Grid, TeacherStatus, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, AssignedSlot, EmailPreferences, SalesContactResult } from '@/types';
+import { Teacher, Student, Assignment, AppUser, Grid, TeacherStatus, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, AssignedSlot, EmailPreferences, SalesContactResult, RecoveryCell } from '@/types';
 
 // ── AUTH ─────────────────────────────────────────────────────────────────────
 
@@ -93,6 +93,27 @@ export async function dbGetTeachers(): Promise<Teacher[]> {
         return { id: key, studentName: student, day, time, duration: 1, type: 'Clase' };
       });
 
+    // Celdas de RECUPERACIÓN ('bloqueado' con alumno y semana), resueltas a su
+    // fecha real. `upcomingClasses` no puede llevarlas: usa `baseStudentOf`, que
+    // devuelve el alumno RECURRENTE y deja fuera al que recupera. Sin esta lista
+    // finanzas no ve que la hora pegada a una clase normal es una recuperación
+    // del mismo alumno, y una sesión de 2h (normal + recuperación) se paga como 1.
+    const recoveryCells: RecoveryCell[] = [];
+    for (const [key, cell] of Object.entries(grid)) {
+      if (!cell || cell.state !== 'bloqueado' || !cell.student) continue;
+      const date = puntualDateOf(key, cell);
+      if (!date) continue;   // sin weekDate no se sabe a qué semana pertenece
+      const usc = key.lastIndexOf('_');
+      if (usc < 0) continue;
+      recoveryCells.push({
+        studentName: cell.student,
+        day:  key.slice(0, usc),
+        hour: key.slice(usc + 1),
+        date,
+        recoveryFor: cell.recoveryFor,
+      });
+    }
+
     // Exact list of free cell keys (`${day}_${hour}`) — the single source of truth
     // for slot availability. Cuentan las celdas cuyo estado RECURRENTE es 'libre':
     // 'libre' a secas y las que solo tienen una marca puntual encima (recuperación
@@ -148,6 +169,7 @@ export async function dbGetTeachers(): Promise<Teacher[]> {
       blockedSlots:        [],
       vacations:           [],
       upcomingClasses,
+      recoveryCells,
       internalRating:      row.internal_rating ?? 0,
       createdAt:           row.created_at ?? undefined,
       currentLevel:        row.current_level ?? 1,
@@ -3687,6 +3709,15 @@ export async function dbAddClassRecord(
   teacherId: string, teacherName: string, studentName: string,
   classDate: string, classTime: string | undefined, screenshotUrl: string,
   classType: import('@/types').ClassRecordType = 'normal', comment?: string, subscriptionStatus?: string,
+  /**
+   * Fecha de la clase PERDIDA que esta clase salda ('YYYY-MM-DD'). La rellenan
+   * las sesiones con parte de recuperación, incluido el bloque mixto de 2h
+   * (normal + recuperación), que se registra como 'normal' porque eso es lo que
+   * es en su mayor parte. La celda del calendario es la fuente viva del vínculo,
+   * pero es una marca de UNA semana y acaba borrándose; esto lo deja fijado en el
+   * historial del alumno.
+   */
+  recoveryForDate?: string,
 ): Promise<import('@/types').ClassRecord> {
   const id        = `cr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   const createdAt = new Date().toISOString();
@@ -3704,9 +3735,13 @@ export async function dbAddClassRecord(
   };
   // Resiliente: si la columna subscription_status aún no existe en la BD,
   // reintenta sin ella para no bloquear el registro de la clase.
-  const { error } = await supabase.from('class_records').insert({ ...base, subscription_status: subscriptionStatus ?? null });
+  const { error } = await supabase.from('class_records').insert({
+    ...base,
+    subscription_status: subscriptionStatus ?? null,
+    ...(recoveryForDate ? { recovery_for_date: recoveryForDate } : {}),
+  });
   if (error) await supabase.from('class_records').insert(base);
-  return { id, teacherId, teacherName, studentName, classDate, classTime, screenshotUrl, classType, comment, subscriptionStatus, createdAt };
+  return { id, teacherId, teacherName, studentName, classDate, classTime, screenshotUrl, classType, comment, subscriptionStatus, recoveryForDate, createdAt };
 }
 
 // Registra la constancia de una clase REPROGRAMADA (o cancelación sobre la hora que

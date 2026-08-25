@@ -48,6 +48,7 @@ const DAY_NAMES = ['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','S
 export type RegisterClassRecordFn = (
   teacherId: string, studentName: string, date: string, time: string | undefined,
   screenshotFile: File | null, classType?: ClassRecordType, comment?: string,
+  recoveryForDate?: string,
 ) => Promise<void>;
 
 export interface SaveClassArgs {
@@ -74,6 +75,14 @@ export interface SaveClassArgs {
    * transcript cubre las dos horas y la validación se calibra con esa duración.
    */
   durationHours?: number;
+  /**
+   * Fecha de la clase PERDIDA que esta sesión salda ('YYYY-MM-DD'). La manda el
+   * bloque de 2h "normal + recuperación": se guarda como clase 'normal' (es lo
+   * que es su hora principal) pero deja el vínculo con la clase que repone, para
+   * que el historial del alumno lo conserve cuando la celda del calendario ya no
+   * esté. Ausente en una clase normal: entonces no cambia absolutamente nada.
+   */
+  recoveryForDate?: string;
 }
 
 export interface SaveClassResult {
@@ -97,12 +106,12 @@ export interface SaveClassResult {
 export async function saveTeacherClass(args: SaveClassArgs): Promise<SaveClassResult> {
   const {
     teacher, myAssignments, studentName, date, time, transcript, classType, comment,
-    transcriptHash: hash, replaceId, registerClassRecord, joinLogId, durationHours,
+    transcriptHash: hash, replaceId, registerClassRecord, joinLogId, durationHours, recoveryForDate,
   } = args;
 
   // Faltas/cancelaciones (sin transcript): solo la constancia.
   if (!transcript.trim()) {
-    if (!replaceId) await registerClassRecord(teacher.id, studentName, date, time, null, classType, comment);
+    if (!replaceId) await registerClassRecord(teacher.id, studentName, date, time, null, classType, comment, recoveryForDate);
     return { notice: null, analysis: null };
   }
 
@@ -123,7 +132,7 @@ export async function saveTeacherClass(args: SaveClassArgs): Promise<SaveClassRe
   });
 
   if (!replaceId) {
-    await registerClassRecord(teacher.id, studentName, date, time, null, classType, comment);
+    await registerClassRecord(teacher.id, studentName, date, time, null, classType, comment, recoveryForDate);
   }
 
   // La clase ya está guardada y validada acá; el informe de IA va por detrás.

@@ -42,6 +42,7 @@ import { WOO_STATUS, isActiveWooStatus, wooStatusMeta } from '@/lib/subscription
 // Solo el TIPO: teacherClasses importa a su vez el tipo ClassTranscriptRef de acá,
 // y los `import type` se borran al compilar, así que no hay ciclo en runtime.
 import type { GridOccupancy } from '@/lib/teacherClasses';
+import { recoveryHoursOn, recoveryPartOfSession } from '@/lib/teacherClasses';
 
 const DAY_NAMES_BY_JSDAY = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 
@@ -154,6 +155,18 @@ export interface ClassFinanceRow {
    * (ver el comentario de los candidatos, más abajo).
    */
   billingUnits: number;
+  /**
+   * Cuántas de las `billingUnits` son de RECUPERACIÓN (salen de las celdas
+   * 'bloqueado' del calendario que caen dentro de la sesión).
+   *
+   * El profesor cobra las `billingUnits` completas —dio las horas—, pero el CUPO
+   * MENSUAL del alumno solo consume `billingUnits - recoveryUnits`: la parte de
+   * recuperación salda una clase que ya se había perdido, no gasta una del mes.
+   * Un bloque de 2h "normal + recuperación" paga 2 y consume 1.
+   */
+  recoveryUnits: number;
+  /** Fechas de las clases PERDIDAS que salda esta fila ('YYYY-MM-DD'). */
+  recoveryForDates: string[];
   status: ClassFinanceStatus;
   classType: ClassRecordType;
   /**
@@ -258,12 +271,16 @@ function slotHoursForDate(a: Assignment | undefined, dateIso: string): number[] 
 }
 
 /**
- * Duración y hora de INICIO de la clase de ese alumno ese día. Dos fuentes, y se
+ * Duración y hora de INICIO de la clase de ese alumno ese día. Tres fuentes, y se
  * toma la MAYOR porque cada una cubre un caso que la otra no ve:
  *   · el horario recurrente (assignment.slots) → la sesión fija de 2h del alumno,
  *     aunque ese día el profesor solo haya registrado un ingreso;
+ *   · las celdas de RECUPERACIÓN de esa fecha (occupancy.recoveries) → la hora
+ *     que el alumno recupera pegada a su clase normal. Son marcas puntuales de
+ *     una semana y por eso no están en la ocupación recurrente: sin ellas un
+ *     bloque de 2h "normal + recuperación" se pagaba como UNA sola hora;
  *   · las horas realmente observadas (ingresos + registros de esa fecha) → las
- *     recuperaciones y las clases fuera de horario, que no están en los slots.
+ *     clases fuera de horario, que no están en los slots.
  * Ambas exigen contigüidad REAL: dos clases sueltas el mismo día (14:00 y 18:00)
  * siguen valiendo 1, porque un único acceso no puede dar fe de las dos.
  *
@@ -278,22 +295,30 @@ function sessionSpanFor(
   const anchor = hourNum(anchorHour);
   if (!Number.isFinite(anchor)) return { durationHours: 1, startHour: anchorHour };
 
+  // Horas de RECUPERACIÓN de ese alumno en esa FECHA. También son calendario
+  // (celdas 'bloqueado' que puso el profesor), solo que puntuales de esa semana,
+  // así que se suman a la ocupación recurrente en todas las ramas de abajo. Es lo
+  // que permite ver el bloque "normal 17:00 + recuperación 18:00" como una sesión
+  // de 2h en vez de como una clase de 1h con una hora regalada.
+  const recHours = recoveryHoursOn(occupancy, a?.studentName ?? '', dateIso).map(r => r.hour);
+
   // 1) EL CALENDARIO MANDA. Si el alumno tiene horario en el grid ese día, su
   //    palabra es definitiva: la ficha puede haberse quedado vieja (el profesor
   //    acordó otro horario y se cambió el calendario), y pagar 2 horas que el
   //    calendario no tiene ocupadas es cobrar de más.
   const day = DAY_NAMES_BY_JSDAY[new Date(dateIso + 'T00:00:00').getDay()];
   const gridHours = occupancy.hours.get(`${nkName(a?.studentName ?? '')}|${day}`);
-  if (gridHours && gridHours.length > 0) {
-    const len = contiguousRunLength(gridHours, anchor);
+  if ((gridHours && gridHours.length > 0) || recHours.length > 0) {
+    const calendarHours = [...(gridHours ?? []), ...recHours];
+    const len = contiguousRunLength(calendarHours, anchor);
     // Si la hora no está en el calendario (len 0) la clase existió igual — hay
     // ingreso o registro — pero como sesión de una hora: el grid no la respalda.
-    if (len > 0) return { durationHours: len, startHour: hourText(runStartHour(gridHours, anchor)) };
+    if (len > 0) return { durationHours: len, startHour: hourText(runStartHour(calendarHours, anchor)) };
     return { durationHours: 1, startHour: hourText(anchor) };
   }
 
-  // 2) El alumno SÍ está en el calendario, pero no ese día: es una recuperación o
-  //    una clase fuera de su horario. Manda lo observado (ingresos y registros).
+  // 2) El alumno SÍ está en el calendario, pero no ese día: es una clase fuera de
+  //    su horario. Manda lo observado (ingresos y registros).
   const sigueEnElGrid = [...occupancy.hours.keys()].some(k => k.startsWith(`${nkName(a?.studentName ?? '')}|`));
   if (sigueEnElGrid) {
     const len = contiguousRunLength([...observed], anchor);
@@ -692,6 +717,27 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     // cancelaciones: si la clase perdida era de 2 horas, la constancia vale 2.
     const { durationHours, startHour: hour } = sessionSpanFor(a, c.date, anchorHour, c.hours, gridOccupancy);
 
+    // Parte de RECUPERACIÓN de la sesión: cuántas de sus horas salen de una celda
+    // 'bloqueado' del calendario, y qué clases perdidas saldan. Se deriva del
+    // grid igual que la duración —no hay columna que lo diga— para que profesor y
+    // admin lean lo mismo sin depender de qué registro llegó primero.
+    const startNum = hourNum(hour);
+    const fromGrid = Number.isFinite(startNum)
+      ? recoveryPartOfSession(gridOccupancy, c.studentName, c.date, startNum, startNum + durationHours)
+      : { units: 0, dates: [] as string[] };
+    let recoveryUnits = fromGrid.units;
+    let recoveryForDates = fromGrid.dates;
+    // Respaldo: recuperación registrada SIN celda en el calendario (el selector
+    // "Clase de recuperación" de Añadir clase). Ahí la fila entera es recuperación.
+    if (recoveryUnits === 0 && classType === 'recuperacion') {
+      recoveryUnits = durationHours;
+      if (record?.recoveryForDate) recoveryForDates = [record.recoveryForDate];
+    } else if (record?.recoveryForDate && !recoveryForDates.includes(record.recoveryForDate)) {
+      recoveryForDates = [...recoveryForDates, record.recoveryForDate].sort();
+    }
+    // Nunca más horas de recuperación que horas cobradas.
+    recoveryUnits = Math.min(recoveryUnits, durationHours);
+
     // Estado de suscripción: prioriza el del join log (momento real de la clase).
     const subAtJoin = log?.subscriptionStatus;
     const subAtRecord = record?.subscriptionStatus;
@@ -718,7 +764,8 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     rows.push({
       date: c.date, hour, studentName: c.studentName, plan,
       planCategory: planClass.type, planLabel: planClass.displayName,
-      weeklyHours, antiquityDays, rate, durationHours, billingUnits: durationHours, status,
+      weeklyHours, antiquityDays, rate, durationHours, billingUnits: durationHours,
+      recoveryUnits, recoveryForDates, status,
       classType, recordId: record?.id,
       hasJoinLog: join, hasTranscript: isTranscript, transcriptState, hasMeetLink, punctuality, manuallyApproved: approved,
       subscriptionStatus, subAtJoin, subAtRecord,
@@ -744,15 +791,26 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
   // (monthlyLimit sale de weeklyHours, que es slots.length), así que la unidad
   // coincide. Una sesión que no entra entera queda 'excede_limite' completa: no
   // se parte en "una hora sí y otra no".
+  //
+  // LA RECUPERACIÓN NO GASTA CUPO DEL MES. Una hora de recuperación repone una
+  // clase que el alumno ya había perdido: salda una deuda vieja, no consume una
+  // de las de este mes. Por eso el cupo se descuenta con `billingUnits -
+  // recoveryUnits`:
+  //   · sesión normal de 1h      → consume 1 (2h → 2), como siempre;
+  //   · sesión mixta de 2h       → PAGA 2 y consume 1 (la hora normal);
+  //   · recuperación pura de 1h  → PAGA 1 y consume 0.
+  // Antes una clase perdida en julio y recuperada en agosto se comía una de las 5
+  // de agosto y la fila caía en 'excede_limite' — o sea, no se pagaba.
   const usedByStudent = new Map<string, number>();
   for (const row of countable) {
     const k = nkey(row.studentName);
     const limit = limitByStudent.has(k) ? limitByStudent.get(k)! : Infinity; // ex-alumnos: sin límite
     const used = usedByStudent.get(k) ?? 0;
-    if (used + row.billingUnits > limit && !row.manuallyApproved) {
+    const cupoUnits = Math.max(0, row.billingUnits - row.recoveryUnits);
+    if (used + cupoUnits > limit && !row.manuallyApproved) {
       row.status = 'excede_limite';
     } else {
-      usedByStudent.set(k, used + row.billingUnits);
+      usedByStudent.set(k, used + cupoUnits);
     }
   }
 
@@ -907,7 +965,54 @@ export function rowHoursLabel(row: { hour: string; durationHours?: number }): st
 export function sessionBreakdownLabel(row: ClassFinanceRow): string | null {
   if ((row.billingUnits ?? 1) <= 1) return null;
   const total = (row.rate * row.billingUnits).toFixed(2);
-  return `Sesión de ${row.durationHours}h con ${row.studentName} — cuenta como ${row.billingUnits} (€${total})`;
+  const base = `Sesión de ${row.durationHours}h con ${row.studentName} — cuenta como ${row.billingUnits} (€${total})`;
+  const rec = row.recoveryUnits ?? 0;
+  if (rec <= 0 || rec >= row.billingUnits) return base;
+  const normales = row.billingUnits - rec;
+  return `${base} · ${normales}h normal${normales !== 1 ? 'es' : ''} + ${rec}h de recuperación`;
+}
+
+// ── Sesión MIXTA: normal + recuperación en el mismo bloque ────────────────────
+//
+// Un bloque de 2 horas seguidas donde una hora es la clase normal del alumno y la
+// otra recupera una clase que había perdido. Se paga entero (2 × tarifa, un solo
+// transcript) pero solo consume UNA clase del cupo del mes. Estas dos funciones
+// son la fuente única del texto: si el profesor y el admin leyeran frases
+// distintas sobre por qué esa clase paga doble, volveríamos a las consultas de
+// "¿por qué me pagaste 2 horas de una clase de 1?".
+
+/** Badge "Normal + recuperación". null si la sesión no es mixta. */
+export function mixedSessionBadge(
+  row: Pick<ClassFinanceRow, 'billingUnits' | 'recoveryUnits'>,
+): { label: string; color: string; bg: string } | null {
+  const rec = row.recoveryUnits ?? 0;
+  if (rec <= 0 || rec >= (row.billingUnits ?? 1)) return null;
+  return { label: '🔁 Normal + recuperación', color: '#8a6d00', bg: 'rgba(255,196,0,0.20)' };
+}
+
+/**
+ * Qué clase perdida salda esta fila y qué efecto tiene en el cupo del alumno.
+ * null cuando la fila no recupera nada.
+ */
+export function recoveryCreditLabel(
+  row: Pick<ClassFinanceRow, 'billingUnits' | 'recoveryUnits' | 'recoveryForDates'>,
+): string | null {
+  const rec = row.recoveryUnits ?? 0;
+  if (rec <= 0) return null;
+  const fechas = (row.recoveryForDates ?? []).map(fmtDMY);
+  const qué = fechas.length
+    ? `salda la clase perdida del ${fechas.join(' y ')}`
+    : 'salda una clase perdida';
+  const cupo = rec >= (row.billingUnits ?? 1)
+    ? 'no consume ninguna clase del mes'
+    : `consume ${(row.billingUnits ?? 1) - rec} clase${(row.billingUnits ?? 1) - rec !== 1 ? 's' : ''} del mes en vez de ${row.billingUnits}`;
+  return `${rec}h de recuperación — ${qué}: ${cupo}.`;
+}
+
+/** 'YYYY-MM-DD' → '12/07/2026'. */
+function fmtDMY(iso: string): string {
+  const [y, m, d] = (iso ?? '').split('-');
+  return y && m && d ? `${d}/${m}/${y}` : iso;
 }
 
 /** Badge discreto "2h"/"3h" en verde DRC. null si la clase dura una hora. */

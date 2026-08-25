@@ -7,7 +7,7 @@ import { LastUpdated } from '@/components/LastUpdated';
 import { getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
-import { calculateTeacherFinance, recordVerification, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge, rowHoursLabel, durationBadge, sessionBreakdownLabel, transcriptStateBadge, transcriptNeedsTeacher, financeStatusBadge, pendingTranscriptSummary, canMarkStudentAbsence, absenceBreakdownLabel, ABSENCE_MONTHLY_CAP, ABSENCE_CAP_MESSAGE } from '@/lib/finance';
+import { calculateTeacherFinance, recordVerification, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge, rowHoursLabel, durationBadge, sessionBreakdownLabel, transcriptStateBadge, transcriptNeedsTeacher, financeStatusBadge, pendingTranscriptSummary, canMarkStudentAbsence, absenceBreakdownLabel, mixedSessionBadge, recoveryCreditLabel, ABSENCE_MONTHLY_CAP, ABSENCE_CAP_MESSAGE } from '@/lib/finance';
 import { dbGetAssignmentsByTeacher, calcRegisteredClassNumber } from '@/lib/db';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { maybeSendMilestoneEmail } from '@/lib/milestoneEmails';
@@ -616,6 +616,10 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                             ? canMarkStudentAbsence(classRecords, teacher.id, g.name, r.date.slice(0, 7))
                             : null;
                           const absenceNote = absenceBreakdownLabel(r);
+                          // Bloque de 2h "normal + recuperación": el badge explica por qué
+                          // paga doble y la nota, qué clase perdida salda.
+                          const mixed = mixedSessionBadge(r);
+                          const recNote = recoveryCreditLabel(r);
                           return (
                             <div key={i} className={`mcf-cls${r.status === 'a_revisar' ? ' is-review' : ''}`}
                               onClick={() => toggleClass(clsKey)} aria-expanded={clsOpen}>
@@ -647,7 +651,9 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                                         ? <span className="mcf-tag" style={{ background: ct.bg, color: ct.color }}>{plainLabel(ct.label)}</span>
                                         : 'Normal'}
                                       {dur && <span className="mcf-tag" style={{ background: dur.bg, color: dur.color }}>{dur.label}</span>}
+                                      {mixed && <span className="mcf-tag" style={{ background: mixed.bg, color: mixed.color }}>{plainLabel(mixed.label)}</span>}
                                     </div>
+                                    {recNote && <div className="mcf-cls-note" style={{ color: '#8a6d00', marginTop: 4 }}>{recNote}</div>}
                                   </div>
 
                                   <div>

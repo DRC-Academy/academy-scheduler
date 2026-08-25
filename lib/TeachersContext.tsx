@@ -84,7 +84,7 @@ interface TeachersContextType {
   loadClassJoinLogs: () => Promise<void>;
   loadClassRecords: () => Promise<void>;
   loadFinanceData: () => Promise<void>;
-  registerClassRecord: (teacherId: string, studentName: string, date: string, time: string | undefined, screenshotFile: File | null, classType?: ClassRecordType, comment?: string) => Promise<void>;
+  registerClassRecord: (teacherId: string, studentName: string, date: string, time: string | undefined, screenshotFile: File | null, classType?: ClassRecordType, comment?: string, recoveryForDate?: string) => Promise<void>;
   attachScreenshotToClass: (teacherId: string, studentName: string, date: string, time: string | undefined, screenshotFile: File, comment?: string) => Promise<void>;
   markPaymentAsPaid: (teacherId: string, monthYear: string) => Promise<void>;
   markStudentAbsence: (teacherId: string, studentName: string, date: string, time: string | undefined, comment?: string) => Promise<void>;
@@ -519,6 +519,8 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   async function registerClassRecord(
     teacherId: string, studentName: string, date: string, time: string | undefined,
     screenshotFile: File | null, classType: ClassRecordType = 'normal', comment?: string,
+    /** Clase perdida que esta salda (sesiones con parte de recuperación). */
+    recoveryForDate?: string,
   ) {
     const teacherName = teachers.find(t => t.id === teacherId)?.name ?? '';
     // Estado de suscripciÃ³n al momento de registrar (no bloquea si falla).
@@ -530,7 +532,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     }
     // Las faltas/cancelaciones no llevan captura: se guarda screenshot_url vacÃ­o.
     const url = screenshotFile ? await dbUploadClassScreenshot(screenshotFile, teacherId) : '';
-    const record = await dbAddClassRecord(teacherId, teacherName, studentName, date, time, url, classType, comment, subscriptionStatus);
+    const record = await dbAddClassRecord(teacherId, teacherName, studentName, date, time, url, classType, comment, subscriptionStatus, recoveryForDate);
     setClassRecords(prev => [record, ...prev]);
 
     // Efectos de falta. La falta DEL ALUMNO ('falta_sin_aviso') ya no dispara
