@@ -26,6 +26,7 @@ import type {
 } from '@/lib/aiTypes';
 import { isRiskSignal } from '@/lib/aiTypes';
 import { normalizeLevel, viableClassTypes } from '@/lib/drcMethodology';
+import { effectiveLevelOf } from '@/lib/effectiveLevel';
 import { ClassCard, classToText, copyText } from '@/components/alumnos/ClassContent';
 import { isConversacionGuiada } from '@/lib/aiTypes';
 import { printClassPdf } from '@/lib/classDoc';
@@ -62,6 +63,19 @@ const TYPE_LABEL: Record<ClassType, string> = {
 };
 
 export default function ProximaClaseTab(p: Props) {
+  // EL NIVEL QUE VA A LA IA.
+  //
+  // Antes era siempre `assignment.studentLevel`, o sea lo que tipeó el setter
+  // el día del alta: ni la prueba de nivel ni el criterio del profesor llegaban
+  // nunca al prompt. Ahora manda el nivel confirmado por el profesor y, si no
+  // se pronunció, el de la prueba (regla única en lib/effectiveLevel).
+  //
+  // Se prefiere `level` (CEFR limpio) sobre `raw` porque este valor se
+  // interpola tal cual en el prompt: con `raw` el modelo leería "nivel B1
+  // Exámenes", que es como está escrito el campo en producción.
+  const eff = effectiveLevelOf(p.profile, p.assignment.studentLevel);
+  const aiLevel = eff.level ?? eff.raw ?? p.assignment.studentLevel;
+
   const [stage, setStage] = useState<Stage>('idle');
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -69,7 +83,7 @@ export default function ProximaClaseTab(p: Props) {
 
   // Clase genérica (alumno sin ficha). El nivel arranca en el de la asignación:
   // es el único dato de nivel que hay cuando no completó el formulario.
-  const [gLevel, setGLevel] = useState<CEFRLevel>(() => normalizeLevel(p.assignment.studentLevel));
+  const [gLevel, setGLevel] = useState<CEFRLevel>(() => normalizeLevel(aiLevel));
   const [gDomain, setGDomain] = useState<AvatarDomain>('social');
   const [gType, setGType] = useState<ClassType>('metodologia_aplicada');
   const [gFocus, setGFocus] = useState('');
@@ -108,7 +122,7 @@ export default function ProximaClaseTab(p: Props) {
     teacherId: p.assignment.teacherId,
     profileId: p.profile?.id ?? null,
     plan: p.assignment.plan,
-    level: p.assignment.studentLevel,
+    level: aiLevel,
   };
 
   /**
@@ -117,7 +131,7 @@ export default function ProximaClaseTab(p: Props) {
    * los dos le daría al modelo un perfil y la orden de ignorarlo.
    */
   function generationArgs() {
-    if (p.ficha) return { studentProfile: p.ficha, generic: null, level: p.assignment.studentLevel };
+    if (p.ficha) return { studentProfile: p.ficha, generic: null, level: aiLevel };
     const generic: GenericClassBrief = {
       focus: gFocus.trim() || null,
       context: gContext.trim() || null,
@@ -262,7 +276,7 @@ export default function ProximaClaseTab(p: Props) {
     printClassPdf(nc, {
       studentName: p.assignment.studentName,
       teacherName: p.teacherName,
-      level: p.assignment.studentLevel,
+      level: aiLevel,
       classTypeLabel: isConversacionGuiada(nc) ? 'Conversación guiada' : 'Metodología aplicada',
     });
   }
@@ -375,7 +389,7 @@ export default function ProximaClaseTab(p: Props) {
 
         {newClass && (
           <div style={{ marginTop: 24 }}>
-            <ClassCard nc={newClass} level={p.assignment.studentLevel} />
+            <ClassCard nc={newClass} level={aiLevel} />
             <div style={{ marginTop: 10 }}>
               <button onClick={() => handlePdf(newClass)} style={btnSecondary}>PDF</button>
             </div>
@@ -448,7 +462,7 @@ export default function ProximaClaseTab(p: Props) {
   if (p.nextClass) {
     return (
       <div>
-        <ClassCard nc={p.nextClass} level={p.assignment.studentLevel} />
+        <ClassCard nc={p.nextClass} level={aiLevel} />
         {!p.ficha && (
           <div style={{ ...noteStyle, marginTop: 14 }}>
             Clase genérica: se generó sin ficha del alumno. Cuando complete el formulario inicial, las clases pasan a salir de su diagnóstico.

@@ -128,6 +128,14 @@ export interface StudentProfileRow {
   // con reintento, así que no están si supabase-level-test-v2.sql no se corrió.
   level_test_provisional?: boolean | null;
   level_test_provisional_reason?: string | null;
+  // Nivel confirmado por el PROFESOR tras las primeras clases. Manda sobre el de
+  // la prueba (ver lib/effectiveLevel.ts), que NO se pisa: se guarda aparte para
+  // poder medir cuanto acierta la prueba. Opcionales por lo mismo que los de
+  // arriba: llegan con supabase-teacher-level.sql y la consulta los pide en el
+  // grupo con reintento.
+  teacher_confirmed_level?: string | null;
+  teacher_confirmed_at?: string | null;
+  teacher_confirmed_by?: string | null;
   // Formato anterior (markdown) — se conserva para fichas viejas.
   ai_ficha: string | null;
   ai_status: string | null;

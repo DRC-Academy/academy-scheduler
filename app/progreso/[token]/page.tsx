@@ -22,7 +22,8 @@ import { useParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { toBullets } from '@/components/alumnos/studentPageUi';
 import { keepForStudent, forStudentOrNull } from '@/lib/studentFacing';
-import { CEFR_LADDER, parseCefr } from '@/lib/studentViz';
+import { CEFR_LADDER } from '@/lib/studentViz';
+import { effectiveLevelOf } from '@/lib/effectiveLevel';
 import { getNextMilestone, isMilestone } from '@/lib/milestones';
 import { buildEstimate, monthsLabel, type Estimate } from '@/lib/progressEstimate';
 import type { ClassAnalysisRow, StudentProfileRow } from '@/lib/aiTypes';
@@ -52,6 +53,12 @@ type LoadState =
 const PROFILE_COLS =
   'id, student_id, student_name, strong_points, weak_points, personal_objective, recommended_focus, ' +
   'current_level, level_test_cefr, total_classes_analyzed';
+// El nivel confirmado por el profesor manda sobre el de la prueba (ver
+// lib/effectiveLevel). Llega con supabase-teacher-level.sql: si esa migración
+// no se corrió, pedir la columna rompería la consulta ENTERA con un 42703 y el
+// alumno vería su página de progreso vacía. Por eso se pide aparte y se
+// reintenta sin ella.
+const PROFILE_COLS_EXTRA = PROFILE_COLS + ', teacher_confirmed_level';
 const ANALYSIS_COLS = 'id, student_id, student_name, class_number, class_summary, class_title, analyzed_at, class_date';
 // `status` NO se pide: la columna puede no estar migrada (ver
 // supabase-assignment-status.sql) y pedirla rompería la consulta con un 42703.
@@ -104,9 +111,9 @@ export default function ProgresoPage() {
       // La ficha, las clases y la assignment se buscan por student_id y, como
       // respaldo, por nombre — el mismo criterio tolerante que usa el resto del
       // sistema.
-      const profileQ = row.student_id
-        ? supabase.from('student_profiles').select(PROFILE_COLS).eq('student_id', row.student_id).limit(1)
-        : supabase.from('student_profiles').select(PROFILE_COLS).ilike('student_name', row.student_name).limit(1);
+      const profileQ = (cols: string) => (row.student_id
+        ? supabase.from('student_profiles').select(cols).eq('student_id', row.student_id).limit(1)
+        : supabase.from('student_profiles').select(cols).ilike('student_name', row.student_name).limit(1));
       const analysesQ = row.student_id
         ? supabase.from('class_analyses').select(ANALYSIS_COLS).eq('student_id', row.student_id).order('analyzed_at', { ascending: false })
         : supabase.from('class_analyses').select(ANALYSIS_COLS).ilike('student_name', row.student_name).order('analyzed_at', { ascending: false });
@@ -114,7 +121,11 @@ export default function ProgresoPage() {
         ? supabase.from('assignments').select(ASSIGNMENT_COLS).eq('student_id', row.student_id)
         : supabase.from('assignments').select(ASSIGNMENT_COLS).ilike('student_name', row.student_name);
 
-      const [pRes, aRes, asgRes] = await Promise.all([profileQ, analysesQ, assignQ]);
+      const [firstP, aRes, asgRes] = await Promise.all([profileQ(PROFILE_COLS_EXTRA), analysesQ, assignQ]);
+      // 42703 / PGRST204 = supabase-teacher-level.sql sin correr. Se reintenta
+      // sin esa columna: el alumno ve su progreso igual, con el nivel de antes.
+      const missingCol = firstP.error?.code === '42703' || firstP.error?.code === 'PGRST204';
+      const pRes = missingCol ? await profileQ(PROFILE_COLS) : firstP;
       if (cancelled) return;
       setState({
         kind: 'ready',
@@ -188,10 +199,12 @@ function Progress({ row, profile, analyses, assignment }: {
   const objective = forStudentOrNull(profile?.personal_objective);
   const focus = forStudentOrNull(profile?.recommended_focus);
 
-  // Nivel: la ficha manda, luego el test de nivel y por último lo que puso el
-  // setter al dar de alta al alumno.
-  const rawLevel = profile?.current_level || profile?.level_test_cefr || assignment?.student_level || null;
-  const level = parseCefr(rawLevel);
+  // Nivel: manda el que confirmó el profesor tras las primeras clases; si no se
+  // pronunció, la ficha, el test de nivel y por último lo que puso el setter al
+  // dar de alta al alumno. Regla única en lib/effectiveLevel.
+  const eff = effectiveLevelOf(profile, assignment?.student_level);
+  const rawLevel = eff.raw;
+  const level = eff.level;
 
   const weeklyHours = resolveWeeklyHours(assignment);
 

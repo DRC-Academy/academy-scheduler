@@ -85,6 +85,18 @@ function followupSortKey(cell: FollowupCell): { grupo: number; t: number } {
   return { grupo: 2, t: 0 };
 }
 
+/** Nivel que el profesor fijó a mano, con su trazabilidad. */
+interface ConfirmedLevel { level: string; at: string | null; by: string | null }
+
+/** Lo poco que hace falta de student_profiles para la columna del profesor. */
+interface ProfileLevelRow {
+  student_id: string | null;
+  student_name: string | null;
+  teacher_confirmed_level: string | null;
+  teacher_confirmed_at: string | null;
+  teacher_confirmed_by: string | null;
+}
+
 const COLUMNS = [
   { key: 'candidato', label: 'Candidato' },
   { key: 'email',     label: 'Email' },
@@ -92,6 +104,7 @@ const COLUMNS = [
   { key: 'progreso',  label: 'Progreso' },
   { key: 'score',     label: 'Score' },
   { key: 'cefr',      label: 'CEFR' },
+  { key: 'profesor',  label: 'Nivel profesor' },
   { key: 'followup',  label: 'Último follow-up', sortable: true },
   { key: 'creado',    label: 'Creado' },
   { key: 'expira',    label: 'Expira' },
@@ -112,6 +125,10 @@ export default function LevelTestsTab() {
   const [summary, setSummary] = useState<FollowupSummary | null>(null);
   const [faltaSql, setFaltaSql] = useState(false);
   const [sortFollowup, setSortFollowup] = useState<'none' | 'asc' | 'desc'>('none');
+  // Nivel confirmado por cada profesor, indexado igual de tolerante que el
+  // follow-up (id → email → nombre): hay sesiones de test sin student_id.
+  // Sirve para ver de un vistazo cuánto se desvía la prueba del criterio real.
+  const [confirmados, setConfirmados] = useState<Map<string, ConfirmedLevel>>(new Map());
   // El "ahora" se congela en la carga. Leerlo en cada render haría que la celda
   // se moviera sola entre renders, y el linter de pureza lo prohíbe con razón.
   const [ahora, setAhora] = useState(0);
@@ -120,14 +137,30 @@ export default function LevelTestsTab() {
     setLoading(true);
     const now = Date.now();
     setAhora(now);
-    const [idx, stRes, tkRes, drRes, agRes] = await Promise.all([
+    const [idx, stRes, tkRes, drRes, agRes, spRes] = await Promise.all([
       fetchLevelTestIndex(),
       supabase.from('students').select('id, name, email, form_reminder_count, form_reminder_last_sent, form_reminder_stage'),
       supabase.from('form_tokens').select('id, token, student_id, student_name, student_email, teacher_id, teacher_name, assignment_id, plan, level, status, created_at, completed_at, expires_at, form_reminder_count, form_reminder_last_sent, test_reminder_count, test_reminder_last_sent, reminder_variant'),
       supabase.from('student_dropouts').select('student_id, student_name'),
       supabase.from('assignments').select('id, student_id, student_name, teacher_id, teacher_name, plan, student_level'),
+      // Si supabase-teacher-level.sql no se corrió, esta consulta falla con
+      // 42703 y la columna queda vacía. La pestaña sigue funcionando.
+      supabase.from('student_profiles').select('student_id, student_name, teacher_confirmed_level, teacher_confirmed_at, teacher_confirmed_by'),
     ]);
     setRows(idx.all);
+
+    const confMap = new Map<string, ConfirmedLevel>();
+    for (const row of (spRes.data ?? []) as unknown as ProfileLevelRow[]) {
+      if (!row.teacher_confirmed_level) continue;
+      const info: ConfirmedLevel = {
+        level: row.teacher_confirmed_level,
+        at:    row.teacher_confirmed_at ?? null,
+        by:    row.teacher_confirmed_by ?? null,
+      };
+      if (row.student_id) confMap.set(`id:${row.student_id}`, info);
+      if (row.student_name) confMap.set(`nm:${norm(row.student_name)}`, info);
+    }
+    setConfirmados(confMap);
 
     // Sin las columnas del follow-up (migración sin correr) la pestaña sigue
     // funcionando: la columna queda vacía y se avisa arriba.
@@ -177,6 +210,10 @@ export default function LevelTestsTab() {
   }
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { load(); }, []);
+
+  const nivelProfesorOf = (r: LevelTestInfo): ConfirmedLevel | undefined =>
+    (r.student_id ? confirmados.get(`id:${r.student_id}`) : undefined)
+    ?? confirmados.get(`nm:${norm(r.student_name || r.candidate_name)}`);
 
   const infoOf = (r: LevelTestInfo): FollowupInfo | undefined =>
     (r.student_id ? followup.get(`id:${r.student_id}`) : undefined)
@@ -291,6 +328,7 @@ export default function LevelTestsTab() {
                       <td style={{ padding: '10px 14px', whiteSpace: 'nowrap' }}>
                         {r.cefr_level ? <span style={{ fontWeight: 700, color: CEFR_COLOR[r.cefr_level as keyof typeof CEFR_COLOR] || 'var(--text-primary)' }}>{r.cefr_level}</span> : '—'}
                       </td>
+                      <NivelProfesorTd confirmado={nivelProfesorOf(r)} prueba={r.cefr_level ?? null} />
                       <FollowupCellTd cell={followupCellOf(r, infoOf(r), ahora)} />
                       <td style={{ padding: '10px 14px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{fmtDate(r.created_at)}</td>
                       <td style={{ padding: '10px 14px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{fmtDate(r.expires_at)}</td>
@@ -312,6 +350,38 @@ export default function LevelTestsTab() {
       {showGen && <GenerateModal onClose={() => setShowGen(false)} onDone={() => { setShowGen(false); load(); }} />}
       {detailId && <DetailModal id={detailId} onClose={() => setDetailId(null)} />}
     </div>
+  );
+}
+
+/**
+ * Nivel del profesor frente al de la prueba. La flecha ↕ marca los casos en que
+ * discrepan: son los únicos que dicen algo sobre si la prueba está calibrada.
+ * Vacío = el profesor todavía no se pronunció (o falta correr el SQL).
+ */
+function NivelProfesorTd({ confirmado, prueba }: { confirmado?: ConfirmedLevel; prueba: string | null }) {
+  const td = { padding: '10px 14px', whiteSpace: 'nowrap' as const };
+  if (!confirmado) {
+    return <td style={{ ...td, color: 'var(--text-muted)' }}>—</td>;
+  }
+  const color = CEFR_COLOR[confirmado.level as keyof typeof CEFR_COLOR] || 'var(--text-primary)';
+  const difiere = !!prueba && prueba !== confirmado.level;
+  const title = [
+    confirmado.by ? `Confirmado por ${confirmado.by}` : 'Confirmado por el profesor',
+    confirmado.at ? fmtDate(confirmado.at) : null,
+    difiere ? `La prueba había dado ${prueba}` : null,
+  ].filter(Boolean).join(' · ');
+  return (
+    <td style={td} title={title}>
+      <span style={{ fontWeight: 700, color }}>{confirmado.level}</span>
+      {difiere && (
+        <span style={{
+          marginLeft: 6, fontSize: 10.5, fontWeight: 700, padding: '1px 6px', borderRadius: 8,
+          background: 'rgba(255,196,0,0.18)', color: '#B54708',
+        }}>
+          ↕ {prueba}
+        </span>
+      )}
+    </td>
   );
 }
 

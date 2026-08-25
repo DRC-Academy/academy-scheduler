@@ -29,6 +29,7 @@ import {
   cefrSteps, milestoneProgress, skillsFromResponses, type SkillGauge,
 } from '@/lib/studentViz';
 import { classCategoryBadge } from '@/lib/finance';
+import { effectiveLevelOf } from '@/lib/effectiveLevel';
 import { planFieldsOf } from '@/lib/productUtils';
 import { questionsForResponses } from '@/lib/formQuestions';
 import {
@@ -39,6 +40,7 @@ import {
   asIntervention, AVOID_ITEMS, AVOID_TITLE, NATURAL_REMINDER, type ActiveIntervention,
 } from '@/lib/interventions';
 import ProximaClaseTab from '@/components/alumnos/ProximaClaseTab';
+import NivelProfesorCard from '@/components/alumnos/NivelProfesorCard';
 import FormLinkModal from '@/components/alumnos/FormLinkModal';
 import ResetProfileModal from '@/components/alumnos/ResetProfileModal';
 import {
@@ -176,6 +178,9 @@ function StudentPageContent() {
 
   const initials = a.studentName.trim().split(/\s+/).slice(0, 2).map(w => w[0]?.toUpperCase() ?? '').join('');
   const progressScore = profile?.progress_score ?? null;
+  // Nivel efectivo: manda el que confirmó el profesor. Una sola regla para
+  // toda la app, en lib/effectiveLevel.
+  const eff = effectiveLevelOf(profile, a.studentLevel);
   // Única fuente por destreza: la autoevaluación del formulario inicial.
   const skills = skillsFromResponses(asObject<Record<string, unknown>>(profile?.form_responses));
 
@@ -241,7 +246,7 @@ function StudentPageContent() {
                 )}
               </div>
               <div className="sp-sub" style={{ color: 'var(--sp-t2)' }}>
-                {[a.studentLevel, plan.label, teacher.name, startIso ? `Desde ${formatDate(startIso)}` : null]
+                {[eff.raw ?? a.studentLevel, plan.label, teacher.name, startIso ? `Desde ${formatDate(startIso)}` : null]
                   .filter(Boolean).join(' · ')}
               </div>
             </div>
@@ -326,7 +331,7 @@ function StudentPageContent() {
               <div>
                 <div className="sp-card-title">Nivel</div>
                 <div className="sp-cefr">
-                  {cefrSteps(profile?.current_level || a.studentLevel).map(s => (
+                  {cefrSteps(eff.raw).map(s => (
                     <span
                       key={s.label}
                       className={`sp-cefr-step${s.state === 'done' ? ' is-done' : s.state === 'current' ? ' is-current' : ''}`}
@@ -363,6 +368,18 @@ function StudentPageContent() {
           </div>
 
           <LevelTestCard profile={profile} />
+
+          {/* Respaldo humano a la prueba: el profesor confirma o corrige el
+              nivel tras las primeras clases. A partir de ahí manda el suyo. */}
+          <NivelProfesorCard
+            profile={profile}
+            assignmentLevel={a.studentLevel}
+            studentName={a.studentName}
+            studentId={a.studentId || profile?.student_id || null}
+            teacherId={a.teacherId || teacher.id}
+            teacherName={teacher.name}
+            onSaved={load}
+          />
         </div>
 
         {/* `data-onboarding`: último paso del bloque de fichas del tutorial, que
@@ -774,6 +791,10 @@ function PerfilTab({ bundle, ficha, risk, teacher, onToast, onRefresh, onOpenFor
   const [busy, setBusy] = useState(false);
   const last = analyses[0];
 
+  // Misma regla que el hero: si el profesor confirmó un nivel, es el que se
+  // muestra. Ver lib/effectiveLevel.
+  const eff = effectiveLevelOf(profile, a.studentLevel);
+
   const responses = asObject<Record<string, unknown>>(profile?.form_responses) ?? {};
   const hasResponses = Object.keys(responses).length > 0;
 
@@ -826,7 +847,12 @@ function PerfilTab({ bundle, ficha, risk, teacher, onToast, onRefresh, onOpenFor
             <Field label="Ocupación" value={ficha.occupation} />
             <Field label="Estilo de aprendizaje" value={ficha.learningStyle} />
             <Field label="Dominio" value={DOMAIN_LABEL[ficha.domain] ?? ficha.domain} />
-            <Field label="Nivel actual" value={profile?.current_level || a.studentLevel} />
+            <Field label="Nivel actual" value={eff.raw} />
+            {eff.origin === 'profesor' && (
+              <div style={{ marginTop: -4, marginBottom: 8, fontSize: 11.5, color: 'var(--text-muted)' }}>
+                Confirmado por el profesor{profile?.teacher_confirmed_by ? ` (${profile.teacher_confirmed_by})` : ''}.
+              </div>
+            )}
           </div>
 
           {last && (
