@@ -211,6 +211,53 @@ export interface ClassJoinLog {
   subscriptionStatus?: string;          // estado WooCommerce: 'active' | 'cancelled' | 'on-hold' | 'expired' | 'pending-cancel' | 'not_found' | 'error' | 'not_verified'
   enteredWithoutActive?: boolean;       // ingresó pese a no tener suscripción activa
   subscriptionDaysRemaining?: number;   // días restantes hasta fin de suscripción (ej. en 'pending-cancel')
+  /**
+   * Cómo nació este ingreso. 'click' = el profesor pulsó "Ingresar a clase";
+   * 'manual' = lo creó el admin al aprobar una solicitud de revisión.
+   *
+   * Finanzas los trata IGUAL a propósito: un ingreso manual ya pasó por una
+   * persona del equipo, así que vale lo mismo que un clic. La distinción existe
+   * para poder auditarlos, no para descontarlos.
+   */
+  source?: 'click' | 'manual';
+  createdBy?: string;                   // quién lo creó, en los 'manual'
+}
+
+// ── Solicitudes de revisión de clases sin ingreso registrado ─────────────────
+
+/** Lo que el PROFESOR declara que pasó en una clase que no tiene ingreso. */
+export type ReviewRequestType = 'normal' | 'falta_sin_aviso' | 'falta_con_aviso';
+
+/**
+ * Tipo con el que el ADMIN resuelve la solicitud. Puede reclasificarla: incluye
+ * los dos que al profesor no se le ofrecen ('cancelacion_hora' y
+ * 'cancelada_por_profesor', que lleva penalización y nadie elegiría solo).
+ */
+export type ReviewResolvedType = ReviewRequestType | 'cancelacion_hora' | 'cancelada_por_profesor';
+
+export type ReviewRequestStatus = 'pendiente' | 'aprobada' | 'rechazada';
+
+export interface ClassReviewRequest {
+  id: string;
+  teacherId: string;
+  teacherName: string;
+  studentName: string;
+  classDate: string;        // 'YYYY-MM-DD'
+  classTime?: string;       // 'HH:MM'
+  /** 2 en una sesión de celdas contiguas: la clase vale dos. */
+  durationHours: number;
+  requestedType: ReviewRequestType;
+  /** Fila de class_analyses con el transcript (solo en las de tipo 'normal'). */
+  analysisId?: string;
+  comment?: string;
+  status: ReviewRequestStatus;
+  resolvedType?: ReviewResolvedType;
+  reviewNote?: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+  /** Ingreso creado al aprobarla; ausente en las que no generan ingreso. */
+  joinLogId?: string;
+  createdAt: string;
 }
 
 export interface AdminAlert {

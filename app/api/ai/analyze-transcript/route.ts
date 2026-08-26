@@ -20,7 +20,7 @@ import { computeTranscriptVerdict, decideTranscript, shouldRunAI, statusForDecis
 import { validateTranscriptStructure } from '@/lib/transcriptValidation';
 import { verifyTranscriptAI } from '@/lib/verifyTranscriptAI';
 import {
-  persistTranscript, persistAnalysisFields, markAnalysisFailed, markForReview,
+  persistTranscript, persistAnalysisFields, markAnalysisFailed, recordLateAuthenticityCheck,
   ensureProfileId, updateProfileFromAnalysis,
   notifyAdminRisk, notifyAdminTranscript, verdictPayload,
 } from '@/lib/transcriptStore';
@@ -340,7 +340,12 @@ async function afterAnalysis(args: {
   }
 
   // CAPA 3 — solo si la clase iba a contar tal cual ('ok') y está en zona gris.
-  // Como mucho la degrada a revisión; nunca borra ni descarta el registro.
+  //
+  // NO PUEDE DESPAGAR LA CLASE. Deja constancia del hallazgo y avisa al admin,
+  // pero el `validation_status` no baja: la clase ya se le prometió pagada al
+  // profesor, y quitársela minutos después sin decirle nada era peor que el
+  // problema que esto intenta detectar. Sacarla de 'ok' es decisión de una
+  // persona, con el botón "Reabrir" del panel de Validación.
   if (args.validationStatus !== 'ok') return;
   try {
     // Duración REAL de la clase: 120 en una sesión de 2h. La IA verificadora
@@ -364,7 +369,7 @@ async function afterAnalysis(args: {
     if (decision === 'ok') return;
 
     const flags = Array.from(new Set([...structure.flags, ...(ai.authentic ? [] : ['ia_no_autentico'])]));
-    await markForReview(args.analysisId, ai as unknown as Record<string, unknown>, flags);
+    await recordLateAuthenticityCheck(args.analysisId, ai as unknown as Record<string, unknown>, flags);
     await notifyAdminTranscript(
       {
         decision, structure, flags,

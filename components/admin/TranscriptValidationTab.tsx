@@ -120,7 +120,14 @@ export default function TranscriptValidationTab() {
   const muyDudosas    = useMemo(() => allRows.filter(esMuyDudosa), [allRows]);
   // "Pendientes" son las que esperan decisión y NO son las muy dudosas (esas
   // tienen su propia pestaña, para que lo urgente no se pierda entre lo normal).
-  const pendientes    = useMemo(() => allRows.filter(r => r.status === 'review' && !esMuyDudosa(r)), [allRows]);
+  // Los HALLAZGOS POSTERIORES entran acá aunque su estado sea 'ok': la clase se
+  // sigue pagando (la capa 3 ya no despaga nada por detrás), pero alguien tiene
+  // que mirarlos. Antes el único aviso era la notificación y, si se pasaba por
+  // alto, el hallazgo no volvía a aparecer en ninguna pantalla.
+  const pendientes    = useMemo(
+    () => allRows.filter(r => (r.status === 'review' && !esMuyDudosa(r)) || r.lateFinding),
+    [allRows],
+  );
   // El historial recoge TODO lo que ya no pide decisión: las auto-aprobadas y
   // las que resolvió una persona. Es lo que antes se mezclaba con la cola.
   const historial     = useMemo(

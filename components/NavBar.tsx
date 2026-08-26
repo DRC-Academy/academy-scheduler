@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/AuthContext';
 import { NotificationBell } from '@/components/NotificationBell';
-import { Search, Users, Calendar, CalendarDays, Wallet, Settings, Menu, X, GraduationCap, CalendarCheck, CalendarClock, LifeBuoy } from 'lucide-react';
+import { Search, Users, Calendar, CalendarDays, Wallet, Settings, Menu, X, GraduationCap, CalendarCheck, CalendarClock, ClipboardCheck, LifeBuoy } from 'lucide-react';
 import { Button } from '@/components/ui';
 import { PresentationEmailReminder } from '@/components/PresentationEmailReminder';
 import { useOnboardingActions } from '@/lib/OnboardingContext';
@@ -25,6 +25,9 @@ const navItems = [
   // /mis-clases conserva su URL (para no romper enlaces), pero se muestra como "Finanzas".
   { href: '/mis-clases',        label: 'Finanzas',          icon: Wallet,      roles: ['teacher'] },
   { href: '/asistencias',       label: 'Asistencias',       icon: CalendarCheck, roles: ['teacher'] },
+  // Clases del calendario SIN ingreso registrado: para finanzas no existen, así
+  // que esta es la única vía que tiene el profesor de reclamarlas.
+  { href: '/revisiones',        label: 'Revisiones',        icon: ClipboardCheck, roles: ['teacher'] },
   { href: '/admin',             label: 'Admin',             icon: Settings,    roles: ['admin'] },
   { href: '/finanzas',          label: 'Finanzas',          icon: Wallet,      roles: ['admin'] },
 ];

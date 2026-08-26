@@ -5,6 +5,7 @@
 // lib/analyzeForm, lib/nextClass ni lib/analyzeTranscript desde el cliente.
 
 import { supabase } from '@/lib/supabase';
+import { fetchAllPages } from '@/lib/db';
 import {
   asObject, isRiskSignal,
   type AvatarDomain, type ClassType, type ClassAnalysisRow, type FichaIA,
@@ -118,15 +119,27 @@ export async function fetchClassAnalyses(args: {
   return (data ?? []) as unknown as ClassAnalysisRow[];
 }
 
-/** Todos los análisis (panel de admin). */
-export async function fetchAllClassAnalyses(limit = 500): Promise<ClassAnalysisRow[]> {
-  const build = (cols: string) => supabase.from('class_analyses').select(cols)
-    .order('analyzed_at', { ascending: false }).limit(limit);
+/**
+ * Todos los análisis (pestaña Riesgo del admin).
+ *
+ * PAGINADA. Tenía `limit = 500` sin ninguna explicación, y con 938 filas en
+ * class_analyses eso significaba que la pestaña de riesgo trabajaba con poco más
+ * de la mitad de las clases —las 438 más viejas no existían para ella— mientras
+ * su propio nombre prometía "todos". Un límite heredado que dejó de ser cierto y
+ * no avisó: exactamente el mismo fallo que el techo de PostgREST, pero escrito a
+ * mano.
+ */
+export async function fetchAllClassAnalyses(): Promise<ClassAnalysisRow[]> {
+  const build = (cols: string) => fetchAllPages('class_analyses (riesgo)', (from, to) =>
+    supabase.from('class_analyses').select(cols)
+      // `id` desempata: sin orden estable la paginación duplica y se salta filas.
+      .order('analyzed_at', { ascending: false }).order('id', { ascending: false })
+      .range(from, to));
 
-  let { data, error } = await build(ANALYSIS_COLS_EXTRA);
-  if (error && isMissingCol(error)) ({ data, error } = await build(ANALYSIS_COLS));
-  if (error && isMissingCol(error)) ({ data, error } = await build(ANALYSIS_COLS_EXTRA_LEGACY));
-  if (error && isMissingCol(error)) ({ data, error } = await build(ANALYSIS_COLS_LEGACY));
+  let { rows: data, error } = await build(ANALYSIS_COLS_EXTRA);
+  if (error && isMissingCol(error)) ({ rows: data, error } = await build(ANALYSIS_COLS));
+  if (error && isMissingCol(error)) ({ rows: data, error } = await build(ANALYSIS_COLS_EXTRA_LEGACY));
+  if (error && isMissingCol(error)) ({ rows: data, error } = await build(ANALYSIS_COLS_LEGACY));
   if (error) { console.error('[aiClient] Error al leer class_analyses:', error); return []; }
   return (data ?? []) as unknown as ClassAnalysisRow[];
 }

@@ -82,13 +82,8 @@ export function isStudentAbsence(classType: ClassRecordType | undefined): boolea
   return classType === 'falta_sin_aviso';
 }
 
-/**
- * Faltas del alumno YA marcadas para ese alumno en ese mes, ordenadas por
- * antigüedad. FUENTE ÚNICA del tope: la usan el cálculo (para decidir cuáles son
- * cobrables), el botón del profesor y el aviso de "Añadir clase", de modo que lo
- * que la pantalla promete y lo que el cálculo hace no puedan discrepar.
- */
-export function studentAbsencesInMonth<T extends AbsenceRecordRef>(
+/** Filas crudas de falta del alumno en ese mes, de la más vieja a la más nueva. */
+function absenceRowsInMonth<T extends AbsenceRecordRef>(
   records: T[], teacherId: string, studentName: string, monthYear: string,
 ): T[] {
   return records
@@ -98,6 +93,47 @@ export function studentAbsencesInMonth<T extends AbsenceRecordRef>(
       nkey(r.studentName) === nkey(studentName) &&
       (r.classDate ?? '').slice(0, 7) === monthYear)
     .sort((a, b) => (a.createdAt ?? '').localeCompare(b.createdAt ?? '') || a.classDate.localeCompare(b.classDate));
+}
+
+/**
+ * Faltas del alumno en el mes AGRUPADAS POR FECHA, de la más vieja a la más
+ * nueva. Cada grupo es UNA clase perdida, con todos los registros que la
+ * describen.
+ *
+ * El tope de 2 cuenta CLASES, no filas. La misma clase puede tener varios
+ * `class_records` de tipo 'falta_sin_aviso' —el profesor la marcó dos veces
+ * porque la fila seguía diciendo "pendiente de transcript"— y contarlos por
+ * separado le quemaba el cupo del mes: la auditoría de agosto de 2026 encontró 5
+ * registros duplicados que dejaban a 3 alumnos falsamente en el tope, uno de
+ * ellos con 3 marcas de una sola clase. Contar por fecha hace que esos
+ * duplicados sean inofensivos sin tener que borrarlos: se conservan como
+ * constancia de lo que pasó.
+ */
+export function studentAbsenceDatesInMonth<T extends AbsenceRecordRef>(
+  records: T[], teacherId: string, studentName: string, monthYear: string,
+): Array<{ date: string; records: T[] }> {
+  const byDate = new Map<string, T[]>();
+  for (const r of absenceRowsInMonth(records, teacherId, studentName, monthYear)) {
+    const arr = byDate.get(r.classDate);
+    if (arr) arr.push(r); else byDate.set(r.classDate, [r]);
+  }
+  // El Map conserva el orden de inserción, que es el de `absenceRowsInMonth`:
+  // el primer grupo es el de la falta marcada antes.
+  return [...byDate.entries()].map(([date, rows]) => ({ date, records: rows }));
+}
+
+/**
+ * Faltas del alumno YA marcadas para ese alumno en ese mes: UNA por clase
+ * perdida (la marca más antigua de cada fecha), de la más vieja a la más nueva.
+ * FUENTE ÚNICA del tope: la usan el cálculo (para decidir cuáles son cobrables),
+ * el botón del profesor, el aviso de "Añadir clase" y la pantalla de solicitudes
+ * de revisión, de modo que lo que la pantalla promete y lo que el cálculo hace no
+ * puedan discrepar.
+ */
+export function studentAbsencesInMonth<T extends AbsenceRecordRef>(
+  records: T[], teacherId: string, studentName: string, monthYear: string,
+): T[] {
+  return studentAbsenceDatesInMonth(records, teacherId, studentName, monthYear).map(g => g.records[0]);
 }
 
 /**
@@ -351,6 +387,12 @@ function sessionSpanFor(
  * módulo de IA: cualquier ClassAnalysisRow encaja estructuralmente.
  */
 export interface ClassTranscriptRef {
+  /**
+   * id de la fila. El cálculo no lo usa, pero sí la pantalla de solicitudes de
+   * revisión: cuando una clase ya tiene transcript, la solicitud se engancha a
+   * ESE análisis en vez de pedirle al profesor que lo vuelva a pegar.
+   */
+  id?: string | null;
   teacher_id?: string | null;
   student_name: string;
   class_date?: string | null;
@@ -526,11 +568,18 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
   //     que el alumno perdió, y lo que se limita es cuántas de ellas puede
   //     cobrar el profesor cada mes; un tope de por vida haría que un alumno de
   //     dos años no pudiera faltar nunca más. Se cuenta con la MISMA función que
-  //     usa el botón del profesor (studentAbsencesInMonth), para que el tope que
-  //     se anuncia en pantalla y el que decide el pago no puedan separarse.
+  //     usa el botón del profesor (studentAbsenceDatesInMonth), para que el tope
+  //     que se anuncia en pantalla y el que decide el pago no puedan separarse.
   //
   //   · Cancelación sobre la hora ('cancelacion_hora') → sigue como estaba: las
   //     2 primeras de TODO el historial por alumno.
+  //
+  // LOS DOS TOPES CUENTAN CLASES (fecha), NO FILAS. Una misma clase puede tener
+  // varias constancias del mismo tipo, y contarlas por separado gastaba el cupo
+  // con duplicados: la tercera falta REAL del mes caía en 'excede_limite_tipo' y
+  // no se pagaba. Además se marcan cobrables TODOS los registros de esas fechas,
+  // no solo el primero: cuál de ellos acaba anclando la fila lo decide el cruce
+  // de candidatos, y si marcáramos solo uno podría quedar cobrable el que no es.
   const cobrableTypeRecordIds = new Set<string>();
 
   const absenceMonths = new Set<string>();
@@ -539,9 +588,9 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
   }
   for (const k of absenceMonths) {
     const [student, month] = k.split('__');
-    studentAbsencesInMonth(myRecords, teacherId, student, month)
+    studentAbsenceDatesInMonth(myRecords, teacherId, student, month)
       .slice(0, ABSENCE_MONTHLY_CAP)
-      .forEach(r => cobrableTypeRecordIds.add(r.id));
+      .forEach(g => g.records.forEach(r => cobrableTypeRecordIds.add(r.id)));
   }
 
   const byStudentCancel = new Map<string, ClassRecord[]>();
@@ -553,7 +602,13 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
   }
   for (const arr of byStudentCancel.values()) {
     arr.sort((a, b) => (a.createdAt ?? '').localeCompare(b.createdAt ?? '') || a.classDate.localeCompare(b.classDate));
-    arr.slice(0, 2).forEach(r => cobrableTypeRecordIds.add(r.id));
+    // Mismo criterio que la falta: 2 CLASES distintas, con todas sus constancias.
+    const byDate = new Map<string, ClassRecord[]>();
+    for (const r of arr) {
+      const g = byDate.get(r.classDate);
+      if (g) g.push(r); else byDate.set(r.classDate, [r]);
+    }
+    [...byDate.values()].slice(0, 2).forEach(g => g.forEach(r => cobrableTypeRecordIds.add(r.id)));
   }
 
   // Candidatos (alumno + fecha) del mes. NIVEL 1: la única fuente que CREA una
@@ -1051,6 +1106,32 @@ export function ingresoBadge(row: { hasJoinLog: boolean; punctuality?: string; h
 // Categoría simplificada para el profesor. Wrapper de classifyPlan (ÚNICA fuente
 // de verdad). Acepta los campos completos (plan + objetivo + plan/producto del
 // alumno) o, por compatibilidad, un único texto libre.
+/**
+ * Lo que valdría UNA clase de ese alumno en esa fecha: tarifa × horas.
+ *
+ * Misma cadena que usa `calculateTeacherFinance` para decidir el importe de una
+ * fila (clasificación del plan → tipo → antigüedad → tramo → tarifa), expuesta
+ * aparte para que el resumen de "validar en bloque" del admin diga un número que
+ * no pueda discrepar del que va a acabar cobrando el profesor.
+ *
+ * Es una ESTIMACIÓN: el cupo mensual del alumno puede retener alguna de las
+ * clases una vez aplicado (`excede_limite`), y eso solo se sabe calculando el mes
+ * entero. Quien muestre esto tiene que decir que es aproximado.
+ */
+export function estimateClassAmount(args: {
+  assignment?: Assignment;
+  student?: Student;
+  rates: FinanceRate[];
+  date: string;
+  durationHours?: number;
+}): number {
+  const planClass = classifyFor(args.assignment, args.student);
+  const start = args.assignment?.startDate;
+  const antiquityDays = start ? Math.max(0, daysBetween(start, args.date)) : 0;
+  const tier: 'nuevo' | 'antiguo' = antiquityDays < 30 ? 'nuevo' : 'antiguo';
+  return findRate(args.rates, planClass.financeType, tier) * (args.durationHours ?? 1);
+}
+
 export function classCategoryBadge(
   input?: {
     assignmentPlan?: string | null;

@@ -237,6 +237,14 @@ export interface AddClassModalProps {
    * se pueden cambiar (cambiarlos pegaría el transcript en la clase equivocada).
    */
   lockClass?: boolean;
+  /**
+   * El tipo de clase ya se eligió antes de abrir el modal: se muestra, no se
+   * puede cambiar. Lo usa la pantalla de solicitudes de revisión, donde el
+   * profesor elige el tipo primero y este modal solo recoge el transcript.
+   */
+  lockType?: boolean;
+  /** Texto del botón de guardado. Por defecto "Guardar registro". */
+  submitLabel?: string;
   /** Texto del recuadro verde de contexto. Si no viene, se usa el de Finanzas. */
   contextNote?: React.ReactNode;
   /**
@@ -253,7 +261,8 @@ export interface AddClassModalProps {
 }
 
 export function AddClassModal({
-  teacher, myAssignments, classRecords, initial, title, lockClass, contextNote, durationHours, onClose, onSaved,
+  teacher, myAssignments, classRecords, initial, title, lockClass, lockType, contextNote,
+  durationHours, submitLabel, onClose, onSaved,
 }: AddClassModalProps) {
   // Se extrae a una variable para que el memo dependa del nombre y no del objeto
   // `initial` entero (que el llamador puede recrear en cada render).
@@ -406,9 +415,15 @@ export function AddClassModal({
           </div>
           <div>
             <label style={labelStyle}>Tipo de clase <span style={{ color: '#ef4444' }}>*</span></label>
-            <select value={classType} onChange={e => setClassType(e.target.value as ClassRecordType)} style={inputStyle}>
-              {CLASS_TYPE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
+            {lockType ? (
+              <div style={readOnlyStyle}>
+                {CLASS_TYPE_OPTIONS.find(o => o.value === classType)?.label ?? classType}
+              </div>
+            ) : (
+              <select value={classType} onChange={e => setClassType(e.target.value as ClassRecordType)} style={inputStyle}>
+                {CLASS_TYPE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            )}
           </div>
           {limitReached ? (
             <>
@@ -500,7 +515,7 @@ export function AddClassModal({
               <div style={{ display: 'flex', gap: 10, marginTop: 2 }}>
                 <button onClick={onClose} disabled={saving} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#6b7280', cursor: saving ? 'not-allowed' : 'pointer', fontSize: 14, fontFamily: 'inherit' }}>Cancelar</button>
                 <button onClick={handleSave} disabled={!canSave || checking} style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: canSave && !checking ? '#1E9E3A' : '#d1d5db', color: 'white', cursor: canSave && !checking ? 'pointer' : 'not-allowed', fontSize: 14, fontWeight: 700, fontFamily: 'inherit' }}>
-                  {checking ? 'Verificando...' : saving ? 'Guardando...' : 'Guardar registro'}
+                  {checking ? 'Verificando...' : saving ? 'Guardando...' : (submitLabel ?? 'Guardar registro')}
                 </button>
               </div>
             </>

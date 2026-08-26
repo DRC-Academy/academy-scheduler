@@ -147,6 +147,12 @@ export interface ValRow {
   flags: string[];
   status: string;
   reviewedBy: string | null;
+  /**
+   * La clase está aprobada ('ok', contando para el pago) y la verificación
+   * tardía encontró algo DESPUÉS de guardarla. No se despaga sola —eso dejó de
+   * ocurrir—, pero entra en la cola para que alguien la mire.
+   */
+  lateFinding: boolean;
   /** La fila original: el desplegable necesita transcript y detalles. */
   src: FlaggedTranscript;
 }
@@ -164,6 +170,7 @@ export function toRow(r: FlaggedTranscript, teacherName: string): ValRow {
     flags: r.flags,
     status: r.validationStatus,
     reviewedBy: r.reviewedBy,
+    lateFinding: r.lateFinding,
     src: r,
   };
 }

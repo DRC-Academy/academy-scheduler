@@ -13,6 +13,7 @@
 // distintos salían todas como la misma.
 
 import { supabase } from '@/lib/supabase';
+import { fetchAllPages } from '@/lib/db';
 
 /**
  * Normalización MÍNIMA y solo cosmética: que un espacio de más no cuente como
@@ -96,11 +97,15 @@ export async function checkTranscriptDuplicates(args: {
   classDate: string;
   hash: string;
 }): Promise<DupeCheck> {
-  const { data, error } = await supabase
-    .from('class_analyses')
-    .select('id, student_name, class_date, analyzed_at, transcript_hash')
-    .eq('teacher_id', args.teacherId)
-    .order('analyzed_at', { ascending: false });
+  // Paginada: son TODAS las transcripciones del profesor y crecen con cada clase.
+  // Truncada, el detector de duplicados dejaría de ver las viejas y volvería a
+  // aceptar como nuevo un texto ya subido.
+  const { rows: data, error } = await fetchAllPages('class_analyses (duplicados)', (from, to) =>
+    supabase.from('class_analyses')
+      .select('id, student_name, class_date, analyzed_at, transcript_hash')
+      .eq('teacher_id', args.teacherId)
+      .order('analyzed_at', { ascending: false }).order('id', { ascending: false })
+      .range(from, to));
 
   // Si la consulta falla (p. ej. falta la columna transcript_hash), se degrada a
   // "sin duplicados": la verificación nunca debe impedir guardar una clase.

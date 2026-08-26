@@ -145,6 +145,21 @@ export function ValidationRow(p: ValRowProps) {
           fontSize: 13, color: '#5c6a62', lineHeight: 1.45,
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         }}>
+          {/* La clase ya está aprobada y cobrando: la verificación tardía
+              encontró algo DESPUÉS. Se marca fuerte porque es el único sitio
+              donde este hallazgo se ve; si no, solo existía en la campanita. */}
+          {row.lateFinding && (
+            <span
+              title="La clase ya estaba aprobada y sigue contando para el pago. La verificación posterior encontró estas señales."
+              style={{
+                display: 'inline-block', marginRight: 7, padding: '1px 7px', borderRadius: 999,
+                fontSize: 10.5, fontWeight: 800, letterSpacing: '0.02em',
+                background: 'rgba(255,196,0,0.22)', color: '#8a6d00', border: '1px solid rgba(255,196,0,0.55)',
+              }}
+            >
+              HALLAZGO POSTERIOR
+            </span>
+          )}
           {row.alertText}
         </span>
 

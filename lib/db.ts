@@ -6,6 +6,55 @@ import { fetchOpenAlertState } from './interventionsClient';
 import { findContiguityMismatches, type ContiguityMismatch } from './teacherClasses';
 import { Teacher, Student, Assignment, AppUser, Grid, TeacherStatus, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, AssignedSlot, EmailPreferences, SalesContactResult, RecoveryCell } from '@/types';
 
+// ── PAGINACIÓN ───────────────────────────────────────────────────────────────
+//
+// PostgREST corta TODA consulta en 1000 filas (`db-max-rows`) y no avisa de
+// ninguna manera: no hay error, no hay flag, solo faltan filas. Un `.limit(2000)`
+// tampoco lo salta — el techo del servidor manda sobre el del cliente.
+//
+// Lo que costó descubrirlo: class_join_logs y class_records pasaron de 1000 en
+// agosto de 2026, y desde entonces finanzas solo veía desde el 4 de agosto. Julio
+// entero salía en CERO clases y cero euros para todos los profesores, y de agosto
+// faltaban 106 clases. Nadie vio un error entre medias.
+//
+// REGLA: toda consulta que devuelva una COLECCIÓN pasa por acá. Las que buscan
+// una fila (`.single()`, `.maybeSingle()`) y los conteos (`head: true`) no lo
+// necesitan.
+const PAGE_SIZE = 1000;
+/** Tope de seguridad: 50 páginas = 50 000 filas. Si se alcanza, algo va mal. */
+const MAX_PAGES = 50;
+
+/**
+ * Trae TODAS las filas de una consulta, de 1000 en 1000.
+ *
+ * `run(desde, hasta)` tiene que aplicar `.range(desde, hasta)` sobre la consulta
+ * ya construida (con su `select`, sus filtros y su `order`). Se corta cuando una
+ * página viene incompleta, que es la señal de que no hay más.
+ *
+ * IMPORTANTE: el `order` no es opcional en la práctica. Sin un orden estable,
+ * PostgREST puede devolver la misma fila en dos páginas y saltarse otra.
+ */
+export async function fetchAllPages<T>(
+  label: string,
+  run: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string; code?: string } | null }>,
+): Promise<{ rows: T[]; error: { message: string; code?: string } | null }> {
+  const rows: T[] = [];
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const from = page * PAGE_SIZE;
+    const { data, error } = await run(from, from + PAGE_SIZE - 1);
+    if (error) return { rows, error };
+    const lote = data ?? [];
+    rows.push(...lote);
+    // Página incompleta = última página.
+    if (lote.length < PAGE_SIZE) return { rows, error: null };
+  }
+  console.error(
+    `[db] ${label}: se alcanzó el tope de ${MAX_PAGES} páginas (${MAX_PAGES * PAGE_SIZE} filas). ` +
+    'La lista está incompleta: revisá si la consulta necesita un filtro.',
+  );
+  return { rows, error: null };
+}
+
 // ── AUTH ─────────────────────────────────────────────────────────────────────
 
 export async function dbAuthenticate(username: string, password: string): Promise<AppUser | null> {
@@ -500,10 +549,8 @@ export async function dbSaveTeacherCalendarHours(
 // ── STUDENTS ─────────────────────────────────────────────────────────────────
 
 export async function dbGetStudents(): Promise<Student[]> {
-  const { data, error } = await supabase
-    .from('students')
-    .select('*')
-    .order('name');
+  const { rows: data, error } = await fetchAllPages('students', (from, to) =>
+    supabase.from('students').select('*').order('name').order('id').range(from, to));
 
   if (error || !data) return [];
 
@@ -680,12 +727,11 @@ export async function dbUpsertStudent(student: Student): Promise<void> {
 // ── ASSIGNMENTS ───────────────────────────────────────────────────────────────
 
 export async function dbGetAssignments(): Promise<Assignment[]> {
-  const { data, error } = await supabase
-    .from('assignments')
-    .select('*')
-    .order('created_at', { ascending: false });
+  const { rows: data, error } = await fetchAllPages('assignments', (from, to) =>
+    supabase.from('assignments').select('*')
+      .order('created_at', { ascending: false }).order('id', { ascending: false }).range(from, to));
 
-  if (error || !data) return [];
+  if (error) { console.error('[db] No se pudieron leer las asignaciones:', error); return []; }
 
   return data.map(row => ({
     id:                    row.id,
@@ -2368,9 +2414,12 @@ export async function dbRevertPenalty(p: {
 }
 
 export async function dbGetScoringEvents(teacherId?: string): Promise<ScoringEvent[]> {
-  let q = supabase.from('scoring_events').select('*').order('created_at', { ascending: false });
-  if (teacherId) q = (q as any).eq('teacher_id', teacherId);
-  const { data, error } = await q;
+  const { rows: data, error } = await fetchAllPages('scoring_events', (from, to) => {
+    let q = supabase.from('scoring_events').select('*')
+      .order('created_at', { ascending: false }).order('id', { ascending: false });
+    if (teacherId) q = (q as any).eq('teacher_id', teacherId);
+    return (q as any).range(from, to);
+  });
   // Se LANZA ante error en vez de devolver []: una lista vacía es un estado
   // legítimo (no hay eventos) y el llamador no podía distinguirla de un fallo de
   // red, así que un refresh caído vaciaba el scoring en pantalla.
@@ -2916,14 +2965,16 @@ export async function dbLogClassJoin(
 }
 
 export async function dbGetClassJoinLogs(): Promise<ClassJoinLog[]> {
-  const { data, error } = await supabase
-    .from('class_join_logs')
-    .select('*')
-    .order('clicked_at', { ascending: false });
+  // PAGINADA. Es el NIVEL 1 de finanzas: sin el ingreso, la clase no existe para
+  // el pago. Truncada a 1000 filas dejaba a julio entero en cero euros y hacía
+  // que /revisiones ofreciera reclamar clases que sí tenían su clic.
+  const { rows: data, error } = await fetchAllPages('class_join_logs', (from, to) =>
+    supabase.from('class_join_logs').select('*')
+      .order('clicked_at', { ascending: false }).order('id', { ascending: false }).range(from, to));
 
-  if (error || !data) return [];
+  if (error) { console.error('[db] No se pudieron leer los ingresos:', error); return []; }
 
-  return (data as any[]).map(row => ({
+  return data.map(row => ({
     id:            row.id,
     teacherId:     row.teacher_id,
     teacherName:   row.teacher_name,
@@ -2935,7 +2986,48 @@ export async function dbGetClassJoinLogs(): Promise<ClassJoinLog[]> {
     subscriptionStatus:   row.subscription_status ?? undefined,
     enteredWithoutActive: row.entered_without_active ?? false,
     subscriptionDaysRemaining: row.subscription_days_remaining ?? undefined,
+    source:        row.source === 'manual' ? 'manual' : 'click',
+    createdBy:     row.created_by ?? undefined,
   }));
+}
+
+/**
+ * Ingreso creado A MANO por el admin al aprobar una solicitud de revisión.
+ *
+ * Es la ÚNICA vía para que una clase sin clic entre a finanzas, y por eso deja
+ * rastro de quién la habilitó. `punctuality: 'on_time'` porque no hubo clic que
+ * medir y la clase la validó una persona: penalizarla por un retraso que nadie
+ * observó sería inventarse un dato.
+ *
+ * Resiliente: si la base no tiene todavía las columnas source/created_by
+ * (supabase-class-review-requests.sql sin correr) se reintenta sin ellas, para
+ * que la aprobación no se caiga por un dato de auditoría.
+ */
+export async function dbCreateManualJoinLog(p: {
+  teacherId: string; teacherName: string; studentName: string;
+  scheduledDate: string; scheduledTime: string; createdBy: string;
+  subscriptionStatus?: string;
+}): Promise<string> {
+  const id = `cjl_manual_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const base = {
+    id,
+    teacher_id:     p.teacherId,
+    teacher_name:   p.teacherName,
+    student_name:   p.studentName,
+    scheduled_date: p.scheduledDate,
+    scheduled_time: p.scheduledTime || '00:00',
+    clicked_at:     new Date().toISOString(),
+    punctuality:    'on_time',
+    subscription_status: p.subscriptionStatus ?? null,
+  };
+  let { error } = await supabase.from('class_join_logs')
+    .insert({ ...base, source: 'manual', created_by: p.createdBy });
+  if (error && (error.code === 'PGRST204' || error.code === '42703')) {
+    console.warn('[db] class_join_logs sin source/created_by. Corré supabase-class-review-requests.sql; el ingreso se crea sin trazabilidad.');
+    ({ error } = await supabase.from('class_join_logs').insert(base));
+  }
+  if (error) throw new Error(`No se pudo crear el ingreso manual: ${error.message}`);
+  return id;
 }
 
 // ── UNASSIGNED STUDENTS ───────────────────────────────────────────────────────
@@ -3083,12 +3175,12 @@ export async function dbNotifyNewAssignment(
 }
 
 export async function dbGetNotificationsForUser(userId: string, role: string): Promise<AppNotification[]> {
-  const { data, error } = await supabase
-    .from('notifications')
-    .select('*')
-    .or(`target_user.eq.${userId},target_role.eq.${role}`)
-    .order('created_at', { ascending: false });
-  if (error || !data) return [];
+  // Paginada: la tabla pasó de 1000 filas y la campanita dejaba fuera las viejas.
+  const { rows: data, error } = await fetchAllPages('notifications (usuario)', (from, to) =>
+    supabase.from('notifications').select('*')
+      .or(`target_user.eq.${userId},target_role.eq.${role}`)
+      .order('created_at', { ascending: false }).order('id', { ascending: false }).range(from, to));
+  if (error) { console.error('[db] No se pudieron leer las notificaciones:', error); return []; }
   // La exclusión se aplica aquí y no en la consulta a propósito: un filtro
   // `not.cs` sobre la columna fallaría entero si la migración no está corrida, y
   // dejaría al profesor sin NINGUNA notificación. Filtrar en memoria degrada bien
@@ -3105,21 +3197,22 @@ export async function dbMarkNotificationRead(notificationId: string, userId: str
 }
 
 export async function dbGetAllNotifications(): Promise<AppNotification[]> {
-  const { data, error } = await supabase
-    .from('notifications')
-    .select('*')
-    .order('created_at', { ascending: false });
-  if (error || !data) return [];
+  const { rows: data, error } = await fetchAllPages('notifications (todas)', (from, to) =>
+    supabase.from('notifications').select('*')
+      .order('created_at', { ascending: false }).order('id', { ascending: false }).range(from, to));
+  if (error) { console.error('[db] No se pudieron leer las notificaciones:', error); return []; }
   return data.map(mapNotif);
 }
 
 export async function dbMarkAllNotificationsRead(userId: string, role: string): Promise<void> {
   // `select('*')` y no `'id, read_by, excluded_users'`: pedir una columna que
   // todavía no existe rompería el marcado entero, que hoy funciona.
-  const { data } = await supabase
-    .from('notifications')
-    .select('*')
-    .or(`target_user.eq.${userId},target_role.eq.${role}`);
+  // Paginada: sin esto "marcar todas como leídas" dejaba sin marcar las más
+  // viejas y el contador nunca llegaba a cero.
+  const { rows: data } = await fetchAllPages('notifications (marcar leídas)', (from, to) =>
+    supabase.from('notifications').select('*')
+      .or(`target_user.eq.${userId},target_role.eq.${role}`)
+      .order('id', { ascending: false }).range(from, to));
   if (!data || data.length === 0) return;
   const unread = data.filter((n: any) =>
     !(n.read_by ?? []).includes(userId) && !(n.excluded_users ?? []).includes(userId));
@@ -3273,12 +3366,18 @@ export async function dbCountClassTypeForStudent(
 }
 
 export async function dbGetClassRecords(): Promise<import('@/types').ClassRecord[]> {
-  const { data, error } = await supabase
-    .from('class_records')
-    .select('*')
-    .order('class_date', { ascending: false });
-  if (error || !data) return [];
-  return (data as any[]).map(mapClassRecord);
+  // PAGINADA. Son las constancias (faltas, cancelaciones, recuperaciones) de las
+  // que sale el tipo de cada clase en finanzas. `class_records` no tiene columna
+  // `transcript`, así que el `select('*')` no arrastra texto pesado.
+  //
+  // Se ordena por `class_date` y `id`: la fecha sola no es un orden estable (hay
+  // decenas de registros por día) y sin desempate la paginación puede repetir una
+  // fila y saltarse otra.
+  const { rows: data, error } = await fetchAllPages('class_records', (from, to) =>
+    supabase.from('class_records').select('*')
+      .order('class_date', { ascending: false }).order('id', { ascending: false }).range(from, to));
+  if (error) { console.error('[db] No se pudieron leer los registros de clase:', error); return []; }
+  return data.map(mapClassRecord);
 }
 
 /**
@@ -3303,31 +3402,54 @@ export async function dbGetClassTranscripts(): Promise<import('@/lib/finance').C
   //
   // Si la migración supabase-has-transcript.sql no está corrida, la columna no
   // existe y se reintenta con `transcript` — mismo resultado, sin ahorro.
+  //
+  // PAGINADA (de 1000 en 1000). Es la más urgente de todas: class_analyses estaba
+  // en 937 filas creciendo ~40 al día, y en cuanto pasara de 1000 los transcripts
+  // más viejos habrían dejado de llegar. Como el transcript es lo que hace pagable
+  // una clase, eso habría despagado clases solas, en silencio y hacia atrás.
+  //
+  // Primero se PRUEBA qué juego de columnas admite la base (una fila basta) y
+  // recién después se pagina con el que funcionó: así el descarte de columnas
+  // opcionales no cuesta una lectura completa por intento.
   const OPCIONALES = ['join_log_id', 'validation_status'];
 
+  const paginar = (cols: string) => fetchAllPages<Record<string, unknown>>('class_analyses', (from, to) =>
+    supabase.from('class_analyses').select(cols)
+      // `id` desempata: `analyzed_at` se repite entre filas guardadas en el mismo
+      // instante y sin orden estable la paginación duplicaría y se saltaría filas.
+      .order('analyzed_at', { ascending: false }).order('id', { ascending: false })
+      .range(from, to) as unknown as PromiseLike<{ data: Record<string, unknown>[] | null; error: { message: string; code?: string } | null }>);
+
   for (const señal of ['has_transcript', 'transcript'] as const) {
-    const BASE = `teacher_id, student_name, class_date, analyzed_at, ${señal}`;
+    // `id` va en la base: lo necesita la pantalla de solicitudes de revisión para
+    // enganchar la solicitud al análisis que YA existe (una columna de texto
+    // corto, sin impacto en el egress).
+    const BASE = `id, teacher_id, student_name, class_date, analyzed_at, ${señal}`;
 
     for (let quitar = 0; quitar <= OPCIONALES.length; quitar++) {
       const cols = [BASE, ...OPCIONALES.slice(0, OPCIONALES.length - quitar)].join(', ');
-      const { data, error } = await supabase
-        .from('class_analyses')
-        .select(cols)
-        .order('analyzed_at', { ascending: false });
 
-      if (!error && data) {
-        if (quitar > 0) {
-          console.warn(`[db] class_analyses sin las columnas [${OPCIONALES.slice(OPCIONALES.length - quitar).join(', ')}]. Faltan migraciones: supabase-join-log-link.sql / supabase-transcript-validation.sql.`);
-        }
-        if (señal === 'transcript') {
-          console.warn('[db] class_analyses sin has_transcript: se está trayendo el TEXTO de todas las transcripciones (~11 MB). Corré supabase-has-transcript.sql.');
-        }
-        return data as unknown as import('@/lib/finance').ClassTranscriptRef[];
-      }
-      if (error && error.code !== '42703' && error.code !== 'PGRST204') {
-        console.error('[db] Error al leer class_analyses para finanzas:', error);
+      // Sonda: una sola fila para saber si estas columnas existen.
+      const probe = await supabase.from('class_analyses').select(cols).range(0, 0);
+      if (probe.error) {
+        if (probe.error.code === '42703' || probe.error.code === 'PGRST204') continue;
+        console.error('[db] Error al leer class_analyses para finanzas:', probe.error);
         return [];
       }
+
+      if (quitar > 0) {
+        console.warn(`[db] class_analyses sin las columnas [${OPCIONALES.slice(OPCIONALES.length - quitar).join(', ')}]. Faltan migraciones: supabase-join-log-link.sql / supabase-transcript-validation.sql.`);
+      }
+      if (señal === 'transcript') {
+        console.warn('[db] class_analyses sin has_transcript: se está trayendo el TEXTO de todas las transcripciones (~11 MB). Corré supabase-has-transcript.sql.');
+      }
+
+      const { rows, error } = await paginar(cols);
+      if (error) {
+        console.error('[db] Error al paginar class_analyses para finanzas:', error);
+        return [];
+      }
+      return rows as unknown as import('@/lib/finance').ClassTranscriptRef[];
     }
   }
   return [];
@@ -3369,6 +3491,13 @@ export interface FlaggedTranscript {
   details: TranscriptValidationDetails | null;
   /** Acceso por el botón "Ingresar a clase" enlazado a esta clase, si lo hubo. */
   joinLogId: string | null;
+  /**
+   * La clase está en 'ok' (contando para el pago) y la verificación tardía de la
+   * capa 3 encontró algo DESPUÉS. No la despaga —eso ya no ocurre—, pero tiene
+   * que verse: antes el único aviso era una notificación, y si se pasaba por alto
+   * el hallazgo no volvía a aparecer en ninguna parte.
+   */
+  lateFinding: boolean;
 }
 
 export interface FlaggedTranscriptsResult {
@@ -3400,10 +3529,16 @@ export interface PendingValidationSummary {
  * acumular 19 clases —la más vieja de 4 días— que no le contaban a nadie.
  */
 export async function dbCountPendingValidations(): Promise<PendingValidationSummary> {
-  const { data, error } = await supabase
-    .from('class_analyses')
-    .select('class_date, analyzed_at')
-    .eq('validation_status', 'review');
+  // Paginada: el total sale de `data.length`, así que un corte a 1000 no daría un
+  // error sino un número más chico — el peor fallo posible en un contador.
+  const { rows: data, error } = await fetchAllPages<{ class_date: string | null; analyzed_at: string | null }>(
+    'class_analyses (cola de validación)',
+    (from, to) => supabase.from('class_analyses')
+      .select('class_date, analyzed_at')
+      .eq('validation_status', 'review')
+      .order('id', { ascending: false })
+      .range(from, to) as unknown as PromiseLike<{ data: { class_date: string | null; analyzed_at: string | null }[] | null; error: { message: string; code?: string } | null }>,
+  );
 
   if (error || !data) {
     // Sin la columna (migración sin correr) no hay cola que mostrar: se calla.
@@ -3444,19 +3579,32 @@ export async function dbGetFlaggedTranscripts(): Promise<FlaggedTranscriptsResul
   // 'auto_approved' entra para que el admin pueda AUDITARLAS, aunque no
   // requieran ninguna acción suya. 'ok' se queda fuera a propósito: son las
   // limpias de score < 80, que nunca pasaron por validación.
-  const query = (cols: string) => supabase
-    .from('class_analyses')
-    .select(cols)
-    .in('validation_status', ['review', 'approved', 'rejected', 'auto_approved'])
-    .order('analyzed_at', { ascending: false });
+  // PAGINADA: el historial de validación no para de crecer y a partir de las 1000
+  // filas la pestaña habría dejado de mostrar las más viejas sin decir nada.
+  // El `or` incluye un caso más: las clases en 'ok' con HALLAZGO POSTERIOR.
+  //
+  // La capa 3 (IA de autenticidad) corre después del guardado y ya no despaga
+  // nada (ver recordLateAuthenticityCheck), pero deja su veredicto en
+  // `ai_authenticity_check`. Sin esta condición esas clases no aparecían en
+  // ninguna lista: el único aviso era la notificación, y si el admin no la veía,
+  // el hallazgo se perdía para siempre.
+  const FILTRO = 'validation_status.in.(review,approved,rejected,auto_approved),'
+    + 'and(validation_status.eq.ok,ai_authenticity_check.not.is.null)';
 
-  let { data, error } = await query(`${FLAGGED_BASE_COLS}, ${FLAGGED_EXTRA_COLS}`);
+  const query = (cols: string) => fetchAllPages<Record<string, unknown>>('class_analyses (validación)', (from, to) =>
+    supabase.from('class_analyses')
+      .select(cols)
+      .or(FILTRO)
+      .order('analyzed_at', { ascending: false }).order('id', { ascending: false })
+      .range(from, to) as unknown as PromiseLike<{ data: Record<string, unknown>[] | null; error: { message: string; code?: string } | null }>);
+
+  let { rows: data, error } = await query(`${FLAGGED_BASE_COLS}, ${FLAGGED_EXTRA_COLS}`);
 
   // Falta alguna de las opcionales: se reintenta con lo imprescindible. Solo si
   // ESTE segundo intento también falla estamos ante la migración sin correr.
   if (error && (error.code === '42703' || error.code === 'PGRST204')) {
     console.warn('[db] class_analyses no tiene join_log_id / validation_details; el detalle de validación irá incompleto. Corré supabase-validation-details.sql y supabase-join-log-link.sql.');
-    ({ data, error } = await query(FLAGGED_BASE_COLS));
+    ({ rows: data, error } = await query(FLAGGED_BASE_COLS));
   }
 
   if (error || !data) {
@@ -3485,6 +3633,10 @@ export async function dbGetFlaggedTranscripts(): Promise<FlaggedTranscriptsResul
     reviewedAt:       (r.validation_reviewed_at as string) ?? null,
     details:          (r.validation_details as TranscriptValidationDetails) ?? null,
     joinLogId:        (r.join_log_id as string) ?? null,
+    // HALLAZGO POSTERIOR: la clase ya estaba aprobada como 'ok' y la
+    // verificación tardía encontró algo. Sigue pagándose —no se despaga nada por
+    // detrás—, pero el admin tiene que poder verla sin depender de la campanita.
+    lateFinding:      (r.validation_status as string) === 'ok' && !!r.ai_authenticity_check,
   }));
   return { rows, missingColumns: false };
 }
@@ -3650,17 +3802,24 @@ export async function dbGetChurnOverview(riskThreshold = 65, topN = 15): Promise
     const [churnedRes, activeRes, recentRes] = await Promise.all([
       supabase.from('churn_snapshots').select('id', { count: 'exact', head: true }).eq('label', 'churned'),
       supabase.from('churn_snapshots').select('id', { count: 'exact', head: true }).eq('label', 'active'),
-      supabase.from('churn_snapshots')
+      // Se queda con la ÚLTIMA foto de cada alumno, así que hay que traer varias
+      // rondas de escaneo: con 177 alumnos, 300 filas se quedaban cortas a la
+      // segunda pasada y los últimos alumnos desaparecían del resumen.
+      //
+      // PAGINADA. Antes decía `.limit(2000)`, que NO servía de nada: el techo de
+      // PostgREST son 1000 filas y el límite del cliente no lo levanta. Con 931
+      // fotos todavía entraba justo; a la siguiente ronda de escaneo habría
+      // empezado a perder alumnos sin que nada lo dijera.
+      fetchAllPages('churn_snapshots', (from, to) => supabase.from('churn_snapshots')
         .select('id, student_name, teacher_id, captured_at, combined_risk, cancellations, late_count, days_since_last_class, speaking_trend, ai_reasoning, ai_explicit_quit')
-        // Se queda con la ÚLTIMA foto de cada alumno, así que hay que traer varias
-        // rondas de escaneo: con 177 alumnos, 300 filas se quedaban cortas a la
-        // segunda pasada y los últimos alumnos desaparecían del resumen.
-        .eq('label', 'active').order('captured_at', { ascending: false }).limit(2000),
+        .eq('label', 'active')
+        .order('captured_at', { ascending: false }).order('id', { ascending: false })
+        .range(from, to)),
     ]);
 
     // Última foto por alumno.
     const latest = new Map<string, ChurnRiskStudent>();
-    for (const r of (recentRes.data ?? []) as Array<Record<string, unknown>>) {
+    for (const r of (recentRes.rows ?? []) as Array<Record<string, unknown>>) {
       const key = String(r.student_name ?? '').trim().toLowerCase();
       if (!key || latest.has(key)) continue;
       latest.set(key, {
@@ -3742,6 +3901,37 @@ export async function dbAddClassRecord(
   });
   if (error) await supabase.from('class_records').insert(base);
   return { id, teacherId, teacherName, studentName, classDate, classTime, screenshotUrl, classType, comment, subscriptionStatus, recoveryForDate, createdAt };
+}
+
+/**
+ * ¿Ya hay una falta sin aviso de ese alumno en esa fecha? Devuelve su id.
+ *
+ * Es el guard de idempotencia de `markStudentAbsence`. Se pregunta a la BASE y no
+ * al estado de React a propósito: el botón ya está deshabilitado mientras guarda,
+ * así que los duplicados que encontró la auditoría de agosto de 2026 no vinieron
+ * de un doble clic sino de dos envíos deliberados con minutos —o días— de
+ * diferencia, cuando la fila seguía apareciendo como pendiente. Contra eso el
+ * único remedio es que la segunda escritura no ocurra.
+ *
+ * El nombre se compara normalizado en JS y no con `ilike`, que interpretaría un
+ * '%' o un '_' del nombre como comodín.
+ */
+export async function dbFindStudentAbsence(
+  teacherId: string, studentName: string, classDate: string,
+): Promise<string | null> {
+  const { data, error } = await supabase.from('class_records')
+    .select('id, student_name')
+    .eq('teacher_id', teacherId)
+    .eq('class_date', classDate)
+    .eq('class_type', 'falta_sin_aviso');
+  if (error) {
+    // Ante un fallo de lectura NO se bloquea el registro: perder una falta real
+    // es peor que un duplicado, que ya no gasta cupo (ver lib/finance).
+    console.error('[db] No se pudo comprobar si la falta ya existía:', error);
+    return null;
+  }
+  const wanted = normKey(studentName);
+  return (data ?? []).find(r => normKey(r.student_name) === wanted)?.id ?? null;
 }
 
 // Registra la constancia de una clase REPROGRAMADA (o cancelación sobre la hora que

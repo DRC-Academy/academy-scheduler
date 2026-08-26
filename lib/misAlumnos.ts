@@ -12,6 +12,7 @@
 // tolerante que usa el resto del sistema).
 
 import { supabase } from '@/lib/supabase';
+import { fetchAllPages } from '@/lib/db';
 import type { ClassAnalysisRow, StudentProfileRow } from '@/lib/aiTypes';
 import type { Assignment } from '@/types';
 
@@ -106,10 +107,15 @@ export async function loadStudentBundles(assignments: Assignment[]): Promise<Stu
   // teacher_id. Hoy afecta a 2 alumnos de 116 (los transferidos).
   const teacherIds = [...new Set(assignments.map(a => a.teacherId).filter(Boolean))];
 
+  // Paginada aunque hoy esté lejos del techo: son las clases de TODOS los alumnos
+  // del profesor y crecen sin parar. Cuando pase de 1000, "Mis alumnos" empezaría
+  // a perder el historial más viejo sin dar ningún error.
   const readAnalyses = (cols: string) =>
-    supabase.from('class_analyses').select(cols)
-      .in('teacher_id', teacherIds)
-      .order('analyzed_at', { ascending: false });
+    fetchAllPages('class_analyses (mis alumnos)', (from, to) =>
+      supabase.from('class_analyses').select(cols)
+        .in('teacher_id', teacherIds)
+        .order('analyzed_at', { ascending: false }).order('id', { ascending: false })
+        .range(from, to));
   const readProfiles = (cols: string) => supabase.from('student_profiles').select(cols);
   const missingCol = (e: { code?: string } | null) => e?.code === '42703' || e?.code === 'PGRST204';
 
@@ -134,7 +140,7 @@ export async function loadStudentBundles(assignments: Assignment[]): Promise<Stu
   if (analysesRes.error) console.error('[mis-alumnos] Error al leer class_analyses:', analysesRes.error);
 
   const profiles = (profilesRes.data ?? []) as unknown as StudentProfileRow[];
-  const analyses = (analysesRes.data ?? []) as unknown as ClassAnalysisRow[];
+  const analyses = (analysesRes.rows ?? []) as unknown as ClassAnalysisRow[];
 
   const pIdx = indexBy(profiles);
   const aIdx = indexBy(analyses);

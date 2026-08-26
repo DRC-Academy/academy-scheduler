@@ -269,14 +269,33 @@ export async function markAnalysisFailed(analysisId: string, message: string): P
   );
 }
 
-/** Degrada una clase a revisión (lo usa la capa 3 cuando corre después del guardado). */
-export async function markForReview(
+/**
+ * Deja constancia de lo que encontró la capa 3 (IA de autenticidad) cuando corre
+ * DESPUÉS del guardado, sin tocar el estado de validación.
+ *
+ * ANTES ESTO DESPAGABA CLASES HACIA ATRÁS. La función ponía
+ * `validation_status: 'review'` sobre clases que ya estaban en 'ok' —o sea, que
+ * ya contaban para el pago— y lo hacía minutos después de que el profesor viera
+ * "Clase guardada ✓, cuenta para tu pago". Nadie le avisaba: la clase
+ * simplemente dejaba de sumar y reaparecía como "Pendiente de transcript".
+ *
+ * Ahora el hallazgo se guarda (`ai_authenticity_check` + `transcript_validation_flags`)
+ * y se le avisa al admin, pero el estado NO baja: sacar una clase de 'ok' o de
+ * 'auto_approved' es una decisión de una persona, y para eso está el botón
+ * "Reabrir" del panel (dbReopenTranscript).
+ */
+export async function recordLateAuthenticityCheck(
   analysisId: string, ai: Record<string, unknown> | null, flags: string[],
 ): Promise<void> {
+  console.warn(
+    `[transcriptStore] La verificación tardía marcó señales en ${analysisId} [${flags.join(', ')}]. ` +
+    'Se guardan como constancia y se avisa al admin; el estado de validación NO se toca ' +
+    '(una clase ya aprobada solo la reabre una persona).',
+  );
   await writeWithFallback(
-    'marcar a revisión',
+    'registrar verificación tardía',
     row => supabase.from('class_analyses').update(row).eq('id', analysisId),
-    { validation_status: 'review', ai_authenticity_check: ai, transcript_validation_flags: flags },
+    { ai_authenticity_check: ai, transcript_validation_flags: flags },
   );
 }
 

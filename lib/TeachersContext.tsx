@@ -21,7 +21,7 @@ import {
   dbGetManualApprovals, dbAddManualApproval,
   dbChangeStudentTeacher, dbAddRescheduleRecord, dbAddRecoveryClass, dbRemoveAssignment,
   dbSetSalesContact,
-  dbApplyFaltaSideEffects, dbRevertStudentAbsence,
+  dbApplyFaltaSideEffects, dbRevertStudentAbsence, dbFindStudentAbsence,
 } from '@/lib/db';
 import type { AffectedTeacher, ChangeTeacherParams, DeleteTeacherResult, StudentLeftGrid } from '@/lib/db';
 import type { AssignedSlot } from '@/types';
@@ -554,10 +554,19 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
    * El tope de 2 por alumno y mes se comprueba acá además de en la pantalla: el
    * botón se deshabilita, pero la comprobación de verdad no puede vivir solo en
    * el render (dos pestañas abiertas marcarían tres faltas sin enterarse).
+   *
+   * IDEMPOTENTE por clase: si ese alumno ya tiene una falta sin aviso en esa
+   * fecha, no se crea otra. Los duplicados de agosto de 2026 no salieron de un
+   * doble clic —el botón ya se deshabilita mientras guarda— sino de dos envíos
+   * deliberados separados por minutos o días, cuando la fila seguía apareciendo
+   * como pendiente. Contra eso el único remedio es que la segunda escritura no
+   * ocurra. Se pregunta a la BASE y no a `classRecords`, que puede estar viejo.
    */
   async function markStudentAbsence(
     teacherId: string, studentName: string, date: string, time: string | undefined, comment?: string,
   ) {
+    const yaExiste = await dbFindStudentAbsence(teacherId, studentName, date);
+    if (yaExiste) return;   // ya está marcada: nada que hacer, y sin error que asuste
     const { allowed } = canMarkStudentAbsence(classRecords, teacherId, studentName, date.slice(0, 7));
     if (!allowed) throw new Error(ABSENCE_CAP_MESSAGE);
     await registerClassRecord(teacherId, studentName, date, time, null, 'falta_sin_aviso', comment);
