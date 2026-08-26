@@ -4,6 +4,7 @@
 // la clave anónima (RLS deshabilitado, igual que form_tokens).
 
 import { supabase } from '@/lib/supabase';
+import { publicBaseClient } from '@/lib/appUrl';
 
 // 'abandoned' = se empezó y el enlace caducó a medias. Sin nivel y sin vuelta
 // atrás; distinto de 'expired', que es el enlace que caducó sin abrirse nunca.
@@ -84,9 +85,7 @@ export function lookupTest(
 }
 
 export function buildTestUrl(token: string): string {
-  const base = (typeof window !== 'undefined' && window.location.origin)
-    || 'https://academy-scheduler-aqpt.vercel.app';
-  return `${base}/test/${token}`;
+  return `${publicBaseClient()}/test/${token}`;
 }
 
 export interface GenerateTestPayload {

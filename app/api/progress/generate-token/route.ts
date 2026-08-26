@@ -5,22 +5,12 @@
 // LECTURA y expira a los 30 días, pero cualquiera que lo tenga puede abrirlo.
 
 import { supabase } from '@/lib/supabase';
+import { publicBase } from '@/lib/appUrl';
 
 interface Body {
   studentId?: string;
   studentName?: string;
   teacherId?: string;
-}
-
-// Base pública. Se prioriza la env var y, si no, el origin de la request.
-function publicBase(request: Request): string {
-  const envUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '');
-  if (envUrl) return envUrl;
-  try {
-    return new URL(request.url).origin;
-  } catch {
-    return 'https://academy-scheduler-aqpt.vercel.app';
-  }
 }
 
 export async function POST(request: Request): Promise<Response> {

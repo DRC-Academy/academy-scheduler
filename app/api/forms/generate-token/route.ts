@@ -6,6 +6,7 @@
 // valida los datos mínimos; no expone información sensible (solo crea un link).
 
 import { supabase } from '@/lib/supabase';
+import { publicBase } from '@/lib/appUrl';
 
 interface Body {
   studentId?: string;
@@ -42,18 +43,6 @@ async function expirePreviousTokens(studentId: string | undefined, studentName: 
   expired += data?.length ?? 0;
 
   return expired;
-}
-
-// Base pública del formulario. Se prioriza el origin de la request (funciona en
-// local y en cualquier deploy); si no, la variable de entorno o el dominio prod.
-function publicBase(request: Request): string {
-  const envUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '');
-  if (envUrl) return envUrl;
-  try {
-    return new URL(request.url).origin;
-  } catch {
-    return 'https://academy-scheduler-aqpt.vercel.app';
-  }
 }
 
 export async function POST(request: Request): Promise<Response> {

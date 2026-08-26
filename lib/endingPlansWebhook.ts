@@ -22,11 +22,9 @@
 // anti-duplicado del canal que sí importa.
 
 import type { EndingPlan } from '@/lib/endingPlans';
+import { PUBLIC_APP_URL as APP_URL } from '@/lib/appUrl';
 
 const TIMEOUT_MS = 10_000;
-
-const APP_URL =
-  process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '') || 'https://academy-scheduler-aqpt.vercel.app';
 
 /**
  * Lo que recibe Zapier. Nombres en snake_case porque es el formato que espera el

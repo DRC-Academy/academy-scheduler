@@ -38,6 +38,7 @@ import {
   type AssignmentRow, type PendingEntry, type NeedsToken,
 } from '@/lib/formReminders';
 import { sendFollowupEmail, followupCopy } from '@/lib/studentFollowupEmails';
+import { publicBase } from '@/lib/appUrl';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -62,13 +63,6 @@ const TOKEN_COLS =
   'assignment_id, plan, level, status, created_at, completed_at, expires_at, ' +
   'form_reminder_count, form_reminder_last_sent, test_reminder_count, test_reminder_last_sent, ' +
   'reminder_variant';
-
-function publicBase(request: Request): string {
-  const envUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '');
-  if (envUrl) return envUrl;
-  try { return new URL(request.url).origin; }
-  catch { return 'https://academy-scheduler-aqpt.vercel.app'; }
-}
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 

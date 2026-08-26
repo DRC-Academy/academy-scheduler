@@ -3,13 +3,7 @@
 // resto del sistema). Espejo de app/api/forms/generate-token.
 
 import { createTestSession, type TestSessionInput } from '@/lib/levelTest/createSession';
-
-function publicBase(request: Request): string {
-  const envUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '');
-  if (envUrl) return envUrl;
-  try { return new URL(request.url).origin; }
-  catch { return 'https://academy-scheduler-aqpt.vercel.app'; }
-}
+import { publicBase } from '@/lib/appUrl';
 
 export async function POST(request: Request): Promise<Response> {
   let body: TestSessionInput;

@@ -16,6 +16,7 @@
 // Además se genera un formulario nuevo (el enlace anterior deja de funcionar).
 
 import { supabase } from '@/lib/supabase';
+import { publicBase } from '@/lib/appUrl';
 
 export const runtime = 'nodejs';
 export const maxDuration = 30;
@@ -49,12 +50,6 @@ const AI_FIELDS: Record<string, unknown> = {
 
 const isMissingCol = (e: { code?: string } | null): boolean =>
   e?.code === 'PGRST204' || e?.code === '42703';
-
-function publicBase(request: Request): string {
-  const envUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '');
-  if (envUrl) return envUrl;
-  try { return new URL(request.url).origin; } catch { return 'https://academy-scheduler-aqpt.vercel.app'; }
-}
 
 export async function POST(request: Request): Promise<Response> {
   let body: Body;

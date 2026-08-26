@@ -17,9 +17,9 @@ import {
 import type { RiskSignal } from '@/lib/aiTypes';
 import { cleanAiText } from '@/lib/textCleanup';
 import { longDateEs, retentionLine, type EndingPlan } from '@/lib/endingPlans';
+import { PUBLIC_APP_URL as APP_URL } from '@/lib/appUrl';
 
 const FROM = 'DRC Academy <notificaciones@drcacademy.com>';
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '') || 'https://academy-scheduler-aqpt.vercel.app';
 const PAGOS_EMAIL = 'pagos@drcacademy.com';
 // Destinatario de los avisos al admin (recordatorios de emails de presentación).
 // Configurable por entorno; si no está, cae en la dirección de pagos de DRC.

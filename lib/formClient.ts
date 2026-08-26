@@ -2,6 +2,7 @@
 // del token de cada alumno, generar un token nuevo y armar el link/email.
 
 import { supabase } from '@/lib/supabase';
+import { publicBaseClient } from '@/lib/appUrl';
 
 export interface FormTokenInfo {
   id: string;
@@ -57,9 +58,7 @@ export function lookupToken(
 }
 
 export function buildFormUrl(token: string): string {
-  const base = (typeof window !== 'undefined' && window.location.origin)
-    || 'https://academy-scheduler-aqpt.vercel.app';
-  return `${base}/formulario/${token}`;
+  return `${publicBaseClient()}/formulario/${token}`;
 }
 
 export interface GenerateTokenPayload {

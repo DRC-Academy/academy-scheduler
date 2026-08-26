@@ -10,17 +10,11 @@ import { generateFicha } from '@/lib/analyzeForm';
 import { fichaToColumns } from '@/lib/aiTypes';
 import { fetchTeacher, sendFormCompletedEmail } from '@/lib/emailNotifications';
 import { getOrCreateTestSession } from '@/lib/levelTest/createSession';
+import { publicBase } from '@/lib/appUrl';
 
 interface Body {
   token?: string;
   responses?: FormResponses;
-}
-
-function publicBase(request: Request): string {
-  const envUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '');
-  if (envUrl) return envUrl;
-  try { return new URL(request.url).origin; }
-  catch { return 'https://academy-scheduler-aqpt.vercel.app'; }
 }
 
 export async function POST(request: Request): Promise<Response> {
