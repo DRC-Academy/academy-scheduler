@@ -30,8 +30,6 @@ import type { HelpTooltipKey } from '@/lib/help-tooltips';
 import AiRiskTab from '@/components/ai/AiRiskTab';
 import LevelTestsTab from '@/components/admin/LevelTestsTab';
 import TranscriptValidationTab from '@/components/admin/TranscriptValidationTab';
-import ReviewRequestsTab from '@/components/admin/ReviewRequestsTab';
-import { dbCountPendingReviewRequests } from '@/lib/reviewRequests';
 import ChurnTab from '@/components/admin/ChurnTab';
 import { triggerEmail } from '@/lib/emailClient';
 import { notificationDirection, notificationTypeInfo, type NotificationDirection } from '@/lib/notificationDirection';
@@ -3802,7 +3800,7 @@ function ConflictDetailModal({ groups, onClose, onOpenAudit }: {
   );
 }
 
-const ADMIN_TABS = ['overview', 'teachers', 'emails', 'scoring', 'tracking', 'classlog', 'leveltests', 'validacion', 'revisiones', 'ai', 'bajas', 'notifications'] as const;
+const ADMIN_TABS = ['overview', 'teachers', 'emails', 'scoring', 'tracking', 'classlog', 'leveltests', 'validacion', 'ai', 'bajas', 'notifications'] as const;
 type AdminTab = typeof ADMIN_TABS[number];
 
 function AdminContent() {
@@ -3838,10 +3836,8 @@ function AdminContent() {
   const [pendingValidations, setPendingValidations] = useState<PendingValidationSummary>({ total: 0, oldestDate: null, oldestDays: 0 });
   useEffect(() => { dbCountPendingValidations().then(setPendingValidations).catch(() => {}); }, []);
 
-  // Solicitudes de revisión esperando. Son clases que HOY no existen para el pago:
-  // mientras nadie las mire, el profesor no cobra una clase que dio.
-  const [pendingReviews, setPendingReviews] = useState(0);
-  useEffect(() => { dbCountPendingReviewRequests().then(setPendingReviews).catch(() => {}); }, []);
+  // Las solicitudes de revisión viven en /finanzas (son clases esperando cobro).
+  // Su contador está en el badge de "Finanzas" del NavBar, no acá.
 
   // ── Conflictos REALES ──────────────────────────────────────────────────────
   // Hasta ahora este contador salía de `mockAlerts`, un array fijo de lib/mock-data:
@@ -3963,7 +3959,6 @@ function AdminContent() {
     { id: 'classlog',       label: 'Registro de clases' },
     { id: 'leveltests',     label: 'Tests de nivel' },
     { id: 'validacion',     label: 'Validación' },
-    { id: 'revisiones',     label: 'Revisiones' },
     { id: 'ai',             label: 'Riesgo' },
     { id: 'bajas',          label: 'Bajas' },
     { id: 'notifications',  label: 'Notificaciones' },
@@ -4010,16 +4005,6 @@ function AdminContent() {
                     border: pendingValidations.oldestDays >= 3 ? '1px solid rgba(255,196,0,0.5)' : '1px solid transparent',
                   }}>
                   {pendingValidations.total}
-                </span>
-              )}
-              {tab.id === 'revisiones' && pendingReviews > 0 && (
-                <span
-                  title={`${pendingReviews} clases sin ingreso esperando validación. Hasta que se resuelvan, el profesor no cobra.`}
-                  style={{
-                    marginLeft: 6, fontSize: 10.5, fontWeight: 700, padding: '1px 7px', borderRadius: 999,
-                    background: 'rgba(255,196,0,0.22)', color: '#8a6d00', border: '1px solid rgba(255,196,0,0.5)',
-                  }}>
-                  {pendingReviews}
                 </span>
               )}
             </button>
@@ -4539,7 +4524,6 @@ function AdminContent() {
 
         {/* TRANSCRIPT VALIDATION TAB */}
         {activeTab === 'validacion' && <TranscriptValidationTab />}
-        {activeTab === 'revisiones' && <ReviewRequestsTab />}
 
         {/* AI & RISK TAB */}
         {activeTab === 'ai' && <AiRiskTab teachers={teachers} assignments={assignments} />}

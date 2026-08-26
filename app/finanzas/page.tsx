@@ -11,6 +11,7 @@ import { calculateTeacherFinance, TeacherFinanceResult, ClassFinanceRow, ingreso
 import { classifyPlan } from '@/lib/productUtils';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { dbRevertPenalty } from '@/lib/db';
+import ReviewRequestsTab from '@/components/admin/ReviewRequestsTab';
 import { Assignment, ScoringEvent, FinanceManualApproval } from '@/types';
 
 // ─── Finance helpers ──────────────────────────────────────────────────────────
@@ -792,6 +793,11 @@ function FinanzasContent() {
             </button>
           </div>
           <FinanceTab />
+          {/* Solicitudes de revisión: clases que esperan a que alguien las
+              habilite para el pago. Viven acá y no en una pestaña propia del
+              panel porque son exactamente eso — clases esperando cobro— y
+              separarlas del resto de finanzas era pedir que se olvidaran. */}
+          <ReviewRequestsTab />
         </div>
       </PullToRefresh>
       {howOpen && <HowItWorksModal onClose={() => setHowOpen(false)} />}

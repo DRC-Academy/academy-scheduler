@@ -9,7 +9,7 @@
 // No se confunde con la pestaña "Validación": aquella juzga el CONTENIDO de un
 // transcript ya asociado a una clase que sí existe; esta decide si la clase
 // existió.
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useTeachers } from '@/lib/TeachersContext';
 import { useAuth } from '@/lib/AuthContext';
 import {
@@ -19,8 +19,9 @@ import {
 } from '@/lib/reviewRequests';
 import { studentAbsenceDatesInMonth, ABSENCE_MONTHLY_CAP, durationBadge, estimateClassAmount } from '@/lib/finance';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
-import { getTeacherAssignments } from '@/lib/db';
+import { getTeacherAssignments, dbGetTranscriptForReview, type TranscriptForReview } from '@/lib/db';
 import { getSpainParts } from '@/components/VisualCalendar';
+import { flagLabel } from '@/lib/transcriptValidation';
 import type { Assignment, ClassReviewRequest, ReviewResolvedType } from '@/types';
 
 const MESES_CORTOS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
@@ -247,6 +248,121 @@ function BulkConfirm({ items, amount, saving, onCancel, onConfirm }: {
   );
 }
 
+/** Estado de validación en palabras, para el modal. */
+function estadoLabel(s: string | null): { label: string; color: string; bg: string } {
+  switch (s) {
+    case 'auto_approved': return { label: 'Auto-aprobada', color: 'var(--ok)', bg: 'var(--ok-soft)' };
+    case 'approved':      return { label: 'Aprobada por el equipo', color: 'var(--ok)', bg: 'var(--ok-soft)' };
+    case 'review':        return { label: 'En revisión', color: '#8a6d00', bg: 'rgba(255,196,0,0.2)' };
+    case 'rejected':      return { label: 'Rechazada', color: '#b42318', bg: 'rgba(239,68,68,0.1)' };
+    case 'ok':            return { label: 'Válida', color: 'var(--ok)', bg: 'var(--ok-soft)' };
+    default:              return { label: 'Sin validar', color: 'var(--text-muted)', bg: 'var(--bg-surface-3)' };
+  }
+}
+
+/**
+ * Lectura del transcript de UNA solicitud, con su veredicto, para decidir sin
+ * cambiar de pantalla. El texto llega por `dbGetTranscriptForReview`, que se
+ * llama solo al abrir esta fila: los listados nunca traen la columna.
+ */
+function TranscriptModal({ request, data, loading, busy, onClose, onApprove, onReject }: {
+  request: ClassReviewRequest;
+  data: TranscriptForReview | null;
+  loading: boolean;
+  busy: boolean;
+  onClose: () => void;
+  onApprove: () => void;
+  onReject: () => void;
+}) {
+  const estado = estadoLabel(data?.validationStatus ?? null);
+  return (
+    <div
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 130, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+      onClick={e => { if (e.target === e.currentTarget && !busy) onClose(); }}
+      role="dialog" aria-modal="true"
+    >
+      <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 14, width: '100%', maxWidth: 780, maxHeight: '92vh', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ padding: '18px 22px 14px', borderBottom: '1px solid var(--border)' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 10 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary)' }}>{request.studentName}</div>
+              <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', marginTop: 2 }}>
+                {request.teacherName} · {fmtDate(request.classDate)}{request.classTime ? ` · ${request.classTime}` : ''}
+                {request.durationHours > 1 && ` · sesión de ${request.durationHours}h`}
+              </div>
+            </div>
+            <button onClick={onClose} disabled={busy} aria-label="Cerrar"
+              style={{ background: 'none', border: 'none', fontSize: 20, cursor: busy ? 'not-allowed' : 'pointer', color: 'var(--text-muted)', lineHeight: 1 }}>✕</button>
+          </div>
+
+          {/* Veredicto del validador: score, estado y señales. */}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12, fontWeight: 700, padding: '4px 10px', borderRadius: 7, background: estado.bg, color: estado.color }}>
+              {estado.label}
+            </span>
+            {data?.score != null && (
+              <span style={{
+                fontSize: 12, fontWeight: 700, padding: '4px 10px', borderRadius: 7,
+                background: data.score >= 80 ? 'var(--ok-soft)' : data.score >= 15 ? 'rgba(255,196,0,0.2)' : 'rgba(239,68,68,0.1)',
+                color: data.score >= 80 ? 'var(--ok)' : data.score >= 15 ? '#8a6d00' : '#b42318',
+              }}>
+                Score {data.score}/100
+              </span>
+            )}
+            {(data?.flags ?? []).length === 0 && !loading && (
+              <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Sin señales marcadas</span>
+            )}
+            {(data?.flags ?? []).map(f => (
+              <span key={f} style={{ fontSize: 11.5, padding: '3px 9px', borderRadius: 999, background: 'var(--bg-surface-3)', color: 'var(--text-secondary)' }}>
+                {flagLabel(f)}
+              </span>
+            ))}
+          </div>
+        </div>
+
+        {/* Texto */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '16px 22px', minHeight: 180 }}>
+          {loading ? (
+            <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)', fontSize: 13 }}>
+              Cargando la transcripción…
+            </div>
+          ) : !data?.transcript ? (
+            <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)', fontSize: 13 }}>
+              Esta solicitud no tiene transcripción guardada.
+            </div>
+          ) : (
+            <pre style={{
+              margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+              fontSize: 12.5, lineHeight: 1.65, color: 'var(--text-primary)',
+              fontFamily: 'var(--font-app), system-ui, sans-serif',
+            }}>
+              {data.transcript}
+            </pre>
+          )}
+        </div>
+
+        {/* Decidir sin cerrar y volver a buscar la fila. */}
+        {request.status === 'pendiente' && (
+          <div style={{ padding: '14px 22px', borderTop: '1px solid var(--border)', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={{ flex: 1, fontSize: 12, color: 'var(--text-muted)' }}>
+              Se registra como <b style={{ color: 'var(--text-secondary)' }}>{reviewTypeLabel(request.requestedType)}</b>.
+              Para reclasificarla, cerrá y usá el selector de la fila.
+            </span>
+            <button onClick={onReject} disabled={busy}
+              style={{ padding: '9px 16px', borderRadius: 8, border: '1px solid rgba(239,68,68,0.4)', background: 'transparent', color: '#b42318', cursor: busy ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
+              Rechazar
+            </button>
+            <button onClick={onApprove} disabled={busy}
+              style={{ padding: '9px 18px', borderRadius: 8, border: 'none', background: busy ? 'var(--bg-surface-3)' : '#1E9E3A', color: '#fff', cursor: busy ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+              {busy ? 'Guardando…' : 'Aprobar'}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function ReviewRequestsTab() {
   const { user } = useAuth();
   const { classRecords, loadFinanceData, assignments, students, financeRates } = useTeachers();
@@ -264,6 +380,32 @@ export default function ReviewRequestsTab() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmBulk, setConfirmBulk] = useState(false);
   const [bulkSaving, setBulkSaving] = useState(false);
+
+  // Lectura del transcript: una fila por vez, bajo demanda.
+  const [viewing, setViewing] = useState<ClassReviewRequest | null>(null);
+  const [txLoading, setTxLoading] = useState(false);
+  const [txData, setTxData] = useState<TranscriptForReview | null>(null);
+  // Caché en memoria por analysisId: si ya lo leí en esta sesión no vuelvo a
+  // pedirlo. `useRef` y no estado — cachear no tiene que repintar nada.
+  const txCache = useRef(new Map<string, TranscriptForReview>());
+
+  useEffect(() => {
+    const id = viewing?.analysisId;
+    if (!id) { setTxData(null); return; }
+    const cached = txCache.current.get(id);
+    if (cached) { setTxData(cached); return; }
+    let cancelled = false;
+    setTxLoading(true);
+    setTxData(null);
+    dbGetTranscriptForReview(id)
+      .then(d => {
+        txCache.current.set(id, d);
+        if (!cancelled) setTxData(d);
+      })
+      .catch(err => console.error('[admin] No se pudo leer la transcripción:', err))
+      .finally(() => { if (!cancelled) setTxLoading(false); });
+    return () => { cancelled = true; };
+  }, [viewing]);
 
   const reviewerName = user?.displayName || user?.username || 'admin';
 
@@ -470,6 +612,20 @@ export default function ReviewRequestsTab() {
         />
       )}
 
+      {viewing && (
+        <TranscriptModal
+          request={viewing}
+          data={txData}
+          loading={txLoading}
+          busy={busy === viewing.id}
+          onClose={() => setViewing(null)}
+          // Se decide desde el modal y se cierra solo: volver a buscar la fila
+          // entre 44 para pulsar el botón que ya se tenía delante no tiene sentido.
+          onApprove={async () => { const r = viewing; setViewing(null); await resolve(r, 'aprobada'); }}
+          onReject={async () => { const r = viewing; setViewing(null); await resolve(r, 'rechazada'); }}
+        />
+      )}
+
       {loading ? (
         <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: 13.5 }}>Cargando…</div>
       ) : visibles.length === 0 ? (
@@ -535,9 +691,18 @@ export default function ReviewRequestsTab() {
                     {reviewTypeLabel(r.requestedType)}
                   </span>
                   {r.requestedType === 'normal' && (
-                    <span style={{ fontSize: 12, color: r.analysisId ? 'var(--ok)' : '#b45309' }}>
-                      {r.analysisId ? 'con transcript' : 'SIN transcript'}
-                    </span>
+                    r.analysisId ? (
+                      // El texto se pide SOLO al pulsar esto, de esta fila: el
+                      // listado nunca trae la columna `transcript`.
+                      <button
+                        onClick={() => setViewing(r)}
+                        style={{ padding: '4px 11px', borderRadius: 7, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, fontWeight: 600, fontFamily: 'inherit' }}
+                      >
+                        Ver transcript
+                      </button>
+                    ) : (
+                      <span style={{ fontSize: 12, color: '#b45309' }}>SIN transcript</span>
+                    )
                   )}
                   {esFalta && (
                     <span style={{

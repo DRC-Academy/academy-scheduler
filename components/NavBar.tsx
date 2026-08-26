@@ -8,6 +8,7 @@ import { Search, Users, Calendar, CalendarDays, Wallet, Settings, Menu, X, Gradu
 import { Button } from '@/components/ui';
 import { PresentationEmailReminder } from '@/components/PresentationEmailReminder';
 import { useOnboardingActions } from '@/lib/OnboardingContext';
+import { dbCountPendingReviewRequests } from '@/lib/reviewRequests';
 
 // Íconos lucide en vez de emojis: /mis-clases y /finanzas usaban los dos el mismo
 // 💰, así que el ícono no distinguía nada.
@@ -48,8 +49,25 @@ export function NavBar() {
   const { openManual } = useOnboardingActions();
   const showTutorial = user?.role === 'teacher';
 
+  // Solicitudes de revisión esperando (solo admin). Va en la barra y no dentro de
+  // Finanzas a propósito: son clases que un profesor dio y todavía no cobra, así
+  // que tiene que verse sin entrar a buscarlas. Consulta de conteo, sin filas.
+  const [pendingReviews, setPendingReviews] = useState(0);
+  useEffect(() => {
+    if (user?.role !== 'admin') return;
+    let cancelled = false;
+    dbCountPendingReviewRequests()
+      .then(n => { if (!cancelled) setPendingReviews(n); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [user?.role, path]);
+
   // Cerrar el menú al navegar a otra ruta.
   useEffect(() => { setMenuOpen(false); }, [path]);
+
+  /** Badge de pendientes del ítem, si lo tiene. Hoy solo Finanzas del admin. */
+  const badgeFor = (href: string): number =>
+    href === '/finanzas' && user?.role === 'admin' ? pendingReviews : 0;
 
   function handleLogout() { setMenuOpen(false); logout(); router.push('/login'); }
 
@@ -86,6 +104,14 @@ export function NavBar() {
             }}>
               <Icon size={18} strokeWidth={2} />
               {item.label}
+              {badgeFor(item.href) > 0 && (
+                <span style={{
+                  marginLeft: 'auto', fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 999,
+                  background: 'rgba(255,196,0,0.22)', color: '#8a6d00', border: '1px solid rgba(255,196,0,0.5)',
+                }}>
+                  {badgeFor(item.href)}
+                </span>
+              )}
             </Link>
           );
         })}
@@ -147,6 +173,16 @@ export function NavBar() {
                 data-onboarding={`nav:${item.href}`}
                 className={`tnav-link${path === item.href ? ' is-active' : ''}`}>
                 {item.label}
+                {badgeFor(item.href) > 0 && (
+                  <span
+                    title={`${badgeFor(item.href)} solicitudes de revisión esperando. Hasta que se resuelvan, el profesor no cobra esas clases.`}
+                    style={{
+                      marginLeft: 6, fontSize: 10.5, fontWeight: 700, padding: '1px 7px', borderRadius: 999,
+                      background: 'rgba(255,196,0,0.22)', color: '#8a6d00', border: '1px solid rgba(255,196,0,0.5)',
+                    }}>
+                    {badgeFor(item.href)}
+                  </span>
+                )}
               </Link>
             ))}
           </div>

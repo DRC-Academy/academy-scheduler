@@ -3668,6 +3668,57 @@ export async function dbGetTranscriptText(analysisId: string): Promise<string> {
   return (data?.transcript as string) ?? '';
 }
 
+/** Lo que necesita el admin para decidir sobre UNA clase, sin cambiar de pantalla. */
+export interface TranscriptForReview {
+  transcript: string;
+  score: number | null;
+  flags: string[];
+  validationStatus: string | null;
+}
+
+/**
+ * Igual que `dbGetTranscriptText` pero trae además el veredicto del validador.
+ *
+ * Existe para el modal de la cola de solicitudes: el admin decide si habilita el
+ * pago de una clase, y para eso necesita el texto Y por qué el validador la marcó.
+ * Una sola fila, una sola llamada, SOLO cuando abre esa clase — los listados
+ * siguen sin pedir `transcript` jamás (sacarlo bajó el egress unas 1000 veces y
+ * eso no se toca).
+ *
+ * MISMA ADVERTENCIA que `dbGetTranscriptText`: esto NO restringe nada. Sale del
+ * navegador con la anon key y `class_analyses` está sin RLS, así que quien tenga
+ * esa llave lee el texto sin pasar por acá. Envolverlo en una ruta admin-only no
+ * lo arreglaría: el atajo seguiría abierto. La restricción de verdad es REVOKE de
+ * la columna + service role + RLS, que sigue pendiente.
+ */
+export async function dbGetTranscriptForReview(analysisId: string): Promise<TranscriptForReview> {
+  const vacío: TranscriptForReview = { transcript: '', score: null, flags: [], validationStatus: null };
+
+  const pedir = (cols: string) => supabase
+    .from('class_analyses').select(cols).eq('id', analysisId).maybeSingle();
+
+  let { data, error } = await pedir(
+    'transcript, transcript_validation_score, transcript_validation_flags, validation_status');
+
+  // Sin las columnas de validación (migración a medias) se lee al menos el texto:
+  // el admin puede seguir leyendo la clase, solo que sin el veredicto.
+  if (error && (error.code === '42703' || error.code === 'PGRST204')) {
+    ({ data, error } = await pedir('transcript'));
+  }
+  if (error || !data) {
+    if (error) console.error('[db] No se pudo leer la transcripción para revisar:', error);
+    return vacío;
+  }
+
+  const row = data as unknown as Record<string, unknown>;
+  return {
+    transcript:       (row.transcript as string) ?? '',
+    score:            (row.transcript_validation_score as number) ?? null,
+    flags:            (row.transcript_validation_flags as string[]) ?? [],
+    validationStatus: (row.validation_status as string) ?? null,
+  };
+}
+
 /**
  * Reabre una clase auto-aprobada: el admin vio algo que no le cuadra y la manda
  * a revisión manual. Es la única vía para sacar algo de 'auto_approved'.
