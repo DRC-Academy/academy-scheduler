@@ -10,9 +10,13 @@ import { useTeachers } from '@/lib/TeachersContext';
 import { calculateTeacherFinance, TeacherFinanceResult, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge, rowHoursLabel, financeStatusBadge, pendingTranscriptSummary, transcriptStateBadge, absenceBreakdownLabel, isStudentAbsence, mixedSessionBadge, recoveryCreditLabel, SUBSCRIPTION_STATUS_OPTIONS } from '@/lib/finance';
 import { classifyPlan } from '@/lib/productUtils';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
-import { dbRevertPenalty } from '@/lib/db';
+import { dbRevertPenalty, getTeacherAssignments } from '@/lib/db';
+import { buildClassFunnel } from '@/lib/classFunnel';
+import { ClassFunnelCard } from '@/components/ClassFunnelCard';
+import { dbGetReviewRequests } from '@/lib/reviewRequests';
+import { dbGetStudentDropouts, type StudentDropout } from '@/lib/studentPeriod';
 import ReviewRequestsTab from '@/components/admin/ReviewRequestsTab';
-import { Assignment, ScoringEvent, FinanceManualApproval } from '@/types';
+import { Assignment, ScoringEvent, FinanceManualApproval, Teacher, ClassReviewRequest } from '@/types';
 
 // ─── Finance helpers ──────────────────────────────────────────────────────────
 const FIN_MONTHS_ADMIN = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
@@ -58,6 +62,42 @@ const PILL_WARN = { background: 'var(--warn-soft)', color: 'var(--warn)' };
  * busca al abrirlo: antes solo estaba en una columna de la fila plegada, que es
  * justo la que se pierde de vista cuando la tabla se desplaza en horizontal.
  */
+/**
+ * El embudo del profesor dentro del detalle del admin. Es el MISMO componente y
+ * la misma función de cálculo que ve el profesor: si los dos leyeran fuentes
+ * distintas volveríamos al problema de raíz (dos pantallas, dos números, ninguna
+ * forma de saber cuál mirar).
+ */
+function TeacherFunnel({ teacher, monthYear, finance }: {
+  teacher: Teacher; monthYear: string; finance: TeacherFinanceResult;
+}) {
+  const { classJoinLogs, classRecords, classAnalyses } = useTeachers();
+  const [asgs, setAsgs] = useState<Assignment[]>([]);
+  const [requests, setRequests] = useState<ClassReviewRequest[]>([]);
+  const [dropouts, setDropouts] = useState<StudentDropout[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([getTeacherAssignments(teacher), dbGetReviewRequests(teacher.id), dbGetStudentDropouts()])
+      .then(([a, r, d]) => { if (!cancelled) { setAsgs(a); setRequests(r); setDropouts(d); } })
+      .catch(err => console.error('[finanzas] No se pudo armar el embudo:', err));
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teacher.id]);
+
+  const spain = getSpainParts(new Date());
+  const funnel = useMemo(() => buildClassFunnel({
+    monthYear, teacherId: teacher.id, assignments: asgs,
+    joinLogs: classJoinLogs, classRecords, analyses: classAnalyses,
+    requests, dropouts, gridOccupancy: gridOccupancyOfTeacher(teacher), finance,
+    todayIso: spain.dateStr, nowMinutes: spain.hour * 60 + spain.minute,
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [monthYear, teacher, asgs, classJoinLogs, classRecords, classAnalyses, requests, dropouts, finance]);
+
+  if (asgs.length === 0) return null;
+  return <ClassFunnelCard funnel={funnel} />;
+}
+
 function TeacherTotalCard({ result, monthLabel }: { result: TeacherFinanceResult; monthLabel: string }) {
   const pendiente = pendingTranscriptSummary(result);
   const desglose: Array<{ label: string; value: string; tone?: 'ok' | 'warn' | 'danger' }> = [
@@ -599,6 +639,12 @@ function FinanceTab() {
                   <div className="afd-panel">
                     <div className="afd">
                       <TeacherTotalCard result={r} monthLabel={finMonthLabel(monthYear)} />
+                      {/* El mismo embudo que ve el profesor, con la misma
+                          función de cálculo: dos números iguales o ninguno. */}
+                      {(() => {
+                        const t = teachers.find(x => x.id === r.teacherId);
+                        return t ? <TeacherFunnel teacher={t} monthYear={monthYear} finance={r} /> : null;
+                      })()}
                       <StudentDetailList
                         result={r} assignments={assignments} approvals={manualApprovals}
                         onApproveReview={(student, date) => approveReviewClass(r.teacherId, student, date, approvedBy)}

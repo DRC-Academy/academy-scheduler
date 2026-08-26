@@ -12,10 +12,11 @@ import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
 import { calcRegisteredClassNumber, dbCheckStudentExists, dbSetStudentProduct, dbEnsureStudentAndAssignment, dbSaveTeacherCalendarHours, getTeacherAssignments } from '@/lib/db';
 import type { StudentLeftGrid } from '@/lib/db';
-import { checkSubscription } from '@/lib/useSubscriptionStatus';
+import { checkSubscription, resolveSubscriptionEmail, subCategory } from '@/lib/useSubscriptionStatus';
 import { planBadgeStyle } from '@/lib/productUtils';
 import { isAssignableCell, withBaseState, baseStudentOf } from '@/lib/cells';
 import { isoDateLocal, classesForDate, groupContiguousClasses, sessionHoursLabel, gridOccupancyOfTeacher } from '@/lib/teacherClasses';
+import { periodIndex, dbGetStudentDropouts, type StudentDropout } from '@/lib/studentPeriod';
 import { StudentAutofillCard } from '@/components/StudentAutofillCard';
 import { useStudentAutofill } from '@/lib/useStudentAutofill';
 import { usePresentationSent, presentationBtnStyle, PresentationEmailBadge } from '@/components/teacherPanelUi';
@@ -87,7 +88,11 @@ function AssignStudentModal({
   const [step, setStep]     = useState<1 | 2>(1);
   const [selectedAssignment, setSelectedAssignment] = useState<Assignment | null>(null);
   const [slots, setSlots]       = useState<Array<{ day: string; hour: string }>>([{ day, hour }]);
-  const [startDate, setStartDate] = useState(today);
+  // VACÍA a propósito. Antes venía con la fecha de HOY y nadie la tocaba, así que
+  // "inicio de clases" acababa siendo "día en que lo cargué": un alumno dado de
+  // alta el 20 de septiembre para empezar el 5 de octubre arrastraba dos semanas
+  // de clases fantasma. Ahora hay que decirlo.
+  const [startDate, setStartDate] = useState('');
   const [newName, setNewName]   = useState('');
   const [newEmail, setNewEmail] = useState('');
   const [newLevel, setNewLevel] = useState('B1');
@@ -106,7 +111,9 @@ function AssignStudentModal({
     if (tab !== 'new') return;
     if (autofill.name)  setNewName(prev => (prev.trim() ? prev : autofill.name!));
     if (autofill.level) setNewLevel(autofill.level!);
-    if (autofill.startDate) setStartDate(prev => (prev && prev !== today ? prev : autofill.startDate!));
+    // La de WooCommerce solo rellena el campo VACÍO: si el profesor ya escribió
+    // una fecha, manda la suya.
+    if (autofill.startDate) setStartDate(prev => (prev ? prev : autofill.startDate!));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autofill.name, autofill.level, autofill.startDate, tab]);
 
@@ -153,13 +160,17 @@ function AssignStudentModal({
   function removeSlot(i: number) { setSlots(prev => prev.filter((_, idx) => idx !== i)); }
 
   const allSlotsValid = slots.length > 0 && slots.every(s => s.day && s.hour);
+  // Sin fecha de inicio no se guarda: es lo que define desde cuándo existen sus
+  // clases (ver lib/studentPeriod).
+  const puedeGuardarExistente = allSlotsValid && !!startDate;
 
   function selectStudent(a: Assignment) {
     setSelectedAssignment(a);
     const base = [...(a.slots || [])];
     if (!base.some(s => s.day === day && s.hour === hour)) base.unshift({ day, hour });
     setSlots(base);
-    setStartDate(a.startDate || today);
+    // Sin fecha guardada se deja VACÍO, no "hoy": que la diga quien la sabe.
+    setStartDate(a.startDate || '');
     setStep(2);
   }
 
@@ -168,7 +179,9 @@ function AssignStudentModal({
     setStep(1);
     setSelectedAssignment(null);
     setSlots([{ day, hour }]);
-    setStartDate(today);
+    // Vacía, como al abrir: cambiar de pestaña no puede dejar puesta una fecha
+    // que nadie eligió.
+    setStartDate('');
   }
 
   const uniqueStudents = Array.from(new Map(myAssignments.map(a => [a.studentName, a])).values());
@@ -299,7 +312,7 @@ function AssignStudentModal({
               <button
                 onClick={() => allSlotsValid && onConfirm({ isNew: false, studentName: selectedAssignment.studentName, slots, startDate, weeklyHours: slots.length, existingAssignment: selectedAssignment })}
                 disabled={!allSlotsValid}
-                style={{ padding: '11px', borderRadius: 9, border: 'none', background: allSlotsValid ? '#1E9E3A' : 'var(--bg-surface-3)', color: allSlotsValid ? 'white' : 'var(--text-muted)', cursor: allSlotsValid ? 'pointer' : 'not-allowed', fontSize: 14, fontWeight: 700, fontFamily: 'inherit' }}>
+                style={{ padding: '11px', borderRadius: 9, border: 'none', background: puedeGuardarExistente ? '#1E9E3A' : 'var(--bg-surface-3)', color: puedeGuardarExistente ? 'white' : 'var(--text-muted)', cursor: puedeGuardarExistente ? 'pointer' : 'not-allowed', fontSize: 14, fontWeight: 700, fontFamily: 'inherit' }}>
                 Confirmar — {slots.length} {slots.length === 1 ? 'clase' : 'clases'}/semana
               </button>
             </div>
@@ -1089,6 +1102,37 @@ function TeacherContent() {
   // se filtra `assignments` por teacherId, que era lo que dejaba colgados en
   // Asistencias / Próximas clases / Mis alumnos a los alumnos sin celdas.
   const [myAssignments, setMyAssignments] = useState<Assignment[]>([]);
+  // Bajas, para cerrar el período de cada alumno (ver lib/studentPeriod).
+  const [headerDropouts, setHeaderDropouts] = useState<StudentDropout[]>([]);
+  useEffect(() => { dbGetStudentDropouts().then(setHeaderDropouts).catch(() => {}); }, []);
+
+  // Alumnos SIN suscripción activa, resueltos EN VIVO contra WooCommerce (la
+  // misma `checkSubscription` que el badge de Alumnos, con su caché de 5 min
+  // compartida). Se MARCAN en el calendario, nunca se filtran: una suscripción
+  // vencida no significa que el alumno dejó de venir, y esconder su clase le
+  // borraría al profesor una clase real.
+  const [inactiveStudents, setInactiveStudents] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const out = new Set<string>();
+      for (const a of myAssignments) {
+        const email = resolveSubscriptionEmail(
+          students.find(s => s.name.trim().toLowerCase() === a.studentName.trim().toLowerCase())?.email,
+          a.studentEmail);
+        if (!email) continue;
+        try {
+          const info = await checkSubscription(email);
+          // Solo lo que es DE VERDAD una anomalía: 'unverified' y 'pending' no
+          // se marcan, para que el aviso signifique algo cuando aparece.
+          if (subCategory(info) === 'inactive') out.add(a.studentName.trim().toLowerCase());
+        } catch { /* si Woo falla no se marca nada: mejor sin aviso que uno falso */ }
+      }
+      if (!cancelled) setInactiveStudents(out);
+    })();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [myAssignments.length, students.length]);
 
   // Alumno que se quedó sin horario Y con la suscripción cancelada: se le AVISA
   // al profesor de lo que acaba de pasar. Nada más: el profesor desvincula, no
@@ -1409,10 +1453,13 @@ function TeacherContent() {
   // Cabecera: día y hora de España, la misma referencia que la agenda. Antes usaba
   // la hora local del navegador y podía anunciar la clase de otro día.
   const spainHeader = getSpainParts(new Date());
+  // Período de cada alumno: sin esto "Próxima clase" podía anunciar la de un
+  // alumno que todavía no empezó (ver lib/studentPeriod).
+  const periodosHeader = periodIndex(myAssignments, headerDropouts, teacher?.id ?? '');
   // Agrupada como en el resto de la app: una sesión de 2h es UNA clase que sigue
   // en curso hasta su hora de fin (endHourNum), no hasta la hora siguiente.
   const todayClassesHeader = groupContiguousClasses(
-    classesForDate(myAssignments, spainHeader.dateStr), teacher.id,
+    classesForDate(myAssignments, spainHeader.dateStr, periodosHeader), teacher.id,
     gridOccupancyOfTeacher(teacher),
   );
   const nowDecimalHeader = spainHeader.hour + spainHeader.minute / 60;
@@ -1618,6 +1665,7 @@ function TeacherContent() {
                 onGridChange={handleGridChange}
                 onOcupadoNeed={handleOcupadoNeed}
                 onRecuperacionNeed={handleRecuperacionNeed}
+                inactiveStudents={inactiveStudents}
               />
             )}
           </div>

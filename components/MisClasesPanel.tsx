@@ -39,6 +39,7 @@ import { useOnboardingActions } from '@/lib/OnboardingContext';
 import { registerTourBridge } from '@/lib/tourBridge';
 import { fetchRiskBriefings, briefingFor, type RiskBriefingIndex } from '@/lib/interventionsClient';
 import { AddClassModal, saveTeacherClass, ANALYSIS_FAILED_NOTICE } from '@/components/AddClassModal';
+import { periodIndex, dbGetStudentDropouts, type StudentDropout } from '@/lib/studentPeriod';
 import { PresentationModal } from '@/components/PresentationModal';
 import FormStatusBadge from '@/components/FormStatusBadge';
 import { lookupToken, formStateOf, type FormTokenInfo } from '@/lib/formClient';
@@ -512,6 +513,16 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     return !rescheduledFor(c.studentName, date) && !cancelledFor(c.studentName, date);
   }
 
+  // Período de cada alumno (inicio de clases → baja). El horario del grid es
+  // recurrente y sin fechas, así que sin esto un alumno que empieza el mes que
+  // viene ya aparece en la agenda de esta semana. Ver lib/studentPeriod.
+  const [dropouts, setDropouts] = useState<StudentDropout[]>([]);
+  useEffect(() => { dbGetStudentDropouts().then(setDropouts).catch(() => {}); }, []);
+  const periodos = useMemo(
+    () => periodIndex(myAssignments, dropouts, teacher.id),
+    [myAssignments, dropouts, teacher.id],
+  );
+
   // ── Días con sus clases, ya filtrados ────────────────────────────────────────
   // Sin useMemo a propósito: son unos pocos filtros sobre decenas de elementos.
   const dayGroups = visibleDays.map(iso => {
@@ -519,7 +530,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     // por la MISMA agrupación: dos celdas contiguas del mismo alumno salen como
     // una sola card de 2h, con un botón de transcript y un solo "Ingresar".
     const all = groupContiguousClasses([
-      ...classesForDate(myAssignments, iso),
+      ...classesForDate(myAssignments, iso, periodos),
       ...recoveriesForDate(grid, iso, myAssignments),
     ], teacher.id, gridOccupancy);
 
@@ -617,7 +628,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     const set = new Set<string>();
     const isos = new Set([...visibleDays, todayIso, addDaysIso(todayIso, 1), addDaysIso(todayIso, 2)]);
     for (const iso of isos) {
-      for (const c of [...classesForDate(myAssignments, iso), ...recoveriesForDate(grid, iso, myAssignments)]) {
+      for (const c of [...classesForDate(myAssignments, iso, periodos), ...recoveriesForDate(grid, iso, myAssignments)]) {
         const e = subEmailForAssignment(c.assignment);
         if (e) set.add(e);
       }

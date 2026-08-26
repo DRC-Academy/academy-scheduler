@@ -19,6 +19,7 @@ import {
 } from '@/lib/reviewRequests';
 import { studentAbsenceDatesInMonth, ABSENCE_MONTHLY_CAP, durationBadge, estimateClassAmount } from '@/lib/finance';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
+import { findStartDateMismatches } from '@/lib/studentPeriod';
 import { getTeacherAssignments, dbGetTranscriptForReview, type TranscriptForReview } from '@/lib/db';
 import { getSpainParts } from '@/components/VisualCalendar';
 import { flagLabel } from '@/lib/transcriptValidation';
@@ -109,6 +110,16 @@ function ClasesSinIngreso() {
 
   const total = porProfesor.reduce((s, p) => s + p.clases.length, 0);
 
+  // Fechas de inicio incoherentes con los hechos, en TODA la academia (no solo
+  // en el mes elegido: una fecha mal cargada no es un problema de este mes).
+  const mismatches = useMemo(() => {
+    const todas = Object.values(asgsByTeacher).flat();
+    if (todas.length === 0) return [];
+    return findStartDateMismatches({
+      assignments: todas, joinLogs: classJoinLogs, classRecords, analyses: classAnalyses,
+    });
+  }, [asgsByTeacher, classJoinLogs, classRecords, classAnalyses]);
+
   return (
     <div style={{ marginTop: 30, borderTop: '1px solid var(--border)', paddingTop: 24 }}>
       <h3 style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary)', margin: '0 0 5px' }}>
@@ -118,6 +129,28 @@ function ClasesSinIngreso() {
         Todo lo que el calendario dice que tocaba y no tiene clic en «Ingresar a clase». El profesor solo ve
         el mes en curso y las que dejaron algún rastro; acá podés ver el resto.
       </p>
+
+      {/* Fechas de inicio que no cuadran con los hechos. No se corrigen solas:
+          solo el profesor sabe si aquello fue una clase de prueba o el inicio de
+          verdad. Sin esta lista, los casos se pierden en un comentario. */}
+      {mismatches.length > 0 && (
+        <div style={{ background: 'rgba(255,196,0,0.10)', border: '1px solid rgba(255,196,0,0.45)', borderRadius: 10, padding: '12px 15px', marginBottom: 16 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#8a6d00', marginBottom: 5 }}>
+            {mismatches.length} alumno{mismatches.length === 1 ? '' : 's'} con clases anteriores a su fecha de inicio
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.55, marginBottom: 9 }}>
+            O empezaron antes de lo previsto, o la fecha está mal cargada. No se toca sola porque cambiarla
+            mueve qué clases existen: preguntale al profesor. Las clases se siguen viendo y cobrando igual.
+          </div>
+          {mismatches.map(m => (
+            <div key={`${m.teacherId}|${m.studentName}`} style={{ fontSize: 12.5, color: 'var(--text-primary)', padding: '3px 0' }}>
+              <b>{m.studentName}</b> <span style={{ color: 'var(--text-muted)' }}>({m.teacherName})</span> — inicio
+              declarado {fmtDate(m.declared)}, pero hay {m.source === 'ingreso' ? 'un ingreso' : m.source === 'registro' ? 'un registro' : 'un transcript'} del{' '}
+              {fmtDate(m.firstFact)} <span style={{ color: '#8a6d00' }}>({m.daysBefore} {m.daysBefore === 1 ? 'día' : 'días'} antes)</span>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap', marginBottom: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

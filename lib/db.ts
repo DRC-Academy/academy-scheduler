@@ -4552,3 +4552,28 @@ export async function dbMarkPaymentPaid(
   const { data } = await supabase.from('finance_payments').select('*').eq('id', id).single();
   return mapFinancePayment(data);
 }
+
+/**
+ * ¿Ya hay un ingreso de ese alumno en esa fecha? Devuelve su id.
+ *
+ * Guard de idempotencia al aprobar una solicitud de revisión: sin él, aprobar
+ * una clase que entre medias recibió su clic dejaría DOS ingresos del mismo día.
+ * Se compara por FECHA y no por hora, que es como empareja finanzas.
+ *
+ * Ante un error de lectura devuelve null (se crea el ingreso): perder una clase
+ * aprobada es peor que tener un acceso repetido en el historial.
+ */
+export async function dbFindJoinLog(
+  teacherId: string, studentName: string, scheduledDate: string,
+): Promise<string | null> {
+  const { data, error } = await supabase.from('class_join_logs')
+    .select('id, student_name')
+    .eq('teacher_id', teacherId)
+    .eq('scheduled_date', scheduledDate);
+  if (error) {
+    console.error('[db] No se pudo comprobar si la clase ya tenía ingreso:', error);
+    return null;
+  }
+  const wanted = normKey(studentName);
+  return (data ?? []).find(r => normKey(r.student_name) === wanted)?.id ?? null;
+}

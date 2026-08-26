@@ -19,6 +19,7 @@
 import type { Assignment, AssignedSlot, ClassRecord, ClassRecordType, Grid } from '@/types';
 import type { ClassTranscriptRef } from '@/lib/finance';
 import { baseStateOf, baseStudentOf } from '@/lib/cells';
+import { existsForStudent, type StudentPeriod } from '@/lib/studentPeriod';
 import {
   contiguousRunLength, groupByContiguousHour, hourNum, hourText, nkName,
   sessionIdOf, sessionRangeLabel,
@@ -132,11 +133,22 @@ export interface TeacherClass {
   recoveryFor?: string;   // 'YYYY-MM-DD' de la clase original que se recupera
 }
 
-/** FUENTE 1: slots recurrentes que caen en la fecha, ordenados por hora. */
-export function classesForDate(assignments: Assignment[], dateIso: string): TeacherClass[] {
+/**
+ * FUENTE 1: slots recurrentes que caen en la fecha, ordenados por hora.
+ *
+ * `periods` (lib/studentPeriod) descarta las clases fuera del período del alumno:
+ * el horario recurrente no tiene fechas, así que sin esto un alumno que empieza
+ * el mes que viene ya aparece en la agenda de hoy. Es OPCIONAL para no romper a
+ * los llamadores que todavía no lo pasan; cuando falta, se proyecta todo como
+ * antes.
+ */
+export function classesForDate(
+  assignments: Assignment[], dateIso: string, periods?: Map<string, StudentPeriod>,
+): TeacherClass[] {
   const dayName = dayNameFromIso(dateIso);
   const list: TeacherClass[] = [];
   for (const a of assignments) {
+    if (periods && !existsForStudent(periods, a.studentName, dateIso)) continue;
     for (const slot of a.slots ?? []) {
       if (slot.day !== dayName) continue;
       list.push({

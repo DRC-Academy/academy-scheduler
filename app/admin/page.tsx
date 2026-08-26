@@ -24,6 +24,7 @@ import { SpecialtyChip, ToggleChip } from '@/components/ui';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { AppNotification, AssignedSlot } from '@/types';
 import { buildAttendanceRows, punctStyleOf, attendanceSubBadge, minutesLate, isoDate, type LogRow } from '@/lib/attendance';
+import { periodIndex, dbGetStudentDropouts, type StudentDropout } from '@/lib/studentPeriod';
 import { gridOccupancyOfTeacher, applyGridSlots } from '@/lib/teacherClasses';
 import { HelpTooltip } from '@/components/ui';
 import type { HelpTooltipKey } from '@/lib/help-tooltips';
@@ -2146,6 +2147,15 @@ function ClassLogTab() {
     [teachers],
   );
 
+  // Período de cada alumno con cada profesor (inicio de clases → baja). Ver el
+  // contrato en lib/studentPeriod: filtra lo PROYECTADO, nunca los hechos.
+  const [dropouts, setDropouts] = useState<StudentDropout[]>([]);
+  useEffect(() => { dbGetStudentDropouts().then(setDropouts).catch(() => {}); }, []);
+  const periodsByTeacher = useMemo(
+    () => Object.fromEntries(teachers.map(t => [t.id, periodIndex(assignments, dropouts, t.id)])),
+    [teachers, assignments, dropouts],
+  );
+
   // Filas de asistencia (fuente única: lib/attendance). El admin ve todos los
   // profes (o el filtrado) y NO incluye clases futuras. Orden descendente.
   const baseRows = useMemo<LogRow[]>(() =>
@@ -2159,8 +2169,12 @@ function ClassLogTab() {
       includeFuture: false,
       // El calendario de cada profe decide qué son 2h con un solo acceso.
       gridOccupancyByTeacher: occupancyByTeacher,
+      // Y su PERÍODO decide desde cuándo existen: el horario recurrente no tiene
+      // fechas, así que sin esto un alumno que empieza el mes que viene ya
+      // acumula "no ingresó" hacia atrás. Eran 132 filas fantasma en agosto.
+      periodsByTeacher: periodsByTeacher,
     }).sort((x, y) => y.date.localeCompare(x.date) || (parseInt(y.hour) - parseInt(x.hour))),
-  [assignments, classJoinLogs, teacherFilter, fromDate, toDate, todayIso, nowMinutes, occupancyByTeacher]);
+  [assignments, classJoinLogs, teacherFilter, fromDate, toDate, todayIso, nowMinutes, occupancyByTeacher, periodsByTeacher]);
 
   // Summary metrics — las clases "Pendiente" (hoy, aún sin pasar) no cuentan como
   // registradas ni como perdidas.

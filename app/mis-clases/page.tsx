@@ -7,12 +7,16 @@ import { LastUpdated } from '@/components/LastUpdated';
 import { getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
-import { calculateTeacherFinance, recordVerification, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge, rowHoursLabel, durationBadge, sessionBreakdownLabel, transcriptStateBadge, transcriptNeedsTeacher, financeStatusBadge, pendingTranscriptSummary, canMarkStudentAbsence, absenceBreakdownLabel, mixedSessionBadge, recoveryCreditLabel, ABSENCE_MONTHLY_CAP, ABSENCE_CAP_MESSAGE } from '@/lib/finance';
-import { dbGetAssignmentsByTeacher, calcRegisteredClassNumber } from '@/lib/db';
+import { calculateTeacherFinance, recordVerification, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge, rowHoursLabel, durationBadge, sessionBreakdownLabel, transcriptStateBadge, transcriptNeedsTeacher, financeStatusBadge, pendingTranscriptSummary, canMarkStudentAbsence, absenceBreakdownLabel, mixedSessionBadge, recoveryCreditLabel, estimateClassAmount, ABSENCE_MONTHLY_CAP, ABSENCE_CAP_MESSAGE } from '@/lib/finance';
+import { dbGetAssignmentsByTeacher, calcRegisteredClassNumber, getTeacherAssignments } from '@/lib/db';
+import { buildClassFunnel } from '@/lib/classFunnel';
+import { ClassFunnelCard } from '@/components/ClassFunnelCard';
+import { dbGetReviewRequests } from '@/lib/reviewRequests';
+import { dbGetStudentDropouts, type StudentDropout } from '@/lib/studentPeriod';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { maybeSendMilestoneEmail } from '@/lib/milestoneEmails';
 import { AddClassModal, saveTeacherClass, ANALYSIS_FAILED_NOTICE } from '@/components/AddClassModal';
-import { Teacher, Assignment, ClassRecordType } from '@/types';
+import { Teacher, Assignment, ClassRecordType, ClassReviewRequest } from '@/types';
 import { HelpTooltip } from '@/components/ui';
 import type { HelpTooltipKey } from '@/lib/help-tooltips';
 
@@ -144,6 +148,29 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
   const [absenceSaving, setAbsenceSaving] = useState(false);
   const [absenceError, setAbsenceError] = useState('');
 
+  // ── Fuentes del EMBUDO ──────────────────────────────────────────────────────
+  //
+  // OJO con `myAssignments`: esas son las de la FICHA y se le pasan a
+  // `calculateTeacherFinance` a propósito (es el último horario conocido de un
+  // alumno que ya no está en el calendario). El embudo necesita las del
+  // CALENDARIO, que es lo que /revisiones usa para saber qué clases tocaban.
+  // Mezclarlas era justo lo que hacía que la tarjeta y /revisiones dieran
+  // números distintos.
+  const [gridAssignments, setGridAssignments] = useState<Assignment[]>([]);
+  const [reviewRequests, setReviewRequests] = useState<ClassReviewRequest[]>([]);
+  const [dropouts, setDropouts] = useState<StudentDropout[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([getTeacherAssignments(teacher), dbGetReviewRequests(teacher.id), dbGetStudentDropouts()])
+      .then(([asgs, reqs, bajas]) => {
+        if (cancelled) return;
+        setGridAssignments(asgs); setReviewRequests(reqs); setDropouts(bajas);
+      })
+      .catch(err => console.error('[finanzas] No se pudo armar el embudo:', err));
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teacher.id]);
+
   async function confirmAbsence() {
     if (!absence) return;
     setAbsenceSaving(true); setAbsenceError('');
@@ -215,7 +242,30 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
     gridOccupancy: gridOccupancyOfTeacher(teacher),
   }), [teacher, monthYear, myAssignments, classJoinLogs, classRecords, classAnalyses, financeRates, scoringEvents, students, manualApprovals, payment]);
 
-  const todayIso = getSpainParts(new Date()).dateStr;
+  const spainNow = getSpainParts(new Date());
+  const todayIso = spainNow.dateStr;
+
+  // El EMBUDO: una clase, un lugar, y el total es la suma de las ramas. Sale de
+  // las mismas fuentes que /revisiones para que los dos números no puedan
+  // separarse (ver lib/classFunnel).
+  const funnel = useMemo(() => buildClassFunnel({
+    monthYear, teacherId: teacher.id,
+    assignments: gridAssignments,
+    joinLogs: classJoinLogs, classRecords, analyses: classAnalyses,
+    requests: reviewRequests, dropouts,
+    gridOccupancy: gridOccupancyOfTeacher(teacher),
+    finance,
+    todayIso, nowMinutes: spainNow.hour * 60 + spainNow.minute,
+  }), [monthYear, teacher, gridAssignments, classJoinLogs, classRecords, classAnalyses, reviewRequests, dropouts, finance, todayIso, spainNow.hour, spainNow.minute]);
+
+  /** Lo que el profesor deja de cobrar si no reclama. Tarifa real de cada alumno. */
+  const claimAmount = useMemo(() => funnel.missing
+    .filter(c => c.signal !== null)
+    .reduce((s, c) => s + estimateClassAmount({
+      assignment: myAssignments.find(a => a.studentName.trim().toLowerCase() === c.studentName.trim().toLowerCase()),
+      student: students.find(x => x.name.trim().toLowerCase() === c.studentName.trim().toLowerCase()),
+      rates: financeRates, date: c.date, durationHours: c.durationHours,
+    }), 0), [funnel, myAssignments, students, financeRates]);
 
   // Agrupar las clases detectadas (finance.rows) por alumno, con su desglose.
   const financeGroups = useMemo(() => {
@@ -446,13 +496,25 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
           </div>
         </div>
 
-        {/* ── 2. KPIs ── */}
+        {/* ── 2. EMBUDO ──
+            Reemplaza a las cuatro tarjetas sueltas. Las viejas contaban cada una
+            por su cuenta: "Sin ingreso detectado" solo miraba los registros que
+            el profesor había cargado a mano, así que decía 2 donde había 80.
+            Acá cada clase está en una rama y el total es la suma. */}
+        <ClassFunnelCard
+          funnel={funnel}
+          claimAmount={claimAmount}
+          showActions
+          intro={<>
+            Ahora se muestran <b>todas</b> las clases de tu calendario sin registro de acceso, no solo las que
+            declaraste a mano. Las que tienen el transcript subido <b>las podés reclamar</b> y se te pagan
+            cuando el equipo las valide.
+          </>}
+        />
         <div className="mcf-kpis">
           {([
-            { label: 'Clases registradas este mes', value: monthRecords.length, dot: null, color: undefined, help: undefined },
-            { label: 'Con ingreso detectado', value: detectedCount, dot: '#16a34a', color: undefined, help: 'finanzas.ingresoDetectado' },
-            { label: 'Sin ingreso detectado', value: notDetectedCount, dot: '#e0912f', color: notDetectedCount > 0 ? '#9a6516' : undefined, help: 'finanzas.sinIngreso' },
             { label: 'Alumnos con clases este mes', value: financeGroups.length, dot: null, color: undefined, help: undefined },
+            { label: 'Con ingreso detectado', value: detectedCount, dot: '#16a34a', color: undefined, help: 'finanzas.ingresoDetectado' },
           ] as Array<{ label: string; value: number; dot: string | null; color: string | undefined; help?: HelpTooltipKey }>).map(k => (
             <div key={k.label} className="mcf-card mcf-kpi">
               <div className="mcf-kpi-value" style={k.color ? { color: k.color } : undefined}>

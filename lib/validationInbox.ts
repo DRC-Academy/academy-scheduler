@@ -28,7 +28,7 @@ import type { FlaggedTranscript } from '@/lib/db';
 // pestañas tiene que tratar "Sebastián" y "sebastian" igual.
 import { fold } from '@/lib/riskInbox';
 import {
-  FLAG_LABELS, TIMESTAMP_RE, flagLabel, SCORE_SEVERE, SCORE_AUTO_APPROVE,
+  FLAG_LABELS, TIMESTAMP_RE, flagLabel, SCORE_SEVERE, SCORE_CLEAN, SCORE_AUTO_APPROVE,
 } from '@/lib/transcriptValidation';
 
 // ── Motivo ───────────────────────────────────────────────────────────────────
@@ -126,11 +126,16 @@ export function motivoOf(flags: string[]): Motivo {
  * corto para la duración de la clase" y "Duración insuficiente según las marcas
  * de tiempo", y el admin necesita saber cuál de las dos saltó.
  */
-export function alertTextOf(flags: string[]): string {
+export function alertTextOf(flags: string[], score?: number | null): string {
   const f = dominantFlag(flags);
-  return f
-    ? flagLabel(f)
-    : 'Sin señales concretas: el score quedó por debajo del umbral de validación';
+  if (f) return flagLabel(f);
+  // SIN señales. El texto tiene que depender del SCORE: decía "el score quedó por
+  // debajo del umbral" también en transcripciones de 100/100 —las auto-aprobadas
+  // sin una sola alerta—, que es exactamente lo contrario de lo que pasó.
+  if (score == null) return 'Sin señales concretas';
+  if (score >= SCORE_AUTO_APPROVE) return `Sin señales: transcripción limpia (${score}/100)`;
+  if (score >= SCORE_CLEAN) return `Sin señales concretas: score ${score}/100, por debajo del umbral de auto-aprobación`;
+  return `Sin señales concretas: el score quedó por debajo del umbral de validación (${score}/100)`;
 }
 
 // ── Fila de la bandeja ───────────────────────────────────────────────────────
@@ -166,7 +171,7 @@ export function toRow(r: FlaggedTranscript, teacherName: string): ValRow {
     date: r.classDate ?? r.analyzedAt,
     score: r.score,
     motivo: motivoOf(r.flags),
-    alertText: alertTextOf(r.flags),
+    alertText: alertTextOf(r.flags, r.score),
     flags: r.flags,
     status: r.validationStatus,
     reviewedBy: r.reviewedBy,

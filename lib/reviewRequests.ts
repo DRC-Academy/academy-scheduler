@@ -26,6 +26,7 @@ import type {
   ClassReviewRequest, ReviewRequestType, ReviewResolvedType,
 } from '@/types';
 import type { ClassTranscriptRef } from '@/lib/finance';
+import { periodIndex, existsForStudent } from '@/lib/studentPeriod';
 
 const nk = (s: string | null | undefined): string => (s ?? '').trim().toLowerCase();
 
@@ -208,6 +209,8 @@ export function buildMissingJoinClasses(opts: {
   requests: ClassReviewRequest[];
   /** Transcripts guardados: uno de ellos es el indicio más fuerte de que la clase existió. */
   analyses?: ClassTranscriptRef[];
+  /** Bajas registradas: cierran el período del alumno (ver lib/studentPeriod). */
+  dropouts?: Array<{ teacherId: string; studentName: string; droppedAt?: string }>;
   teacherId: string;
   fromDate: string;
   toDate: string;
@@ -217,7 +220,7 @@ export function buildMissingJoinClasses(opts: {
   /** false → también las clases sin ningún rastro (solo el panel del admin). */
   onlyWithSignal?: boolean;
 }): MissingJoinClass[] {
-  const { assignments, joinLogs, classRecords, requests, teacherId } = opts;
+  const { assignments, joinLogs, classRecords, requests, teacherId, dropouts } = opts;
   const analyses = opts.analyses ?? [];
   const onlyWithSignal = opts.onlyWithSignal ?? true;
 
@@ -229,15 +232,10 @@ export function buildMissingJoinClasses(opts: {
     gridOccupancyByTeacher: { [teacherId]: opts.gridOccupancy },
   });
 
-  // Alta del alumno: el horario recurrente no sabe desde cuándo existe, así que
-  // sin esto la pantalla ofrecería reclamar clases anteriores a su primer día.
-  const startByStudent = new Map<string, string>();
-  for (const a of assignments) {
-    if (a.teacherId !== teacherId || !a.startDate) continue;
-    const k = nk(a.studentName);
-    const cur = startByStudent.get(k);
-    if (!cur || a.startDate < cur) startByStudent.set(k, a.startDate);
-  }
+  // Período del alumno (inicio y baja). Reemplaza al filtro propio que solo
+  // miraba `startDate`: ahora es la misma regla que usan asistencias y la agenda,
+  // y de paso cubre el lado de la baja. Ver el contrato en lib/studentPeriod.ts.
+  const periodos = periodIndex(assignments, dropouts ?? [], teacherId);
 
   // Por alumno + fecha + HORA, que es la clave del índice único de la tabla: un
   // alumno puede tener dos clases sueltas el mismo día (14:00 y 18:00) y son dos
@@ -305,8 +303,7 @@ export function buildMissingJoinClasses(opts: {
     if (row.status !== 'missed') continue;
     if (ingresoEseDia.has(`${nk(row.studentName)}|${row.date}`)) continue;
 
-    const start = startByStudent.get(nk(row.studentName));
-    if (start && row.date < start) continue;
+    if (!existsForStudent(periodos, row.studentName, row.date)) continue;
 
     // Ya dijo qué pasó con esta clase: cancelada, con aviso, reprogramada…
     if (cancellationFor(classRecords, teacherId, row.studentName, row.date)) continue;
@@ -524,7 +521,7 @@ export async function dbResolveReviewRequest(p: {
 }): Promise<{ joinLogId?: string }> {
   // Import perezoso: db.ts es enorme y arrastra medio sistema. Acá solo hacen
   // falta tres funciones, y solo al resolver.
-  const { dbCreateManualJoinLog, dbAddClassRecord, dbApplyFaltaSideEffects } = await import('@/lib/db');
+  const { dbCreateManualJoinLog, dbAddClassRecord, dbApplyFaltaSideEffects, dbFindJoinLog } = await import('@/lib/db');
 
   const { request: r, decision, reviewerName } = p;
   const tipo: ReviewResolvedType = p.resolvedType ?? r.requestedType;
@@ -532,7 +529,16 @@ export async function dbResolveReviewRequest(p: {
 
   if (decision === 'aprobada') {
     if (resolvedTypeCreatesJoinLog(tipo)) {
-      joinLogId = await dbCreateManualJoinLog({
+      // IDEMPOTENTE. Si esa clase YA tiene ingreso, no se crea otro.
+      //
+      // /revisiones no ofrece clases que ya tengan ingreso ese día, pero entre
+      // que el profesor manda la solicitud y el admin la aprueba pueden pasar
+      // días: el profesor puede haber pulsado el botón mientras tanto, o dos
+      // admins pueden aprobar la misma solicitud a la vez. Un segundo ingreso no
+      // duplicaría el pago (finanzas empareja por alumno+fecha y el segundo log
+      // pisa al primero), pero ensucia el historial de accesos y la puntualidad.
+      const yaHay = await dbFindJoinLog(r.teacherId, r.studentName, r.classDate);
+      joinLogId = yaHay ?? await dbCreateManualJoinLog({
         teacherId:     r.teacherId,
         teacherName:   r.teacherName,
         studentName:   r.studentName,
@@ -540,6 +546,9 @@ export async function dbResolveReviewRequest(p: {
         scheduledTime: r.classTime ?? '',
         createdBy:     reviewerName,
       });
+      if (yaHay) {
+        console.log(`[reviewRequests] ${r.id}: la clase ya tenía ingreso (${yaHay}); no se crea otro.`);
+      }
       // El ingreso acaba de existir: la señal `sin_acceso_registrado` del
       // transcript ya no describe nada real. Si era la ÚNICA que lo retenía, la
       // clase se aprueba sola; si había otra, se queda en la cola.

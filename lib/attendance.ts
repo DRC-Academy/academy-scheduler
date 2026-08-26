@@ -8,6 +8,7 @@ import type { Assignment, ClassJoinLog } from '@/types';
 import { minutesLateSpain } from '@/lib/spainTime';
 import { contiguousRunLength, groupByContiguousHour, hourNum, hourText, nkName, sessionRangeLabel } from '@/lib/sessions';
 import type { GridOccupancy } from '@/lib/teacherClasses';
+import { existsForStudent, type StudentPeriod } from '@/lib/studentPeriod';
 // Mismo badge de suscripción que finanzas y que el panel de alumnos.
 import { subscriptionBadge } from '@/lib/finance';
 
@@ -118,8 +119,18 @@ export function buildAttendanceRows(opts: {
    * agrupa por el horario de la ficha, que puede estar desactualizado.
    */
   gridOccupancyByTeacher?: Record<string, GridOccupancy>;
+  /**
+   * Período de cada alumno (`lib/studentPeriod.periodIndex`), por profesor.
+   *
+   * Sin esto el horario recurrente se proyecta hacia atrás hasta el infinito: un
+   * alumno que empieza el 5 de octubre aparecía con clases perdidas de todo
+   * septiembre. Ver el contrato en lib/studentPeriod.ts — el período tapa lo
+   * PROYECTADO; los ingresos que quedan sin consumir se reemiten igual al final
+   * como "leftovers", así que ningún hecho real se pierde por esto.
+   */
+  periodsByTeacher?: Record<string, Map<string, StudentPeriod>>;
 }): LogRow[] {
-  const { assignments, joinLogs, teacherId, fromDate, toDate, todayIso, nowMinutes, includeFuture = false, gridOccupancyByTeacher } = opts;
+  const { assignments, joinLogs, teacherId, fromDate, toDate, todayIso, nowMinutes, includeFuture = false, gridOccupancyByTeacher, periodsByTeacher } = opts;
   const rows: LogRow[] = [];
   const consumedLogs = new Set<string>();
   const relevant = assignments.filter(a => !teacherId || a.teacherId === teacherId);
@@ -173,6 +184,11 @@ export function buildAttendanceRows(opts: {
       const dayName = DAY_NAMES_BY_JSDAY[cursor.getDay()];
       for (const run of sessionsByDay.get(dayName) ?? []) {
         const dateIso = isoDate(cursor);
+        // Fuera del período del alumno: esta clase no existió. Se salta ANTES de
+        // consumir el ingreso, para que si por algún motivo hubiera uno, salga
+        // igual entre los leftovers de abajo (ver el contrato de studentPeriod).
+        const periodos = periodsByTeacher?.[a.teacherId];
+        if (periodos && !existsForStudent(periodos, a.studentName, dateIso)) continue;
         const startHour = run[0];
         const durationHours = run.length;
         const hour = hourText(startHour);

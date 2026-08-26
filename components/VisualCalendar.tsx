@@ -141,6 +141,16 @@ interface BaseProps {
   /** Rango de horas preferido del profesor (teachers.calendar_*_hour). */
   startHour?: number;
   endHour?: number;
+  /**
+   * Alumnos SIN suscripción activa (nombres normalizados), resueltos en vivo
+   * contra WooCommerce por el consumidor.
+   *
+   * Se MARCAN, nunca se filtran: que una suscripción venza no significa que el
+   * alumno dejó de venir —renovaciones tardías, pending-cancel, planes
+   * extendidos— y esconder su clase le borraría al profesor una clase real y
+   * cobrable. El aviso está para que se vea y alguien pregunte.
+   */
+  inactiveStudents?: Set<string>;
 }
 
 export interface RecuperacionData { student: string; recoveryFor: string; note?: string }
@@ -512,6 +522,11 @@ export function VisualCalendar(props: Props) {
   }
 
   // Contenido visual de una celda, compartido por la grilla y la agenda móvil.
+  /** ¿Este alumno figura sin suscripción activa? Solo marca, nunca oculta. */
+  function sinSuscripcion(student?: string): boolean {
+    return !!student && !!props.inactiveStudents?.has(nkName(student));
+  }
+
   function blockContent(cell: Cell, run?: RunInfo) {
     if (cell.state === 'no_work') {
       return props.mode === 'teacher' ? <div className="vc-b-name">No work</div> : null;
@@ -521,7 +536,15 @@ export function VisualCalendar(props: Props) {
         <>
           {/* Badge "2h"/"3h" en la esquina, solo en la primera celda de la sesión. */}
           {run && run.index === 0 && <span className="vc-hours-badge">{run.length}h</span>}
-          <div className="vc-b-name">{cell.student || 'Ocupado'}</div>
+          <div className="vc-b-name">
+            {cell.student || 'Ocupado'}
+            {sinSuscripcion(cell.student) && (
+              <span
+                title="Este alumno figura sin suscripción activa. La clase se sigue mostrando y contando: verificá con el equipo."
+                style={{ marginLeft: 4, color: '#ea580c', fontWeight: 700 }}
+              >⚠</span>
+            )}
+          </div>
           <div className="vc-b-sub">{run ? (run.index === 0 ? run.label : 'continúa') : 'Semanal'}</div>
         </>
       );

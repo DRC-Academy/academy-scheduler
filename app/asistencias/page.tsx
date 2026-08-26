@@ -15,6 +15,7 @@ import { useTeachers } from '@/lib/TeachersContext';
 import { buildAttendanceRows, isoDate, type LogRow } from '@/lib/attendance';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { getTeacherAssignments } from '@/lib/db';
+import { periodIndex, dbGetStudentDropouts, type StudentDropout } from '@/lib/studentPeriod';
 import type { Assignment } from '@/types';
 import { checkSubscription, subBadge, resolveSubscriptionEmail, type SubscriptionInfo } from '@/lib/useSubscriptionStatus';
 import { HelpTooltip } from '@/components/ui';
@@ -132,6 +133,9 @@ function AsistenciasContent() {
   // clase esperada sin ingreso cuenta como "🔴 No ingresó", le falseaba la
   // asistencia hacia abajo. La pertenencia la decide getTeacherAssignments.
   const [myAssignments, setMyAssignments] = useState<Assignment[]>([]);
+  // Bajas: cierran el período del alumno (ver lib/studentPeriod).
+  const [dropouts, setDropouts] = useState<StudentDropout[]>([]);
+  useEffect(() => { dbGetStudentDropouts().then(setDropouts).catch(() => {}); }, []);
   useEffect(() => {
     if (!teacher) return;
     let cancelled = false;
@@ -152,8 +156,12 @@ function AsistenciasContent() {
       fromDate, toDate, todayIso, nowMinutes, includeFuture: true,
       // El calendario decide qué son 2h con un solo acceso.
       gridOccupancyByTeacher: { [teacher.id]: gridOccupancyOfTeacher(teacher) },
+      // El horario recurrente no tiene fechas: sin el período, un alumno que
+      // empieza el mes que viene ya figura con clases perdidas de este, y uno
+      // dado de baja seguiría acumulando "no ingresó" cada semana.
+      periodsByTeacher: { [teacher.id]: periodIndex(myAssignments, dropouts, teacher.id) },
     }).sort((x, y) => x.date.localeCompare(y.date) || (parseInt(x.hour) - parseInt(y.hour)));
-  }, [teacher, myAssignments, classJoinLogs, fromDate, toDate, todayIso, nowMinutes]);
+  }, [teacher, myAssignments, dropouts, classJoinLogs, fromDate, toDate, todayIso, nowMinutes]);
 
   const allClasses = useMemo<ClassRow[]>(() => rows.map(r => ({
     // hoursLabel ya trae el rango de la sesión ("12:00 - 14:00" en una clase de
