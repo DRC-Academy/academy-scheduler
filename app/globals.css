@@ -3556,6 +3556,22 @@ body.driver-active .drc-modal-backdrop * { pointer-events: auto; }
 .fch-sub.is-bad { color: var(--danger); font-weight: 500; }
 .fch-sub-when { color: var(--text-muted); font-weight: 400; }
 
+/* El plan contratado. Va debajo de la suscripción y ocupa su propia línea: es
+   una cadena de WooCommerce de cien caracteres y no cabe en la línea de
+   contexto sin partirla en cualquier sitio. */
+.fch-plan {
+  display: flex; align-items: baseline; gap: var(--space-3);
+  padding: 0 var(--space-4) 10px;
+}
+.fch-plan-label {
+  flex-shrink: 0; font-size: var(--fs-micro); color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.fch-plan-value { font-size: var(--fs-caption); color: var(--text-primary); line-height: 1.5; overflow-wrap: anywhere; }
+/* Los atributos de la variación pesan menos que el nombre del producto. */
+.fch-plan-var { color: var(--text-muted); }
+.fch-plan-var::before { content: ' · '; }
+
 /* El cupo: el número que antes había que deducir contando filas. */
 .fch-quota { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 0 16px 12px; }
 .fch-quota-label { font-size: 12px; color: var(--text-muted); }

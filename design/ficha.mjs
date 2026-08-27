@@ -10,6 +10,7 @@ const ALUMNOS = [
     id: 'alvaro',
     nombre: 'Alvaro Poza', profe: 'Maribel',
     plan: 'Exámenes', inicio: '17 jun 2026',
+    contratado: { producto: 'Curso intensivo de ingles - OFERTA - 5h semanales', variante: '5h semanales · B2 · 11:00 - 12:00 · Lunes a viernes' },
     cupo: { used: 11, limit: 25 },
     pagables: 16, subtotal: 80.00,
     sub: { label: 'Activa', fecha: '26 ago', ok: true },
@@ -35,6 +36,7 @@ const ALUMNOS = [
     id: 'ester',
     nombre: 'Ester Domènech Rodríguez', profe: 'Wanda',
     plan: 'Exámenes', inicio: '8 may 2026',
+    contratado: { producto: 'Curso intensivo de ingles - OFERTA - 5h semanales', variante: '5h semanales · B2 · 2h diarias · De lunes a viernes' },
     cupo: { used: 5, limit: 5 },
     pagables: 10, subtotal: 50.00,
     sub: { label: 'Cancelada', fecha: '21 ago', ok: false },
@@ -129,6 +131,13 @@ function fichaHTML(a, movil) {
         Suscripción: ${a.sub.label} <span class="fch-sub-when">· visto el ${a.sub.fecha}</span>
       </span>
     </div>
+
+    <!-- El plan contratado: el producto de WooCommerce tal cual. Solo cuando dice
+         más que la categoría de tarifa de la línea de arriba. -->
+    ${a.contratado ? `<div class="fch-plan">
+      <span class="fch-plan-label">Plan</span>
+      <span class="fch-plan-value">${a.contratado.producto}<span class="fch-plan-var">${a.contratado.variante}</span></span>
+    </div>` : ''}
 
     <!-- El cupo del mes: el número que antes había que deducir contando filas. -->
     <div class="fch-quota">

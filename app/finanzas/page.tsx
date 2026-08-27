@@ -83,6 +83,27 @@ function plainPill(label: string): string {
 }
 
 /**
+ * El plan contratado de una fila, partido en producto y variante.
+ *
+ * `row.plan` es la cadena de WooCommerce entera: el nombre del producto, ` — `, y
+ * los atributos de la variación («5h semanales · B2 · 11:00 - 12:00 · Lunes a
+ * viernes»). Son cien caracteres en los que lo que se busca —qué compró— está al
+ * principio, así que se pintan con distinto peso en vez de como un solo bloque.
+ *
+ * Devuelve null cuando el plan no dice más que la categoría de tarifa que ya está
+ * en la línea de arriba: repetir «Inglés general» debajo de «Inglés general» es
+ * exactamente el ruido que este rediseño vino a quitar.
+ */
+function planContratado(row: ClassFinanceRow | undefined): { producto: string; variante: string } | null {
+  const plan = (row?.plan ?? '').trim();
+  if (!plan || plan === (row?.planLabel ?? '').trim()) return null;
+  const i = plan.indexOf(' — ');
+  return i < 0
+    ? { producto: plan, variante: '' }
+    : { producto: plan.slice(0, i).trim(), variante: plan.slice(i + 3).trim() };
+}
+
+/**
  * Saldo del mes del profesor. Va ARRIBA del detalle porque es el dato que se
  * busca al abrirlo: antes solo estaba en una columna de la fila plegada, que es
  * justo la que se pierde de vista cuando la tabla se desplaza en horizontal.
@@ -354,6 +375,7 @@ function StudentDetailList({ result, assignments, approvals, onApproveReview, on
           // hay en local, y por eso se dice con su fecha.
           const ultimaSub = [...rows].reverse().find(r => r.subscriptionStatus);
           const subOk = isActiveWooStatus(ultimaSub?.subscriptionStatus);
+          const plan = planContratado(rows[0]);
 
           // Lo que pide una decisión del admin, con su dinero. Cuenta las retenidas
           // por el cupo, no solo los transcripts: la pill verde «OK» de antes solo
@@ -415,6 +437,24 @@ function StudentDetailList({ result, assignments, approvals, onApproveReview, on
                       </span>
                     )}
                   </div>
+
+                  {/* El plan CONTRATADO, debajo de la suscripción: el producto de
+                      WooCommerce tal cual, que es distinto de la categoría de
+                      tarifa de la línea de arriba («Exámenes» decide cuánto se le
+                      paga al profesor; esto es lo que compró el alumno).
+
+                      Solo cuando dice algo más que la categoría: un alumno cuyo
+                      plan es literalmente «Inglés general» ya lo tiene escrito
+                      dos centímetros más arriba. */}
+                  {plan && (
+                    <div className="fch-plan">
+                      <span className="fch-plan-label">Plan</span>
+                      <span className="fch-plan-value">
+                        {plan.producto}
+                        {plan.variante && <span className="fch-plan-var">{plan.variante}</span>}
+                      </span>
+                    </div>
+                  )}
 
                   {/* El cupo del mes: el número que antes había que deducir contando filas. */}
                   <div className="fch-quota">

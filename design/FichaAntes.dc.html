@@ -236,6 +236,23 @@ body{margin:0;background:var(--bg-base);color:var(--text-primary);
   .fch-cls-note { grid-column: 1 / -1; }
   .fch-total { min-width: 0; }
 }
+
+/* El plan contratado. Va debajo de la suscripción y ocupa su propia línea: es
+   una cadena de WooCommerce de cien caracteres y no cabe en la línea de
+   contexto sin partirla en cualquier sitio. */
+.fch-plan {
+  display: flex; align-items: baseline; gap: var(--space-3);
+  padding: 0 var(--space-4) 10px;
+}
+.fch-plan-label {
+  flex-shrink: 0; font-size: var(--fs-micro); color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.fch-plan-value { font-size: var(--fs-caption); color: var(--text-primary); line-height: 1.5; overflow-wrap: anywhere; }
+/* Los atributos de la variación pesan menos que el nombre del producto. */
+.fch-plan-var { color: var(--text-muted); }
+.fch-plan-var::before { content: ' · '; }
+
 </style>
 </helmet>
 <div class="page" style="max-width:760px;margin:0 auto">
