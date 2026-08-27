@@ -7,7 +7,7 @@ import { LastUpdated } from '@/components/LastUpdated';
 import { getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
-import { calculateTeacherFinance, estimateClassAmount, TeacherFinanceResult, ClassFinanceRow, classTypeBadge, subscriptionBadge, rowHoursLabel, financeStatusBadge, pendingTranscriptSummary, transcriptStateBadge, absenceBreakdownLabel, isStudentAbsence, recoveryCreditLabel, studentQuotaOf, SUBSCRIPTION_STATUS_OPTIONS } from '@/lib/finance';
+import { calculateTeacherFinance, estimateClassAmount, TeacherFinanceResult, ClassFinanceRow, classTypeBadge, subscriptionBadge, rowHoursLabel, financeStatusBadge, transcriptStateBadge, absenceBreakdownLabel, isStudentAbsence, recoveryCreditLabel, studentQuotaOf, SUBSCRIPTION_STATUS_OPTIONS } from '@/lib/finance';
 import { isActiveWooStatus } from '@/lib/subscriptionAccess';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { dbRevertPenalty, getTeacherAssignments } from '@/lib/db';
@@ -104,11 +104,6 @@ function planContratado(row: ClassFinanceRow | undefined): { producto: string; v
 }
 
 /**
- * Saldo del mes del profesor. Va ARRIBA del detalle porque es el dato que se
- * busca al abrirlo: antes solo estaba en una columna de la fila plegada, que es
- * justo la que se pierde de vista cuando la tabla se desplaza en horizontal.
- */
-/**
  * El embudo del profesor dentro del detalle del admin. Es el MISMO componente y
  * la misma función de cálculo que ve el profesor: si los dos leyeran fuentes
  * distintas volveríamos al problema de raíz (dos pantallas, dos números, ninguna
@@ -182,59 +177,29 @@ function FinanceBar({ r }: { r: TeacherFinanceResult }) {
   );
 }
 
-function TeacherTotalCard({ result, monthLabel }: { result: TeacherFinanceResult; monthLabel: string }) {
-  const pendiente = pendingTranscriptSummary(result);
-  const desglose: Array<{ label: string; value: string; tone?: 'ok' | 'warn' | 'danger' }> = [
-    { label: 'Clases pagables', value: `${result.totalPagable} · €${result.montoPagable.toFixed(2)}` },
-  ];
-  if (pendiente)
-    desglose.push({ label: 'Pendiente de transcript', value: `${pendiente.classes} · €${pendiente.amount.toFixed(2)}`, tone: 'warn' });
-  if (result.montoRetenido > 0)
-    desglose.push({ label: 'Retenido', value: `€${result.montoRetenido.toFixed(2)}`, tone: 'warn' });
-  if (result.bonusFromScoring > 0)
-    desglose.push({ label: 'Bonos', value: `+€${result.bonusFromScoring.toFixed(2)}`, tone: 'ok' });
-  if (result.penaltiesFromScoring < 0)
-    desglose.push({ label: 'Penalizaciones', value: `−€${Math.abs(result.penaltiesFromScoring).toFixed(2)}`, tone: 'danger' });
-
+/**
+ * Estado de la suscripción de las clases PAGABLES, al momento de darse.
+ *
+ * Es lo único que vivía en la caja "Total a cobrar" y no está en la fila
+ * plegada: allí solo hay un ⚠️ con los estados SIN acceso escondidos en un
+ * tooltip. Las líneas informativas —el alumno sí podía tomar clase, pero su
+ * acceso no venía de una suscripción viva de WooCommerce— no estaban en
+ * ningún otro sitio.
+ *
+ * Ninguna de las dos cambia el importe: lo que decide que una clase se pague
+ * sigue siendo el clic en "Unirse" más el transcript.
+ */
+function SubStatusNotes({ result }: { result: TeacherFinanceResult }) {
+  if (result.payableSubStatuses.length === 0) return null;
   return (
-    <div className="afd-total">
-      <div className="afd-total-head">
-        <div>
-          <div className="afd-total-label">Total a cobrar · {monthLabel}</div>
-          <div className="afd-total-value">€{result.totalAPagar.toFixed(2)}</div>
-        </div>
-        <span className="afd-pill" style={result.paymentStatus === 'paid' ? PILL_OK : PILL_WARN}>
-          {result.paymentStatus === 'paid' ? '✅ Pagado' : '⏳ Pendiente'}
-        </span>
-      </div>
-      {/* Estado de la suscripción de las clases pagables. Una línea por estado,
-          para que "pendiente de cancelación" (el alumno estaba al día) no se lea
-          igual que "en espera" (no podía tomar clases). Ninguna cambia el importe. */}
+    <div className="afd-subnotes">
       {result.payableSubStatuses.map(s => (
-        <div key={s.status} style={{
-          marginTop: 'var(--space-2)', fontSize: 'var(--fs-caption)',
-          color: s.countsAsActive ? 'var(--text-muted)' : 'var(--warn)',
-        }}>
-          {s.countsAsActive ? 'ℹ️' : '⚠️'} {s.count === 1 ? '1 clase pagable' : `${s.count} clases pagables`}
+        <div key={s.status} className={s.countsAsActive ? undefined : 'is-warn'}>
+          {s.count === 1 ? '1 clase pagable' : `${s.count} clases pagables`}
           {' '}con la suscripción en «{s.label}»
           {s.countsAsActive ? ' (vigente: el alumno podía tomar clases).' : ' (sin acceso al momento de darse).'}
         </div>
       ))}
-      <div className="afd-break">
-        {desglose.map(d => (
-          <div key={d.label}>
-            <div className="afd-brow-label">{d.label}</div>
-            <div className={`afd-brow-value${d.tone ? ` is-${d.tone}` : ''}`}>{d.value}</div>
-          </div>
-        ))}
-      </div>
-      {/* El total de arriba NO incluye lo pendiente: se dice explícitamente para
-          que nadie sume mentalmente las dos cifras. */}
-      {pendiente && (
-        <div style={{ marginTop: 'var(--space-2)', fontSize: 'var(--fs-caption)', color: '#9a6516' }}>
-          {pendiente.label} — no suma al total hasta que el profesor suba el transcript.
-        </div>
-      )}
     </div>
   );
 }
@@ -772,7 +737,7 @@ function FinanceTab() {
               {isOpen && (
                   <div className="afd-panel">
                     <div className="afd">
-                      <TeacherTotalCard result={r} monthLabel={finMonthLabel(monthYear)} />
+                      <SubStatusNotes result={r} />
                       {/* El mismo embudo que ve el profesor, con la misma
                           función de cálculo: dos números iguales o ninguno. */}
                       {(() => {
@@ -787,7 +752,12 @@ function FinanceTab() {
                       />
                       {penaltiesOf(r.teacherId).length > 0 && (
                         <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '12px 14px', background: 'var(--bg-surface)' }}>
-                          <div style={{ fontSize: 12.5, fontWeight: 700, color: '#c0392b', marginBottom: 8 }}>Penalizaciones del mes</div>
+                          {/* El total va acá, junto a la lista que lo compone. Es
+                              el único número de la caja borrada que la fila
+                              plegada no muestra: allí solo están los bonos. */}
+                          <div style={{ fontSize: 12.5, fontWeight: 700, color: '#c0392b', marginBottom: 8 }}>
+                            Penalizaciones del mes · −€{Math.abs(r.penaltiesFromScoring).toFixed(2)}
+                          </div>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                             {penaltiesOf(r.teacherId).map(p => (
                               <div key={p.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, fontSize: 12.5, flexWrap: 'wrap' }}>

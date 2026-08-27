@@ -3625,3 +3625,12 @@ body.driver-active .drc-modal-backdrop * { pointer-events: auto; }
   .fch-cls-note { grid-column: 1 / -1; }
   .fch-total { min-width: 0; }
 }
+
+/* Notas de suscripción de las clases pagables. Vivían dentro de la caja
+   "Total a cobrar", que repetía la fila plegada entera y por eso se borró; estas
+   líneas no estaban en ningún otro sitio. */
+.afd-subnotes {
+  display: flex; flex-direction: column; gap: 5px;
+  font-size: var(--fs-caption); color: var(--text-muted); line-height: 1.5;
+}
+.afd-subnotes .is-warn { color: var(--warn); font-weight: var(--fw-medium); }
