@@ -59,19 +59,36 @@ export function ClassFunnelCard({ funnel, claimAmount, showActions = false, onPi
   const suma = funnel.branches.reduce((s, b) => s + b.count, 0);
   const pick = (key: string) => onPick ? () => onPick(key) : undefined;
 
-  /** Una línea hija normal (no accionable). */
+  /**
+   * Una línea hija normal (no accionable).
+   *
+   * Cuando la línea NO se divide por estado de pago —las de origen de "fuera del
+   * calendario"— lleva debajo cuántas de sus clases ya cuentan y cuántas no. Es
+   * el dato que antes era la división principal de la rama y que ahora viaja con
+   * cada línea, que es donde sirve: primero qué son, después cómo están.
+   */
   function Child({ c }: { c: FunnelBranch }) {
     const zero = c.count === 0;
-    const warn = c.key === 'pendientes' || c.key === 'fuera_pendientes';
+    const s = c.payStatus;
+    const mixta = !!s && s.pagables > 0 && s.pendientes > 0;
+    const todoPendiente = !!s && s.pagables === 0 && s.pendientes === c.count && c.count > 0;
+    const warn = mixta || todoPendiente;
     return (
       <button
         type="button"
-        className={`fnl-child${zero ? ' is-zero' : ''}`}
+        className={`fnl-child${zero ? ' is-zero' : ''}${mixta ? ' has-sub' : ''}`}
         onClick={zero ? undefined : pick(c.key)}
         disabled={zero || !onPick}
-        title={warn ? pendingTitle(c) : c.hint}
+        title={warn && c.pendingSplit ? pendingTitle(c) : c.hint}
       >
-        <span className="fnl-child-name">{c.label}</span>
+        <span className="fnl-child-body">
+          <span className="fnl-child-name">{c.label}</span>
+          {mixta && (
+            <span className="fnl-child-sub">
+              {s.pagables} {s.pagables === 1 ? 'pagable' : 'pagables'} · {s.pendientes} pendiente{s.pendientes === 1 ? '' : 's'} de cobro
+            </span>
+          )}
+        </span>
         {c.amount != null && (
           <span className={`fnl-child-eur${zero ? ' is-zero' : warn ? ' is-warn' : ''}`}>{eur(c.amount)}</span>
         )}
@@ -155,7 +172,11 @@ export function ClassFunnelCard({ funnel, claimAmount, showActions = false, onPi
               }
 
               // ── Pendientes con importe: accionable, un escalón por debajo ──
-              const esPendiente = c.key === 'pendientes' || c.key === 'fuera_pendientes';
+              // Solo la rama que se divide por estado. Las de "fuera del
+              // calendario" se dividen por origen y llevan su estado escrito al
+              // lado, sin botón: el camino para subir el transcript es hacer
+              // clic y ver esas clases en la lista, una por una.
+              const esPendiente = c.key === 'pendientes';
               if (esPendiente && c.count > 0) {
                 const s = c.pendingSplit;
                 return (

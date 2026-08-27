@@ -63,10 +63,6 @@ body{margin:0;background:var(--bg-base);color:var(--text-primary);
 .fin-claim-eur{color:var(--warn);font-weight:600}
 .fin-claim-btn{flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;min-height:40px;padding:0 16px;background:var(--accent);color:#fff;border-radius:9px;font-size:13px;font-weight:600}
 
-.fin-notice{display:flex;align-items:flex-start;gap:11px;padding:11px 14px;background:var(--warn-soft);border:1px solid var(--warn-border);border-radius:10px}
-.fin-notice-i{flex-shrink:0;width:18px;height:18px;border-radius:999px;background:var(--warn);color:#fff;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center;margin-top:1px}
-.fin-notice-body{flex-grow:1;font-size:12px;line-height:1.55;color:var(--text-secondary)}
-.fin-notice-x{flex-shrink:0;background:none;border:none;color:var(--text-muted);font-size:16px;line-height:1;padding:0 2px;font-family:inherit}
 
 /* ── embudo ── */
 .fnl{background:var(--bg-surface);border:1px solid var(--border);border-radius:14px;overflow:hidden}
@@ -93,7 +89,10 @@ body{margin:0;background:var(--bg-base);color:var(--text-primary);
 .fnl-branch-n{font-size:18px;font-weight:600;min-width:40px;text-align:right}
 .fnl-child{width:100%;text-align:left;font-family:inherit;background:none;border:none;border-top:1px solid var(--bg-surface-2);padding:9px 20px 9px 40px;display:flex;align-items:center;gap:12px}
 .fnl-child.is-zero{opacity:0.55}
-.fnl-child-name{flex:1;min-width:0;font-size:13px;color:var(--text-secondary)}
+.fnl-child-body{flex:1;min-width:0;text-align:left}
+.fnl-child-name{font-size:13px;color:var(--text-secondary)}
+.fnl-child-sub{display:block;font-size:11px;color:var(--text-muted);margin-top:2px}
+.fnl-child.has-sub{padding-top:11px;padding-bottom:11px}
 .fnl-child-eur{font-size:13px;font-weight:600;color:var(--accent);white-space:nowrap}
 .fnl-child-eur.is-warn{color:var(--warn)}
 .fnl-child-eur.is-zero{color:var(--text-muted);font-weight:400}
@@ -115,6 +114,8 @@ body{margin:0;background:var(--bg-base);color:var(--text-primary);
 .fin-list-title{flex-grow:1;font-size:14px;font-weight:600}
 .fin-filters{display:flex;gap:4px;flex-wrap:wrap}
 .fin-filter{padding:5px 11px;border:1px solid var(--border);background:var(--bg-surface);color:var(--text-secondary);border-radius:999px;font-size:12px;font-family:inherit}
+.fin-filter.is-pick{display:inline-flex;align-items:center;gap:7px}
+.fin-filter-x{font-size:10px;opacity:0.75}
 .fin-filter.is-on{border-color:var(--accent);background:var(--accent-soft);color:var(--accent);font-weight:600}
 .card{background:var(--bg-surface);border:1px solid var(--border);border-radius:12px}
 .stu{display:grid;grid-template-columns:40px minmax(0,1fr) auto;gap:14px;align-items:start;padding:16px 18px}
@@ -141,7 +142,7 @@ body{margin:0;background:var(--bg-base);color:var(--text-primary);
 </style>
 </helmet>
 <div style="display:flex;gap:20px;padding:20px 16px 40px;align-items:flex-start">
-<div style="flex:1;min-width:0"><p class="caso-h">Silvia — el caso sano</p><p class="caso-p">83 de 84 clases pagables. La banda de reclamables aparece igual: 5 clases, €22,50 que se le escapan si no las pide. Sin ella tendría que deducirlo del embudo.</p><div class="page" style="padding:0;gap:12px">
+<div style="flex:1;min-width:0"><p class="caso-h">Silvia — el caso sano</p><p class="caso-p">83 de 84 pagables. Sus 17 de fuera del calendario son casi todas recuperaciones: la línea lo dice, y el importe va en verde porque ya cuentan. Solo 1 clase se dio fuera de su horario.</p><div class="page" style="padding:0;gap:12px">
 <div class="fin-head">
   <div class="fin-bar">
     <div class="fin-nav">
@@ -181,8 +182,6 @@ body{margin:0;background:var(--bg-base);color:var(--text-primary);
   </div>
 </a>
 
-
-
 <div class="fnl">
   <div class="fnl-head">
     <div class="fnl-head-row"><span class="fnl-eyebrow">Clases de agosto</span><span class="fnl-total">93</span></div>
@@ -193,7 +192,10 @@ body{margin:0;background:var(--bg-base);color:var(--text-primary);
   <span class="fnl-branch-body"><span class="fnl-branch-name">Con registro de clase</span><span class="fnl-hint">Pulsaste «Ingresar a clase», o quedó constancia (falta sin aviso, cancelación).</span></span>
   <span class="fnl-branch-n">67</span>
 </div><div class="fnl-child" style="padding-left:40px">
-  <span class="fnl-child-name">Pagables</span>
+  <span class="fnl-child-body">
+    <span class="fnl-child-name">Pagables</span>
+    
+  </span>
   <span class="fnl-child-eur">€298,00</span>
   <span class="fnl-child-n">66</span>
 </div><div class="fnl-act" style="padding-left:40px">
@@ -215,26 +217,42 @@ body{margin:0;background:var(--bg-base);color:var(--text-primary);
   <span class="fnl-act-n">5</span>
   <a class="fnl-act-btn" href="#">Reclamar en Revisiones →</a>
 </div><div class="fnl-child" style="padding-left:40px">
-  <span class="fnl-child-name">Sin transcript ni registro</span>
+  <span class="fnl-child-body">
+    <span class="fnl-child-name">Sin transcript ni registro</span>
+    
+  </span>
   
   <span class="fnl-child-n">4</span>
 </div>
 <div class="fnl-branch is-fuera">
-  <span class="fnl-branch-body"><span class="fnl-branch-name">Fuera del calendario</span><span class="fnl-hint">Recuperaciones, clases añadidas a mano y horarios cambiados: existen y se cobran, pero no salen de una celda.</span></span>
+  <span class="fnl-branch-body"><span class="fnl-branch-name">Fuera del calendario</span><span class="fnl-hint">Recuperaciones, faltas y clases dadas otro día: existen y se cobran, pero no salen de una celda.</span></span>
   <span class="fnl-branch-n">17</span>
-</div><div class="fnl-child" style="padding-left:40px">
-  <span class="fnl-child-name">Pagables</span>
-  <span class="fnl-child-eur">€76,50</span>
-  <span class="fnl-child-n">17</span>
-</div><div class="fnl-child is-zero" style="padding-left:40px">
-  <span class="fnl-child-name">Pendientes de cobro</span>
+</div><div class="fnl-child" style="padding-left:40px" title="Clases que diste para reponer una que se había perdido. Salen de una celda bloqueada del calendario, por eso no aparecen en tu horario habitual. Se cobran, y no consumen cupo del alumno.">
+  <span class="fnl-child-body">
+    <span class="fnl-child-name">Recuperaciones</span>
+    
+  </span>
+  <span class="fnl-child-eur">€72,50</span>
+  <span class="fnl-child-n">16</span>
+</div><div class="fnl-child is-zero" style="padding-left:40px" title="El alumno no vino o canceló sobre la hora, en un día que no tenía clase agendada. Se cobran sin transcript.">
+  <span class="fnl-child-body">
+    <span class="fnl-child-name">Faltas y cancelaciones</span>
+    
+  </span>
   <span class="fnl-child-eur is-zero">€0,00</span>
   <span class="fnl-child-n">0</span>
+</div><div class="fnl-child" style="padding-left:40px" title="Diste la clase un día que el calendario no tiene marcado para ese alumno. Suele ser un cambio de horario que no se reflejó en la grilla. Se cobra igual.">
+  <span class="fnl-child-body">
+    <span class="fnl-child-name">Dadas fuera de tu horario</span>
+    
+  </span>
+  <span class="fnl-child-eur">€4,00</span>
+  <span class="fnl-child-n">1</span>
 </div>
 </div>
 
 </div></div>
-<div style="flex:1;min-width:0"><p class="caso-h">Sol.G — saldo negativo y nada que reclamar</p><p class="caso-p">Las penalizaciones se comieron el mes: −€1,00 va en rojo, no en el verde de «vas a cobrar». Cero en la primera rama, 80 clases sin rastro: no hay banda de reclamar, y se dice por qué en vez de ofrecer una acción que no existe.</p><div class="page" style="padding:0;gap:12px">
+<div style="flex:1;min-width:0"><p class="caso-h">Sol.G — saldo negativo y nada que reclamar</p><p class="caso-p">Las penalizaciones se comieron el mes: −€1,00 va en rojo, no en el verde de «vas a cobrar». Cero en la primera rama y 80 clases sin rastro. Sus 2 de fuera del calendario son faltas, no un problema de calendario.</p><div class="page" style="padding:0;gap:12px">
 <div class="fin-head">
   <div class="fin-bar">
     <div class="fin-nav">
@@ -266,8 +284,6 @@ body{margin:0;background:var(--bg-base);color:var(--text-primary);
 
 
 
-
-
 <div class="fnl">
   <div class="fnl-head">
     <div class="fnl-head-row"><span class="fnl-eyebrow">Clases de agosto</span><span class="fnl-total">82</span></div>
@@ -278,11 +294,17 @@ body{margin:0;background:var(--bg-base);color:var(--text-primary);
   <span class="fnl-branch-body"><span class="fnl-branch-name">Con registro de clase</span><span class="fnl-hint">Pulsaste «Ingresar a clase», o quedó constancia (falta sin aviso, cancelación).</span></span>
   <span class="fnl-branch-n">0</span>
 </div><div class="fnl-child is-zero" style="padding-left:40px">
-  <span class="fnl-child-name">Pagables</span>
+  <span class="fnl-child-body">
+    <span class="fnl-child-name">Pagables</span>
+    
+  </span>
   <span class="fnl-child-eur is-zero">€0,00</span>
   <span class="fnl-child-n">0</span>
 </div><div class="fnl-child is-zero" style="padding-left:40px">
-  <span class="fnl-child-name">Pendientes de cobro</span>
+  <span class="fnl-child-body">
+    <span class="fnl-child-name">Pendientes de cobro</span>
+    
+  </span>
   <span class="fnl-child-eur is-zero">€0,00</span>
   <span class="fnl-child-n">0</span>
 </div>
@@ -290,30 +312,49 @@ body{margin:0;background:var(--bg-base);color:var(--text-primary);
   <span class="fnl-branch-body"><span class="fnl-branch-name">Sin ingreso registrado</span><span class="fnl-hint">El calendario dice que tocaban y no quedó registro de acceso.</span></span>
   <span class="fnl-branch-n">80</span>
 </div><div class="fnl-child is-zero" style="padding-left:40px">
-  <span class="fnl-child-name">Reclamables</span>
+  <span class="fnl-child-body">
+    <span class="fnl-child-name">Reclamables</span>
+    
+  </span>
   
   <span class="fnl-child-n">0</span>
 </div><div class="fnl-child" style="padding-left:40px">
-  <span class="fnl-child-name">Sin transcript ni registro</span>
+  <span class="fnl-child-body">
+    <span class="fnl-child-name">Sin transcript ni registro</span>
+    
+  </span>
   
   <span class="fnl-child-n">80</span>
 </div><div class="fnl-nothing" style="padding-left:40px">No hay nada que reclamar: de estas clases no quedó transcript ni registro. Usá «Ingresar a clase» para que cuenten.</div>
 <div class="fnl-branch is-fuera">
-  <span class="fnl-branch-body"><span class="fnl-branch-name">Fuera del calendario</span><span class="fnl-hint">Recuperaciones, clases añadidas a mano y horarios cambiados: existen y se cobran, pero no salen de una celda.</span></span>
+  <span class="fnl-branch-body"><span class="fnl-branch-name">Fuera del calendario</span><span class="fnl-hint">Recuperaciones, faltas y clases dadas otro día: existen y se cobran, pero no salen de una celda.</span></span>
   <span class="fnl-branch-n">2</span>
-</div><div class="fnl-child" style="padding-left:40px">
-  <span class="fnl-child-name">Pagables</span>
+</div><div class="fnl-child is-zero" style="padding-left:40px" title="Clases que diste para reponer una que se había perdido. Salen de una celda bloqueada del calendario, por eso no aparecen en tu horario habitual. Se cobran, y no consumen cupo del alumno.">
+  <span class="fnl-child-body">
+    <span class="fnl-child-name">Recuperaciones</span>
+    
+  </span>
+  <span class="fnl-child-eur is-zero">€0,00</span>
+  <span class="fnl-child-n">0</span>
+</div><div class="fnl-child" style="padding-left:40px" title="El alumno no vino o canceló sobre la hora, en un día que no tenía clase agendada. Se cobran sin transcript.">
+  <span class="fnl-child-body">
+    <span class="fnl-child-name">Faltas y cancelaciones</span>
+    
+  </span>
   <span class="fnl-child-eur">€9,00</span>
   <span class="fnl-child-n">2</span>
-</div><div class="fnl-child is-zero" style="padding-left:40px">
-  <span class="fnl-child-name">Pendientes de cobro</span>
+</div><div class="fnl-child is-zero" style="padding-left:40px" title="Diste la clase un día que el calendario no tiene marcado para ese alumno. Suele ser un cambio de horario que no se reflejó en la grilla. Se cobra igual.">
+  <span class="fnl-child-body">
+    <span class="fnl-child-name">Dadas fuera de tu horario</span>
+    
+  </span>
   <span class="fnl-child-eur is-zero">€0,00</span>
   <span class="fnl-child-n">0</span>
 </div>
 </div>
 
 </div></div>
-<div style="flex:1;min-width:0"><p class="caso-h">Dana — la rama que mezcla dos cosas</p><p class="caso-p">34 pendientes repartidas en dos ramas. En «Fuera del calendario», 14 esperan su transcript y 2 están retenidas por el límite del plan: se dice cuáles dependen de ella y cuáles no, para no mandarla a hacer un trabajo que no cambia nada.</p><div class="page" style="padding:0;gap:12px">
+<div style="flex:1;min-width:0"><p class="caso-h">Dana — el caso que justifica el desglose</p><p class="caso-p">31 clases fuera del calendario que antes solo decían «15 pagables, 16 pendientes». Ahora se ve que son 17 recuperaciones, 3 faltas y 11 dadas fuera de su horario — y que de esas 11, 10 están sin cobrar.</p><div class="page" style="padding:0;gap:12px">
 <div class="fin-head">
   <div class="fin-bar">
     <div class="fin-nav">
@@ -353,8 +394,6 @@ body{margin:0;background:var(--bg-base);color:var(--text-primary);
   </div>
 </a>
 
-
-
 <div class="fnl">
   <div class="fnl-head">
     <div class="fnl-head-row"><span class="fnl-eyebrow">Clases de agosto</span><span class="fnl-total">141</span></div>
@@ -365,7 +404,10 @@ body{margin:0;background:var(--bg-base);color:var(--text-primary);
   <span class="fnl-branch-body"><span class="fnl-branch-name">Con registro de clase</span><span class="fnl-hint">Pulsaste «Ingresar a clase», o quedó constancia (falta sin aviso, cancelación).</span></span>
   <span class="fnl-branch-n">74</span>
 </div><div class="fnl-child" style="padding-left:40px">
-  <span class="fnl-child-name">Pagables</span>
+  <span class="fnl-child-body">
+    <span class="fnl-child-name">Pagables</span>
+    
+  </span>
   <span class="fnl-child-eur">€238,00</span>
   <span class="fnl-child-n">56</span>
 </div><div class="fnl-act" style="padding-left:40px">
@@ -387,24 +429,37 @@ body{margin:0;background:var(--bg-base);color:var(--text-primary);
   <span class="fnl-act-n">9</span>
   <a class="fnl-act-btn" href="#">Reclamar en Revisiones →</a>
 </div><div class="fnl-child" style="padding-left:40px">
-  <span class="fnl-child-name">Sin transcript ni registro</span>
+  <span class="fnl-child-body">
+    <span class="fnl-child-name">Sin transcript ni registro</span>
+    
+  </span>
   
   <span class="fnl-child-n">27</span>
 </div>
 <div class="fnl-branch is-fuera">
-  <span class="fnl-branch-body"><span class="fnl-branch-name">Fuera del calendario</span><span class="fnl-hint">Recuperaciones, clases añadidas a mano y horarios cambiados: existen y se cobran, pero no salen de una celda.</span></span>
+  <span class="fnl-branch-body"><span class="fnl-branch-name">Fuera del calendario</span><span class="fnl-hint">Recuperaciones, faltas y clases dadas otro día: existen y se cobran, pero no salen de una celda.</span></span>
   <span class="fnl-branch-n">31</span>
-</div><div class="fnl-child" style="padding-left:40px">
-  <span class="fnl-child-name">Pagables</span>
-  <span class="fnl-child-eur">€67,50</span>
-  <span class="fnl-child-n">15</span>
-</div><div class="fnl-act" style="padding-left:40px">
-  <span class="fnl-act-body">
-    <span class="fnl-act-top"><span class="fnl-act-name">Pendientes de cobro</span><span class="fnl-act-eur">€71,50</span></span>
-    <span class="fnl-act-sub">14 esperan tu transcript · 2 retenidas por el límite del plan (lo resuelve el equipo)</span>
+</div><div class="fnl-child has-sub" style="padding-left:40px" title="Clases que diste para reponer una que se había perdido. Salen de una celda bloqueada del calendario, por eso no aparecen en tu horario habitual. Se cobran, y no consumen cupo del alumno.">
+  <span class="fnl-child-body">
+    <span class="fnl-child-name">Recuperaciones</span>
+    <span class="fnl-child-sub">12 pagables · 5 pendientes de cobro</span>
   </span>
-  <span class="fnl-act-n">16</span>
-  <button class="fnl-act-btn is-ghost">Ver y subir</button>
+  <span class="fnl-child-eur is-warn">€77,00</span>
+  <span class="fnl-child-n">17</span>
+</div><div class="fnl-child has-sub" style="padding-left:40px" title="El alumno no vino o canceló sobre la hora, en un día que no tenía clase agendada. Se cobran sin transcript.">
+  <span class="fnl-child-body">
+    <span class="fnl-child-name">Faltas y cancelaciones</span>
+    <span class="fnl-child-sub">2 pagables · 1 pendiente de cobro</span>
+  </span>
+  <span class="fnl-child-eur is-warn">€13,50</span>
+  <span class="fnl-child-n">3</span>
+</div><div class="fnl-child has-sub" style="padding-left:40px" title="Diste la clase un día que el calendario no tiene marcado para ese alumno. Suele ser un cambio de horario que no se reflejó en la grilla. Se cobra igual.">
+  <span class="fnl-child-body">
+    <span class="fnl-child-name">Dadas fuera de tu horario</span>
+    <span class="fnl-child-sub">1 pagable · 10 pendientes de cobro</span>
+  </span>
+  <span class="fnl-child-eur is-warn">€48,50</span>
+  <span class="fnl-child-n">11</span>
 </div>
 </div>
 

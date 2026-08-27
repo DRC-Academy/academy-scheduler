@@ -16,6 +16,7 @@ import { ClassFunnelCard } from '@/components/ClassFunnelCard';
 import { dbGetReviewRequests } from '@/lib/reviewRequests';
 import { dbGetStudentDropouts, type StudentDropout } from '@/lib/studentPeriod';
 import ReviewRequestsTab from '@/components/admin/ReviewRequestsTab';
+import OutOfScheduleTab from '@/components/admin/OutOfScheduleTab';
 import { Assignment, ScoringEvent, FinanceManualApproval, Teacher, ClassReviewRequest } from '@/types';
 
 // ─── Finance helpers ──────────────────────────────────────────────────────────
@@ -782,6 +783,11 @@ function FinanceTab() {
           </div>
         </div>
       )}
+
+      {/* La contrapartida de «Dadas fuera de tu horario» del embudo del profesor:
+          allí solo se le dice que se cobran igual, y el arreglo se hace acá. Se
+          carga al pedirlo, no al abrir Finanzas. */}
+      <OutOfScheduleTab monthYear={monthYear} monthLabel={finMonthLabel(monthYear)} />
     </div>
   );
 }

@@ -3298,7 +3298,11 @@ body.driver-active .drc-modal-backdrop * { pointer-events: auto; }
   display: flex; align-items: center; gap: var(--space-3); cursor: pointer;
 }
 .fnl-child.is-zero { opacity: 0.55; cursor: default; }
-.fnl-child-name { flex: 1; min-width: 0; font-size: var(--fs-sm); color: var(--text-secondary); }
+.fnl-child-body { flex: 1; min-width: 0; text-align: left; }
+.fnl-child-name { font-size: var(--fs-sm); color: var(--text-secondary); }
+/* El estado de pago de una línea que no se divide por estado. */
+.fnl-child-sub  { display: block; font-size: var(--fs-micro); color: var(--text-muted); margin-top: 2px; }
+.fnl-child.has-sub { padding-top: 11px; padding-bottom: 11px; }
 .fnl-child-eur  { font-size: var(--fs-sm); font-weight: var(--fw-semibold); color: var(--accent); white-space: nowrap; }
 .fnl-child-eur.is-warn { color: var(--warn); }
 .fnl-child-eur.is-zero { color: var(--text-muted); font-weight: var(--fw-regular); }
@@ -3472,22 +3476,6 @@ body.driver-active .drc-modal-backdrop * { pointer-events: auto; }
   border-radius: 9px; font-size: var(--fs-sm); font-weight: var(--fw-semibold);
 }
 
-/* Aviso temporal: descartable, porque es una novedad y no parte de la pantalla. */
-.fin-notice {
-  display: flex; align-items: flex-start; gap: 11px; padding: 11px 14px;
-  background: var(--warn-soft); border: 1px solid var(--warn-border); border-radius: var(--radius-md);
-}
-.fin-notice-i {
-  flex-shrink: 0; width: 18px; height: 18px; border-radius: var(--radius-pill);
-  background: var(--warn); color: #fff; font-size: var(--fs-caption); font-weight: var(--fw-semibold);
-  display: flex; align-items: center; justify-content: center; margin-top: 1px;
-}
-.fin-notice-body { flex-grow: 1; font-size: var(--fs-caption); line-height: 1.55; color: var(--text-secondary); }
-.fin-notice-x {
-  flex-shrink: 0; background: none; border: none; color: var(--text-muted);
-  font-size: 16px; line-height: 1; cursor: pointer; padding: 0 2px; font-family: inherit;
-}
-
 /* ── 3. La lista, con filtros por estado ──
    Los filtros son también el destino de los clics del embudo: pulsar
    «Pendientes de cobro» arriba deja la lista mostrando exactamente esas. */
@@ -3503,6 +3491,8 @@ body.driver-active .drc-modal-backdrop * { pointer-events: auto; }
   font-size: var(--fs-caption); cursor: pointer; font-family: inherit;
 }
 .fin-filter:hover { background: var(--bg-surface-2); }
+.fin-filter.is-pick { display: inline-flex; align-items: center; gap: 7px; }
+.fin-filter-x { font-size: 10px; opacity: 0.75; }
 .fin-filter.is-on {
   border-color: var(--accent); background: var(--accent-soft);
   color: var(--accent); font-weight: var(--fw-semibold);

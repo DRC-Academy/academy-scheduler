@@ -1,10 +1,11 @@
 {
   "artboards": [
-    { "file": "Main.dc.html",       "x": 0,    "y": 0,    "w": 1240, "h": 2000, "title": "Profesor · escritorio (Agustin, agosto real)" },
-    { "file": "Movil.dc.html",      "x": 1400, "y": 0,    "w": 390,  "h": 1560, "title": "Profesor · móvil 390px (Agustin)" },
-    { "file": "Casos.dc.html",      "x": 0,    "y": 2160, "w": 1790, "h": 1320, "title": "Silvia · Sol.G · Dana — escritorio" },
-    { "file": "MovilCasos.dc.html", "x": 0,    "y": 3640, "w": 1290, "h": 1400, "title": "Silvia · Sol.G · Dana — móvil 390px" },
-    { "file": "Admin.dc.html",      "x": 0,    "y": 5200, "w": 1000, "h": 1500, "title": "Admin · la fila plegada de cada profesor" }
+    { "file": "Main.dc.html",             "x": 0,    "y": 0,    "w": 1240, "h": 2000, "title": "Profesor · escritorio (Agustin, agosto real)" },
+    { "file": "Movil.dc.html",            "x": 1400, "y": 0,    "w": 390,  "h": 1560, "title": "Profesor · móvil 390px (Agustin)" },
+    { "file": "Casos.dc.html",            "x": 0,    "y": 2160, "w": 1790, "h": 1360, "title": "Silvia · Sol.G · Dana — escritorio" },
+    { "file": "MovilCasos.dc.html",       "x": 0,    "y": 3680, "w": 1290, "h": 1440, "title": "Silvia · Sol.G · Dana — móvil 390px" },
+    { "file": "Admin.dc.html",            "x": 0,    "y": 5280, "w": 1000, "h": 1520, "title": "Admin · la fila plegada de cada profesor" },
+    { "file": "AdminCalendarios.dc.html", "x": 1080, "y": 5280, "w": 1000, "h": 1520, "title": "Admin · calendarios desincronizados" }
   ],
   "annotations": [
     {
@@ -12,28 +13,28 @@
       "x": 0,
       "y": -190,
       "w": 600,
-      "text": "Rediseño de Finanzas — datos REALES de agosto 2026.\nEl orden responde las tres preguntas:\n1. ¿Cuánto cobro? → el total, arriba\n2. ¿Depende algo de mí? → la banda de reclamables, antes del detalle\n3. ¿Por qué ese número? → el embudo, y cada línea baja a la lista filtrada"
+      "text": "Rediseño de Finanzas — datos REALES de agosto 2026.\nEl orden responde las tres preguntas:\n1. ¿Cuánto cobro? → el total, arriba\n2. ¿Depende algo de mí? → la banda de reclamables, antes del detalle\n3. ¿Por qué ese número? → el embudo, y cada línea baja a la lista mostrando esas clases"
     },
     {
       "id": "nota-cuadra",
       "x": 660,
       "y": -190,
       "w": 580,
-      "text": "La barra de tres segmentos ES la prueba de que cuadra: los segmentos son las ramas y llenan el ancho. Debajo, la suma escrita (70 + 46 + 8 = 124).\n\nComprobado contra la base: 31 profesores, 0 fallos de consistencia, y el «Pagables» del embudo == el totalPagable de finanzas en todos."
+      "text": "«Fuera del calendario» se divide ahora por ORIGEN, no por estado de pago: qué son esas clases, con su estado escrito al lado.\n\nComprobado contra la base: 31 profesores, 0 fallos de consistencia, y el «Pagables» del embudo == el totalPagable de finanzas en todos."
     },
     {
       "id": "nota-casos",
       "x": 0,
       "y": 2050,
-      "w": 780,
-      "text": "Los tres casos que rompen supuestos. Sol.G es el importante: saldo NEGATIVO (−€1,00 por penalizaciones), cero en la primera rama y 80 clases sin nada que reclamar. El total va en rojo, no en el verde de «vas a cobrar», y no se ofrece una acción que no existe."
+      "w": 820,
+      "text": "Los tres casos que rompen supuestos. Sol.G: saldo NEGATIVO (−€1,00 por penalizaciones), cero en la primera rama, 80 clases sin nada que reclamar. Dana: las 31 de fuera del calendario que antes solo decían «15 pagables / 16 pendientes» y ahora dicen 17 recuperaciones, 3 faltas y 11 dadas fuera de horario."
     },
     {
       "id": "nota-admin",
       "x": 0,
-      "y": 5080,
-      "w": 780,
-      "text": "Admin: la barra sale SOLO de `finance`, que ya está calculado para los 22. El embudo completo necesita 3 consultas por profesor — 66 al abrir la pantalla — así que el importe reclamable aparece al desplegar uno, no en la lista."
+      "y": 5160,
+      "w": 820,
+      "text": "Izquierda: la barra sale SOLO de `finance`, ya calculado para los 22. Derecha: las 79 clases dadas fuera de horario, agrupadas por alumno y separadas en los tres motivos. Se carga al pulsar «Revisar» — dos consultas, no 66."
     }
   ],
   "launch": { "view": "canvas" }

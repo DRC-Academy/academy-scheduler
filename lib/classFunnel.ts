@@ -19,10 +19,14 @@
 //     │     ├── Reclamables               → hay transcript: se piden en Revisiones
 //     │     └── Sin transcript ni registro→ no hay nada que reclamar
 //     └── Fuera del calendario            (hecho real sin celda agendada)
+//           ├── Recuperaciones            → reponen una clase perdida
+//           ├── Faltas y cancelaciones    → sin celda ese día
+//           └── Dadas fuera de tu horario → el resto: la grilla no lo refleja
 //
-// "Fuera del calendario" no es un cajón de sastre: son recuperaciones, clases
-// añadidas a mano y alumnos que cambiaron de horario. Sin esa rama el total
-// mentiría, porque esas clases existen, se cobran, y no salen de ninguna celda.
+// "Fuera del calendario" no es un cajón de sastre, y por eso se divide por
+// ORIGEN y no por estado de pago (ver lib/outOfCalendar): al verla, lo que se
+// pregunta el profesor es qué son esas clases, no si están cobradas. Sin esa
+// rama el total mentiría: existen, se cobran, y no salen de ninguna celda.
 //
 // TODO se mide en CLASES (unidades), no en filas: una sesión de 2 horas cuenta 2
 // en todas las ramas, igual que en el pago. Así "Pagables" del embudo y
@@ -33,9 +37,9 @@ import type { Assignment, ClassJoinLog, ClassRecord, ClassReviewRequest } from '
 import type { ClassTranscriptRef, TeacherFinanceResult, ClassFinanceRow } from '@/lib/finance';
 import type { GridOccupancy } from '@/lib/teacherClasses';
 import { buildMissingJoinClasses, type MissingJoinClass } from '@/lib/reviewRequests';
-import { periodIndex, existsForStudent, type StudentDropout } from '@/lib/studentPeriod';
+import { type StudentDropout } from '@/lib/studentPeriod';
+import { scheduledIndex, originOf, OUT_ORIGINS } from '@/lib/outOfCalendar';
 
-const nk = (s: string | null | undefined): string => (s ?? '').trim().toLowerCase();
 
 /** Una rama del embudo. `amount` solo donde el dinero significa algo. */
 export interface FunnelBranch {
@@ -59,6 +63,20 @@ export interface FunnelBranch {
    * en `ClassFunnel.missing`).
    */
   rows?: ClassFinanceRow[];
+  /**
+   * Reparto de la línea por estado de pago: `pagables + pendientes === count`.
+   *
+   * Existe por dos motivos. Uno, `funnelPayableTotal` suma ESTO en vez de buscar
+   * ramas por su nombre de clave, así que la comprobación sigue valiendo aunque
+   * las ramas se reorganicen (que es justo lo que pasó al dividir "fuera del
+   * calendario" por origen). Dos, las ramas que no se dividen por estado pueden
+   * decir en pantalla cuántas de sus clases ya cuentan y cuántas no.
+   *
+   * En las ramas que SÍ se dividen por estado ("Pagables" / "Pendientes de
+   * cobro") queda con un lado en cero, y la pantalla no lo pinta: repetir
+   * "70 pagables" debajo de una línea que se llama "Pagables" es ruido.
+   */
+  payStatus?: { pagables: number; pendientes: number };
   /**
    * Desglose de "Pendientes de cobro" en sus DOS causas, que no son lo mismo:
    *
@@ -163,22 +181,10 @@ export function buildClassFunnel(opts: {
   // tiene clic pero sí tiene celda, y clasificarla por el clic la dejaba fuera de
   // las dos ramas. Así se perdían 5 clases pagables de Sol y 2 de Florencia, y el
   // embudo "sumaba" solo porque el total se definía como la suma de sus partes.
-  const periodos = periodIndex(opts.assignments, opts.dropouts, teacherId);
-  const agendadas = new Set<string>();
-  for (const a of opts.assignments) {
-    if (a.teacherId !== teacherId) continue;
-    const dias = new Set((a.slots ?? []).map(s => s.day));
-    if (dias.size === 0) continue;
-    for (let d = 1; d <= ultimo; d++) {
-      const iso = `${monthYear}-${String(d).padStart(2, '0')}`;
-      const dayName = DIAS[new Date(iso + 'T00:00:00').getDay()];
-      if (!dias.has(dayName)) continue;
-      if (!existsForStudent(periodos, a.studentName, iso)) continue;
-      agendadas.add(`${nk(a.studentName)}|${iso}`);
-    }
-  }
-  const esAgendada = (r: { studentName: string; date: string }) =>
-    agendadas.has(`${nk(r.studentName)}|${r.date}`);
+  const sched = scheduledIndex({
+    assignments: opts.assignments, dropouts: opts.dropouts, teacherId, monthYear,
+  });
+  const esAgendada = (r: { studentName: string; date: string }) => sched.has(r.studentName, r.date);
 
   const hechosMes  = finance.rows.filter(r => inMonth(r.date, monthYear));
   const conRegistro = hechosMes.filter(esAgendada);
@@ -197,6 +203,11 @@ export function buildClassFunnel(opts: {
     transcript: unidadesFin(rs.filter(r => r.status === 'a_revisar')),
     limite:     unidadesFin(rs.filter(r => r.status === 'excede_limite' || r.status === 'excede_limite_tipo')),
   });
+  /** Reparto por estado de pago. De acá sale `funnelPayableTotal`. */
+  const estado = (rs: Fila[]) => ({
+    pagables:   unidadesFin(pagablesDe(rs)),
+    pendientes: unidadesFin(pendientesDe(rs)),
+  });
 
   const branches: FunnelBranch[] = [
     {
@@ -210,12 +221,14 @@ export function buildClassFunnel(opts: {
           key: 'pagables', label: 'Pagables',
           count: unidadesFin(pagablesDe(conRegistro)), amount: importe(pagablesDe(conRegistro)),
           rows: pagablesDe(conRegistro),
+          payStatus: estado(pagablesDe(conRegistro)),
           hint: 'Verificadas. Suman a tu total del mes.',
         },
         {
           key: 'pendientes', label: 'Pendientes de cobro',
           count: unidadesFin(pendientesDe(conRegistro)), amount: importe(pendientesDe(conRegistro)),
           rows: pendientesDe(conRegistro),
+          payStatus: estado(pendientesDe(conRegistro)),
           pendingSplit: splitDe(pendientesDe(conRegistro)),
           hint: 'Ya las diste y todavía no suman al total: falta el transcript, o están retenidas por el límite del plan.',
         },
@@ -244,24 +257,31 @@ export function buildClassFunnel(opts: {
       label: 'Fuera del calendario',
       count: unidadesFin(fuera),
       rows: fuera,
-      hint: 'Recuperaciones, clases añadidas a mano y horarios cambiados: existen y se cobran, pero no salen de una celda.',
-      // Se desglosa igual que "con ingreso" para que `Pagables` del embudo sumado
-      // dé EXACTAMENTE el `totalPagable` de finanzas. Sin este desglose, un
-      // profesor con recuperaciones veía "Pagables 70" en el embudo y 75 en su
-      // total del mes: los dos números que este rediseño viene a eliminar.
-      children: [
-        {
-          key: 'fuera_pagables', label: 'Pagables',
-          count: unidadesFin(pagablesDe(fuera)), amount: importe(pagablesDe(fuera)),
-          rows: pagablesDe(fuera),
-        },
-        {
-          key: 'fuera_pendientes', label: 'Pendientes de cobro',
-          count: unidadesFin(pendientesDe(fuera)), amount: importe(pendientesDe(fuera)),
-          rows: pendientesDe(fuera),
-          pendingSplit: splitDe(pendientesDe(fuera)),
-        },
-      ],
+      payStatus: estado(fuera),
+      hint: 'Recuperaciones, faltas y clases dadas otro día: existen y se cobran, pero no salen de una celda.',
+      // Se desglosa por ORIGEN, no por estado de pago.
+      //
+      // Antes eran "Pagables" y "Pendientes de cobro", igual que la rama de
+      // arriba. Cuadraba, pero no respondía la única pregunta que se hace el
+      // profesor al ver esta rama: qué son esas clases. El estado de pago pasa a
+      // ser un dato de cada línea (`payStatus`), que es su sitio.
+      //
+      // Las tres líneas salen de `originOf` (lib/outOfCalendar) y "dadas fuera de
+      // tu horario" es el resto por definición, así que la suma cuadra por
+      // construcción. Las que quedan en cero no se pintan.
+      children: OUT_ORIGINS.map(o => {
+        const rs = fuera.filter(r => originOf(r) === o.key);
+        return {
+          key: o.branchKey,
+          label: o.label,
+          hint: o.hint,
+          count: unidadesFin(rs),
+          amount: importe(rs),
+          rows: rs,
+          payStatus: estado(rs),
+          pendingSplit: splitDe(pendientesDe(rs)),
+        };
+      }),
     },
   ];
 
@@ -278,15 +298,18 @@ export function buildClassFunnel(opts: {
  *
  * Tiene que dar EXACTAMENTE `finance.totalPagable`. Es la comprobación que
  * impide que el embudo y el total del mes se separen sin que nadie lo note.
+ *
+ * Suma `payStatus.pagables` de cada hoja en vez de buscar las claves 'pagables'
+ * y 'fuera_pagables', como hacía antes. Con el desglose por origen esas claves
+ * ya no existen, y una comprobación que depende del nombre de una rama deja de
+ * comprobar en silencio en cuanto alguien la renombra — que es exactamente el
+ * fallo que esta función existe para evitar.
  */
 export function funnelPayableTotal(f: ClassFunnel): number {
   let n = 0;
   for (const b of f.branches) {
-    for (const c of b.children ?? []) {
-      if (c.key === 'pagables' || c.key === 'fuera_pagables') n += c.count;
-    }
+    for (const c of b.children ?? []) n += c.payStatus?.pagables ?? 0;
   }
   return n;
 }
 
-const DIAS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];

@@ -59,22 +59,36 @@ function daysDiff(aIso: string, bIso: string): number {
 // Las etiquetas y colores de estado salen de lib/finance (financeStatusBadge):
 // una sola fuente para esta pantalla y la del admin.
 
-/** Filtro de la lista de clases. Las mismas tres categorías del embudo. */
-type ListFilter = 'todas' | 'pagables' | 'pendientes';
+/**
+ * Filtro de la lista de clases. Dos formas, porque hay dos preguntas distintas:
+ *
+ *   · por ESTADO — las tres de siempre, que salen de `r.status`.
+ *   · por ORIGEN — al pulsar una línea del embudo ("Recuperaciones", "Dadas
+ *     fuera de tu horario"): no es un estado, es un conjunto concreto de clases.
+ *
+ * El filtro por origen guarda las FILAS que el embudo ya clasificó, no un
+ * criterio para volver a clasificarlas. Reproducir acá el "¿esto es una
+ * recuperación?" sería tener la regla en dos sitios, que es justo lo que hacía
+ * que dos pantallas dieran números distintos sobre las mismas clases.
+ */
+type ListFilter =
+  | { kind: 'todas' | 'pagables' | 'pendientes' }
+  | { kind: 'origen'; key: string; label: string; rows: Set<ClassFinanceRow> };
 
-/** Se descartó el aviso de la novedad. Por navegador, no por profesor. */
-const NOTICE_KEY = 'finanzas.novedad.revisiones';
+const TODAS: ListFilter = { kind: 'todas' };
 
 /**
- * ¿Entra esta clase en el filtro? La clasificación NO se define acá: se lee de
- * `r.status`, que ya viene calculado por lib/finance. Cualquier otra cosa sería
- * una segunda clasificación viviendo en la pantalla, que es exactamente lo que
- * hacía que las tarjetas viejas contradijeran al total.
+ * ¿Entra esta clase en el filtro? Para los de estado se lee `r.status`, que ya
+ * viene calculado por lib/finance; para los de origen, la pertenencia al
+ * conjunto que armó el embudo. En ningún caso se clasifica de nuevo.
  */
-function matchesFilter(status: ClassFinanceRow['status'], f: ListFilter): boolean {
-  if (f === 'todas') return true;
-  if (f === 'pagables') return status === 'pagable';
-  return status !== 'pagable';
+function matchesFilter(r: ClassFinanceRow, f: ListFilter): boolean {
+  switch (f.kind) {
+    case 'todas':      return true;
+    case 'pagables':   return r.status === 'pagable';
+    case 'pendientes': return r.status !== 'pagable';
+    case 'origen':     return f.rows.has(r);
+  }
 }
 
 /** El día en que se liquida el mes: el último. Se dice, en vez de suponerlo. */
@@ -176,14 +190,7 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
   // pulsar "Pendientes de cobro" arriba deja la lista mostrando esas y solo esas,
   // que es lo que convierte al embudo en una explicación navegable y no en un
   // cartel. Un solo estado para las dos entradas, así no pueden discrepar.
-  const [listFilter, setListFilter] = useState<ListFilter>('todas');
-  // El aviso de la novedad. Se lee en el inicializador y no en un effect: este
-  // componente solo se monta en el cliente (AuthGuard no lo renderiza hasta tener
-  // sesión), así que no hay desajuste de hidratación y quien ya lo cerró no lo ve
-  // parpadear en cada carga.
-  const [noticeOn, setNoticeOn] = useState(() => {
-    try { return localStorage.getItem(NOTICE_KEY) !== '1'; } catch { return true; }
-  });
+  const [listFilter, setListFilter] = useState<ListFilter>(TODAS);
   const [absence, setAbsence] = useState<{ studentName: string; date: string; time?: string; remaining: number } | null>(null);
   const [absenceSaving, setAbsenceSaving] = useState(false);
   const [absenceError, setAbsenceError] = useState('');
@@ -308,22 +315,45 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
   // compara los dos números no encuentre dos verdades.
   const filterCounts = useMemo(() => {
     const units = (f: ListFilter) => finance.rows
-      .filter(r => matchesFilter(r.status, f))
+      .filter(r => matchesFilter(r, f))
       .reduce((s, r) => s + r.billingUnits, 0);
-    return { todas: units('todas'), pagables: units('pagables'), pendientes: units('pendientes') };
+    return {
+      todas: units({ kind: 'todas' }),
+      pagables: units({ kind: 'pagables' }),
+      pendientes: units({ kind: 'pendientes' }),
+    };
   }, [finance.rows]);
 
+  /** Todas las líneas del embudo, planas, para poder buscarlas por clave. */
+  const funnelLines = useMemo(
+    () => funnel.branches.flatMap(b => [b, ...(b.children ?? [])]),
+    [funnel],
+  );
+
   /**
-   * Clic en una línea del embudo. Las ramas que tienen filas en la lista la
-   * filtran y bajan hasta ella; "Reclamables" no vive acá sino en /revisiones,
-   * así que ahí se lleva al profesor a donde puede actuar.
+   * Clic en una línea del embudo. Cada línea deja la lista mostrando SUS clases
+   * y baja hasta ella.
+   *
+   * Las de origen ("Recuperaciones", "Dadas fuera de tu horario") filtran por
+   * las filas que el embudo ya clasificó, no por estado de pago: si hago clic en
+   * las 11 dadas fuera de horario quiero ver esas 11, no las pagables del mes.
+   * Las de estado siguen filtrando por estado, que es lo que dicen que son.
+   *
+   * "Reclamables" no vive acá sino en /revisiones, así que ahí se lleva al
+   * profesor a donde sí puede actuar.
    */
   function pickFunnelBranch(key: string) {
     if (key === 'reclamables') { router.push('/revisiones'); return; }
-    const f: ListFilter = key === 'pagables' || key === 'fuera_pagables' ? 'pagables'
-      : key === 'pendientes' || key === 'fuera_pendientes' ? 'pendientes'
-      : 'todas';
-    setListFilter(f);
+    if (key === 'pagables')   setListFilter({ kind: 'pagables' });
+    else if (key === 'pendientes') setListFilter({ kind: 'pendientes' });
+    else {
+      const line = funnelLines.find(l => l.key === key);
+      // Sin filas propias (p. ej. la rama padre) no hay nada que acotar: se
+      // muestra todo antes que mentir con una lista vacía.
+      setListFilter(line?.rows?.length
+        ? { kind: 'origen', key, label: line.label, rows: new Set(line.rows) }
+        : TODAS);
+    }
     document.getElementById('fin-lista')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
@@ -381,10 +411,16 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
     return groups;
   }, [finance, myAssignments, todayIso]);
 
-  /** Los alumnos que tienen alguna clase en el estado filtrado. */
+  /** Los alumnos que tienen alguna clase dentro del filtro. */
   const visibleGroups = useMemo(
-    () => financeGroups.filter(g => g.rows.some(r => matchesFilter(r.status, listFilter))),
+    () => financeGroups.filter(g => g.rows.some(r => matchesFilter(r, listFilter))),
     [financeGroups, listFilter],
+  );
+
+  /** Clases que deja ver el filtro activo, para el contador del chip. */
+  const filterUnits = useMemo(
+    () => finance.rows.filter(r => matchesFilter(r, listFilter)).reduce((s, r) => s + r.billingUnits, 0),
+    [finance.rows, listFilter],
   );
 
   function toggleClass(key: string) {
@@ -561,32 +597,12 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
           </Link>
         )}
 
-        {/* Aviso de la novedad: se puede cerrar y no vuelve. Es información de
-            estreno, no parte de la pantalla, y ocupar sitio para siempre por un
-            cambio de este mes sería cobrárselo al profesor todo el año. */}
-        {noticeOn && (
-          <div className="fin-notice">
-            <span className="fin-notice-i" aria-hidden>i</span>
-            <div className="fin-notice-body">
-              <b style={{ color: 'var(--text-primary)' }}>Novedad.</b> Ahora ves <b>todas</b> las clases de tu
-              calendario sin registro de acceso, no solo las que declaraste a mano. Las que tienen el
-              transcript subido <b>las podés reclamar</b> y se te pagan cuando el equipo las valide.
-            </div>
-            <button
-              className="fin-notice-x" aria-label="Descartar aviso"
-              onClick={() => { setNoticeOn(false); try { localStorage.setItem(NOTICE_KEY, '1'); } catch { /* modo privado */ } }}
-            >
-              ✕
-            </button>
-          </div>
-        )}
-
         {/* ── 3. EL EMBUDO: por qué el total es ese ──
             Reemplaza a las cuatro tarjetas sueltas. Las viejas contaban cada una
             por su cuenta: "Sin ingreso detectado" solo miraba los registros que
             el profesor había cargado a mano, así que decía 2 donde había 80.
             Acá cada clase está en una rama, el total es la suma, y cada línea
-            baja a la lista filtrada por ese estado. */}
+            baja a la lista mostrando exactamente esas clases. */}
         <ClassFunnelCard
           funnel={funnel}
           claimAmount={claimAmount}
@@ -606,29 +622,44 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                   { k: 'todas', label: 'Todas' },
                   { k: 'pagables', label: 'Pagables' },
                   { k: 'pendientes', label: 'Pendientes' },
-                ] as Array<{ k: ListFilter; label: string }>).map(f => (
+                ] as Array<{ k: 'todas' | 'pagables' | 'pendientes'; label: string }>).map(f => (
                   <button
                     key={f.k}
-                    className={`fin-filter${listFilter === f.k ? ' is-on' : ''}`}
-                    onClick={() => setListFilter(f.k)}
+                    className={`fin-filter${listFilter.kind === f.k ? ' is-on' : ''}`}
+                    onClick={() => setListFilter({ kind: f.k })}
                   >
                     {f.label} {filterCounts[f.k]}
                   </button>
                 ))}
+                {/* El cuarto filtro: aparece al pulsar una línea de origen del
+                    embudo y se quita con la ✕. No es un estado más, así que no
+                    ocupa sitio cuando no está en uso. */}
+                {listFilter.kind === 'origen' && (
+                  <button
+                    className="fin-filter is-on is-pick"
+                    onClick={() => setListFilter(TODAS)}
+                    title="Quitar este filtro"
+                  >
+                    {listFilter.label} {filterUnits}
+                    <span className="fin-filter-x" aria-hidden>✕</span>
+                  </button>
+                )}
               </div>
             </div>
             {visibleGroups.length === 0 ? (
               <div className="mcf-card mcf-empty">
                 {financeGroups.length === 0
                   ? <>No hay clases detectadas este mes. Registrá clases con <b>Añadir clase</b> o ingresá con el botón Meet.</>
-                  : listFilter === 'pendientes'
+                  : listFilter.kind === 'pendientes'
                     ? <>No te queda ninguna clase pendiente de cobro este mes.</>
-                    : <>Ninguna clase de este mes está en ese estado.</>}
+                    : listFilter.kind === 'origen'
+                      ? <>Ninguna clase de este mes entra en «{listFilter.label}».</>
+                      : <>Ninguna clase de este mes está en ese estado.</>}
               </div>
             ) : visibleGroups.map(g => {
               // Con un filtro puesto la lista se abre sola: si hay que pulsar
               // cada alumno para ver las 3 pendientes, el filtro no sirve.
-              const isOpen = expanded.has(g.name) || listFilter !== 'todas';
+              const isOpen = expanded.has(g.name) || listFilter.kind !== 'todas';
               return (
                 <div key={g.name} className="mcf-card">
                   <div className="mcf-student-head" onClick={() => toggle(g.name)}>
@@ -699,7 +730,7 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                             <span key={col.h}>{col.h}<HelpTooltip tooltipKey={col.help} /></span>
                           ))}
                         </div>
-                        {g.rows.filter(r => matchesFilter(r.status, listFilter)).map((r, i) => {
+                        {g.rows.filter(r => matchesFilter(r, listFilter)).map((r, i) => {
                           const rec = recordFor(g.name, r.date);
                           const ing = ingresoBadge(r);
                           const ct = classTypeBadge(r.classType);

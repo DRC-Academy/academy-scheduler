@@ -1022,6 +1022,67 @@ export async function dbGetAllGridOccupancy(): Promise<GridOccupancy[]> {
   return out;
 }
 
+/**
+ * Lo mismo que `getTeacherAssignments`, pero para TODOS los profesores de una
+ * vez: 3 consultas en total en lugar de 3 por profesor.
+ *
+ * Existe por el egress. `getTeacherAssignments` llama a `dbGetStudents()` por
+ * dentro, así que pedirlo para los 22 profesores del panel de admin se traía la
+ * tabla de alumnos entera 22 veces. Con esto el admin puede armar el mismo
+ * diagnóstico que ve el profesor sin que abrir Finanzas cueste 66 consultas.
+ *
+ * El merge es EL MISMO que el de `getStudentsForTeacher` (slots del grid, resto
+ * de la assignment) a propósito: si divergieran, el embudo del profesor y la
+ * vista del admin volverían a contar cosas distintas.
+ */
+export async function dbGetAllTeacherAssignments(): Promise<Map<string, Assignment[]>> {
+  const [teachers, students, allAssignments, calRes] = await Promise.all([
+    dbGetTeachers(),
+    dbGetStudents(),
+    dbGetAssignments(),
+    supabase.from('teacher_calendars').select('teacher_id, grid'),
+  ]);
+
+  const studentsByName = new Map(students.map(s => [normKey(s.name), s]));
+  const asgByTeacher = new Map<string, Map<string, Assignment>>();
+  for (const a of allAssignments) {
+    if (!asgByTeacher.has(a.teacherId)) asgByTeacher.set(a.teacherId, new Map());
+    const porNombre = asgByTeacher.get(a.teacherId)!;
+    // Con duplicados gana el primero: dbGetAssignments ya ordena por created_at.
+    const k = normKey(a.studentName);
+    if (!porNombre.has(k)) porNombre.set(k, a);
+  }
+
+  const out = new Map<string, Assignment[]>();
+  for (const t of teachers) out.set(t.id, []);
+
+  for (const cal of (calRes.data ?? []) as Array<{ teacher_id: string; grid: Grid }>) {
+    const t = teachers.find(x => x.id === cal.teacher_id);
+    if (!t) continue;
+    const porNombre = asgByTeacher.get(t.id) ?? new Map<string, Assignment>();
+    const enGrid = new Set<string>();
+    const lista: Assignment[] = [];
+    for (const { name, slots } of groupCellsByStudent(extractOcupadoCells(cal.grid)).values()) {
+      const k = normKey(name);
+      enGrid.add(k);
+      const asg = porNombre.get(k);
+      lista.push(asg
+        ? { ...asg, slots }
+        : assignmentFromGrid(t, { studentName: name, slots, student: studentsByName.get(k) ?? null, assignment: null, activo: true }));
+    }
+    // Asignados sin horario: van sin slots, igual que en getStudentsForTeacher.
+    for (const [k, a] of porNombre) if (!enGrid.has(k)) lista.push({ ...a, slots: [] });
+    out.set(t.id, lista);
+  }
+
+  // Profesores sin fila en teacher_calendars: solo lo que diga la ficha.
+  for (const t of teachers) {
+    if ((out.get(t.id) ?? []).length > 0) continue;
+    out.set(t.id, [...(asgByTeacher.get(t.id)?.values() ?? [])].map(a => ({ ...a, slots: [] })));
+  }
+  return out;
+}
+
 // ── FUENTE ÚNICA DE VERDAD: alumnos de un profesor ───────────────────────────
 //
 // REGLA: un alumno pertenece a un profesor SI Y SOLO SI tiene al menos una celda
