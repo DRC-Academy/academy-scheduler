@@ -3600,6 +3600,16 @@ body.driver-active .drc-modal-backdrop * { pointer-events: auto; }
   gap: 4px 12px; align-items: center; padding: 7px 16px; font-size: 12.5px;
 }
 .fch-cls.is-flag { background: #FFFDF5; }
+/* Clase dada SIN acceso: el alumno no tenía con qué tomarla y se paga igual. Es
+   la única línea que se pinta en rojo — el resto de los estados son de cobro, no
+   de acceso. */
+.fch-cls.is-sinsub { background: var(--danger-soft); box-shadow: inset 3px 0 0 var(--danger); }
+.fch-cls-sinsub { color: var(--danger); font-weight: var(--fw-medium); }
+.fch-cls-sinsub::before { content: ' · '; color: var(--text-muted); font-weight: var(--fw-regular); }
+/* Nunca hubo respuesta de WooCommerce: no sabemos si estaba al día, así que no
+   se afirma que no lo estuviera. */
+.fch-cls-dudoso { color: var(--text-muted); }
+.fch-cls-dudoso::before { content: ' · '; }
 .fch-cls-when { color: var(--text-secondary); display: flex; gap: 8px; }
 .fch-cls-h { color: var(--text-muted); }
 .fch-cls-state { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; }
@@ -3626,11 +3636,4 @@ body.driver-active .drc-modal-backdrop * { pointer-events: auto; }
   .fch-total { min-width: 0; }
 }
 
-/* Notas de suscripción de las clases pagables. Vivían dentro de la caja
-   "Total a cobrar", que repetía la fila plegada entera y por eso se borró; estas
-   líneas no estaban en ningún otro sitio. */
-.afd-subnotes {
-  display: flex; flex-direction: column; gap: 5px;
-  font-size: var(--fs-caption); color: var(--text-muted); line-height: 1.5;
-}
-.afd-subnotes .is-warn { color: var(--warn); font-weight: var(--fw-medium); }
+

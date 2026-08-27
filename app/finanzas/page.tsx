@@ -223,31 +223,48 @@ function FinanceBar({ r }: { r: TeacherFinanceResult }) {
   );
 }
 
+/** Acceso a la ACADEMIA con el que se dio esa clase, para pintarla o no. */
+type AccesoClase =
+  | { kind: 'ok' }
+  | { kind: 'sin'; label: string; title: string }
+  | { kind: 'dudoso'; label: string };
+
+/** Estados que dan acceso sin ser una suscripción viva de WooCommerce. */
+const ACCESO_PROPIO = new Set(['oritalk', 'manual_override', 'manual_active']);
+
 /**
- * Estado de la suscripción de las clases PAGABLES, al momento de darse.
+ * ¿Con qué acceso se dio esta clase?
  *
- * Es lo único que vivía en la caja "Total a cobrar" y no está en la fila
- * plegada: allí solo hay un ⚠️ con los estados SIN acceso escondidos en un
- * tooltip. Las líneas informativas —el alumno sí podía tomar clase, pero su
- * acceso no venía de una suscripción viva de WooCommerce— no estaban en
- * ningún otro sitio.
+ * Sustituye a la lista de párrafos que encabezaba el panel del profesor. Aquello
+ * agrupaba por estado —"3 clases pagables con la suscripción en «No encontrada»"—
+ * y por tanto no decía CUÁL de sus clases era; además repetía en verde los
+ * estados que sí daban acceso, que no son noticia. Ahora la marca va en la clase.
  *
- * Ninguna de las dos cambia el importe: lo que decide que una clase se pague
- * sigue siendo el clic en "Unirse" más el transcript.
+ * TRES respuestas, no dos, porque los estados no son la misma familia (el mapa
+ * completo está en lib/subscriptionAccess):
+ *
+ *   · `ok`     — el alumno podía tomar clase. Incluye 'pending-cancel' (canceló
+ *                la renovación pero el período pagado sigue vivo), Oritalk y las
+ *                activaciones manuales. No se pinta nada.
+ *   · `sin`    — WooCommerce respondió y NO había acceso: cancelada, vencida, en
+ *                espera, sin suscripción para ese correo, o un pago único al que
+ *                nadie activó el acceso. Esto es lo que va en rojo.
+ *   · `dudoso` — nunca hubo respuesta ('error'): el alumno no tenía email en
+ *                ficha, faltaban las credenciales de Woo, o la llamada falló. NO
+ *                se pinta en rojo: no sabemos si el alumno estaba al día, y
+ *                afirmarlo sería decir algo que el dato no dice.
  */
-function SubStatusNotes({ result }: { result: TeacherFinanceResult }) {
-  if (result.payableSubStatuses.length === 0) return null;
-  return (
-    <div className="afd-subnotes">
-      {result.payableSubStatuses.map(s => (
-        <div key={s.status} className={s.countsAsActive ? undefined : 'is-warn'}>
-          {s.count === 1 ? '1 clase pagable' : `${s.count} clases pagables`}
-          {' '}con la suscripción en «{s.label}»
-          {s.countsAsActive ? ' (vigente: el alumno podía tomar clases).' : ' (sin acceso al momento de darse).'}
-        </div>
-      ))}
-    </div>
-  );
+function accesoDeLaClase(r: ClassFinanceRow): AccesoClase {
+  const s = r.subscriptionStatus;
+  if (!s || s === 'error') return s === 'error' ? { kind: 'dudoso', label: 'sin verificar' } : { kind: 'ok' };
+  if (isActiveWooStatus(s) || ACCESO_PROPIO.has(s)) return { kind: 'ok' };
+  if (s === 'scheduled') return { kind: 'ok' };   // pagada, empieza más adelante
+  const nombre = plainPill(subscriptionBadge(s).label);
+  return {
+    kind: 'sin',
+    label: s === 'one_time_no_access' ? 'pago único sin activar' : `suscripción ${nombre.toLowerCase()}`,
+    title: `Se dio esta clase sin acceso: WooCommerce daba «${nombre}» ese día.`,
+  };
 }
 
 /**
@@ -286,9 +303,11 @@ function ClassRows({ result, studentName, approvals, onApproveReview, onApproveE
         const txNote = !isFalta && (r.transcriptState === 'review' || r.transcriptState === 'rejected')
           ? transcriptStateBadge(r.transcriptState).label
           : null;
+        const acc = accesoDeLaClase(r);
         const notas = [absenceBreakdownLabel(r), recoveryCreditLabel(r)].filter(Boolean);
         return (
-          <div className={`fch-cls${r.status !== 'pagable' ? ' is-flag' : ''}`} key={i}>
+          <div className={`fch-cls${acc.kind === 'sin' ? ' is-sinsub' : r.status !== 'pagable' ? ' is-flag' : ''}`}
+            key={i} title={acc.kind === 'sin' ? acc.title : undefined}>
             <span className="fch-cls-when">
               {finDateShort(r.date)}
               {r.hour && <span className="fch-cls-h">{r.hour}</span>}
@@ -300,6 +319,13 @@ function ClassRows({ result, studentName, approvals, onApproveReview, onApproveE
             <span className="fch-cls-type">
               {[ct && plainPill(ct.label), txNote, r.billingUnits > 1 ? `${r.durationHours}h` : null]
                 .filter(Boolean).join(' · ')}
+              {/* Sin acceso: se dice EN la clase, que es donde significa algo.
+                  Antes esto era una lista de párrafos al principio del panel del
+                  profesor, agrupada por estado, que no permitía saber cuál de sus
+                  clases era. */}
+              {acc.kind !== 'ok' && (
+                <span className={acc.kind === 'sin' ? 'fch-cls-sinsub' : 'fch-cls-dudoso'}>{acc.label}</span>
+              )}
             </span>
             <span className="fch-cls-eur">€{(r.rate * r.billingUnits).toFixed(2)}</span>
             <span>
@@ -786,7 +812,6 @@ function FinanceTab() {
               {isOpen && (
                   <div className="afd-panel">
                     <div className="afd">
-                      <SubStatusNotes result={r} />
                       {/* El mismo embudo que ve el profesor, con la misma
                           función de cálculo: dos números iguales o ninguno. */}
                       {(() => {
