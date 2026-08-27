@@ -163,7 +163,7 @@ interface TeacherProps extends BaseProps {
   onOcupadoNeed?: (day: string, hour: string, resolve: (name: string) => void, cancel: () => void) => void;
   // "En recuperación" (bloqueado): si se provee, el consumidor abre un mini modal
   // para elegir el alumno + fecha original; si no, se aplica sin datos (setter).
-  onRecuperacionNeed?: (day: string, hour: string, resolve: (data: RecuperacionData) => void, cancel: () => void) => void;
+  onRecuperacionNeed?: (day: string, hour: string, date: string, resolve: (data: RecuperacionData) => void, cancel: () => void) => void;
 }
 
 interface SetterProps extends BaseProps {
@@ -205,13 +205,16 @@ function StudentNameModal({ onConfirm, onCancel }: { onConfirm: (name: string) =
 
 // Context menu for teacher clicking a cell
 function CellMenu({
-  day, hour, current, onSelect, onClose, onOcupadoNeed, onRecuperacionNeed,
+  day, hour, date, current, onSelect, onClose, onOcupadoNeed, onRecuperacionNeed,
 }: {
-  day: string; hour: string; current: CellState;
+  /** Fecha REAL de la celda en la semana que se está viendo. La necesita la
+   *  recuperación: sin ella no se puede comprobar que la clase que salda sea
+   *  anterior, que es la primera de las reglas (ver lib/recovery). */
+  day: string; hour: string; date: string; current: CellState;
   onSelect: (state: CellState, student?: string, recovery?: { recoveryFor: string; note?: string }) => void;
   onClose: () => void;
   onOcupadoNeed?: (day: string, hour: string, resolve: (name: string) => void, cancel: () => void) => void;
-  onRecuperacionNeed?: (day: string, hour: string, resolve: (data: RecuperacionData) => void, cancel: () => void) => void;
+  onRecuperacionNeed?: (day: string, hour: string, date: string, resolve: (data: RecuperacionData) => void, cancel: () => void) => void;
 }) {
   const [askStudent, setAskStudent] = useState(false);
 
@@ -250,7 +253,7 @@ function CellMenu({
             }
             if (opt.state === 'bloqueado' && onRecuperacionNeed) {
               onClose();
-              onRecuperacionNeed(day, hour, data => { onSelect('bloqueado', data.student, { recoveryFor: data.recoveryFor, note: data.note }); }, onClose);
+              onRecuperacionNeed(day, hour, date, data => { onSelect('bloqueado', data.student, { recoveryFor: data.recoveryFor, note: data.note }); }, onClose);
               return;
             }
             onSelect(opt.state);
@@ -755,6 +758,7 @@ export function VisualCalendar(props: Props) {
         <CellMenu
           day={menu.day}
           hour={menu.hour}
+          date={toISODateStr(weekDates[Math.max(0, DAYS.indexOf(menu.day))])}
           current={getCell(menu.day, menu.hour).state}
           onSelect={(state, student, recovery) => handleMenuSelect(menu.day, menu.hour, state, student, recovery)}
           onClose={() => setMenu(null)}

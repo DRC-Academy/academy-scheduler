@@ -15,6 +15,7 @@ import type { StudentLeftGrid } from '@/lib/db';
 import { checkSubscription, resolveSubscriptionEmail, subCategory } from '@/lib/useSubscriptionStatus';
 import { planBadgeStyle } from '@/lib/productUtils';
 import { isAssignableCell, withBaseState, baseStudentOf } from '@/lib/cells';
+import { checkRecovery, existingRecoveriesOf, type RecoveryVerdict } from '@/lib/recovery';
 import { isoDateLocal, classesForDate, groupContiguousClasses, sessionHoursLabel, gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { periodIndex, dbGetStudentDropouts, type StudentDropout } from '@/lib/studentPeriod';
 import { StudentAutofillCard } from '@/components/StudentAutofillCard';
@@ -989,9 +990,25 @@ function TeacherNotificationsTab({ teacher, myAssignments, students, classRecord
 // ─── Mini modal "En recuperación" (punto 3) ───────────────────────────────────
 // Al marcar una celda como "En recuperación", pide qué alumno recupera, la fecha
 // de la clase original que se perdió y una nota opcional.
-function RecuperacionModal({ day, hour, studentNames, onConfirm, onCancel }: {
+//
+// La fecha se COMPRUEBA contra las reglas de la academia (lib/recovery) en cuanto
+// se escribe, y el botón queda bloqueado si no cumple. Antes no había ninguna
+// comprobación: en agosto de 2026, de 187 recuperaciones solo 12 correspondían a
+// una clase perdida con derecho a recuperarse.
+//
+// El bloqueo trae SALIDA. Cuando no consta nada en esa fecha —el caso más común,
+// 54 de 187— el modal ofrece registrar ahí mismo la falta con aviso y continuar.
+// Bloquear sin dar salida es garantizar que el profesor no cambie de hábito: hoy
+// el alumno avisa por WhatsApp y ese aviso no llega al sistema.
+function RecuperacionModal({ day, hour, date, studentNames, verdictOf, onRegisterAbsence, onConfirm, onCancel }: {
   day: string; hour: string;
+  /** Fecha real de la celda que se está marcando. */
+  date: string;
   studentNames: string[];
+  /** Las reglas, resueltas por la pantalla (que es quien tiene los datos). */
+  verdictOf: (studentName: string, lostDate: string) => RecoveryVerdict;
+  /** Registra la falta con aviso de esa fecha. Es la salida del bloqueo. */
+  onRegisterAbsence: (studentName: string, lostDate: string) => Promise<void>;
   onConfirm: (data: RecuperacionData) => void;
   onCancel: () => void;
 }) {
@@ -999,9 +1016,26 @@ function RecuperacionModal({ day, hour, studentNames, onConfirm, onCancel }: {
   const [customName, setCustomName] = useState('');
   const [recoveryFor, setRecoveryFor] = useState('');
   const [note, setNote] = useState('');
+  const [registrando, setRegistrando] = useState(false);
+  const [registrada, setRegistrada] = useState(false);
+  const [errorRegistro, setErrorRegistro] = useState('');
 
   const finalName = (studentNames.length === 0 ? customName : student).trim();
-  const canConfirm = !!finalName && !!recoveryFor;
+  // Se comprueba mientras escribe: el motivo aparece antes de pulsar nada.
+  const verdict = finalName && recoveryFor ? verdictOf(finalName, recoveryFor) : null;
+  const canConfirm = !!finalName && !!recoveryFor && !!verdict?.ok;
+
+  async function registrarFalta() {
+    setRegistrando(true); setErrorRegistro('');
+    try {
+      await onRegisterAbsence(finalName, recoveryFor);
+      setRegistrada(true);
+    } catch (e) {
+      setErrorRegistro(e instanceof Error ? e.message : 'No se pudo registrar la falta.');
+    } finally {
+      setRegistrando(false);
+    }
+  }
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 85, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
@@ -1020,7 +1054,42 @@ function RecuperacionModal({ day, hour, studentNames, onConfirm, onCancel }: {
         )}
 
         <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>Fecha de la clase original que se recupera</label>
-        <input type="date" value={recoveryFor} onChange={e => setRecoveryFor(e.target.value)} style={{ width: '100%', marginBottom: 14 }} />
+        {/* `max`: no se puede recuperar una clase que todavía no se dio. El
+            navegador ya no deja elegirla, y la regla se comprueba igual abajo —
+            un date input se puede escribir a mano. */}
+        <input type="date" value={recoveryFor} max={date}
+          onChange={e => { setRecoveryFor(e.target.value); setRegistrada(false); setErrorRegistro(''); }}
+          style={{ width: '100%', marginBottom: verdict && !verdict.ok ? 10 : 14 }} />
+
+        {/* Por qué no se puede, dicho antes de pulsar nada. */}
+        {verdict && !verdict.ok && (
+          <div style={{
+            background: verdict.kind === 'sin_registro' ? 'rgba(255,196,0,0.12)' : 'rgba(239,68,68,0.08)',
+            border: `1px solid ${verdict.kind === 'sin_registro' ? 'rgba(255,196,0,0.45)' : 'rgba(239,68,68,0.30)'}`,
+            borderRadius: 10, padding: '11px 13px', marginBottom: 14,
+          }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: verdict.kind === 'sin_registro' ? '#9a6516' : '#b91c1c', marginBottom: 3 }}>
+              {verdict.title}
+            </div>
+            <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.55 }}>{verdict.detail}</div>
+
+            {/* LA SALIDA: registrar la falta con aviso y seguir sin salir de acá. */}
+            {verdict.offerRegister && !registrada && (
+              <button onClick={registrarFalta} disabled={registrando}
+                style={{ marginTop: 10, width: '100%', padding: '9px', borderRadius: 8, border: 'none', background: registrando ? 'var(--bg-surface-3)' : '#e0912f', color: registrando ? 'var(--text-muted)' : 'white', cursor: registrando ? 'not-allowed' : 'pointer', fontSize: 12.5, fontWeight: 700, fontFamily: 'inherit' }}>
+                {registrando ? 'Registrando…' : `Registrar que el alumno avisó el ${recoveryFor.split('-').reverse().join('/')}`}
+              </button>
+            )}
+            {errorRegistro && (
+              <div style={{ marginTop: 8, fontSize: 12, color: '#c0392b' }}>{errorRegistro}</div>
+            )}
+          </div>
+        )}
+        {registrada && verdict?.ok && (
+          <div style={{ background: '#eaf5ec', border: '1px solid rgba(22,122,45,0.30)', borderRadius: 10, padding: '10px 13px', marginBottom: 14, fontSize: 12.5, color: '#1f7a3d', lineHeight: 1.5 }}>
+            Falta con aviso registrada. Ya podés marcar la recuperación.
+          </div>
+        )}
 
         <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>Nota (opcional)</label>
         <input value={note} onChange={e => setNote(e.target.value)} placeholder="Ej: la faltó por viaje" style={{ width: '100%', marginBottom: 18 }} />
@@ -1043,7 +1112,7 @@ type TeacherTab = typeof TEACHER_TABS[number];
 
 function TeacherContent() {
   const { user } = useAuth();
-  const { teachers, students, assignments, scoringEvents, notifications, classRecords, getTeacherGrid, updateTeacherGrid, addStudent, addAssignment, updateAssignmentStartDate, updateAssignmentSlots, reloadAll, updateTeacherSpecialties, loadNotifications, markNotificationRead, updateMeetLink, addRecoveryClass, removeAssignment } = useTeachers();
+  const { teachers, students, assignments, scoringEvents, notifications, classRecords, getTeacherGrid, updateTeacherGrid, addStudent, addAssignment, updateAssignmentStartDate, updateAssignmentSlots, reloadAll, updateTeacherSpecialties, loadNotifications, markNotificationRead, updateMeetLink, addRecoveryClass, removeAssignment, classJoinLogs, registerClassRecord } = useTeachers();
   const [activeTab, setActiveTab] = useState<TeacherTab>('calendar');
 
   // El campanario del header navega a /teacher?tab=notifications. Sincronizamos
@@ -1071,7 +1140,7 @@ function TeacherContent() {
   const [pendingOcupado, setPendingOcupado] = useState<{ day: string; hour: string; resolve: (name: string) => void } | null>(null);
   // Aviso "este alumno ya tiene profesor": guarda la asignación a la espera de decisión.
   const [yaAsignado, setYaAsignado] = useState<{ data: AssignConfirmData; matches: ExistingAssignmentMatch[] } | null>(null);
-  const [pendingRecuperacion, setPendingRecuperacion] = useState<{ day: string; hour: string; resolve: (data: RecuperacionData) => void } | null>(null);
+  const [pendingRecuperacion, setPendingRecuperacion] = useState<{ day: string; hour: string; date: string; resolve: (data: RecuperacionData) => void } | null>(null);
   const [formIndex, setFormIndex] = useState<FormIndex>(EMPTY_FORM_INDEX);
 
   const refreshFormIndex = () => { fetchFormTokensIndex().then(setFormIndex).catch(() => {}); };
@@ -1208,8 +1277,42 @@ function TeacherContent() {
     setPendingOcupado({ day, hour, resolve });
   }
 
-  function handleRecuperacionNeed(day: string, hour: string, resolve: (data: RecuperacionData) => void, cancel: () => void) {
-    setPendingRecuperacion({ day, hour, resolve });
+  function handleRecuperacionNeed(day: string, hour: string, date: string, resolve: (data: RecuperacionData) => void, cancel: () => void) {
+    setPendingRecuperacion({ day, hour, date, resolve });
+  }
+
+  /**
+   * Las reglas de la recuperación, resueltas con lo que tiene la pantalla: los
+   * registros del alumno, sus ingresos y las recuperaciones que ya existen (las
+   * celdas del calendario y los class_records). La decisión vive en lib/recovery;
+   * acá solo se le pasan los datos.
+   */
+  function recoveryVerdictOf(studentName: string, lostDate: string): RecoveryVerdict {
+    const celdas = (teacher?.recoveryCells ?? []).map(c => ({
+      studentName: c.studentName, date: c.date, recoveryFor: c.recoveryFor,
+    }));
+    return checkRecovery({
+      studentName,
+      recoveryDate: pendingRecuperacion?.date ?? isoDateLocal(new Date()),
+      lostDate,
+      classRecords, joinLogs: classJoinLogs,
+      existing: existingRecoveriesOf({ studentName, classRecords, recoveryCells: celdas }),
+    });
+  }
+
+  /**
+   * La salida del bloqueo: registrar la falta CON aviso de esa fecha para poder
+   * seguir con la recuperación. No mueve dinero —una falta avisada se ignora en
+   * el cálculo del pago (lib/finance.ts:721)— pero deja constancia de que el
+   * alumno avisó, que es justo lo que hoy se pierde cuando el aviso llega por
+   * WhatsApp y no entra al sistema.
+   */
+  async function registrarFaltaConAviso(studentName: string, lostDate: string) {
+    if (!teacher) throw new Error('Sin profesor cargado.');
+    await registerClassRecord(
+      teacher.id, studentName, lostDate, undefined, null, 'falta_con_aviso',
+      'Registrada al marcar una recuperación: el alumno había avisado.',
+    );
   }
 
   // Confirma la recuperación: pinta la celda (via resolve) y registra la clase de
@@ -1782,6 +1885,9 @@ function TeacherContent() {
         <RecuperacionModal
           day={pendingRecuperacion.day}
           hour={pendingRecuperacion.hour}
+          date={pendingRecuperacion.date}
+          verdictOf={recoveryVerdictOf}
+          onRegisterAbsence={registrarFaltaConAviso}
           studentNames={Array.from(new Set(myAssignments.map(a => a.studentName))).sort()}
           onConfirm={handleRecuperacionConfirm}
           onCancel={() => setPendingRecuperacion(null)}

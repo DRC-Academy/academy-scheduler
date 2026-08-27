@@ -121,6 +121,24 @@ describe('el cupo del alumno que ve el admin', () => {
     expect(studentQuotaOf(fin, 'Ana')!.used).toBe(2);
   });
 
+  it('la falta sobre una RECUPERACIÓN sí gasta cupo: la clase se perdió otra vez', () => {
+    // Cristian Díaz (Johny): faltó sin avisar a la recuperación del 17/08 y esa
+    // falta no le gastaba ninguna clase del mes. No puede salir gratis faltar dos
+    // veces seguidas — el crédito de la clase perdida se consume igual.
+    const occ = gridOccupancyOfTeacher({
+      recoveryCells: [{ studentName: 'Ana', hour: '10:00', date: MIERCOLES[0], recoveryFor: '2026-07-28' }],
+    });
+    const fin = armar({
+      assignments: [alumno('Ana', [{ day: 'Martes', hour: '10:00' }])],
+      classRecords: [rec('Ana', MIERCOLES[0], 'falta_sin_aviso')],
+      occupancy: occ,
+    });
+    const fila = fin.rows.find(r => r.date === MIERCOLES[0])!;
+    expect(fila.recoveryUnits).toBe(1);          // el calendario dice que era recuperación
+    expect(fila.status).toBe('pagable');         // se cobra entera, como cualquier falta
+    expect(studentQuotaOf(fin, 'Ana')!.used).toBe(1);   // y consume su clase del mes
+  });
+
   it('ex-alumno: sin assignment no hay cupo, y nada excede', () => {
     const fechas = [...MARTES, ...MIERCOLES].sort();
     const fin = armar({

@@ -901,8 +901,27 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     const k = nkey(row.studentName);
     const limit = limitByStudent.has(k) ? limitByStudent.get(k)! : Infinity; // ex-alumnos: sin límite
     const used = usedByStudent.get(k) ?? 0;
-    const cupoUnits = Math.max(0, row.billingUnits - row.recoveryUnits);
-    if (used + cupoUnits > limit && !row.manuallyApproved) {
+    // REGLA: la falta del alumno consume su cupo ENTERO, aunque cayera sobre una
+    // hora de recuperación. El descuento de `recoveryUnits` existe porque una
+    // recuperación repone una clase ya perdida y no gasta una del mes — pero si
+    // el alumno tampoco viene a la recuperación, la clase se perdió otra vez y el
+    // crédito se consumió: no puede salirle gratis faltar dos veces seguidas.
+    //
+    // El caso: Cristian Díaz (Johny) faltó sin avisar el 17/08 a la recuperación
+    // de su clase del 12, y esa falta no le gastaba ninguna clase del mes.
+    const cupoUnits = isStudentAbsence(row.classType)
+      ? row.billingUnits
+      : Math.max(0, row.billingUnits - row.recoveryUnits);
+    // La falta del alumno CONSUME cupo pero nunca es la que se retiene: el
+    // profesor estuvo ahí y el alumno no vino, así que se le paga igual. Dejarla
+    // caer por el tope hacía que la regla se contradijera sola — "se cobra
+    // entera" y "no se cobra" a la vez— y pasaba justo cuando la falta era lo
+    // último que entraba en el mes (Ester Domènech, 15/08, 4 de 5 usadas).
+    //
+    // No abre la puerta a abusos: las faltas ya tienen su propio tope de 2 al mes
+    // por tipo ('excede_limite_tipo'), que se aplica antes que esto.
+    const puedeRetenerse = !row.manuallyApproved && !isStudentAbsence(row.classType);
+    if (used + cupoUnits > limit && puedeRetenerse) {
       row.status = 'excede_limite';
     } else {
       usedByStudent.set(k, used + cupoUnits);
@@ -1103,11 +1122,19 @@ export function mixedSessionBadge(
  * null cuando la fila no recupera nada.
  */
 export function recoveryCreditLabel(
-  row: Pick<ClassFinanceRow, 'billingUnits' | 'recoveryUnits' | 'recoveryForDates'>,
+  row: Pick<ClassFinanceRow, 'billingUnits' | 'recoveryUnits' | 'recoveryForDates' | 'classType'>,
 ): string | null {
   const rec = row.recoveryUnits ?? 0;
   if (rec <= 0) return null;
   const fechas = (row.recoveryForDates ?? []).map(fmtDMY);
+  // El alumno tampoco vino a la recuperación: no saldó nada, pero el crédito se
+  // gastó igual — la clase perdida ya no se vuelve a recuperar. Decir "salda la
+  // clase perdida del X" en una fila donde el alumno faltó era la contradicción
+  // más visible de esta pantalla.
+  if (isStudentAbsence(row.classType)) {
+    const cual = fechas.length ? `del ${fechas.join(' y ')}` : 'que recuperaba';
+    return `Era la recuperación de la clase ${cual} y el alumno tampoco vino: el crédito se consumió y esa clase ya no se repone.`;
+  }
   const qué = fechas.length
     ? `salda la clase perdida del ${fechas.join(' y ')}`
     : 'salda una clase perdida';
