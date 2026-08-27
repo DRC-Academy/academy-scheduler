@@ -20,7 +20,7 @@ import { CambiarProfesorModal } from '@/components/CambiarProfesorModal';
 import { CrearVinculoModal } from '@/components/CrearVinculoModal';
 import { getPresentationEmailStatus, hoursSinceAssigned, type PresentationEmailStatusKind } from '@/lib/presentationEmailUtils';
 import { ALL_SPECIALTIES } from '@/lib/specialties';
-import { SpecialtyChip, ToggleChip } from '@/components/ui';
+import { SpecialtyChip, ToggleChip, Badge, Dot, Button, Card, TableWrap, THead, TD, CardList, T } from '@/components/ui';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { AppNotification, AssignedSlot } from '@/types';
 import { buildAttendanceRows, punctStyleOf, attendanceSubBadge, minutesLate, isoDate, type LogRow } from '@/lib/attendance';
@@ -675,28 +675,21 @@ function Stars({ level, size = 14 }: { level: number; size?: number }) {
 }
 
 // ─── Level Badge ──────────────────────────────────────────────────────────────
+// El nivel es una CATEGORÍA, no un estado: por eso va SIN caja — estrellas y
+// etiqueta sueltas, como manda components/ui/tokens ("neutral para categorías y
+// etiquetas […] esas no comunican estado y no llevan color propio"). La caja
+// gris de Junior y el resplandor dorado de Elite pintaban tres colores por fila
+// sin decir nada que las estrellas no dijeran ya.
+//
+// Bloqueado SÍ es un estado y sí lleva pill: es el único caso que pide acción.
 function LevelBadge({ level, blocked }: { level: number; blocked?: boolean }) {
-  if (blocked) {
-    return (
-      <span style={{
-        display: 'inline-flex', alignItems: 'center', gap: 4,
-        padding: '3px 10px', borderRadius: 20,
-        background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.4)',
-        color: '#ef4444', fontSize: 11, fontWeight: 700,
-      }}>
-        🔴 Bloqueado
-      </span>
-    );
-  }
+  if (blocked) return <Badge tone="danger" dot>Bloqueado</Badge>;
   const info = LEVEL_INFO[(level as 1 | 2 | 3)] ?? LEVEL_INFO[1];
   return (
     <span style={{
-      display: 'inline-flex', alignItems: 'center', gap: 5,
-      padding: '3px 10px', borderRadius: 20,
-      background: info.bg, border: `1px solid ${info.border}`,
-      color: info.color, fontSize: 11, fontWeight: 700,
-      boxShadow: level === 3 ? '0 0 8px rgba(255,196,0,0.3)' : 'none',
-      whiteSpace: 'nowrap',
+      display: 'inline-flex', alignItems: 'center', gap: T.space(1),
+      fontSize: T.fs.micro, lineHeight: T.lh.micro, fontWeight: T.fw.medium,
+      color: T.text.secondary, whiteSpace: 'nowrap',
     }}>
       <Stars level={level} size={11} />
       {info.name}
@@ -3506,8 +3499,8 @@ function DuplicatesBanner() {
     <>
       {duplicates.length > 0 && (
         <div className="adm-banner">
-          <span className="adm-dot" style={{ background: '#dc4a38' }} />
-          <span style={{ flex: 1, minWidth: 200, lineHeight: 1.5 }}>
+          <Dot tone="danger" size={9} />
+          <span style={{ flex: 1, minWidth: 200 }}>
             {duplicates.length} alumno{duplicates.length !== 1 ? 's' : ''} con asignaciones duplicadas. Puede duplicar clases en finanzas y ocupar horarios que en realidad están libres.
           </span>
           <button className="adm-banner-btn" onClick={() => setOpen(true)}>Ver y resolver</button>
@@ -3991,7 +3984,7 @@ function AdminContent() {
             <p className="adm-sub">
               {teachers.length} profesores · {students.length} alumnos · {assignments.length} asignaciones
               {blockedCount > 0 && (
-                <span style={{ color: '#c73a28', fontWeight: 600 }}> · {blockedCount} bloqueado{blockedCount !== 1 ? 's' : ''}</span>
+                <span style={{ color: 'var(--danger)', fontWeight: T.fw.semibold }}> · {blockedCount} bloqueado{blockedCount !== 1 ? 's' : ''}</span>
               )}
             </p>
           </div>
@@ -4224,180 +4217,324 @@ function AdminContent() {
               })}
             </div>
 
-            {/* Desktop: table */}
-            <div className="desk-only" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', marginBottom: 16 }}>
-              <div style={{ overflowX: 'auto', maxHeight: 500, overflowY: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                  <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}>
-                    <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)' }}>
-                      {['Nombre', 'Especialidades', 'Estado', 'Nivel', 'Carga', 'Cupos', '📧 Emails', 'Faltas mes', ''].map(h => (
-                        <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {teachers
-                      .filter(t => !specialtyFilter || (t.specialties ?? []).includes(specialtyFilter))
-                      .map(t => {
-                      const loadPct = t.maxWeeklyLoad > 0 ? Math.round((t.weeklyLoad / t.maxWeeklyLoad) * 100) : 0;
-                      const loadColor = loadPct >= 90 ? '#ef4444' : loadPct >= 70 ? '#f59e0b' : '#1E9E3A';
-                      const isBlocked = t.isBlocked ?? false;
-                      const presSum = teacherPresentationSummary(assignments.filter(a => a.teacherId === t.id), nowMs);
-                      const emailOpen = emailDetail === t.id;
-                      return (
-                        <Fragment key={t.id}>
-                        <tr style={{ borderBottom: '1px solid var(--border)', background: isBlocked ? 'rgba(239,68,68,0.02)' : selectedTeacher === t.id ? 'var(--bg-surface-2)' : 'transparent' }}>
-                          <td style={{ padding: '11px 14px' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                              <div style={{ width: 30, height: 30, borderRadius: '50%', background: isBlocked ? 'rgba(239,68,68,0.1)' : 'var(--bg-surface-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: isBlocked ? '#ef4444' : 'var(--text-secondary)', flexShrink: 0 }}>{t.avatar}</div>
-                              <div>
-                                <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{t.name}</span>
-                                {isBlocked && <span style={{ marginLeft: 6, fontSize: 10, color: '#ef4444', fontWeight: 700 }}>🔴 BLOQUEADO</span>}
-                              </div>
-                            </div>
-                          </td>
-                          <td style={{ padding: '11px 14px' }}>
-                            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                              {(t.specialties ?? []).map(sp => <SpecialtyChip key={sp} specialty={sp} />)}
-                              {(t.specialties ?? []).length === 0 && <span style={{ fontSize: 11, color: 'var(--text-muted)', fontStyle: 'italic' }}>—</span>}
-                            </div>
-                          </td>
-                          <td style={{ padding: '11px 14px' }}><StatusBadge status={t.status} /></td>
-                          <td style={{ padding: '11px 14px' }}>
-                            {isBlocked
-                              ? <LevelBadge level={t.currentLevel ?? 1} blocked />
-                              : <LevelBadge level={t.currentLevel ?? 1} />}
-                          </td>
-                          <td style={{ padding: '11px 14px', minWidth: 100 }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                              <div style={{ flex: 1, height: 4, borderRadius: 2, background: 'var(--bg-surface-3)' }}>
-                                <div style={{ width: `${loadPct}%`, height: '100%', borderRadius: 2, background: loadColor }} />
-                              </div>
-                              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{t.weeklyLoad}h</span>
-                            </div>
-                          </td>
-                          <td style={{ padding: '11px 14px' }}>
-                            <span style={{ fontSize: 13, color: t.freeSpots > 0 ? '#1E9E3A' : 'var(--text-muted)', fontWeight: 600 }}>{t.freeSpots}</span>
-                          </td>
-                          <td style={{ padding: '11px 14px' }}>
-                            <button
-                              onClick={() => { if (presSum.pending.length > 0) setEmailDetail(emailOpen ? null : t.id); }}
-                              style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 9px', borderRadius: 20, background: presSum.badge.bg, border: `1px solid ${presSum.badge.border}`, color: presSum.badge.color, fontSize: 11, fontWeight: 700, cursor: presSum.pending.length > 0 ? 'pointer' : 'default', fontFamily: 'inherit' }}>
-                              {presSum.badge.text}
-                              {presSum.pending.length > 0 && <span style={{ opacity: 0.7 }}>{emailOpen ? '▲' : '▼'}</span>}
-                            </button>
-                          </td>
-                          <td style={{ padding: '11px 14px' }}>
-                            {(() => {
-                              const n = faltasOfTeacher(t.id).length;
-                              const color = n >= 4 ? '#dc2626' : n >= 2 ? '#ea580c' : 'var(--text-muted)';
-                              return (
-                                <button
-                                  onClick={() => { if (n > 0) setFaltasDetail(faltasDetail === t.id ? null : t.id); }}
-                                  style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 20, border: `1px solid ${n >= 2 ? color : 'var(--border)'}`, background: n >= 4 ? 'rgba(239,68,68,0.08)' : n >= 2 ? 'rgba(249,115,22,0.08)' : 'transparent', color, fontSize: 12, fontWeight: 700, cursor: n > 0 ? 'pointer' : 'default', fontFamily: 'inherit' }}>
-                                  {n}
-                                  {n > 0 && <span style={{ opacity: 0.7 }}>{faltasDetail === t.id ? '▲' : '▼'}</span>}
-                                </button>
-                              );
-                            })()}
-                          </td>
-                          <td style={{ padding: '11px 14px' }}>
-                            <div style={{ display: 'flex', gap: 6 }}>
-                              <button onClick={() => setEditTeacher(t)} style={{ padding: '5px 10px', borderRadius: 7, border: '1px solid rgba(30,158,58,0.35)', background: 'rgba(30,158,58,0.07)', color: '#1E9E3A', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>
-                                Editar
-                              </button>
-                              <button onClick={() => setSelectedTeacher(t.id === selectedTeacher ? null : t.id)} style={{ padding: '5px 12px', borderRadius: 7, border: '1px solid var(--border)', background: selectedTeacher === t.id ? 'var(--bg-surface-3)' : 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 12 }}>
-                                {selectedTeacher === t.id ? 'Cerrar' : 'Ver'}
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                        {emailOpen && presSum.pending.length > 0 && (
-                          <tr style={{ background: 'var(--bg-surface-2)' }}>
-                            <td colSpan={9} style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)' }}>
-                              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 6 }}>{t.name} — Email pendiente:</div>
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                                {presSum.pending.map((p, i) => (
-                                  <div key={i} style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                                    {p.studentName} · Asignada hace {p.hours}h · <span style={{ fontWeight: 700, color: p.statusKind === 'overdue' ? '#ef4444' : p.statusKind === 'at_risk' ? '#f97316' : '#b8860b' }}>{p.statusLabel}</span>
-                                  </div>
-                                ))}
-                              </div>
-                            </td>
-                          </tr>
-                        )}
-                        {faltasDetail === t.id && (
-                          <tr style={{ background: 'var(--bg-surface-2)' }}>
-                            <td colSpan={9} style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)' }}>
-                              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 6 }}>
-                                {t.name} — Cancelaciones sin antelación de este mes:
-                              </div>
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                                {faltasOfTeacher(t.id).map((e, i) => (
-                                  <div key={i} style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                                    {e.note.replace(/^(Falta sin aviso registrada|Cancelación sin antelación) — /, '')}
-                                  </div>
-                                ))}
-                              </div>
-                            </td>
-                          </tr>
-                        )}
-                        </Fragment>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+            {/* ── Desktop: tabla ───────────────────────────────────────────────
+                OCHO columnas con ancho fijo en % (<colgroup> + table-layout:fixed
+                vía TableWrap `fixed`). El ancho lo mandan las columnas, no el
+                contenido: con el algoritmo automático `width:100%` era un mínimo
+                y una celda larga desbordaba la card.
+                Sin `maxHeight` → scrollea la PÁGINA, no la card, y por eso el
+                <thead> ya no es sticky. */}
+            <TableWrap className="adm-tt-desk" fixed style={{ borderRadius: 14, marginBottom: T.space(4) }}>
+              <colgroup>
+                <col style={{ width: '17%' }} />{/* Nombre */}
+                <col style={{ width: '15%' }} />{/* Especialidades */}
+                <col style={{ width: '11%' }} />{/* Estado */}
+                <col style={{ width: '10%' }} />{/* Nivel */}
+                <col style={{ width: '15%' }} />{/* Carga (barra + horas + cupos) */}
+                <col style={{ width: '11%' }} />{/* Emails */}
+                <col style={{ width:  '8%' }} />{/* Faltas mes */}
+                <col style={{ width: '13%' }} />{/* Acciones */}
+              </colgroup>
+              <THead
+                sticky={false}
+                align={[undefined, undefined, undefined, undefined, undefined, undefined, undefined, 'right']}
+                columns={['Nombre', 'Especialidades', 'Estado', 'Nivel', 'Carga', 'Emails', 'Faltas mes', '']}
+              />
+              <tbody>
+                {teachers
+                  .filter(t => !specialtyFilter || (t.specialties ?? []).includes(specialtyFilter))
+                  .map(t => {
+                  const loadPct = t.maxWeeklyLoad > 0 ? Math.round((t.weeklyLoad / t.maxWeeklyLoad) * 100) : 0;
+                  const loadColor = loadPct >= 90 ? '#ef4444' : loadPct >= 70 ? '#f59e0b' : '#1E9E3A';
+                  const isBlocked = t.isBlocked ?? false;
+                  const presSum = teacherPresentationSummary(assignments.filter(a => a.teacherId === t.id), nowMs);
+                  const emailOpen = emailDetail === t.id;
+                  const faltasList = faltasOfTeacher(t.id);
+                  const faltas = faltasList.length;
+                  const specs = t.specialties ?? [];
+                  const pendN = presSum.pending.length;
+                  const overN = presSum.overdueCount;
+                  const shownN = overN > 0 ? overN : pendN;
+                  const pendPlural = shownN !== 1 ? 's' : '';
+                  return (
+                    <Fragment key={t.id}>
+                    <tr style={{
+                      borderBottom: `1px solid ${T.border.base}`,
+                      background: isBlocked ? 'var(--danger-soft)'
+                        : selectedTeacher === t.id ? T.bg.surface2 : 'transparent',
+                    }}>
+                      {/* Nombre — el bloqueo se lee por el avatar rojo, el fondo de
+                          la fila y el pill de Nivel; no hace falta un cuarto aviso
+                          inline que además partía el nombre en dos líneas. */}
+                      <TD style={{ overflow: 'hidden' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: T.space(2), minWidth: 0 }}>
+                          <span style={{
+                            width: 28, height: 28, borderRadius: '50%', flexShrink: 0,
+                            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                            fontSize: T.fs.micro, fontWeight: T.fw.semibold,
+                            background: isBlocked ? 'var(--danger-soft)' : T.bg.surface3,
+                            color: isBlocked ? 'var(--danger)' : T.text.secondary,
+                          }}>{t.avatar}</span>
+                          <span title={t.name} style={{
+                            fontSize: T.fs.sm, fontWeight: T.fw.semibold, color: T.text.primary,
+                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                          }}>{t.name}</span>
+                        </div>
+                      </TD>
 
-            {/* Mobile: cards */}
-            <div className="mob-only" style={{ flexDirection: 'column', gap: 10, marginBottom: 16 }}>
+                      {/* Especialidades — máximo dos chips y un "+N" con el resto en
+                          el tooltip. Sin `flexWrap`: envolver estiraba la fila. */}
+                      <TD style={{ overflow: 'hidden' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: T.space(1), minWidth: 0 }}>
+                          {specs.length === 0 && (
+                            <span style={{ fontSize: T.fs.micro, color: T.text.muted }}>—</span>
+                          )}
+                          {specs.slice(0, 2).map(sp => <SpecialtyChip key={sp} specialty={sp} />)}
+                          {specs.length > 2 && (
+                            <Badge tone="neutral" title={specs.slice(2).join(' · ')}>
+                              +{specs.length - 2}
+                            </Badge>
+                          )}
+                        </div>
+                      </TD>
+
+                      <TD style={{ overflow: 'hidden' }}>
+                        <StatusBadge status={t.status} compact />
+                      </TD>
+
+                      <TD style={{ overflow: 'hidden' }}>
+                        <LevelBadge level={t.currentLevel ?? 1} blocked={isBlocked} />
+                      </TD>
+
+                      {/* Carga — barra a la izquierda y el texto a la derecha, en
+                          celdas separadas del mismo flex. El `flexShrink: 0` del
+                          texto es lo que impedía que "3h" se pintara ENCIMA de la
+                          barra: sin él, el <span> se comprimía por debajo de su
+                          contenido y el texto desbordaba sobre la barra. */}
+                      <TD style={{ overflow: 'hidden' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: T.space(2) }}>
+                          <span style={{
+                            flex: 1, minWidth: 34, height: 4, borderRadius: 2,
+                            background: T.bg.surface3, overflow: 'hidden',
+                          }}>
+                            <span style={{
+                              display: 'block', width: `${loadPct}%`, height: '100%',
+                              borderRadius: 2, background: loadColor,
+                            }} />
+                          </span>
+                          <span
+                            title={`${t.weeklyLoad}h semanales de ${t.maxWeeklyLoad} · ${t.freeSpots} cupo${t.freeSpots !== 1 ? 's' : ''} libre${t.freeSpots !== 1 ? 's' : ''}`}
+                            style={{
+                              flexShrink: 0, whiteSpace: 'nowrap',
+                              fontSize: T.fs.micro, lineHeight: T.lh.micro, color: T.text.muted,
+                            }}>
+                            <span style={{ color: T.text.primary, fontWeight: T.fw.semibold }}>{t.weeklyLoad}h</span>
+                            {' · '}{t.freeSpots} cupos
+                          </span>
+                        </div>
+                      </TD>
+
+                      {/* Emails — es <button> porque despliega la fila de detalle,
+                          pero el aspecto lo pone el Badge de adentro (ver
+                          .adm-tt-badgebtn en globals.css). */}
+                      <TD style={{ overflow: 'hidden' }}>
+                        <button
+                          type="button"
+                          className="adm-tt-badgebtn"
+                          disabled={pendN === 0}
+                          aria-expanded={pendN > 0 ? emailOpen : undefined}
+                          onClick={() => { if (pendN > 0) setEmailDetail(emailOpen ? null : t.id); }}>
+                          <Badge
+                            tone={pendN === 0 ? 'ok' : overN > 0 ? 'danger' : 'warn'}
+                            dot
+                            title={pendN === 0
+                              ? 'Todos los emails de presentación enviados'
+                              : `${shownN} pendiente${pendPlural} ${overN > 0 ? '(+24h)' : '(<24h)'} · clic para ver el detalle`}>
+                            {pendN === 0 ? 'Al día' : `${shownN} pendiente${pendPlural}`}
+                          </Badge>
+                        </button>
+                      </TD>
+
+                      <TD style={{ overflow: 'hidden' }}>
+                        <button
+                          type="button"
+                          className="adm-tt-badgebtn"
+                          disabled={faltas === 0}
+                          aria-expanded={faltas > 0 ? faltasDetail === t.id : undefined}
+                          onClick={() => { if (faltas > 0) setFaltasDetail(faltasDetail === t.id ? null : t.id); }}>
+                          <Badge
+                            tone={faltas >= 4 ? 'danger' : faltas >= 2 ? 'warn' : 'neutral'}
+                            title={faltas === 0
+                              ? 'Sin cancelaciones sin antelación este mes'
+                              : `${faltas} cancelaci${faltas !== 1 ? 'ones' : 'ón'} sin antelación este mes · clic para ver el detalle`}>
+                            {faltas}
+                          </Badge>
+                        </button>
+                      </TD>
+
+                      <TD align="right" style={{ overflow: 'hidden' }}>
+                        <span style={{ display: 'inline-flex', gap: T.space(1) }}>
+                          <Button variant="secondary" size="sm" onClick={() => setEditTeacher(t)}>
+                            Editar
+                          </Button>
+                          <Button variant="secondary" size="sm"
+                            onClick={() => setSelectedTeacher(t.id === selectedTeacher ? null : t.id)}>
+                            {selectedTeacher === t.id ? 'Cerrar' : 'Ver'}
+                          </Button>
+                        </span>
+                      </TD>
+                    </tr>
+
+                    {emailOpen && pendN > 0 && (
+                      <tr style={{ background: T.bg.surface2 }}>
+                        <td colSpan={8} style={{ padding: `${T.space(3)} ${T.space(4)}`, borderBottom: `1px solid ${T.border.base}` }}>
+                          <div style={{ fontSize: T.fs.caption, fontWeight: T.fw.semibold, color: T.text.primary, marginBottom: T.space(2) }}>
+                            {t.name} — Email pendiente:
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: T.space(1) }}>
+                            {presSum.pending.map((p, i) => (
+                              <div key={i} style={{ fontSize: T.fs.caption, color: T.text.secondary }}>
+                                {p.studentName} · Asignada hace {p.hours}h ·{' '}
+                                <span style={{
+                                  fontWeight: T.fw.semibold,
+                                  color: p.statusKind === 'overdue' ? 'var(--danger)' : 'var(--warn)',
+                                }}>{p.statusLabel}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+
+                    {faltasDetail === t.id && (
+                      <tr style={{ background: T.bg.surface2 }}>
+                        <td colSpan={8} style={{ padding: `${T.space(3)} ${T.space(4)}`, borderBottom: `1px solid ${T.border.base}` }}>
+                          <div style={{ fontSize: T.fs.caption, fontWeight: T.fw.semibold, color: T.text.primary, marginBottom: T.space(2) }}>
+                            {t.name} — Cancelaciones sin antelación de este mes:
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: T.space(1) }}>
+                            {faltasList.map((e, i) => (
+                              <div key={i} style={{ fontSize: T.fs.caption, color: T.text.secondary }}>
+                                {e.note.replace(/^(Falta sin aviso registrada|Cancelación sin antelación) — /, '')}
+                              </div>
+                            ))}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </TableWrap>
+
+            {/* ── Por debajo de 1024px: una card por profesor ────────────────────
+                Breakpoint PROPIO (.adm-tt-cards), no el global de 768: ocho
+                columnas no entran cómodas antes de eso. Mismos badges y misma
+                tipografía que la tabla. */}
+            <CardList className="adm-tt-cards" style={{ gap: T.space(3), marginBottom: T.space(4) }}>
               {teachers
                 .filter(t => !specialtyFilter || (t.specialties ?? []).includes(specialtyFilter))
                 .map(t => {
+                const loadPct = t.maxWeeklyLoad > 0 ? Math.round((t.weeklyLoad / t.maxWeeklyLoad) * 100) : 0;
+                const loadColor = loadPct >= 90 ? '#ef4444' : loadPct >= 70 ? '#f59e0b' : '#1E9E3A';
                 const isBlocked = t.isBlocked ?? false;
                 const teacherAssignments = assignments.filter(a => a.teacherId === t.id);
                 const presSum = teacherPresentationSummary(teacherAssignments, nowMs);
+                const faltas = faltasOfTeacher(t.id).length;
+                const pendN = presSum.pending.length;
+                const overN = presSum.overdueCount;
+                const shownN = overN > 0 ? overN : pendN;
+                const pendPlural = shownN !== 1 ? 's' : '';
                 return (
-                  <div key={t.id} style={{ background: 'var(--bg-surface)', border: `1px solid ${isBlocked ? 'rgba(239,68,68,0.25)' : 'var(--border)'}`, borderRadius: 12, padding: 14, opacity: isBlocked ? 0.9 : 1 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-                      <div style={{ width: 38, height: 38, borderRadius: '50%', background: isBlocked ? 'rgba(239,68,68,0.1)' : 'var(--bg-surface-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, color: isBlocked ? '#ef4444' : 'var(--text-secondary)', flexShrink: 0 }}>{t.avatar}</div>
+                  <Card key={t.id} padding="md" style={{
+                    borderRadius: 14,
+                    borderColor: isBlocked ? 'var(--danger-border)' : undefined,
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: T.space(3), marginBottom: T.space(3) }}>
+                      <span style={{
+                        width: 36, height: 36, borderRadius: '50%', flexShrink: 0,
+                        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: T.fs.caption, fontWeight: T.fw.semibold,
+                        background: isBlocked ? 'var(--danger-soft)' : T.bg.surface3,
+                        color: isBlocked ? 'var(--danger)' : T.text.secondary,
+                      }}>{t.avatar}</span>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.name}</div>
-                        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>{teacherAssignments.length} alumnos · {t.weeklyLoad}h/sem</div>
+                        <div style={{
+                          fontSize: T.fs.body, fontWeight: T.fw.semibold, color: T.text.primary,
+                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        }}>{t.name}</div>
+                        <div style={{ fontSize: T.fs.micro, color: T.text.muted, marginTop: 1 }}>
+                          {teacherAssignments.length} alumnos · {t.weeklyLoad}h/sem · {t.freeSpots} cupos
+                        </div>
                       </div>
                     </div>
-                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+
+                    <div style={{ display: 'flex', gap: T.space(1), flexWrap: 'wrap', marginBottom: T.space(2) }}>
                       {(t.specialties ?? []).map(sp => <SpecialtyChip key={sp} specialty={sp} />)}
                     </div>
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10, alignItems: 'center' }}>
+
+                    <div style={{ display: 'flex', gap: T.space(2), flexWrap: 'wrap', marginBottom: T.space(3), alignItems: 'center' }}>
                       <StatusBadge status={t.status} />
-                      {isBlocked ? <LevelBadge level={t.currentLevel ?? 1} blocked /> : <LevelBadge level={t.currentLevel ?? 1} />}
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 9px', borderRadius: 20, background: presSum.badge.bg, border: `1px solid ${presSum.badge.border}`, color: presSum.badge.color, fontSize: 11, fontWeight: 700 }}>
-                        {presSum.badge.text}
+                      <LevelBadge level={t.currentLevel ?? 1} blocked={isBlocked} />
+                      <Badge tone={pendN === 0 ? 'ok' : overN > 0 ? 'danger' : 'warn'} dot>
+                        {pendN === 0 ? 'Al día' : `${shownN} pendiente${pendPlural} ${overN > 0 ? '(+24h)' : '(<24h)'}`}
+                      </Badge>
+                      {faltas > 0 && (
+                        <Badge tone={faltas >= 4 ? 'danger' : 'warn'}>
+                          {faltas} falta{faltas !== 1 ? 's' : ''} mes
+                        </Badge>
+                      )}
+                    </div>
+
+                    {/* Carga: misma lectura que la columna de la tabla. */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: T.space(2), marginBottom: T.space(3) }}>
+                      <span style={{
+                        flex: 1, minWidth: 34, height: 4, borderRadius: 2,
+                        background: T.bg.surface3, overflow: 'hidden',
+                      }}>
+                        <span style={{
+                          display: 'block', width: `${loadPct}%`, height: '100%',
+                          borderRadius: 2, background: loadColor,
+                        }} />
+                      </span>
+                      <span style={{
+                        flexShrink: 0, whiteSpace: 'nowrap',
+                        fontSize: T.fs.micro, lineHeight: T.lh.micro, color: T.text.muted,
+                      }}>
+                        <span style={{ color: T.text.primary, fontWeight: T.fw.semibold }}>{t.weeklyLoad}h</span>
+                        {' · '}{t.freeSpots} cupos
                       </span>
                     </div>
-                    {presSum.pending.length > 0 && (
-                      <div style={{ marginBottom: 10, display: 'flex', flexDirection: 'column', gap: 3 }}>
+
+                    {pendN > 0 && (
+                      <div style={{ marginBottom: T.space(3), display: 'flex', flexDirection: 'column', gap: 3 }}>
                         {presSum.pending.map((p, i) => (
-                          <div key={i} style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-                            📧 {p.studentName} · hace {p.hours}h · <span style={{ fontWeight: 700, color: p.statusKind === 'overdue' ? '#ef4444' : p.statusKind === 'at_risk' ? '#f97316' : '#b8860b' }}>{p.statusLabel}</span>
+                          <div key={i} style={{ fontSize: T.fs.micro, color: T.text.secondary }}>
+                            {p.studentName} · hace {p.hours}h ·{' '}
+                            <span style={{
+                              fontWeight: T.fw.semibold,
+                              color: p.statusKind === 'overdue' ? 'var(--danger)' : 'var(--warn)',
+                            }}>{p.statusLabel}</span>
                           </div>
                         ))}
                       </div>
                     )}
-                    <div style={{ display: 'flex', gap: 8 }}>
-                      <button onClick={() => setEditTeacher(t)} style={{ flex: 1, padding: '8px', borderRadius: 8, border: '1px solid rgba(30,158,58,0.35)', background: 'rgba(30,158,58,0.07)', color: '#1E9E3A', cursor: 'pointer', fontSize: 12, fontWeight: 700, fontFamily: 'inherit' }}>
+
+                    <div style={{ display: 'flex', gap: T.space(2) }}>
+                      <Button variant="secondary" size="md" style={{ flex: 1 }}
+                        onClick={() => setEditTeacher(t)}>
                         Editar
-                      </button>
-                      <button onClick={() => setSelectedTeacher(t.id === selectedTeacher ? null : t.id)} style={{ flex: 2, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: selectedTeacher === t.id ? 'var(--bg-surface-3)' : 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
-                        {selectedTeacher === t.id ? 'Cerrar detalle' : 'Ver detalle →'}
-                      </button>
+                      </Button>
+                      <Button variant="secondary" size="md" style={{ flex: 2 }}
+                        onClick={() => setSelectedTeacher(t.id === selectedTeacher ? null : t.id)}>
+                        {selectedTeacher === t.id ? 'Cerrar detalle' : 'Ver detalle'}
+                      </Button>
                     </div>
-                  </div>
+                  </Card>
                 );
               })}
-            </div>
+            </CardList>
 
             {teacher && (
               <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '22px 24px' }}>

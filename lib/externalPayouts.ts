@@ -12,6 +12,14 @@
 // de 2h que valen una clase, tope de faltas cobrables, penalizaciones, mes
 // congelado al pagarse) que no son expresables como una consulta.
 //
+// QUIÉN SALE: todos los profesores de la tabla `teachers` MENOS las cuentas de
+// prueba (lib/externalTeachers). No se filtra por actividad ni por importe: un
+// profesor sin clases pagables ese mes viene igual, con `total_amount` en 0 y
+// `is_active` diciendo si hoy tiene algún alumno. Las tres cifras del mes
+// —`teachers_total`, `teachers_with_amount` y `active_teachers_now`— responden
+// preguntas distintas y no tienen por qué coincidir; que difieran no es que
+// falten profesores en el array.
+//
 // COSTE: el dataset se lee UNA vez por request (11 consultas) y sirve para
 // todos los meses del rango. Calcular N meses no añade consultas, solo CPU: son
 // 27 profesores × N meses de función pura. Por eso no hay cache persistente de
@@ -27,6 +35,7 @@ import { calculateTeacherFinance } from '@/lib/finance';
 import { margenDe } from '@/lib/billing';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { madridToday } from '@/lib/subscriptionAccess';
+import { esProfesorDePrueba, sinProfesoresDePrueba } from '@/lib/externalTeachers';
 import type {
   Teacher, Student, Assignment, ScoringEvent, FinanceRate, FinancePayment,
   ClassRecord, ClassJoinLog, FinanceManualApproval, ProductPrice,
@@ -111,7 +120,7 @@ export async function loadPayoutDataset(force = false): Promise<PayoutDataset> {
   if (!force && cached && Date.now() - cached.loadedAt < DATASET_TTL_MS) return cached;
 
   const [
-    teachers, students, assignments, scoringEvents,
+    todosLosTeachers, students, assignments, scoringEvents,
     rates, payments, classRecords, joinLogs, manualApprovals, classAnalyses,
     productPrices,
   ] = await Promise.all([
@@ -119,6 +128,14 @@ export async function loadPayoutDataset(force = false): Promise<PayoutDataset> {
     dbGetFinanceRates(), dbGetFinancePayments(), dbGetClassRecords(), dbGetClassJoinLogs(),
     dbGetManualApprovals(), dbGetClassTranscripts(), dbGetProductPrices(),
   ]);
+
+  // Las cuentas de prueba se quitan ACÁ, en el dataset, y no al construir la
+  // respuesta: así no hay ninguna vista de este módulo —ni las que se escriban
+  // después— en la que un profesor de prueba siga contando. Ver
+  // lib/externalTeachers. El resto del dataset (alumnos, assignments, registros)
+  // se deja intacto: la liquidación de los demás profesores no depende de que
+  // t1 y t2 estén o no en esta lista, y recortarlo sería arriesgar sus números.
+  const teachers = sinProfesoresDePrueba(todosLosTeachers);
 
   const hoy = madridToday();
 
@@ -143,6 +160,12 @@ export async function loadPayoutDataset(force = false): Promise<PayoutDataset> {
 
   for (const a of assignments) {
     if ((a.status ?? 'active') !== 'active') continue;
+    // Los de prueba tampoco entran en estos dos índices. Sin esta línea el
+    // dataset se contradiría solo: `teachers` ya no los tiene, pero
+    // `activeTeacherIds.size` seguiría contándolos, y el día que alguien use ese
+    // .size como "profesores activos" —que es exactamente para lo que parece
+    // estar— volverían a colarse en el número por la puerta de atrás.
+    if (esProfesorDePrueba(a.teacherId)) continue;
     const s = byId.get(a.studentId) ?? byEmail.get(nk(a.studentEmail)) ?? byName.get(nk(a.studentName));
     if (!s) continue;
     if (VENCIDOS_CONOCIDOS.has(accesoConocidoDe(s, hoy))) continue;
@@ -204,6 +227,17 @@ export interface MonthPayouts {
   month_year: string;
   is_current_month: boolean;
   total_amount: number;
+  /**
+   * Profesores de la plantilla, ya sin las cuentas de prueba. Es el DENOMINADOR
+   * de las otras dos cifras: sirve para leer `teachers_with_amount` como "21 de
+   * 29" en vez de como un 21 suelto, que es justo lo que se malinterpretó
+   * (27/08/2026) creyendo que faltaban profesores en la respuesta.
+   *
+   * Es exactamente `teachers.length` — el array completo viene igual. Se manda
+   * aparte para que el dashboard pueda pintar la tarjeta sin recorrerlo, y para
+   * que quede explícito que ningún profesor se está quedando fuera del array.
+   */
+  teachers_total: number;
   /** Profesores que facturaron algo ESE mes. Es el número histórico real. */
   teachers_with_amount: number;
   /**
@@ -301,6 +335,7 @@ export function computeMonth(ds: PayoutDataset, monthYear: string): MonthPayouts
     month_year: monthYear,
     is_current_month: isCurrent,
     total_amount: totalAmount,
+    teachers_total: teachers.length,
     teachers_with_amount: teachers.filter(t => t.total_amount !== 0).length,
     active_teachers_now: teachers.filter(t => t.is_active).length,
     facturacion_total: facturacionTotal,

@@ -1994,18 +1994,27 @@ body.driver-active .drc-modal-backdrop * { pointer-events: auto; }
 }
 .adm-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; display: inline-block; }
 
-/* Banner crítico — franja calmada, no rojo saturado */
+/* Banner crítico — franja calmada, no rojo saturado.
+   Anatomía de Finanzas: el radio de .fin-head (14px), el padding de .fin-bar y
+   la tipografía del sistema. Los rojos ya no son literales sueltos (#fbeceb /
+   #f2c9c4 / #c73a28) sino los tokens semánticos de danger, los mismos que usa
+   el Badge del punto rojo. */
 .adm-banner {
-  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-  background: #fbeceb; border: 1px solid #f2c9c4; border-radius: 14px;
-  padding: 13px 16px; margin-bottom: 16px; font-size: 13.5px; color: #c73a28;
+  display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap;
+  background: var(--danger-soft); border: 1px solid var(--danger-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3) 18px; margin-bottom: var(--space-4);
+  font-size: var(--fs-sm); line-height: var(--lh-sm); color: var(--danger);
 }
+/* Mismo botón secundario que .fin-ghost-btn en Finanzas. */
 .adm-banner-btn {
-  margin-left: auto; border: 1px solid #f2c9c4; background: #fff; color: #c73a28;
-  border-radius: 9px; padding: 8px 14px; font-family: inherit;
-  font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap;
+  margin-left: auto; padding: 7px 13px;
+  border: 1px solid var(--border); background: var(--bg-surface);
+  border-radius: var(--radius-sm); color: var(--text-secondary);
+  font-family: inherit; font-size: var(--fs-caption); font-weight: var(--fw-medium);
+  cursor: pointer; white-space: nowrap;
 }
-.adm-banner-btn:hover { background: #fdf5f4; }
+.adm-banner-btn:hover { background: var(--bg-surface-2); color: var(--text-primary); }
 
 /* Cabecera */
 .adm-head {
@@ -2013,7 +2022,12 @@ body.driver-active .drc-modal-backdrop * { pointer-events: auto; }
   gap: 16px; flex-wrap: wrap; margin-bottom: 18px;
 }
 .adm-title { font-size: 24px; font-weight: 700; letter-spacing: -0.015em; margin: 0; }
-.adm-sub { font-size: 13.5px; color: #5f6360; margin: 4px 0 0; }
+/* Línea de resumen ("31 profesores · 189 alumnos · …"). Misma tipografía que el
+   subtítulo de SectionHeader en Finanzas: caption + text-muted. */
+.adm-sub {
+  font-size: var(--fs-caption); line-height: var(--lh-caption);
+  color: var(--text-muted); margin: var(--space-1) 0 0;
+}
 .adm-btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   padding: 9px 16px; border-radius: 10px; font-family: inherit;
@@ -2149,6 +2163,39 @@ body.driver-active .drc-modal-backdrop * { pointer-events: auto; }
 .adm-row-teacher { color: #2f7a42; font-weight: 600; }
 .adm-row-time { font-size: 12px; color: #a4a7a1; white-space: nowrap; }
 .adm-empty { text-align: center; padding: 28px 0; color: #8b8e88; font-size: 13.5px; }
+
+/* ── Tabla de profesores (Admin > Profesores) ───────────────────────────────
+   Breakpoint PROPIO a 1024px. Ocho columnas no entran cómodas por debajo de
+   eso, pero el resto de la app cambia a móvil recién en 768 (.desk-only /
+   .mob-only) y ese umbral no se toca desde acá: mover el global arrastraría
+   todas las pantallas. Entre 1024 y 768 esta tabla ya muestra cards mientras
+   el resto sigue en desktop, que es exactamente lo que se quiere.
+
+   Antes de esto la tabla vivía en un div con `maxHeight: 500 + overflowY:auto`
+   (scroll dentro de la card) y `overflowX: auto` sobre una <table> sin
+   `table-layout: fixed` (scroll lateral). Ahora scrollea la página y los
+   anchos los manda el <colgroup>. */
+.adm-tt-desk  { display: block; }
+.adm-tt-cards { display: none; }
+
+@media (max-width: 1024px) {
+  .adm-tt-desk  { display: none; }
+  .adm-tt-cards { display: flex; flex-direction: column; gap: var(--space-3); }
+}
+
+/* Emails y Faltas son <button> SOLO porque despliegan una fila de detalle: el
+   pill de adentro es quien manda el aspecto. Sin esto heredan el relleno y el
+   `min-height: 44px` del móvil y quedan al doble de alto que los <span> de al
+   lado, que es lo que desparejaba las filas. La clase gana al selector `button`
+   por especificidad, dentro y fuera del media query. */
+.adm-tt-badgebtn {
+  display: inline-flex; align-items: center;
+  background: none; border: none; padding: 0; margin: 0;
+  min-height: 0; line-height: 0;
+  font: inherit; color: inherit; cursor: pointer;
+}
+.adm-tt-badgebtn[disabled] { cursor: default; }
+.adm-tt-badgebtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-pill); }
 
 @media (max-width: 900px) {
   .adm { padding: 16px 12px 48px; }

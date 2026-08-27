@@ -1,26 +1,34 @@
 'use client';
 import { TeacherStatus } from '@/types';
+import { Badge, type Tone } from '@/components/ui';
 
-const statusConfig: Record<TeacherStatus, { label: string; dot: string; bg: string; color: string }> = {
-  available:       { label: 'Disponible',       dot: '#1E9E3A', bg: 'rgba(30,158,58,0.1)',   color: '#167a2d' },
-  almost_full:     { label: 'Casi lleno',        dot: '#FFC400', bg: 'rgba(255,196,0,0.15)',  color: '#b38600' },
-  busy:            { label: 'Completo',           dot: '#ef4444', bg: 'rgba(239,68,68,0.1)',   color: '#dc2626' },
-  vacation:        { label: 'Vacaciones',         dot: '#8b5cf6', bg: 'rgba(139,92,246,0.1)', color: '#7c3aed' },
-  no_availability: { label: 'Sin disponibilidad', dot: '#9ca3af', bg: 'rgba(156,163,175,0.1)',color: '#6b7280' },
+// Estado de ocupación del profesor. Se dibuja con el Badge del sistema
+// (components/ui/Badge) en vez de con un pill propio: antes esta era una de las
+// CUATRO implementaciones de pill que convivían en la tabla del admin, cada una
+// con su padding y su tamaño de letra, y por eso las filas quedaban desparejas.
+//
+// El color sale del tono SEMÁNTICO, no de una paleta propia. `vacation` es
+// neutral a propósito: estar de vacaciones no es ni bueno ni malo, y el violeta
+// que usaba antes no existe en los tokens de la app.
+const statusConfig: Record<TeacherStatus, { label: string; short: string; tone: Tone }> = {
+  available:       { label: 'Disponible',         short: 'Disponible', tone: 'ok' },
+  almost_full:     { label: 'Casi lleno',         short: 'Casi lleno', tone: 'warn' },
+  busy:            { label: 'Completo',           short: 'Completo',   tone: 'danger' },
+  vacation:        { label: 'Vacaciones',         short: 'Vacaciones', tone: 'neutral' },
+  no_availability: { label: 'Sin disponibilidad', short: 'Sin disp.',  tone: 'neutral' },
 };
 
-export function StatusBadge({ status }: { status: TeacherStatus }) {
+export function StatusBadge({ status, compact = false }: {
+  status: TeacherStatus;
+  /** Etiqueta corta para columnas estrechas. El texto completo queda en el tooltip. */
+  compact?: boolean;
+}) {
   const cfg = statusConfig[status];
+  const short = compact && cfg.short !== cfg.label;
   return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center', gap: 5,
-      padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600,
-      background: cfg.bg, color: cfg.color,
-      border: `1px solid ${cfg.dot}33`,
-    }}>
-      <span style={{ width: 6, height: 6, borderRadius: '50%', background: cfg.dot, display: 'inline-block', flexShrink: 0 }} />
-      {cfg.label}
-    </span>
+    <Badge tone={cfg.tone} dot title={short ? cfg.label : undefined}>
+      {compact ? cfg.short : cfg.label}
+    </Badge>
   );
 }
 
