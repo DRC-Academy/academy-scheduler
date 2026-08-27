@@ -1,0 +1,40 @@
+{
+  "artboards": [
+    { "file": "Main.dc.html",       "x": 0,    "y": 0,    "w": 1240, "h": 2000, "title": "Profesor · escritorio (Agustin, agosto real)" },
+    { "file": "Movil.dc.html",      "x": 1400, "y": 0,    "w": 390,  "h": 1560, "title": "Profesor · móvil 390px (Agustin)" },
+    { "file": "Casos.dc.html",      "x": 0,    "y": 2160, "w": 1790, "h": 1320, "title": "Silvia · Sol.G · Dana — escritorio" },
+    { "file": "MovilCasos.dc.html", "x": 0,    "y": 3640, "w": 1290, "h": 1400, "title": "Silvia · Sol.G · Dana — móvil 390px" },
+    { "file": "Admin.dc.html",      "x": 0,    "y": 5200, "w": 1000, "h": 1500, "title": "Admin · la fila plegada de cada profesor" }
+  ],
+  "annotations": [
+    {
+      "id": "nota-orden",
+      "x": 0,
+      "y": -190,
+      "w": 600,
+      "text": "Rediseño de Finanzas — datos REALES de agosto 2026.\nEl orden responde las tres preguntas:\n1. ¿Cuánto cobro? → el total, arriba\n2. ¿Depende algo de mí? → la banda de reclamables, antes del detalle\n3. ¿Por qué ese número? → el embudo, y cada línea baja a la lista filtrada"
+    },
+    {
+      "id": "nota-cuadra",
+      "x": 660,
+      "y": -190,
+      "w": 580,
+      "text": "La barra de tres segmentos ES la prueba de que cuadra: los segmentos son las ramas y llenan el ancho. Debajo, la suma escrita (70 + 46 + 8 = 124).\n\nComprobado contra la base: 31 profesores, 0 fallos de consistencia, y el «Pagables» del embudo == el totalPagable de finanzas en todos."
+    },
+    {
+      "id": "nota-casos",
+      "x": 0,
+      "y": 2050,
+      "w": 780,
+      "text": "Los tres casos que rompen supuestos. Sol.G es el importante: saldo NEGATIVO (−€1,00 por penalizaciones), cero en la primera rama y 80 clases sin nada que reclamar. El total va en rojo, no en el verde de «vas a cobrar», y no se ofrece una acción que no existe."
+    },
+    {
+      "id": "nota-admin",
+      "x": 0,
+      "y": 5080,
+      "w": 780,
+      "text": "Admin: la barra sale SOLO de `finance`, que ya está calculado para los 22. El embudo completo necesita 3 consultas por profesor — 66 al abrir la pantalla — así que el importe reclamable aparece al desplegar uno, no en la lista."
+    }
+  ],
+  "launch": { "view": "canvas" }
+}

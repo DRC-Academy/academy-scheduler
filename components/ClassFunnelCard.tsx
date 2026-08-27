@@ -3,12 +3,20 @@
 //
 // Reemplaza a las cuatro tarjetas sueltas que contaba cada una por su cuenta.
 // Acá cada clase está en EXACTAMENTE una rama y el total es la suma de las
-// ramas; si alguna vez no suma, se dice en pantalla en vez de dejar que el
-// número mienta (ver `funnelIsConsistent`).
+// ramas; la barra de tres segmentos es la prueba visual de que cuadra, y si
+// alguna vez no cuadrara se dice en pantalla en vez de dejar que el número
+// mienta (ver `funnelIsConsistent`).
 //
 // Lo usan el profesor (su propio mes) y el admin (el de cada profesor), con el
-// mismo componente para que no puedan divergir. La única diferencia es
-// `showActions`: al profesor se le ofrece reclamar; al admin, no.
+// MISMO componente para que no puedan divergir. La única diferencia es
+// `showActions`: al profesor se le ofrece reclamar y subir transcripts; al
+// admin no, porque no es él quien lo hace.
+//
+// La jerarquía visual responde a la pregunta 2 de la pantalla ("¿hay algo que
+// dependa de mí?"): Reclamables es lo más accionable (fondo ámbar + botón
+// sólido), Pendientes de cobro va un escalón por debajo (botón fantasma), y las
+// ramas en cero quedan presentes pero apagadas. El rojo NO se usa para
+// pendientes: está reservado a penalizaciones y saldos negativos.
 
 import Link from 'next/link';
 import { funnelIsConsistent, type ClassFunnel, type FunnelBranch } from '@/lib/classFunnel';
@@ -18,137 +26,186 @@ function mesLabel(my: string): string {
   const [y, m] = my.split('-').map(Number);
   return `${MESES[(m ?? 1) - 1]} ${y}`;
 }
+const eur = (n: number) => `€${n.toFixed(2).replace('.', ',')}`;
 
-const COLOR: Record<string, string> = {
-  con_ingreso:      '#1f7a3d',
-  sin_ingreso:      '#9a6516',
-  fuera_calendario: '#3b5b9e',
+/** Clase del riel de color de cada rama de primer nivel. */
+const RAIL: Record<string, string> = {
+  con_ingreso: 'is-con',
+  sin_ingreso: 'is-sin',
+  fuera_calendario: 'is-fuera',
 };
 
-function Rama({ b, depth, claimAmount, showActions, onPick }: {
-  b: FunnelBranch;
-  depth: number;
-  claimAmount?: number;
-  showActions: boolean;
-  onPick?: (key: string) => void;
-}) {
-  const esHijo = depth > 0;
-  const clicable = !!onPick;
-  const reclamable = b.key === 'reclamables';
-
-  return (
-    <>
-      <div
-        onClick={clicable ? () => onPick!(b.key) : undefined}
-        role={clicable ? 'button' : undefined}
-        tabIndex={clicable ? 0 : undefined}
-        onKeyDown={clicable ? e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPick!(b.key); } } : undefined}
-        style={{
-          display: 'flex', alignItems: 'baseline', gap: 10,
-          padding: esHijo ? '7px 14px 7px 34px' : '11px 14px',
-          borderTop: '1px solid var(--border, #eceee9)',
-          cursor: clicable ? 'pointer' : 'default',
-          background: esHijo ? 'transparent' : 'rgba(0,0,0,0.015)',
-        }}
-      >
-        <span style={{
-          flex: 1, minWidth: 0,
-          fontSize: esHijo ? 13 : 13.5,
-          fontWeight: esHijo ? 500 : 700,
-          color: esHijo ? 'var(--text-secondary, #5f6360)' : (COLOR[b.key] ?? 'var(--text-primary, #1a1c1a)'),
-        }}>
-          {b.label}
-          {b.hint && (
-            <span style={{ display: 'block', fontSize: 11.5, fontWeight: 400, color: 'var(--text-muted, #8b8e88)', marginTop: 2, lineHeight: 1.45 }}>
-              {b.hint}
-            </span>
-          )}
-        </span>
-
-        {/* El importe de "Reclamables" es lo que el profesor deja de cobrar si no
-            lo pide: va al lado del número, no escondido en un tooltip. */}
-        {reclamable && claimAmount != null && claimAmount > 0 && (
-          <span style={{ fontSize: 12.5, fontWeight: 700, color: '#9a6516', whiteSpace: 'nowrap' }}>
-            €{claimAmount.toFixed(2)}
-          </span>
-        )}
-        {b.amount != null && b.amount > 0 && (
-          <span style={{ fontSize: 12.5, color: 'var(--text-muted, #8b8e88)', whiteSpace: 'nowrap' }}>
-            €{b.amount.toFixed(2)}
-          </span>
-        )}
-        <span style={{
-          fontSize: esHijo ? 14 : 16, fontWeight: 700, minWidth: 34, textAlign: 'right',
-          color: esHijo ? 'var(--text-primary, #1a1c1a)' : (COLOR[b.key] ?? 'var(--text-primary, #1a1c1a)'),
-        }}>
-          {b.count}
-        </span>
-      </div>
-
-      {reclamable && showActions && b.count > 0 && (
-        <div style={{ padding: '0 14px 10px 34px' }}>
-          <Link href="/revisiones" style={{
-            display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 14px', borderRadius: 8,
-            background: '#1E9E3A', color: '#fff', fontSize: 12.5, fontWeight: 700, textDecoration: 'none',
-          }}>
-            Reclamar {b.count} {b.count === 1 ? 'clase' : 'clases'} en Revisiones →
-          </Link>
-        </div>
-      )}
-
-      {(b.children ?? []).map(c => (
-        <Rama key={c.key} b={c} depth={depth + 1} claimAmount={claimAmount} showActions={showActions} onPick={onPick} />
-      ))}
-    </>
-  );
+/** Por qué está pendiente, en una frase. Solo si el desglose vino en los datos. */
+function pendingTitle(b: FunnelBranch): string | undefined {
+  const s = b.pendingSplit;
+  if (!s || (s.transcript === 0 && s.limite === 0)) return b.hint;
+  const partes: string[] = [];
+  if (s.transcript > 0) partes.push(`${s.transcript} esperan que subas el transcript`);
+  if (s.limite > 0) partes.push(`${s.limite} están retenidas por el límite del plan del alumno (lo resuelve el equipo)`);
+  return `De estas ${b.count}: ${partes.join(' · ')}.`;
 }
 
 export function ClassFunnelCard({ funnel, claimAmount, showActions = false, onPick, intro }: {
   funnel: ClassFunnel;
   /** Importe estimado de las clases reclamables. */
   claimAmount?: number;
-  /** true en la vista del profesor: se le ofrece reclamar. */
+  /** true en la vista del profesor: se le ofrece actuar. */
   showActions?: boolean;
+  /** Llevar al detalle. Recibe la clave de la rama pulsada. */
   onPick?: (key: string) => void;
   intro?: React.ReactNode;
 }) {
   const cuadra = funnelIsConsistent(funnel);
+  const suma = funnel.branches.reduce((s, b) => s + b.count, 0);
+  const pick = (key: string) => onPick ? () => onPick(key) : undefined;
 
-  // En la vista del profesor, "sin transcript ni registro" no lleva desglose ni
-  // acción: no puede hacer nada con esas clases y ofrecerle algo sería mandarlo a
-  // un callejón. Se deja el número, que sí le sirve para entender el total.
-  const branches = funnel.branches.map(b => b.key !== 'sin_ingreso' ? b : {
-    ...b,
-    children: (b.children ?? []).map(c =>
-      c.key === 'sin_rastro' && showActions ? { ...c, hint: undefined } : c),
-  });
+  /** Una línea hija normal (no accionable). */
+  function Child({ c }: { c: FunnelBranch }) {
+    const zero = c.count === 0;
+    const warn = c.key === 'pendientes' || c.key === 'fuera_pendientes';
+    return (
+      <button
+        type="button"
+        className={`fnl-child${zero ? ' is-zero' : ''}`}
+        onClick={zero ? undefined : pick(c.key)}
+        disabled={zero || !onPick}
+        title={warn ? pendingTitle(c) : c.hint}
+      >
+        <span className="fnl-child-name">{c.label}</span>
+        {c.amount != null && (
+          <span className={`fnl-child-eur${zero ? ' is-zero' : warn ? ' is-warn' : ''}`}>{eur(c.amount)}</span>
+        )}
+        <span className="fnl-child-n">{c.count}</span>
+      </button>
+    );
+  }
 
   return (
-    <div style={{ background: 'var(--bg-surface, #fff)', border: '1px solid var(--border, #e4e5e1)', borderRadius: 14, overflow: 'hidden', marginBottom: 16 }}>
-      <div style={{ padding: '14px 16px 12px' }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-secondary, #5f6360)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
-            Clases de {mesLabel(funnel.monthYear)}
-          </span>
-          <span style={{ fontSize: 26, fontWeight: 700, color: 'var(--text-primary, #1a1c1a)', lineHeight: 1 }}>
-            {funnel.total}
-          </span>
+    <div className="fnl">
+      <div className="fnl-head">
+        <div className="fnl-head-row">
+          <span className="fnl-eyebrow">Clases de {mesLabel(funnel.monthYear)}</span>
+          <span className="fnl-total">{funnel.total}</span>
         </div>
-        {intro && (
-          <p style={{ fontSize: 12.5, color: 'var(--text-secondary, #5f6360)', lineHeight: 1.6, margin: '10px 0 0' }}>
-            {intro}
-          </p>
-        )}
+
+        {/* Los segmentos SON las ramas: juntos llenan el ancho, y debajo va la
+            suma escrita. Es la forma discreta de mostrar que cuadra. */}
+        <div className="fnl-bar" aria-hidden>
+          {funnel.branches.filter(b => b.count > 0).map(b => (
+            <div key={b.key} className={`fnl-seg ${RAIL[b.key] ?? ''}`} style={{ flexGrow: b.count }} />
+          ))}
+        </div>
+        <div className={`fnl-check${cuadra ? '' : ' is-broken'}`}>
+          {cuadra ? (
+            <>
+              <span className="fnl-check-ok">✓</span>
+              <span>
+                {funnel.branches.map(b => b.count).join(' + ')} = {funnel.total} · cada clase está en un solo lugar
+              </span>
+            </>
+          ) : (
+            <span>Las ramas suman {suma} y el total dice {funnel.total}.</span>
+          )}
+        </div>
+
+        {intro && <p className="fnl-act-sub" style={{ marginTop: 'var(--space-3)' }}>{intro}</p>}
       </div>
 
-      {branches.map(b => (
-        <Rama key={b.key} b={b} depth={0} claimAmount={claimAmount} showActions={showActions} onPick={onPick} />
-      ))}
+      {funnel.branches.map(b => {
+        const zero = b.count === 0;
+        return (
+          <div key={b.key}>
+            <button
+              type="button"
+              className={`fnl-branch ${zero ? 'is-zero' : (RAIL[b.key] ?? '')}`}
+              onClick={zero ? undefined : pick(b.key)}
+              disabled={zero || !onPick}
+            >
+              <span className="fnl-branch-body">
+                <span className="fnl-branch-name">{b.label}</span>
+                {b.hint && <span className="fnl-hint" style={{ display: 'block' }}>{b.hint}</span>}
+              </span>
+              <span className="fnl-branch-n">{b.count}</span>
+            </button>
+
+            {(b.children ?? []).map(c => {
+              // ── Reclamables: lo más accionable de la pantalla ──
+              if (c.key === 'reclamables' && c.count > 0) {
+                return (
+                  <div key={c.key} className="fnl-act is-claim">
+                    <span className="fnl-act-body">
+                      <span className="fnl-act-top">
+                        <span className="fnl-act-name">Reclamables</span>
+                        {claimAmount != null && claimAmount > 0 && (
+                          <span className="fnl-act-eur">≈ {eur(claimAmount)}</span>
+                        )}
+                      </span>
+                      <span className="fnl-act-sub" style={{ display: 'block' }}>
+                        Tienen el transcript subido: es dinero que podés cobrar por clases que ya diste.
+                      </span>
+                    </span>
+                    <span className="fnl-act-n">{c.count}</span>
+                    {showActions && (
+                      <Link href="/revisiones" className="fnl-act-btn">
+                        Reclamar en Revisiones →
+                      </Link>
+                    )}
+                  </div>
+                );
+              }
+
+              // ── Pendientes con importe: accionable, un escalón por debajo ──
+              const esPendiente = c.key === 'pendientes' || c.key === 'fuera_pendientes';
+              if (esPendiente && c.count > 0) {
+                const s = c.pendingSplit;
+                return (
+                  <div key={c.key} className="fnl-act" title={pendingTitle(c)}>
+                    <span className="fnl-act-body">
+                      <span className="fnl-act-top">
+                        <span className="fnl-act-name">{c.label}</span>
+                        {c.amount != null && <span className="fnl-act-eur">{eur(c.amount)}</span>}
+                      </span>
+                      {/* Se dice cuántas dependen de él y cuántas no: pedirle un
+                          transcript por una clase retenida por el límite del plan
+                          es mandarlo a hacer algo que no cambia nada. */}
+                      {s && (s.transcript > 0 || s.limite > 0) && (
+                        <span className="fnl-act-sub" style={{ display: 'block' }}>
+                          {s.transcript > 0 && <>{s.transcript} esperan tu transcript</>}
+                          {s.transcript > 0 && s.limite > 0 && ' · '}
+                          {s.limite > 0 && <>{s.limite} retenidas por el límite del plan (lo resuelve el equipo)</>}
+                        </span>
+                      )}
+                    </span>
+                    <span className="fnl-act-n">{c.count}</span>
+                    {showActions && s && s.transcript > 0 && (
+                      <button type="button" className="fnl-act-btn is-ghost" onClick={pick(c.key)}>
+                        Ver y subir
+                      </button>
+                    )}
+                  </div>
+                );
+              }
+
+              return <Child key={c.key} c={c} />;
+            })}
+
+            {/* Sin nada que reclamar: se explica, y no se ofrece una acción que
+                no existe. Es el caso del profesor que no usa el botón. */}
+            {b.key === 'sin_ingreso' && b.count > 0
+              && (b.children ?? []).find(c => c.key === 'reclamables')?.count === 0 && (
+              <div className="fnl-nothing">
+                No hay nada que reclamar: de estas clases no quedó transcript ni registro.
+                Usá «Ingresar a clase» para que cuenten.
+              </div>
+            )}
+          </div>
+        );
+      })}
 
       {/* Un total que no es la suma de sus partes es un bug, y prefiero verlo a
           que pase inadvertido. No debería aparecer nunca. */}
       {!cuadra && (
-        <div style={{ padding: '10px 14px', background: 'rgba(239,68,68,0.08)', color: '#b42318', fontSize: 12.5, fontWeight: 600, borderTop: '1px solid rgba(239,68,68,0.3)' }}>
+        <div className="fnl-broken">
           Las ramas no suman el total. Es un error de cálculo: avisá al equipo antes de usar estos números.
         </div>
       )}

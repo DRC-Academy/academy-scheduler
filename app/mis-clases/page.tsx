@@ -1,5 +1,7 @@
 ﻿'use client';
 import { useState, useEffect, useMemo } from 'react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { NavBar } from '@/components/NavBar';
 import { AuthGuard } from '@/components/AuthGuard';
 import { PullToRefresh } from '@/components/PullToRefresh';
@@ -7,7 +9,7 @@ import { LastUpdated } from '@/components/LastUpdated';
 import { getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
-import { calculateTeacherFinance, recordVerification, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge, rowHoursLabel, durationBadge, sessionBreakdownLabel, transcriptStateBadge, transcriptNeedsTeacher, financeStatusBadge, pendingTranscriptSummary, canMarkStudentAbsence, absenceBreakdownLabel, mixedSessionBadge, recoveryCreditLabel, estimateClassAmount, ABSENCE_MONTHLY_CAP, ABSENCE_CAP_MESSAGE } from '@/lib/finance';
+import { calculateTeacherFinance, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge, rowHoursLabel, durationBadge, sessionBreakdownLabel, transcriptStateBadge, transcriptNeedsTeacher, financeStatusBadge, canMarkStudentAbsence, absenceBreakdownLabel, mixedSessionBadge, recoveryCreditLabel, estimateClassAmount, ABSENCE_MONTHLY_CAP, ABSENCE_CAP_MESSAGE } from '@/lib/finance';
 import { dbGetAssignmentsByTeacher, calcRegisteredClassNumber, getTeacherAssignments } from '@/lib/db';
 import { buildClassFunnel } from '@/lib/classFunnel';
 import { ClassFunnelCard } from '@/components/ClassFunnelCard';
@@ -56,6 +58,31 @@ function daysDiff(aIso: string, bIso: string): number {
 
 // Las etiquetas y colores de estado salen de lib/finance (financeStatusBadge):
 // una sola fuente para esta pantalla y la del admin.
+
+/** Filtro de la lista de clases. Las mismas tres categorías del embudo. */
+type ListFilter = 'todas' | 'pagables' | 'pendientes';
+
+/** Se descartó el aviso de la novedad. Por navegador, no por profesor. */
+const NOTICE_KEY = 'finanzas.novedad.revisiones';
+
+/**
+ * ¿Entra esta clase en el filtro? La clasificación NO se define acá: se lee de
+ * `r.status`, que ya viene calculado por lib/finance. Cualquier otra cosa sería
+ * una segunda clasificación viviendo en la pantalla, que es exactamente lo que
+ * hacía que las tarjetas viejas contradijeran al total.
+ */
+function matchesFilter(status: ClassFinanceRow['status'], f: ListFilter): boolean {
+  if (f === 'todas') return true;
+  if (f === 'pagables') return status === 'pagable';
+  return status !== 'pagable';
+}
+
+/** El día en que se liquida el mes: el último. Se dice, en vez de suponerlo. */
+function settlementLabel(monthYear: string): string {
+  const [y, m] = monthYear.split('-').map(Number);
+  const last = new Date(y, m, 0).getDate();
+  return `Se liquida el ${last} de ${FIN_MONTHS[(m ?? 1) - 1]}`;
+}
 
 /**
  * Por qué una clase quedó pendiente, en el orden de prioridad que le sirve al
@@ -131,6 +158,7 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
     registerClassRecord, loadFinanceData, markStudentAbsence,
   } = useTeachers();
 
+  const router = useRouter();
   const [monthYear, setMonthYear] = useState(currentMonthYear());
   const [showAdd, setShowAdd] = useState(false);
   // Prefill de "Añadir clase" al abrirlo desde una clase a revisar: deja el
@@ -144,6 +172,18 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
   const [validationNotice, setValidationNotice] = useState<{ title: string; body: string } | null>(null);
   const [showPenalties, setShowPenalties] = useState(false);
   // Falta sin aviso del alumno: clase a confirmar, guardado y error del guardado.
+  // Filtro de la lista de clases. Es también el destino de los clics del embudo:
+  // pulsar "Pendientes de cobro" arriba deja la lista mostrando esas y solo esas,
+  // que es lo que convierte al embudo en una explicación navegable y no en un
+  // cartel. Un solo estado para las dos entradas, así no pueden discrepar.
+  const [listFilter, setListFilter] = useState<ListFilter>('todas');
+  // El aviso de la novedad. Se lee en el inicializador y no en un effect: este
+  // componente solo se monta en el cliente (AuthGuard no lo renderiza hasta tener
+  // sesión), así que no hay desajuste de hidratación y quien ya lo cerró no lo ve
+  // parpadear en cada carga.
+  const [noticeOn, setNoticeOn] = useState(() => {
+    try { return localStorage.getItem(NOTICE_KEY) !== '1'; } catch { return true; }
+  });
   const [absence, setAbsence] = useState<{ studentName: string; date: string; time?: string; remaining: number } | null>(null);
   const [absenceSaving, setAbsenceSaving] = useState(false);
   const [absenceError, setAbsenceError] = useState('');
@@ -219,15 +259,6 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [teacher?.id, myAssignments.length, classRecords.length]);
 
-  // Registros (capturas) del profesor para el mes seleccionado.
-  const monthRecords = useMemo(
-    () => classRecords.filter(r => r.teacherId === teacher.id && (r.classDate ?? '').slice(0, 7) === monthYear),
-    [classRecords, teacher.id, monthYear],
-  );
-
-  const detectedCount = monthRecords.filter(r => recordVerification(r.studentName, r.classDate, classJoinLogs, teacher.id) === 'detected').length;
-  const notDetectedCount = monthRecords.length - detectedCount;
-
   // Resumen de pago (cálculo de finanzas).
   const payment = financePayments.find(p => p.teacherId === teacher.id && p.monthYear === monthYear) ?? null;
   // classAnalyses es el SEGUNDO FACTOR de verificación (el transcript). Sin él,
@@ -266,6 +297,35 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
       student: students.find(x => x.name.trim().toLowerCase() === c.studentName.trim().toLowerCase()),
       rates: financeRates, date: c.date, durationHours: c.durationHours,
     }), 0), [funnel, myAssignments, students, financeRates]);
+
+  /** Cuántas clases puede reclamar hoy. Sale del embudo, no de un recuento aparte. */
+  const reclamables = funnel.branches
+    .find(b => b.key === 'sin_ingreso')?.children
+    ?.find(c => c.key === 'reclamables')?.count ?? 0;
+
+  // Los contadores de los filtros, en CLASES (unidades): una sesión de 2h es una
+  // fila que vale 2. Mismo criterio que el embudo, para que un profesor que
+  // compara los dos números no encuentre dos verdades.
+  const filterCounts = useMemo(() => {
+    const units = (f: ListFilter) => finance.rows
+      .filter(r => matchesFilter(r.status, f))
+      .reduce((s, r) => s + r.billingUnits, 0);
+    return { todas: units('todas'), pagables: units('pagables'), pendientes: units('pendientes') };
+  }, [finance.rows]);
+
+  /**
+   * Clic en una línea del embudo. Las ramas que tienen filas en la lista la
+   * filtran y bajan hasta ella; "Reclamables" no vive acá sino en /revisiones,
+   * así que ahí se lleva al profesor a donde puede actuar.
+   */
+  function pickFunnelBranch(key: string) {
+    if (key === 'reclamables') { router.push('/revisiones'); return; }
+    const f: ListFilter = key === 'pagables' || key === 'fuera_pagables' ? 'pagables'
+      : key === 'pendientes' || key === 'fuera_pendientes' ? 'pendientes'
+      : 'todas';
+    setListFilter(f);
+    document.getElementById('fin-lista')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
 
   // Agrupar las clases detectadas (finance.rows) por alumno, con su desglose.
   const financeGroups = useMemo(() => {
@@ -321,6 +381,12 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
     return groups;
   }, [finance, myAssignments, todayIso]);
 
+  /** Los alumnos que tienen alguna clase en el estado filtrado. */
+  const visibleGroups = useMemo(
+    () => financeGroups.filter(g => g.rows.some(r => matchesFilter(r.status, listFilter))),
+    [financeGroups, listFilter],
+  );
+
   function toggleClass(key: string) {
     setExpandedClass(prev => { const n = new Set(prev); if (n.has(key)) n.delete(key); else n.add(key); return n; });
   }
@@ -362,24 +428,10 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
     ) ?? null;
   }
 
-  // Lo que le falta cobrar por no haber subido transcripts (fuente única).
-  const pendiente = pendingTranscriptSummary(finance);
-
-  // Alertas de clases pendientes: se indica exactamente qué falta y, sobre todo,
-  // SI le toca hacer algo al profesor.
-  //
-  // Antes esto decía "falta subir transcript" en cuanto `hasTranscript` era false
-  // — y ese campo también es false cuando el transcript está subido y esperando
-  // validación. El profesor lo volvía a pegar, el detector de duplicados le decía
-  // que era idéntico, se revalidaba igual y el mensaje no cambiaba: un bucle sin
-  // salida sobre clases que ya estaban completas de su lado.
-  const reviewAlerts = finance.rows.filter(r => r.status === 'a_revisar').map(r => ({
-    studentName: r.studentName, date: r.date, hour: r.hour,
-    transcriptState: r.transcriptState, classType: r.classType, hasJoinLog: r.hasJoinLog,
-    // Solo se ofrece el botón de pegar cuando pegar sirve de algo.
-    canPaste: transcriptNeedsTeacher(r.transcriptState),
-    missing: missingReason(r),
-  }));
+  // La lista de "clases pendientes de transcript" que vivía acá desapareció: era
+  // un tercer recuento de lo mismo, con su propia idea de qué está pendiente. Lo
+  // que decía lo dicen ahora la rama del embudo (cuántas y cuánto) y el filtro
+  // "Pendientes" de la lista (cuáles, con el motivo y el botón de subir).
 
   // Penalizaciones del mes: CUALQUIER evento con euros negativos (falta sin aviso
   // registrada en el calendario, falta injustificada cargada por el admin, etc.).
@@ -404,180 +456,179 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
         </div>
       )}
 
-      {/* Barra de mes */}
-      <div className="mcf-card mcf-monthbar">
-        <div className="mcf-month">
-          <button className="mcf-icon-btn" aria-label="Mes anterior" onClick={() => setMonthYear(m => shiftMonth(m, -1))}>‹</button>
-          <span className="mcf-month-label">{monthLabel(monthYear)}</span>
-          <button className="mcf-icon-btn" aria-label="Mes siguiente" onClick={() => setMonthYear(m => shiftMonth(m, 1))}>›</button>
-          <button className="mcf-btn mcf-btn-ghost mcf-btn-sm" onClick={() => setMonthYear(currentMonthYear())}>Hoy</button>
+      {/* ── 1. CABECERA: mes, total, estado y acción, en UNA card ──────────────
+          Antes eran dos bloques separados: una barra de mes, y más abajo una
+          tarjeta de "Total a cobrar" con el desglose plegado. Había que leer las
+          dos para responder "¿cuánto cobro y por qué?", y el desglose que más se
+          discute (bonos y penalizaciones) estaba detrás de un clic.
+
+          `data-onboarding`: último paso del tutorial guiado, que trae acá al
+          profesor para enseñarle que la clase cerrada ya suma a su pago. */}
+      <div className="fin-head" data-onboarding="payment-summary">
+        <div className="fin-bar">
+          <div className="fin-nav">
+            <button className="fin-nav-btn" aria-label="Mes anterior" onClick={() => setMonthYear(m => shiftMonth(m, -1))}>‹</button>
+            <span className="fin-month">{monthLabel(monthYear)}</span>
+            <button className="fin-nav-btn" aria-label="Mes siguiente" onClick={() => setMonthYear(m => shiftMonth(m, 1))}>›</button>
+          </div>
+          <button className="fin-ghost-btn" onClick={() => setMonthYear(currentMonthYear())}>Hoy</button>
+          <span className="fin-spacer" />
+          <button className="fin-primary-btn" onClick={() => openAddClass()}>Añadir clase</button>
         </div>
-        <button className="mcf-btn mcf-btn-primary" onClick={() => openAddClass()}>Añadir clase</button>
+
+        <div className="fin-main">
+          <div>
+            <div className="fin-eyebrow">
+              Total a cobrar
+              <HelpTooltip tooltipKey="finanzas.totalCobrar" position="bottom" />
+            </div>
+            {/* Verde solo cuando de verdad hay algo que cobrar. Un saldo en cero
+                va apagado y uno negativo, en rojo: hay profesores a los que las
+                penalizaciones les dejan el mes bajo cero y pintarlo de verde
+                sería la peor mentira de la pantalla. */}
+            <div className={`fin-amount${finance.totalAPagar < 0 ? ' is-neg' : finance.totalAPagar === 0 ? ' is-zero' : ''}`}>
+              {finance.totalAPagar < 0 ? '−' : ''}€{Math.abs(finance.totalAPagar).toFixed(2)}
+            </div>
+          </div>
+
+          <div className="fin-state">
+            <span className={`fin-pill${finance.paymentStatus === 'paid' ? ' is-paid' : ''}`}>
+              <span className="fin-pill-dot" />
+              {finance.paymentStatus === 'paid' ? 'Pagado' : 'Pendiente de pago'}
+            </span>
+            <span className="fin-settle">{settlementLabel(monthYear)}</span>
+          </div>
+
+          <span className="fin-spacer" />
+
+          {/* Cómo se llega al total, sin desplegar nada. Los bonos y las
+              penalizaciones son justo lo que el profesor discute cuando el
+              número no le cuadra: esconderlos era esconder la respuesta. */}
+          <div className="fin-chips">
+            <span className="fin-chip">Clases €{finance.montoPagable.toFixed(2)}</span>
+            <span className="fin-chip-sep">·</span>
+            <span className={`fin-chip${finance.bonusFromScoring > 0 ? '' : ' is-muted'}`}>
+              Bonos €{finance.bonusFromScoring.toFixed(2)}
+            </span>
+            <span className="fin-chip-sep">·</span>
+            <span className={`fin-chip${finance.penaltiesFromScoring < 0 ? ' is-bad' : ' is-muted'}`}>
+              Penalizaciones −€{Math.abs(finance.penaltiesFromScoring).toFixed(2)}
+            </span>
+            {finance.penaltiesFromScoring < 0 && (
+              <button className="fin-chip-btn" onClick={() => setShowPenalties(s => !s)}>
+                {showPenalties ? 'ocultar' : 'ver detalle'}
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Las revertidas se muestran tachadas y no restan (ver lib/finance.ts). */}
+        {showPenalties && monthPenalties.length > 0 && (
+          <div className="fin-pen">
+            {monthPenalties.map(p => (
+              <div key={p.id} className={`fin-pen-row${p.reverted ? ' is-reverted' : ''}`}>
+                <span>{p.note.replace(/^(Falta sin aviso registrada|Cancelación sin antelación) — /, '').replace('alumno ', '').replace('fecha ', '')}</span>
+                <span style={{ whiteSpace: 'nowrap' }}>
+                  {p.reverted && <span className="fin-pen-back">Revertida por el equipo</span>}
+                  −€{Math.abs(p.euros).toFixed(2)}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="mcf-content">
-        {/* ── 1. Resumen de pago — ARRIBA y a ancho completo ──────────────────
-            Estaba en un aside sticky de 380px a la derecha, que le robaba ese
-            ancho al detalle de clases y lo obligaba a desplazarse en horizontal. */}
-        {/* `data-onboarding`: último paso del tutorial guiado, que trae acá al
-            profesor para enseñarle que la clase cerrada ya suma a su pago. */}
-        <div className="mcf-card mcf-card-pad mcf-total" data-onboarding="payment-summary">
-          <div className="mcf-total-head">
-            <div>
-              <div className="mcf-card-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                Total a cobrar · {monthLabel(monthYear)}
-                <HelpTooltip tooltipKey="finanzas.totalCobrar" position="bottom" />
+        {/* ── 2. LA ACCIÓN, ANTES DEL DETALLE ──
+            Responde "¿hay algo que dependa de mí para cobrar más?" sin obligar
+            al profesor a leer el embudo entero. Solo aparece cuando de verdad
+            hay algo que reclamar: una banda que no lleva a ninguna parte es
+            peor que no tenerla. */}
+        {reclamables > 0 && (
+          <Link href="/revisiones" className="fin-claim">
+            <div className="fin-claim-in">
+              <div className="fin-claim-body">
+                <div className="fin-claim-title">
+                  {reclamables === 1 ? 'Tenés 1 clase reclamable' : `Tenés ${reclamables} clases reclamables`}
+                </div>
+                <div className="fin-claim-sub">
+                  Ya tienen el transcript subido: son <b className="fin-claim-eur">≈ €{claimAmount.toFixed(2)}</b> que
+                  podés cobrar si las reclamás antes del cierre del mes.
+                </div>
               </div>
-              <div className="mcf-amount">€{finance.totalAPagar.toFixed(2)}</div>
+              <span className="fin-claim-btn">Reclamar en Revisiones →</span>
             </div>
-            <span className={`mcf-pill ${finance.paymentStatus === 'paid' ? 'is-ok' : 'is-warn'}`}>
-              <span className="mcf-dot" style={{ background: finance.paymentStatus === 'paid' ? '#16a34a' : '#e0912f' }} />
-              {finance.paymentStatus === 'paid' ? 'Pagado' : 'Pendiente de pago'}
-            </span>
-          </div>
+          </Link>
+        )}
 
-          <div className="mcf-breakdown">
-            <div className="mcf-brow">
-              <span className="mcf-brow-label" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                Clases pagables · {finance.totalPagable}
-                <HelpTooltip tooltipKey="finanzas.pagables" />
-              </span>
-              <span className="mcf-brow-value">€{finance.montoPagable.toFixed(2)}</span>
+        {/* Aviso de la novedad: se puede cerrar y no vuelve. Es información de
+            estreno, no parte de la pantalla, y ocupar sitio para siempre por un
+            cambio de este mes sería cobrárselo al profesor todo el año. */}
+        {noticeOn && (
+          <div className="fin-notice">
+            <span className="fin-notice-i" aria-hidden>i</span>
+            <div className="fin-notice-body">
+              <b style={{ color: 'var(--text-primary)' }}>Novedad.</b> Ahora ves <b>todas</b> las clases de tu
+              calendario sin registro de acceso, no solo las que declaraste a mano. Las que tienen el
+              transcript subido <b>las podés reclamar</b> y se te pagan cuando el equipo las valide.
             </div>
-            <div className="mcf-brow">
-              <span className="mcf-brow-label" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
-                Pendiente de transcript · {finance.totalARevisar}
-                <span className="mcf-brow-note">no suma al total</span>
-                <HelpTooltip tooltipKey="finanzas.aRevisar" />
-              </span>
-              <span className="mcf-brow-value" style={{ color: '#9a6516' }}>€{finance.montoARevisar.toFixed(2)}</span>
-            </div>
-            {/* Lo que le falta cobrar por transcripts sin subir. Va debajo del
-                importe para que quede claro que NO está dentro del total. */}
-            {pendiente && (
-              <div className="mcf-brow" style={{ borderTop: '1px dashed var(--mcf-border)', paddingTop: 8 }}>
-                <span className="mcf-brow-note" style={{ color: '#9a6516' }}>
-                  {pendiente.label}. Al subir el transcript pasan a pagables y se suman solas.
-                </span>
-              </div>
-            )}
-            <div className="mcf-brow">
-              <span className="mcf-brow-label" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                Bonos scoring
-                <HelpTooltip tooltipKey="finanzas.bonosScoring" />
-              </span>
-              <span className="mcf-brow-value">€{finance.bonusFromScoring.toFixed(2)}</span>
-            </div>
-            {finance.penaltiesFromScoring < 0 && (
-              <div className="mcf-brow">
-                <span className="mcf-brow-label" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                  Penalizaciones
-                  <button onClick={() => setShowPenalties(s => !s)}
-                    style={{ background: 'none', border: 'none', color: '#c0392b', cursor: 'pointer', fontSize: 11.5, fontWeight: 600, padding: 0, textDecoration: 'underline' }}>
-                    {showPenalties ? 'ocultar' : 'ver detalle'}
-                  </button>
-                </span>
-                <span className="mcf-brow-value" style={{ color: '#c0392b' }}>−€{Math.abs(finance.penaltiesFromScoring).toFixed(2)}</span>
-              </div>
-            )}
-            {showPenalties && monthPenalties.length > 0 && (
-              <div className="mcf-pen-detail" style={{ paddingTop: 10, borderTop: '1px dashed var(--mcf-border)', display: 'flex', flexDirection: 'column', gap: 5 }}>
-                {monthPenalties.map(p => (
-                  <div key={p.id} style={{ fontSize: 12, color: p.reverted ? 'var(--text-muted)' : '#5f6360', display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', textDecoration: p.reverted ? 'line-through' : undefined }}>
-                    <span>{p.note.replace(/^(Falta sin aviso registrada|Cancelación sin antelación) — /, '').replace('alumno ', '').replace('fecha ', '')}</span>
-                    <span style={{ whiteSpace: 'nowrap' }}>
-                      {p.reverted ? <span style={{ textDecoration: 'none', color: '#1f7a3d', marginRight: 6 }}>Revertida por el equipo</span> : null}
-                      −€{Math.abs(p.euros).toFixed(2)}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
+            <button
+              className="fin-notice-x" aria-label="Descartar aviso"
+              onClick={() => { setNoticeOn(false); try { localStorage.setItem(NOTICE_KEY, '1'); } catch { /* modo privado */ } }}
+            >
+              ✕
+            </button>
           </div>
-        </div>
+        )}
 
-        {/* ── 2. EMBUDO ──
+        {/* ── 3. EL EMBUDO: por qué el total es ese ──
             Reemplaza a las cuatro tarjetas sueltas. Las viejas contaban cada una
             por su cuenta: "Sin ingreso detectado" solo miraba los registros que
             el profesor había cargado a mano, así que decía 2 donde había 80.
-            Acá cada clase está en una rama y el total es la suma. */}
+            Acá cada clase está en una rama, el total es la suma, y cada línea
+            baja a la lista filtrada por ese estado. */}
         <ClassFunnelCard
           funnel={funnel}
           claimAmount={claimAmount}
           showActions
-          intro={<>
-            Ahora se muestran <b>todas</b> las clases de tu calendario sin registro de acceso, no solo las que
-            declaraste a mano. Las que tienen el transcript subido <b>las podés reclamar</b> y se te pagan
-            cuando el equipo las valide.
-          </>}
+          onPick={pickFunnelBranch}
         />
-        <div className="mcf-kpis">
-          {([
-            { label: 'Alumnos con clases este mes', value: financeGroups.length, dot: null, color: undefined, help: undefined },
-            { label: 'Con ingreso detectado', value: detectedCount, dot: '#16a34a', color: undefined, help: 'finanzas.ingresoDetectado' },
-          ] as Array<{ label: string; value: number; dot: string | null; color: string | undefined; help?: HelpTooltipKey }>).map(k => (
-            <div key={k.label} className="mcf-card mcf-kpi">
-              <div className="mcf-kpi-value" style={k.color ? { color: k.color } : undefined}>
-                {k.dot && <span className="mcf-dot" style={{ background: k.dot }} />}
-                {k.value}
-              </div>
-              <div className="mcf-kpi-label" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                {k.label}
-                {k.help && <HelpTooltip tooltipKey={k.help} />}
-              </div>
-            </div>
-          ))}
-        </div>
-
         <div className="mcf-body">
-          {/* ── 3. Clases a revisar — a ancho completo, antes del detalle ── */}
-          {reviewAlerts.length > 0 && (
-            <div className="mcf-card mcf-card-pad mcf-review">
-              <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 6 }}>
-                <span className="mcf-card-title">Pendientes de transcript</span>
-                <span className="mcf-counter">{reviewAlerts.length}</span>
-              </div>
-              {pendiente && (
-                <div style={{ fontSize: 12.5, color: '#9a6516', lineHeight: 1.55, marginBottom: 8 }}>
-                  Son clases que ya diste y que <b>todavía no se te pagan</b>: €{pendiente.amount.toFixed(2)} sin cobrar.
-                  En cuanto subas el transcript pasan a pagables.
-                </div>
-              )}
-              {reviewAlerts.map((a, i) => (
-                <div key={i} className="mcf-review-row">
-                  <span className="mcf-dot" style={{ background: '#e0912f', marginTop: 5 }} />
-                  <div style={{ minWidth: 0, flex: 1 }}>
-                    <div className="mcf-review-who">{a.studentName} · {finShortDate(a.date)}</div>
-                    <div className="mcf-review-note">Falta: {a.missing}</div>
-                  </div>
-                  {/* El botón aparece SOLO si pegar cambia algo: falta el
-                      transcript o el equipo lo rechazó. Si está en revisión, o si
-                      lo que falta es el ingreso por Meet, no hay acción posible y
-                      ofrecerla sería mandarlo a repetir trabajo en vano. */}
-                  {a.canPaste && (
-                    <button
-                      onClick={() => openAddClass({ studentName: a.studentName, date: a.date, classType: a.classType })}
-                      title="Pegá el transcript de esta clase para verificarla"
-                      style={{ flexShrink: 0, padding: '6px 11px', borderRadius: 8, border: 'none', background: '#1E9E3A', color: 'white', cursor: 'pointer', fontSize: 12, fontWeight: 700, fontFamily: 'inherit', whiteSpace: 'nowrap' }}
-                    >
-                      Pegar transcript
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* ── 4. Detalle de clases — a ancho completo ── */}
+          {/* ── 4. EL DETALLE, filtrable ──
+              La tarjeta suelta de "Pendientes de transcript" que vivía acá decía
+              lo mismo que la rama del embudo y con otro recuento; ahora el
+              embudo es el índice y esto, el detalle al que lleva. */}
           <div className="mcf-main">
-            <div className="mcf-section-title">Clases por alumno</div>
-
-            {financeGroups.length === 0 ? (
-              <div className="mcf-card mcf-empty">
-                No hay clases detectadas este mes. Registrá clases con <b>Añadir clase</b> o ingresá con el botón Meet.
+            <div className="fin-list-head" id="fin-lista">
+              <span className="fin-list-title">Clases por alumno</span>
+              <div className="fin-filters">
+                {([
+                  { k: 'todas', label: 'Todas' },
+                  { k: 'pagables', label: 'Pagables' },
+                  { k: 'pendientes', label: 'Pendientes' },
+                ] as Array<{ k: ListFilter; label: string }>).map(f => (
+                  <button
+                    key={f.k}
+                    className={`fin-filter${listFilter === f.k ? ' is-on' : ''}`}
+                    onClick={() => setListFilter(f.k)}
+                  >
+                    {f.label} {filterCounts[f.k]}
+                  </button>
+                ))}
               </div>
-            ) : financeGroups.map(g => {
-              const isOpen = expanded.has(g.name);
+            </div>
+            {visibleGroups.length === 0 ? (
+              <div className="mcf-card mcf-empty">
+                {financeGroups.length === 0
+                  ? <>No hay clases detectadas este mes. Registrá clases con <b>Añadir clase</b> o ingresá con el botón Meet.</>
+                  : listFilter === 'pendientes'
+                    ? <>No te queda ninguna clase pendiente de cobro este mes.</>
+                    : <>Ninguna clase de este mes está en ese estado.</>}
+              </div>
+            ) : visibleGroups.map(g => {
+              // Con un filtro puesto la lista se abre sola: si hay que pulsar
+              // cada alumno para ver las 3 pendientes, el filtro no sirve.
+              const isOpen = expanded.has(g.name) || listFilter !== 'todas';
               return (
                 <div key={g.name} className="mcf-card">
                   <div className="mcf-student-head" onClick={() => toggle(g.name)}>
@@ -648,7 +699,7 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                             <span key={col.h}>{col.h}<HelpTooltip tooltipKey={col.help} /></span>
                           ))}
                         </div>
-                        {g.rows.map((r, i) => {
+                        {g.rows.filter(r => matchesFilter(r.status, listFilter)).map((r, i) => {
                           const rec = recordFor(g.name, r.date);
                           const ing = ingresoBadge(r);
                           const ct = classTypeBadge(r.classType);

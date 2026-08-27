@@ -3232,3 +3232,300 @@ body.driver-active .drc-modal-backdrop * { pointer-events: auto; }
    !important porque son estilos inline del componente, que no se toca. */
 .stx-stamp > div { padding-bottom: 0 !important; font-size: var(--fs-caption) !important; }
 
+
+/* ── EMBUDO DE CLASES (components/ClassFunnelCard) ────────────────────────────
+   Lo usan Finanzas del profesor y Finanzas del admin, con el mismo componente:
+   si los dos leyeran estilos distintos volveríamos al problema que este embudo
+   viene a resolver (dos pantallas, dos números, ninguna forma de saber cuál
+   mirar).
+
+   COLOR. #1E9E3A es el verde de MARCA y da 3.5:1: solo aparece en números de
+   24px o más y en los segmentos de la barra. Para texto y botones va --accent
+   (#167A2D, 5.5:1). El amarillo #FFC400 (1.6:1) nunca es texto: solo fondo o
+   borde, con --warn (#B45309) encima. Los profesores leen esto en el teléfono
+   entre clases y muchas veces con mala luz. */
+
+.fnl {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.fnl-head { padding: var(--space-4) 20px var(--space-3); }
+.fnl-head-row { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); }
+.fnl-eyebrow {
+  font-size: var(--fs-caption); font-weight: var(--fw-semibold); color: var(--text-secondary);
+  letter-spacing: 0.03em; text-transform: uppercase;
+}
+.fnl-total { font-size: 28px; font-weight: var(--fw-semibold); line-height: 1; letter-spacing: -0.02em; }
+
+/* La barra ES la prueba de que cuadra: los segmentos son las ramas y llenan el
+   ancho completo. No es decoración — es el argumento. */
+.fnl-bar { display: flex; gap: 3px; height: 8px; margin-top: var(--space-3); }
+.fnl-seg { border-radius: 3px; min-width: 2px; }
+.fnl-seg.is-con    { background: var(--brand-green); }
+.fnl-seg.is-sin    { background: var(--brand-yellow); }
+.fnl-seg.is-fuera  { background: #2563eb; }
+.fnl-check {
+  display: flex; align-items: center; gap: 7px; margin-top: var(--space-2);
+  font-size: var(--fs-micro); color: var(--text-muted);
+}
+.fnl-check-ok { color: var(--accent); font-weight: var(--fw-semibold); }
+.fnl-check.is-broken { color: var(--danger); font-weight: var(--fw-medium); }
+
+/* ── Ramas ── */
+.fnl-branch {
+  width: 100%; text-align: left; font-family: inherit; background: none;
+  border: none; border-top: 1px solid var(--border); border-left: 3px solid var(--border);
+  padding: var(--space-3) 20px var(--space-3) 17px;
+  display: flex; align-items: baseline; gap: var(--space-3); cursor: pointer;
+}
+.fnl-branch:hover, .fnl-child:hover { background: var(--bg-surface-2); }
+.fnl-branch.is-con   { border-left-color: var(--brand-green); }
+.fnl-branch.is-sin   { border-left-color: var(--brand-yellow); }
+.fnl-branch.is-fuera { border-left-color: #2563eb; }
+.fnl-branch.is-zero  { border-left-color: var(--border); opacity: 0.55; }
+.fnl-branch-body { flex: 1; min-width: 0; }
+.fnl-branch-name { font-size: var(--fs-body); font-weight: var(--fw-semibold); }
+.fnl-hint { font-size: var(--fs-micro); color: var(--text-muted); margin-top: 2px; line-height: 1.45; }
+.fnl-branch-n { font-size: var(--fs-title); font-weight: var(--fw-semibold); min-width: 40px; text-align: right; }
+
+.fnl-child {
+  width: 100%; text-align: left; font-family: inherit; background: none; border: none;
+  border-top: 1px solid var(--bg-surface-2);
+  padding: 9px 20px 9px 40px;
+  display: flex; align-items: center; gap: var(--space-3); cursor: pointer;
+}
+.fnl-child.is-zero { opacity: 0.55; cursor: default; }
+.fnl-child-name { flex: 1; min-width: 0; font-size: var(--fs-sm); color: var(--text-secondary); }
+.fnl-child-eur  { font-size: var(--fs-sm); font-weight: var(--fw-semibold); color: var(--accent); white-space: nowrap; }
+.fnl-child-eur.is-warn { color: var(--warn); }
+.fnl-child-eur.is-zero { color: var(--text-muted); font-weight: var(--fw-regular); }
+.fnl-child-n { font-size: 15px; font-weight: var(--fw-semibold); min-width: 40px; text-align: right; }
+
+/* ── Fila accionable ── lo único que cambia de fondo, porque es lo único que
+   pide algo del profesor. Reclamables en ámbar (dinero que puede cobrar hoy),
+   pendientes en blanco con botón fantasma (un escalón por debajo). */
+.fnl-act {
+  border-top: 1px solid var(--bg-surface-2);
+  padding: var(--space-3) 20px var(--space-3) 40px;
+  display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap;
+}
+.fnl-act.is-claim { background: var(--warn-soft); }
+.fnl-act-body { flex: 1; min-width: 180px; }
+.fnl-act-top { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; }
+.fnl-act-name { font-size: var(--fs-body); font-weight: var(--fw-semibold); color: var(--text-primary); }
+.fnl-act-eur  { font-size: 15px; font-weight: var(--fw-semibold); color: var(--warn); }
+.fnl-act-sub  { font-size: var(--fs-caption); color: var(--text-secondary); margin-top: 3px; line-height: 1.45; }
+.fnl-act-n    { font-size: 22px; font-weight: var(--fw-semibold); color: var(--warn); min-width: 40px; text-align: right; }
+.fnl-act-btn {
+  flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
+  min-height: 40px; padding: 0 var(--space-4); border-radius: var(--radius-sm);
+  background: var(--accent); color: #fff; font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold); text-decoration: none; border: none;
+  cursor: pointer; font-family: inherit;
+}
+.fnl-act-btn:hover { background: var(--accent-hover); text-decoration: none; color: #fff; }
+.fnl-act-btn.is-ghost {
+  background: var(--bg-surface); border: 1px solid var(--border); color: var(--text-secondary);
+  min-height: 36px; font-size: var(--fs-caption);
+}
+.fnl-act-btn.is-ghost:hover { background: var(--bg-surface-2); color: var(--text-primary); }
+
+/* Cuando no hay nada que reclamar se dice, y no se ofrece una acción que no
+   existe. El caso de un profesor con 80 clases sin ningún registro. */
+.fnl-nothing {
+  border-top: 1px solid var(--bg-surface-2); background: var(--bg-base);
+  padding: var(--space-3) 20px var(--space-3) 40px;
+  font-size: var(--fs-micro); color: var(--text-muted); line-height: 1.55;
+}
+.fnl-broken {
+  padding: var(--space-3) 20px; background: var(--danger-soft); color: var(--danger);
+  font-size: var(--fs-caption); font-weight: var(--fw-medium);
+  border-top: 1px solid var(--danger-border);
+}
+
+@media (max-width: 900px) {
+  .fnl-head { padding: var(--space-3) var(--space-4) var(--space-3); }
+  .fnl-branch { padding: 11px var(--space-4) 11px 13px; }
+  .fnl-child, .fnl-act, .fnl-nothing { padding-left: 30px; padding-right: var(--space-4); }
+  .fnl-child { padding-top: 10px; padding-bottom: 10px; }
+  .fnl-branch-n { min-width: 28px; }
+  .fnl-child-n  { min-width: 28px; }
+  .fnl-act-n    { min-width: 28px; }
+  /* El botón cae a ancho completo: en el pulgar, no en una esquina. */
+  .fnl-act-btn { width: 100%; min-height: 44px; }
+  .fnl-act-body { min-width: 100%; }
+}
+
+/* ═══ FINANZAS DEL PROFESOR ═══════════════════════════════════════════════════
+   La pantalla responde tres preguntas y en este orden:
+     1. ¿Cuánto voy a cobrar?          → .fin-head (el total, arriba del todo)
+     2. ¿Depende algo de mí?           → .fin-claim (antes del detalle)
+     3. ¿Por qué ese número?           → el embudo (.fnl-*) y la lista
+   Antes la 1 estaba bien y las otras dos había que deducirlas leyendo el
+   detalle entero, que es donde el profesor abandonaba.
+
+   Mismas reglas de color que el embudo: el verde de marca (#1E9E3A, 3.5:1) solo
+   en el importe grande; para texto y botones va --accent (5.5:1). */
+
+.fin-wrap { display: flex; flex-direction: column; gap: var(--space-3); }
+
+/* ── 1. Cabecera: mes, total, estado y la acción, en una sola card ── */
+.fin-head {
+  background: var(--bg-surface); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); overflow: hidden;
+}
+.fin-bar {
+  display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap;
+  padding: var(--space-3) 18px; border-bottom: 1px solid var(--border);
+}
+.fin-nav { display: flex; align-items: center; gap: 2px; }
+.fin-nav-btn {
+  width: 34px; height: 34px; border: 1px solid var(--border); background: var(--bg-surface);
+  border-radius: var(--radius-sm); color: var(--text-secondary); font-size: 16px;
+  cursor: pointer; font-family: inherit; line-height: 1;
+}
+.fin-nav-btn:hover { background: var(--bg-surface-2); }
+.fin-month { min-width: 132px; text-align: center; font-size: var(--fs-body); font-weight: var(--fw-semibold); }
+.fin-ghost-btn {
+  padding: 7px 13px; border: 1px solid var(--border); background: var(--bg-surface);
+  border-radius: var(--radius-sm); color: var(--text-secondary); font-size: var(--fs-caption);
+  font-weight: var(--fw-medium); cursor: pointer; font-family: inherit;
+}
+.fin-ghost-btn:hover { background: var(--bg-surface-2); color: var(--text-primary); }
+.fin-primary-btn {
+  padding: 9px 16px; border: none; background: var(--accent); color: #fff;
+  border-radius: var(--radius-sm); font-size: var(--fs-sm); font-weight: var(--fw-semibold);
+  cursor: pointer; font-family: inherit;
+}
+.fin-primary-btn:hover { background: var(--accent-hover); }
+.fin-spacer { flex-grow: 1; }
+
+.fin-main { display: flex; align-items: flex-end; gap: 28px; padding: 18px 20px 20px; flex-wrap: wrap; }
+.fin-eyebrow {
+  font-size: var(--fs-caption); color: var(--text-muted); letter-spacing: 0.03em;
+  text-transform: uppercase; font-weight: var(--fw-medium); margin-bottom: var(--space-1);
+  display: inline-flex; align-items: center; gap: 5px;
+}
+/* 40px: el único sitio donde el verde de marca es legible de sobra. */
+.fin-amount {
+  font-size: 40px; font-weight: var(--fw-semibold); line-height: 1;
+  letter-spacing: -0.02em; color: var(--brand-green);
+}
+.fin-amount.is-zero { color: var(--text-muted); }
+/* Un saldo negativo (las penalizaciones se comieron el mes) en el verde de
+   "vas a cobrar esto" sería la peor mentira de la pantalla. */
+.fin-amount.is-neg { color: var(--danger); }
+.fin-state { display: flex; flex-direction: column; gap: 6px; padding-bottom: var(--space-1); }
+.fin-pill {
+  display: inline-flex; align-items: center; gap: 7px; padding: 5px 12px;
+  border-radius: var(--radius-pill); background: var(--warn-soft);
+  border: 1px solid var(--warn-border); color: var(--warn);
+  font-size: var(--fs-caption); font-weight: var(--fw-semibold); align-self: flex-start;
+}
+.fin-pill.is-paid { background: var(--ok-soft); border-color: var(--ok-border); color: var(--accent); }
+.fin-pill-dot { width: 7px; height: 7px; border-radius: var(--radius-pill); background: currentColor; }
+.fin-settle { font-size: var(--fs-caption); color: var(--text-muted); }
+
+/* Cómo se llega al total: SIEMPRE visible, sin desplegar. Los bonos y las
+   penalizaciones estaban escondidos detrás de un clic y son justo lo que el
+   profesor discute cuando el número no le cuadra. */
+.fin-chips {
+  display: flex; align-items: baseline; gap: var(--space-2); flex-wrap: wrap;
+  font-size: var(--fs-sm); color: var(--text-secondary); padding-bottom: 6px;
+}
+.fin-chip-sep { color: var(--text-muted); }
+.fin-chip.is-muted { color: var(--text-muted); }
+.fin-chip.is-bad   { color: var(--danger); font-weight: var(--fw-medium); }
+.fin-chip-btn {
+  background: none; border: none; padding: 0; font-family: inherit;
+  font-size: var(--fs-caption); font-weight: var(--fw-semibold); color: var(--danger);
+  text-decoration: underline; cursor: pointer;
+}
+.fin-pen {
+  border-top: 1px solid var(--border); padding: var(--space-3) 20px;
+  display: flex; flex-direction: column; gap: 5px; background: var(--bg-base);
+}
+.fin-pen-row {
+  display: flex; justify-content: space-between; gap: var(--space-2); flex-wrap: wrap;
+  font-size: var(--fs-caption); color: var(--text-secondary);
+}
+.fin-pen-row.is-reverted { color: var(--text-muted); text-decoration: line-through; }
+.fin-pen-back { text-decoration: none; color: var(--accent); margin-right: 6px; }
+
+/* ── 2. La acción, antes del detalle ── */
+.fin-claim {
+  display: block; background: var(--warn-soft); border: 1px solid var(--warn-border);
+  border-radius: var(--radius-md); padding: 14px 18px; text-decoration: none;
+}
+.fin-claim:hover { background: #FFF0CC; text-decoration: none; }
+.fin-claim-in { display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap; }
+.fin-claim-body { flex-grow: 1; min-width: 220px; }
+.fin-claim-title { font-size: 15px; font-weight: var(--fw-semibold); color: var(--text-primary); }
+.fin-claim-sub { font-size: var(--fs-caption); color: var(--text-secondary); margin-top: 3px; line-height: 1.5; }
+.fin-claim-eur { color: var(--warn); font-weight: var(--fw-semibold); }
+.fin-claim-btn {
+  flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
+  min-height: 40px; padding: 0 var(--space-4); background: var(--accent); color: #fff;
+  border-radius: 9px; font-size: var(--fs-sm); font-weight: var(--fw-semibold);
+}
+
+/* Aviso temporal: descartable, porque es una novedad y no parte de la pantalla. */
+.fin-notice {
+  display: flex; align-items: flex-start; gap: 11px; padding: 11px 14px;
+  background: var(--warn-soft); border: 1px solid var(--warn-border); border-radius: var(--radius-md);
+}
+.fin-notice-i {
+  flex-shrink: 0; width: 18px; height: 18px; border-radius: var(--radius-pill);
+  background: var(--warn); color: #fff; font-size: var(--fs-caption); font-weight: var(--fw-semibold);
+  display: flex; align-items: center; justify-content: center; margin-top: 1px;
+}
+.fin-notice-body { flex-grow: 1; font-size: var(--fs-caption); line-height: 1.55; color: var(--text-secondary); }
+.fin-notice-x {
+  flex-shrink: 0; background: none; border: none; color: var(--text-muted);
+  font-size: 16px; line-height: 1; cursor: pointer; padding: 0 2px; font-family: inherit;
+}
+
+/* ── 3. La lista, con filtros por estado ──
+   Los filtros son también el destino de los clics del embudo: pulsar
+   «Pendientes de cobro» arriba deja la lista mostrando exactamente esas. */
+.fin-list-head {
+  display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap;
+  margin-bottom: var(--space-2);
+}
+.fin-list-title { flex-grow: 1; font-size: var(--fs-body); font-weight: var(--fw-semibold); }
+.fin-filters { display: flex; gap: var(--space-1); flex-wrap: wrap; }
+.fin-filter {
+  padding: 5px 11px; border: 1px solid var(--border); background: var(--bg-surface);
+  color: var(--text-secondary); border-radius: var(--radius-pill);
+  font-size: var(--fs-caption); cursor: pointer; font-family: inherit;
+}
+.fin-filter:hover { background: var(--bg-surface-2); }
+.fin-filter.is-on {
+  border-color: var(--accent); background: var(--accent-soft);
+  color: var(--accent); font-weight: var(--fw-semibold);
+}
+
+@media (max-width: 900px) {
+  .fin-bar { padding: var(--space-3) var(--space-4); gap: var(--space-2); }
+  .fin-nav { flex-grow: 1; }
+  .fin-month { min-width: 0; flex-grow: 1; }
+  /* En el móvil «Añadir clase» ocupa la fila entera: es el pulgar, no el ratón. */
+  .fin-primary-btn { width: 100%; min-height: 44px; }
+  .fin-main { padding: var(--space-4); gap: var(--space-4); }
+  .fin-amount { font-size: 34px; }
+  .fin-chips { padding-bottom: 0; }
+  .fin-claim-btn { width: 100%; min-height: 44px; }
+  .fin-claim-body { min-width: 100%; }
+  .fin-list-head { align-items: flex-start; }
+  .fin-list-title { flex-basis: 100%; }
+}
+
+/* La barra de la fila plegada del admin (ver FinanceBar en app/finanzas).
+   Reutiliza los segmentos del embudo a propósito: verde pagable, amarillo
+   pendiente. El gris es "retenida por el límite del plan" y NO es el azul del
+   embudo, que ahí significa "fuera del calendario": un color, un significado. */
+.afd-bar { display: flex; gap: 3px; height: 6px; margin: 0 var(--space-4) var(--space-3); }
+.fnl-seg.is-hold { background: var(--text-muted); }

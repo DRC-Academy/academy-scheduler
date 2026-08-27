@@ -12,9 +12,9 @@
 // vez de dejar que el número mienta.
 //
 //   Clases del mes
-//     ├── Con ingreso registrado          (el profesor pulsó "Ingresar a clase")
+//     ├── Con registro de clase           (clic en "Ingresar", o constancia)
 //     │     ├── Pagables                  → suman al total del mes
-//     │     └── Pendientes de transcript  → dadas, sin cobrar todavía
+//     │     └── Pendientes de cobro       → dadas, sin cobrar todavía
 //     ├── Sin ingreso registrado          (el calendario dice que tocaba)
 //     │     ├── Reclamables               → hay transcript: se piden en Revisiones
 //     │     └── Sin transcript ni registro→ no hay nada que reclamar
@@ -30,7 +30,7 @@
 // difieren.
 
 import type { Assignment, ClassJoinLog, ClassRecord, ClassReviewRequest } from '@/types';
-import type { ClassTranscriptRef, TeacherFinanceResult } from '@/lib/finance';
+import type { ClassTranscriptRef, TeacherFinanceResult, ClassFinanceRow } from '@/lib/finance';
 import type { GridOccupancy } from '@/lib/teacherClasses';
 import { buildMissingJoinClasses, type MissingJoinClass } from '@/lib/reviewRequests';
 import { periodIndex, existsForStudent, type StudentDropout } from '@/lib/studentPeriod';
@@ -48,6 +48,32 @@ export interface FunnelBranch {
   children?: FunnelBranch[];
   /** Ayuda contextual de una línea. */
   hint?: string;
+  /**
+   * Las filas de finanzas que componen esta rama. SOLO para que la pantalla
+   * pueda llevar al detalle al hacer clic: la clasificación se hace acá y en
+   * ningún otro sitio, así que nadie tiene que volver a decidir qué clase
+   * pertenece a qué rama para pintarla. No participa de ningún cálculo — ni
+   * `count`, ni `amount`, ni `funnelIsConsistent` la miran.
+   *
+   * Ausente en las ramas que no salen de finanzas (las de "sin ingreso" viven
+   * en `ClassFunnel.missing`).
+   */
+  rows?: ClassFinanceRow[];
+  /**
+   * Desglose de "Pendientes de cobro" en sus DOS causas, que no son lo mismo:
+   *
+   *   · `transcript` → depende del profesor: sube el archivo y cobra.
+   *   · `limite`     → no depende de nadie: la clase excede el cupo mensual del
+   *                    alumno y la resuelve el equipo.
+   *
+   * La rama sigue siendo UNA (partirla cambiaría la forma del embudo), pero
+   * pedirle "subí el transcript" a alguien cuyas clases están retenidas por un
+   * límite es mandarlo a hacer algo que no sirve. Con esto la pantalla puede
+   * decir cuántas son de cada tipo sin inventar el dato.
+   *
+   * PENDIENTE (septiembre): separarlas en dos ramas de verdad.
+   */
+  pendingSplit?: { transcript: number; limite: number };
 }
 
 export interface ClassFunnel {
@@ -166,23 +192,32 @@ export function buildClassFunnel(opts: {
   // —dio la clase y no la cobró— y separarlo convertiría el embudo en una tabla.
   const pagablesDe   = (rs: Fila[]) => rs.filter(r => r.status === 'pagable');
   const pendientesDe = (rs: Fila[]) => rs.filter(r => r.status !== 'pagable');
+  /** Por qué está pendiente. Solo cuenta lo ya clasificado; no decide nada. */
+  const splitDe = (rs: Fila[]) => ({
+    transcript: unidadesFin(rs.filter(r => r.status === 'a_revisar')),
+    limite:     unidadesFin(rs.filter(r => r.status === 'excede_limite' || r.status === 'excede_limite_tipo')),
+  });
 
   const branches: FunnelBranch[] = [
     {
       key: 'con_ingreso',
       label: 'Con registro de clase',
       count: unidadesFin(conRegistro),
+      rows: conRegistro,
       hint: 'Pulsaste «Ingresar a clase», o quedó constancia (falta sin aviso, cancelación).',
       children: [
         {
           key: 'pagables', label: 'Pagables',
           count: unidadesFin(pagablesDe(conRegistro)), amount: importe(pagablesDe(conRegistro)),
+          rows: pagablesDe(conRegistro),
           hint: 'Verificadas. Suman a tu total del mes.',
         },
         {
-          key: 'pendientes', label: 'Pendientes de transcript',
+          key: 'pendientes', label: 'Pendientes de cobro',
           count: unidadesFin(pendientesDe(conRegistro)), amount: importe(pendientesDe(conRegistro)),
-          hint: 'Ya las diste, pero todavía no suman al total.',
+          rows: pendientesDe(conRegistro),
+          pendingSplit: splitDe(pendientesDe(conRegistro)),
+          hint: 'Ya las diste y todavía no suman al total: falta el transcript, o están retenidas por el límite del plan.',
         },
       ],
     },
@@ -208,6 +243,7 @@ export function buildClassFunnel(opts: {
       key: 'fuera_calendario',
       label: 'Fuera del calendario',
       count: unidadesFin(fuera),
+      rows: fuera,
       hint: 'Recuperaciones, clases añadidas a mano y horarios cambiados: existen y se cobran, pero no salen de una celda.',
       // Se desglosa igual que "con ingreso" para que `Pagables` del embudo sumado
       // dé EXACTAMENTE el `totalPagable` de finanzas. Sin este desglose, un
@@ -217,10 +253,13 @@ export function buildClassFunnel(opts: {
         {
           key: 'fuera_pagables', label: 'Pagables',
           count: unidadesFin(pagablesDe(fuera)), amount: importe(pagablesDe(fuera)),
+          rows: pagablesDe(fuera),
         },
         {
-          key: 'fuera_pendientes', label: 'Pendientes de transcript',
+          key: 'fuera_pendientes', label: 'Pendientes de cobro',
           count: unidadesFin(pendientesDe(fuera)), amount: importe(pendientesDe(fuera)),
+          rows: pendientesDe(fuera),
+          pendingSplit: splitDe(pendientesDe(fuera)),
         },
       ],
     },

@@ -7,7 +7,7 @@ import { LastUpdated } from '@/components/LastUpdated';
 import { getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
-import { calculateTeacherFinance, TeacherFinanceResult, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge, rowHoursLabel, financeStatusBadge, pendingTranscriptSummary, transcriptStateBadge, absenceBreakdownLabel, isStudentAbsence, mixedSessionBadge, recoveryCreditLabel, SUBSCRIPTION_STATUS_OPTIONS } from '@/lib/finance';
+import { calculateTeacherFinance, estimateClassAmount, TeacherFinanceResult, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge, rowHoursLabel, financeStatusBadge, pendingTranscriptSummary, transcriptStateBadge, absenceBreakdownLabel, isStudentAbsence, mixedSessionBadge, recoveryCreditLabel, SUBSCRIPTION_STATUS_OPTIONS } from '@/lib/finance';
 import { classifyPlan } from '@/lib/productUtils';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { dbRevertPenalty, getTeacherAssignments } from '@/lib/db';
@@ -71,7 +71,7 @@ const PILL_WARN = { background: 'var(--warn-soft)', color: 'var(--warn)' };
 function TeacherFunnel({ teacher, monthYear, finance }: {
   teacher: Teacher; monthYear: string; finance: TeacherFinanceResult;
 }) {
-  const { classJoinLogs, classRecords, classAnalyses } = useTeachers();
+  const { classJoinLogs, classRecords, classAnalyses, students, financeRates } = useTeachers();
   const [asgs, setAsgs] = useState<Assignment[]>([]);
   const [requests, setRequests] = useState<ClassReviewRequest[]>([]);
   const [dropouts, setDropouts] = useState<StudentDropout[]>([]);
@@ -94,8 +94,46 @@ function TeacherFunnel({ teacher, monthYear, finance }: {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [monthYear, teacher, asgs, classJoinLogs, classRecords, classAnalyses, requests, dropouts, finance]);
 
+  /**
+   * Cuánto vale lo que el profesor todavía puede reclamar. El admin lo necesita
+   * para saber si vale la pena avisarle antes del cierre, y sale de la misma
+   * estimación que ve él: mismo alumno, misma tarifa, misma duración.
+   */
+  const claimAmount = useMemo(() => funnel.missing
+    .filter(c => c.signal !== null)
+    .reduce((s, c) => s + estimateClassAmount({
+      assignment: asgs.find(a => a.studentName.trim().toLowerCase() === c.studentName.trim().toLowerCase()),
+      student: students.find(x => x.name.trim().toLowerCase() === c.studentName.trim().toLowerCase()),
+      rates: financeRates, date: c.date, durationHours: c.durationHours,
+    }), 0), [funnel, asgs, students, financeRates]);
+
   if (asgs.length === 0) return null;
-  return <ClassFunnelCard funnel={funnel} />;
+  // Sin `showActions`: reclamar y subir transcripts es cosa del profesor, y un
+  // botón que el admin no puede pulsar en su nombre solo sirve para confundir.
+  return <ClassFunnelCard funnel={funnel} claimAmount={claimAmount} />;
+}
+
+/**
+ * La foto del mes de un profesor en una barra, para la fila plegada.
+ *
+ * Se arma SOLO con `finance`, que ya está calculado para los 22 profesores: el
+ * embudo completo necesita assignments, solicitudes y bajas por profesor, y
+ * cargarlos al abrir la pantalla serían 66 consultas para pintar 22 barras.
+ * Por eso son las tres categorías que el admin ya tiene en las columnas de
+ * abajo, no las tres ramas del embudo — y el azul del embudo ("fuera del
+ * calendario") no aparece acá, para que un mismo color no signifique dos cosas.
+ */
+function FinanceBar({ r }: { r: TeacherFinanceResult }) {
+  const retenidas = r.totalExcedeLimite + r.totalExcedeLimiteTipo;
+  const total = r.totalPagable + r.totalARevisar + retenidas;
+  if (total === 0) return null;
+  return (
+    <div className="afd-bar" title={`${r.totalPagable} pagables · ${r.totalARevisar} pendientes de transcript · ${retenidas} retenidas por límite`}>
+      {r.totalPagable > 0 && <div className="fnl-seg is-con"   style={{ flexGrow: r.totalPagable }} />}
+      {r.totalARevisar > 0 && <div className="fnl-seg is-sin"  style={{ flexGrow: r.totalARevisar }} />}
+      {retenidas > 0       && <div className="fnl-seg is-hold" style={{ flexGrow: retenidas }} />}
+    </div>
+  );
 }
 
 function TeacherTotalCard({ result, monthLabel }: { result: TeacherFinanceResult; monthLabel: string }) {
@@ -600,6 +638,11 @@ function FinanceTab() {
                   </span>
                 </div>
               </div>
+
+              {/* Cómo se reparte el mes, de un vistazo y sin abrir el detalle:
+                  con 22 profesores en la lista, comparar cuatro cifras por fila
+                  es justo lo que nadie hace. */}
+              <FinanceBar r={r} />
 
               <div className="afd-stats">
                 <div>

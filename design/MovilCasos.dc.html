@@ -1,0 +1,422 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+  <title>Los tres casos en móvil</title>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Radio+Canada:wght@400;500;600&display=swap">
+  <style>
+:root{
+  --bg-base:#F7F7F5; --bg-surface:#FFFFFF; --bg-surface-2:#F0F0ED; --border:#E0E0DA;
+  --text-primary:#1A1A1A; --text-secondary:#4A4A4A; --text-muted:#6E6E66;
+  --accent:#167A2D; --accent-soft:rgba(22,122,45,0.10);
+  --brand-green:#1E9E3A; --brand-yellow:#FFC400;
+  --ok-soft:#EAF5EC; --ok-border:rgba(22,122,45,0.30);
+  --warn:#B45309; --warn-soft:#FFF6E0; --warn-border:rgba(255,196,0,0.45);
+  --danger:#C81E1E; --danger-soft:#FDECEC; --danger-border:rgba(200,30,30,0.30);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg-base);color:var(--text-primary);
+  font-family:'Radio Canada',-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+  font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased}
+.page{display:flex;flex-direction:column;gap:12px;padding:20px 16px 40px}
+.pagetitle{font-size:22px;font-weight:600;letter-spacing:-0.02em;margin:0 0 2px}
+.pagesub{font-size:12.5px;color:var(--text-muted);margin:0 0 6px}
+
+/* ── cabecera ── */
+.fin-head{background:var(--bg-surface);border:1px solid var(--border);border-radius:14px;overflow:hidden}
+.fin-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 18px;border-bottom:1px solid var(--border)}
+.fin-nav{display:flex;align-items:center;gap:2px}
+.fin-nav-btn{width:34px;height:34px;border:1px solid var(--border);background:var(--bg-surface);border-radius:6px;color:var(--text-secondary);font-size:16px;font-family:inherit;line-height:1}
+.fin-month{min-width:132px;text-align:center;font-size:14px;font-weight:600}
+.fin-ghost-btn{padding:7px 13px;border:1px solid var(--border);background:var(--bg-surface);border-radius:6px;color:var(--text-secondary);font-size:12px;font-weight:500;font-family:inherit}
+.fin-primary-btn{padding:9px 16px;border:none;background:var(--accent);color:#fff;border-radius:6px;font-size:13px;font-weight:600;font-family:inherit}
+.fin-spacer{flex-grow:1}
+.fin-main{display:flex;align-items:flex-end;gap:28px;padding:18px 20px 20px;flex-wrap:wrap}
+.fin-eyebrow{font-size:12px;color:var(--text-muted);letter-spacing:0.03em;text-transform:uppercase;font-weight:500;margin-bottom:4px;display:inline-flex;align-items:center;gap:5px}
+.fin-help{width:14px;height:14px;border-radius:999px;border:1px solid var(--border);color:var(--text-muted);font-size:9px;display:inline-flex;align-items:center;justify-content:center;text-transform:none}
+.fin-amount{font-size:40px;font-weight:600;line-height:1;letter-spacing:-0.02em;color:var(--brand-green)}
+.fin-amount.is-zero{color:var(--text-muted)}
+.fin-amount.is-neg{color:var(--danger)}
+.fin-state{display:flex;flex-direction:column;gap:6px;padding-bottom:4px}
+.fin-pill{display:inline-flex;align-items:center;gap:7px;padding:5px 12px;border-radius:999px;background:var(--warn-soft);border:1px solid var(--warn-border);color:var(--warn);font-size:12px;font-weight:600;align-self:flex-start}
+.fin-pill-dot{width:7px;height:7px;border-radius:999px;background:currentColor}
+.fin-settle{font-size:12px;color:var(--text-muted)}
+.fin-chips{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;font-size:13px;color:var(--text-secondary);padding-bottom:6px}
+.fin-chip-sep{color:var(--text-muted)}
+.fin-chip.is-muted{color:var(--text-muted)}
+.fin-chip.is-bad{color:var(--danger);font-weight:500}
+.fin-chip-btn{background:none;border:none;padding:0;font-family:inherit;font-size:12px;font-weight:600;color:var(--danger);text-decoration:underline}
+.fin-pen{border-top:1px solid var(--border);padding:12px 20px;display:flex;flex-direction:column;gap:5px;background:var(--bg-base)}
+.fin-pen-row{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--text-secondary)}
+
+/* ── banda de reclamables ── */
+.fin-claim{display:block;background:var(--warn-soft);border:1px solid var(--warn-border);border-radius:10px;padding:14px 18px;text-decoration:none}
+.fin-claim-in{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.fin-claim-body{flex-grow:1;min-width:220px}
+.fin-claim-title{font-size:15px;font-weight:600;color:var(--text-primary)}
+.fin-claim-sub{font-size:12px;color:var(--text-secondary);margin-top:3px;line-height:1.5}
+.fin-claim-eur{color:var(--warn);font-weight:600}
+.fin-claim-btn{flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;min-height:40px;padding:0 16px;background:var(--accent);color:#fff;border-radius:9px;font-size:13px;font-weight:600}
+
+.fin-notice{display:flex;align-items:flex-start;gap:11px;padding:11px 14px;background:var(--warn-soft);border:1px solid var(--warn-border);border-radius:10px}
+.fin-notice-i{flex-shrink:0;width:18px;height:18px;border-radius:999px;background:var(--warn);color:#fff;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center;margin-top:1px}
+.fin-notice-body{flex-grow:1;font-size:12px;line-height:1.55;color:var(--text-secondary)}
+.fin-notice-x{flex-shrink:0;background:none;border:none;color:var(--text-muted);font-size:16px;line-height:1;padding:0 2px;font-family:inherit}
+
+/* ── embudo ── */
+.fnl{background:var(--bg-surface);border:1px solid var(--border);border-radius:14px;overflow:hidden}
+.fnl-head{padding:16px 20px 12px}
+.fnl-head-row{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.fnl-eyebrow{font-size:12px;font-weight:600;color:var(--text-secondary);letter-spacing:0.03em;text-transform:uppercase}
+.fnl-total{font-size:28px;font-weight:600;line-height:1;letter-spacing:-0.02em}
+.fnl-bar{display:flex;gap:3px;height:8px;margin-top:12px}
+.fnl-seg{border-radius:3px;min-width:2px}
+.fnl-seg.is-con{background:var(--brand-green)}
+.fnl-seg.is-sin{background:var(--brand-yellow)}
+.fnl-seg.is-fuera{background:#2563eb}
+.fnl-seg.is-hold{background:var(--text-muted)}
+.fnl-check{display:flex;align-items:center;gap:7px;margin-top:8px;font-size:11px;color:var(--text-muted)}
+.fnl-check-ok{color:var(--accent);font-weight:600}
+.fnl-branch{width:100%;text-align:left;font-family:inherit;background:none;border:none;border-top:1px solid var(--border);border-left:3px solid var(--border);padding:12px 20px 12px 17px;display:flex;align-items:baseline;gap:12px}
+.fnl-branch.is-con{border-left-color:var(--brand-green)}
+.fnl-branch.is-sin{border-left-color:var(--brand-yellow)}
+.fnl-branch.is-fuera{border-left-color:#2563eb}
+.fnl-branch.is-zero{border-left-color:var(--border);opacity:0.55}
+.fnl-branch-body{flex:1;min-width:0}
+.fnl-branch-name{font-size:14px;font-weight:600}
+.fnl-hint{font-size:11px;color:var(--text-muted);margin-top:2px;line-height:1.45;display:block}
+.fnl-branch-n{font-size:18px;font-weight:600;min-width:40px;text-align:right}
+.fnl-child{width:100%;text-align:left;font-family:inherit;background:none;border:none;border-top:1px solid var(--bg-surface-2);padding:9px 20px 9px 40px;display:flex;align-items:center;gap:12px}
+.fnl-child.is-zero{opacity:0.55}
+.fnl-child-name{flex:1;min-width:0;font-size:13px;color:var(--text-secondary)}
+.fnl-child-eur{font-size:13px;font-weight:600;color:var(--accent);white-space:nowrap}
+.fnl-child-eur.is-warn{color:var(--warn)}
+.fnl-child-eur.is-zero{color:var(--text-muted);font-weight:400}
+.fnl-child-n{font-size:15px;font-weight:600;min-width:40px;text-align:right}
+.fnl-act{border-top:1px solid var(--bg-surface-2);padding:12px 20px 12px 40px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.fnl-act.is-claim{background:var(--warn-soft)}
+.fnl-act-body{flex:1;min-width:180px}
+.fnl-act-top{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap}
+.fnl-act-name{font-size:14px;font-weight:600;color:var(--text-primary)}
+.fnl-act-eur{font-size:15px;font-weight:600;color:var(--warn)}
+.fnl-act-sub{font-size:12px;color:var(--text-secondary);margin-top:3px;line-height:1.45;display:block}
+.fnl-act-n{font-size:22px;font-weight:600;color:var(--warn);min-width:40px;text-align:right}
+.fnl-act-btn{flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;min-height:40px;padding:0 16px;border-radius:6px;background:var(--accent);color:#fff;font-size:13px;font-weight:600;text-decoration:none;border:none;font-family:inherit}
+.fnl-act-btn.is-ghost{background:var(--bg-surface);border:1px solid var(--border);color:var(--text-secondary);min-height:36px;font-size:12px}
+.fnl-nothing{border-top:1px solid var(--bg-surface-2);background:var(--bg-base);padding:12px 20px 12px 40px;font-size:11px;color:var(--text-muted);line-height:1.55}
+
+/* ── lista ── */
+.fin-list-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:8px}
+.fin-list-title{flex-grow:1;font-size:14px;font-weight:600}
+.fin-filters{display:flex;gap:4px;flex-wrap:wrap}
+.fin-filter{padding:5px 11px;border:1px solid var(--border);background:var(--bg-surface);color:var(--text-secondary);border-radius:999px;font-size:12px;font-family:inherit}
+.fin-filter.is-on{border-color:var(--accent);background:var(--accent-soft);color:var(--accent);font-weight:600}
+.card{background:var(--bg-surface);border:1px solid var(--border);border-radius:12px}
+.stu{display:grid;grid-template-columns:40px minmax(0,1fr) auto;gap:14px;align-items:start;padding:16px 18px}
+.avatar{width:40px;height:40px;border-radius:50%;display:grid;place-items:center;font-size:13px;font-weight:600;background:#eef4ef;color:#2f6b3f}
+.stu-name{font-size:15.5px;font-weight:600;letter-spacing:-0.01em}
+.stu-meta{font-size:12.5px;color:var(--text-muted);margin-top:8px}
+.stu-cols{grid-column:2 / -1;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-top:12px}
+.stu-col-label{font-size:11.5px;color:var(--text-muted);margin-bottom:2px}
+.stu-col-value{font-size:13.5px;color:var(--text-secondary)}
+.stu-col-value.is-amount{font-size:15px;font-weight:600;color:var(--accent)}
+.stu-link{grid-column:2 / -1;justify-self:start;margin-top:12px;color:var(--accent);font-size:13px;font-weight:600}
+.pill-warn{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;font-size:12px;font-weight:600;padding:4px 11px;border-radius:999px;background:#fdf3e7;color:#9a6516}
+.cls{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;padding:10px 18px;border-top:1px solid var(--bg-surface-2);font-size:12.5px}
+.cls.is-review{background:#FFFDF5}
+.cls-when{display:flex;align-items:center;gap:9px;color:var(--text-secondary);flex-wrap:wrap}
+.cls-time{color:var(--text-muted)}
+.tag-ok{display:inline-flex;align-items:center;gap:6px;color:var(--accent);font-weight:500}
+.tag-warn{display:inline-flex;align-items:center;gap:6px;color:var(--warn);font-weight:500}
+.dot{width:6px;height:6px;border-radius:999px}
+.cls-eur{font-weight:600;text-align:right}
+.nota{font-size:11.5px;color:var(--text-muted);line-height:1.5;padding:2px 4px 0}
+.caso-h{font-size:13px;font-weight:600;color:var(--text-primary);margin:0 0 2px}
+.caso-p{font-size:11.5px;color:var(--text-muted);line-height:1.5;margin:0 0 10px}
+</style>
+</helmet>
+<div style="display:flex;gap:18px;padding:16px;align-items:flex-start">
+<div style="width:390px;flex-shrink:0">
+  <p class="caso-h" style="padding:0 4px">Silvia</p>
+  <div class="page" style="padding:0;gap:12px">
+<div class="fin-head">
+  <div class="fin-bar">
+    <div class="fin-nav">
+      <button class="fin-nav-btn">‹</button><span class="fin-month">agosto 2026</span><button class="fin-nav-btn">›</button>
+    </div>
+    <button class="fin-ghost-btn">Hoy</button>
+    
+    <button class="fin-primary-btn" style="width:100%;min-height:44px">Añadir clase</button>
+  </div>
+  <div class="fin-main" style="padding:16px;gap:16px">
+    <div>
+      <div class="fin-eyebrow">Total a cobrar <span class="fin-help">?</span></div>
+      <div class="fin-amount" style="font-size:34px">€374,50</div>
+    </div>
+    <div class="fin-state">
+      <span class="fin-pill"><span class="fin-pill-dot"></span>Pendiente de pago</span>
+      <span class="fin-settle">Se liquida el 31 de agosto</span>
+    </div>
+    
+    <div class="fin-chips">
+      <span class="fin-chip">Clases €374,50</span><span class="fin-chip-sep">·</span>
+      <span class="fin-chip is-muted">Bonos €0,00</span><span class="fin-chip-sep">·</span>
+      <span class="fin-chip is-muted">Penalizaciones −€0,00</span>
+      
+    </div>
+  </div>
+  
+</div>
+
+<a class="fin-claim" href="#">
+  <div class="fin-claim-in">
+    <div class="fin-claim-body">
+      <div class="fin-claim-title">Tenés 5 clases reclamables</div>
+      <div class="fin-claim-sub">Ya tienen el transcript subido: son <b class="fin-claim-eur">≈ €22,50</b> que podés cobrar si las reclamás antes del cierre del mes.</div>
+    </div>
+    <span class="fin-claim-btn" style="width:100%;min-height:44px">Reclamar en Revisiones →</span>
+  </div>
+</a>
+
+
+
+<div class="fnl">
+  <div class="fnl-head" style="padding:12px 16px">
+    <div class="fnl-head-row"><span class="fnl-eyebrow">Clases de agosto</span><span class="fnl-total">93</span></div>
+    <div class="fnl-bar"><div class="fnl-seg is-con" style="flex-grow:67"></div><div class="fnl-seg is-sin" style="flex-grow:9"></div><div class="fnl-seg is-fuera" style="flex-grow:17"></div></div>
+    <div class="fnl-check"><span class="fnl-check-ok">✓</span><span>67 + 9 + 17 = 93 · cada clase está en un solo lugar</span></div>
+  </div>
+  <div class="fnl-branch is-con">
+  <span class="fnl-branch-body"><span class="fnl-branch-name">Con registro de clase</span><span class="fnl-hint">Pulsaste «Ingresar a clase», o quedó constancia (falta sin aviso, cancelación).</span></span>
+  <span class="fnl-branch-n">67</span>
+</div><div class="fnl-child" style="padding-left:30px">
+  <span class="fnl-child-name">Pagables</span>
+  <span class="fnl-child-eur">€298,00</span>
+  <span class="fnl-child-n">66</span>
+</div><div class="fnl-act" style="padding-left:30px">
+  <span class="fnl-act-body">
+    <span class="fnl-act-top"><span class="fnl-act-name">Pendientes de cobro</span><span class="fnl-act-eur">€4,50</span></span>
+    <span class="fnl-act-sub">1 esperan tu transcript</span>
+  </span>
+  <span class="fnl-act-n">1</span>
+  <button class="fnl-act-btn is-ghost">Ver y subir</button>
+</div>
+<div class="fnl-branch is-sin">
+  <span class="fnl-branch-body"><span class="fnl-branch-name">Sin ingreso registrado</span><span class="fnl-hint">El calendario dice que tocaban y no quedó registro de acceso.</span></span>
+  <span class="fnl-branch-n">9</span>
+</div><div class="fnl-act is-claim" style="padding-left:30px">
+  <span class="fnl-act-body">
+    <span class="fnl-act-top"><span class="fnl-act-name">Reclamables</span><span class="fnl-act-eur">≈ €22,50</span></span>
+    <span class="fnl-act-sub">Tienen el transcript subido: es dinero que podés cobrar por clases que ya diste.</span>
+  </span>
+  <span class="fnl-act-n">5</span>
+  <a class="fnl-act-btn" href="#">Reclamar en Revisiones →</a>
+</div><div class="fnl-child" style="padding-left:30px">
+  <span class="fnl-child-name">Sin transcript ni registro</span>
+  
+  <span class="fnl-child-n">4</span>
+</div>
+<div class="fnl-branch is-fuera">
+  <span class="fnl-branch-body"><span class="fnl-branch-name">Fuera del calendario</span><span class="fnl-hint">Recuperaciones, clases añadidas a mano y horarios cambiados: existen y se cobran, pero no salen de una celda.</span></span>
+  <span class="fnl-branch-n">17</span>
+</div><div class="fnl-child" style="padding-left:30px">
+  <span class="fnl-child-name">Pagables</span>
+  <span class="fnl-child-eur">€76,50</span>
+  <span class="fnl-child-n">17</span>
+</div><div class="fnl-child is-zero" style="padding-left:30px">
+  <span class="fnl-child-name">Pendientes de cobro</span>
+  <span class="fnl-child-eur is-zero">€0,00</span>
+  <span class="fnl-child-n">0</span>
+</div>
+</div>
+
+</div>
+</div><div style="width:390px;flex-shrink:0">
+  <p class="caso-h" style="padding:0 4px">Sol.G</p>
+  <div class="page" style="padding:0;gap:12px">
+<div class="fin-head">
+  <div class="fin-bar">
+    <div class="fin-nav">
+      <button class="fin-nav-btn">‹</button><span class="fin-month">agosto 2026</span><button class="fin-nav-btn">›</button>
+    </div>
+    <button class="fin-ghost-btn">Hoy</button>
+    
+    <button class="fin-primary-btn" style="width:100%;min-height:44px">Añadir clase</button>
+  </div>
+  <div class="fin-main" style="padding:16px;gap:16px">
+    <div>
+      <div class="fin-eyebrow">Total a cobrar <span class="fin-help">?</span></div>
+      <div class="fin-amount is-neg" style="font-size:34px">−€1,00</div>
+    </div>
+    <div class="fin-state">
+      <span class="fin-pill"><span class="fin-pill-dot"></span>Pendiente de pago</span>
+      <span class="fin-settle">Se liquida el 31 de agosto</span>
+    </div>
+    
+    <div class="fin-chips">
+      <span class="fin-chip">Clases €9,00</span><span class="fin-chip-sep">·</span>
+      <span class="fin-chip is-muted">Bonos €0,00</span><span class="fin-chip-sep">·</span>
+      <span class="fin-chip is-bad">Penalizaciones −€10,00</span>
+      <button class="fin-chip-btn">ver detalle</button>
+    </div>
+  </div>
+  <div class="fin-pen"><div class="fin-pen-row"><span>Falta sin aviso — Camila Ruiz, 12 ago</span><span>−€5,00</span></div><div class="fin-pen-row"><span>Falta sin aviso — Camila Ruiz, 19 ago</span><span>−€5,00</span></div></div>
+</div>
+
+
+
+
+
+<div class="fnl">
+  <div class="fnl-head" style="padding:12px 16px">
+    <div class="fnl-head-row"><span class="fnl-eyebrow">Clases de agosto</span><span class="fnl-total">82</span></div>
+    <div class="fnl-bar"><div class="fnl-seg is-sin" style="flex-grow:80"></div><div class="fnl-seg is-fuera" style="flex-grow:2"></div></div>
+    <div class="fnl-check"><span class="fnl-check-ok">✓</span><span>0 + 80 + 2 = 82 · cada clase está en un solo lugar</span></div>
+  </div>
+  <div class="fnl-branch is-zero">
+  <span class="fnl-branch-body"><span class="fnl-branch-name">Con registro de clase</span><span class="fnl-hint">Pulsaste «Ingresar a clase», o quedó constancia (falta sin aviso, cancelación).</span></span>
+  <span class="fnl-branch-n">0</span>
+</div><div class="fnl-child is-zero" style="padding-left:30px">
+  <span class="fnl-child-name">Pagables</span>
+  <span class="fnl-child-eur is-zero">€0,00</span>
+  <span class="fnl-child-n">0</span>
+</div><div class="fnl-child is-zero" style="padding-left:30px">
+  <span class="fnl-child-name">Pendientes de cobro</span>
+  <span class="fnl-child-eur is-zero">€0,00</span>
+  <span class="fnl-child-n">0</span>
+</div>
+<div class="fnl-branch is-sin">
+  <span class="fnl-branch-body"><span class="fnl-branch-name">Sin ingreso registrado</span><span class="fnl-hint">El calendario dice que tocaban y no quedó registro de acceso.</span></span>
+  <span class="fnl-branch-n">80</span>
+</div><div class="fnl-child is-zero" style="padding-left:30px">
+  <span class="fnl-child-name">Reclamables</span>
+  
+  <span class="fnl-child-n">0</span>
+</div><div class="fnl-child" style="padding-left:30px">
+  <span class="fnl-child-name">Sin transcript ni registro</span>
+  
+  <span class="fnl-child-n">80</span>
+</div><div class="fnl-nothing" style="padding-left:30px">No hay nada que reclamar: de estas clases no quedó transcript ni registro. Usá «Ingresar a clase» para que cuenten.</div>
+<div class="fnl-branch is-fuera">
+  <span class="fnl-branch-body"><span class="fnl-branch-name">Fuera del calendario</span><span class="fnl-hint">Recuperaciones, clases añadidas a mano y horarios cambiados: existen y se cobran, pero no salen de una celda.</span></span>
+  <span class="fnl-branch-n">2</span>
+</div><div class="fnl-child" style="padding-left:30px">
+  <span class="fnl-child-name">Pagables</span>
+  <span class="fnl-child-eur">€9,00</span>
+  <span class="fnl-child-n">2</span>
+</div><div class="fnl-child is-zero" style="padding-left:30px">
+  <span class="fnl-child-name">Pendientes de cobro</span>
+  <span class="fnl-child-eur is-zero">€0,00</span>
+  <span class="fnl-child-n">0</span>
+</div>
+</div>
+
+</div>
+</div><div style="width:390px;flex-shrink:0">
+  <p class="caso-h" style="padding:0 4px">Dana</p>
+  <div class="page" style="padding:0;gap:12px">
+<div class="fin-head">
+  <div class="fin-bar">
+    <div class="fin-nav">
+      <button class="fin-nav-btn">‹</button><span class="fin-month">agosto 2026</span><button class="fin-nav-btn">›</button>
+    </div>
+    <button class="fin-ghost-btn">Hoy</button>
+    
+    <button class="fin-primary-btn" style="width:100%;min-height:44px">Añadir clase</button>
+  </div>
+  <div class="fin-main" style="padding:16px;gap:16px">
+    <div>
+      <div class="fin-eyebrow">Total a cobrar <span class="fin-help">?</span></div>
+      <div class="fin-amount" style="font-size:34px">€305,50</div>
+    </div>
+    <div class="fin-state">
+      <span class="fin-pill"><span class="fin-pill-dot"></span>Pendiente de pago</span>
+      <span class="fin-settle">Se liquida el 31 de agosto</span>
+    </div>
+    
+    <div class="fin-chips">
+      <span class="fin-chip">Clases €305,50</span><span class="fin-chip-sep">·</span>
+      <span class="fin-chip is-muted">Bonos €0,00</span><span class="fin-chip-sep">·</span>
+      <span class="fin-chip is-muted">Penalizaciones −€0,00</span>
+      
+    </div>
+  </div>
+  
+</div>
+
+<a class="fin-claim" href="#">
+  <div class="fin-claim-in">
+    <div class="fin-claim-body">
+      <div class="fin-claim-title">Tenés 9 clases reclamables</div>
+      <div class="fin-claim-sub">Ya tienen el transcript subido: son <b class="fin-claim-eur">≈ €37,00</b> que podés cobrar si las reclamás antes del cierre del mes.</div>
+    </div>
+    <span class="fin-claim-btn" style="width:100%;min-height:44px">Reclamar en Revisiones →</span>
+  </div>
+</a>
+
+
+
+<div class="fnl">
+  <div class="fnl-head" style="padding:12px 16px">
+    <div class="fnl-head-row"><span class="fnl-eyebrow">Clases de agosto</span><span class="fnl-total">141</span></div>
+    <div class="fnl-bar"><div class="fnl-seg is-con" style="flex-grow:74"></div><div class="fnl-seg is-sin" style="flex-grow:36"></div><div class="fnl-seg is-fuera" style="flex-grow:31"></div></div>
+    <div class="fnl-check"><span class="fnl-check-ok">✓</span><span>74 + 36 + 31 = 141 · cada clase está en un solo lugar</span></div>
+  </div>
+  <div class="fnl-branch is-con">
+  <span class="fnl-branch-body"><span class="fnl-branch-name">Con registro de clase</span><span class="fnl-hint">Pulsaste «Ingresar a clase», o quedó constancia (falta sin aviso, cancelación).</span></span>
+  <span class="fnl-branch-n">74</span>
+</div><div class="fnl-child" style="padding-left:30px">
+  <span class="fnl-child-name">Pagables</span>
+  <span class="fnl-child-eur">€238,00</span>
+  <span class="fnl-child-n">56</span>
+</div><div class="fnl-act" style="padding-left:30px">
+  <span class="fnl-act-body">
+    <span class="fnl-act-top"><span class="fnl-act-name">Pendientes de cobro</span><span class="fnl-act-eur">€78,00</span></span>
+    <span class="fnl-act-sub">18 esperan tu transcript</span>
+  </span>
+  <span class="fnl-act-n">18</span>
+  <button class="fnl-act-btn is-ghost">Ver y subir</button>
+</div>
+<div class="fnl-branch is-sin">
+  <span class="fnl-branch-body"><span class="fnl-branch-name">Sin ingreso registrado</span><span class="fnl-hint">El calendario dice que tocaban y no quedó registro de acceso.</span></span>
+  <span class="fnl-branch-n">36</span>
+</div><div class="fnl-act is-claim" style="padding-left:30px">
+  <span class="fnl-act-body">
+    <span class="fnl-act-top"><span class="fnl-act-name">Reclamables</span><span class="fnl-act-eur">≈ €37,00</span></span>
+    <span class="fnl-act-sub">Tienen el transcript subido: es dinero que podés cobrar por clases que ya diste.</span>
+  </span>
+  <span class="fnl-act-n">9</span>
+  <a class="fnl-act-btn" href="#">Reclamar en Revisiones →</a>
+</div><div class="fnl-child" style="padding-left:30px">
+  <span class="fnl-child-name">Sin transcript ni registro</span>
+  
+  <span class="fnl-child-n">27</span>
+</div>
+<div class="fnl-branch is-fuera">
+  <span class="fnl-branch-body"><span class="fnl-branch-name">Fuera del calendario</span><span class="fnl-hint">Recuperaciones, clases añadidas a mano y horarios cambiados: existen y se cobran, pero no salen de una celda.</span></span>
+  <span class="fnl-branch-n">31</span>
+</div><div class="fnl-child" style="padding-left:30px">
+  <span class="fnl-child-name">Pagables</span>
+  <span class="fnl-child-eur">€67,50</span>
+  <span class="fnl-child-n">15</span>
+</div><div class="fnl-act" style="padding-left:30px">
+  <span class="fnl-act-body">
+    <span class="fnl-act-top"><span class="fnl-act-name">Pendientes de cobro</span><span class="fnl-act-eur">€71,50</span></span>
+    <span class="fnl-act-sub">14 esperan tu transcript · 2 retenidas por el límite del plan (lo resuelve el equipo)</span>
+  </span>
+  <span class="fnl-act-n">16</span>
+  <button class="fnl-act-btn is-ghost">Ver y subir</button>
+</div>
+</div>
+
+</div>
+</div>
+</div>
+</x-dc>
+</body>
+</html>
