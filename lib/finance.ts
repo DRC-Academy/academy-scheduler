@@ -265,6 +265,46 @@ export interface TeacherFinanceResult {
   totalAPagar: number;
   paymentStatus: 'pending' | 'paid';
   paidAt?: string;
+  /** Cupo mensual por alumno, tal como quedó tras aplicarlo. Ver `StudentQuota`. */
+  studentQuota: StudentQuota[];
+}
+
+/**
+ * Cuántas clases del mes tiene el alumno y cuántas lleva gastadas.
+ *
+ * Los dos números YA existían dentro de `calculateTeacherFinance`: son los que
+ * deciden qué fila pasa a 'excede_limite'. Se exponen —sin recalcular nada— para
+ * que una pantalla pueda decir «3 de 9» en lugar de derivar el límite desde
+ * `weeklyHours` por su cuenta, que es exactamente cómo dos vistas acaban
+ * discrepando sobre el mismo alumno.
+ *
+ * `limit: null` = sin cupo. Es el caso del ex-alumno: ya no tiene assignment de
+ * la que sacar las horas semanales, así que sus clases nunca exceden.
+ *
+ * `used` cuenta en UNIDADES y NO incluye las horas de recuperación (reponen una
+ * clase perdida, no gastan una de este mes) ni las que quedaron fuera por
+ * exceder. Puede superar a `limit` cuando el equipo aprobó clases a mano.
+ */
+export interface StudentQuota {
+  /** Nombre normalizado (minúsculas, sin espacios sobrantes). Para buscar. */
+  studentKey: string;
+  /** Nombre tal como aparece en las clases. Para mostrar. */
+  studentName: string;
+  limit: number | null;
+  used: number;
+}
+
+/**
+ * El cupo de un alumno dentro de un mes ya calculado. La normalización del
+ * nombre vive acá y no en cada pantalla: el emparejamiento tolerante es la clase
+ * de detalle que, repetido en tres sitios, acaba dando tres respuestas.
+ */
+export function studentQuotaOf(
+  result: Pick<TeacherFinanceResult, 'studentQuota'>,
+  studentName: string,
+): StudentQuota | null {
+  const k = nkey(studentName);
+  return result.studentQuota.find(q => q.studentKey === k) ?? null;
 }
 
 function isoDate(d: Date): string {
@@ -869,6 +909,18 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     }
   }
 
+  // El cupo, tal como quedó. NO es un cálculo nuevo: son los dos números que el
+  // bucle de arriba ya usó para decidir qué fila pasaba a 'excede_limite', y se
+  // exponen para que una pantalla pueda decir "3 de 9" sin volver a derivar el
+  // límite desde weeklyHours por su cuenta (que es cómo dos vistas acaban
+  // discrepando sobre el mismo alumno).
+  const quota: StudentQuota[] = [...new Set(rows.map(r => nkey(r.studentName)))].map(k => ({
+    studentKey: k,
+    studentName: rows.find(r => nkey(r.studentName) === k)!.studentName,
+    limit: limitByStudent.has(k) ? limitByStudent.get(k)! : null,   // ex-alumnos: sin límite
+    used: usedByStudent.get(k) ?? 0,
+  }));
+
   rows.sort((x, y) => x.date.localeCompare(y.date) || x.studentName.localeCompare(y.studentName));
 
   // Agregados (punto 6).
@@ -961,6 +1013,7 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     montoPagable, montoARevisar, montoRetenido,
     bonusFromScoring, penaltiesFromScoring, totalAPagar,
     paymentStatus, paidAt,
+    studentQuota: quota,
   };
 }
 

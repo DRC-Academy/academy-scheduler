@@ -3,6 +3,7 @@
 // para escritorio y móvil, igual que en la app: el mismo componente, distinto ancho.
 import fs from 'node:fs';
 import { CASOS, AYUDAS, ADMIN, DRIFT } from './data.mjs';
+import { ALUMNOS, fichaHTML, ANTES } from './ficha.mjs';
 
 const eur = n => '€' + n.toFixed(2).replace('.', ',');
 const CSS = fs.readFileSync('design/_css.txt', 'utf8')
@@ -341,3 +342,49 @@ fs.writeFileSync('design/AdminCalendarios.dc.html', shell('Admin · calendarios 
 </div>`));
 
 console.log('ok: Main, Movil, Casos, MovilCasos, Admin, AdminCalendarios');
+
+// ── Ficha del alumno (panel de admin) ────────────────────────────────────────
+const FICHA_CSS = fs.readFileSync('design/ficha-css.txt', 'utf8');
+const shellF = (title, body) => shell(title, body).replace('</style>', FICHA_CSS + '</style>');
+
+const CAPS = {
+  alvaro:  ['Activo y al día', 'Todo pagable, cupo con margen (11 de 25) y suscripción activa. La fila plegada dice «Al día» en gris: no hay nada que mirar, y por eso no grita.'],
+  ester:   ['Con problemas', 'Cupo lleno (5 de 5) y 3 clases retenidas — €15,00 sin pagar. Hoy esta ficha le dice «OK» en verde: la pill vieja solo mira los transcripts. Y su suscripción figura cancelada desde su última clase.'],
+  pascale: ['Ex-alumna', 'Sin asignación con la profesora, así que no tiene cupo: sus clases nunca exceden. Quedan 2 sin transcript, que es lo único accionable.'],
+};
+
+fs.writeFileSync('design/Ficha.dc.html', shellF('Ficha del alumno · escritorio', `<div class="page" style="max-width:1000px;margin:0 auto">
+  <div>
+    <h1 class="pagetitle" style="font-size:17px">Alumnos (3)</h1>
+    <p class="pagesub" style="max-width:760px">
+      Propuesta. Tres alumnos reales de agosto, desplegados. El orden responde las tres preguntas:
+      arriba quién es y si está al día, en medio lo que pide acción, abajo el detalle.
+    </p>
+  </div>
+  ${ALUMNOS.map(a => `<div>
+    <p class="caso-h">${CAPS[a.id][0]} — ${a.profe}</p>
+    <p class="caso-p">${CAPS[a.id][1]}</p>
+    ${fichaHTML(a, false)}
+  </div>`).join('')}
+</div>`));
+
+fs.writeFileSync('design/FichaMovil.dc.html', shellF('Ficha del alumno · móvil', `<div style="display:flex;gap:18px;padding:16px;align-items:flex-start">
+  ${ALUMNOS.map(a => `<div style="width:390px;flex-shrink:0">
+    <p class="caso-h" style="padding:0 4px">${CAPS[a.id][0]}</p>
+    <div class="page" style="padding:0;gap:10px">${fichaHTML(a, true)}</div>
+  </div>`).join('')}
+</div>`));
+
+fs.writeFileSync('design/FichaAntes.dc.html', shellF('Ficha del alumno · lo que hay hoy', `<div class="page" style="max-width:760px;margin:0 auto">
+  <div>
+    <h1 class="pagetitle" style="font-size:17px">Lo que hay hoy</h1>
+    <p class="pagesub" style="max-width:700px">
+      La misma alumna, Ester Domènech, con el diseño actual (4 de sus 12 clases).
+      La grilla de seis campos repite tres de la cabecera; cada clase pinta hasta seis pills;
+      y la pill verde dice «OK» con 3 clases retenidas por el cupo.
+    </p>
+  </div>
+  ${ANTES}
+</div>`));
+
+console.log('ok: Ficha, FichaMovil, FichaAntes');

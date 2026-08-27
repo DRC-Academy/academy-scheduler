@@ -1,15 +1,40 @@
 {
+  "pages": [
+    { "id": "page-1", "name": "Ficha de alumno" },
+    { "id": "page-2", "name": "Finanzas" }
+  ],
   "artboards": [
-    { "file": "Main.dc.html",             "x": 0,    "y": 0,    "w": 1240, "h": 2000, "title": "Profesor · escritorio (Agustin, agosto real)" },
-    { "file": "Movil.dc.html",            "x": 1400, "y": 0,    "w": 390,  "h": 1560, "title": "Profesor · móvil 390px (Agustin)" },
-    { "file": "Casos.dc.html",            "x": 0,    "y": 2160, "w": 1790, "h": 1360, "title": "Silvia · Sol.G · Dana — escritorio" },
-    { "file": "MovilCasos.dc.html",       "x": 0,    "y": 3680, "w": 1290, "h": 1440, "title": "Silvia · Sol.G · Dana — móvil 390px" },
-    { "file": "Admin.dc.html",            "x": 0,    "y": 5280, "w": 1000, "h": 1520, "title": "Admin · la fila plegada de cada profesor" },
-    { "file": "AdminCalendarios.dc.html", "x": 1080, "y": 5280, "w": 1000, "h": 1520, "title": "Admin · calendarios desincronizados" }
+    { "file": "Ficha.dc.html",            "page": "page-1", "x": 0,    "y": 0,    "w": 1060, "h": 2100, "title": "Propuesta · escritorio (tres alumnos reales)" },
+    { "file": "FichaAntes.dc.html",       "page": "page-1", "x": 1160, "y": 0,    "w": 820,  "h": 1180, "title": "Lo que hay hoy" },
+    { "file": "FichaMovil.dc.html",       "page": "page-1", "x": 0,    "y": 2240, "w": 1290, "h": 1500, "title": "Propuesta · móvil 390px" },
+
+    { "file": "Main.dc.html",             "page": "page-2", "x": 0,    "y": 0,    "w": 1240, "h": 2000, "title": "Profesor · escritorio (Agustin, agosto real)" },
+    { "file": "Movil.dc.html",            "page": "page-2", "x": 1400, "y": 0,    "w": 390,  "h": 1560, "title": "Profesor · móvil 390px (Agustin)" },
+    { "file": "Casos.dc.html",            "page": "page-2", "x": 0,    "y": 2160, "w": 1790, "h": 1360, "title": "Silvia · Sol.G · Dana — escritorio" },
+    { "file": "MovilCasos.dc.html",       "page": "page-2", "x": 0,    "y": 3680, "w": 1290, "h": 1440, "title": "Silvia · Sol.G · Dana — móvil 390px" },
+    { "file": "Admin.dc.html",            "page": "page-2", "x": 0,    "y": 5280, "w": 1000, "h": 1520, "title": "Admin · la fila plegada de cada profesor" },
+    { "file": "AdminCalendarios.dc.html", "page": "page-2", "x": 1080, "y": 5280, "w": 1000, "h": 1520, "title": "Admin · calendarios desincronizados" }
   ],
   "annotations": [
     {
+      "id": "nota-ficha",
+      "page": "page-1",
+      "x": 0,
+      "y": -230,
+      "w": 700,
+      "text": "Ficha del alumno en el panel de admin — PROPUESTA, sin aplicar.\n\nFuera: la grilla de 6 campos (3 repetían la cabecera), antigüedad y tarifa (salían de la primera clase del mes, no de hoy), el badge de ingreso con puntualidad, la suscripción repetida en cada clase, y todos los emojis.\n\nDentro: el cupo del mes, que ya se calculaba y no salía."
+    },
+    {
+      "id": "nota-ficha-ok",
+      "page": "page-1",
+      "x": 1160,
+      "y": -230,
+      "w": 700,
+      "text": "El fallo que encontré con datos reales: la pill verde «OK» solo mira los transcripts.\n\nEn agosto hay 5 alumnos con clases retenidas por el cupo, y a 4 de ellos la ficha les dice «OK». Ester Domènech es uno: 3 clases fuera del cupo, €15,00 sin pagar, y en verde."
+    },
+    {
       "id": "nota-orden",
+      "page": "page-2",
       "x": 0,
       "y": -190,
       "w": 600,
@@ -17,13 +42,15 @@
     },
     {
       "id": "nota-cuadra",
+      "page": "page-2",
       "x": 660,
       "y": -190,
       "w": 580,
-      "text": "«Fuera del calendario» se divide ahora por ORIGEN, no por estado de pago: qué son esas clases, con su estado escrito al lado.\n\nComprobado contra la base: 31 profesores, 0 fallos de consistencia, y el «Pagables» del embudo == el totalPagable de finanzas en todos."
+      "text": "«Fuera del calendario» se divide por ORIGEN, no por estado de pago: qué son esas clases, con su estado escrito al lado.\n\nComprobado contra la base: 31 profesores, 0 fallos de consistencia, y el «Pagables» del embudo == el totalPagable de finanzas en todos."
     },
     {
       "id": "nota-casos",
+      "page": "page-2",
       "x": 0,
       "y": 2050,
       "w": 820,
@@ -31,11 +58,12 @@
     },
     {
       "id": "nota-admin",
+      "page": "page-2",
       "x": 0,
       "y": 5160,
       "w": 820,
       "text": "Izquierda: la barra sale SOLO de `finance`, ya calculado para los 22. Derecha: las 79 clases dadas fuera de horario, agrupadas por alumno y separadas en los tres motivos. Se carga al pulsar «Revisar» — dos consultas, no 66."
     }
   ],
-  "launch": { "view": "canvas" }
+  "launch": { "view": "canvas", "page": "page-1" }
 }

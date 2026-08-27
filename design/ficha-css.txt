@@ -1,0 +1,97 @@
+
+/* ── Ficha del alumno (propuesta) ── */
+.fch { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 10px; }
+.fch.is-open { border-color: var(--accent-border, rgba(22,122,45,0.30)); }
+.fch-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 12px 16px; }
+.fch-name { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.fch-caret { color: var(--text-muted); font-size: 11px; }
+.fch-head-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.fch-count { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+.fch-total { font-size: 18px; font-weight: 600; color: var(--accent); white-space: nowrap; min-width: 66px; text-align: right; }
+
+/* El resumen de la fila plegada. Ya no dice "OK" cuando hay clases retenidas. */
+.fch-flag { font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
+.fch-flag.is-ok  { background: transparent; color: var(--text-muted); font-weight: 400; padding-left: 0; padding-right: 0; }
+.fch-flag.is-rev { background: var(--warn-soft); color: var(--warn); }
+.fch-flag.is-exc { background: #FFEDD5; color: #C2410C; }
+
+.fch-body { border-top: 1px solid var(--bg-surface-2); }
+
+/* Contexto: una línea, sin cajitas de etiqueta/valor. */
+.fch-ctx { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 11px 16px; font-size: 12.5px; color: var(--text-secondary); }
+.fch-sep { color: var(--text-muted); }
+.fch-spacer { flex-grow: 1; }
+.fch-ex { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--bg-surface-2); color: var(--text-muted); }
+.fch-sub { font-size: 12px; color: var(--text-secondary); }
+.fch-sub.is-bad { color: var(--danger); font-weight: 500; }
+.fch-sub-when { color: var(--text-muted); font-weight: 400; }
+
+/* El cupo: el número que antes había que deducir contando filas. */
+.fch-quota { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 0 16px 12px; }
+.fch-quota-label { font-size: 12px; color: var(--text-muted); }
+.fch-quota-bar { flex-grow: 1; min-width: 120px; max-width: 260px; height: 6px; border-radius: 3px; background: var(--bg-surface-2); overflow: hidden; }
+.fch-quota-fill { display: block; height: 100%; background: var(--brand-green); border-radius: 3px; }
+.fch-quota-fill.is-full { background: #EA580C; }
+.fch-quota-n { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.fch-quota-n.is-full { color: #C2410C; }
+.fch-quota-none { font-size: 12px; color: var(--text-muted); }
+
+/* Lo que pide acción, antes del detalle. Mismo sitio y mismo tono que la banda
+   de reclamables del profesor. */
+.fch-act { background: var(--warn-soft); border-top: 1px solid var(--warn-border); border-bottom: 1px solid var(--warn-border); padding: 4px 16px; }
+.fch-act-row { display: flex; align-items: flex-start; gap: 12px; padding: 9px 0; }
+.fch-act-row + .fch-act-row { border-top: 1px solid var(--warn-border); }
+.fch-act-n { font-size: 20px; font-weight: 600; color: var(--warn); min-width: 26px; text-align: right; line-height: 1.2; }
+.fch-act-body { flex-grow: 1; min-width: 0; }
+.fch-act-top { display: block; font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.fch-act-eur { color: var(--warn); margin-left: 7px; }
+.fch-act-sub { display: block; font-size: 12px; color: var(--text-secondary); margin-top: 2px; line-height: 1.5; }
+
+/* Una clase, una línea. */
+.fch-list { padding: 4px 0 6px; }
+.fch-cls {
+  display: grid; grid-template-columns: 106px 128px minmax(0, 1fr) 62px auto;
+  gap: 4px 12px; align-items: center; padding: 7px 16px; font-size: 12.5px;
+}
+.fch-cls.is-flag { background: #FFFDF5; }
+.fch-cls-when { color: var(--text-secondary); display: flex; gap: 8px; }
+.fch-cls-h { color: var(--text-muted); }
+.fch-cls-state { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; }
+.fch-dot { width: 6px; height: 6px; border-radius: 999px; flex-shrink: 0; }
+.fch-cls-type { color: var(--text-muted); min-width: 0; }
+.fch-cls-eur { text-align: right; font-weight: 600; color: var(--text-primary); white-space: nowrap; }
+.fch-cls-btn {
+  padding: 5px 11px; border-radius: 6px; border: 1px solid var(--accent-border, rgba(22,122,45,0.30));
+  background: var(--accent-soft); color: var(--accent);
+  font-family: inherit; font-size: 11.5px; font-weight: 600; white-space: nowrap;
+}
+.fch-cls-note { grid-column: 2 / -1; font-size: 11.5px; color: var(--text-muted); line-height: 1.5; }
+
+/* ── Lo que hay hoy, para comparar ── */
+.old-student { background: var(--bg-surface); border: 1px solid rgba(22,122,45,0.30); border-radius: 10px; overflow: hidden; }
+.old-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 12px 16px; }
+.old-name { font-size: 14px; font-weight: 600; }
+.old-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.old-count { font-size: 12px; color: var(--text-muted); }
+.old-amount { font-size: 18px; font-weight: 600; color: var(--accent); }
+.old-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; padding: 0 16px 12px; }
+.old-meta-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.old-meta-value { font-size: 13px; color: var(--text-secondary); margin-top: 2px; }
+.old-classes { border-top: 1px solid var(--border); background: var(--bg-surface-2); }
+.old-class { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px 12px; padding: 12px 16px; }
+.old-class + .old-class { border-top: 1px solid var(--border); }
+.old-class-date { font-size: 13px; font-weight: 600; }
+.old-class-amount { font-size: 13px; font-weight: 600; text-align: right; }
+.old-badges { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px 8px; }
+.old-pill { font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
+
+@media (max-width: 720px) {
+  .fch-cls { grid-template-columns: minmax(0, 1fr) auto; gap: 3px 10px; }
+  .fch-cls-when { grid-column: 1; }
+  .fch-cls-eur { grid-column: 2; grid-row: 1; }
+  .fch-cls-state { grid-column: 1; }
+  .fch-cls-type { grid-column: 2; text-align: right; }
+  .fch-cls-btn { grid-column: 1 / -1; justify-self: start; margin-top: 4px; min-height: 40px; }
+  .fch-cls-note { grid-column: 1 / -1; }
+  .fch-total { min-width: 0; }
+}

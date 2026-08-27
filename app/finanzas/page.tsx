@@ -7,8 +7,8 @@ import { LastUpdated } from '@/components/LastUpdated';
 import { getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
-import { calculateTeacherFinance, estimateClassAmount, TeacherFinanceResult, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge, rowHoursLabel, financeStatusBadge, pendingTranscriptSummary, transcriptStateBadge, absenceBreakdownLabel, isStudentAbsence, mixedSessionBadge, recoveryCreditLabel, SUBSCRIPTION_STATUS_OPTIONS } from '@/lib/finance';
-import { classifyPlan } from '@/lib/productUtils';
+import { calculateTeacherFinance, estimateClassAmount, TeacherFinanceResult, ClassFinanceRow, classTypeBadge, subscriptionBadge, rowHoursLabel, financeStatusBadge, pendingTranscriptSummary, transcriptStateBadge, absenceBreakdownLabel, isStudentAbsence, recoveryCreditLabel, studentQuotaOf, SUBSCRIPTION_STATUS_OPTIONS } from '@/lib/finance';
+import { isActiveWooStatus } from '@/lib/subscriptionAccess';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { dbRevertPenalty, getTeacherAssignments } from '@/lib/db';
 import { buildClassFunnel } from '@/lib/classFunnel';
@@ -57,6 +57,30 @@ function approvalTrace(approvals: FinanceManualApproval[], teacherId: string, st
   return `${motivo} — ${a.approvedBy || 'sin registrar'}${cuando ? ` el ${cuando}` : ''}`;
 }
 const PILL_WARN = { background: 'var(--warn-soft)', color: 'var(--warn)' };
+
+/**
+ * Color del texto de un estado, accesible sobre fondo blanco.
+ *
+ * `financeStatusBadge` decide CUÁL es el estado y da su color de marca, pensado
+ * para una pill con fondo tintado. Acá el estado va como texto sobre blanco, y el
+ * verde de marca (#1E9E3A, 3.5:1) no llega a AA a este tamaño. La clasificación
+ * sigue viniendo de finanzas; esto solo elige con qué tinta pintarla.
+ */
+function statusText(status: ClassFinanceRow['status']): string {
+  if (status === 'pagable') return 'var(--accent)';
+  if (status === 'a_revisar') return 'var(--warn)';
+  if (status === 'excede_limite' || status === 'excede_limite_tipo') return '#C2410C';
+  return 'var(--text-muted)';
+}
+
+/**
+ * Las etiquetas de lib/finance vienen con emoji (fuente compartida con otras
+ * pantallas). Acá se muestran sin él, igual que en la vista del profesor: se
+ * recorta el prefijo no alfanumérico, sin tocar la fuente.
+ */
+function plainPill(label: string): string {
+  return label.replace(/^[^\p{L}\p{N}€]+/u, '').trim();
+}
 
 /**
  * Saldo del mes del profesor. Va ARRIBA del detalle porque es el dato que se
@@ -195,11 +219,19 @@ function TeacherTotalCard({ result, monthLabel }: { result: TeacherFinanceResult
 }
 
 /**
- * Clases de un alumno. Una tarjeta por clase en vez de una fila de tabla: los
- * badges envuelven en lugar de estirar el ancho, así que no hay `min-width` que
- * obligue a desplazarse en horizontal para leer el estado o el botón de aprobar.
+ * Las clases de un alumno: UNA LÍNEA cada una.
+ *
+ * Antes era una tarjeta con hasta seis pills. En una clase normal y pagable, tres
+ * de ellas decían lo mismo con distintas palabras: «Pagable» ya significa que
+ * hubo ingreso Y transcript validado, así que repetir «✅ A tiempo» y «Transcript
+ * subido» al lado no añadía nada. Ahora el estado es la conclusión y solo se
+ * pinta lo que NO se deduce de él: el tipo cuando no es una clase normal, y el
+ * estado del transcript cuando no es el esperado.
+ *
+ * La suscripción salió de acá: era el estado de WooCommerce del momento de esa
+ * clase, repetido en cada fila del alumno. Vive una vez arriba, en la cabecera.
  */
-function ClassCards({ result, studentName, approvals, onApproveReview, onApproveExceed, onRevertAbsence }: {
+function ClassRows({ result, studentName, approvals, onApproveReview, onApproveExceed, onRevertAbsence }: {
   result: TeacherFinanceResult;
   studentName: string;
   approvals: FinanceManualApproval[];
@@ -207,91 +239,58 @@ function ClassCards({ result, studentName, approvals, onApproveReview, onApprove
   onApproveExceed: (date: string) => void;
   onRevertAbsence: (row: ClassFinanceRow) => void;
 }) {
-  const rows = result.rows.filter(r => r.studentName === studentName);
+  const rows = result.rows.filter(r => nkStudent(r.studentName) === nkStudent(studentName));
   if (rows.length === 0) return <div className="afd-empty">Sin clases registradas este mes.</div>;
 
   return (
-    <div className="afd-classes">
+    <div className="fch-list">
       {rows.map((r, i) => {
         const st = financeStatusBadge(r.status);
-        const ing = ingresoBadge(r);
         const ct = classTypeBadge(r.classType);
-        const ts = transcriptStateBadge(r.transcriptState);
         const isFalta = r.classType === 'falta_sin_aviso' || r.classType === 'cancelacion_hora';
-        const sub = subscriptionBadge(r.subscriptionStatus);
-        // Bloque de 2h "normal + recuperación": por qué paga doble y qué clase
-        // perdida salda. Mismas funciones que usa el panel del profesor.
-        const mixed = mixedSessionBadge(r);
-        const recNote = recoveryCreditLabel(r);
-        const subDiffer = r.subAtJoin && r.subAtRecord && r.subAtJoin !== r.subAtRecord;
         const editable = result.paymentStatus !== 'paid' && !r.manuallyApproved;
+        // Detalle del transcript SOLO cuando cambia lo que hay que hacer: subido y
+        // validado ya lo dice el estado; en revisión o rechazado, no.
+        const txNote = !isFalta && (r.transcriptState === 'review' || r.transcriptState === 'rejected')
+          ? transcriptStateBadge(r.transcriptState).label
+          : null;
+        const notas = [absenceBreakdownLabel(r), recoveryCreditLabel(r)].filter(Boolean);
         return (
-          <div className="afd-class" key={i}>
-            <div className="afd-class-date">{finDateShort(r.date)}</div>
-            {/* Importe = tarifa × unidades. Una sesión de 2h cobra 2× la tarifa. */}
-            <div className="afd-class-amount" title={r.billingUnits > 1 ? `${r.billingUnits} × €${r.rate.toFixed(2)}` : undefined}>
-              €{(r.rate * r.billingUnits).toFixed(2)}
-              {r.billingUnits > 1 && (
-                <span className="afd-pill" style={{ ...PILL_OK, marginLeft: 6 }}>{r.durationHours}h ×{r.billingUnits}</span>
+          <div className={`fch-cls${r.status !== 'pagable' ? ' is-flag' : ''}`} key={i}>
+            <span className="fch-cls-when">
+              {finDateShort(r.date)}
+              {r.hour && <span className="fch-cls-h">{r.hour}</span>}
+            </span>
+            <span className="fch-cls-state" style={{ color: statusText(r.status) }}>
+              <span className="fch-dot" style={{ background: st.dot }} />
+              {st.short}
+            </span>
+            <span className="fch-cls-type">
+              {[ct && plainPill(ct.label), txNote, r.billingUnits > 1 ? `${r.durationHours}h` : null]
+                .filter(Boolean).join(' · ')}
+            </span>
+            <span className="fch-cls-eur">€{(r.rate * r.billingUnits).toFixed(2)}</span>
+            <span>
+              {/* Revertir una falta marcada por error: la clase vuelve a pendiente
+                  y deja de contar para el pago, el tope del mes y el cupo. */}
+              {isStudentAbsence(r.classType) && r.recordId && result.paymentStatus !== 'paid' && (
+                <button className="fch-cls-btn" onClick={() => onRevertAbsence(r)}>Revertir falta</button>
               )}
-            </div>
-            <div className="afd-badges">
-              <span className="afd-pill" style={{ background: st.bg, color: st.color }}>{st.label}</span>
-              {ct && <span className="afd-pill" style={{ background: ct.bg, color: ct.color }}>{ct.label}</span>}
-              {mixed && <span className="afd-pill" style={{ background: mixed.bg, color: mixed.color }} title={recNote ?? undefined}>{mixed.label}</span>}
-              <span className="afd-pill" style={{ background: ing.bg, color: ing.color }}>{ing.label}</span>
-              {/* Transcript: NIVEL 2. Los cuatro estados salen de lib/finance, para
-                  que el admin lea exactamente lo mismo que ve el profesor. Una
-                  falta no lleva transcript, así que ahí no se pide ninguno. */}
-              {isFalta
-                ? <span className="afd-pill" style={{ background: 'var(--bg-surface-3)', color: 'var(--text-muted)' }}>Sin transcript (no aplica)</span>
-                : <span className="afd-pill" style={{ background: ts.bg, color: ts.color }}>{ts.label}</span>}
-              <span className="afd-pill" style={{ background: sub.bg, color: sub.color }}>{sub.label}</span>
-              {subDiffer && (
-                <span style={{ cursor: 'help' }} title={`Al ingresar: ${subscriptionBadge(r.subAtJoin).label.replace(/^[^ ]+ /, '')} · Al registrar: ${subscriptionBadge(r.subAtRecord).label.replace(/^[^ ]+ /, '')}`}>ℹ️</span>
+              {editable && r.status === 'a_revisar' && (
+                <button className="fch-cls-btn" onClick={() => onApproveReview(r.date)}>Pagar sin transcript</button>
               )}
-              {/* Trazabilidad: pagar sin transcript es una decisión manual, así que
-                  la fila dice quién la tomó y cuándo (finance_manual_approvals). */}
-              {r.manuallyApproved && (
-                <span className="afd-pill" style={PILL_OK} title={approvalTrace(approvals, result.teacherId, r.studentName, r.date)}>
-                  ✓ Aprobada{approvalBy(approvals, result.teacherId, r.studentName, r.date)}
-                </span>
+              {editable && (r.status === 'excede_limite' || r.status === 'excede_limite_tipo') && (
+                <button className="fch-cls-btn" onClick={() => onApproveExceed(r.date)}>Incluir igual</button>
               )}
-            </div>
-            {/* Falta sin aviso del alumno: qué se cobró y por qué. Misma frase
-                que ve el profesor en su desglose (fuente única, lib/finance). */}
-            {absenceBreakdownLabel(r) && (
-              <div style={{ fontSize: 12.5, color: '#b45309', lineHeight: 1.5, marginTop: 2 }}>
-                {absenceBreakdownLabel(r)}
-              </div>
+            </span>
+            {/* Pagar sin transcript es la única forma de saltarse el nivel 2, así
+                que la fila dice quién lo decidió y cuándo. */}
+            {r.manuallyApproved && (
+              <span className="fch-cls-note is-ok" title={approvalTrace(approvals, result.teacherId, r.studentName, r.date)}>
+                Aprobada por el equipo{approvalBy(approvals, result.teacherId, r.studentName, r.date)}
+              </span>
             )}
-            {/* Parte de RECUPERACIÓN: por qué la sesión paga las horas que paga y
-                cuántas clases del mes consume de verdad. Misma frase que ve el
-                profesor (fuente única, lib/finance.recoveryCreditLabel). */}
-            {recNote && (
-              <div style={{ fontSize: 12.5, color: '#8a6d00', lineHeight: 1.5, marginTop: 2 }}>
-                {recNote}
-              </div>
-            )}
-            {/* Revertir una falta marcada por error. La clase vuelve a pendiente y
-                deja de contar para el pago, el tope del mes y el cupo del alumno. */}
-            {isStudentAbsence(r.classType) && r.recordId && result.paymentStatus !== 'paid' && (
-              <div className="afd-action">
-                <button className="afd-btn" onClick={() => onRevertAbsence(r)}>↩ Revertir falta</button>
-              </div>
-            )}
-            {/* Pagar una clase que entró (tiene ingreso) pero sigue sin transcript.
-                No hay botón para las que nunca entraron: sin ingreso no hay fila. */}
-            {editable && r.status === 'a_revisar' && (
-              <div className="afd-action">
-                <button className="afd-btn" onClick={() => onApproveReview(r.date)}>✓ Pagar sin transcript</button>
-              </div>
-            )}
-            {editable && (r.status === 'excede_limite' || r.status === 'excede_limite_tipo') && (
-              <div className="afd-action">
-                <button className="afd-btn" onClick={() => onApproveExceed(r.date)}>✓ Incluir igual</button>
-              </div>
-            )}
+            {notas.map((n, k) => <span className="fch-cls-note" key={k}>{n}</span>)}
           </div>
         );
       })}
@@ -300,9 +299,15 @@ function ClassCards({ result, studentName, approvals, onApproveReview, onApprove
 }
 
 /**
- * Alumnos del profesor, plegados. La fila plegada deja ver lo que importa para
- * comparar (nombre, clases, subtotal, estado); al abrir aparecen la ficha y las
- * clases, sin tabla anidada y por tanto sin scroll lateral.
+ * Alumnos del profesor. La fila plegada compara; al abrir, la ficha responde tres
+ * preguntas en este orden: quién es y si está al día, qué pide acción, y el
+ * detalle clase a clase.
+ *
+ * Lo que se fue de la versión anterior: la grilla de seis campos etiqueta/valor
+ * —tres de los cuales repetían la cabecera que tenían justo encima— y otros dos
+ * (antigüedad y tarifa) que salían de `rows[0]`, o sea de la PRIMERA clase del
+ * mes: a un alumno que cruzaba los 30 días a mitad de mes le mostraban la
+ * antigüedad y la tarifa viejas sin decirlo.
  */
 function StudentDetailList({ result, assignments, approvals, onApproveReview, onApproveExceed, onRevertAbsence }: {
   result: TeacherFinanceResult;
@@ -327,84 +332,130 @@ function StudentDetailList({ result, assignments, approvals, onApproveReview, on
   return (
     <div>
       <div className="afd-section-title">Alumnos ({students.length})</div>
-      <div className="afd-students">
+      <div>
         {students.map(([name, rows]) => {
-          const asgn = assignments.find(a => a.teacherId === result.teacherId && a.studentName === name);
+          // Emparejamiento TOLERANTE, como en el resto del código. Con `===` un
+          // alumno escrito distinto en `assignments` mostraba «Inicio —» sin más.
+          const asgn = assignments.find(a =>
+            a.teacherId === result.teacherId && nkStudent(a.studentName) === nkStudent(name));
+          const units = (rs: ClassFinanceRow[]) => rs.reduce((s, r) => s + r.billingUnits, 0);
+          const euros = (rs: ClassFinanceRow[]) => rs.reduce((s, r) => s + r.rate * r.billingUnits, 0);
           const pagables = rows.filter(r => r.status === 'pagable');
-          // En unidades: una sesión de 2h son 2 clases pagables y 2× la tarifa.
-          const pagableUnits = pagables.reduce((s, r) => s + r.billingUnits, 0);
-          const subtotal = pagables.reduce((s, r) => s + r.rate * r.billingUnits, 0);
-          const antiquity = rows[0]?.antiquityDays ?? 0;
-          const rate = rows[0]?.rate ?? 0;
+          const revisar  = rows.filter(r => r.status === 'a_revisar');
+          const excede   = rows.filter(r => r.status === 'excede_limite');
+          const excTipo  = rows.filter(r => r.status === 'excede_limite_tipo');
           const isOpen = openStudent === name;
-          // Clases dadas que todavía no se cobran por no tener transcript.
-          const pendientes = rows.filter(r => r.status === 'a_revisar');
-          const hasReview = pendientes.length > 0;
-          const pendienteAmount = pendientes.reduce((s, r) => s + r.rate * r.billingUnits, 0);
+          // El cupo sale de finanzas, que ya lo calculó para decidir qué clase
+          // quedaba fuera. La pantalla no lo deriva de weeklyHours por su cuenta.
+          const quota = studentQuotaOf(result, name);
+          const lleno = quota?.limit != null && quota.used >= quota.limit;
+          // Estado de la suscripción en su ÚLTIMA clase. No es una comprobación de
+          // hoy —eso solo lo sabe WooCommerce— sino el último dato verificado que
+          // hay en local, y por eso se dice con su fecha.
+          const ultimaSub = [...rows].reverse().find(r => r.subscriptionStatus);
+          const subOk = isActiveWooStatus(ultimaSub?.subscriptionStatus);
+
+          // Lo que pide una decisión del admin, con su dinero. Cuenta las retenidas
+          // por el cupo, no solo los transcripts: la pill verde «OK» de antes solo
+          // miraba `a_revisar`, así que un alumno con clases fuera del cupo salía
+          // en verde. En agosto le pasaba a 4 de los 5 que tenían clases retenidas.
+          const problemas: Array<{ n: number; amount: number; txt: string; det: string }> = [];
+          if (revisar.length > 0) problemas.push({
+            n: units(revisar), amount: euros(revisar),
+            txt: 'clases sin transcript',
+            det: 'El profesor las dio y todavía no subió el texto. Pasan a pagables solas en cuanto lo suba.',
+          });
+          if (excede.length > 0) problemas.push({
+            n: units(excede), amount: euros(excede),
+            txt: 'clases fuera del cupo del mes',
+            det: `Superan las ${quota?.limit ?? '—'} que incluye su plan. Cada una se puede incluir igual desde la lista.`,
+          });
+          if (excTipo.length > 0) problemas.push({
+            n: units(excTipo), amount: euros(excTipo),
+            txt: 'faltas o cancelaciones de más',
+            det: 'Superan las 2 cobrables de ese tipo en el mes. Cada una se puede incluir igual desde la lista.',
+          });
+
           return (
-            <div key={name} className={`afd-student${isOpen ? ' is-open' : ''}`}>
-              <button className="afd-student-head" aria-expanded={isOpen}
+            <div key={name} className={`fch${isOpen ? ' is-open' : ''}`}>
+              <button className="fch-head" aria-expanded={isOpen}
                 onClick={() => setOpenStudent(isOpen ? null : name)}>
-                <span className="afd-student-name">
-                  <span aria-hidden>{isOpen ? '▾' : '▸'}</span>
+                <span className="fch-name">
+                  <span className="fch-caret" aria-hidden>{isOpen ? '▾' : '▸'}</span>
                   <span style={{ overflowWrap: 'anywhere' }}>{name}</span>
                 </span>
-                <span className="afd-student-right">
-                  <span className="afd-student-count">{pagableUnits} {pagableUnits === 1 ? 'clase' : 'clases'}</span>
-                  <span className="afd-pill" style={hasReview ? PILL_WARN : PILL_OK}
-                    title={hasReview ? `€${pendienteAmount.toFixed(2)} sin cobrar por falta de transcript` : undefined}>
-                    {hasReview ? 'Pendiente de transcript' : 'OK'}
-                  </span>
-                  <span className="afd-student-amount">€{subtotal.toFixed(2)}</span>
+                <span className="fch-head-right">
+                  {problemas.length === 0
+                    ? <span className="fch-flag is-ok">Al día</span>
+                    : <>
+                        {revisar.length > 0 && <span className="fch-flag is-rev">{units(revisar)} sin transcript</span>}
+                        {(excede.length > 0 || excTipo.length > 0) && (
+                          <span className="fch-flag is-exc">{units(excede) + units(excTipo)} fuera del cupo</span>
+                        )}
+                      </>}
+                  <span className="fch-count">{units(pagables)} {units(pagables) === 1 ? 'clase' : 'clases'}</span>
+                  <span className="fch-total">€{euros(pagables).toFixed(2)}</span>
                 </span>
               </button>
 
               {isOpen && (
-                <>
-                  <div className="afd-meta">
-                    <div>
-                      <div className="afd-meta-label">Plan</div>
-                      <div className="afd-meta-value">{rows[0]?.planLabel ?? '—'}</div>
-                    </div>
-                    <div>
-                      <div className="afd-meta-label">Inicio</div>
-                      <div className="afd-meta-value">{asgn?.startDate ? finDateShort(asgn.startDate) : '—'}</div>
-                    </div>
-                    <div>
-                      <div className="afd-meta-label">Antigüedad</div>
-                      <div className="afd-meta-value">{antiquity}d</div>
-                    </div>
-                    <div>
-                      <div className="afd-meta-label">Tarifa</div>
-                      <div className="afd-meta-value">€{rate.toFixed(2)}</div>
-                    </div>
-                    <div>
-                      <div className="afd-meta-label">Clases pagables</div>
-                      <div className="afd-meta-value">
-                        {pagableUnits}
-                        {pagableUnits !== pagables.length && ` (${pagables.length} sesiones)`}
-                      </div>
-                    </div>
-                    <div>
-                      <div className="afd-meta-label">Subtotal</div>
-                      <div className="afd-meta-value" style={{ color: 'var(--ok)', fontWeight: 'var(--fw-semibold)' }}>€{subtotal.toFixed(2)}</div>
-                    </div>
-                    {hasReview && (
-                      <div>
-                        <div className="afd-meta-label">Pendiente de transcript</div>
-                        <div className="afd-meta-value" style={{ color: '#9a6516', fontWeight: 'var(--fw-semibold)' }}>
-                          €{pendienteAmount.toFixed(2)} · {pendientes.length}
-                        </div>
-                      </div>
+                <div className="fch-body">
+                  {/* Contexto en UNA línea: lo justo para situar al alumno. */}
+                  <div className="fch-ctx">
+                    <span>{rows[0]?.planLabel ?? '—'}</span>
+                    <span className="fch-sep">·</span>
+                    <span>{asgn?.startDate ? `desde el ${finDateShort(asgn.startDate)}` : 'sin asignación activa'}</span>
+                    {!asgn && <span className="fch-ex" title="Ya no tiene plan con este profesor, pero sus clases del mes siguen contando para el pago">ex-alumno</span>}
+                    <span className="fch-spacer" />
+                    {ultimaSub && (
+                      <span className={`fch-sub${subOk ? '' : ' is-bad'}`}
+                        title="Estado de WooCommerce registrado en su última clase. No es una comprobación de hoy.">
+                        Suscripción: {plainPill(subscriptionBadge(ultimaSub.subscriptionStatus).label)}
+                        <span className="fch-sub-when"> · visto el {finDateShort(ultimaSub.date)}</span>
+                      </span>
                     )}
                   </div>
-                  <ClassCards
+
+                  {/* El cupo del mes: el número que antes había que deducir contando filas. */}
+                  <div className="fch-quota">
+                    <span className="fch-quota-label">Clases del mes</span>
+                    {quota?.limit == null ? (
+                      <span className="fch-quota-none">Sin cupo — ya no tiene plan con este profesor</span>
+                    ) : (
+                      <>
+                        <span className="fch-quota-bar">
+                          <span className={`fch-quota-fill${lleno ? ' is-full' : ''}`}
+                            style={{ width: `${Math.min(100, Math.round((quota.used / quota.limit) * 100))}%` }} />
+                        </span>
+                        <span className={`fch-quota-n${lleno ? ' is-full' : ''}`}>{quota.used} de {quota.limit}</span>
+                      </>
+                    )}
+                  </div>
+
+                  {/* Lo que pide acción, ANTES del detalle. */}
+                  {problemas.length > 0 && (
+                    <div className="fch-act">
+                      {problemas.map((p, k) => (
+                        <div className="fch-act-row" key={k}>
+                          <span className="fch-act-n">{p.n}</span>
+                          <span className="fch-act-body">
+                            <span className="fch-act-top">
+                              {p.txt}<b className="fch-act-eur">€{p.amount.toFixed(2)} sin pagar</b>
+                            </span>
+                            <span className="fch-act-sub">{p.det}</span>
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <ClassRows
                     result={result} studentName={name} approvals={approvals}
                     onApproveReview={date => onApproveReview(name, date)}
                     onApproveExceed={date => onApproveExceed(name, date)}
                     onRevertAbsence={onRevertAbsence}
                   />
-                </>
+                </div>
               )}
             </div>
           );
@@ -413,7 +464,6 @@ function StudentDetailList({ result, assignments, approvals, onApproveReview, on
     </div>
   );
 }
-
 function FinanceTab() {
   const { user } = useAuth();
   const {

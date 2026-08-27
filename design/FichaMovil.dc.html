@@ -1,0 +1,581 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+  <title>Ficha del alumno · móvil</title>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Radio+Canada:wght@400;500;600&display=swap">
+  <style>
+:root{
+  --bg-base:#F7F7F5; --bg-surface:#FFFFFF; --bg-surface-2:#F0F0ED; --border:#E0E0DA;
+  --text-primary:#1A1A1A; --text-secondary:#4A4A4A; --text-muted:#6E6E66;
+  --accent:#167A2D; --accent-soft:rgba(22,122,45,0.10);
+  --brand-green:#1E9E3A; --brand-yellow:#FFC400;
+  --ok-soft:#EAF5EC; --ok-border:rgba(22,122,45,0.30);
+  --warn:#B45309; --warn-soft:#FFF6E0; --warn-border:rgba(255,196,0,0.45);
+  --danger:#C81E1E; --danger-soft:#FDECEC; --danger-border:rgba(200,30,30,0.30);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg-base);color:var(--text-primary);
+  font-family:'Radio Canada',-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+  font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased}
+.page{display:flex;flex-direction:column;gap:12px;padding:20px 16px 40px}
+.pagetitle{font-size:22px;font-weight:600;letter-spacing:-0.02em;margin:0 0 2px}
+.pagesub{font-size:12.5px;color:var(--text-muted);margin:0 0 6px}
+
+/* ── cabecera ── */
+.fin-head{background:var(--bg-surface);border:1px solid var(--border);border-radius:14px;overflow:hidden}
+.fin-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 18px;border-bottom:1px solid var(--border)}
+.fin-nav{display:flex;align-items:center;gap:2px}
+.fin-nav-btn{width:34px;height:34px;border:1px solid var(--border);background:var(--bg-surface);border-radius:6px;color:var(--text-secondary);font-size:16px;font-family:inherit;line-height:1}
+.fin-month{min-width:132px;text-align:center;font-size:14px;font-weight:600}
+.fin-ghost-btn{padding:7px 13px;border:1px solid var(--border);background:var(--bg-surface);border-radius:6px;color:var(--text-secondary);font-size:12px;font-weight:500;font-family:inherit}
+.fin-primary-btn{padding:9px 16px;border:none;background:var(--accent);color:#fff;border-radius:6px;font-size:13px;font-weight:600;font-family:inherit}
+.fin-spacer{flex-grow:1}
+.fin-main{display:flex;align-items:flex-end;gap:28px;padding:18px 20px 20px;flex-wrap:wrap}
+.fin-eyebrow{font-size:12px;color:var(--text-muted);letter-spacing:0.03em;text-transform:uppercase;font-weight:500;margin-bottom:4px;display:inline-flex;align-items:center;gap:5px}
+.fin-help{width:14px;height:14px;border-radius:999px;border:1px solid var(--border);color:var(--text-muted);font-size:9px;display:inline-flex;align-items:center;justify-content:center;text-transform:none}
+.fin-amount{font-size:40px;font-weight:600;line-height:1;letter-spacing:-0.02em;color:var(--brand-green)}
+.fin-amount.is-zero{color:var(--text-muted)}
+.fin-amount.is-neg{color:var(--danger)}
+.fin-state{display:flex;flex-direction:column;gap:6px;padding-bottom:4px}
+.fin-pill{display:inline-flex;align-items:center;gap:7px;padding:5px 12px;border-radius:999px;background:var(--warn-soft);border:1px solid var(--warn-border);color:var(--warn);font-size:12px;font-weight:600;align-self:flex-start}
+.fin-pill-dot{width:7px;height:7px;border-radius:999px;background:currentColor}
+.fin-settle{font-size:12px;color:var(--text-muted)}
+.fin-chips{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;font-size:13px;color:var(--text-secondary);padding-bottom:6px}
+.fin-chip-sep{color:var(--text-muted)}
+.fin-chip.is-muted{color:var(--text-muted)}
+.fin-chip.is-bad{color:var(--danger);font-weight:500}
+.fin-chip-btn{background:none;border:none;padding:0;font-family:inherit;font-size:12px;font-weight:600;color:var(--danger);text-decoration:underline}
+.fin-pen{border-top:1px solid var(--border);padding:12px 20px;display:flex;flex-direction:column;gap:5px;background:var(--bg-base)}
+.fin-pen-row{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--text-secondary)}
+
+/* ── banda de reclamables ── */
+.fin-claim{display:block;background:var(--warn-soft);border:1px solid var(--warn-border);border-radius:10px;padding:14px 18px;text-decoration:none}
+.fin-claim-in{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.fin-claim-body{flex-grow:1;min-width:220px}
+.fin-claim-title{font-size:15px;font-weight:600;color:var(--text-primary)}
+.fin-claim-sub{font-size:12px;color:var(--text-secondary);margin-top:3px;line-height:1.5}
+.fin-claim-eur{color:var(--warn);font-weight:600}
+.fin-claim-btn{flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;min-height:40px;padding:0 16px;background:var(--accent);color:#fff;border-radius:9px;font-size:13px;font-weight:600}
+
+
+/* ── embudo ── */
+.fnl{background:var(--bg-surface);border:1px solid var(--border);border-radius:14px;overflow:hidden}
+.fnl-head{padding:16px 20px 12px}
+.fnl-head-row{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.fnl-eyebrow{font-size:12px;font-weight:600;color:var(--text-secondary);letter-spacing:0.03em;text-transform:uppercase}
+.fnl-total{font-size:28px;font-weight:600;line-height:1;letter-spacing:-0.02em}
+.fnl-bar{display:flex;gap:3px;height:8px;margin-top:12px}
+.fnl-seg{border-radius:3px;min-width:2px}
+.fnl-seg.is-con{background:var(--brand-green)}
+.fnl-seg.is-sin{background:var(--brand-yellow)}
+.fnl-seg.is-fuera{background:#2563eb}
+.fnl-seg.is-hold{background:var(--text-muted)}
+.fnl-check{display:flex;align-items:center;gap:7px;margin-top:8px;font-size:11px;color:var(--text-muted)}
+.fnl-check-ok{color:var(--accent);font-weight:600}
+.fnl-branch{width:100%;text-align:left;font-family:inherit;background:none;border:none;border-top:1px solid var(--border);border-left:3px solid var(--border);padding:12px 20px 12px 17px;display:flex;align-items:baseline;gap:12px}
+.fnl-branch.is-con{border-left-color:var(--brand-green)}
+.fnl-branch.is-sin{border-left-color:var(--brand-yellow)}
+.fnl-branch.is-fuera{border-left-color:#2563eb}
+.fnl-branch.is-zero{border-left-color:var(--border);opacity:0.55}
+.fnl-branch-body{flex:1;min-width:0}
+.fnl-branch-name{font-size:14px;font-weight:600}
+.fnl-hint{font-size:11px;color:var(--text-muted);margin-top:2px;line-height:1.45;display:block}
+.fnl-branch-n{font-size:18px;font-weight:600;min-width:40px;text-align:right}
+.fnl-child{width:100%;text-align:left;font-family:inherit;background:none;border:none;border-top:1px solid var(--bg-surface-2);padding:9px 20px 9px 40px;display:flex;align-items:center;gap:12px}
+.fnl-child.is-zero{opacity:0.55}
+.fnl-child-body{flex:1;min-width:0;text-align:left}
+.fnl-child-name{font-size:13px;color:var(--text-secondary)}
+.fnl-child-sub{display:block;font-size:11px;color:var(--text-muted);margin-top:2px}
+.fnl-child.has-sub{padding-top:11px;padding-bottom:11px}
+.fnl-child-eur{font-size:13px;font-weight:600;color:var(--accent);white-space:nowrap}
+.fnl-child-eur.is-warn{color:var(--warn)}
+.fnl-child-eur.is-zero{color:var(--text-muted);font-weight:400}
+.fnl-child-n{font-size:15px;font-weight:600;min-width:40px;text-align:right}
+.fnl-act{border-top:1px solid var(--bg-surface-2);padding:12px 20px 12px 40px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.fnl-act.is-claim{background:var(--warn-soft)}
+.fnl-act-body{flex:1;min-width:180px}
+.fnl-act-top{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap}
+.fnl-act-name{font-size:14px;font-weight:600;color:var(--text-primary)}
+.fnl-act-eur{font-size:15px;font-weight:600;color:var(--warn)}
+.fnl-act-sub{font-size:12px;color:var(--text-secondary);margin-top:3px;line-height:1.45;display:block}
+.fnl-act-n{font-size:22px;font-weight:600;color:var(--warn);min-width:40px;text-align:right}
+.fnl-act-btn{flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;min-height:40px;padding:0 16px;border-radius:6px;background:var(--accent);color:#fff;font-size:13px;font-weight:600;text-decoration:none;border:none;font-family:inherit}
+.fnl-act-btn.is-ghost{background:var(--bg-surface);border:1px solid var(--border);color:var(--text-secondary);min-height:36px;font-size:12px}
+.fnl-nothing{border-top:1px solid var(--bg-surface-2);background:var(--bg-base);padding:12px 20px 12px 40px;font-size:11px;color:var(--text-muted);line-height:1.55}
+
+/* ── lista ── */
+.fin-list-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:8px}
+.fin-list-title{flex-grow:1;font-size:14px;font-weight:600}
+.fin-filters{display:flex;gap:4px;flex-wrap:wrap}
+.fin-filter{padding:5px 11px;border:1px solid var(--border);background:var(--bg-surface);color:var(--text-secondary);border-radius:999px;font-size:12px;font-family:inherit}
+.fin-filter.is-pick{display:inline-flex;align-items:center;gap:7px}
+.fin-filter-x{font-size:10px;opacity:0.75}
+.fin-filter.is-on{border-color:var(--accent);background:var(--accent-soft);color:var(--accent);font-weight:600}
+.card{background:var(--bg-surface);border:1px solid var(--border);border-radius:12px}
+.stu{display:grid;grid-template-columns:40px minmax(0,1fr) auto;gap:14px;align-items:start;padding:16px 18px}
+.avatar{width:40px;height:40px;border-radius:50%;display:grid;place-items:center;font-size:13px;font-weight:600;background:#eef4ef;color:#2f6b3f}
+.stu-name{font-size:15.5px;font-weight:600;letter-spacing:-0.01em}
+.stu-meta{font-size:12.5px;color:var(--text-muted);margin-top:8px}
+.stu-cols{grid-column:2 / -1;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-top:12px}
+.stu-col-label{font-size:11.5px;color:var(--text-muted);margin-bottom:2px}
+.stu-col-value{font-size:13.5px;color:var(--text-secondary)}
+.stu-col-value.is-amount{font-size:15px;font-weight:600;color:var(--accent)}
+.stu-link{grid-column:2 / -1;justify-self:start;margin-top:12px;color:var(--accent);font-size:13px;font-weight:600}
+.pill-warn{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;font-size:12px;font-weight:600;padding:4px 11px;border-radius:999px;background:#fdf3e7;color:#9a6516}
+.cls{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;padding:10px 18px;border-top:1px solid var(--bg-surface-2);font-size:12.5px}
+.cls.is-review{background:#FFFDF5}
+.cls-when{display:flex;align-items:center;gap:9px;color:var(--text-secondary);flex-wrap:wrap}
+.cls-time{color:var(--text-muted)}
+.tag-ok{display:inline-flex;align-items:center;gap:6px;color:var(--accent);font-weight:500}
+.tag-warn{display:inline-flex;align-items:center;gap:6px;color:var(--warn);font-weight:500}
+.dot{width:6px;height:6px;border-radius:999px}
+.cls-eur{font-weight:600;text-align:right}
+.nota{font-size:11.5px;color:var(--text-muted);line-height:1.5;padding:2px 4px 0}
+.caso-h{font-size:13px;font-weight:600;color:var(--text-primary);margin:0 0 2px}
+.caso-p{font-size:11.5px;color:var(--text-muted);line-height:1.5;margin:0 0 10px}
+
+/* ── Ficha del alumno (propuesta) ── */
+.fch { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 10px; }
+.fch.is-open { border-color: var(--accent-border, rgba(22,122,45,0.30)); }
+.fch-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 12px 16px; }
+.fch-name { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.fch-caret { color: var(--text-muted); font-size: 11px; }
+.fch-head-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.fch-count { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+.fch-total { font-size: 18px; font-weight: 600; color: var(--accent); white-space: nowrap; min-width: 66px; text-align: right; }
+
+/* El resumen de la fila plegada. Ya no dice "OK" cuando hay clases retenidas. */
+.fch-flag { font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
+.fch-flag.is-ok  { background: transparent; color: var(--text-muted); font-weight: 400; padding-left: 0; padding-right: 0; }
+.fch-flag.is-rev { background: var(--warn-soft); color: var(--warn); }
+.fch-flag.is-exc { background: #FFEDD5; color: #C2410C; }
+
+.fch-body { border-top: 1px solid var(--bg-surface-2); }
+
+/* Contexto: una línea, sin cajitas de etiqueta/valor. */
+.fch-ctx { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 11px 16px; font-size: 12.5px; color: var(--text-secondary); }
+.fch-sep { color: var(--text-muted); }
+.fch-spacer { flex-grow: 1; }
+.fch-ex { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--bg-surface-2); color: var(--text-muted); }
+.fch-sub { font-size: 12px; color: var(--text-secondary); }
+.fch-sub.is-bad { color: var(--danger); font-weight: 500; }
+.fch-sub-when { color: var(--text-muted); font-weight: 400; }
+
+/* El cupo: el número que antes había que deducir contando filas. */
+.fch-quota { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 0 16px 12px; }
+.fch-quota-label { font-size: 12px; color: var(--text-muted); }
+.fch-quota-bar { flex-grow: 1; min-width: 120px; max-width: 260px; height: 6px; border-radius: 3px; background: var(--bg-surface-2); overflow: hidden; }
+.fch-quota-fill { display: block; height: 100%; background: var(--brand-green); border-radius: 3px; }
+.fch-quota-fill.is-full { background: #EA580C; }
+.fch-quota-n { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.fch-quota-n.is-full { color: #C2410C; }
+.fch-quota-none { font-size: 12px; color: var(--text-muted); }
+
+/* Lo que pide acción, antes del detalle. Mismo sitio y mismo tono que la banda
+   de reclamables del profesor. */
+.fch-act { background: var(--warn-soft); border-top: 1px solid var(--warn-border); border-bottom: 1px solid var(--warn-border); padding: 4px 16px; }
+.fch-act-row { display: flex; align-items: flex-start; gap: 12px; padding: 9px 0; }
+.fch-act-row + .fch-act-row { border-top: 1px solid var(--warn-border); }
+.fch-act-n { font-size: 20px; font-weight: 600; color: var(--warn); min-width: 26px; text-align: right; line-height: 1.2; }
+.fch-act-body { flex-grow: 1; min-width: 0; }
+.fch-act-top { display: block; font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.fch-act-eur { color: var(--warn); margin-left: 7px; }
+.fch-act-sub { display: block; font-size: 12px; color: var(--text-secondary); margin-top: 2px; line-height: 1.5; }
+
+/* Una clase, una línea. */
+.fch-list { padding: 4px 0 6px; }
+.fch-cls {
+  display: grid; grid-template-columns: 106px 128px minmax(0, 1fr) 62px auto;
+  gap: 4px 12px; align-items: center; padding: 7px 16px; font-size: 12.5px;
+}
+.fch-cls.is-flag { background: #FFFDF5; }
+.fch-cls-when { color: var(--text-secondary); display: flex; gap: 8px; }
+.fch-cls-h { color: var(--text-muted); }
+.fch-cls-state { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; }
+.fch-dot { width: 6px; height: 6px; border-radius: 999px; flex-shrink: 0; }
+.fch-cls-type { color: var(--text-muted); min-width: 0; }
+.fch-cls-eur { text-align: right; font-weight: 600; color: var(--text-primary); white-space: nowrap; }
+.fch-cls-btn {
+  padding: 5px 11px; border-radius: 6px; border: 1px solid var(--accent-border, rgba(22,122,45,0.30));
+  background: var(--accent-soft); color: var(--accent);
+  font-family: inherit; font-size: 11.5px; font-weight: 600; white-space: nowrap;
+}
+.fch-cls-note { grid-column: 2 / -1; font-size: 11.5px; color: var(--text-muted); line-height: 1.5; }
+
+/* ── Lo que hay hoy, para comparar ── */
+.old-student { background: var(--bg-surface); border: 1px solid rgba(22,122,45,0.30); border-radius: 10px; overflow: hidden; }
+.old-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 12px 16px; }
+.old-name { font-size: 14px; font-weight: 600; }
+.old-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.old-count { font-size: 12px; color: var(--text-muted); }
+.old-amount { font-size: 18px; font-weight: 600; color: var(--accent); }
+.old-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; padding: 0 16px 12px; }
+.old-meta-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.old-meta-value { font-size: 13px; color: var(--text-secondary); margin-top: 2px; }
+.old-classes { border-top: 1px solid var(--border); background: var(--bg-surface-2); }
+.old-class { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px 12px; padding: 12px 16px; }
+.old-class + .old-class { border-top: 1px solid var(--border); }
+.old-class-date { font-size: 13px; font-weight: 600; }
+.old-class-amount { font-size: 13px; font-weight: 600; text-align: right; }
+.old-badges { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px 8px; }
+.old-pill { font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
+
+@media (max-width: 720px) {
+  .fch-cls { grid-template-columns: minmax(0, 1fr) auto; gap: 3px 10px; }
+  .fch-cls-when { grid-column: 1; }
+  .fch-cls-eur { grid-column: 2; grid-row: 1; }
+  .fch-cls-state { grid-column: 1; }
+  .fch-cls-type { grid-column: 2; text-align: right; }
+  .fch-cls-btn { grid-column: 1 / -1; justify-self: start; margin-top: 4px; min-height: 40px; }
+  .fch-cls-note { grid-column: 1 / -1; }
+  .fch-total { min-width: 0; }
+}
+</style>
+</helmet>
+<div style="display:flex;gap:18px;padding:16px;align-items:flex-start">
+  <div style="width:390px;flex-shrink:0">
+    <p class="caso-h" style="padding:0 4px">Activo y al día</p>
+    <div class="page" style="padding:0;gap:10px"><div class="fch is-open">
+  <div class="fch-head">
+    <span class="fch-name"><span class="fch-caret">▾</span>Alvaro Poza</span>
+    <span class="fch-head-right">
+      <span class="fch-flag is-ok">Al día</span>
+      <span class="fch-count">16 clases</span>
+      <span class="fch-total">€80,00</span>
+    </span>
+  </div>
+
+  <div class="fch-body">
+    <!-- Una línea de contexto: lo que hace falta para situar al alumno, y nada más. -->
+    <div class="fch-ctx">
+      <span>Exámenes</span>
+      <span class="fch-sep">·</span>
+      <span>desde el 17 jun 2026</span>
+      
+      <span class="fch-spacer"></span>
+      <span class="fch-sub" title="Estado de WooCommerce registrado en su última clase. No es una comprobación de hoy.">
+        Suscripción: Activa <span class="fch-sub-when">· visto el 26 ago</span>
+      </span>
+    </div>
+
+    <!-- El cupo del mes: el número que antes había que deducir contando filas. -->
+    <div class="fch-quota">
+      <span class="fch-quota-label">Clases del mes</span>
+      <span class="fch-quota-bar"><span class="fch-quota-fill" style="width:44%"></span></span>
+           <span class="fch-quota-n">11 de 25</span>
+    </div>
+
+    
+
+    <div class="fch-list">
+      <div class="fch-cls">
+  <span class="fch-cls-when">04 ago<span class="fch-cls-h">13:00</span></span>
+  <span class="fch-cls-state" style="color:var(--accent)"><span class="fch-dot" style="background:var(--brand-green)"></span>Pagable</span>
+  <span class="fch-cls-type">Recuperación</span>
+  <span class="fch-cls-eur">€5,00</span>
+  <span></span>
+  <span class="fch-cls-note">1h de recuperación — salda una clase perdida: no consume ninguna clase del mes.</span>
+</div><div class="fch-cls">
+  <span class="fch-cls-when">05 ago<span class="fch-cls-h">12:00</span></span>
+  <span class="fch-cls-state" style="color:var(--accent)"><span class="fch-dot" style="background:var(--brand-green)"></span>Pagable</span>
+  <span class="fch-cls-type">Recuperación · 2h</span>
+  <span class="fch-cls-eur">€10,00</span>
+  <span></span>
+  <span class="fch-cls-note">1h de recuperación — salda una clase perdida: consume 1 clase del mes en vez de 2.</span>
+</div><div class="fch-cls">
+  <span class="fch-cls-when">06 ago<span class="fch-cls-h">13:00</span></span>
+  <span class="fch-cls-state" style="color:var(--accent)"><span class="fch-dot" style="background:var(--brand-green)"></span>Pagable</span>
+  <span class="fch-cls-type"></span>
+  <span class="fch-cls-eur">€5,00</span>
+  <span></span>
+  
+</div><div class="fch-cls">
+  <span class="fch-cls-when">07 ago<span class="fch-cls-h">13:00</span></span>
+  <span class="fch-cls-state" style="color:var(--accent)"><span class="fch-dot" style="background:var(--brand-green)"></span>Pagable</span>
+  <span class="fch-cls-type"></span>
+  <span class="fch-cls-eur">€5,00</span>
+  <span></span>
+  
+</div><div class="fch-cls">
+  <span class="fch-cls-when">11 ago<span class="fch-cls-h">13:00</span></span>
+  <span class="fch-cls-state" style="color:var(--accent)"><span class="fch-dot" style="background:var(--brand-green)"></span>Pagable</span>
+  <span class="fch-cls-type"></span>
+  <span class="fch-cls-eur">€5,00</span>
+  <span></span>
+  
+</div><div class="fch-cls">
+  <span class="fch-cls-when">12 ago<span class="fch-cls-h">13:00</span></span>
+  <span class="fch-cls-state" style="color:var(--accent)"><span class="fch-dot" style="background:var(--brand-green)"></span>Pagable</span>
+  <span class="fch-cls-type"></span>
+  <span class="fch-cls-eur">€5,00</span>
+  <span></span>
+  
+</div><div class="fch-cls">
+  <span class="fch-cls-when">13 ago<span class="fch-cls-h">13:00</span></span>
+  <span class="fch-cls-state" style="color:var(--accent)"><span class="fch-dot" style="background:var(--brand-green)"></span>Pagable</span>
+  <span class="fch-cls-type"></span>
+  <span class="fch-cls-eur">€5,00</span>
+  <span></span>
+  
+</div><div class="fch-cls">
+  <span class="fch-cls-when">14 ago<span class="fch-cls-h">13:00</span></span>
+  <span class="fch-cls-state" style="color:var(--accent)"><span class="fch-dot" style="background:var(--brand-green)"></span>Pagable</span>
+  <span class="fch-cls-type"></span>
+  <span class="fch-cls-eur">€5,00</span>
+  <span></span>
+  
+</div><div class="fch-cls">
+  <span class="fch-cls-when">18 ago<span class="fch-cls-h">13:00</span></span>
+  <span class="fch-cls-state" style="color:var(--accent)"><span class="fch-dot" style="background:var(--brand-green)"></span>Pagable</span>
+  <span class="fch-cls-type"></span>
+  <span class="fch-cls-eur">€5,00</span>
+  <span></span>
+  
+</div><div class="fch-cls">
+  <span class="fch-cls-when">19 ago<span class="fch-cls-h">13:00</span></span>
+  <span class="fch-cls-state" style="color:var(--accent)"><span class="fch-dot" style="background:var(--brand-green)"></span>Pagable</span>
+  <span class="fch-cls-type"></span>
+  <span class="fch-cls-eur">€5,00</span>
+  <span></span>
+  
+</div><div class="fch-cls">
+  <span class="fch-cls-when">20 ago<span class="fch-cls-h">13:00</span></span>
+  <span class="fch-cls-state" style="color:var(--accent)"><span class="fch-dot" style="background:var(--brand-green)"></span>Pagable</span>
+  <span class="fch-cls-type"></span>
+  <span class="fch-cls-eur">€5,00</span>
+  <span></span>
+  
+</div><div class="fch-cls">
+  <span class="fch-cls-when">24 ago<span class="fch-cls-h">13:00</span></span>
+  <span class="fch-cls-state" style="color:var(--accent)"><span class="fch-dot" style="background:var(--brand-green)"></span>Pagable</span>
+  <span class="fch-cls-type">Recuperación</span>
+  <span class="fch-cls-eur">€5,00</span>
+  <span></span>
+  <span class="fch-cls-note">1h de recuperación — salda una clase perdida: no consume ninguna clase del mes.</span>
+</div><div class="fch-cls">
+  <span class="fch-cls-when">25 ago<span class="fch-cls-h">13:00</span></span>
+  <span class="fch-cls-state" style="color:var(--accent)"><span class="fch-dot" style="background:var(--brand-green)"></span>Pagable</span>
+  <span class="fch-cls-type">2h</span>
+  <span class="fch-cls-eur">€10,00</span>
+  <span></span>
+  <span class="fch-cls-note">1h de recuperación — salda una clase perdida: consume 1 clase del mes en vez de 2.</span>
+</div><div class="fch-cls">
+  <span class="fch-cls-when">26 ago<span class="fch-cls-h">13:00</span></span>
+  <span class="fch-cls-state" style="color:var(--accent)"><span class="fch-dot" style="background:var(--brand-green)"></span>Pagable</span>
+  <span class="fch-cls-type">Cancelación a la hora</span>
+  <span class="fch-cls-eur">€5,00</span>
+  <span></span>
+  
+</div>
+    </div>
+  </div>
+</div></div>
+  </div><div style="width:390px;flex-shrink:0">
+    <p class="caso-h" style="padding:0 4px">Con problemas</p>
+    <div class="page" style="padding:0;gap:10px"><div class="fch is-open">
+  <div class="fch-head">
+    <span class="fch-name"><span class="fch-caret">▾</span>Ester Domènech Rodríguez</span>
+    <span class="fch-head-right">
+      <span class="fch-flag is-exc">3 fuera del cupo</span>
+      <span class="fch-count">10 clases</span>
+      <span class="fch-total">€50,00</span>
+    </span>
+  </div>
+
+  <div class="fch-body">
+    <!-- Una línea de contexto: lo que hace falta para situar al alumno, y nada más. -->
+    <div class="fch-ctx">
+      <span>Exámenes</span>
+      <span class="fch-sep">·</span>
+      <span>desde el 8 may 2026</span>
+      
+      <span class="fch-spacer"></span>
+      <span class="fch-sub is-bad" title="Estado de WooCommerce registrado en su última clase. No es una comprobación de hoy.">
+        Suscripción: Cancelada <span class="fch-sub-when">· visto el 21 ago</span>
+      </span>
+    </div>
+
+    <!-- El cupo del mes: el número que antes había que deducir contando filas. -->
+    <div class="fch-quota">
+      <span class="fch-quota-label">Clases del mes</span>
+      <span class="fch-quota-bar"><span class="fch-quota-fill is-full" style="width:100%"></span></span>
+           <span class="fch-quota-n is-full">5 de 5</span>
+    </div>
+
+    <div class="fch-act">
+      <div class="fch-act-row">
+        <span class="fch-act-n">3</span>
+        <span class="fch-act-body">
+          <span class="fch-act-top">clases fuera del cupo del mes<b class="fch-act-eur">€15,00 sin pagar</b></span>
+          <span class="fch-act-sub">Superan las 5 que incluye su plan. Cada una se puede incluir igual desde la lista.</span>
+        </span>
+      </div>
+    </div>
+
+    <div class="fch-list">
+      <div class="fch-cls">
+  <span class="fch-cls-when">03 ago<span class="fch-cls-h">12:00</span></span>
+  <span class="fch-cls-state" style="color:var(--accent)"><span class="fch-dot" style="background:var(--brand-green)"></span>Pagable</span>
+  <span class="fch-cls-type"></span>
+  <span class="fch-cls-eur">€5,00</span>
+  <span></span>
+  
+</div><div class="fch-cls">
+  <span class="fch-cls-when">04 ago<span class="fch-cls-h">12:00</span></span>
+  <span class="fch-cls-state" style="color:var(--accent)"><span class="fch-dot" style="background:var(--brand-green)"></span>Pagable</span>
+  <span class="fch-cls-type"></span>
+  <span class="fch-cls-eur">€5,00</span>
+  <span></span>
+  
+</div><div class="fch-cls">
+  <span class="fch-cls-when">05 ago<span class="fch-cls-h">12:00</span></span>
+  <span class="fch-cls-state" style="color:var(--accent)"><span class="fch-dot" style="background:var(--brand-green)"></span>Pagable</span>
+  <span class="fch-cls-type">Cancelación a la hora</span>
+  <span class="fch-cls-eur">€5,00</span>
+  <span></span>
+  
+</div><div class="fch-cls">
+  <span class="fch-cls-when">07 ago<span class="fch-cls-h">12:00</span></span>
+  <span class="fch-cls-state" style="color:var(--accent)"><span class="fch-dot" style="background:var(--brand-green)"></span>Pagable</span>
+  <span class="fch-cls-type">Cancelación a la hora</span>
+  <span class="fch-cls-eur">€5,00</span>
+  <span></span>
+  
+</div><div class="fch-cls">
+  <span class="fch-cls-when">10 ago<span class="fch-cls-h">12:00</span></span>
+  <span class="fch-cls-state" style="color:var(--accent)"><span class="fch-dot" style="background:var(--brand-green)"></span>Pagable</span>
+  <span class="fch-cls-type"></span>
+  <span class="fch-cls-eur">€5,00</span>
+  <span></span>
+  
+</div><div class="fch-cls">
+  <span class="fch-cls-when">11 ago<span class="fch-cls-h">12:00</span></span>
+  <span class="fch-cls-state" style="color:var(--accent)"><span class="fch-dot" style="background:var(--brand-green)"></span>Pagable</span>
+  <span class="fch-cls-type"></span>
+  <span class="fch-cls-eur">€5,00</span>
+  <span></span>
+  
+</div><div class="fch-cls">
+  <span class="fch-cls-when">13 ago<span class="fch-cls-h">12:00</span></span>
+  <span class="fch-cls-state" style="color:var(--accent)"><span class="fch-dot" style="background:var(--brand-green)"></span>Pagable</span>
+  <span class="fch-cls-type">Recuperación</span>
+  <span class="fch-cls-eur">€5,00</span>
+  <span></span>
+  <span class="fch-cls-note">1h de recuperación — salda una clase perdida: no consume ninguna clase del mes.</span>
+</div><div class="fch-cls">
+  <span class="fch-cls-when">15 ago<span class="fch-cls-h">14:00</span></span>
+  <span class="fch-cls-state" style="color:var(--accent)"><span class="fch-dot" style="background:var(--brand-green)"></span>Pagable</span>
+  <span class="fch-cls-type">Falta sin aviso · 2h</span>
+  <span class="fch-cls-eur">€10,00</span>
+  <button class="fch-cls-btn">Revertir falta</button>
+  <span class="fch-cls-note">Falta sin aviso — Ester Domènech Rodríguez, 2026-08-15 — 10.00 € (el alumno no se presentó) · 2h de recuperación — salda una clase perdida: no consume ninguna clase del mes.</span>
+</div><div class="fch-cls">
+  <span class="fch-cls-when">18 ago<span class="fch-cls-h">12:00</span></span>
+  <span class="fch-cls-state" style="color:var(--accent)"><span class="fch-dot" style="background:var(--brand-green)"></span>Pagable</span>
+  <span class="fch-cls-type"></span>
+  <span class="fch-cls-eur">€5,00</span>
+  <span></span>
+  
+</div><div class="fch-cls is-flag">
+  <span class="fch-cls-when">19 ago<span class="fch-cls-h">12:00</span></span>
+  <span class="fch-cls-state" style="color:#C2410C"><span class="fch-dot" style="background:#EA580C"></span>Fuera del cupo</span>
+  <span class="fch-cls-type"></span>
+  <span class="fch-cls-eur">€5,00</span>
+  <button class="fch-cls-btn">Incluir igual</button>
+  
+</div><div class="fch-cls is-flag">
+  <span class="fch-cls-when">20 ago<span class="fch-cls-h">12:00</span></span>
+  <span class="fch-cls-state" style="color:#C2410C"><span class="fch-dot" style="background:#EA580C"></span>Fuera del cupo</span>
+  <span class="fch-cls-type"></span>
+  <span class="fch-cls-eur">€5,00</span>
+  <button class="fch-cls-btn">Incluir igual</button>
+  
+</div><div class="fch-cls is-flag">
+  <span class="fch-cls-when">21 ago<span class="fch-cls-h">12:00</span></span>
+  <span class="fch-cls-state" style="color:#C2410C"><span class="fch-dot" style="background:#EA580C"></span>Fuera del cupo</span>
+  <span class="fch-cls-type"></span>
+  <span class="fch-cls-eur">€5,00</span>
+  <button class="fch-cls-btn">Incluir igual</button>
+  
+</div>
+    </div>
+  </div>
+</div></div>
+  </div><div style="width:390px;flex-shrink:0">
+    <p class="caso-h" style="padding:0 4px">Ex-alumna</p>
+    <div class="page" style="padding:0;gap:10px"><div class="fch is-open">
+  <div class="fch-head">
+    <span class="fch-name"><span class="fch-caret">▾</span>Pascale Arbion</span>
+    <span class="fch-head-right">
+      <span class="fch-flag is-rev">2 sin transcript</span>
+      <span class="fch-count">1 clases</span>
+      <span class="fch-total">€4,00</span>
+    </span>
+  </div>
+
+  <div class="fch-body">
+    <!-- Una línea de contexto: lo que hace falta para situar al alumno, y nada más. -->
+    <div class="fch-ctx">
+      <span>Inglés general</span>
+      <span class="fch-sep">·</span>
+      <span>sin asignación activa</span>
+      <span class="fch-ex">ex-alumno</span>
+      <span class="fch-spacer"></span>
+      <span class="fch-sub" title="Estado de WooCommerce registrado en su última clase. No es una comprobación de hoy.">
+        Suscripción: Pendiente de cancelación <span class="fch-sub-when">· visto el 10 ago</span>
+      </span>
+    </div>
+
+    <!-- El cupo del mes: el número que antes había que deducir contando filas. -->
+    <div class="fch-quota">
+      <span class="fch-quota-label">Clases del mes</span>
+      <span class="fch-quota-none">Sin cupo — ya no tiene plan con este profesor</span>
+    </div>
+
+    <div class="fch-act">
+      <div class="fch-act-row">
+        <span class="fch-act-n">2</span>
+        <span class="fch-act-body">
+          <span class="fch-act-top">clases sin transcript<b class="fch-act-eur">€8,00 sin pagar</b></span>
+          <span class="fch-act-sub">El profesor las dio y todavía no subió el texto. Se pagan solas en cuanto lo suba.</span>
+        </span>
+      </div>
+    </div>
+
+    <div class="fch-list">
+      <div class="fch-cls is-flag">
+  <span class="fch-cls-when">03 ago<span class="fch-cls-h">12:00</span></span>
+  <span class="fch-cls-state" style="color:var(--warn)"><span class="fch-dot" style="background:var(--brand-yellow)"></span>Sin transcript</span>
+  <span class="fch-cls-type"></span>
+  <span class="fch-cls-eur">€4,00</span>
+  <button class="fch-cls-btn">Pagar sin transcript</button>
+  
+</div><div class="fch-cls is-flag">
+  <span class="fch-cls-when">05 ago<span class="fch-cls-h">12:00</span></span>
+  <span class="fch-cls-state" style="color:var(--warn)"><span class="fch-dot" style="background:var(--brand-yellow)"></span>Sin transcript</span>
+  <span class="fch-cls-type"></span>
+  <span class="fch-cls-eur">€4,00</span>
+  <button class="fch-cls-btn">Pagar sin transcript</button>
+  
+</div><div class="fch-cls">
+  <span class="fch-cls-when">10 ago<span class="fch-cls-h">12:00</span></span>
+  <span class="fch-cls-state" style="color:var(--accent)"><span class="fch-dot" style="background:var(--brand-green)"></span>Pagable</span>
+  <span class="fch-cls-type"></span>
+  <span class="fch-cls-eur">€4,00</span>
+  <span></span>
+  
+</div>
+    </div>
+  </div>
+</div></div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>
