@@ -15,7 +15,7 @@
 
 import { useState } from 'react';
 import { CEFR_COLOR } from '@/lib/levelTest/constants';
-import { referenceLevelOf, type ProfileLevelFields } from '@/lib/effectiveLevel';
+import { referenceLevelOf, teacherReviewOf, type TeacherReviewFields } from '@/lib/effectiveLevel';
 
 const LEVELS = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'] as const;
 
@@ -28,7 +28,7 @@ const REFERENCE_LABEL: Record<string, string> = {
 };
 
 interface Props {
-  profile: (ProfileLevelFields & {
+  profile: (TeacherReviewFields & {
     id?: string | null;
     student_id?: string | null;
     level_test_completed_at?: string | null;
@@ -72,7 +72,26 @@ export default function NivelProfesorCard(p: Props) {
     setError(null);
   }
 
-  const dirty = value !== (confirmed || '');
+  const review = teacherReviewOf(p.profile, p.assignmentLevel);
+
+  // Qué haría el botón AHORA MISMO con lo que hay elegido.
+  //
+  // El problema que esto arregla: cuando el profesor estaba de acuerdo, el
+  // desplegable ya venía con el nivel de la prueba, la referencia de al lado
+  // decía lo mismo y el botón decía "Guardar". Parecía que no había nada que
+  // hacer, y nadie pulsa un botón que aparentemente no cambia nada. Resultado:
+  // en agosto de 2026, de 15 alumnos con prueba solo 2 tenían nivel del
+  // profesor, y los DOS eran correcciones. El acuerdo —que es la mitad del set
+  // de calibración— no se registraba nunca.
+  //
+  // Ahora el botón dice lo que hace y sigue activo cuando el nivel coincide:
+  // confirmar el acuerdo es una acción, no la ausencia de una.
+  const yaGuardado = value === (confirmed || '');
+  const coincide = !!value && value === reference.level;
+  const accion: 'confirmar' | 'corregir' | 'nada' =
+    !value || yaGuardado ? 'nada' : coincide ? 'confirmar' : 'corregir';
+  const btnLabel = saving ? 'Guardando…' : accion === 'corregir' ? 'Guardar corrección' : 'Confirmar nivel';
+  const btnOff = saving || accion === 'nada';
 
   async function save(level: string | null) {
     setSaving(true);
@@ -88,6 +107,7 @@ export default function NivelProfesorCard(p: Props) {
           teacherId:   p.teacherId,
           teacherName: p.teacherName,
           level,
+          against: reference.level,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -116,8 +136,6 @@ export default function NivelProfesorCard(p: Props) {
     ? new Date(p.profile.teacher_confirmed_at).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' })
     : null;
 
-  const btnOff = saving || !value || !dirty;
-
   return (
     <div
       data-onboarding="nivel-profesor"
@@ -132,9 +150,10 @@ export default function NivelProfesorCard(p: Props) {
       </div>
 
       <p style={{ margin: '6px 0 12px', fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-        Tras las primeras clases, confirma o ajusta el nivel del alumno.
-        <b> Tu criterio es el que se usará de aquí en adelante</b> — en la ficha, en las clases
-        que genera la IA y en el progreso que ve el alumno.
+        Tras las primeras clases, dinos si el nivel de al lado es el correcto.
+        <b> Confírmalo aunque estés de acuerdo</b>: así sabemos cuándo la prueba acierta, no
+        solo cuándo falla. Tu criterio es el que manda de aquí en adelante — en la ficha, en
+        las clases que genera la IA y en el progreso que ve el alumno.
       </p>
 
       <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'flex-end' }}>
@@ -185,37 +204,48 @@ export default function NivelProfesorCard(p: Props) {
                 fontSize: 13.5, fontWeight: 700, fontFamily: 'inherit',
               }}
             >
-              {saving ? 'Guardando…' : 'Guardar'}
+              {btnLabel}
             </button>
           </div>
         </div>
       </div>
 
-      {/* Estado de lo ya confirmado: nivel, cuándo y quién. */}
-      {confirmed && !dirty && (
+      {/* LOS TRES ESTADOS, dichos con todas las letras. El que faltaba era el
+          primero: "confirmado igual" antes no se distinguía de "sin revisar",
+          porque las dos cosas dejaban el campo vacío. */}
+      {yaGuardado && (
         <div style={{ marginTop: 10, fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-          <span style={{ color: confColor, fontWeight: 700 }}>{confirmed}</span> confirmado
-          {p.profile?.teacher_confirmed_by ? ` por ${p.profile.teacher_confirmed_by}` : ''}
-          {confDate ? ` el ${confDate}` : ''}.
-          {reference.level && reference.level !== confirmed && reference.origin === 'prueba' && (
-            <> La prueba había dado <b>{reference.level}</b>.</>
+          {review.state === 'sin_revisar' ? (
+            <span style={{ color: 'var(--text-muted)' }}>
+              <b>Sin revisar.</b> Si el nivel de arriba te cuadra, confírmalo: saber que acertó
+              vale tanto como saber que se equivocó.
+            </span>
+          ) : (
+            <>
+              <span style={{ color: confColor, fontWeight: 700 }}>{confirmed}</span>
+              {review.state === 'confirmado'
+                ? <> confirmado{review.against ? <> — coincide con el nivel de {review.against === reference.level && reference.origin === 'prueba' ? 'la prueba' : 'referencia'}</> : ''}</>
+                : <> corregido{review.against ? <>, la referencia decía <b>{review.against}</b></> : ''}</>}
+              {p.profile?.teacher_confirmed_by ? ` · ${p.profile.teacher_confirmed_by}` : ''}
+              {confDate ? ` · ${confDate}` : ''}.
+              {' '}
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => save(null)}
+                style={{
+                  border: 'none', background: 'none', padding: 0, cursor: 'pointer',
+                  color: 'var(--text-muted)', fontSize: 12.5, fontFamily: 'inherit', textDecoration: 'underline',
+                }}
+              >
+                Quitar mi confirmación
+              </button>
+            </>
           )}
-          {' '}
-          <button
-            type="button"
-            disabled={saving}
-            onClick={() => save(null)}
-            style={{
-              border: 'none', background: 'none', padding: 0, cursor: 'pointer',
-              color: 'var(--text-muted)', fontSize: 12.5, fontFamily: 'inherit', textDecoration: 'underline',
-            }}
-          >
-            Quitar mi confirmación
-          </button>
         </div>
       )}
 
-      {justSaved && !dirty && !error && (
+      {justSaved && yaGuardado && !error && (
         <div style={{ marginTop: 8, fontSize: 12.5, color: '#1E9E3A', fontWeight: 600 }}>Guardado.</div>
       )}
       {error && (

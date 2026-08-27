@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { effectiveLevelOf, getEffectiveLevel, referenceLevelOf } from './effectiveLevel';
+import { effectiveLevelOf, getEffectiveLevel, referenceLevelOf, teacherReviewOf } from './effectiveLevel';
 
 describe('getEffectiveLevel — prioridad', () => {
   it('el nivel del profesor manda sobre todos', () => {
@@ -95,5 +95,74 @@ describe('effectiveLevelOf / referenceLevelOf', () => {
     const ref = referenceLevelOf({ teacher_confirmed_level: 'B2' }, 'A2');
     expect(ref.level).toBe('A2');
     expect(ref.origin).toBe('alta');
+  });
+});
+
+// ── Los tres estados de la revisión del profesor ─────────────────────────────
+//
+// El campo vacío decía dos cosas a la vez ("estoy de acuerdo" y "ni lo miré") y
+// por eso el set de calibración de agosto tenía 2 pares y los dos eran
+// correcciones. Estos tests fijan que los tres casos quedan separados.
+describe('teacherReviewOf', () => {
+  const ficha = (o: Record<string, string | null>) => ({
+    level_test_cefr: null, teacher_confirmed_level: null,
+    teacher_confirmed_at: null, teacher_confirmed_by: null, ...o,
+  });
+
+  it('sin pronunciarse → sin_revisar, y NO entra en la calibración', () => {
+    const r = teacherReviewOf(ficha({ level_test_cefr: 'B2' }), null);
+    expect(r.state).toBe('sin_revisar');
+    expect(r.level).toBeNull();
+    expect(r.comparable).toBe(false);
+  });
+
+  it('mismo nivel que la prueba → confirmado, y SÍ entra', () => {
+    const r = teacherReviewOf(ficha({ level_test_cefr: 'B2', teacher_confirmed_level: 'B2' }), null);
+    expect(r.state).toBe('confirmado');
+    expect(r.comparable).toBe(true);
+  });
+
+  it('nivel distinto → corregido — Samantha Reyes, prueba B2 y la profesora puso A1', () => {
+    const r = teacherReviewOf(ficha({ level_test_cefr: 'B2', teacher_confirmed_level: 'A1' }), null);
+    expect(r.state).toBe('corregido');
+    expect(r.against).toBe('B2');
+    expect(r.comparable).toBe(true);
+  });
+
+  it('sin prueba: el profesor lo define, pero NO es un dato de calibración', () => {
+    const r = teacherReviewOf(ficha({ teacher_confirmed_level: 'B1' }), 'Inglés general');
+    expect(r.state).toBe('corregido');
+    expect(r.comparable).toBe(false);
+  });
+
+  it('compara contra el nivel CONGELADO al confirmar, no contra el de hoy', () => {
+    // Se confirmó un acuerdo con la prueba en B2; después se repitió y dio C1.
+    // Sin el campo congelado, aquel acuerdo pasaría a leerse como corrección.
+    const r = teacherReviewOf(ficha({
+      level_test_cefr: 'C1', teacher_confirmed_level: 'B2', teacher_confirmed_against: 'B2',
+    }), null);
+    expect(r.state).toBe('confirmado');
+    expect(r.against).toBe('B2');
+  });
+
+  it('sin el campo congelado cae al nivel de la prueba (la columna es opcional)', () => {
+    const r = teacherReviewOf(ficha({ level_test_cefr: 'C1', teacher_confirmed_level: 'B2' }), null);
+    expect(r.state).toBe('corregido');
+    expect(r.against).toBe('C1');
+  });
+
+  it('el nivel del alta con texto suelto no cuenta como referencia comparable', () => {
+    const r = teacherReviewOf(ficha({ teacher_confirmed_level: 'B1' }), 'B1 Exámenes');
+    expect(r.state).toBe('confirmado');   // el alta sí parsea a B1
+    expect(r.comparable).toBe(false);     // pero no es una prueba: no calibra nada
+  });
+
+  it('conserva quién y cuándo', () => {
+    const r = teacherReviewOf(ficha({
+      level_test_cefr: 'B2', teacher_confirmed_level: 'B1',
+      teacher_confirmed_at: '2026-08-25T10:00:00Z', teacher_confirmed_by: 'Johny',
+    }), null);
+    expect(r.by).toBe('Johny');
+    expect(r.at).toBe('2026-08-25T10:00:00Z');
   });
 });

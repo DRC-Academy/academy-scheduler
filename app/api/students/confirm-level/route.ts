@@ -26,6 +26,8 @@ interface Body {
   teacherName?: string;
   /** null = el profesor retira su confirmación y se vuelve al nivel de la prueba. */
   level?: string | null;
+  /** Nivel de referencia contra el que comparó, para congelarlo (ver el SQL). */
+  against?: string | null;
 }
 
 export async function POST(request: Request): Promise<Response> {
@@ -65,15 +67,30 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   const now = new Date().toISOString();
-  // Al retirar la confirmación se limpian los tres campos a la vez: dejar la
-  // fecha y el autor de una confirmación que ya no existe haría que el admin
-  // leyera "confirmado por Seba" junto a un nivel vacío.
-  const { error } = await supabase.from('student_profiles').update({
+  const against = typeof body.against === 'string' ? body.against.trim().toUpperCase() : null;
+  const againstOk = against && (LEVELS as readonly string[]).includes(against) ? against : null;
+
+  // Al retirar la confirmación se limpian los campos a la vez: dejar la fecha y
+  // el autor de una confirmación que ya no existe haría que el admin leyera
+  // "confirmado por Seba" junto a un nivel vacío.
+  const base = {
     teacher_confirmed_level: level,
     teacher_confirmed_at:    level ? now : null,
     teacher_confirmed_by:    level ? (body.teacherName?.trim() || null) : null,
     updated_at:              now,
-  }).eq('id', profileId);
+  };
+  // Contra qué comparó, CONGELADO. Va aparte porque la columna llega con
+  // supabase-teacher-level-against.sql, que se corre a mano: si todavía no
+  // existe, pedirla haría fallar el update entero y el profesor no podría
+  // guardar nada. Ver el mismo patrón en level-test/submit.
+  const { error } = await (async () => {
+    const first = await supabase.from('student_profiles')
+      .update({ ...base, teacher_confirmed_against: level ? againstOk : null })
+      .eq('id', profileId);
+    if (first.error?.code !== '42703' && first.error?.code !== 'PGRST204') return first;
+    console.warn('[confirm-level] Falta teacher_confirmed_against; se guarda sin congelar la referencia.');
+    return supabase.from('student_profiles').update(base).eq('id', profileId);
+  })();
 
   if (error) {
     console.error('[confirm-level] No se pudo guardar el nivel del profesor:', error);

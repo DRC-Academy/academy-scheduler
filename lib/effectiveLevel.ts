@@ -141,3 +141,84 @@ export function referenceLevelOf(
     assignmentLevel,
   });
 }
+
+// ── Qué hizo el profesor con el nivel ────────────────────────────────────────
+//
+// TRES estados, y hay que poder distinguirlos: la pareja (nivel de la prueba /
+// nivel del profesor) es el set de calibración, y solo sirve para medir si la
+// prueba acierta si recoge TAMBIÉN los acuerdos.
+//
+// El campo vacío decía dos cosas a la vez —"estoy de acuerdo" y "ni lo miré"— y
+// eso dejaba el set con solo desacuerdos. En agosto de 2026: 15 alumnos con
+// prueba, 2 con nivel del profesor, y los DOS eran correcciones. Con eso la
+// prueba parece fallar el 100% de las veces, cuando lo único que sabíamos es que
+// el profesor solo tocaba el control cuando algo le chirriaba.
+
+export type TeacherReviewState =
+  | 'sin_revisar'   // el profesor todavía no se pronunció
+  | 'confirmado'    // miró y puso el MISMO nivel que la referencia
+  | 'corregido';    // puso otro, o no había referencia y lo definió él
+
+export const REVIEW_STATE_LABEL: Record<TeacherReviewState, string> = {
+  sin_revisar: 'Sin revisar',
+  confirmado:  'Confirmado por el profesor',
+  corregido:   'Corregido por el profesor',
+};
+
+export interface TeacherReview {
+  state: TeacherReviewState;
+  /** Lo que puso el profesor. null si no se pronunció. */
+  level: string | null;
+  /**
+   * Contra qué comparó. Se prefiere `teacher_confirmed_against` —el nivel de
+   * referencia CONGELADO al confirmar— sobre el actual: si mañana se repite la
+   * prueba y da otro nivel, un acuerdo de hoy no puede pasar a leerse como
+   * desacuerdo. Cuando la columna todavía no existe se cae al de la prueba.
+   */
+  against: string | null;
+  at: string | null;
+  by: string | null;
+  /**
+   * ¿Entra en el set de calibración? Solo si el profesor se pronunció Y había un
+   * nivel de PRUEBA con el que comparar. Un alumno al que el profesor le puso el
+   * nivel de la nada no dice nada sobre si la prueba acierta.
+   */
+  comparable: boolean;
+}
+
+export interface TeacherReviewFields extends ProfileLevelFields {
+  teacher_confirmed_at?: string | null;
+  teacher_confirmed_by?: string | null;
+  /** Nivel de referencia en el momento de confirmar (supabase-teacher-level-against.sql). */
+  teacher_confirmed_against?: string | null;
+}
+
+/**
+ * Qué hizo el profesor con el nivel de este alumno. Una sola definición: la
+ * consumen la ficha, el panel de admin y cualquier consulta de calibración.
+ */
+export function teacherReviewOf(
+  profile: TeacherReviewFields | null | undefined,
+  assignmentLevel: string | null | undefined,
+): TeacherReview {
+  const level = parseCefr(profile?.teacher_confirmed_level);
+  const congelado = parseCefr(profile?.teacher_confirmed_against);
+  const prueba = parseCefr(profile?.level_test_cefr);
+  const referencia = congelado ?? referenceLevelOf(profile, assignmentLevel).level;
+
+  const at = clean(profile?.teacher_confirmed_at);
+  const by = clean(profile?.teacher_confirmed_by);
+
+  if (!level) {
+    return { state: 'sin_revisar', level: null, against: referencia, at: null, by: null, comparable: false };
+  }
+  return {
+    state: referencia && level === referencia ? 'confirmado' : 'corregido',
+    level,
+    against: referencia,
+    at, by,
+    // Con `teacher_confirmed_against` guardado vale ese; si no, hace falta que la
+    // prueba exista HOY para poder llamar a esto una comparación.
+    comparable: !!(congelado ?? prueba),
+  };
+}
