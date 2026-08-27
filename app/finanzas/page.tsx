@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { NavBar } from '@/components/NavBar';
 import { AuthGuard } from '@/components/AuthGuard';
 import { PullToRefresh } from '@/components/PullToRefresh';
@@ -10,7 +10,7 @@ import { useTeachers } from '@/lib/TeachersContext';
 import { calculateTeacherFinance, estimateClassAmount, TeacherFinanceResult, ClassFinanceRow, classTypeBadge, subscriptionBadge, rowHoursLabel, financeStatusBadge, transcriptStateBadge, absenceBreakdownLabel, isStudentAbsence, recoveryCreditLabel, studentQuotaOf, SUBSCRIPTION_STATUS_OPTIONS } from '@/lib/finance';
 import { isActiveWooStatus } from '@/lib/subscriptionAccess';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
-import { dbRevertPenalty, getTeacherAssignments } from '@/lib/db';
+import { dbRevertPenalty, dbGetAllTeacherAssignments } from '@/lib/db';
 import { buildClassFunnel } from '@/lib/classFunnel';
 import { ClassFunnelCard } from '@/components/ClassFunnelCard';
 import { dbGetReviewRequests } from '@/lib/reviewRequests';
@@ -104,27 +104,73 @@ function planContratado(row: ClassFinanceRow | undefined): { producto: string; v
 }
 
 /**
+ * Lo que necesita el embudo de CUALQUIER profesor, cargado una sola vez.
+ *
+ * El embudo pedía sus datos por profesor y al desplegar uno se disparaban cinco
+ * consultas, dos de ellas leyendo tablas enteras: `getTeacherAssignments` llama
+ * por dentro a `dbGetStudents()` —la tabla de alumnos completa, que el contexto
+ * ya tiene— y las bajas se volvían a pedir cada vez. Cerrar un profesor y abrir
+ * otro pagaba las cinco otra vez.
+ *
+ * Ahora se cargan a la primera apertura, valen para todos y van EN PARALELO, y
+ * se le pasan a `dbGetAllTeacherAssignments` los alumnos y las assignments que
+ * el contexto ya tiene: tres consultas simultáneas la primera vez y NINGUNA a
+ * partir de la segunda, en lugar de cinco por profesor.
+ *
+ * Las solicitudes de revisión se traen todas de golpe —son ocho filas en toda la
+ * base— en vez de una consulta por profesor. Pedirlas por separado dejaba el
+ * primer despliegue esperando dos viajes seguidos: primero los calendarios y
+ * luego, con ellos ya en pantalla, las suyas.
+ *
+ * Es perezoso a propósito: quien entra a Finanzas y no despliega a nadie no paga
+ * nada de esto.
+ */
+function useFunnelData(enabled: boolean) {
+  const { teachers, students, assignments } = useTeachers();
+  const [data, setData] = useState<{
+    grids: Map<string, Assignment[]>;
+    dropouts: StudentDropout[];
+    requests: ClassReviewRequest[];
+  } | null>(null);
+  const pedido = useRef(false);
+
+  useEffect(() => {
+    if (!enabled || pedido.current) return;
+    pedido.current = true;
+    let cancelled = false;
+    Promise.all([
+      dbGetAllTeacherAssignments({ teachers, students, assignments }),
+      dbGetStudentDropouts(),
+      dbGetReviewRequests(),
+    ])
+      .then(([grids, dropouts, requests]) => { if (!cancelled) setData({ grids, dropouts, requests }); })
+      .catch(err => {
+        console.error('[finanzas] No se pudieron cargar los datos del embudo:', err);
+        pedido.current = false;   // que un fallo de red no lo deje muerto
+      });
+    return () => { cancelled = true; };
+  // Se pide UNA vez: `pedido` corta las repeticiones y los datos del contexto no
+  // cambian mientras el admin tiene un profesor abierto.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled]);
+
+  return data;
+}
+
+/**
  * El embudo del profesor dentro del detalle del admin. Es el MISMO componente y
  * la misma función de cálculo que ve el profesor: si los dos leyeran fuentes
  * distintas volveríamos al problema de raíz (dos pantallas, dos números, ninguna
  * forma de saber cuál mirar).
  */
-function TeacherFunnel({ teacher, monthYear, finance }: {
+function TeacherFunnel({ teacher, monthYear, finance, asgs, dropouts, requests }: {
   teacher: Teacher; monthYear: string; finance: TeacherFinanceResult;
+  /** Todo ya cargado para el conjunto de profesores; ver `useFunnelData`. */
+  asgs: Assignment[];
+  dropouts: StudentDropout[];
+  requests: ClassReviewRequest[];
 }) {
   const { classJoinLogs, classRecords, classAnalyses, students, financeRates } = useTeachers();
-  const [asgs, setAsgs] = useState<Assignment[]>([]);
-  const [requests, setRequests] = useState<ClassReviewRequest[]>([]);
-  const [dropouts, setDropouts] = useState<StudentDropout[]>([]);
-
-  useEffect(() => {
-    let cancelled = false;
-    Promise.all([getTeacherAssignments(teacher), dbGetReviewRequests(teacher.id), dbGetStudentDropouts()])
-      .then(([a, r, d]) => { if (!cancelled) { setAsgs(a); setRequests(r); setDropouts(d); } })
-      .catch(err => console.error('[finanzas] No se pudo armar el embudo:', err));
-    return () => { cancelled = true; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [teacher.id]);
 
   const spain = getSpainParts(new Date());
   const funnel = useMemo(() => buildClassFunnel({
@@ -484,6 +530,9 @@ function FinanceTab() {
   const [statusFilter, setStatusFilter] = useState<'all' | 'paid' | 'pending'>('all');
   const [subFilter, setSubFilter] = useState('all'); // estado de suscripción
   const [expandedTeacher, setExpandedTeacher] = useState<string | null>(null);
+  // Calendarios y bajas: se piden al desplegar al primer profesor y sirven para
+  // todos. Ver `useFunnelData`.
+  const funnelData = useFunnelData(expandedTeacher !== null);
   const [paying, setPaying] = useState<string | null>(null);
   // Reversión de penalización (Bloque 4.5).
   const [revertModal, setRevertModal] = useState<ScoringEvent | null>(null);
@@ -742,7 +791,16 @@ function FinanceTab() {
                           función de cálculo: dos números iguales o ninguno. */}
                       {(() => {
                         const t = teachers.find(x => x.id === r.teacherId);
-                        return t ? <TeacherFunnel teacher={t} monthYear={monthYear} finance={r} /> : null;
+                        if (!t) return null;
+                        if (!funnelData) return <div className="afd-empty">Cargando el detalle…</div>;
+                        return (
+                          <TeacherFunnel
+                            teacher={t} monthYear={monthYear} finance={r}
+                            asgs={funnelData.grids.get(t.id) ?? []}
+                            dropouts={funnelData.dropouts}
+                            requests={funnelData.requests.filter(q => q.teacherId === t.id)}
+                          />
+                        );
                       })()}
                       <StudentDetailList
                         result={r} assignments={assignments} approvals={manualApprovals}

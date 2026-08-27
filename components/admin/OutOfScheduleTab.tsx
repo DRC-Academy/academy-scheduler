@@ -12,10 +12,10 @@
 // son operación normal, y están para poder descartarlos de un vistazo en vez de
 // tener que mirar cada caso.
 //
-// COSTE. Se carga al abrirla, no al entrar en Finanzas, y son DOS consultas:
-// `dbGetAllTeacherAssignments` trae los calendarios de los 22 profesores de una
-// vez (3 queries por dentro, no 3 por profesor) y la otra, las bajas. El cálculo
-// de finanzas se rehace en memoria con lo que el contexto ya tiene cargado.
+// COSTE. Se carga al abrirla, no al entrar en Finanzas, y son DOS consultas: los
+// calendarios de los 22 profesores de una vez y las bajas. Los alumnos y las
+// assignments se le pasan desde el contexto, que ya los tiene, y el cálculo de
+// finanzas se rehace en memoria.
 
 import { useState, useMemo } from 'react';
 import { useTeachers } from '@/lib/TeachersContext';
@@ -59,7 +59,12 @@ export default function OutOfScheduleTab({ monthYear, monthLabel }: {
     if (datos || loading) return;
     setLoading(true); setError('');
     try {
-      const [grids, dropouts] = await Promise.all([dbGetAllTeacherAssignments(), dbGetStudentDropouts()]);
+      const [grids, dropouts] = await Promise.all([
+        // Los alumnos y las assignments ya están en el contexto: pasárselos deja
+        // esto en una sola consulta, la de los calendarios.
+        dbGetAllTeacherAssignments({ teachers, students, assignments }),
+        dbGetStudentDropouts(),
+      ]);
       setDatos({ grids, dropouts });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo cargar el diagnóstico.');

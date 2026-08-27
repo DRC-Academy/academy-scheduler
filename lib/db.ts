@@ -1035,11 +1035,18 @@ export async function dbGetAllGridOccupancy(): Promise<GridOccupancy[]> {
  * de la assignment) a propósito: si divergieran, el embudo del profesor y la
  * vista del admin volverían a contar cosas distintas.
  */
-export async function dbGetAllTeacherAssignments(): Promise<Map<string, Assignment[]>> {
+export async function dbGetAllTeacherAssignments(
+  /**
+   * Lo que quien llama YA tenga cargado. El panel de admin tiene los tres en su
+   * contexto, así que pasándolos esto baja a UNA consulta —los calendarios— en
+   * vez de cuatro. Sin ellos se piden, como antes.
+   */
+  cache?: { teachers?: Teacher[]; students?: Student[]; assignments?: Assignment[] },
+): Promise<Map<string, Assignment[]>> {
   const [teachers, students, allAssignments, calRes] = await Promise.all([
-    dbGetTeachers(),
-    dbGetStudents(),
-    dbGetAssignments(),
+    cache?.teachers ?? dbGetTeachers(),
+    cache?.students ?? dbGetStudents(),
+    cache?.assignments ?? dbGetAssignments(),
     supabase.from('teacher_calendars').select('teacher_id, grid'),
   ]);
 
