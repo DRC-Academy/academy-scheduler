@@ -139,6 +139,24 @@ export const WOO_STATUS: Record<string, WooStatusMeta> = {
     label: 'Programada', countsAsActive: false, icon: '🗓️',
     color: '#2563eb', bg: 'rgba(37,99,235,0.10)',
   },
+  // PENDIENTE DE PAGO: la suscripción existe pero nunca se cobró. WooCommerce la
+  // crea así al empezar el checkout y la pasa a 'active' cuando entra el pago, así
+  // que lo que se acumula acá son sobre todo checkouts abandonados. NO da acceso.
+  //
+  // Estaba fuera del mapa hasta la auditoría del 28/08/2026: la instalación real
+  // tenía 4 suscripciones en 'pending' y, al no ser clave de acá, caían en
+  // `otros_estados` del endpoint externo (el dashboard las pintaba como "pending
+  // (sin mapear)") y en el badge salían como "Sin verificar", que es justo lo que
+  // no son — se sabe perfectamente qué les pasa.
+  //
+  // Mismo ámbar oscuro que 'on-hold' a propósito: los dos son "no da acceso y hay
+  // algo que perseguir", y el color codifica qué hacer, no cuál es. Lo que los
+  // separa de un vistazo es el icono (💳 pago que no entró vs ⚠️ pago que falló) y
+  // el nombre, que es el que manda en este mapa.
+  pending: {
+    label: 'Pendiente de pago', countsAsActive: false, icon: '💳',
+    color: '#92400e', bg: 'rgba(146,64,14,0.12)',
+  },
   // Pago fallido o pausada: NO puede tomar clases. Ámbar oscuro para que se
   // distinga de un vistazo del ámbar de 'pending-cancel', que sí es válida.
   'on-hold': {
@@ -166,9 +184,16 @@ const NOT_FOUND_STATUS: WooStatusMeta = {
 };
 
 /**
- * Metadatos de un estado de WooCommerce. Un estado desconocido (Woo tiene más:
- * 'switched', 'pending'…) cae en "Sin verificar" y NO cuenta como activo: ante la
- * duda no se le abre la puerta a nadie, pero tampoco se afirma que esté cancelado.
+ * Metadatos de un estado de WooCommerce. Un estado desconocido cae en "Sin
+ * verificar" y NO cuenta como activo: ante la duda no se le abre la puerta a
+ * nadie, pero tampoco se afirma que esté cancelado.
+ *
+ * El único canónico de WooCommerce Subscriptions que queda fuera del mapa es
+ * 'switched' (la suscripción se cambió por otra). Hoy la instalación real tiene
+ * cero, y por eso no se le inventa un tratamiento; si aparece, el endpoint
+ * externo la reporta en `otros_estados` en vez de perderla, que es exactamente
+ * cómo se detectó 'pending'. 'scheduled', en cambio, NO es canónico: lo agrega un
+ * plugin de esta tienda y sí está mapeado.
  */
 export function wooStatusMeta(status: string | null | undefined): WooStatusMeta {
   if (!status) return UNKNOWN_STATUS;

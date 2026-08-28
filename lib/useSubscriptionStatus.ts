@@ -45,6 +45,13 @@ export interface SubscriptionInfo {
   fetchedAt: number;
 }
 
+/**
+ * OJO CON 'pending': acá es la CATEGORÍA DE FILTRO de "Pendiente cancelar"
+ * (chip de la lista de alumnos), y NO tiene nada que ver con el estado de
+ * WooCommerce 'pending' = "Pendiente de pago", que existe desde la auditoría del
+ * 28/08/2026 y cae en 'inactive' como corresponde (no da acceso). Son dos cosas
+ * distintas que se llaman igual: no cablear una con la otra.
+ */
 export type SubCategory = 'active' | 'inactive' | 'pending' | 'scheduled' | 'unverified';
 
 // Cache compartido entre TODOS los componentes (vive en el módulo). Si "Alumnos"

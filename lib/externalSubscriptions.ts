@@ -68,8 +68,15 @@ const nkEmail = (v: unknown): string => (typeof v === 'string' ? v.trim().toLowe
 async function fetchPage(
   c: { base: string; ck: string; cs: string }, page: number,
 ): Promise<{ rows: WooSub[]; totalPages: number }> {
+  // orderby=id&order=asc NO es cosmético: el endpoint ordena por `date desc` por
+  // defecto, y las páginas 2-4 se piden en paralelo un instante después de la 1
+  // (ver fetchAllSubscriptions). Con orden por fecha, una suscripción creada en
+  // ese hueco corre la lista entera hacia abajo y una fila del final de la página
+  // 1 reaparece al principio de la 2 — se cuenta dos veces. Por `id` ascendente
+  // las altas nuevas se van SIEMPRE al final y no mueven a las que ya se leyeron.
   const url =
     `${c.base}/wp-json/wc/v3/subscriptions?per_page=${PER_PAGE}&page=${page}` +
+    `&orderby=id&order=asc` +
     `&_fields=${encodeURIComponent('status,billing.email')}` +
     `&consumer_key=${encodeURIComponent(c.ck)}&consumer_secret=${encodeURIComponent(c.cs)}`;
 
@@ -146,10 +153,18 @@ export interface WooCount {
   total: number;
   /** Un contador por cada estado conocido por WOO_STATUS, siempre presentes. */
   por_estado: Record<string, number>;
-  /** Estados que la app no mapea ('switched', 'pending'…). Vacío lo normal. */
+  /** Estados que la app no mapea ('switched'…). Vacío lo normal. */
   otros_estados: Record<string, number>;
   /** Suscripciones que DAN ACCESO: active + pending-cancel (isActiveWooStatus). */
   dan_acceso: number;
+  /**
+   * Emails DISTINTOS entre las suscripciones que dan acceso. Junto a `dan_acceso`
+   * es lo que mide cuánta gente tiene MÁS DE UNA suscripción activa a la vez:
+   * `dan_acceso - emails_con_acceso` = suscripciones de más. Sin este número la
+   * distancia entre las suscripciones y las personas hay que auditarla a mano
+   * (ver la nota de `descuadres`). Con Woo caído va 0, como el resto del bloque.
+   */
+  emails_con_acceso: number;
   paginas_leidas: number;
   error: string | null;
 }
@@ -166,7 +181,7 @@ const WOO_CAIDO = (msg: string): WooResult => ({
   conteo: {
     ok: false, total: 0,
     por_estado: Object.fromEntries(Object.keys(WOO_STATUS).map(k => [k, 0])),
-    otros_estados: {}, dan_acceso: 0, paginas_leidas: 0, error: msg,
+    otros_estados: {}, dan_acceso: 0, emails_con_acceso: 0, paginas_leidas: 0, error: msg,
   },
   accesoPorEmail: new Map(),
   conAccesoSinEmail: 0,
@@ -200,7 +215,11 @@ async function contarWoo(): Promise<WooResult> {
 
   for (const s of rows) {
     const status = typeof s?.status === 'string' ? s.status : '';
-    if (status in porEstado) porEstado[status]++;
+    // Object.hasOwn y no `status in porEstado`: `in` recorre la cadena de
+    // prototipos, así que un estado llamado 'toString' o 'constructor' daría true
+    // y el ++ escribiría NaN sobre un contador que no existe. Con los slugs de
+    // Woo no puede pasar hoy, pero el coste de blindarlo es cero.
+    if (Object.hasOwn(porEstado, status)) porEstado[status]++;
     else otros[status || 'sin_estado'] = (otros[status || 'sin_estado'] ?? 0) + 1;
 
     if (!isActiveWooStatus(status)) continue;
@@ -213,7 +232,8 @@ async function contarWoo(): Promise<WooResult> {
   return {
     conteo: {
       ok: true, total: rows.length, por_estado: porEstado, otros_estados: otros,
-      dan_acceso: danAcceso, paginas_leidas: paginas, error: null,
+      dan_acceso: danAcceso, emails_con_acceso: accesoPorEmail.size,
+      paginas_leidas: paginas, error: null,
     },
     accesoPorEmail,
     conAccesoSinEmail,
@@ -294,6 +314,14 @@ export interface SubscriptionsSnapshot {
       manual: { total: number; plan_empresa: number; a_mano: number };
       oritalk: number;
     };
+    /**
+     * Alumnos que tienen override (manual u Oritalk) Y ADEMÁS una suscripción de
+     * Woo que da acceso. NO es un descuadre: cuentan en su bucket de `por_origen`
+     * por precedencia y por eso no están en `suscripcion`, que es correcto. Se
+     * publica porque es la otra mitad —junto a `emails_con_acceso`— de por qué
+     * `dan_acceso` no coincide con `por_origen.suscripcion`. null con Woo caído.
+     */
+    con_override_y_suscripcion: number | null;
   };
   descuadres: {
     /** Pagan en Woo pero no existen en la base: altas sin dar de alta. */
@@ -304,6 +332,30 @@ export interface SubscriptionsSnapshot {
     alumnos_sin_email: number;
   };
 }
+
+/**
+ * DE `dan_acceso` (SUSCRIPCIONES) A `por_origen.suscripcion` (PERSONAS).
+ *
+ * Los dos números están bien y casi nunca coinciden. Todo lo que hace falta para
+ * cerrar la diferencia sin auditar a mano está publicado; con los datos reales
+ * del 28/08/2026 entre paréntesis:
+ *
+ *   dan_acceso                                     (135)
+ *   − suscripciones_activas_sin_email                (0)  Woo no trae el email
+ *   − suscripciones_activas_sin_alumno               (5)  huérfanas: pagan y no
+ *                                                         están dados de alta
+ *   = suscripciones sobre emails que sí existen    (130)
+ *
+ *   S = por_origen.suscripcion + con_override_y_suscripcion
+ *       → personas en la base que tienen alguna suscripción con acceso
+ *   suscripciones de más por persona = 130 − S
+ *       → gente con dos o más suscripciones activas a la vez
+ *   emails huérfanos distintos = emails_con_acceso − S
+ *
+ * Y por el otro lado: `por_origen.suscripcion` cuenta FILAS de `students`, no
+ * personas. Hoy los 189 alumnos tienen 189 emails distintos, así que da igual;
+ * si algún día se duplica una fila, el número se infla y esta nota es el aviso.
+ */
 
 // Cache en memoria por instancia serverless. 60 s: el dato es un recuento que se
 // mueve por hora, no por segundo, y sin cache cada tarjeta del dashboard pagaría
@@ -323,17 +375,29 @@ export async function loadSubscriptionsSnapshot(force = false): Promise<Subscrip
   let manualAMano = 0;
   let oritalk = 0;
   let sinEmail = 0;
+  let overrideConSuscripcion = 0;
   const emailsEnBase = new Set<string>();
 
   for (const a of alumnos) {
     const email = nkEmail(a.email);
     if (email) emailsEnBase.add(email); else sinEmail++;
 
+    // Se calcula ANTES de mirar el override y no dentro de la última rama: la
+    // pregunta "¿tiene suscripción con acceso?" es independiente de por qué se le
+    // termina contando, y es justo lo que hay que saber de los que ganan por
+    // override para poder explicar la distancia entre suscripciones y personas.
+    const tieneSuscripcionConAcceso =
+      woo.conteo.ok && !!email && woo.accesoPorEmail.has(email);
+
     // MISMA función que decide el acceso en check-subscription, con la misma
     // precedencia: Oritalk gana a la activación manual, y el override gana a
     // WooCommerce. Contar los buckets en otro orden los solaparía y el desglose
     // sumaría más que el total.
     const override = accessOverrideOf(a, today);
+    // Con override cuenta en SU bucket y no en `suscripcion`, aunque además pague
+    // en Woo. Eso es lo correcto (si no, sumaría dos veces), y a la vez es una de
+    // las dos razones por las que dan_acceso > suscripcion: acá queda anotada.
+    if (override && tieneSuscripcionConAcceso) overrideConSuscripcion++;
     if (override?.kind === 'oritalk') { oritalk++; continue; }
     if (override?.kind === 'manual') {
       // `company_plan_months` lo escribe la detección automática de planes de
@@ -346,7 +410,7 @@ export async function loadSubscriptionsSnapshot(force = false): Promise<Subscrip
       continue;
     }
     // Sin override: manda WooCommerce. Sin email no hay forma de preguntarle.
-    if (woo.conteo.ok && email && woo.accesoPorEmail.has(email)) porSuscripcion++;
+    if (tieneSuscripcionConAcceso) porSuscripcion++;
   }
 
   const manualTotal = manualEmpresa + manualAMano;
@@ -372,6 +436,7 @@ export async function loadSubscriptionsSnapshot(force = false): Promise<Subscrip
         manual: { total: manualTotal, plan_empresa: manualEmpresa, a_mano: manualAMano },
         oritalk,
       },
+      con_override_y_suscripcion: woo.conteo.ok ? overrideConSuscripcion : null,
     },
     descuadres: {
       suscripciones_activas_sin_alumno: woo.conteo.ok ? subsSinAlumno : null,
