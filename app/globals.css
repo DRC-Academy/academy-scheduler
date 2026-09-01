@@ -3662,6 +3662,10 @@ body.driver-active .drc-modal-backdrop * { pointer-events: auto; }
 .fch-cls-state { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; }
 .fch-dot { width: 6px; height: 6px; border-radius: 999px; flex-shrink: 0; }
 .fch-cls-type { color: var(--text-muted); min-width: 0; }
+/* Horas de la sesión y quién las decidió (calendario / solicitud / equipo). Lleva
+   `title` con la explicación completa, así que se marca como ayuda: es la señal
+   de que hay algo más que leer al pasar por encima. */
+.fch-cls-dur { color: var(--text-secondary); cursor: help; }
 .fch-cls-eur { text-align: right; font-weight: 600; color: var(--text-primary); white-space: nowrap; }
 .fch-cls-btn {
   padding: 5px 11px; border-radius: 6px; border: 1px solid var(--accent-border, rgba(22,122,45,0.30));

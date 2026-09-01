@@ -7,7 +7,7 @@ import { LastUpdated } from '@/components/LastUpdated';
 import { getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
-import { calculateTeacherFinance, estimateClassAmount, TeacherFinanceResult, ClassFinanceRow, classTypeBadge, subscriptionBadge, rowHoursLabel, financeStatusBadge, transcriptStateBadge, absenceBreakdownLabel, isStudentAbsence, recoveryCreditLabel, studentQuotaOf, SUBSCRIPTION_STATUS_OPTIONS } from '@/lib/finance';
+import { calculateTeacherFinance, estimateClassAmount, TeacherFinanceResult, ClassFinanceRow, classTypeBadge, durationSourceBadge, subscriptionBadge, rowHoursLabel, financeStatusBadge, transcriptStateBadge, absenceBreakdownLabel, isStudentAbsence, recoveryCreditLabel, studentQuotaOf, SUBSCRIPTION_STATUS_OPTIONS } from '@/lib/finance';
 import { isActiveWooStatus } from '@/lib/subscriptionAccess';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { dbRevertPenalty, dbGetAllTeacherAssignments } from '@/lib/db';
@@ -296,6 +296,7 @@ function ClassRows({ result, studentName, approvals, onApproveReview, onApproveE
       {rows.map((r, i) => {
         const st = financeStatusBadge(r.status);
         const ct = classTypeBadge(r.classType);
+        const dur = durationSourceBadge(r);
         const isFalta = r.classType === 'falta_sin_aviso' || r.classType === 'cancelacion_hora';
         const editable = result.paymentStatus !== 'paid' && !r.manuallyApproved;
         // Detalle del transcript SOLO cuando cambia lo que hay que hacer: subido y
@@ -317,8 +318,21 @@ function ClassRows({ result, studentName, approvals, onApproveReview, onApproveE
               {st.short}
             </span>
             <span className="fch-cls-type">
-              {[ct && plainPill(ct.label), txNote, r.billingUnits > 1 ? `${r.durationHours}h` : null]
-                .filter(Boolean).join(' · ')}
+              {[ct && plainPill(ct.label), txNote].filter(Boolean).join(' · ')}
+              {/* Las horas y QUIÉN las decidió. Dos clases de 2 h que se
+                  resolvieron por caminos distintos no se auditan igual: una la
+                  dedujo el calendario de hoy, otra la declaró el profesor al
+                  reclamar la clase, y otra la corrigió el equipo a mano.
+
+                  Se pinta también con 1 hora cuando NO viene del calendario: una
+                  corrección del admin a la baja (de 2 h a 1 h) sería si no
+                  indistinguible de una clase normal de una hora, y es
+                  precisamente la que alguien va a querer revisar. */}
+              {dur && (
+                <span className="fch-cls-dur" title={dur.title}>
+                  {(ct || txNote) ? ` · ${dur.label}` : dur.label}
+                </span>
+              )}
               {/* Sin acceso: se dice EN la clase, que es donde significa algo.
                   Antes esto era una lista de párrafos al principio del panel del
                   profesor, agrupada por estado, que no permitía saber cuál de sus

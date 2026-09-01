@@ -216,9 +216,11 @@ function ClasesSinIngreso() {
  * Va ANTES de ejecutar porque aprobar es lo que hace existir la clase para el
  * pago: es la acción que mueve dinero y no tiene deshacer directo.
  */
-function BulkConfirm({ items, amount, saving, onCancel, onConfirm }: {
+function BulkConfirm({ items, amount, saving, horasDe, onCancel, onConfirm }: {
   items: ClassReviewRequest[];
   amount: number;
+  /** Horas efectivas de cada solicitud: incluyen la corrección del admin. */
+  horasDe: (r: ClassReviewRequest) => number;
   saving: boolean;
   onCancel: () => void;
   onConfirm: () => void;
@@ -229,7 +231,7 @@ function BulkConfirm({ items, amount, saving, onCancel, onConfirm }: {
     porProfesor.set(r.teacherName, (porProfesor.get(r.teacherName) ?? 0) + 1);
     porTipo.set(r.requestedType, (porTipo.get(r.requestedType) ?? 0) + 1);
   }
-  const clases = items.reduce((s, r) => s + (r.durationHours || 1), 0);
+  const clases = items.reduce((s, r) => s + horasDe(r), 0);
 
   return (
     <div
@@ -408,6 +410,18 @@ export default function ReviewRequestsTab() {
   // que declaró el profesor.
   const [reclass, setReclass] = useState<Record<string, ReviewResolvedType>>({});
   const [notes, setNotes] = useState<Record<string, string>>({});
+  /**
+   * Horas con las que el admin va a resolver cada solicitud. Vacío = las que
+   * trae la solicitud (la foto automática del calendario). Mismo patrón que
+   * `reclass` y `notes`: se guarda al aprobar, no antes.
+   */
+  const [horas, setHoras] = useState<Record<string, number>>({});
+
+  /** Las horas efectivas de una solicitud: la corrección del admin si la hay. */
+  const horasDe = useCallback(
+    (r: ClassReviewRequest): number => horas[r.id] ?? r.durationHours ?? 1,
+    [horas],
+  );
   // Validación en bloque: si un profesor manda 44, resolverlas de a una no es
   // una opción. La reclasificación sigue siendo individual a propósito.
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -491,7 +505,9 @@ export default function ReviewRequestsTab() {
     if (!resolvedTypeCreatesJoinLog(tipo)) return 0;
     return estimateClassAmount({
       assignment: a, student: s, rates: financeRates,
-      date: r.classDate, durationHours: r.durationHours,
+      // Las horas EFECTIVAS: si el admin las corrigió, el importe estimado tiene
+      // que decir lo que se va a pagar y no lo que decía el calendario.
+      date: r.classDate, durationHours: horasDe(r),
     });
   }
 
@@ -525,6 +541,7 @@ export default function ReviewRequestsTab() {
         await dbResolveReviewRequest({
           request: r, decision: 'aprobada',
           resolvedType: reclass[r.id] ?? r.requestedType,
+          durationHours: horasDe(r),
           reviewerName, note: notes[r.id]?.trim() || undefined,
         });
         ok++;
@@ -547,6 +564,7 @@ export default function ReviewRequestsTab() {
         request: r,
         decision,
         resolvedType: reclass[r.id] ?? r.requestedType,
+        durationHours: horasDe(r),
         reviewerName,
         note: notes[r.id]?.trim() || undefined,
       });
@@ -638,6 +656,7 @@ export default function ReviewRequestsTab() {
       {confirmBulk && (
         <BulkConfirm
           items={seleccionadas}
+          horasDe={horasDe}
           amount={sumaSeleccion}
           saving={bulkSaving}
           onCancel={() => { if (!bulkSaving) setConfirmBulk(false); }}
@@ -671,7 +690,8 @@ export default function ReviewRequestsTab() {
             const tipo: ReviewResolvedType = reclass[r.id] ?? r.requestedType;
             const cambiado = tipo !== r.requestedType;
             const pagable = resolvedTypeCreatesJoinLog(tipo);
-            const dur = durationBadge(r.durationHours);
+            const dur = durationBadge(horasDe(r));
+            const horasCorregidas = horasDe(r) !== (r.durationHours ?? 1);
             const esFalta = tipo === 'falta_sin_aviso';
             const ordinal = esFalta ? absenceOrdinal(r) : 0;
             const superaCupo = esFalta && ordinal > ABSENCE_MONTHLY_CAP;
@@ -774,6 +794,48 @@ export default function ReviewRequestsTab() {
                         {RESOLVE_TYPE_OPTIONS.find(o => o.value === tipo)?.note}
                       </span>
                     </div>
+
+                    {/* Horas de la sesión. El número que trae la solicitud es una
+                        foto AUTOMÁTICA del calendario del día en que el profesor
+                        la declaró, y solo pisa al calendario de hoy si es >= 2
+                        (ver sessionSpanFor). Corregirlo acá lo convierte en una
+                        decisión del equipo, y entonces vale en los dos sentidos:
+                        también para bajar. Solo tiene sentido en los tipos que
+                        crean ingreso; los demás no se pagan. */}
+                    {pagable && (
+                      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
+                        <label htmlFor={`horas-${r.id}`} style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                          Horas de la clase:
+                        </label>
+                        <input
+                          id={`horas-${r.id}`}
+                          type="number"
+                          min={1}
+                          max={8}
+                          step={1}
+                          value={horasDe(r)}
+                          onChange={e => {
+                            const n = Math.round(Number(e.target.value));
+                            // El tope no es decorativo: un 22 en vez de un 2
+                            // pagaría 22 horas y nadie lo vería hasta la
+                            // liquidación.
+                            if (Number.isFinite(n) && n >= 1 && n <= 8) setHoras(p => ({ ...p, [r.id]: n }));
+                          }}
+                          disabled={working}
+                          style={{
+                            width: 62, padding: '7px 9px', borderRadius: 8,
+                            border: `1.5px solid ${horasCorregidas ? 'var(--warn)' : 'var(--border)'}`,
+                            background: 'var(--bg-surface-2)', color: 'var(--text-primary)',
+                            fontSize: 12.5, fontFamily: 'inherit',
+                          }}
+                        />
+                        <span style={{ fontSize: 12, color: horasCorregidas ? '#b45309' : 'var(--text-muted)' }}>
+                          {horasCorregidas
+                            ? `Corregido a mano · el calendario del día decía ${r.durationHours} h`
+                            : `Automático, del calendario del día de la clase`}
+                        </span>
+                      </div>
+                    )}
 
                     {/* Aprobar crea el ingreso, y eso desactiva por sí solo la
                         señal "sin acceso registrado" del transcript — que se

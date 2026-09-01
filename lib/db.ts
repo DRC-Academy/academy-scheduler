@@ -3133,6 +3133,11 @@ export async function dbGetClassJoinLogs(): Promise<ClassJoinLog[]> {
     subscriptionDaysRemaining: row.subscription_days_remaining ?? undefined,
     source:        row.source === 'manual' ? 'manual' : 'click',
     createdBy:     row.created_by ?? undefined,
+    // Sin migrar (columnas ausentes) → undefined: manda el calendario, como
+    // siempre. Ver supabase-review-duration.sql.
+    durationHours:  typeof row.duration_hours === 'number' ? row.duration_hours : undefined,
+    durationSource: row.duration_source === 'admin' ? 'admin'
+      : row.duration_source === 'solicitud' ? 'solicitud' : undefined,
   }));
 }
 
@@ -3152,6 +3157,13 @@ export async function dbCreateManualJoinLog(p: {
   teacherId: string; teacherName: string; studentName: string;
   scheduledDate: string; scheduledTime: string; createdBy: string;
   subscriptionStatus?: string;
+  /**
+   * Horas declaradas en la solicitud. Viaja hasta acá porque el ingreso es lo
+   * que CREA la clase para el pago, y `sessionSpanFor` las prefiere al
+   * calendario de hoy. Sin ellas (undefined) todo sigue como antes.
+   */
+  durationHours?: number;
+  durationSource?: 'solicitud' | 'admin';
 }): Promise<string> {
   const id = `cjl_manual_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   const base = {
@@ -3165,14 +3177,70 @@ export async function dbCreateManualJoinLog(p: {
     punctuality:    'on_time',
     subscription_status: p.subscriptionStatus ?? null,
   };
-  let { error } = await supabase.from('class_join_logs')
-    .insert({ ...base, source: 'manual', created_by: p.createdBy });
-  if (error && (error.code === 'PGRST204' || error.code === '42703')) {
+  const trazabilidad = { source: 'manual', created_by: p.createdBy };
+  const duracion = p.durationHours && p.durationHours >= 1
+    ? { duration_hours: Math.round(p.durationHours), duration_source: p.durationSource ?? 'solicitud' }
+    : {};
+
+  // Se degrada por capas, de más datos a menos: la aprobación no puede caerse
+  // porque falte una migración de auditoría. Cada capa avisa qué SQL falta.
+  const falta = (e: { code?: string } | null) => !!e && (e.code === 'PGRST204' || e.code === '42703');
+
+  let { error } = await supabase.from('class_join_logs').insert({ ...base, ...trazabilidad, ...duracion });
+  if (falta(error) && Object.keys(duracion).length > 0) {
+    console.warn('[db] class_join_logs sin duration_hours. Corré supabase-review-duration.sql; la clase se pagará según el calendario de hoy.');
+    ({ error } = await supabase.from('class_join_logs').insert({ ...base, ...trazabilidad }));
+  }
+  if (falta(error)) {
     console.warn('[db] class_join_logs sin source/created_by. Corré supabase-class-review-requests.sql; el ingreso se crea sin trazabilidad.');
     ({ error } = await supabase.from('class_join_logs').insert(base));
   }
   if (error) throw new Error(`No se pudo crear el ingreso manual: ${error.message}`);
   return id;
+}
+
+/**
+ * Escribe las horas declaradas sobre los ingresos de una clase QUE YA EXISTÍA.
+ *
+ * Es el caso de la guarda de idempotencia: entre que el profesor manda la
+ * solicitud y el admin la aprueba, la clase puede haber recibido su clic. Ahí
+ * `dbResolveReviewRequest` adopta ese ingreso en vez de crear otro — y sin esta
+ * función sería justamente el único camino que se seguiría pagando por el
+ * calendario de hoy, que es el problema que la solicitud viene a resolver.
+ *
+ * MARCA TODOS los ingresos de esa clase, no solo el que encontró `dbFindJoinLog`.
+ * Una clase puede tener dos accesos del mismo día (el profesor pulsó dos veces), y
+ * finanzas se queda con el ÚLTIMO que recorre: escribir sobre uno solo sería
+ * apostar a que el elegido es ese, y cuando no lo fuera la clase se pagaría por
+ * calendario sin que nadie se enterara. Se comprueba por FECHA y nombre
+ * normalizado, igual que `dbFindJoinLog`.
+ *
+ * No lanza: es un dato de precisión, no la aprobación. Si falla, la clase se
+ * paga como antes y queda el aviso en consola.
+ */
+export async function dbSetJoinLogDuration(
+  teacherId: string, studentName: string, scheduledDate: string,
+  durationHours: number, source: 'solicitud' | 'admin',
+): Promise<void> {
+  if (!(durationHours >= 1)) return;
+  const { data, error } = await supabase.from('class_join_logs')
+    .select('id, student_name')
+    .eq('teacher_id', teacherId)
+    .eq('scheduled_date', scheduledDate);
+  if (error) {
+    console.error('[db] No se pudieron leer los ingresos para fijar la duración:', error.message);
+    return;
+  }
+  const wanted = normKey(studentName);
+  const ids = (data ?? []).filter(r => normKey(r.student_name) === wanted).map(r => r.id);
+  if (ids.length === 0) return;
+
+  const { error: upErr } = await supabase.from('class_join_logs')
+    .update({ duration_hours: Math.round(durationHours), duration_source: source })
+    .in('id', ids);
+  if (upErr) {
+    console.error(`[db] No se pudo fijar la duración de ${ids.length} ingreso(s):`, upErr.message);
+  }
 }
 
 // ── UNASSIGNED STUDENTS ───────────────────────────────────────────────────────

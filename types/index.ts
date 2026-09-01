@@ -229,6 +229,22 @@ export interface ClassJoinLog {
    * para poder auditarlos, no para descontarlos.
    */
   source?: 'click' | 'manual';
+  /**
+   * Horas declaradas en la solicitud de revisión que creó este ingreso.
+   *
+   * `undefined` = no hay declaración y la duración la decide el CALENDARIO DE HOY
+   * (lib/finance.sessionSpanFor). Los ingresos por clic la dejan siempre así: ese
+   * camino no cambió.
+   */
+  durationHours?: number;
+  /**
+   * De dónde salen esas horas. `undefined` = ninguna declaración, manda el
+   * calendario. No comparte vocabulario con `ClassReviewRequest.durationSource`
+   * a propósito: allí 'calendario' significa "lo calculó el sistema al declarar",
+   * y acá eso es justamente `'solicitud'` — el `undefined` es el que significa
+   * calendario, pero el de HOY.
+   */
+  durationSource?: 'solicitud' | 'admin';
   createdBy?: string;                   // quién lo creó, en los 'manual'
 }
 
@@ -253,8 +269,23 @@ export interface ClassReviewRequest {
   studentName: string;
   classDate: string;        // 'YYYY-MM-DD'
   classTime?: string;       // 'HH:MM'
-  /** 2 en una sesión de celdas contiguas: la clase vale dos. */
+  /**
+   * 2 en una sesión de celdas contiguas: la clase vale dos.
+   *
+   * Sale AUTOMÁTICAMENTE del calendario al enviarse la solicitud
+   * (lib/attendance.ts, `run.length`); el profesor no lo elige ni lo ve como algo
+   * editable. El admin sí puede corregirlo al validar, y entonces
+   * `durationHours` es su número y `durationHoursAuto` el automático.
+   */
   durationHours: number;
+  /**
+   * Lo que decía el calendario cuando el profesor declaró la clase, si el admin
+   * lo corrigió después. `undefined` = nadie lo tocó (o la solicitud es anterior
+   * a supabase-review-duration.sql), así que el automático es `durationHours`.
+   */
+  durationHoursAuto?: number;
+  /** Quién fijó `durationHours`. Ausente = 'calendario'. */
+  durationSource?: 'calendario' | 'admin';
   requestedType: ReviewRequestType;
   /** Fila de class_analyses con el transcript (solo en las de tipo 'normal'). */
   analysisId?: string;

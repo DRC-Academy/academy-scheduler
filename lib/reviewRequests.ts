@@ -356,6 +356,9 @@ function mapRequest(row: Record<string, unknown>): ClassReviewRequest {
     classDate:     row.class_date as string,
     classTime:     (row.class_time as string) ?? undefined,
     durationHours: (row.duration_hours as number) ?? 1,
+    // Sin migrar → undefined. `durationHours` sigue siendo el automático.
+    durationHoursAuto: typeof row.duration_hours_auto === 'number' ? row.duration_hours_auto : undefined,
+    durationSource: row.duration_source === 'admin' ? 'admin' : 'calendario',
     requestedType: row.requested_type as ReviewRequestType,
     analysisId:    (row.analysis_id as string) ?? undefined,
     comment:       (row.comment as string) ?? undefined,
@@ -426,13 +429,27 @@ export async function dbCreateReviewRequest(p: {
     class_date:     p.classDate,
     class_time:     p.classTime ?? null,
     duration_hours: p.durationHours ?? 1,
+    // El automático se guarda POR DUPLICADO desde el minuto cero. Copiarlo solo
+    // cuando el admin corrige dejaría a las solicitudes sin corregir sin forma de
+    // decir "este número lo puso el calendario" salvo por ausencia, y una
+    // columna que a veces significa una cosa y a veces otra es la que acaba
+    // interpretándose mal. Acá `duration_hours_auto` siempre es el automático.
+    duration_hours_auto: p.durationHours ?? 1,
+    duration_source: 'calendario',
     requested_type: p.requestedType,
     analysis_id:    p.analysisId || null,
     comment:        p.comment || null,
     status:         'pendiente',
     created_at:     new Date().toISOString(),
   };
-  const { error } = await supabase.from('class_review_requests').insert(row);
+  let { error } = await supabase.from('class_review_requests').insert(row);
+  // Sin la migración de duración: se envía igual, sin el rastro del automático.
+  if (error && (error.code === 'PGRST204' || error.code === '42703')) {
+    console.warn('[reviewRequests] class_review_requests sin duration_hours_auto/duration_source. Corré supabase-review-duration.sql.');
+    const { duration_hours_auto, duration_source, ...sinAuditoria } = row;
+    void duration_hours_auto; void duration_source;
+    ({ error } = await supabase.from('class_review_requests').insert(sinAuditoria));
+  }
   if (error) {
     if (error.code === '23505') throw new Error('Esta clase ya tiene una solicitud enviada.');
     if (error.code === '42P01') throw new Error('Falta correr supabase-class-review-requests.sql en la base.');
@@ -516,16 +533,32 @@ export async function dbResolveReviewRequest(p: {
   request: ClassReviewRequest;
   decision: 'aprobada' | 'rechazada';
   resolvedType?: ReviewResolvedType;
+  /**
+   * Horas con las que el admin resuelve la clase. Ausente = las que traía la
+   * solicitud. Si difieren, el automático se conserva en `duration_hours_auto` y
+   * la clase pasa a contar como corregida a mano — que es lo que le permite a
+   * `sessionSpanFor` respetarla también cuando BAJA de 2 h.
+   */
+  durationHours?: number;
   reviewerName: string;
   note?: string;
 }): Promise<{ joinLogId?: string }> {
   // Import perezoso: db.ts es enorme y arrastra medio sistema. Acá solo hacen
-  // falta tres funciones, y solo al resolver.
-  const { dbCreateManualJoinLog, dbAddClassRecord, dbApplyFaltaSideEffects, dbFindJoinLog } = await import('@/lib/db');
+  // falta cuatro funciones, y solo al resolver.
+  const {
+    dbCreateManualJoinLog, dbAddClassRecord, dbApplyFaltaSideEffects,
+    dbFindJoinLog, dbSetJoinLogDuration,
+  } = await import('@/lib/db');
 
   const { request: r, decision, reviewerName } = p;
   const tipo: ReviewResolvedType = p.resolvedType ?? r.requestedType;
   let joinLogId: string | undefined;
+
+  // ── Horas con las que se resuelve ──────────────────────────────────────────
+  const horas = Math.max(1, Math.round(p.durationHours ?? r.durationHours ?? 1));
+  const corregidoAhora = horas !== Math.round(r.durationHours ?? 1);
+  const origen: 'solicitud' | 'admin' =
+    (corregidoAhora || r.durationSource === 'admin') ? 'admin' : 'solicitud';
 
   if (decision === 'aprobada') {
     if (resolvedTypeCreatesJoinLog(tipo)) {
@@ -545,9 +578,15 @@ export async function dbResolveReviewRequest(p: {
         scheduledDate: r.classDate,
         scheduledTime: r.classTime ?? '',
         createdBy:     reviewerName,
+        durationHours: horas,
+        durationSource: origen,
       });
       if (yaHay) {
-        console.log(`[reviewRequests] ${r.id}: la clase ya tenía ingreso (${yaHay}); no se crea otro.`);
+        // El ingreso reutilizado TAMBIÉN recibe las horas declaradas. Sin esto,
+        // la única clase que la guarda de idempotencia protege sería la única
+        // que se seguiría pagando por el calendario de hoy.
+        await dbSetJoinLogDuration(r.teacherId, r.studentName, r.classDate, horas, origen);
+        console.log(`[reviewRequests] ${r.id}: la clase ya tenía ingreso (${yaHay}); no se crea otro (duración ${horas} h · ${origen}).`);
       }
       // El ingreso acaba de existir: la señal `sin_acceso_registrado` del
       // transcript ya no describe nada real. Si era la ÚNICA que lo retenía, la
@@ -580,14 +619,29 @@ export async function dbResolveReviewRequest(p: {
     }
   }
 
-  const { error } = await supabase.from('class_review_requests').update({
+  const cierre = {
     status:        decision,
     resolved_type: decision === 'aprobada' ? tipo : null,
     review_note:   p.note || null,
     reviewed_by:   reviewerName,
     reviewed_at:   new Date().toISOString(),
     join_log_id:   joinLogId ?? null,
-  }).eq('id', r.id);
+  };
+  // La corrección del admin solo se escribe si de verdad cambió algo. El
+  // automático se preserva: si la solicitud es anterior a la migración no lo
+  // tiene, y entonces el que se guarda es el valor PREVIO a esta corrección —
+  // que es exactamente el que puso el calendario.
+  const duracion = corregidoAhora ? {
+    duration_hours:      horas,
+    duration_hours_auto: r.durationHoursAuto ?? Math.round(r.durationHours ?? 1),
+    duration_source:     'admin',
+  } : {};
+
+  let { error } = await supabase.from('class_review_requests').update({ ...cierre, ...duracion }).eq('id', r.id);
+  if (error && (error.code === 'PGRST204' || error.code === '42703') && corregidoAhora) {
+    console.warn('[reviewRequests] class_review_requests sin las columnas de duración. Corré supabase-review-duration.sql; la solicitud se cierra sin el rastro de la corrección.');
+    ({ error } = await supabase.from('class_review_requests').update(cierre).eq('id', r.id));
+  }
   if (error) throw new Error(`La clase se registró, pero no se pudo cerrar la solicitud: ${error.message}`);
 
   if (decision === 'rechazada') {

@@ -67,6 +67,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /** Máximo de faltas del alumno cobrables por alumno y MES. */
 export const ABSENCE_MONTHLY_CAP = 2;
 
+/** Quién decidió cuántas horas dura una sesión. Ver `sessionSpanFor`. */
+export type DurationSource = 'calendario' | 'solicitud' | 'admin';
+
 /** Registro mínimo de class_records que necesita el conteo de faltas. */
 interface AbsenceRecordRef {
   id: string;
@@ -203,6 +206,15 @@ export interface ClassFinanceRow {
    * día (17:00 + 18:00). Se deriva de la contigüidad, no hay columna que lo diga.
    */
   durationHours: number;
+  /**
+   * De dónde salieron esas horas. Lo pinta finanzas: dos clases de 2 h que se
+   * decidieron de forma distinta no se pueden auditar igual.
+   *
+   *   'calendario' → el grid del profesor HOY (el camino de siempre).
+   *   'solicitud'  → las declaró la solicitud de revisión aprobada.
+   *   'admin'      → el equipo las corrigió al validarla.
+   */
+  durationSource: DurationSource;
   /**
    * Lo que vale esta fila: `rate * billingUnits` y `billingUnits` unidades del
    * límite mensual. Una sesión de 2h es UN registro que vale 2, nunca dos filas
@@ -385,9 +397,45 @@ function slotHoursForDate(a: Assignment | undefined, dateIso: string): number[] 
 function sessionSpanFor(
   a: Assignment | undefined, dateIso: string, anchorHour: string, observed: Set<number>,
   occupancy: GridOccupancy,
-): { durationHours: number; startHour: string } {
+  declared?: { hours?: number; source?: 'solicitud' | 'admin' },
+): { durationHours: number; startHour: string; source: DurationSource } {
   const anchor = hourNum(anchorHour);
-  if (!Number.isFinite(anchor)) return { durationHours: 1, startHour: anchorHour };
+  if (!Number.isFinite(anchor)) return { durationHours: 1, startHour: anchorHour, source: 'calendario' };
+
+  // ── 0) LA SOLICITUD MANDA, PERO SOLO HACIA ARRIBA ─────────────────────────
+  //
+  // Las clases que entran por /revisiones traen sus horas declaradas
+  // (`class_join_logs.duration_hours`). El umbral para que pisen al calendario es
+  // >= 2 y NO >= 1, y la diferencia importa:
+  //
+  // `duration_hours` es una foto AUTOMÁTICA del calendario, tomada cuando el
+  // profesor declaró la clase (lib/attendance.ts: `run.length`). Nadie la
+  // escribió a mano y nadie la revisó. Es más fiable que el calendario de HOY
+  // —los horarios cambian y `teacher_calendars` no guarda historia— pero sigue
+  // siendo una foto.
+  //
+  // Confiar en ella para SUBIR recupera las sesiones largas que el calendario
+  // actual perdió: Stephannie Fermin (Daiana.M, 06 y 13/08) declara 2 h y el grid
+  // de hoy solo tiene una celda, así que se le pagaba la mitad. Confiar en ella
+  // para BAJAR le quitaría horas a un profesor por un dato que él no eligió y no
+  // puede corregir: Jorge Vidal (Johny, 26/08) declara 1 h contra las 2 del
+  // calendario, y con un umbral de >= 1 habría perdido una hora sin que nadie lo
+  // decidiera. El criterio es no bajarle el pago a nadie POR UN AUTOMATISMO.
+  //
+  // La corrección del ADMIN sí vale en los dos sentidos, y por eso su umbral es
+  // >= 1: ahí hubo una persona que miró el transcript y el comentario del
+  // profesor —más de lo que sabe cualquier calendario— y decidió. Descartar un 1
+  // escrito a mano sería ignorar en silencio la única revisión humana del
+  // proceso.
+  const minimo = declared?.source === 'admin' ? 1 : 2;
+  const horas = declared?.hours;
+  if (typeof horas === 'number' && Number.isFinite(horas) && horas >= minimo) {
+    return {
+      durationHours: Math.round(horas),
+      startHour: hourText(anchor),
+      source: declared?.source ?? 'solicitud',
+    };
+  }
 
   // Horas de RECUPERACIÓN de ese alumno en esa FECHA. También son calendario
   // (celdas 'bloqueado' que puso el profesor), solo que puntuales de esa semana,
@@ -407,8 +455,8 @@ function sessionSpanFor(
     const len = contiguousRunLength(calendarHours, anchor);
     // Si la hora no está en el calendario (len 0) la clase existió igual — hay
     // ingreso o registro — pero como sesión de una hora: el grid no la respalda.
-    if (len > 0) return { durationHours: len, startHour: hourText(runStartHour(calendarHours, anchor)) };
-    return { durationHours: 1, startHour: hourText(anchor) };
+    if (len > 0) return { durationHours: len, startHour: hourText(runStartHour(calendarHours, anchor)), source: 'calendario' };
+    return { durationHours: 1, startHour: hourText(anchor), source: 'calendario' };
   }
 
   // 2) El alumno SÍ está en el calendario, pero no ese día: es una clase fuera de
@@ -417,8 +465,8 @@ function sessionSpanFor(
   if (sigueEnElGrid) {
     const len = contiguousRunLength([...observed], anchor);
     return len > 1
-      ? { durationHours: len, startHour: hourText(runStartHour([...observed], anchor)) }
-      : { durationHours: 1, startHour: hourText(anchor) };
+      ? { durationHours: len, startHour: hourText(runStartHour([...observed], anchor)), source: 'calendario' }
+      : { durationHours: 1, startHour: hourText(anchor), source: 'calendario' };
   }
 
   // 3) El alumno YA NO ESTÁ en el calendario (lo sacaron, se dio de baja). El grid
@@ -436,7 +484,7 @@ function sessionSpanFor(
     const len = contiguousRunLength(hours, anchor);
     if (len > durationHours) { durationHours = len; start = runStartHour(hours, anchor); }
   }
-  return { durationHours, startHour: hourText(start) };
+  return { durationHours, startHour: hourText(start), source: 'calendario' };
 }
 
 /**
@@ -828,7 +876,9 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     const anchorHour = firstNonEmpty(log?.scheduledTime, record?.classTime, slotHourForDate(a, c.date));
     // Sesión de 2h (celdas contiguas) → la fila vale 2. Aplica también a faltas y
     // cancelaciones: si la clase perdida era de 2 horas, la constancia vale 2.
-    const { durationHours, startHour: hour } = sessionSpanFor(a, c.date, anchorHour, c.hours, gridOccupancy);
+    const { durationHours, startHour: hour, source: durationSource } =
+      sessionSpanFor(a, c.date, anchorHour, c.hours, gridOccupancy,
+        { hours: c.log?.durationHours, source: c.log?.durationSource });
 
     // Parte de RECUPERACIÓN de la sesión: cuántas de sus horas salen de una celda
     // 'bloqueado' del calendario, y qué clases perdidas saldan. Se deriva del
@@ -877,7 +927,7 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     rows.push({
       date: c.date, hour, studentName: c.studentName, plan,
       planCategory: planClass.type, planLabel: planClass.displayName,
-      weeklyHours, antiquityDays, rate, durationHours, billingUnits: durationHours,
+      weeklyHours, antiquityDays, rate, durationHours, durationSource, billingUnits: durationHours,
       recoveryUnits, recoveryForDates, status,
       classType, recordId: record?.id,
       hasJoinLog: join, hasTranscript: isTranscript, transcriptState, hasMeetLink, punctuality, manuallyApproved: approved,
@@ -1195,6 +1245,43 @@ export function durationBadge(durationHours?: number):
   { label: string; color: string; bg: string } | null {
   if (!durationHours || durationHours <= 1) return null;
   return { label: `${durationHours}h`, color: '#1E9E3A', bg: 'rgba(30,158,58,0.12)' };
+}
+
+/**
+ * Las horas de una fila y QUIÉN las decidió, para el detalle del admin.
+ *
+ * Tres clases de 2 h pueden haberse resuelto por tres caminos distintos, y no se
+ * auditan igual: una la dedujo el calendario de hoy, otra la declaró el profesor
+ * al reclamar la clase (foto automática del calendario de aquel día) y otra la
+ * corrigió el equipo a mano al validarla. Sin distinguirlas, el único número que
+ * queda —"2h"— no dice de dónde salió.
+ *
+ * Devuelve `null` solo en el caso aburrido: una hora decidida por el calendario,
+ * que es lo normal y no merece pintarse. Una corrección del admin SÍ se pinta
+ * aunque sea de 1 hora: bajar de 2 h a 1 h es justo lo que alguien va a querer
+ * revisar, y si no se dijera sería indistinguible de una clase normal.
+ */
+export function durationSourceBadge(
+  row: Pick<ClassFinanceRow, 'durationHours' | 'billingUnits' | 'durationSource'>,
+): { label: string; title: string } | null {
+  const horas = row.durationHours ?? 1;
+  const fuente = row.durationSource ?? 'calendario';
+  if (horas <= 1 && fuente === 'calendario') return null;
+
+  if (fuente === 'solicitud') {
+    return {
+      label: `${horas}h · declarada`,
+      title: `${horas} h según la solicitud de revisión que el profesor declaró para esta clase. `
+        + 'No se consultó el calendario de hoy, que puede haber cambiado desde entonces.',
+    };
+  }
+  if (fuente === 'admin') {
+    return {
+      label: `${horas}h · ajustada`,
+      title: `${horas} h fijadas a mano por el equipo al validar la solicitud de revisión.`,
+    };
+  }
+  return { label: `${horas}h`, title: `Sesión de ${horas} h según el calendario del profesor.` };
 }
 
 // Verificación visible para el profesor (sección "Mis clases"): ¿hubo ingreso?
