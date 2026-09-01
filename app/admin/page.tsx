@@ -15,7 +15,7 @@ import { EVENT_POINTS, EVENT_EUROS, calcRegisteredClassNumber, dbUpdateAssignmen
   dbDiagnoseAllCalendars, dbSyncAllCalendarsToAssignments, dbCreateFullLink, CalendarDiagnosisAllRow, AuditResult,
   dbRepairMisplacedStudent, dbCountPendingValidations, type PendingValidationSummary,
   dbSyncSlotsFromCalendar,
-  findDuplicateTeacherAssignments, type DuplicateAssignmentGroup, type DeleteTeacherResult } from '@/lib/db';
+  findDuplicateTeacherAssignments, type DuplicateAssignmentGroup, type ArchiveTeacherResult } from '@/lib/db';
 import { CambiarProfesorModal } from '@/components/CambiarProfesorModal';
 import { CrearVinculoModal } from '@/components/CrearVinculoModal';
 import { getPresentationEmailStatus, hoursSinceAssigned, type PresentationEmailStatusKind } from '@/lib/presentationEmailUtils';
@@ -36,11 +36,11 @@ import { triggerEmail } from '@/lib/emailClient';
 import { notificationDirection, notificationTypeInfo, type NotificationDirection } from '@/lib/notificationDirection';
 
 // ─── Edit Teacher Modal ───────────────────────────────────────────────────────
-function EditTeacherModal({ teacher, onClose, onSave, onDelete }: {
+function EditTeacherModal({ teacher, onClose, onSave, onArchive }: {
   teacher: Teacher;
   onClose: () => void;
   onSave: (id: string, data: { name: string; email: string; specialties: string[]; notificationEmail: string }) => Promise<void>;
-  onDelete: (id: string) => Promise<DeleteTeacherResult>;
+  onArchive: (id: string) => Promise<ArchiveTeacherResult>;
 }) {
   const [form, setForm] = useState({
     name:             teacher.name,
@@ -76,12 +76,19 @@ function EditTeacherModal({ teacher, onClose, onSave, onDelete }: {
     setDeleting(true);
     setDeleteError(null);
     try {
-      const res = await onDelete(teacher.id);
+      const res = await onArchive(teacher.id);
       if (!res.ok) {
+        // El motivo real primero: si la base rechaza la operación (p. ej. falta
+        // la migración), repetir el clic no la va a arreglar y hay que decirlo.
+        if (res.error) {
+          setDeleteError(res.error);
+          setDeleting(false);
+          return;
+        }
         const names = (res.studentNames ?? []).slice(0, 5).join(', ');
         const more = (res.studentNames?.length ?? 0) > 5 ? '…' : '';
         setDeleteError(
-          `No se puede eliminar: ${teacher.name} todavía tiene ${res.activeAssignments} ` +
+          `No se puede archivar: ${teacher.name} todavía tiene ${res.activeAssignments} ` +
           `asignación${res.activeAssignments === 1 ? '' : 'es'} activa${res.activeAssignments === 1 ? '' : 's'}` +
           (names ? ` (${names}${more})` : '') +
           `. Reasigná o dá de baja a esos alumnos primero.`
@@ -90,8 +97,10 @@ function EditTeacherModal({ teacher, onClose, onSave, onDelete }: {
         return;
       }
       onClose();
-    } catch {
-      setDeleteError('No se pudo eliminar el profesor. Inténtalo de nuevo.');
+    } catch (e) {
+      setDeleteError(
+        `No se pudo archivar el profesor: ${e instanceof Error ? e.message : 'error inesperado'}.`
+      );
       setDeleting(false);
     }
   }
@@ -143,19 +152,23 @@ function EditTeacherModal({ teacher, onClose, onSave, onDelete }: {
             </button>
           </div>
 
-          {/* ── Zona de peligro: eliminar definitivamente ── */}
+          {/* ── Dar de baja: se archiva, no se borra (ver lib/db.ts:dbArchiveTeacher) ── */}
           <div style={{ marginTop: 10, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
             {!confirming ? (
               <button onClick={() => { setConfirming(true); setDeleteError(null); }}
                 style={{ width: '100%', padding: '9px', borderRadius: 8, border: '1px solid #f0c4bd', background: 'transparent', color: '#c0392b', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
-                Eliminar profesor definitivamente
+                Dar de baja al profesor
               </button>
             ) : (
               <div style={{ background: 'rgba(192,57,43,0.05)', border: '1px solid #f0c4bd', borderRadius: 10, padding: 14 }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: '#c0392b', marginBottom: 6 }}>⚠️ Eliminar a {teacher.name}</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#c0392b', marginBottom: 6 }}>⚠️ Dar de baja a {teacher.name}</div>
                 <div style={{ fontSize: 12.5, color: '#6b7280', lineHeight: 1.55, marginBottom: 12 }}>
-                  Se eliminará el profesor, su acceso al sistema y su calendario. El historial de clases y
-                  finanzas de meses anteriores se conserva. <b>Esta acción no se puede deshacer.</b>
+                  {teacher.name} desaparecerá de la plataforma y <b>perderá el acceso</b>: no podrá volver
+                  a entrar ni recibirá avisos. Su historial de clases y finanzas se conserva intacto, así
+                  que las liquidaciones de meses anteriores no cambian.
+                  <br /><br />
+                  Se puede revertir desde la base de datos (<code>archived_at</code>), pero habría que
+                  volver a crearle el usuario de acceso.
                 </div>
                 <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 5 }}>
                   Escribe <b>{teacher.name}</b> para confirmar
@@ -173,7 +186,7 @@ function EditTeacherModal({ teacher, onClose, onSave, onDelete }: {
                   </button>
                   <button onClick={handleDelete} disabled={!canConfirmDelete}
                     style={{ flex: 2, padding: '9px', borderRadius: 8, border: 'none', background: canConfirmDelete ? '#c0392b' : '#e5b8b1', color: 'white', cursor: canConfirmDelete ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
-                    {deleting ? 'Eliminando…' : 'Eliminar definitivamente'}
+                    {deleting ? 'Dando de baja…' : 'Dar de baja'}
                   </button>
                 </div>
               </div>
@@ -3811,7 +3824,7 @@ const ADMIN_TABS = ['overview', 'teachers', 'emails', 'scoring', 'tracking', 'cl
 type AdminTab = typeof ADMIN_TABS[number];
 
 function AdminContent() {
-  const { teachers, assignments, students, classRecords, scoringEvents, addTeacher, deleteTeacher, loadingTeachers, getTeacherGrid, updateTeacherGrid, checkAndRunResets, reloadAll, updateTeacherInfo } = useTeachers();
+  const { teachers, assignments, students, classRecords, scoringEvents, addTeacher, archiveTeacher, loadingTeachers, getTeacherGrid, updateTeacherGrid, checkAndRunResets, reloadAll, updateTeacherInfo } = useTeachers();
   const [selectedTeacher, setSelectedTeacher] = useState<string | null>(null);
   const [showNewTeacher, setShowNewTeacher] = useState(false);
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');
@@ -4715,7 +4728,7 @@ function AdminContent() {
           teacher={editTeacher}
           onClose={() => setEditTeacher(null)}
           onSave={async (id, data) => { await updateTeacherInfo(id, data); setEditTeacher(null); }}
-          onDelete={deleteTeacher}
+          onArchive={archiveTeacher}
         />
       )}
       </PullToRefresh>

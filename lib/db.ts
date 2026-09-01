@@ -115,13 +115,38 @@ export function dbGetWeekDates(offset: number = 0): Date[] {
 
 // ── TEACHERS ─────────────────────────────────────────────────────────────────
 
-export async function dbGetTeachers(): Promise<Teacher[]> {
+/**
+ * La plantilla de profesores.
+ *
+ * POR DEFECTO NO TRAE LOS ARCHIVADOS. Un profesor archivado ya no está con la
+ * academia: no debe salir en el buscador, ni en los selectores de asignación, ni
+ * recibir el recordatorio diario de transcripciones. Como este es el único sitio
+ * del que la app saca la lista (cuatro consumidores), filtrar acá los quita de
+ * todas partes a la vez.
+ *
+ * `includeArchived: true` es para el HISTÓRICO. La liquidación de un mes cerrado
+ * no puede cambiar porque el profesor se haya ido después: si /api/external/payouts
+ * dejara de verlo, el gasto de julio se movería solo. Ver lib/externalPayouts.
+ *
+ * El descarte se hace en JS y no con un `.is('archived_at', null)` a propósito:
+ * PostgREST falla con 42703 si se filtra por una columna que todavía no existe, y
+ * eso dejaría la app sin NINGÚN profesor entre que se despliega el código y se
+ * corre supabase-teacher-archive.sql. Con `select('*')` la columna ausente llega
+ * como `undefined` y no archiva a nadie, que es el fallo seguro.
+ */
+export async function dbGetTeachers(
+  opts: { includeArchived?: boolean } = {},
+): Promise<Teacher[]> {
   const [teachersRes, calendarsRes] = await Promise.all([
     supabase.from('teachers').select('*').order('name'),
     supabase.from('teacher_calendars').select('teacher_id, grid'),
   ]);
 
   if (teachersRes.error || !teachersRes.data) return [];
+
+  if (!opts.includeArchived) {
+    teachersRes.data = teachersRes.data.filter(row => !row.archived_at);
+  }
 
   const gridMap: Record<string, Grid> = {};
   if (calendarsRes.data) {
@@ -221,6 +246,8 @@ export async function dbGetTeachers(): Promise<Teacher[]> {
       recoveryCells,
       internalRating:      row.internal_rating ?? 0,
       createdAt:           row.created_at ?? undefined,
+      // Sin migrar (columna ausente) → undefined: nadie sale archivado.
+      archivedAt:          row.archived_at ?? undefined,
       currentLevel:        row.current_level ?? 1,
       totalScore:          row.total_score ?? 0,
       totalEuros:          row.total_euros ?? 0,
@@ -256,49 +283,99 @@ export async function dbAddTeacher(teacher: Teacher, username: string): Promise<
   });
 }
 
-export interface DeleteTeacherResult {
+export interface ArchiveTeacherResult {
   ok: boolean;
-  /** Cantidad de asignaciones activas que impiden borrar (guard), si ok === false. */
+  /** Cantidad de asignaciones activas que impiden archivar (guard), si ok === false. */
   activeAssignments?: number;
   /** Nombres de los alumnos aún asignados a ese profesor. */
   studentNames?: string[];
+  /**
+   * Motivo REAL cuando la base rechaza la operación (típicamente: la columna
+   * `archived_at` todavía no existe porque falta correr la migración). Va a la
+   * UI tal cual: un "inténtalo de nuevo" ante un fallo determinista solo hace
+   * que el admin repita el clic para siempre.
+   */
+  error?: string;
 }
 
-// Elimina DEFINITIVAMENTE a un profesor que ya no trabaja con la academia.
+// Archiva a un profesor que ya no trabaja con la academia.
 //
-// GUARD: si el profesor todavía tiene alumnos asignados (assignments), NO se borra
-// — devuelve ok:false con el recuento y los nombres, para que el admin primero
-// reasigne o dé de baja a esos alumnos. Así nunca dejamos a un alumno activo sin
-// profesor por accidente.
+// ── POR QUÉ ARCHIVAR Y NO BORRAR ────────────────────────────────────────────
 //
-// Al borrar se elimina su IDENTIDAD y ACCESO: la fila de `teachers`, su usuario de
-// login (`app_users`) y su calendario (`teacher_calendars`). El HISTORIAL de clases
-// y finanzas (class_records, class_join_logs, finance_payments, scoring_events) se
-// PRESERVA a propósito: son la base contable de meses ya cerrados y no deben
-// desaparecer porque el profesor se vaya (misma filosofía que dbDeleteStudent).
-export async function dbDeleteTeacher(teacherId: string): Promise<DeleteTeacherResult> {
+// Ocho tablas referencian `teachers(id)` con FK y sin `on delete cascade`:
+// assignments, class_records, class_join_logs, finance_payments, class_analyses,
+// class_review_requests, form_tokens y level_test_sessions. Postgres no deja
+// borrar la fila padre mientras alguna apunte al profesor, así que un profesor
+// que dio una sola clase NO se puede borrar sin destruir antes esa clase — y esas
+// filas son la base contable de meses ya cerrados.
+//
+// Es decir: "borrar el profesor" y "conservar su historial" no pueden ser ciertas
+// a la vez. Esta función elige lo segundo, que es lo que la academia necesita.
+// Antes intentaba lo primero y moría con un 23503 que la UI traducía a
+// "Inténtalo de nuevo", dejando además al profesor A MEDIAS (ver abajo).
+//
+// ── ORDEN DE LAS OPERACIONES ────────────────────────────────────────────────
+//
+// El UPDATE de `teachers` va PRIMERO y nada más se toca si sale bien. La versión
+// anterior borraba `app_users` y `teacher_calendars` ANTES del DELETE final: como
+// ese DELETE fallaba siempre para quien tuviera historial, el profesor se quedaba
+// existiendo pero sin login ni calendario, y sin forma de deshacerlo. Le pasó a
+// una profesora real (agosto/2026). El paso que puede fallar va primero.
+//
+// El login SÍ se revoca (`app_users`): archivar es "esta persona ya no entra".
+// El calendario se CONSERVA, para que desarchivar devuelva al profesor con su
+// grid intacto; el usuario de login, en cambio, hay que volver a crearlo.
+export async function dbArchiveTeacher(teacherId: string): Promise<ArchiveTeacherResult> {
+  // GUARD: alumnos todavía asignados. Solo cuentan los assignments ACTIVOS — un
+  // assignment inactivo es un vínculo histórico, no un alumno que se quedaría sin
+  // profesor, y es justo lo que acumula quien lleva tiempo en la academia. (El
+  // mensaje de error ya decía "activas"; la consulta no lo filtraba.)
   const { data: assigns } = await supabase
     .from('assignments')
-    .select('student_name')
+    .select('student_name, status')
     .eq('teacher_id', teacherId);
 
-  if (assigns && assigns.length > 0) {
-    const studentNames = [...new Set(assigns.map(a => a.student_name).filter(Boolean) as string[])];
-    return { ok: false, activeAssignments: assigns.length, studentNames };
+  const activos = (assigns ?? []).filter(a => (a.status ?? 'active') === 'active');
+  if (activos.length > 0) {
+    const studentNames = [...new Set(activos.map(a => a.student_name).filter(Boolean) as string[])];
+    return { ok: false, activeAssignments: activos.length, studentNames };
   }
 
-  // Sin alumnos asignados → borrado seguro de identidad + acceso + calendario.
-  await supabase.from('app_users').delete().eq('teacher_id', teacherId);
-  await supabase.from('teacher_calendars').delete().eq('teacher_id', teacherId);
+  const { error } = await supabase
+    .from('teachers')
+    .update({ archived_at: new Date().toISOString() })
+    .eq('id', teacherId);
 
-  const { error } = await supabase.from('teachers').delete().eq('id', teacherId);
   if (error) {
-    console.error('[dbDeleteTeacher] Error al eliminar el profesor:', error);
+    console.error('[dbArchiveTeacher] No se pudo archivar el profesor:', error);
+    // 42703 = la columna no existe: falta correr supabase-teacher-archive.sql.
+    const falta = error.code === '42703' || /archived_at/.test(error.message ?? '');
+    return {
+      ok: false,
+      error: falta
+        ? 'Falta correr supabase-teacher-archive.sql en Supabase: la columna archived_at todavía no existe.'
+        : error.message,
+    };
+  }
+
+  // Solo ahora se revoca el acceso: si lo de arriba falló, el profesor sigue
+  // entrando igual que antes y no queda en un estado a medias.
+  await supabase.from('app_users').delete().eq('teacher_id', teacherId);
+
+  console.log(`[dbArchiveTeacher] Profesor ${teacherId} archivado (login revocado). Historial y calendario preservados.`);
+  return { ok: true };
+}
+
+/** Devuelve a un profesor archivado a la plantilla. No le recrea el login. */
+export async function dbUnarchiveTeacher(teacherId: string): Promise<void> {
+  const { error } = await supabase
+    .from('teachers')
+    .update({ archived_at: null })
+    .eq('id', teacherId);
+  if (error) {
+    console.error('[dbUnarchiveTeacher] No se pudo desarchivar el profesor:', error);
     throw new Error(error.message);
   }
-
-  console.log(`[dbDeleteTeacher] Profesor ${teacherId} eliminado (identidad + login + calendario). Historial preservado.`);
-  return { ok: true };
 }
 
 // ── CALENDARS ─────────────────────────────────────────────────────────────────

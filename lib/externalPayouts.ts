@@ -124,7 +124,12 @@ export async function loadPayoutDataset(force = false): Promise<PayoutDataset> {
     rates, payments, classRecords, joinLogs, manualApprovals, classAnalyses,
     productPrices,
   ] = await Promise.all([
-    dbGetTeachers(), dbGetStudents(), dbGetAssignments(), dbGetScoringEvents(),
+    // CON los archivados: un profesor que se fue en agosto siguió costando lo que
+    // costó en julio. Si el dataset dejara de verlo, el gasto de un mes ya cerrado
+    // bajaría solo por una baja posterior. `computeMonth` los descarta después,
+    // pero solo en los meses en que no tuvieron actividad.
+    dbGetTeachers({ includeArchived: true }),
+    dbGetStudents(), dbGetAssignments(), dbGetScoringEvents(),
     dbGetFinanceRates(), dbGetFinancePayments(), dbGetClassRecords(), dbGetClassJoinLogs(),
     dbGetManualApprovals(), dbGetClassTranscripts(), dbGetProductPrices(),
   ]);
@@ -249,9 +254,14 @@ export interface MonthPayouts {
    * 29" en vez de como un 21 suelto, que es justo lo que se malinterpretó
    * (27/08/2026) creyendo que faltaban profesores en la respuesta.
    *
-   * Es exactamente `teachers.length` — el array completo viene igual. Se manda
-   * aparte para que el dashboard pueda pintar la tarjeta sin recorrerlo, y para
-   * que quede explícito que ningún profesor se está quedando fuera del array.
+   * Cuenta la plantilla ACTUAL: los profesores en activo, sin los archivados. Se
+   * manda aparte para que el dashboard pueda pintar la tarjeta sin recorrer el
+   * array.
+   *
+   * NO es `teachers.length`. El array puede traer ADEMÁS a profesores ya dados de
+   * baja que sí trabajaron en el mes pedido (ver `computeMonth`): su liquidación
+   * de ese mes existió y no puede desaparecer porque se hayan ido después. El
+   * denominador es la plantilla de hoy; el array, quién costó dinero ese mes.
    */
   teachers_total: number;
   /** Profesores que facturaron algo ESE mes. Es el número histórico real. */
@@ -346,25 +356,35 @@ export function computeMonth(ds: PayoutDataset, monthYear: string): MonthPayouts
     };
   });
 
-  const totalAmount = round2(teachers.reduce((s, t) => s + t.total_amount, 0));
-  const facturacionTotal = round2(teachers.reduce((s, t) => s + t.facturacion, 0));
+  // Profesores dados de baja: se quedan SOLO en los meses en que hubo actividad.
+  // Mantenerlos siempre llenaría la serie de filas en cero de gente que ya no
+  // está; quitarlos siempre reescribiría los meses que sí trabajaron. El criterio
+  // es el mes, no la baja.
+  const archivedIds = new Set(ds.teachers.filter(t => t.archivedAt).map(t => t.id));
+  const visibles = teachers.filter(t =>
+    !archivedIds.has(t.teacher_id) || t.total_amount !== 0 || t.facturacion !== 0);
+
+  const totalAmount = round2(visibles.reduce((s, t) => s + t.total_amount, 0));
+  const facturacionTotal = round2(visibles.reduce((s, t) => s + t.facturacion, 0));
   // Ningún profesor con precio resuelto → no hay margen que dar. Es el caso de
   // `product_prices` vacía: sin esto, el mes entero saldría con un margen
   // negativo igual al gasto, como si la academia no facturara nada.
-  const algunPrecio = teachers.some(t => t.alumnos_con_precio > 0);
+  const algunPrecio = visibles.some(t => t.alumnos_con_precio > 0);
 
   return {
     month_year: monthYear,
     is_current_month: isCurrent,
     total_amount: totalAmount,
-    teachers_total: teachers.length,
-    teachers_with_amount: teachers.filter(t => t.total_amount !== 0).length,
-    active_teachers_now: teachers.filter(t => t.is_active).length,
+    // La PLANTILLA de hoy: sin archivados. `visibles` puede ser mayor si algún
+    // profesor ya dado de baja trabajó este mes.
+    teachers_total: teachers.filter(t => !archivedIds.has(t.teacher_id)).length,
+    teachers_with_amount: visibles.filter(t => t.total_amount !== 0).length,
+    active_teachers_now: visibles.filter(t => t.is_active).length,
     facturacion_total: facturacionTotal,
     margen_total: algunPrecio ? round2(facturacionTotal - totalAmount) : null,
-    facturacion_parcial: teachers.some(t => t.facturacion_parcial),
-    ventanas_dudosas_total: teachers.reduce((s, t) => s + t.ventanas_dudosas, 0),
-    teachers: teachers.sort((a, b) => b.total_amount - a.total_amount || a.teacher_name.localeCompare(b.teacher_name, 'es')),
+    facturacion_parcial: visibles.some(t => t.facturacion_parcial),
+    ventanas_dudosas_total: visibles.reduce((s, t) => s + t.ventanas_dudosas, 0),
+    teachers: visibles.sort((a, b) => b.total_amount - a.total_amount || a.teacher_name.localeCompare(b.teacher_name, 'es')),
   };
 }
 

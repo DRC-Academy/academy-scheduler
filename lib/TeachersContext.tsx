@@ -2,7 +2,7 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { Teacher, Student, Assignment, Grid, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, ClassRecord, ClassRecordType, FinanceRate, FinancePayment, FinanceManualApproval, EmailPreferences, SalesContactResult } from '@/types';
 import {
-  dbGetTeachers, dbAddTeacher, dbDeleteTeacher,
+  dbGetTeachers, dbAddTeacher, dbArchiveTeacher,
   dbGetStudents, dbUpsertStudent, dbDeleteStudent, dbUpdateStudent,
   dbGetAssignments, dbAddAssignment, dbGetAllStudentsWithAssignments,
   dbGetTeacherGrid, dbSaveTeacherGrid, dbUpdateTeacherRating,
@@ -23,7 +23,7 @@ import {
   dbSetSalesContact,
   dbApplyFaltaSideEffects, dbRevertStudentAbsence, dbFindStudentAbsence,
 } from '@/lib/db';
-import type { AffectedTeacher, ChangeTeacherParams, DeleteTeacherResult, StudentLeftGrid } from '@/lib/db';
+import type { AffectedTeacher, ChangeTeacherParams, ArchiveTeacherResult, StudentLeftGrid } from '@/lib/db';
 import type { AssignedSlot } from '@/types';
 import { calculateTeacherFinance, canMarkStudentAbsence, ABSENCE_CAP_MESSAGE, type ClassTranscriptRef } from '@/lib/finance';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
@@ -48,7 +48,7 @@ interface TeachersContextType {
   manualApprovals: FinanceManualApproval[];
   lastUpdated: Date | null;
   addTeacher: (t: Teacher, username: string) => Promise<void>;
-  deleteTeacher: (teacherId: string) => Promise<DeleteTeacherResult>;
+  archiveTeacher: (teacherId: string) => Promise<ArchiveTeacherResult>;
   addStudent: (s: Student) => Promise<void>;
   deleteStudent: (studentId: string, studentName: string, createdBy?: string, alsoStudentIds?: string[]) => Promise<AffectedTeacher[]>;
   updateStudent: (student: Student) => Promise<void>;
@@ -103,7 +103,7 @@ const TeachersContext = createContext<TeachersContextType>({
   unassignedStudents: [], classJoinLogs: [], classRecords: [], classAnalyses: [],
   financeRates: [], financePayments: [], manualApprovals: [], lastUpdated: null,
   addTeacher:               async () => {},
-  deleteTeacher:            async () => ({ ok: true }),
+  archiveTeacher:           async () => ({ ok: true }),
   addStudent:               async () => {},
   deleteStudent:            async () => [],
   updateStudent:            async () => {},
@@ -236,8 +236,8 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   // Borra definitivamente a un profesor que ya no trabaja con la academia. Si tiene
   // alumnos asignados, la BD devuelve ok:false (guard) y NO se toca nada; el llamador
   // muestra el motivo. Al eliminarlo, se refresca el estado para que desaparezca.
-  async function deleteTeacher(teacherId: string): Promise<DeleteTeacherResult> {
-    const result = await dbDeleteTeacher(teacherId);
+  async function archiveTeacher(teacherId: string): Promise<ArchiveTeacherResult> {
+    const result = await dbArchiveTeacher(teacherId);
     if (result.ok) {
       setTeachers(prev => prev.filter(t => t.id !== teacherId));
       await reloadAll();
@@ -668,7 +668,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
       teachers, students, assignments, teacherGrids, loadingTeachers,
       scoringEvents, classCounts, notifications, unassignedStudents, classJoinLogs,
       classRecords, classAnalyses, financeRates, financePayments, manualApprovals, lastUpdated,
-      addTeacher, deleteTeacher, addStudent, deleteStudent, updateStudent, markSalesContact, addAssignment,
+      addTeacher, archiveTeacher, addStudent, deleteStudent, updateStudent, markSalesContact, addAssignment,
       getTeacherGrid, updateTeacherGrid, updateTeacherRating,
       updateTeacherSpecialties, updateTeacherInfo, updateTeacherEmailPreferences,
       addScoringEvent, loadScoringEvents, checkAndRunResets,

@@ -106,6 +106,13 @@ export interface Teacher {
   recoveryCells?: RecoveryCell[];
   internalRating?: number;
   createdAt?: string;
+  /**
+   * Fecha en que el profesor dejó la academia. Presente = ARCHIVADO: no sale en
+   * ninguna lista de la app ni recibe avisos, pero su historial de clases y
+   * finanzas sigue intacto. Los profesores no se borran — ver
+   * lib/db.ts:dbArchiveTeacher y supabase-teacher-archive.sql.
+   */
+  archivedAt?: string;
   currentLevel?: number;
   totalScore?: number;
   totalEuros?: number;

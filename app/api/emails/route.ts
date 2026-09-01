@@ -121,9 +121,12 @@ async function sendCircularToAll(
   notification: { title: string; body: string },
   excludeTeacherIds: string[] = [],
 ): Promise<number> {
-  const { data, error } = await supabase
-    .from('teachers')
-    .select('id, name, email, notification_email, email_preferences');
+  // `select('*')` y no la lista de columnas: hace falta leer `archived_at` para
+  // descartar a los profesores dados de baja, y nombrarla explícitamente haría
+  // fallar la consulta entera (42703) mientras la migración no esté corrida —
+  // dejando sin circular a TODA la plantilla. Con `*` la columna ausente llega
+  // como undefined y no descarta a nadie.
+  const { data, error } = await supabase.from('teachers').select('*');
 
   if (error || !data) {
     console.error('[api/emails] No se pudieron leer los profesores:', error);
@@ -134,7 +137,8 @@ async function sendCircularToAll(
   // el aviso in-app y el correo tienen que salir con la misma lista o un profesor
   // excluido recibiría el email de algo que no ve en la plataforma.
   const excluidos = new Set(excludeTeacherIds);
-  const destinatarios = data.filter(t => !excluidos.has(t.id));
+  // Los dados de baja no reciben circulares: ya no están en la academia.
+  const destinatarios = data.filter(t => !excluidos.has(t.id) && !t.archived_at);
   if (excluidos.size > 0) {
     console.log(`[api/emails] Circular con exclusiones: ${destinatarios.length} de ${data.length} profesores.`);
   }
