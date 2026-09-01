@@ -82,6 +82,24 @@ export function isStudentAbsence(classType: ClassRecordType | undefined): boolea
   return classType === 'falta_sin_aviso';
 }
 
+/**
+ * ¿Es una clase que el alumno PERDIÓ por su cuenta? Falta sin aviso o
+ * cancelación sobre la hora.
+ *
+ * Las dos son lo mismo desde el plan del alumno: la hora se reservó, el profesor
+ * estuvo, y esa clase ya no se da ni se recupera. Por eso GASTAN UNA CLASE DEL
+ * MES — si no lo hicieran, cancelar sobre la hora saldría gratis y el alumno
+ * acabaría el mes con más clases de las que incluye su plan.
+ *
+ * NO se mezcla con `isStudentAbsence`, que sigue significando solo la falta:
+ * cada tipo tiene su propio tope de cobro y son distintos (la falta, 2 por MES;
+ * la cancelación, las 2 primeras del historial). Este predicado responde a otra
+ * pregunta —"¿consume cupo del plan?"— y por eso vive aparte.
+ */
+export function isStudentLostClass(classType: ClassRecordType | undefined): boolean {
+  return isStudentAbsence(classType) || classType === 'cancelacion_hora';
+}
+
 /** Filas crudas de falta del alumno en ese mes, de la más vieja a la más nueva. */
 function absenceRowsInMonth<T extends AbsenceRecordRef>(
   records: T[], teacherId: string, studentName: string, monthYear: string,
@@ -873,13 +891,19 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
   for (const a of myAssignments) limitByStudent.set(nkey(a.studentName), monthlyLimit(a.weeklyHours ?? 0));
 
   // El límite mensual del plan lo consumen las clases normales, las de
-  // recuperación y las FALTAS DEL ALUMNO: si el alumno no viene, esa clase se
-  // perdió y no se recupera, así que gasta una de las de su mes igual que si la
-  // hubiera dado (4 clases al mes, 1 falta → le quedan 3). La cancelación sobre
-  // la hora sigue fuera del cupo: se rige solo por su tope de 2 del historial.
+  // recuperación y las CLASES QUE EL ALUMNO PERDIÓ — faltas sin aviso y
+  // cancelaciones sobre la hora (ver `isStudentLostClass`): la hora se reservó,
+  // el profesor estuvo, y esa clase no se da ni se recupera, así que gasta una de
+  // las de su mes igual que si la hubiera dado (4 al mes, 1 perdida → le quedan 3).
+  //
+  // La cancelación sobre la hora entró acá el 01/09/2026. Antes quedaba fuera del
+  // cupo y solo la limitaba su tope de 2 del historial, así que la barra "Clases
+  // del mes" no la contaba: Adrián Padilla (Victoria) canceló sobre la hora el
+  // 01/09 y su barra seguía diciendo "0 de 9". El alumno terminaba el mes con más
+  // clases de las que incluye su plan, que es justo lo que el cupo evita.
   const countable = rows
     .filter(r => (r.status === 'pagable' || r.status === 'a_revisar')
-      && (r.classType === 'normal' || r.classType === 'recuperacion' || isStudentAbsence(r.classType)))
+      && (r.classType === 'normal' || r.classType === 'recuperacion' || isStudentLostClass(r.classType)))
     .sort((x, y) => x.date.localeCompare(y.date) || x.studentName.localeCompare(y.studentName));
   // El límite se descuenta en UNIDADES, no en filas: una sesión de 2h consume 2
   // de las 9 del plan de 2h/semana. Las dos magnitudes están en horas
@@ -901,27 +925,42 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     const k = nkey(row.studentName);
     const limit = limitByStudent.has(k) ? limitByStudent.get(k)! : Infinity; // ex-alumnos: sin límite
     const used = usedByStudent.get(k) ?? 0;
-    // REGLA: la falta del alumno consume su cupo ENTERO, aunque cayera sobre una
-    // hora de recuperación. El descuento de `recoveryUnits` existe porque una
-    // recuperación repone una clase ya perdida y no gasta una del mes — pero si
-    // el alumno tampoco viene a la recuperación, la clase se perdió otra vez y el
-    // crédito se consumió: no puede salirle gratis faltar dos veces seguidas.
+    // REGLA: la clase perdida por el alumno consume su cupo ENTERO, aunque cayera
+    // sobre una hora de recuperación. El descuento de `recoveryUnits` existe
+    // porque una recuperación repone una clase ya perdida y no gasta una del mes
+    // — pero si el alumno tampoco aparece a la recuperación (o la cancela sobre
+    // la hora), la clase se perdió otra vez y el crédito se consumió: no puede
+    // salirle gratis perderla dos veces seguidas.
     //
     // El caso: Cristian Díaz (Johny) faltó sin avisar el 17/08 a la recuperación
     // de su clase del 12, y esa falta no le gastaba ninguna clase del mes.
-    const cupoUnits = isStudentAbsence(row.classType)
+    const cupoUnits = isStudentLostClass(row.classType)
       ? row.billingUnits
       : Math.max(0, row.billingUnits - row.recoveryUnits);
-    // La falta del alumno CONSUME cupo pero nunca es la que se retiene: el
-    // profesor estuvo ahí y el alumno no vino, así que se le paga igual. Dejarla
-    // caer por el tope hacía que la regla se contradijera sola — "se cobra
-    // entera" y "no se cobra" a la vez— y pasaba justo cuando la falta era lo
-    // último que entraba en el mes (Ester Domènech, 15/08, 4 de 5 usadas).
+    // La clase perdida por el alumno CONSUME cupo pero nunca es la que se
+    // retiene: el profesor estuvo ahí y el alumno no vino (o canceló sobre la
+    // hora), así que se le paga igual. Dejarla caer por el tope hacía que la
+    // regla se contradijera sola — "se cobra entera" y "no se cobra" a la vez— y
+    // pasaba justo cuando era lo último que entraba en el mes (Ester Domènech,
+    // 15/08, 4 de 5 usadas).
     //
-    // No abre la puerta a abusos: las faltas ya tienen su propio tope de 2 al mes
-    // por tipo ('excede_limite_tipo'), que se aplica antes que esto.
-    const puedeRetenerse = !row.manuallyApproved && !isStudentAbsence(row.classType);
-    if (used + cupoUnits > limit && puedeRetenerse) {
+    // No abre la puerta a abusos: cada tipo ya tiene su propio tope de cobro
+    // ('excede_limite_tipo'), que se aplica antes que esto — 2 al mes la falta,
+    // 2 en todo el historial la cancelación sobre la hora.
+    const puedeRetenerse = !row.manuallyApproved && !isStudentLostClass(row.classType);
+    // UNA FILA QUE NO CONSUME CUPO NUNCA LO EXCEDE. `cupoUnits === 0` es la
+    // recuperación pura: repone una clase que el alumno ya había perdido, así que
+    // no gasta ninguna de las de este mes. Sin este corte bastaba con que el
+    // contador YA estuviera por encima del límite para que `used + 0 > limit`
+    // fuese cierto y la recuperación cayera retenida — "excede el plan" dicho de
+    // una clase que no ocupa ningún hueco del plan.
+    //
+    // Solo se podía llegar ahí si el contador se pasaba del límite, cosa que
+    // únicamente hacen las clases perdidas por el alumno (que consumen cupo pero
+    // nunca se retienen). Lo destapó López Nahuel (Maribel): sus 2 cancelaciones
+    // sobre la hora lo dejaron en 7 de 5, y eso tiraba sus recuperaciones del
+    // 20/08 y el 24/08 — 12 € que el profesor sí trabajó.
+    if (cupoUnits > 0 && used + cupoUnits > limit && puedeRetenerse) {
       row.status = 'excede_limite';
     } else {
       usedByStudent.set(k, used + cupoUnits);
@@ -1127,13 +1166,14 @@ export function recoveryCreditLabel(
   const rec = row.recoveryUnits ?? 0;
   if (rec <= 0) return null;
   const fechas = (row.recoveryForDates ?? []).map(fmtDMY);
-  // El alumno tampoco vino a la recuperación: no saldó nada, pero el crédito se
-  // gastó igual — la clase perdida ya no se vuelve a recuperar. Decir "salda la
-  // clase perdida del X" en una fila donde el alumno faltó era la contradicción
-  // más visible de esta pantalla.
-  if (isStudentAbsence(row.classType)) {
+  // El alumno tampoco aprovechó la recuperación: no saldó nada, pero el crédito
+  // se gastó igual — la clase perdida ya no se vuelve a recuperar. Decir "salda
+  // la clase perdida del X" en una fila donde el alumno faltó era la
+  // contradicción más visible de esta pantalla.
+  if (isStudentLostClass(row.classType)) {
     const cual = fechas.length ? `del ${fechas.join(' y ')}` : 'que recuperaba';
-    return `Era la recuperación de la clase ${cual} y el alumno tampoco vino: el crédito se consumió y esa clase ya no se repone.`;
+    const qué = isStudentAbsence(row.classType) ? 'el alumno tampoco vino' : 'el alumno la canceló sobre la hora';
+    return `Era la recuperación de la clase ${cual} y ${qué}: el crédito se consumió y esa clase ya no se repone.`;
   }
   const qué = fechas.length
     ? `salda la clase perdida del ${fechas.join(' y ')}`

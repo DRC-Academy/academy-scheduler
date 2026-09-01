@@ -500,7 +500,7 @@ export function AddClassModal({
                   Este tipo de clase <b>SÍ genera cobro</b> (tarifa normal del alumno) y <b>no te penaliza</b>:
                   el que faltó fue el alumno. {isStudentAbsence(classType)
                     ? <>Se permiten hasta 2 <b>por mes</b>; llevás <b>{typeCount}</b> de 2 este mes, y la clase consume cupo del alumno.</>
-                    : <>Solo se permite hasta 2 veces; llevás <b>{typeCount}</b> de 2 registradas.</>} No requiere transcript.
+                    : <>Solo se permite hasta 2 veces; llevás <b>{typeCount}</b> de 2 registradas, y la clase consume cupo del alumno.</>} No requiere transcript.
                 </div>
               )}
               <div>
