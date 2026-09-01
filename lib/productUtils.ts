@@ -272,6 +272,96 @@ export function detectCompanyPlan(args: {
   return { months, start, until };
 }
 
+// ── PAGO ÚNICO: clasificación y ancla de inicio ──────────────────────────────
+//
+// Productos de PAGO ÚNICO (match por "contiene", en minúsculas). Cualquier otro
+// producto se considera de suscripción recurrente.
+//
+// Vive acá y no en cada endpoint porque hasta el 31/08/2026 había DOS listas
+// —check-subscription y sync-student-plans— y ya habían divergido: la corrección
+// del 07/08/2026 que agregó "curso intensivo de ingles" se aplicó solo a la
+// primera, así que los 8 alumnos de ese producto salían 'one_time' por un camino
+// y 'subscription' por el otro según qué endpoint hubiera escrito último.
+//
+// SIN normalizeText A PROPÓSITO: quitar tildes haría que "Preparación" empezara a
+// casar con 'preparacion de examenes', y esta clasificación no es cosmética —
+// decide si el alumno pasa por la rama de suscripción de Woo o por la de acceso
+// manual. Ampliarla es un cambio de acceso, no de formato, y va aparte.
+const ONE_TIME_PRODUCTS = [
+  'intensivo fce',
+  'intensivo pet',
+  'intensivo general',
+  'intensivo cae',
+  'curso intensivo de ingles',
+  'empresas preparacion de examenes',
+  'empresas ingles general',
+  'empresas intensivos',
+];
+
+export function isOneTimeProduct(name?: string | null): boolean {
+  const n = (name ?? '').toLowerCase();
+  return ONE_TIME_PRODUCTS.some(p => n.includes(p));
+}
+
+/** Lo que hay que escribir en (company_plan_months, company_plan_start). */
+export interface OneTimeAnchor {
+  months: number | null;
+  start: string;
+}
+
+/**
+ * ANCLA DE INICIO de un pago único que NO es un plan de empresa con duración.
+ *
+ * Por qué existe: `lib/billing.facturacionMensualDe` reparte el importe de un
+ * pago único sobre una ventana de meses, y para eso necesita saber CUÁNDO
+ * empezó. Cuando no lo sabe, hoy cuenta hacia atrás desde `manual_active_until`
+ * —una fecha que el admin pone CON COLCHÓN— y un colchón que cruza el fin de mes
+ * corre la ventana entera un mes hacia adelante. En agosto/2026 eso dejó a tres
+ * alumnos (Izaro, Laia, Héctor) facturando 0 € con 11–20 clases dadas en el mes.
+ *
+ * La fecha del pedido de Woo es el ancla real, y YA venía en la respuesta que
+ * `check-subscription` pide para todos los alumnos: solo se guardaba dentro de la
+ * rama de `detectCompanyPlan`, o sea para los productos "Empresas *". Por eso 24
+ * de 29 alumnos de pago único no tenían ancla. Esto la guarda para todos.
+ *
+ * MESES: se devuelven en null salvo que el producto sea de empresa. La duración
+ * de un intensivo NO está en la variación de Woo — vive en `billing_months` de
+ * `product_prices`, y `facturacionMensualDe` solo usa `companyPlanMonths` cuando
+ * existe. Escribir un número inventado acá le ganaría a la tabla. Un producto de
+ * empresa cuya variación no parseó conserva los meses que ya tenía: es el mismo
+ * plan, con una fecha de inicio mejor.
+ *
+ * Devuelve null cuando no hay nada que hacer: sin fecha de pedido (NO se pisa un
+ * ancla buena con null) o cuando lo que saldría es idéntico a lo guardado.
+ */
+export function resolveOneTimeStart(args: {
+  productName?: string | null;
+  orderDate?: string | null;
+  currentMonths?: number | null;
+  currentStart?: string | null;
+}): OneTimeAnchor | null {
+  // Fecha de calendario REAL, no solo con forma de fecha: WooCommerce devuelve
+  // '0000-00-00 00:00:00' en los pedidos sin completar, y eso pasa cualquier
+  // regex de forma. Guardarlo daría una ventana que arranca en el año 0 y factura
+  // 0 € para siempre, que es justo el cero silencioso que esto viene a evitar.
+  // `check-subscription` ya lo filtra antes, pero el backfill masivo no tiene por
+  // qué depender de que su llamador lo haya hecho.
+  const start = (args.orderDate ?? '').slice(0, 10);
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(start);
+  if (!m) return null;
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  if (isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== start) return null;
+
+  const months = isCompanyProduct(baseProductName(args.productName))
+    ? (args.currentMonths ?? null)
+    : null;
+
+  const sinCambios =
+    months === (args.currentMonths ?? null) &&
+    start === (args.currentStart ?? '').slice(0, 10);
+  return sinCambios ? null : { months, start };
+}
+
 /**
  * Qué hacer con la fecha calculada frente a la que ya tiene el alumno.
  *

@@ -221,6 +221,22 @@ export interface TeacherPayout {
    * visible: un margen parcial presentado como definitivo es peor que no darlo.
    */
   facturacion_parcial: boolean;
+  /**
+   * Alumnos de pago único cuya ventana no cuadra con el acceso que tienen (ver
+   * VENTANA_DUDOSA_DIAS en lib/billing). NO es lo mismo que `facturacion_parcial`:
+   * ahí FALTA un precio y `facturacion` es un piso; acá el importe está sumado,
+   * pero puede estar corrido de mes. 0 = ninguno.
+   */
+  ventanas_dudosas: number;
+  /**
+   * QUIÉNES son, para que el dashboard pueda listar a quién hay que revisar en
+   * vez de mostrar un número suelto. Vacío si no hay ninguno.
+   *
+   * Solo nombre y motivo: es lo que hace falta para ir a mirar la ficha. NO va
+   * el importe ni el producto — el detalle completo por alumno se queda del lado
+   * del admin, que es donde se arregla el dato.
+   */
+  ventanas_dudosas_detalle: Array<{ student_name: string; motivo: string }>;
 }
 
 export interface MonthPayouts {
@@ -254,6 +270,8 @@ export interface MonthPayouts {
   margen_total: number | null;
   /** true si a CUALQUIER profesor le falta el precio de algún alumno. */
   facturacion_parcial: boolean;
+  /** Suma de `ventanas_dudosas` de todos los profesores. */
+  ventanas_dudosas_total: number;
 
   teachers: TeacherPayout[];
 }
@@ -321,6 +339,10 @@ export function computeMonth(ds: PayoutDataset, monthYear: string): MonthPayouts
       alumnos_con_precio: m.alumnosConPrecio,
       alumnos_totales: m.alumnosTotales,
       facturacion_parcial: m.facturacionParcial,
+      ventanas_dudosas: m.ventanasDudosas,
+      ventanas_dudosas_detalle: m.detalle
+        .filter(d => d.warning)
+        .map(d => ({ student_name: d.studentName, motivo: d.warning! })),
     };
   });
 
@@ -341,6 +363,7 @@ export function computeMonth(ds: PayoutDataset, monthYear: string): MonthPayouts
     facturacion_total: facturacionTotal,
     margen_total: algunPrecio ? round2(facturacionTotal - totalAmount) : null,
     facturacion_parcial: teachers.some(t => t.facturacion_parcial),
+    ventanas_dudosas_total: teachers.reduce((s, t) => s + t.ventanas_dudosas, 0),
     teachers: teachers.sort((a, b) => b.total_amount - a.total_amount || a.teacher_name.localeCompare(b.teacher_name, 'es')),
   };
 }

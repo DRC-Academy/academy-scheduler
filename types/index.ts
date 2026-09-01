@@ -146,7 +146,9 @@ export interface Student {
   // solo registran de dónde salió esa fecha, para que el badge distinga la
   // activación automática de una manual. Ver lib/productUtils.detectCompanyPlan.
   companyPlanMonths?: number; // duración contratada, en meses
-  companyPlanStart?: string;  // 'YYYY-MM-DD' — fecha del pedido
+  companyPlanStart?: string;  // 'YYYY-MM-DD' — fecha del pedido de Woo. Se guarda
+                              // para TODO pago único (no solo empresas): es el
+                              // ancla de la ventana de facturación en lib/billing.
   // Aviso interno de fin de plan ("Próximos a cancelar"). Cuenta como enviado
   // solo si `endingNoticeForDate` coincide con `manualActiveUntil`: al renovar,
   // deja de coincidir y el alumno vuelve a poder avisarse. Ver lib/endingPlans.

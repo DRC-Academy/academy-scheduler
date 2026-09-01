@@ -7,17 +7,11 @@
 // ni sobrecargar la API de WooCommerce.
 
 import { supabase } from '@/lib/supabase';
-import { detectLevel } from '@/lib/productUtils';
-
-// Productos de PAGO ÚNICO (igual criterio que check-subscription).
-const ONE_TIME_PRODUCTS = [
-  'intensivo fce', 'intensivo pet', 'intensivo general', 'intensivo cae',
-  'empresas preparacion de examenes', 'empresas ingles general', 'empresas intensivos',
-];
-function isOneTimeProduct(name: string): boolean {
-  const n = (name ?? '').toLowerCase();
-  return ONE_TIME_PRODUCTS.some(p => n.includes(p));
-}
+// isOneTimeProduct se importa en vez de repetir la lista: esta copia local se
+// había quedado sin "curso intensivo de ingles" (corrección del 07/08/2026, que
+// solo se aplicó a check-subscription), así que este endpoint marcaba como
+// suscripción a 8 alumnos que el otro marcaba como pago único.
+import { detectLevel, isOneTimeProduct } from '@/lib/productUtils';
 
 const TIMEOUT_MS = 10_000;
 

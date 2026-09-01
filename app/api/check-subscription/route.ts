@@ -7,31 +7,17 @@ import { supabase } from '@/lib/supabase';
 import {
   parseHoursFromText, parseHoursFromMeta, detectLevel,
   detectCompanyPlan, resolveCompanyPlanUpdate, isCompanyProduct,
+  isOneTimeProduct, resolveOneTimeStart,
 } from '@/lib/productUtils';
 // La regla de "activo" (Woo OR manual OR Oritalk) vive en un módulo puro para
 // que exista una sola definición. Ver lib/subscriptionAccess.ts.
 import { accessOverrideOf, isActiveWooStatus, madridToday } from '@/lib/subscriptionAccess';
 
-// Productos de PAGO ÚNICO (case-insensitive, match por "contiene"). Cualquier
-// otro producto se considera de suscripción recurrente.
-const ONE_TIME_PRODUCTS = [
-  'intensivo fce',
-  'intensivo pet',
-  'intensivo general',
-  'intensivo cae',
-  // "Curso intensivo de ingles - OFERTA - 5h semanales". Ninguno de los patrones
-  // de arriba lo cazaba (el match es por `includes`, y este no dice "intensivo
-  // general" ni "intensivo pet"), así que 8 alumnos con un intensivo estaban
-  // clasificados como suscripción mensual recurrente. Auditoría del 07/08/2026.
-  'curso intensivo de ingles',
-  'empresas preparacion de examenes',
-  'empresas ingles general',
-  'empresas intensivos',
-];
-function isOneTimeProduct(name: string): boolean {
-  const n = (name ?? '').toLowerCase();
-  return ONE_TIME_PRODUCTS.some(p => n.includes(p));
-}
+// La lista de productos de PAGO ÚNICO vive en lib/productUtils.isOneTimeProduct:
+// era una constante local duplicada en sync-student-plans, y las dos copias ya
+// habían divergido. Incluye "curso intensivo de ingles" (auditoría del
+// 07/08/2026): ninguno de los otros patrones lo cazaba y 8 alumnos con un
+// intensivo salían clasificados como suscripción mensual recurrente.
 
 type ProductType = 'subscription' | 'one_time' | null;
 
@@ -232,7 +218,9 @@ async function fetchSubStatus(c: { base: string; ck: string; cs: string }, email
 }
 
 /**
- * Guarda el plan de empresa detectado. Un `until` no nulo además ACTIVA al alumno.
+ * Guarda el ancla del pago único: duración detectada (solo empresas) y fecha del
+ * pedido. Un `until` no nulo además ACTIVA al alumno — eso sigue siendo exclusivo
+ * de los planes de empresa, que son los únicos con una fecha de fin calculable.
  *
  * El reintento importa: si `supabase-company-plans.sql` todavía no se corrió, las
  * columnas `company_plan_*` no existen y el UPDATE entero falla — incluida la
@@ -240,14 +228,14 @@ async function fetchSubStatus(c: { base: string; ck: string; cs: string }, email
  * solo `manual_active_until` y el alumno queda activo igual, sin el detalle del
  * plan en el badge.
  */
-async function persistCompanyPlan(
+async function persistPlanAnchor(
   studentId: string, months: number | null, start: string | null, until: string | null,
 ): Promise<void> {
   const updates: Record<string, unknown> = { company_plan_months: months, company_plan_start: start };
   if (until) updates.manual_active_until = until;
   const { error } = await supabase.from('students').update(updates).eq('id', studentId);
   if (error) {
-    console.error('[check-subscription] no se pudo guardar el plan de empresa:', error.message);
+    console.error('[check-subscription] no se pudo guardar el ancla del pago único:', error.message);
     if (until) await supabase.from('students').update({ manual_active_until: until }).eq('id', studentId);
   }
 }
@@ -367,13 +355,21 @@ export async function GET(request: Request): Promise<Response> {
     }
   }
 
-  // ── PLAN DE EMPRESA ────────────────────────────────────────────────────────
+  // ── ANCLA DEL PAGO ÚNICO ───────────────────────────────────────────────────
   //
-  // Los productos "Empresas *" son de pago único y llevan la duración en la
-  // variación ("B1 · 1h semanal · 6 Meses"). Woo no vence un pago único, así que
-  // la fecha de fin la calculamos nosotros desde la fecha del pedido y la
-  // escribimos en `manual_active_until`, que es lo que ya lee la regla de acceso
-  // y la pestaña "Próximos a cancelar".
+  // Dos cosas distintas, en este orden:
+  //
+  // 1. PLAN DE EMPRESA. Los productos "Empresas *" llevan la duración en la
+  //    variación ("B1 · 1h semanal · 6 Meses"). Woo no vence un pago único, así
+  //    que la fecha de fin la calculamos nosotros desde la fecha del pedido y la
+  //    escribimos en `manual_active_until`, que es lo que ya lee la regla de
+  //    acceso y la pestaña "Próximos a cancelar".
+  //
+  // 2. CUALQUIER OTRO PAGO ÚNICO (los intensivos). No tienen duración en la
+  //    variación ni fecha de fin calculable, así que NO se les toca el acceso:
+  //    solo se guarda la fecha del pedido como ancla de facturación. Antes se
+  //    tiraba —solo la rama 1 la persistía— y por eso 24 de 29 alumnos de pago
+  //    único no tenían con qué anclar su ventana en lib/billing.
   //
   // Va acá y no en un endpoint aparte porque el pedido YA está traído: detectar
   // el plan no cuesta ni una llamada más. Se evalúa también cuando `rich` viene
@@ -399,15 +395,36 @@ export async function GET(request: Request): Promise<Response> {
         (student.company_plan_months ?? null) === plan.months &&
         (student.company_plan_start ?? null) === plan.start;
       if (decision.writes || !yaGuardado) {
-        await persistCompanyPlan(student.id, plan.months, plan.start, decision.writes ? decision.until : null);
+        await persistPlanAnchor(student.id, plan.months, plan.start, decision.writes ? decision.until : null);
       }
-    } else if (rich.name && !isCompanyProduct(rich.name) && companyPlanMonths != null) {
-      // El alumno cambió a un producto que no es de empresa. Se limpia la marca
-      // para que el badge no siga anunciando un plan que ya no existe. NO se toca
+    } else if (rich.productType === 'one_time') {
+      // Pago único sin plan de empresa detectable: un intensivo, o una variación
+      // de empresa de la que no se pudo leer la duración. Se guarda SOLO la fecha
+      // del pedido. `until` va en null a propósito: sin duración no hay fin que
+      // calcular, y el acceso de estos alumnos lo sigue poniendo el admin a mano.
+      const anchor = resolveOneTimeStart({
+        productName: rich.name,
+        orderDate: rich.orderDate,
+        currentMonths: companyPlanMonths,
+        currentStart: companyPlanStart,
+      });
+      if (anchor) {
+        companyPlanMonths = anchor.months;
+        companyPlanStart  = anchor.start;
+        await persistPlanAnchor(student.id, anchor.months, anchor.start, null);
+      }
+    } else if (rich.name && !isCompanyProduct(rich.name) && (companyPlanMonths != null || companyPlanStart != null)) {
+      // El alumno pasó a una SUSCRIPCIÓN recurrente. Se limpia el ancla entera
+      // para que el badge no siga anunciando un plan que ya no existe y para que
+      // lib/billing no arrastre la ventana del pago único anterior. NO se toca
       // `manual_active_until`: quitarle acceso no es cosa de esta detección.
+      //
+      // La condición mira `companyPlanStart` además de los meses porque desde que
+      // el ancla se guarda para todo pago único hay alumnos con fecha y sin
+      // duración: mirando solo los meses, la fecha vieja sobrevivía al cambio.
       companyPlanMonths = null;
       companyPlanStart  = null;
-      await persistCompanyPlan(student.id, null, null, null);
+      await persistPlanAnchor(student.id, null, null, null);
     }
   }
 
