@@ -251,7 +251,7 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
                 </span>
               </div>
               <div style={{ fontSize: 12.5, color: '#8b8e88', marginBottom: 16 }}>
-                El alumno no ve este aviso. Es solo para ti.
+                El alumno no ve este aviso. Es solo para ti, y son sugerencias: tú decides.
               </div>
 
               {/* CONTEXTO de la clase anterior. Va lo PRIMERO a propósito: una
@@ -285,7 +285,7 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
                   dejaba al profesor una hora de clase por delante sin nada que
                   hacer. Lo que no hay que forzar va abajo, como guardarraíl. */}
               <div style={{ fontSize: 13.5, fontWeight: 700, color: '#1a1c1a', marginBottom: 8 }}>
-                En esta clase:
+                Ideas para esta clase
               </div>
 
               {/* La acción concreta, cuando dice algo ejecutable. */}

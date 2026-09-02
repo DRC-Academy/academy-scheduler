@@ -287,7 +287,7 @@ export async function sendInterventionEmail(
   // caso a soporte": un correo cuyo contenido era que no hiciera nada.
   const lista = protocolFor(s.steps, risk).steps;
   const stepsBlock = `<div style="margin:0 0 16px; padding:14px 16px; border:1px solid #E0E0DA; border-radius:8px; background-color:#FFFFFF;">
-  <div style="font-size:12px; font-weight:700; color:#1E9E3A; text-transform:uppercase; letter-spacing:0.04em; margin-bottom:8px;">En esta clase</div>
+  <div style="font-size:12px; font-weight:700; color:#1E9E3A; text-transform:uppercase; letter-spacing:0.04em; margin-bottom:8px;">Ideas para esta clase</div>
   <ol style="margin:0; padding-left:18px; font-size:14px; line-height:1.65; color:#1A1A1A;">${
     lista.map(t => `<li style="margin-bottom:6px;">${esc(t)}</li>`).join('')
   }</ol>
@@ -311,14 +311,14 @@ export async function sendInterventionEmail(
     p(`Hola ${esc(teacher.name)},`) +
     p(`<strong>${esc(info.studentName)}</strong> ha mostrado señales de riesgo en su última clase${info.classNumber != null ? ` (clase ${info.classNumber})` : ''}.`) +
     (context ? p(`<strong>En la última clase:</strong> ${esc(context)}`) : '') +
-    (accion ? banner('#FFF9E0', '#FFC400', '#8A6A00', 'Intervención recomendada', accion) : '') +
+    (accion ? banner('#FFF9E0', '#FFC400', '#8A6A00', 'Una sugerencia', accion) : '') +
     stepsBlock +
     // Guardarraíl del caso escalado: va DESPUÉS del protocolo, nunca en su lugar.
     (escalate ? banner('#FFF9E0', '#FFC400', '#8A6A00', 'Ten en cuenta', ESCALATED_GUARDRAIL) : '') +
     (s.reconnectHook ? p(`<strong>Oportunidad:</strong> ${esc(s.reconnectHook)}`) : '') +
     p(`<em>${esc(NATURAL_REMINDER)}</em>`) +
     `<div style="margin:0 0 16px; padding:12px 14px; border:1px solid #E0E0DA; border-radius:8px;">
-  <div style="font-size:12px; font-weight:700; color:#888880; text-transform:uppercase; letter-spacing:0.04em; margin-bottom:8px;">Qué evitar</div>
+  <div style="font-size:12px; font-weight:700; color:#888880; text-transform:uppercase; letter-spacing:0.04em; margin-bottom:8px;">Qué suele funcionar peor</div>
   <ul style="margin:0; padding-left:18px; font-size:13.5px; line-height:1.6; color:#5A5A55;">${AVOID_ITEMS.map(t => `<li style="margin-bottom:4px;">${esc(t)}</li>`).join('')}</ul>
 </div>` +
     ctaButton('Ver la ficha del alumno', `${APP_URL}/mis-alumnos`),

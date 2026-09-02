@@ -157,19 +157,30 @@ export const CHANNEL_LABEL: Record<InterventionChannel, string> = {
   escalar_soporte: 'Escalar a soporte',
 };
 
-/** Recordatorio fijo: la intervención tiene que parecer natural, nunca reactiva. */
+/**
+ * Recordatorio fijo al pie de la alerta. Dice dos cosas y las dos importan: que
+ * esto son ideas (el profesor decide, que para eso estuvo en la clase) y que el
+ * alumno no debe notar que un sistema detectó algo.
+ */
 export const NATURAL_REMINDER =
-  'Recuerda: no menciones al alumno que se detectó un problema. La intervención debe ser natural.';
+  'Son ideas, no instrucciones: tú estuviste en la clase y decides qué encaja. Lo único que conviene mantener es que el alumno no note que un sistema ha detectado algo.';
 
-/** Lo que NO hay que hacer. Se muestra en los tres sitios (notificación, email y ficha). */
+/**
+ * Lo que suele salir mal en estas situaciones. Se muestra en los tres sitios
+ * (notificación, email y ficha).
+ *
+ * Van descritos como lo que son, cosas que en la práctica funcionan peor, y no
+ * como una lista de órdenes al profesor: la alerta entera ya sonaba a
+ * reprimenda y esta lista era la parte que más lo acentuaba.
+ */
 export const AVOID_ITEMS = [
-  'No ignores la alerta y sigas exactamente igual.',
-  'No contactes al alumno diciendo que detectaste que algo no va bien.',
-  'No presiones al alumno para que se quede si ya expresó que quiere irse.',
-  'No prometas cosas que no puedas cumplir solo para evitar la baja.',
+  'Decirle al alumno que se ha detectado algo raro: le confirma que hay un problema justo donde a lo mejor no lo había.',
+  'Insistirle para que se quede cuando ya ha dicho que quiere irse: suele empujar hacia el otro lado.',
+  'Prometer cosas que luego no se puedan cumplir solo para evitar la baja.',
+  'Dar por hecho que la ficha describe lo que el alumno quiere hoy: puede haber cambiado de idea y no haberlo actualizado.',
 ];
 
-export const AVOID_TITLE = 'Ver qué evitar';
+export const AVOID_TITLE = 'Ver qué suele funcionar peor';
 
 /**
  * Aviso para el alumno que está en amarillo o rojo pero todavía no tiene
@@ -179,7 +190,7 @@ export const AVOID_TITLE = 'Ver qué evitar';
  * eso nunca puede contar como alerta no atendida.
  */
 export const GENERIC_RISK_BRIEFING =
-  'Este alumno muestra señales de riesgo. Estos pasos valen para cualquier caso: úsalos tal cual.';
+  'Este alumno ha mostrado señales de riesgo. Estas ideas valen para cualquier caso, por si te sirven.';
 
 // ── Protocolo de respaldo: el pop-up NUNCA se queda sin qué hacer ────────────
 //
@@ -194,18 +205,18 @@ export const GENERIC_RISK_BRIEFING =
 
 /** Alumno en ROJO. Contención: que la clase le siente bien, pase lo que pase. */
 export const FALLBACK_STEPS_ROJO: string[] = [
-  'Recíbelo con normalidad y arranca con algo que ya domine, para que los primeros minutos le salgan bien.',
-  'Si lo notas tenso o acelerado, baja el ritmo: proponle una pausa, hablad más despacio y quítale carga a la clase.',
-  'En algún momento natural pregúntale cómo lleva el inglés últimamente, y escucha sin justificarte ni rebatirle.',
-  'Cierra recordándole algo concreto que ha mejorado desde que empezó.',
+  'Podrías recibirlo con normalidad y arrancar con algo que ya domine, para que los primeros minutos le salgan bien.',
+  'Si lo notas tenso o acelerado, quizá ayude bajar el ritmo: una pausa, hablar más despacio y quitarle carga a la clase.',
+  'En algún momento natural podrías preguntarle cómo lleva el inglés últimamente, y escucharlo sin justificarte ni rebatirle.',
+  'Una buena forma de cerrar sería recordarle algo concreto que ha mejorado desde que empezó.',
 ];
 
 /** Alumno en AMARILLO. Reenganche: que salga con ganas de volver. */
 export const FALLBACK_STEPS_AMARILLO: string[] = [
-  'Empieza preguntándole qué tal le está yendo con el inglés fuera de clase.',
-  'Ajusta la clase a lo que te diga: si lo ves espeso, cambia a algo más corto y hablado.',
-  'Dale una victoria clara a mitad de clase, algo que le salga bien y lo note.',
-  'Cierra acordando con él qué vais a trabajar la próxima vez.',
+  'Podrías empezar preguntándole qué tal le está yendo con el inglés fuera de clase.',
+  'Una opción es ajustar la clase a lo que te diga: si lo ves espeso, algo más corto y hablado.',
+  'Quizá ayude darle una victoria clara a mitad de clase, algo que le salga bien y lo note.',
+  'Podrías cerrar acordando con él qué vais a trabajar la próxima vez.',
 ];
 
 export function fallbackSteps(risk: RiskSignal): string[] {
@@ -299,8 +310,8 @@ export function protocolFor(
  * encarga" lo dejaba sin nada que hacer durante una hora de clase.
  */
 export const ESCALATED_GUARDRAIL =
-  'Este alumno ya dijo que se plantea dejarlo, así que no le vendas la academia ni le pidas que se quede: '
-  + 'eso lo empuja para el otro lado. Tu objetivo en esta clase es que se vaya a gusto.';
+  'Este alumno ya dijo que se plantea dejarlo. Venderle la academia o pedirle que se quede suele empujar '
+  + 'para el otro lado; lo que mejor funciona aquí es que salga de la clase a gusto.';
 
 /** Máximo de pasos del protocolo. Más de cuatro deja de ser accionable. */
 const MAX_STEPS = 4;
@@ -546,7 +557,7 @@ export function interventionCopy(
   // casos escalados era "escala el caso a soporte": el profesor recibía un aviso
   // cuyo contenido era que no hiciera nada.
   const lista = protocolFor(s.steps, risk).steps;
-  const pasos = `En esta clase:\n${lista.map((p, i) => `${i + 1}. ${p}`).join('\n')}`;
+  const pasos = `Ideas para esta clase:\n${lista.map((p, i) => `${i + 1}. ${p}`).join('\n')}`;
   const contexto = (context ?? '').trim() ? `En la última clase: ${context!.trim()}` : '';
   const accion = usableAction(s.action, context);
 
