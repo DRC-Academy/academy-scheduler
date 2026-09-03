@@ -33,6 +33,9 @@ import type { Assignment, ClassReviewRequest, ReviewRequestType } from '@/types'
 /** Filas por tanda. Con 44 clases en un mes, la lista entera no se lee. */
 const PAGINA = 20;
 
+/** Hasta dónde puede mirar hacia atrás el desplegable de meses. */
+const MESES_ATRAS = 12;
+
 const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
 const MESES_CORTOS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
 
@@ -44,6 +47,12 @@ function monthRange(monthYear: string): { from: string; to: string } {
   const [y, m] = monthYear.split('-').map(Number);
   const last = new Date(y, m, 0).getDate();
   return { from: `${monthYear}-01`, to: `${monthYear}-${String(last).padStart(2, '0')}` };
+}
+/** 'YYYY-MM' corrido `delta` meses. En UTC: un mes no tiene huso horario. */
+function shiftMonth(monthYear: string, delta: number): string {
+  const [y, m] = monthYear.split('-').map(Number);
+  const d = new Date(Date.UTC(y, (m - 1) + delta, 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 function fmtDate(iso: string): string {
   const d = new Date(iso + 'T00:00:00');
@@ -187,7 +196,7 @@ function TypeChooser({ clase, absenceCount, saving, error, onCancel, onConfirm }
 function RevisionesContent() {
   const { user } = useAuth();
   const {
-    teachers, classJoinLogs, classRecords, classAnalyses, loadFinanceData, reloadAll,
+    teachers, classJoinLogs, classRecords, classAnalyses, financePayments, loadFinanceData, reloadAll,
   } = useTeachers();
 
   const teacher = teachers.find(t => t.id === user?.teacherId) ?? teachers[0];
@@ -196,11 +205,21 @@ function RevisionesContent() {
   const todayIso = spain.dateStr;
   const nowMinutes = spain.hour * 60 + spain.minute;
 
-  // SOLO el mes en curso, sin navegación. Los meses cerrados se recuperaron con
-  // la paginación de class_join_logs (julio de 2026 volvió de 0 a 103 clases y
-  // 460,50 €), así que no hay nada que reclamar hacia atrás: abrir el histórico
-  // solo pondría 1.117 filas de julio delante del profesor.
-  const monthYear = todayIso.slice(0, 7);
+  // Mes a revisar. Arranca en el actual y el desplegable deja ir hacia atrás.
+  //
+  // Antes estaba clavado en el mes en curso porque los meses cerrados se habían
+  // recuperado con la paginación de class_join_logs (julio de 2026 volvió de 0 a
+  // 103 clases y 460,50 €) y abrir el histórico solo ponía 1.117 filas de julio
+  // delante del profesor. Eso último ya no pasa: `onlyWithSignal` recorta la
+  // lista a las clases de las que quedó rastro (492 → 146 en agosto), y una
+  // recuperación masiva no es lo mismo que las que se escapan de a una.
+  //
+  // Los meses se ofrecen desde los DATOS, no desde el calendario: solo aquellos
+  // en los que el profesor tiene algún rastro propio, que son los únicos donde
+  // esta pantalla puede mostrar algo. Un desplegable con doce meses vacíos es
+  // peor que no tenerlo.
+  const mesActual = todayIso.slice(0, 7);
+  const [monthYear, setMonthYear] = useState(mesActual);
   const [myAssignments, setMyAssignments] = useState<Assignment[]>([]);
   const [requests, setRequests] = useState<ClassReviewRequest[]>([]);
   const [loading, setLoading] = useState(true);
@@ -242,6 +261,44 @@ function RevisionesContent() {
   }, [teacher?.id]);
 
   useEffect(() => { loadFinanceData(); }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  /**
+   * Meses que ofrece el desplegable, del más nuevo al más viejo: aquellos en los
+   * que este profesor tiene algún rastro propio (transcript, registro o una
+   * solicitud ya enviada), más el mes en curso, que está siempre.
+   *
+   * NO se miran los `class_join_logs`: un ingreso registrado es justo lo que hace
+   * que una clase NO sea reclamable, así que un mes en el que todo tiene su clic
+   * no aporta nada a esta pantalla.
+   */
+  const mesesDisponibles = useMemo(() => {
+    const tope = shiftMonth(mesActual, -MESES_ATRAS);
+    const meses = new Set<string>([mesActual]);
+    const add = (d: string | null | undefined) => {
+      const m = (d ?? '').slice(0, 7);
+      if (m && m >= tope && m <= mesActual) meses.add(m);
+    };
+    if (teacher) {
+      for (const r of classRecords) if (r.teacherId === teacher.id) add(r.classDate);
+      for (const t of classAnalyses) if (!t.teacher_id || t.teacher_id === teacher.id) add(t.class_date ?? t.analyzed_at);
+      for (const r of requests) add(r.classDate);
+    }
+    return [...meses].sort().reverse();
+  }, [teacher?.id, classRecords, classAnalyses, requests, mesActual]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** ¿El mes elegido ya está pagado? Cambia lo que el profesor puede esperar. */
+  const mesPagado = useMemo(
+    () => !!teacher && financePayments.some(
+      p => p.teacherId === teacher.id && p.monthYear === monthYear && p.status === 'paid'),
+    [teacher?.id, financePayments, monthYear],   // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
+  /** Cambiar de mes descarta lo elegido y vuelve a la primera tanda. */
+  function cambiarMes(m: string) {
+    setMonthYear(m);
+    setSelected(new Set());
+    setVerHasta(PAGINA);
+  }
 
   const clases = useMemo<MissingJoinClass[]>(() => {
     if (!teacher) return [];
@@ -468,13 +525,46 @@ function RevisionesContent() {
               Estas clases están en tu calendario pero no quedó registro de que entraras con
               el botón <b>Ingresar a clase</b>, así que <b>no aparecen en Finanzas</b>. Contanos qué pasó
               en cada una y el equipo las revisa.
+              {mesesDisponibles.length > 1 && (
+                <> Si se te escapó alguna de meses anteriores, cambiá el mes en el desplegable.</>
+              )}
             </p>
           </div>
 
-          {/* Mes en curso (sin navegación: ver el comentario de `monthYear`) */}
+          {/* Mes a revisar. Con un solo mes disponible no se pinta el desplegable:
+              un select de una opción es un botón que no hace nada. */}
           <div style={{ background: '#fff', border: '1px solid #e4e5e1', borderRadius: 14, padding: '12px 18px', marginBottom: 14, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-            <div style={{ fontSize: 14.5, fontWeight: 700, color: '#1a1c1a' }}>
-              {monthLabel(monthYear)}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              {mesesDisponibles.length > 1 ? (
+                <select
+                  value={monthYear}
+                  onChange={e => cambiarMes(e.target.value)}
+                  aria-label="Mes que estás revisando"
+                  style={{
+                    padding: '7px 10px', borderRadius: 9, border: '1.5px solid #e4e5e1',
+                    background: '#F7F7F5', color: '#1a1c1a', fontSize: 14.5, fontWeight: 700,
+                    fontFamily: 'inherit', cursor: 'pointer',
+                  }}
+                >
+                  {mesesDisponibles.map(m => (
+                    <option key={m} value={m}>
+                      {monthLabel(m)}{m === mesActual ? ' · en curso' : ''}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <div style={{ fontSize: 14.5, fontWeight: 700, color: '#1a1c1a' }}>
+                  {monthLabel(monthYear)}
+                </div>
+              )}
+              {mesPagado && (
+                <span
+                  title="Este mes ya se pagó. La solicitud se envía igual y la revisa el equipo."
+                  style={{ padding: '4px 10px', borderRadius: 999, background: 'rgba(255,196,0,0.16)', border: '1px solid rgba(255,196,0,0.55)', color: '#8a6100', fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap' }}
+                >
+                  Mes ya pagado
+                </span>
+              )}
             </div>
             <div style={{ fontSize: 13, color: '#5f6360' }}>
               {sinDeclarar.length > 0
