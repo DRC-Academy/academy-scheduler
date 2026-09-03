@@ -92,8 +92,8 @@ describe('el duplicado ya no quema cupo en el pago', () => {
     level: 'B1', plan: 'Inglés general', createdAt: '2026-01-01T00:00:00Z',
   }];
 
-  const calc = (classRecords: ClassRecord[]) => calculateTeacherFinance({
-    teacherId: T, teacherName: 'Jimena', monthYear: '2026-08',
+  const calc = (classRecords: ClassRecord[], monthYear = '2026-08') => calculateTeacherFinance({
+    teacherId: T, teacherName: 'Jimena', monthYear,
     assignments: [asgn], joinLogs: [], classRecords, classAnalyses: [],
     rates, scoringEvents: [], students, manualApprovals: [], payment: null,
     gridOccupancy: EMPTY_GRID_OCCUPANCY,
@@ -130,5 +130,51 @@ describe('el duplicado ya no quema cupo en el pago', () => {
       falta('dup2', '2026-08-05', '2026-08-25T15:16:00Z'),
     ]).rows;
     expect(rows.filter(r => r.date === '2026-08-05')).toHaveLength(1);
+  });
+
+  // El tope es MENSUAL, no de por vida: 2 en agosto, otras 2 en septiembre. Un
+  // tope por historial dejaría a un alumno de dos años sin poder faltar nunca
+  // más, y con los datos de producción de septiembre de 2026 habría bloqueado a
+  // 22 alumnos que sí tenían su cupo del mes intacto.
+  describe('el tope se reinicia con el mes', () => {
+    const agostoLleno = [
+      falta('ago1', '2026-08-05', '2026-08-05T19:12:00Z'),
+      falta('ago2', '2026-08-12', '2026-08-12T19:12:00Z'),
+    ];
+    const septiembre = [
+      falta('sep1', '2026-09-02', '2026-09-02T19:12:00Z'),
+      falta('sep2', '2026-09-09', '2026-09-09T19:12:00Z'),
+    ];
+    const A = 'Marc Caudevilla Reina';
+
+    it('agosto al tope no gasta el cupo de septiembre', () => {
+      const cap = canMarkStudentAbsence(agostoLleno, T, A, '2026-09');
+      expect(cap.count).toBe(0);
+      expect(cap.allowed).toBe(true);
+      expect(cap.remaining).toBe(ABSENCE_MONTHLY_CAP);
+    });
+
+    it('las dos de septiembre se pagan aunque agosto llegara al tope', () => {
+      const rows = calc([...agostoLleno, ...septiembre], '2026-09').rows;
+      expect(rows.find(r => r.date === '2026-09-02')?.status).toBe('pagable');
+      expect(rows.find(r => r.date === '2026-09-09')?.status).toBe('pagable');
+    });
+
+    it('el alumno al tope queda bloqueado SOLO en su mes', () => {
+      const todo = [...agostoLleno, ...septiembre];
+      expect(canMarkStudentAbsence(todo, T, A, '2026-08').allowed).toBe(false);
+      expect(canMarkStudentAbsence(todo, T, A, '2026-09').allowed).toBe(false);
+      expect(canMarkStudentAbsence(todo, T, A, '2026-10').allowed).toBe(true);
+    });
+
+    it('una revertida devuelve el cupo de ese mes, no del historial', () => {
+      const conRevertida: ClassRecord[] = [
+        ...agostoLleno,
+        { ...falta('sep1', '2026-09-02', '2026-09-02T19:12:00Z'), classType: 'falta_sin_aviso_revertida' },
+        falta('sep2', '2026-09-09', '2026-09-09T19:12:00Z'),
+      ];
+      expect(canMarkStudentAbsence(conRevertida, T, A, '2026-09').count).toBe(1);
+      expect(canMarkStudentAbsence(conRevertida, T, A, '2026-09').allowed).toBe(true);
+    });
   });
 });
