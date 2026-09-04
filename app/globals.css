@@ -1801,32 +1801,27 @@ body.driver-active .drc-modal-backdrop * { pointer-events: auto; }
   padding: 1px 6px; border-radius: 7px; line-height: 1.3; white-space: nowrap;
 }
 
-/* Ampliar el rango de horas (profesor): fila al principio y al final de la
-   columna de horas, en las dos vistas (grilla y agenda móvil). El botón suma una
-   hora; el selector de al lado salta directo a una hora lejana (las 00:00). */
-.vc-addhour-row { display: flex; align-items: stretch; width: 100%; }
+/* Mover el rango de horas (profesor): franja al principio y al final de la
+   columna de horas, en las dos vistas (grilla y agenda móvil). Son botones
+   sueltos dentro de una franja, no un botón pegado al borde de la tabla: el
+   grande amplía una hora, los chicos saltan al tope (00:00 / 23:00) y quitan la
+   hora del borde. Envuelven en pantallas angostas en vez de aplastarse. */
+.vc-addhour-row {
+  display: flex; flex-wrap: wrap; gap: 6px; padding: 7px;
+  width: 100%; box-sizing: border-box; background: #fbfbf9;
+}
+.vc-grid > .vc-addhour-row:first-child { border-radius: 15px 15px 0 0; border-bottom: 1px dashed #e6e7e2; }
+.vc-grid > .vc-addhour-row:last-child  { border-radius: 0 0 15px 15px; border-top: 1px dashed #e6e7e2; }
+.vc-agenda > .vc-addhour-row { background: transparent; padding: 0; }
 .vc-addhour {
-  flex: 1 1 auto; min-width: 0; box-sizing: border-box;
-  padding: 9px 12px; border: 1px dashed #cfd3cb; background: #fbfbf9;
-  color: #5f6360; font-family: inherit; font-size: 12.5px; font-weight: 600;
-  cursor: pointer; text-align: left; transition: background 0.12s, color 0.12s, border-color 0.12s;
+  flex: 1 1 200px; min-width: 0; box-sizing: border-box;
+  padding: 9px 12px; border: 1px dashed #cfd3cb; border-radius: 9px; background: #fff;
+  color: #5f6360; font-family: inherit; font-size: 12.5px; font-weight: 600; line-height: 1.3;
+  cursor: pointer; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
 }
-.vc-addhour-jump {
-  flex: 0 0 auto; box-sizing: border-box; padding: 0 8px;
-  border: 1px dashed #cfd3cb; border-left: none; background: #fbfbf9;
-  color: #5f6360; font-family: inherit; font-size: 12px; font-weight: 600;
-  cursor: pointer; transition: background 0.12s, color 0.12s, border-color 0.12s;
-}
-.vc-grid > .vc-addhour-row > .vc-addhour { border-left: none; }
-.vc-grid > .vc-addhour-row > .vc-addhour:last-child { border-right: none; }
-.vc-grid > .vc-addhour-row > .vc-addhour-jump { border-right: none; }
-.vc-grid > .vc-addhour-row:first-child > * { border-top: none; }
-.vc-grid > .vc-addhour-row:last-child > * { border-bottom: none; }
-.vc-agenda > .vc-addhour-row > .vc-addhour { border-radius: 10px 0 0 10px; }
-.vc-agenda > .vc-addhour-row > .vc-addhour:last-child { border-radius: 10px; }
-.vc-agenda > .vc-addhour-row > .vc-addhour-jump { border-radius: 0 10px 10px 0; }
-.vc-addhour:hover:not(:disabled),
-.vc-addhour-jump:hover { background: #eef6ef; color: #15803d; border-color: #1E9E3A; }
+.vc-addhour-mini { flex: 0 0 auto; text-align: center; }
+.vc-addhour:hover:not(:disabled) { background: #eef6ef; color: #15803d; border-color: #1E9E3A; }
 .vc-addhour:disabled { opacity: 0.45; cursor: not-allowed; }
 
 /* Conmutador y agenda: solo móvil */
@@ -1871,6 +1866,8 @@ body.driver-active .drc-modal-backdrop * { pointer-events: auto; }
 
   /* Grilla semanal compacta dentro del scroll horizontal */
   .vc-grid { border-radius: 14px; }
+  .vc-grid > .vc-addhour-row:first-child { border-radius: 13px 13px 0 0; }
+  .vc-grid > .vc-addhour-row:last-child  { border-radius: 0 0 13px 13px; }
   .vc-table { min-width: 560px; }
   .vc-table th { min-width: 82px; font-size: 11.5px; padding: 8px 4px; }
   .vc-th-hours { min-width: 58px !important; }
