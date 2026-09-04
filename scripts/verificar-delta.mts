@@ -8,7 +8,7 @@ for (const line of readFileSync('.env.local', 'utf8').split('\n')) {
 }
 const { loadPayoutDataset } = await import('@/lib/externalPayouts');
 const MES = '2026-08';
-const T = 't30';
+const T = process.env.TEACHER ?? 't30';
 const norm = (s: string) => (s ?? '').normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().trim().replace(/\s+/g, ' ');
 
 const ds = await loadPayoutDataset(true);
