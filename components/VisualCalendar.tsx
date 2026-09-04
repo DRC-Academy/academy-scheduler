@@ -158,7 +158,18 @@ interface BaseProps {
   inactiveStudents?: Set<string>;
 }
 
-export interface RecuperacionData { student: string; recoveryFor: string; note?: string }
+export interface RecuperacionData {
+  student: string;
+  recoveryFor: string;
+  note?: string;
+  /**
+   * Horas seguidas que ocupa esta recuperación. 2 = la clase perdida era de dos
+   * horas y se reponen JUNTAS en un bloque (una sola clase, un transcript). 1 —el
+   * valor por defecto— es tanto la recuperación de una clase de 1 h como cada
+   * mitad de una repuesta en dos días distintos.
+   */
+  hours?: number;
+}
 
 interface TeacherProps extends BaseProps {
   mode: 'teacher';
@@ -216,7 +227,7 @@ function CellMenu({
    *  recuperación: sin ella no se puede comprobar que la clase que salda sea
    *  anterior, que es la primera de las reglas (ver lib/recovery). */
   day: string; hour: string; date: string; current: CellState;
-  onSelect: (state: CellState, student?: string, recovery?: { recoveryFor: string; note?: string }) => void;
+  onSelect: (state: CellState, student?: string, recovery?: { recoveryFor: string; note?: string; hours?: number }) => void;
   onClose: () => void;
   onOcupadoNeed?: (day: string, hour: string, resolve: (name: string) => void, cancel: () => void) => void;
   onRecuperacionNeed?: (day: string, hour: string, date: string, resolve: (data: RecuperacionData) => void, cancel: () => void) => void;
@@ -258,7 +269,7 @@ function CellMenu({
             }
             if (opt.state === 'bloqueado' && onRecuperacionNeed) {
               onClose();
-              onRecuperacionNeed(day, hour, date, data => { onSelect('bloqueado', data.student, { recoveryFor: data.recoveryFor, note: data.note }); }, onClose);
+              onRecuperacionNeed(day, hour, date, data => { onSelect('bloqueado', data.student, { recoveryFor: data.recoveryFor, note: data.note, hours: data.hours }); }, onClose);
               return;
             }
             onSelect(opt.state);
@@ -430,21 +441,43 @@ export function VisualCalendar(props: Props) {
     }
   }
 
-  function handleMenuSelect(day: string, hour: string, state: CellState, student?: string, recovery?: { recoveryFor: string; note?: string }) {
+  function handleMenuSelect(day: string, hour: string, state: CellState, student?: string, recovery?: { recoveryFor: string; note?: string; hours?: number }) {
     if (props.mode !== 'teacher') return;
     const key = cellKey(day, hour);
     let newCell: Cell;
     if (state === 'bloqueado') {
-      const prevCell = props.grid[key] ?? { state: 'no_work' };
-      // El fondo que se recupera al salir de esta semana: nunca otra marca puntual.
-      // `baseStudent` conserva al alumno recurrente, distinto del que recupera.
-      const base = baseCellOf(prevCell);
-      newCell = {
-        state, student, weekDate: toISODateStr(weekDates[0]),
-        baseState: base.state, baseStudent: base.student,
-        recoveryFor: recovery?.recoveryFor, recoveryNote: recovery?.note,
-      };
-    } else {
+      // Una clase perdida de 2 h repuesta JUNTA ocupa dos celdas seguidas: se
+      // escriben las dos de una vez para que sean un bloque de verdad (una sola
+      // clase, un transcript, dos horas de pago). Con `hours` 1 —el caso normal,
+      // y también cada mitad de una recuperación partida en dos días— esto es
+      // exactamente lo de siempre.
+      const horas = Math.max(1, Math.min(Math.round(recovery?.hours ?? 1), 4));
+      const inicio = hourNum(hour);
+      const next: Grid = { ...props.grid };
+      for (let i = 0; i < horas; i++) {
+        const k = Number.isFinite(inicio) && i > 0 ? cellKey(day, hourLabel(inicio + i)) : key;
+        const prevCell = next[k] ?? { state: 'no_work' };
+        // El fondo que se recupera al salir de esta semana: nunca otra marca puntual.
+        // `baseStudent` conserva al alumno recurrente, distinto del que recupera.
+        const base = baseCellOf(prevCell);
+        // Nada de OTRO alumno se pisa: ni su clase recurrente ni su recuperación.
+        // La hora se descarta y la recuperación queda más corta (el modal solo
+        // ofrece "juntas" con las horas libres, esto es el cinturón).
+        const ocupadaPorOtro = i > 0
+          && (prevCell.state === 'ocupado' || prevCell.state === 'bloqueado' || prevCell.state === 'reprogramada'
+              || base.state === 'ocupado')
+          && nkName(prevCell.student ?? base.student) !== nkName(student);
+        if (ocupadaPorOtro) continue;
+        next[k] = {
+          state, student, weekDate: toISODateStr(weekDates[0]),
+          baseState: base.state, baseStudent: base.student,
+          recoveryFor: recovery?.recoveryFor, recoveryNote: recovery?.note,
+        };
+      }
+      props.onGridChange(next);
+      return;
+    }
+    {
       // libre / ocupado / no_work desde el menú reemplazan la celda entera: es la
       // vía manual para limpiar una recuperación vieja del calendario.
       newCell = { state, student };

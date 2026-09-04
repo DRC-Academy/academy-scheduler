@@ -25,7 +25,9 @@
 //      por cancelar tarde.
 //   2. Falta CON aviso, cancelación con preaviso, clase reprogramada y clase
 //      cancelada por el profesor → el alumno SÍ tiene derecho a recuperarla.
-//   3. Una clase perdida se recupera UNA sola vez.
+//   3. Una clase perdida se recupera hasta completar SUS horas: una clase de
+//      1 h admite una recuperación; una de 2 h admite dos horas, juntas el mismo
+//      día o partidas en dos días (ver lib/recoveryLedger).
 //   4. No se puede recuperar una clase que todavía no se dio.
 //
 // LA SALIDA. Cuando no hay registro en esa fecha el modal NO se limita a
@@ -79,9 +81,49 @@ export interface ExistingRecovery {
   studentName: string;
   /** Fecha de la clase de recuperación. */
   date: string;
+  /**
+   * Hora de la celda, 'HH:00'. Es lo que permite contar DOS horas de
+   * recuperación el mismo día (una clase perdida de 2 h repuesta en un bloque)
+   * sin contar dos veces la misma hora, que llega por dos vías: la celda del
+   * calendario y su constancia en class_records.
+   */
+  hour?: string | null;
   /** Clase perdida que salda. */
   recoveryFor?: string | null;
 }
+
+/**
+ * Horas de recuperación ya marcadas para una clase perdida. Cuenta HORAS, no
+ * registros: la misma hora llega por dos vías (la celda del calendario y su
+ * constancia) y contarla dos veces daría por saldada media clase.
+ *
+ * `exclude` es la celda que se está marcando ahora mismo, que todavía no es una
+ * recuperación hecha. Sin hora excluye la fecha entera (comportamiento de
+ * siempre: revisar una recuperación ya marcada no puede leerse como duplicado).
+ */
+export function countRecoveredHours(
+  existing: ExistingRecovery[],
+  studentName: string,
+  lostDate: string,
+  exclude?: { date: string; hour?: string | null },
+): number {
+  const alumno = nk(studentName);
+  const excludeHour = hourKey(exclude?.hour);
+  const horas = new Set<string>();
+  for (const e of existing) {
+    if (nk(e.studentName) !== alumno || e.recoveryFor !== lostDate) continue;
+    const key = hourKey(e.hour);
+    if (exclude && e.date === exclude.date && (excludeHour === 'x' || key === 'x' || key === excludeHour)) continue;
+    horas.add(`${e.date}|${key}`);
+  }
+  return horas.size;
+}
+
+/** 'HH:00' → '17'. 'x' cuando no se sabe la hora. */
+const hourKey = (hour: string | null | undefined): string => {
+  const h = parseInt((hour ?? '').trim(), 10);
+  return Number.isFinite(h) ? String(h) : 'x';
+};
 
 const ES = (iso: string): string => {
   const [y, m, d] = iso.split('-');
@@ -104,12 +146,20 @@ export function checkRecovery(opts: {
   studentName: string;
   /** Fecha de la clase de recuperación (la celda que se está marcando). */
   recoveryDate: string;
+  /** Hora de esa celda, 'HH:00'. Sin ella se excluye la fecha entera. */
+  recoveryHour?: string;
   /** Fecha de la clase perdida que se quiere saldar. */
   lostDate: string;
   classRecords: ClassRecord[];
   joinLogs: ClassJoinLog[];
   /** Recuperaciones que ya existen (celdas del calendario y class_records). */
   existing: ExistingRecovery[];
+  /**
+   * Horas que valía la clase perdida (1 por defecto). Lo calcula el llamador con
+   * `lostClassHours` (lib/recoveryLedger), que es quien tiene el calendario: una
+   * clase de 2 h admite dos horas de recuperación, juntas o partidas.
+   */
+  lostHours?: number;
 }): RecoveryVerdict {
   const { studentName, recoveryDate, lostDate } = opts;
   const alumno = nk(studentName);
@@ -133,14 +183,20 @@ export function checkRecovery(opts: {
     };
   }
 
-  // 3. Una clase perdida, una sola recuperación.
-  const yaSaldada = opts.existing.find(e =>
-    nk(e.studentName) === alumno && e.recoveryFor === lostDate && e.date !== recoveryDate);
-  if (yaSaldada) {
+  // 3. Una clase perdida se repone hasta completar SUS horas.
+  const lostHours = Math.max(1, Math.round(opts.lostHours ?? 1));
+  const hechas = countRecoveredHours(opts.existing, studentName, lostDate,
+    { date: recoveryDate, hour: opts.recoveryHour });
+  if (hechas >= lostHours) {
+    const fechas = [...new Set(opts.existing
+      .filter(e => nk(e.studentName) === alumno && e.recoveryFor === lostDate)
+      .map(e => ES(e.date)))];
     return {
       ok: false, kind: 'ya_recuperada',
-      title: 'Esa clase ya se recuperó.',
-      detail: `La recuperó la clase del ${ES(yaSaldada.date)}. Cada clase perdida se recupera una sola vez.`,
+      title: lostHours > 1 ? `Esa clase ya está recuperada entera.` : 'Esa clase ya se recuperó.',
+      detail: lostHours > 1
+        ? `Era una clase de ${lostHours} horas y ya tiene sus ${lostHours} horas repuestas (${fechas.join(' y ')}).`
+        : `La recuperó la clase del ${fechas[0] ?? ES(recoveryDate)}. Cada clase perdida se recupera una sola vez.`,
     };
   }
 
@@ -191,17 +247,19 @@ export function existingRecoveriesOf(opts: {
   studentName: string;
   classRecords: ClassRecord[];
   /** Celdas de recuperación del calendario, ya resueltas a su fecha real. */
-  recoveryCells: Array<{ studentName: string; date: string; recoveryFor?: string }>;
+  recoveryCells: Array<{ studentName: string; date: string; hour?: string; recoveryFor?: string }>;
 }): ExistingRecovery[] {
   const alumno = nk(opts.studentName);
   const out: ExistingRecovery[] = [];
   for (const c of opts.recoveryCells) {
     if (nk(c.studentName) !== alumno || !c.recoveryFor) continue;
-    out.push({ studentName: c.studentName, date: c.date, recoveryFor: c.recoveryFor });
+    out.push({ studentName: c.studentName, date: c.date, hour: c.hour, recoveryFor: c.recoveryFor });
   }
   for (const r of opts.classRecords) {
     if (nk(r.studentName) !== alumno || !r.recoveryForDate) continue;
-    out.push({ studentName: r.studentName, date: r.classDate, recoveryFor: r.recoveryForDate });
+    // Con la hora: la celda del calendario y su constancia son LA MISMA hora de
+    // recuperación, y `countRecoveredHours` las funde por (fecha, hora).
+    out.push({ studentName: r.studentName, date: r.classDate, hour: r.classTime, recoveryFor: r.recoveryForDate });
   }
   return out;
 }

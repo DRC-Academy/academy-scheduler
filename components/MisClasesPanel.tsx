@@ -33,7 +33,7 @@ import {
   // contiguas del mismo alumno llegan acá como una sola clase de 2h.
   type TeacherSession as TodayClass,
 } from '@/lib/teacherClasses';
-import { durationBadgeLabel, hourNum } from '@/lib/sessions';
+import { durationBadgeLabel, hourNum, nkName } from '@/lib/sessions';
 import { useClassJoin } from '@/components/JoinClass';
 import { useOnboardingActions } from '@/lib/OnboardingContext';
 import { registerTourBridge } from '@/lib/tourBridge';
@@ -708,33 +708,51 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
       //  · celda ORIGINAL → 'reprogramada' (tachada, gris) esa semana.
       //  · celda de la NUEVA fecha/hora → 'bloqueado' (recuperación) → aparece en
       //    Próximas clases el día correcto y cuenta al darse (finanzas).
+      //
+      // Una sesión de 2 h mueve SUS DOS HORAS. Antes marcaba una sola celda a cada
+      // lado: la segunda hora de la clase original seguía pareciendo una clase
+      // normal y en el destino solo se reponía 1 h de las 2, así que el profesor
+      // perdía una hora de pago en cada reprogramación de una clase larga.
       try {
         const origDate = new Date(date + 'T00:00:00');
         const newDate  = new Date(data.newDate + 'T00:00:00');
         const newHour  = `${(data.newTime || c.hour).slice(0, 2)}:00`;
         if (!isNaN(origDate.getTime()) && !isNaN(newDate.getTime())) {
-          const origKey = cellKey(dayNameFromDate(origDate), c.hour);
-          const newKey  = cellKey(dayNameFromDate(newDate), newHour);
+          const horas = Math.max(1, Math.min(Math.round(c.durationHours || 1), 4));
+          const origStart = parseInt(c.hour, 10);
+          const newStart  = parseInt(newHour, 10);
+          const hh = (n: number) => `${String(n).padStart(2, '0')}:00`;
+          const origDay = dayNameFromDate(origDate);
+          const newDay  = dayNameFromDate(newDate);
           const next: Grid = { ...grid };
-          // baseCellOf: el fondo de la celda (nunca otra marca puntual), con su
-          // alumno recurrente, que puede no ser el de la clase que se mueve.
-          const baseOrig = grid[origKey] ? baseCellOf(grid[origKey]) : null;
-          next[origKey] = {
-            state: 'reprogramada', student: c.studentName,
-            weekDate: mondayIsoOf(origDate),
-            baseState: baseOrig ? baseOrig.state : 'ocupado',
-            baseStudent: baseOrig ? baseOrig.student : c.studentName,
-            rescheduledTo: data.newDate,
-          };
-          const baseNew = grid[newKey] ? baseCellOf(grid[newKey]) : null;
-          // No pisar una clase recurrente real en la nueva celda.
-          if (!baseNew || baseNew.state !== 'ocupado') {
-            next[newKey] = {
-              state: 'bloqueado', student: c.studentName,
-              weekDate: mondayIsoOf(newDate),
-              baseState: baseNew ? baseNew.state : 'libre',
-              recoveryFor: date,
-            };
+
+          for (let i = 0; i < horas; i++) {
+            const origKey = cellKey(origDay, Number.isFinite(origStart) && i > 0 ? hh(origStart + i) : c.hour);
+            const newKey  = cellKey(newDay,  Number.isFinite(newStart)  && i > 0 ? hh(newStart + i)  : newHour);
+            // baseCellOf: el fondo de la celda (nunca otra marca puntual), con su
+            // alumno recurrente, que puede no ser el de la clase que se mueve.
+            const baseOrig = next[origKey] ? baseCellOf(next[origKey]) : null;
+            // Solo se tacha la hora que era de este alumno: si la sesión de 2 h
+            // ya no existe en el calendario, la segunda celda se deja como está.
+            if (i === 0 || (baseOrig && nkName(baseOrig.student) === nkName(c.studentName))) {
+              next[origKey] = {
+                state: 'reprogramada', student: c.studentName,
+                weekDate: mondayIsoOf(origDate),
+                baseState: baseOrig ? baseOrig.state : 'ocupado',
+                baseStudent: baseOrig ? baseOrig.student : c.studentName,
+                rescheduledTo: data.newDate,
+              };
+            }
+            const baseNew = next[newKey] ? baseCellOf(next[newKey]) : null;
+            // No pisar una clase recurrente real en la nueva celda.
+            if (!baseNew || baseNew.state !== 'ocupado') {
+              next[newKey] = {
+                state: 'bloqueado', student: c.studentName,
+                weekDate: mondayIsoOf(newDate),
+                baseState: baseNew ? baseNew.state : 'libre',
+                recoveryFor: date,
+              };
+            }
           }
           await onGridChange(next);
         }

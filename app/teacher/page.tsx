@@ -16,6 +16,8 @@ import { checkSubscription, resolveSubscriptionEmail, subCategory } from '@/lib/
 import { planBadgeStyle } from '@/lib/productUtils';
 import { isAssignableCell, withBaseState, baseStudentOf } from '@/lib/cells';
 import { checkRecovery, existingRecoveriesOf, type RecoveryVerdict } from '@/lib/recovery';
+import { lostClassHours, recoveryLedgerOf, type RecoveryLedger } from '@/lib/recoveryLedger';
+import { sessionRangeLabel } from '@/lib/sessions';
 import { isoDateLocal, classesForDate, groupContiguousClasses, sessionHoursLabel, gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { periodIndex, dbGetStudentDropouts, type StudentDropout } from '@/lib/studentPeriod';
 import { StudentAutofillCard } from '@/components/StudentAutofillCard';
@@ -1000,13 +1002,17 @@ function TeacherNotificationsTab({ teacher, myAssignments, students, classRecord
 // 54 de 187— el modal ofrece registrar ahí mismo la falta con aviso y continuar.
 // Bloquear sin dar salida es garantizar que el profesor no cambie de hábito: hoy
 // el alumno avisa por WhatsApp y ese aviso no llega al sistema.
-function RecuperacionModal({ day, hour, date, studentNames, verdictOf, onRegisterAbsence, onConfirm, onCancel }: {
+function RecuperacionModal({ day, hour, date, studentNames, verdictOf, ledgerOf, freeHours, onRegisterAbsence, onConfirm, onCancel }: {
   day: string; hour: string;
   /** Fecha real de la celda que se está marcando. */
   date: string;
   studentNames: string[];
   /** Las reglas, resueltas por la pantalla (que es quien tiene los datos). */
   verdictOf: (studentName: string, lostDate: string) => RecoveryVerdict;
+  /** Saldo de la clase perdida: cuánto valía y cuánto queda por reponer. */
+  ledgerOf: (studentName: string, lostDate: string) => RecoveryLedger;
+  /** Horas seguidas libres desde esta celda (incluida): decide si cabe el bloque. */
+  freeHours: number;
   /** Registra la falta con aviso de esa fecha. Es la salida del bloqueo. */
   onRegisterAbsence: (studentName: string, lostDate: string) => Promise<void>;
   onConfirm: (data: RecuperacionData) => void;
@@ -1019,11 +1025,23 @@ function RecuperacionModal({ day, hour, date, studentNames, verdictOf, onRegiste
   const [registrando, setRegistrando] = useState(false);
   const [registrada, setRegistrada] = useState(false);
   const [errorRegistro, setErrorRegistro] = useState('');
+  // Clase perdida de 2 h: ¿se repone junta (un bloque) o partida en dos días?
+  const [juntas, setJuntas] = useState(true);
 
   const finalName = (studentNames.length === 0 ? customName : student).trim();
   // Se comprueba mientras escribe: el motivo aparece antes de pulsar nada.
   const verdict = finalName && recoveryFor ? verdictOf(finalName, recoveryFor) : null;
   const canConfirm = !!finalName && !!recoveryFor && !!verdict?.ok;
+
+  // Saldo de la clase que se está saldando. Solo cuando la elección es válida:
+  // con una fecha a medio escribir no significa nada.
+  const ledger = canConfirm ? ledgerOf(finalName, recoveryFor) : null;
+  const pendientes = ledger?.pendingHours ?? 1;
+  // Lo que cabe de verdad: lo que falta por reponer, limitado por las horas
+  // libres que hay a continuación en el calendario.
+  const cabenJuntas = Math.min(pendientes, Math.max(1, freeHours));
+  const puedeElegir = pendientes > 1 && cabenJuntas > 1;
+  const horasAMarcar = puedeElegir && juntas ? cabenJuntas : 1;
 
   async function registrarFalta() {
     setRegistrando(true); setErrorRegistro('');
@@ -1091,14 +1109,50 @@ function RecuperacionModal({ day, hour, date, studentNames, verdictOf, onRegiste
           </div>
         )}
 
+        {/* Clase perdida de más de una hora: juntas o partida. El profesor cobra
+            lo mismo en los dos casos; lo que cambia es si son una clase de 2 h
+            (un transcript) o dos clases de 1 h (un transcript cada una). */}
+        {ledger && ledger.lostHours > 1 && (
+          <div style={{ background: 'rgba(255,196,0,0.10)', border: '1px solid rgba(255,196,0,0.45)', borderRadius: 10, padding: '11px 13px', marginBottom: 14 }}>
+            <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.55, marginBottom: puedeElegir ? 9 : 0 }}>
+              Esa clase era de <b>{ledger.lostHours} horas</b>
+              {ledger.recoveredHours > 0 && <> y ya tiene <b>{ledger.recoveredHours} h</b> repuesta{ledger.recoveredHours > 1 ? 's' : ''}</>}
+              . Quedan <b>{pendientes} h</b> por recuperar.
+            </div>
+            {puedeElegir ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                {([
+                  { on: true,  label: `Las ${cabenJuntas} horas juntas (${sessionRangeLabel(hour, cabenJuntas)})`, sub: 'Una clase de varias horas: un transcript, se paga por todas.' },
+                  { on: false, label: 'Solo esta hora, el resto otro día', sub: `Queda${pendientes - 1 > 1 ? 'n' : ''} ${pendientes - 1} h por marcar en otro día. Cada hora es una clase con su transcript.` },
+                ]).map(opt => (
+                  <button key={String(opt.on)} type="button" onClick={() => setJuntas(opt.on)}
+                    style={{ display: 'block', textAlign: 'left', padding: '9px 12px', borderRadius: 9, fontFamily: 'inherit', cursor: 'pointer',
+                      border: `1.5px solid ${juntas === opt.on ? '#1E9E3A' : 'var(--border)'}`,
+                      background: juntas === opt.on ? 'rgba(30,158,58,0.08)' : 'var(--bg-surface)',
+                      color: 'var(--text-primary)', fontSize: 13 }}>
+                    <div style={{ fontWeight: 600 }}>{juntas === opt.on ? '🔘' : '⚪'} {opt.label}</div>
+                    <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 2, marginLeft: 22 }}>{opt.sub}</div>
+                  </button>
+                ))}
+              </div>
+            ) : pendientes > 1 ? (
+              <div style={{ fontSize: 12, color: '#9a6516', lineHeight: 1.5 }}>
+                La hora siguiente no está libre, así que esta recuperación es de 1 h: quedará{pendientes - 1 > 1 ? 'n' : ''} {pendientes - 1} h para otro día.
+              </div>
+            ) : (
+              <div style={{ fontSize: 12, color: '#1f7a3d', lineHeight: 1.5 }}>Esta hora completa la clase.</div>
+            )}
+          </div>
+        )}
+
         <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>Nota (opcional)</label>
         <input value={note} onChange={e => setNote(e.target.value)} placeholder="Ej: la faltó por viaje" style={{ width: '100%', marginBottom: 18 }} />
 
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={onCancel} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit' }}>Cancelar</button>
-          <button onClick={() => canConfirm && onConfirm({ student: finalName, recoveryFor, note: note.trim() || undefined })} disabled={!canConfirm}
+          <button onClick={() => canConfirm && onConfirm({ student: finalName, recoveryFor, note: note.trim() || undefined, hours: horasAMarcar })} disabled={!canConfirm}
             style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: canConfirm ? '#1E9E3A' : 'var(--bg-surface-3)', color: canConfirm ? 'white' : 'var(--text-muted)', cursor: canConfirm ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
-            Marcar recuperación
+            {horasAMarcar > 1 ? `Marcar recuperación de ${horasAMarcar} h` : 'Marcar recuperación'}
           </button>
         </div>
       </div>
@@ -1288,16 +1342,58 @@ function TeacherContent() {
    * acá solo se le pasan los datos.
    */
   function recoveryVerdictOf(studentName: string, lostDate: string): RecoveryVerdict {
-    const celdas = (teacher?.recoveryCells ?? []).map(c => ({
-      studentName: c.studentName, date: c.date, recoveryFor: c.recoveryFor,
-    }));
     return checkRecovery({
       studentName,
       recoveryDate: pendingRecuperacion?.date ?? isoDateLocal(new Date()),
+      recoveryHour: pendingRecuperacion?.hour,
       lostDate,
+      // Una clase perdida de 2 h admite DOS horas de recuperación (juntas o
+      // partidas); una de 1 h sigue admitiendo una sola.
+      lostHours: lostClassHours({
+        studentName, lostDate, classRecords, occupancy: gridOccupancyOfTeacher(teacher),
+      }),
       classRecords, joinLogs: classJoinLogs,
-      existing: existingRecoveriesOf({ studentName, classRecords, recoveryCells: celdas }),
+      existing: existingRecoveriesOf({ studentName, classRecords, recoveryCells: celdasDeRecuperacion() }),
     });
+  }
+
+  /** Las celdas de recuperación del profesor, con su hora (la necesita el saldo). */
+  function celdasDeRecuperacion() {
+    return (teacher?.recoveryCells ?? []).map(c => ({
+      studentName: c.studentName, date: c.date, hour: c.hour, recoveryFor: c.recoveryFor,
+    }));
+  }
+
+  /** Saldo de la clase perdida: lo que mira el modal para ofrecer junta o partida. */
+  function recoveryLedgerFor(studentName: string, lostDate: string): RecoveryLedger {
+    return recoveryLedgerOf({
+      studentName, lostDate, classRecords,
+      existing: existingRecoveriesOf({ studentName, classRecords, recoveryCells: celdasDeRecuperacion() }),
+      occupancy: gridOccupancyOfTeacher(teacher),
+      // La celda que se está marcando ahora no cuenta como recuperación hecha.
+      exclude: pendingRecuperacion
+        ? { date: pendingRecuperacion.date, hour: pendingRecuperacion.hour }
+        : undefined,
+    });
+  }
+
+  /**
+   * Horas seguidas libres a partir de esa celda (la propia incluida, así que
+   * nunca es menos de 1). Decide si una recuperación de 2 h cabe JUNTA: sin esto
+   * el bloque se comería la clase recurrente del alumno de al lado.
+   */
+  function freeHoursFrom(day: string, hour: string): number {
+    const start = parseInt(hour, 10);
+    if (!Number.isFinite(start)) return 1;
+    let n = 1;
+    for (let h = start + 1; h <= start + 3; h++) {
+      const cell = grid[cellKey(day, `${String(h).padStart(2, '0')}:00`)];
+      // Libre de verdad: sin celda, ofrecida o sin trabajar. Una recuperación de
+      // otro alumno también ocupa, aunque el horario de fondo esté libre.
+      if (cell && cell.state !== 'libre' && cell.state !== 'no_work') break;
+      n++;
+    }
+    return n;
   }
 
   /**
@@ -1320,13 +1416,17 @@ function TeacherContent() {
   // fecha original. Cuenta para el pago con la tarifa normal del alumno.
   async function handleRecuperacionConfirm(data: RecuperacionData) {
     if (!teacher || !pendingRecuperacion) return;
+    const { date, hour } = pendingRecuperacion;
     pendingRecuperacion.resolve(data); // aplica la celda 'bloqueado' con student + recoveryFor
     setPendingRecuperacion(null);
     try {
       await addRecoveryClass({
         teacherId: teacher.id, teacherName: teacher.name, studentName: data.student,
-        recoveryDate: isoDateLocal(new Date()), originalDate: data.recoveryFor,
-        note: data.note, classTime: pendingRecuperacion.hour,
+        // La fecha de la CLASE de recuperación, no la de hoy. Marcar el lunes la
+        // recuperación del jueves dejaba la constancia sellada el lunes: la fila
+        // caía en otro día y el saldo de horas no la reconocía.
+        recoveryDate: date, originalDate: data.recoveryFor,
+        note: data.note, classTime: hour,
       });
     } catch { /* la constancia de finanzas no debe romper el marcado del grid */ }
   }
@@ -1887,6 +1987,8 @@ function TeacherContent() {
           hour={pendingRecuperacion.hour}
           date={pendingRecuperacion.date}
           verdictOf={recoveryVerdictOf}
+          ledgerOf={recoveryLedgerFor}
+          freeHours={freeHoursFrom(pendingRecuperacion.day, pendingRecuperacion.hour)}
           onRegisterAbsence={registrarFaltaConAviso}
           studentNames={Array.from(new Set(myAssignments.map(a => a.studentName))).sort()}
           onConfirm={handleRecuperacionConfirm}
