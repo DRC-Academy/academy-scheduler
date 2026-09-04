@@ -9,7 +9,7 @@ import { LastUpdated } from '@/components/LastUpdated';
 import { getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
-import { calculateTeacherFinance, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge, rowHoursLabel, durationBadge, sessionBreakdownLabel, transcriptStateBadge, transcriptNeedsTeacher, financeStatusBadge, canMarkStudentAbsence, absenceBreakdownLabel, mixedSessionBadge, recoveryCreditLabel, estimateClassAmount, ABSENCE_MONTHLY_CAP, ABSENCE_CAP_MESSAGE } from '@/lib/finance';
+import { calculateTeacherFinance, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge, rowHoursLabel, durationBadge, sessionBreakdownLabel, transcriptStateBadge, transcriptNeedsTeacher, financeStatusBadge, canMarkStudentLostClass, lostClassBreakdownLabel, mixedSessionBadge, recoveryCreditLabel, estimateClassAmount, LOST_CLASS_MONTHLY_CAP, LOST_CLASS_CAP_MESSAGE } from '@/lib/finance';
 import { dbGetAssignmentsByTeacher, calcRegisteredClassNumber, getTeacherAssignments } from '@/lib/db';
 import { buildClassFunnel } from '@/lib/classFunnel';
 import { ClassFunnelCard } from '@/components/ClassFunnelCard';
@@ -139,12 +139,13 @@ function AbsenceModal({ studentName, dateLabel, remaining, saving, error, onCanc
         </div>
         <p style={{ fontSize: 13.5, color: '#5f6360', lineHeight: 1.65, margin: '0 0 14px' }}>
           El alumno no se presentó a esta clase. Al marcarla, se te pagará la clase a tarifa
-          normal, sin necesidad de transcript. Puedes marcar un máximo de {ABSENCE_MONTHLY_CAP} faltas
-          sin aviso por alumno al mes. Esta clase contará dentro del cupo mensual del alumno.
+          normal, sin necesidad de transcript. Puedes cobrar un máximo de {LOST_CLASS_MONTHLY_CAP} clases
+          perdidas por alumno al mes, contando las faltas sin aviso y las cancelaciones sobre la
+          hora juntas. Esta clase contará dentro del cupo mensual del alumno.
         </p>
         <div style={{ fontSize: 12.5, color: '#9a6516', background: '#fdf3e7', border: '1px solid #f2e2c9', borderRadius: 10, padding: '10px 13px', lineHeight: 1.55, marginBottom: 16 }}>
-          Te {remaining === 1 ? 'queda 1 falta' : `quedan ${remaining} faltas`} de este alumno este mes
-          (incluida esta).
+          Te {remaining === 1 ? 'queda 1 clase perdida cobrable' : `quedan ${remaining} clases perdidas cobrables`} de
+          este alumno este mes (incluida esta).
         </div>
         {error && (
           <div style={{ fontSize: 12.5, color: '#c0392b', background: 'rgba(239,68,68,0.08)', borderRadius: 8, padding: '9px 12px', marginBottom: 12 }}>
@@ -757,9 +758,9 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                             && r.transcriptState === 'none' && !isFalta
                             && finance.paymentStatus !== 'paid';
                           const absenceCap = canMarkAbsence
-                            ? canMarkStudentAbsence(classRecords, teacher.id, g.name, r.date.slice(0, 7))
+                            ? canMarkStudentLostClass(classRecords, teacher.id, g.name, r.date.slice(0, 7))
                             : null;
-                          const absenceNote = absenceBreakdownLabel(r);
+                          const lostNote = lostClassBreakdownLabel(r);
                           // Bloque de 2h "normal + recuperación": el badge explica por qué
                           // paga doble y la nota, qué clase perdida salda.
                           const mixed = mixedSessionBadge(r);
@@ -859,8 +860,8 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
 
                                   {/* Cobrada por falta del alumno: se dice con todas
                                       las letras, con la misma frase que ve el admin. */}
-                                  {absenceNote && (
-                                    <div className="mcf-cls-reason" style={{ color: '#b45309' }}>{absenceNote}</div>
+                                  {lostNote && (
+                                    <div className="mcf-cls-reason" style={{ color: '#b45309' }}>{lostNote}</div>
                                   )}
 
                                   {/* Por qué no cuenta todavía. */}
@@ -894,8 +895,8 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                                           Marcar falta sin aviso del alumno
                                         </button>
                                       ) : (
-                                        <span style={{ color: '#9a6516', fontSize: 12 }} title={ABSENCE_CAP_MESSAGE}>
-                                          {ABSENCE_CAP_MESSAGE}
+                                        <span style={{ color: '#9a6516', fontSize: 12 }} title={LOST_CLASS_CAP_MESSAGE}>
+                                          {LOST_CLASS_CAP_MESSAGE}
                                         </span>
                                       )
                                     )}

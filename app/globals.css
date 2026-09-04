@@ -1802,18 +1802,31 @@ body.driver-active .drc-modal-backdrop * { pointer-events: auto; }
 }
 
 /* Ampliar el rango de horas (profesor): fila al principio y al final de la
-   columna de horas, en las dos vistas (grilla y agenda móvil). */
+   columna de horas, en las dos vistas (grilla y agenda móvil). El botón suma una
+   hora; el selector de al lado salta directo a una hora lejana (las 00:00). */
+.vc-addhour-row { display: flex; align-items: stretch; width: 100%; }
 .vc-addhour {
-  display: block; width: 100%; box-sizing: border-box;
+  flex: 1 1 auto; min-width: 0; box-sizing: border-box;
   padding: 9px 12px; border: 1px dashed #cfd3cb; background: #fbfbf9;
   color: #5f6360; font-family: inherit; font-size: 12.5px; font-weight: 600;
   cursor: pointer; text-align: left; transition: background 0.12s, color 0.12s, border-color 0.12s;
 }
-.vc-grid > .vc-addhour { border-left: none; border-right: none; }
-.vc-grid > .vc-addhour:first-child { border-top: none; }
-.vc-grid > .vc-addhour:last-child { border-bottom: none; }
-.vc-agenda > .vc-addhour { border-radius: 10px; }
-.vc-addhour:hover:not(:disabled) { background: #eef6ef; color: #15803d; border-color: #1E9E3A; }
+.vc-addhour-jump {
+  flex: 0 0 auto; box-sizing: border-box; padding: 0 8px;
+  border: 1px dashed #cfd3cb; border-left: none; background: #fbfbf9;
+  color: #5f6360; font-family: inherit; font-size: 12px; font-weight: 600;
+  cursor: pointer; transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.vc-grid > .vc-addhour-row > .vc-addhour { border-left: none; }
+.vc-grid > .vc-addhour-row > .vc-addhour:last-child { border-right: none; }
+.vc-grid > .vc-addhour-row > .vc-addhour-jump { border-right: none; }
+.vc-grid > .vc-addhour-row:first-child > * { border-top: none; }
+.vc-grid > .vc-addhour-row:last-child > * { border-bottom: none; }
+.vc-agenda > .vc-addhour-row > .vc-addhour { border-radius: 10px 0 0 10px; }
+.vc-agenda > .vc-addhour-row > .vc-addhour:last-child { border-radius: 10px; }
+.vc-agenda > .vc-addhour-row > .vc-addhour-jump { border-radius: 0 10px 10px 0; }
+.vc-addhour:hover:not(:disabled),
+.vc-addhour-jump:hover { background: #eef6ef; color: #15803d; border-color: #1E9E3A; }
 .vc-addhour:disabled { opacity: 0.45; cursor: not-allowed; }
 
 /* Conmutador y agenda: solo móvil */

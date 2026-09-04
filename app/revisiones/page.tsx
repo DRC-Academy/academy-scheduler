@@ -23,7 +23,7 @@ import { useTeachers } from '@/lib/TeachersContext';
 import { getTeacherAssignments } from '@/lib/db';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { registerClassWithTranscript } from '@/lib/aiClient';
-import { canMarkStudentAbsence, ABSENCE_MONTHLY_CAP, durationBadge } from '@/lib/finance';
+import { canMarkStudentLostClass, LOST_CLASS_MONTHLY_CAP, durationBadge } from '@/lib/finance';
 import {
   buildMissingJoinClasses, pendingToDeclare, dbGetReviewRequests, dbCreateReviewRequest, signalLabel,
   REVIEW_TYPE_OPTIONS, reviewTypeLabel, type MissingJoinClass,
@@ -85,7 +85,7 @@ function RequestPill({ r }: { r: ClassReviewRequest }) {
 // ── Selector "¿qué pasó en esta clase?" ───────────────────────────────────────
 function TypeChooser({ clase, absenceCount, saving, error, onCancel, onConfirm }: {
   clase: MissingJoinClass;
-  /** Faltas sin aviso que YA tiene el alumno este mes (fuente única, lib/finance). */
+  /** Clases perdidas que YA tiene el alumno este mes (fuente única, lib/finance). */
   absenceCount: number;
   saving: boolean;
   error: string;
@@ -95,7 +95,7 @@ function TypeChooser({ clase, absenceCount, saving, error, onCancel, onConfirm }
   const [tipo, setTipo] = useState<ReviewRequestType | null>(null);
   const [comment, setComment] = useState('');
 
-  const capReached = absenceCount >= ABSENCE_MONTHLY_CAP;
+  const capReached = absenceCount >= LOST_CLASS_MONTHLY_CAP;
   const opcion = REVIEW_TYPE_OPTIONS.find(o => o.value === tipo);
   // Las que no llevan transcript piden motivo, igual que en "Añadir clase".
   const needsComment = !!opcion && !opcion.needsTranscript;
@@ -135,12 +135,12 @@ function TypeChooser({ clase, absenceCount, saving, error, onCancel, onConfirm }
                 </div>
                 <div style={{ fontSize: 12, color: bloqueada ? '#9ca3af' : '#5f6360', lineHeight: 1.5 }}>
                   {bloqueada
-                    ? `Este alumno ya tiene ${ABSENCE_MONTHLY_CAP} faltas sin aviso este mes.`
+                    ? `Este alumno ya tiene ${LOST_CLASS_MONTHLY_CAP} clases perdidas cobrables este mes (faltas y cancelaciones juntas).`
                     : o.help}
                 </div>
                 {o.usesAbsenceCap && !bloqueada && (
                   <div style={{ fontSize: 11.5, color: '#9a6516', marginTop: 4 }}>
-                    Lleva {absenceCount} de {ABSENCE_MONTHLY_CAP} este mes.
+                    Lleva {absenceCount} de {LOST_CLASS_MONTHLY_CAP} clases perdidas este mes.
                   </div>
                 )}
               </button>
@@ -389,10 +389,10 @@ function RevisionesContent() {
       : `${ok} enviadas, ${fallos.length} con problemas: ${fallos[0]}`);
   }
 
-  /** Faltas sin aviso que ya tiene ese alumno en el mes de esa clase. */
+  /** Clases perdidas (faltas + cancelaciones) del alumno en el mes de esa clase. */
   function absenceCountFor(c: MissingJoinClass): number {
     if (!teacher) return 0;
-    return canMarkStudentAbsence(classRecords, teacher.id, c.studentName, c.date.slice(0, 7)).count;
+    return canMarkStudentLostClass(classRecords, teacher.id, c.studentName, c.date.slice(0, 7)).count;
   }
 
   function showToast(msg: string) {

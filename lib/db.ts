@@ -600,7 +600,7 @@ async function reconcileAssignmentStatus(
 }
 
 /**
- * Rango de horas que el profesor quiere ver en su calendario (06–23).
+ * Rango de horas que el profesor quiere ver en su calendario (00–23).
  * Si las columnas todavía no existen (falta correr supabase-calendar-hours.sql)
  * no se rompe nada: el calendario sigue funcionando, solo no recuerda el rango
  * entre sesiones.
@@ -4201,8 +4201,9 @@ export async function dbFindStudentAbsence(
 // Registra la constancia de una clase REPROGRAMADA (o cancelación sobre la hora que
 // se reprograma). class_date = fecha original; rescheduled_to = nueva fecha. Las de
 // tipo 'reprogramada' NO cuentan para el pago (ver lib/finance.ts); las de tipo
-// 'cancelacion_hora' sí son cobrables (hasta 2 por alumno). Resiliente si la BD no
-// tiene aún las columnas original_date/rescheduled_to.
+// 'cancelacion_hora' sí son cobrables, dentro de las 2 clases perdidas del mes que
+// comparten con las faltas sin aviso. Resiliente si la BD no tiene aún las
+// columnas original_date/rescheduled_to.
 export async function dbAddRescheduleRecord(p: {
   teacherId: string; teacherName: string; studentName: string;
   originalDate: string; originalTime?: string;

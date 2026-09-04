@@ -1,4 +1,5 @@
-// El tope de 2 faltas sin aviso por alumno y mes cuenta CLASES, no filas.
+// El tope de 2 CLASES PERDIDAS por alumno y mes —faltas sin aviso y cancelaciones
+// sobre la hora juntas— cuenta CLASES, no filas.
 //
 // La auditoría de agosto de 2026 encontró 5 registros duplicados del mismo día
 // (el profesor volvía a marcar la falta porque la fila seguía diciendo "pendiente
@@ -7,11 +8,11 @@
 // conservan como constancia, así que el contador tiene que ser inmune a ellos.
 import { describe, it, expect } from 'vitest';
 import {
-  studentAbsencesInMonth, studentAbsenceDatesInMonth, canMarkStudentAbsence,
-  calculateTeacherFinance, ABSENCE_MONTHLY_CAP,
+  studentLostClassesInMonth, studentLostDatesInMonth, canMarkStudentLostClass,
+  calculateTeacherFinance, LOST_CLASS_MONTHLY_CAP,
 } from '@/lib/finance';
 import { EMPTY_GRID_OCCUPANCY } from '@/lib/teacherClasses';
-import type { ClassRecord, Assignment, FinanceRate, Student } from '@/types';
+import type { ClassRecord, ClassJoinLog, Assignment, FinanceRate, Student } from '@/types';
 
 const T = 't1';
 
@@ -21,6 +22,10 @@ function falta(id: string, date: string, createdAt: string, time = '20:00'): Cla
     classDate: date, classTime: time, screenshotUrl: '',
     classType: 'falta_sin_aviso', createdAt,
   };
+}
+/** Cancelación sobre la hora: gasta el MISMO cupo mensual que la falta. */
+function cancelacion(id: string, date: string, createdAt: string, time = '20:00'): ClassRecord {
+  return { ...falta(id, date, createdAt, time), classType: 'cancelacion_hora' };
 }
 
 describe('tope de faltas sin aviso', () => {
@@ -32,19 +37,19 @@ describe('tope de faltas sin aviso', () => {
   ];
 
   it('cuenta una sola clase aunque haya tres registros del mismo día', () => {
-    expect(studentAbsencesInMonth(triplicada, T, 'Marc Caudevilla Reina', '2026-08')).toHaveLength(1);
-    expect(studentAbsenceDatesInMonth(triplicada, T, 'Marc Caudevilla Reina', '2026-08')).toHaveLength(1);
+    expect(studentLostClassesInMonth(triplicada, T, 'Marc Caudevilla Reina', '2026-08')).toHaveLength(1);
+    expect(studentLostDatesInMonth(triplicada, T, 'Marc Caudevilla Reina', '2026-08')).toHaveLength(1);
   });
 
   it('deja marcar otra falta: el alumno tiene 1 clase perdida, no 3', () => {
-    const cap = canMarkStudentAbsence(triplicada, T, 'Marc Caudevilla Reina', '2026-08');
+    const cap = canMarkStudentLostClass(triplicada, T, 'Marc Caudevilla Reina', '2026-08');
     expect(cap.count).toBe(1);
     expect(cap.allowed).toBe(true);
-    expect(cap.remaining).toBe(ABSENCE_MONTHLY_CAP - 1);
+    expect(cap.remaining).toBe(LOST_CLASS_MONTHLY_CAP - 1);
   });
 
   it('agrupa conservando TODOS los registros de cada fecha', () => {
-    const grupos = studentAbsenceDatesInMonth(triplicada, T, 'Marc Caudevilla Reina', '2026-08');
+    const grupos = studentLostDatesInMonth(triplicada, T, 'Marc Caudevilla Reina', '2026-08');
     expect(grupos[0].date).toBe('2026-08-05');
     expect(grupos[0].records.map(r => r.id).sort()).toEqual(['a', 'b', 'c']);
   });
@@ -55,7 +60,7 @@ describe('tope de faltas sin aviso', () => {
       falta('x', '2026-08-18', '2026-08-18T22:50:00Z', '21:00'),
       falta('y', '2026-08-18', '2026-08-19T10:15:00Z', '12:00'),
     ];
-    expect(canMarkStudentAbsence(mismaFechaOtraHora, T, 'Marc Caudevilla Reina', '2026-08').count).toBe(1);
+    expect(canMarkStudentLostClass(mismaFechaOtraHora, T, 'Marc Caudevilla Reina', '2026-08').count).toBe(1);
   });
 
   it('dos faltas de días distintos sí llegan al tope', () => {
@@ -63,7 +68,7 @@ describe('tope de faltas sin aviso', () => {
       falta('a', '2026-08-05', '2026-08-05T19:12:00Z'),
       falta('b', '2026-08-12', '2026-08-12T19:12:00Z'),
     ];
-    const cap = canMarkStudentAbsence(dosClases, T, 'Marc Caudevilla Reina', '2026-08');
+    const cap = canMarkStudentLostClass(dosClases, T, 'Marc Caudevilla Reina', '2026-08');
     expect(cap.count).toBe(2);
     expect(cap.allowed).toBe(false);
   });
@@ -73,7 +78,7 @@ describe('tope de faltas sin aviso', () => {
       falta('a', '2026-08-05', '2026-08-05T19:12:00Z'),
       { ...falta('b', '2026-08-12', '2026-08-12T19:12:00Z'), classType: 'falta_sin_aviso_revertida' },
     ];
-    expect(canMarkStudentAbsence(conRevertida, T, 'Marc Caudevilla Reina', '2026-08').count).toBe(1);
+    expect(canMarkStudentLostClass(conRevertida, T, 'Marc Caudevilla Reina', '2026-08').count).toBe(1);
   });
 });
 
@@ -148,10 +153,10 @@ describe('el duplicado ya no quema cupo en el pago', () => {
     const A = 'Marc Caudevilla Reina';
 
     it('agosto al tope no gasta el cupo de septiembre', () => {
-      const cap = canMarkStudentAbsence(agostoLleno, T, A, '2026-09');
+      const cap = canMarkStudentLostClass(agostoLleno, T, A, '2026-09');
       expect(cap.count).toBe(0);
       expect(cap.allowed).toBe(true);
-      expect(cap.remaining).toBe(ABSENCE_MONTHLY_CAP);
+      expect(cap.remaining).toBe(LOST_CLASS_MONTHLY_CAP);
     });
 
     it('las dos de septiembre se pagan aunque agosto llegara al tope', () => {
@@ -162,9 +167,9 @@ describe('el duplicado ya no quema cupo en el pago', () => {
 
     it('el alumno al tope queda bloqueado SOLO en su mes', () => {
       const todo = [...agostoLleno, ...septiembre];
-      expect(canMarkStudentAbsence(todo, T, A, '2026-08').allowed).toBe(false);
-      expect(canMarkStudentAbsence(todo, T, A, '2026-09').allowed).toBe(false);
-      expect(canMarkStudentAbsence(todo, T, A, '2026-10').allowed).toBe(true);
+      expect(canMarkStudentLostClass(todo, T, A, '2026-08').allowed).toBe(false);
+      expect(canMarkStudentLostClass(todo, T, A, '2026-09').allowed).toBe(false);
+      expect(canMarkStudentLostClass(todo, T, A, '2026-10').allowed).toBe(true);
     });
 
     it('una revertida devuelve el cupo de ese mes, no del historial', () => {
@@ -173,8 +178,88 @@ describe('el duplicado ya no quema cupo en el pago', () => {
         { ...falta('sep1', '2026-09-02', '2026-09-02T19:12:00Z'), classType: 'falta_sin_aviso_revertida' },
         falta('sep2', '2026-09-09', '2026-09-09T19:12:00Z'),
       ];
-      expect(canMarkStudentAbsence(conRevertida, T, A, '2026-09').count).toBe(1);
-      expect(canMarkStudentAbsence(conRevertida, T, A, '2026-09').allowed).toBe(true);
+      expect(canMarkStudentLostClass(conRevertida, T, A, '2026-09').count).toBe(1);
+      expect(canMarkStudentLostClass(conRevertida, T, A, '2026-09').allowed).toBe(true);
+    });
+  });
+
+  // UN SOLO tope para los dos tipos (septiembre de 2026). Antes la falta llevaba
+  // 2 por mes y la cancelación 2 de por vida: un alumno podía dejar 4 clases
+  // perdidas cobrables en un mes de 4 clases, y a la vez uno con dos
+  // cancelaciones viejas no volvía a tener ninguna cobrable nunca más.
+  describe('faltas y cancelaciones comparten el tope del mes', () => {
+    const A = 'Marc Caudevilla Reina';
+
+    it('una falta + una cancelación del mismo mes llenan el tope', () => {
+      const mezcla = [
+        falta('f1', '2026-09-01', '2026-09-01T19:12:00Z'),
+        cancelacion('c1', '2026-09-08', '2026-09-08T19:12:00Z'),
+      ];
+      const cap = canMarkStudentLostClass(mezcla, T, A, '2026-09');
+      expect(cap.count).toBe(2);
+      expect(cap.allowed).toBe(false);
+      expect(cap.remaining).toBe(0);
+    });
+
+    it('la tercera clase perdida del mes no se paga, sea del tipo que sea', () => {
+      const rows = calc([
+        falta('f1', '2026-09-01', '2026-09-01T19:12:00Z'),
+        cancelacion('c1', '2026-09-08', '2026-09-08T19:12:00Z'),
+        cancelacion('c2', '2026-09-15', '2026-09-15T19:12:00Z'),
+      ], '2026-09').rows;
+      expect(rows.find(r => r.date === '2026-09-01')?.status).toBe('pagable');
+      expect(rows.find(r => r.date === '2026-09-08')?.status).toBe('pagable');
+      expect(rows.find(r => r.date === '2026-09-15')?.status).toBe('excede_limite_tipo');
+    });
+
+    it('las cancelaciones también se reinician con el mes', () => {
+      // Con el tope viejo (2 de por vida) esta tercera cancelación no se pagaba
+      // nunca. Ahora agosto y septiembre tienen cada uno su cupo.
+      const historial = [
+        cancelacion('ago1', '2026-08-04', '2026-08-04T19:12:00Z'),
+        cancelacion('ago2', '2026-08-11', '2026-08-11T19:12:00Z'),
+        cancelacion('sep1', '2026-09-01', '2026-09-01T19:12:00Z'),
+      ];
+      expect(canMarkStudentLostClass(historial, T, A, '2026-08').allowed).toBe(false);
+      expect(canMarkStudentLostClass(historial, T, A, '2026-09').count).toBe(1);
+      expect(calc(historial, '2026-09').rows.find(r => r.date === '2026-09-01')?.status).toBe('pagable');
+    });
+
+    it('una clase perdida paga UNA fila aunque sus constancias se repartan', () => {
+      // Vanesa · Patricia Cebada, agosto de 2026: dos marcas del 21/08. Una se
+      // pegó al ingreso del 20/08 por la tolerancia de ±1 día y la otra se trajo
+      // su propia entrada, así que la MISMA clase salía en dos filas y las dos
+      // pasaban el tope: 3 clases perdidas cobradas con un tope de 2.
+      const joinLogs: ClassJoinLog[] = [{
+        id: 'j1', teacherId: T, teacherName: 'Jimena', studentName: 'Marc Caudevilla Reina',
+        scheduledDate: '2026-08-20', scheduledTime: '20:00',
+        clickedAt: '2026-08-20T20:00:00Z', punctuality: 'on_time',
+      }];
+      const { rows } = calculateTeacherFinance({
+        teacherId: T, teacherName: 'Jimena', monthYear: '2026-08',
+        assignments: [asgn], joinLogs, classAnalyses: [],
+        classRecords: [
+          cancelacion('c1', '2026-08-17', '2026-08-17T19:12:00Z'),
+          cancelacion('dup1', '2026-08-21', '2026-08-21T11:25:00Z'),
+          cancelacion('dup2', '2026-08-21', '2026-08-21T11:25:00Z'),
+        ],
+        rates, scoringEvents: [], students, manualApprovals: [], payment: null,
+        gridOccupancy: EMPTY_GRID_OCCUPANCY,
+      });
+      const pagables = rows.filter(r => r.status === 'pagable');
+      expect(pagables).toHaveLength(2);
+      // Y la clase repetida aporta una sola: la otra fila queda retenida.
+      expect(rows.filter(r => r.status === 'excede_limite_tipo')).toHaveLength(1);
+    });
+
+    it('una clase marcada como falta Y como cancelación es UNA sola perdida', () => {
+      // Corregir el tipo de una clase (el profesor la marcó falta y el admin la
+      // reclasificó) no puede gastar dos cupos: la hora perdida es la misma.
+      const mismaClase = [
+        falta('x', '2026-09-02', '2026-09-02T19:12:00Z'),
+        cancelacion('y', '2026-09-02', '2026-09-03T10:00:00Z'),
+      ];
+      expect(canMarkStudentLostClass(mismaClase, T, A, '2026-09').count).toBe(1);
     });
   });
 });

@@ -5,7 +5,8 @@
 -- ampliarlo con los botones "+ Añadir horario más temprano / más tarde" y su
 -- preferencia se guarda acá para que se mantenga entre sesiones.
 --
--- Límites absolutos de la app: 06:00 (start) y 23:00 (end).
+-- Límites absolutos de la app: 00:00 (start) y 23:00 (end): el día entero. Las
+-- 00:00 en España son las 19:00 en Argentina, así que la medianoche es horario real.
 --
 -- Ejecutá este script UNA vez en el SQL editor de Supabase. Es idempotente.
 -- ─────────────────────────────────────────────────────────────────────────────

@@ -17,14 +17,8 @@ import { getSpainParts } from '@/components/VisualCalendar';
 import { registerClassWithTranscript } from '@/lib/aiClient';
 import { checkTranscriptDuplicates, transcriptHash, type DupeCheck } from '@/lib/transcriptDupes';
 import { quickTranscriptCheck } from '@/lib/transcriptValidation';
-import { canMarkStudentAbsence, isStudentAbsence } from '@/lib/finance';
+import { canMarkStudentLostClass, LOST_CLASS_MONTHLY_CAP, LOST_CLASS_CAP_MESSAGE } from '@/lib/finance';
 import type { Teacher, Assignment, ClassRecord, ClassRecordType } from '@/types';
-
-// Etiquetas singular/plural por tipo de falta (para los mensajes de límite).
-const FALTA_TYPE_LABELS: Record<string, { sing: string; plural: string }> = {
-  falta_sin_aviso:  { sing: 'falta sin aviso',           plural: 'faltas sin aviso' },
-  cancelacion_hora: { sing: 'cancelación sobre la hora', plural: 'cancelaciones sobre la hora' },
-};
 
 // Opciones del selector "Tipo de clase".
 const CLASS_TYPE_OPTIONS: Array<{ value: ClassRecordType; label: string; needsTranscript: boolean }> = [
@@ -296,22 +290,15 @@ export function AddClassModal({
   const needsTranscript = CLASS_TYPE_OPTIONS.find(o => o.value === classType)?.needsTranscript ?? true;
   const isFaltaType = classType === 'falta_sin_aviso' || classType === 'cancelacion_hora';
 
-  // Cuántas lleva ya el alumno de ESE tipo. Son dos topes distintos:
-  //   · falta del alumno  → 2 por MES (mismo contador que usa el botón de
-  //     finanzas y el cálculo del pago: canMarkStudentAbsence, lib/finance);
-  //   · cancelación sobre la hora → 2 de todo el historial, como siempre.
+  // Cuántas CLASES PERDIDAS lleva ya el alumno ese mes. Un solo tope para los dos
+  // tipos: la falta y la cancelación sobre la hora comparten los 2 del mes, con el
+  // mismo contador que usan el botón de finanzas y el cálculo del pago
+  // (canMarkStudentLostClass, lib/finance), para que no puedan discrepar.
   const typeCount = useMemo(() => {
     if (!isFaltaType) return 0;
-    if (isStudentAbsence(classType)) {
-      return canMarkStudentAbsence(classRecords, teacher.id, studentName, (date || '').slice(0, 7)).count;
-    }
-    const nk = (x: string) => (x ?? '').trim().toLowerCase();
-    return classRecords.filter(r =>
-      r.teacherId === teacher.id && nk(r.studentName) === nk(studentName) && r.classType === classType
-    ).length;
-  }, [classRecords, teacher.id, studentName, classType, isFaltaType, date]);
-  const limitReached = isFaltaType && typeCount >= 2;
-  const typeLabel = FALTA_TYPE_LABELS[classType];
+    return canMarkStudentLostClass(classRecords, teacher.id, studentName, (date || '').slice(0, 7)).count;
+  }, [classRecords, teacher.id, studentName, isFaltaType, date]);
+  const limitReached = isFaltaType && typeCount >= LOST_CLASS_MONTHLY_CAP;
 
   // Auto-rellenar la hora con el slot recurrente del alumno si el día coincide.
   // Depende solo de alumno+fecha para no pisar una hora editada a mano. Si el
@@ -428,9 +415,7 @@ export function AddClassModal({
           {limitReached ? (
             <>
               <div style={{ fontSize: 13, color: '#dc2626', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.35)', borderRadius: 10, padding: '12px 14px', lineHeight: 1.5 }}>
-                {isStudentAbsence(classType)
-                  ? `Este alumno ya tiene 2 ${typeLabel?.plural} este mes. No se pueden cobrar más.`
-                  : `Este alumno ya registró 2 ${typeLabel?.plural}. No se pueden registrar más con este motivo.`}
+                {LOST_CLASS_CAP_MESSAGE}
               </div>
               <div style={{ display: 'flex', gap: 10, marginTop: 2 }}>
                 <button onClick={onClose} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#6b7280', cursor: 'pointer', fontSize: 14, fontFamily: 'inherit' }}>Cerrar</button>
@@ -498,9 +483,9 @@ export function AddClassModal({
               ) : (
                 <div style={{ fontSize: 11.5, color: '#b45309', background: 'rgba(255,196,0,0.1)', border: '1px solid rgba(255,196,0,0.3)', borderRadius: 8, padding: '8px 10px', lineHeight: 1.5 }}>
                   Este tipo de clase <b>SÍ genera cobro</b> (tarifa normal del alumno) y <b>no te penaliza</b>:
-                  el que faltó fue el alumno. {isStudentAbsence(classType)
-                    ? <>Se permiten hasta 2 <b>por mes</b>; llevás <b>{typeCount}</b> de 2 este mes, y la clase consume cupo del alumno.</>
-                    : <>Solo se permite hasta 2 veces; llevás <b>{typeCount}</b> de 2 registradas, y la clase consume cupo del alumno.</>} No requiere transcript.
+                  el que faltó fue el alumno. Se cobran hasta {LOST_CLASS_MONTHLY_CAP} clases perdidas <b>por mes</b>
+                  {' '}—faltas y cancelaciones sobre la hora juntas—; llevás <b>{typeCount}</b> de {LOST_CLASS_MONTHLY_CAP} este
+                  mes, y la clase consume cupo del alumno. No requiere transcript.
                 </div>
               )}
               <div>

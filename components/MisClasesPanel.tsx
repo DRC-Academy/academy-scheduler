@@ -202,8 +202,9 @@ function RescheduleModal({ studentName, currentDate, currentHour, saving, onConf
         </div>
         {reason === 'alumno_hora' && (
           <div style={{ fontSize: 11.5, color: '#b45309', background: 'rgba(255,196,0,0.12)', border: '1px solid rgba(255,196,0,0.4)', borderRadius: 8, padding: '8px 12px', marginBottom: 14, lineHeight: 1.5 }}>
-            ⏰ Se registrará como cancelación sobre la hora (cobrable, hasta 2 por alumno). La clase
-            se pierde: consume una del cupo mensual del alumno y no se recupera.
+            ⏰ Se registrará como cancelación sobre la hora (cobrable dentro de las 2 clases perdidas
+            del alumno este mes, que comparte con las faltas sin aviso). La clase se pierde: consume
+            una del cupo mensual del alumno y no se recupera.
           </div>
         )}
 

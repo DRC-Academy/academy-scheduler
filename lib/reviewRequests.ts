@@ -50,7 +50,7 @@ export const REVIEW_TYPE_OPTIONS: Array<{
   label: string;
   help: string;
   needsTranscript: boolean;
-  /** ¿Consume una de las 2 faltas sin aviso del alumno en el mes? */
+  /** ¿Consume una de las 2 clases perdidas cobrables del alumno en el mes? */
   usesAbsenceCap: boolean;
 }> = [
   {
@@ -89,7 +89,7 @@ export const RESOLVE_TYPE_OPTIONS: Array<{ value: ReviewResolvedType; label: str
   { value: 'normal',                 label: 'Clase normal',                 note: 'Crea el ingreso. Se paga con su transcript.' },
   { value: 'falta_sin_aviso',        label: 'Falta sin aviso del alumno',   note: 'Crea el ingreso y la constancia. Se paga sin transcript.' },
   { value: 'falta_con_aviso',        label: 'El alumno avisó',              note: 'Solo constancia. No se paga.' },
-  { value: 'cancelacion_hora',       label: 'Cancelación sobre la hora',    note: 'Solo constancia. Cobrable hasta 2 por alumno.' },
+  { value: 'cancelacion_hora',       label: 'Cancelación sobre la hora',    note: 'Solo constancia. Cobrable dentro de las 2 clases perdidas del mes.' },
   { value: 'cancelada_por_profesor', label: 'Cancelada por el profesor',    note: 'Solo constancia. Aplica la penalización de -5 €.' },
 ];
 

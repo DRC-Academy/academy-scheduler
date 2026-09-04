@@ -19,9 +19,10 @@
 //
 //   NIVEL 2 — de las que entraron, ¿cuáles se PAGAN?  El transcript o la FALTA.
 //     · Clic + transcript validado → 'pagable' ✅ suma al total.
-//     · Clic + falta sin aviso del alumno → 'pagable' ✅ a tarifa normal. El
-//       profesor entró y el alumno no se presentó: no hay clase que transcribir,
-//       pero él cumplió. Máximo 2 por alumno y MES (ver ABSENCE_MONTHLY_CAP).
+//     · Clic + clase perdida del alumno (falta sin aviso o cancelación sobre la
+//       hora) → 'pagable' ✅ a tarifa normal. El profesor estuvo y el alumno no
+//       dio la clase: no hay nada que transcribir, pero él cumplió. Máximo 2 por
+//       alumno y MES entre los DOS tipos (ver LOST_CLASS_MONTHLY_CAP).
 //     · Clic sin transcript válido → 'a_revisar' ⚠️ ("pendiente de transcript"):
 //       visible y contabilizada como dada, pero NO suma al total. Al subir el
 //       transcript pasa sola a 'pagable'.
@@ -30,7 +31,7 @@
 //     · Aprobada manualmente por el admin → 'pagable' (override). Solo puede
 //       aprobar lo que ENTRÓ: sin clic no hay fila que aprobar.
 //     · Supera el límite mensual del plan → 'excede_limite' (salvo aprobación).
-//     · Falta/cancelación más allá de las 2 cobrables de su tipo →
+//     · Falta/cancelación más allá de las 2 clases perdidas cobrables del mes →
 //       'excede_limite_tipo'.
 
 import { Assignment, ClassJoinLog, ClassRecord, FinanceRate, ScoringEvent, FinancePayment, Student, ClassRecordType, FinanceManualApproval } from '@/types';
@@ -64,8 +65,17 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // revés (el que faltó fue el alumno) y ya no se emite; ver dbApplyFaltaSideEffects.
 // Este tipo de clase SUMA dinero, nunca resta.
 
-/** Máximo de faltas del alumno cobrables por alumno y MES. */
-export const ABSENCE_MONTHLY_CAP = 2;
+/**
+ * Máximo de CLASES PERDIDAS del alumno cobrables por alumno y MES.
+ *
+ * Un solo tope para los dos tipos juntos: da igual que sean dos faltas, dos
+ * cancelaciones sobre la hora o una de cada. Antes eran dos contadores separados
+ * (la falta, 2 por mes; la cancelación, 2 de todo el historial), y eso permitía
+ * cobrar hasta 4 clases no dadas del mismo alumno en un mes de 4 clases: el plan
+ * entero sin que el alumno apareciera nunca. En agosto de 2026 hubo 28
+ * combinaciones alumno-mes con los dos tipos a la vez.
+ */
+export const LOST_CLASS_MONTHLY_CAP = 2;
 
 /** Quién decidió cuántas horas dura una sesión. Ver `sessionSpanFor`. */
 export type DurationSource = 'calendario' | 'solicitud' | 'admin';
@@ -94,83 +104,95 @@ export function isStudentAbsence(classType: ClassRecordType | undefined): boolea
  * MES — si no lo hicieran, cancelar sobre la hora saldría gratis y el alumno
  * acabaría el mes con más clases de las que incluye su plan.
  *
- * NO se mezcla con `isStudentAbsence`, que sigue significando solo la falta:
- * cada tipo tiene su propio tope de cobro y son distintos (la falta, 2 por MES;
- * la cancelación, las 2 primeras del historial). Este predicado responde a otra
- * pregunta —"¿consume cupo del plan?"— y por eso vive aparte.
+ * Desde septiembre de 2026 este predicado manda TAMBIÉN sobre el cobro: las dos
+ * comparten un único tope de `LOST_CLASS_MONTHLY_CAP` por alumno y mes. Antes
+ * cada tipo llevaba su propia cuenta y la de la cancelación era de por vida.
+ *
+ * `isStudentAbsence` sigue existiendo porque hay cosas que solo valen para la
+ * falta: el botón "Marcar falta" del profesor, la reversión del admin y el texto
+ * que explica la fila. Para preguntar por el cupo o por el tope, este.
  */
 export function isStudentLostClass(classType: ClassRecordType | undefined): boolean {
   return isStudentAbsence(classType) || classType === 'cancelacion_hora';
 }
 
-/** Filas crudas de falta del alumno en ese mes, de la más vieja a la más nueva. */
-function absenceRowsInMonth<T extends AbsenceRecordRef>(
+/** Filas crudas de clase perdida en ese mes, de la más vieja a la más nueva. */
+function lostRowsInMonth<T extends AbsenceRecordRef>(
   records: T[], teacherId: string, studentName: string, monthYear: string,
 ): T[] {
   return records
     .filter(r =>
       r.teacherId === teacherId &&
-      isStudentAbsence(r.classType) &&
+      isStudentLostClass(r.classType) &&
       nkey(r.studentName) === nkey(studentName) &&
       (r.classDate ?? '').slice(0, 7) === monthYear)
     .sort((a, b) => (a.createdAt ?? '').localeCompare(b.createdAt ?? '') || a.classDate.localeCompare(b.classDate));
 }
 
 /**
- * Faltas del alumno en el mes AGRUPADAS POR FECHA, de la más vieja a la más
- * nueva. Cada grupo es UNA clase perdida, con todos los registros que la
- * describen.
+ * Clases perdidas del alumno en el mes AGRUPADAS POR FECHA, de la más vieja a la
+ * más nueva. Cada grupo es UNA clase perdida, con todos los registros que la
+ * describen — sean faltas, cancelaciones sobre la hora o las dos cosas.
  *
  * El tope de 2 cuenta CLASES, no filas. La misma clase puede tener varios
- * `class_records` de tipo 'falta_sin_aviso' —el profesor la marcó dos veces
- * porque la fila seguía diciendo "pendiente de transcript"— y contarlos por
- * separado le quemaba el cupo del mes: la auditoría de agosto de 2026 encontró 5
- * registros duplicados que dejaban a 3 alumnos falsamente en el tope, uno de
- * ellos con 3 marcas de una sola clase. Contar por fecha hace que esos
- * duplicados sean inofensivos sin tener que borrarlos: se conservan como
- * constancia de lo que pasó.
+ * `class_records` —el profesor la marcó dos veces porque la fila seguía diciendo
+ * "pendiente de transcript"— y contarlos por separado le quemaba el cupo del mes:
+ * la auditoría de agosto de 2026 encontró 5 registros duplicados que dejaban a 3
+ * alumnos falsamente en el tope, uno de ellos con 3 marcas de una sola clase.
+ * Contar por fecha hace que esos duplicados sean inofensivos sin tener que
+ * borrarlos: se conservan como constancia de lo que pasó.
+ *
+ * Agrupar por FECHA tiene un segundo efecto ahora que los dos tipos comparten
+ * tope: una clase marcada como falta y además como cancelación es UNA clase
+ * perdida, no dos. Es lo correcto —la hora es la misma— y de paso hace que
+ * corregir el tipo de una clase no gaste cupo de más.
  */
-export function studentAbsenceDatesInMonth<T extends AbsenceRecordRef>(
+export function studentLostDatesInMonth<T extends AbsenceRecordRef>(
   records: T[], teacherId: string, studentName: string, monthYear: string,
 ): Array<{ date: string; records: T[] }> {
   const byDate = new Map<string, T[]>();
-  for (const r of absenceRowsInMonth(records, teacherId, studentName, monthYear)) {
+  for (const r of lostRowsInMonth(records, teacherId, studentName, monthYear)) {
     const arr = byDate.get(r.classDate);
     if (arr) arr.push(r); else byDate.set(r.classDate, [r]);
   }
-  // El Map conserva el orden de inserción, que es el de `absenceRowsInMonth`:
-  // el primer grupo es el de la falta marcada antes.
+  // El Map conserva el orden de inserción, que es el de `lostRowsInMonth`:
+  // el primer grupo es el de la clase marcada antes.
   return [...byDate.entries()].map(([date, rows]) => ({ date, records: rows }));
 }
 
 /**
- * Faltas del alumno YA marcadas para ese alumno en ese mes: UNA por clase
- * perdida (la marca más antigua de cada fecha), de la más vieja a la más nueva.
+ * Clases perdidas YA marcadas para ese alumno en ese mes: UNA por clase (la marca
+ * más antigua de cada fecha), de la más vieja a la más nueva.
  * FUENTE ÚNICA del tope: la usan el cálculo (para decidir cuáles son cobrables),
  * el botón del profesor, el aviso de "Añadir clase" y la pantalla de solicitudes
  * de revisión, de modo que lo que la pantalla promete y lo que el cálculo hace no
  * puedan discrepar.
  */
-export function studentAbsencesInMonth<T extends AbsenceRecordRef>(
+export function studentLostClassesInMonth<T extends AbsenceRecordRef>(
   records: T[], teacherId: string, studentName: string, monthYear: string,
 ): T[] {
-  return studentAbsenceDatesInMonth(records, teacherId, studentName, monthYear).map(g => g.records[0]);
+  return studentLostDatesInMonth(records, teacherId, studentName, monthYear).map(g => g.records[0]);
 }
 
 /**
- * ¿Puede el profesor marcar una falta más de ese alumno este mes? Devuelve
+ * ¿Puede el profesor cobrar otra clase perdida de ese alumno este mes? Devuelve
  * también el recuento para que el aviso diga el número exacto sin recontar.
+ *
+ * Cuenta los DOS tipos: una cancelación sobre la hora gasta el mismo cupo que una
+ * falta, así que un alumno con 2 cancelaciones este mes ya no admite una falta
+ * cobrable, y al revés.
  */
-export function canMarkStudentAbsence<T extends AbsenceRecordRef>(
+export function canMarkStudentLostClass<T extends AbsenceRecordRef>(
   records: T[], teacherId: string, studentName: string, monthYear: string,
 ): { allowed: boolean; count: number; remaining: number } {
-  const count = studentAbsencesInMonth(records, teacherId, studentName, monthYear).length;
-  return { allowed: count < ABSENCE_MONTHLY_CAP, count, remaining: Math.max(0, ABSENCE_MONTHLY_CAP - count) };
+  const count = studentLostClassesInMonth(records, teacherId, studentName, monthYear).length;
+  return { allowed: count < LOST_CLASS_MONTHLY_CAP, count, remaining: Math.max(0, LOST_CLASS_MONTHLY_CAP - count) };
 }
 
 /** Aviso de tope alcanzado. Mismo texto en el botón del profesor y en el modal. */
-export const ABSENCE_CAP_MESSAGE =
-  `Este alumno ya tiene ${ABSENCE_MONTHLY_CAP} faltas sin aviso este mes. No se pueden cobrar más.`;
+export const LOST_CLASS_CAP_MESSAGE =
+  `Este alumno ya tiene ${LOST_CLASS_MONTHLY_CAP} clases perdidas cobrables este mes `
+  + '(faltas sin aviso y cancelaciones sobre la hora cuentan juntas). No se pueden cobrar más.';
 
 /**
  * Estado de la clase de cara al pago.
@@ -668,53 +690,46 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
   for (const r of myRecords) noteFirst(r.studentName, r.classDate);
   for (const t of myAnalyses) noteFirst(t.student_name, analysisDate(t));
 
-  // Faltas y cancelaciones cobrables. Son DOS topes distintos, a propósito:
+  // Clases perdidas cobrables: UN SOLO tope de 2 por alumno y MES, compartido
+  // entre la falta sin aviso y la cancelación sobre la hora.
   //
-  //   · Falta del alumno ('falta_sin_aviso') → 2 por alumno y MES. Es una clase
-  //     que el alumno perdió, y lo que se limita es cuántas de ellas puede
-  //     cobrar el profesor cada mes; un tope de por vida haría que un alumno de
-  //     dos años no pudiera faltar nunca más. Se cuenta con la MISMA función que
-  //     usa el botón del profesor (studentAbsenceDatesInMonth), para que el tope
-  //     que se anuncia en pantalla y el que decide el pago no puedan separarse.
+  // Las dos son la misma cosa para el alumno y para el profesor —la hora se
+  // reservó, él estuvo, la clase no se dio ni se recupera— así que se cobran
+  // igual y gastan el mismo cupo. Antes cada tipo llevaba su cuenta (la falta, 2
+  // al mes; la cancelación, 2 de por vida) y eso tenía los dos extremos mal: un
+  // alumno podía dejar 4 clases perdidas cobrables en un mes de 4 clases, y a la
+  // vez uno con dos cancelaciones en 2025 no podía tener ninguna cobrable nunca
+  // más. Se cuenta con la MISMA función que usa el botón del profesor
+  // (studentLostDatesInMonth), para que el tope que se anuncia en pantalla y el
+  // que decide el pago no puedan separarse.
   //
-  //   · Cancelación sobre la hora ('cancelacion_hora') → sigue como estaba: las
-  //     2 primeras de TODO el historial por alumno.
+  // EL TOPE CUENTA CLASES (fecha), NO FILAS. Una misma clase puede tener varias
+  // constancias, y contarlas por separado gastaba el cupo con duplicados: la
+  // tercera falta REAL del mes caía en 'excede_limite_tipo' y no se pagaba.
+  // Además se marcan cobrables TODOS los registros de esas fechas, no solo el
+  // primero: cuál de ellos acaba anclando la fila lo decide el cruce de
+  // candidatos, y si marcáramos solo uno podría quedar cobrable el que no es.
   //
-  // LOS DOS TOPES CUENTAN CLASES (fecha), NO FILAS. Una misma clase puede tener
-  // varias constancias del mismo tipo, y contarlas por separado gastaba el cupo
-  // con duplicados: la tercera falta REAL del mes caía en 'excede_limite_tipo' y
-  // no se pagaba. Además se marcan cobrables TODOS los registros de esas fechas,
-  // no solo el primero: cuál de ellos acaba anclando la fila lo decide el cruce
-  // de candidatos, y si marcáramos solo uno podría quedar cobrable el que no es.
-  const cobrableTypeRecordIds = new Set<string>();
+  // El mapa va de CONSTANCIA a CLASE PERDIDA (no a un simple "sí/no"), y eso es lo
+  // que impide pagar dos veces la misma. Las constancias duplicadas de un día no
+  // siempre acaban en la misma fila: una se pega al ingreso del día anterior por
+  // la tolerancia de ±1 día y la otra se trae su propia entrada, así que la clase
+  // salía en DOS filas y las dos pasaban el tope. Vanesa · Patricia Cebada cobró
+  // así 3 clases perdidas en agosto de 2026 con un tope de 2 (las dos marcas del
+  // 21/08 se repartieron entre las filas del 20 y del 21).
+  const claseDeLaConstancia = new Map<string, string>();
+  /** Clases perdidas que YA pagaron una fila. Una clase, un cobro. */
+  const clasesPerdidasCobradas = new Set<string>();
 
-  const absenceMonths = new Set<string>();
+  const lostMonths = new Set<string>();
   for (const r of myRecords) {
-    if (isStudentAbsence(r.classType)) absenceMonths.add(`${nkey(r.studentName)}__${(r.classDate ?? '').slice(0, 7)}`);
+    if (isStudentLostClass(r.classType)) lostMonths.add(`${nkey(r.studentName)}__${(r.classDate ?? '').slice(0, 7)}`);
   }
-  for (const k of absenceMonths) {
+  for (const k of lostMonths) {
     const [student, month] = k.split('__');
-    studentAbsenceDatesInMonth(myRecords, teacherId, student, month)
-      .slice(0, ABSENCE_MONTHLY_CAP)
-      .forEach(g => g.records.forEach(r => cobrableTypeRecordIds.add(r.id)));
-  }
-
-  const byStudentCancel = new Map<string, ClassRecord[]>();
-  for (const r of myRecords) {
-    if (r.classType !== 'cancelacion_hora') continue;
-    const k = nkey(r.studentName);
-    const arr = byStudentCancel.get(k);
-    if (arr) arr.push(r); else byStudentCancel.set(k, [r]);
-  }
-  for (const arr of byStudentCancel.values()) {
-    arr.sort((a, b) => (a.createdAt ?? '').localeCompare(b.createdAt ?? '') || a.classDate.localeCompare(b.classDate));
-    // Mismo criterio que la falta: 2 CLASES distintas, con todas sus constancias.
-    const byDate = new Map<string, ClassRecord[]>();
-    for (const r of arr) {
-      const g = byDate.get(r.classDate);
-      if (g) g.push(r); else byDate.set(r.classDate, [r]);
-    }
-    [...byDate.values()].slice(0, 2).forEach(g => g.forEach(r => cobrableTypeRecordIds.add(r.id)));
+    studentLostDatesInMonth(myRecords, teacherId, student, month)
+      .slice(0, LOST_CLASS_MONTHLY_CAP)
+      .forEach(g => g.records.forEach(r => claseDeLaConstancia.set(r.id, `${k}__${g.date}`)));
   }
 
   // Candidatos (alumno + fecha) del mes. NIVEL 1: la única fuente que CREA una
@@ -910,11 +925,14 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
 
     let status: ClassFinanceStatus;
     if (isFaltaType) {
-      // Falta del alumno / cancelación: cobrable a TARIFA NORMAL si está dentro
-      // de su tope (2 del mes para la falta, 2 del historial para la cancelación)
-      // o si el admin la aprobó. No requiere transcript: no hubo clase que grabar.
-      const withinCap = !!record && cobrableTypeRecordIds.has(record.id);
+      // Clase perdida: cobrable a TARIFA NORMAL si entra en las 2 del mes (faltas
+      // y cancelaciones juntas) o si el admin la aprobó. No requiere transcript:
+      // no hubo clase que grabar. Cada clase perdida paga UNA sola fila, aunque
+      // sus constancias se hayan repartido entre dos.
+      const clasePerdida = record ? claseDeLaConstancia.get(record.id) : undefined;
+      const withinCap = !!clasePerdida && !clasesPerdidasCobradas.has(clasePerdida);
       status = (approved || withinCap) ? 'pagable' : 'excede_limite_tipo';
+      if (status === 'pagable' && clasePerdida) clasesPerdidasCobradas.add(clasePerdida);
     } else if (approved) {
       status = 'pagable';
     } else {
@@ -994,9 +1012,9 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     // pasaba justo cuando era lo último que entraba en el mes (Ester Domènech,
     // 15/08, 4 de 5 usadas).
     //
-    // No abre la puerta a abusos: cada tipo ya tiene su propio tope de cobro
-    // ('excede_limite_tipo'), que se aplica antes que esto — 2 al mes la falta,
-    // 2 en todo el historial la cancelación sobre la hora.
+    // No abre la puerta a abusos: las clases perdidas ya tienen su tope de cobro
+    // ('excede_limite_tipo'), que se aplica antes que esto — 2 al mes por alumno
+    // entre faltas y cancelaciones sobre la hora.
     const puedeRetenerse = !row.manuallyApproved && !isStudentLostClass(row.classType);
     // UNA FILA QUE NO CONSUME CUPO NUNCA LO EXCEDE. `cupoUnits === 0` es la
     // recuperación pura: repone una clase que el alumno ya había perdido, así que
@@ -1145,7 +1163,7 @@ export function financeStatusBadge(status: ClassFinanceStatus):
     case 'excede_limite':
       return { label: 'Excede el límite del plan', short: 'Excede límite', color: '#ea580c', bg: 'rgba(249,115,22,0.12)', dot: '#ea580c' };
     case 'excede_limite_tipo':
-      return { label: 'Supera 2 de este tipo', short: 'Supera 2/tipo', color: '#ea580c', bg: 'rgba(249,115,22,0.12)', dot: '#ea580c' };
+      return { label: 'Supera 2 perdidas del mes', short: 'Supera 2/mes', color: '#ea580c', bg: 'rgba(249,115,22,0.12)', dot: '#ea580c' };
     default:
       return { label: 'No cobrable', short: 'No cobrable', color: 'var(--text-muted)', bg: 'var(--bg-surface-3)', dot: 'var(--text-muted)' };
   }
@@ -1371,19 +1389,26 @@ export function classTypeBadge(t: ClassRecordType | undefined):
 }
 
 /**
- * Línea de desglose de una falta del alumno, para que admin y profesor lean la
- * misma frase: qué se cobró y por qué, sin tener que deducirlo del badge.
- * null cuando la fila no es una falta del alumno.
+ * Línea de desglose de una clase perdida del alumno, para que admin y profesor
+ * lean la misma frase: qué se cobró y por qué, sin tener que deducirlo del badge.
+ * null cuando la fila no es una clase perdida.
+ *
+ * Cubre los DOS tipos desde que comparten tope: una cancelación retenida por el
+ * cupo del mes necesita su explicación igual que una falta, y antes se quedaba
+ * muda porque esta función solo miraba la falta.
  */
-export function absenceBreakdownLabel(
+export function lostClassBreakdownLabel(
   row: Pick<ClassFinanceRow, 'classType' | 'studentName' | 'date' | 'rate' | 'billingUnits' | 'status'>,
 ): string | null {
-  if (!isStudentAbsence(row.classType)) return null;
+  if (!isStudentLostClass(row.classType)) return null;
   const importe = (row.rate * (row.billingUnits ?? 1)).toFixed(2);
   const cobro = row.status === 'pagable'
     ? `${importe} €`
-    : `${importe} € retenidos (supera las ${ABSENCE_MONTHLY_CAP} del mes)`;
-  return `Falta sin aviso — ${row.studentName}, ${row.date} — ${cobro} (el alumno no se presentó)`;
+    : `${importe} € retenidos (supera las ${LOST_CLASS_MONTHLY_CAP} clases perdidas del mes)`;
+  const [qué, porqué] = isStudentAbsence(row.classType)
+    ? ['Falta sin aviso', 'el alumno no se presentó']
+    : ['Cancelación sobre la hora', 'el alumno avisó sobre la hora'];
+  return `${qué} — ${row.studentName}, ${row.date} — ${cobro} (${porqué})`;
 }
 
 // Estados de suscripción posibles (para filtros y leyendas).

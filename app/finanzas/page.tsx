@@ -7,7 +7,7 @@ import { LastUpdated } from '@/components/LastUpdated';
 import { getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
-import { calculateTeacherFinance, estimateClassAmount, TeacherFinanceResult, ClassFinanceRow, classTypeBadge, durationSourceBadge, subscriptionBadge, rowHoursLabel, financeStatusBadge, transcriptStateBadge, absenceBreakdownLabel, isStudentAbsence, recoveryCreditLabel, studentQuotaOf, SUBSCRIPTION_STATUS_OPTIONS } from '@/lib/finance';
+import { calculateTeacherFinance, estimateClassAmount, TeacherFinanceResult, ClassFinanceRow, classTypeBadge, durationSourceBadge, subscriptionBadge, rowHoursLabel, financeStatusBadge, transcriptStateBadge, lostClassBreakdownLabel, isStudentAbsence, recoveryCreditLabel, studentQuotaOf, SUBSCRIPTION_STATUS_OPTIONS } from '@/lib/finance';
 import { isActiveWooStatus } from '@/lib/subscriptionAccess';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { dbRevertPenalty, dbGetAllTeacherAssignments } from '@/lib/db';
@@ -305,7 +305,7 @@ function ClassRows({ result, studentName, approvals, onApproveReview, onApproveE
           ? transcriptStateBadge(r.transcriptState).label
           : null;
         const acc = accesoDeLaClase(r);
-        const notas = [absenceBreakdownLabel(r), recoveryCreditLabel(r)].filter(Boolean);
+        const notas = [lostClassBreakdownLabel(r), recoveryCreditLabel(r)].filter(Boolean);
         return (
           <div className={`fch-cls${acc.kind === 'sin' ? ' is-sinsub' : r.status !== 'pagable' ? ' is-flag' : ''}`}
             key={i} title={acc.kind === 'sin' ? acc.title : undefined}>

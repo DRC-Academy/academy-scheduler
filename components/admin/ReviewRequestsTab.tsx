@@ -17,7 +17,7 @@ import {
   RESOLVE_TYPE_OPTIONS, resolvedTypeCreatesJoinLog,
   buildMissingJoinClasses, signalLabel, type MissingJoinClass,
 } from '@/lib/reviewRequests';
-import { studentAbsenceDatesInMonth, ABSENCE_MONTHLY_CAP, durationBadge, estimateClassAmount } from '@/lib/finance';
+import { studentLostDatesInMonth, LOST_CLASS_MONTHLY_CAP, durationBadge, estimateClassAmount } from '@/lib/finance';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { findStartDateMismatches } from '@/lib/studentPeriod';
 import { getTeacherAssignments, dbGetTranscriptForReview, type TranscriptForReview } from '@/lib/db';
@@ -484,13 +484,14 @@ export default function ReviewRequestsTab() {
   const pendientes = requests.filter(r => r.status === 'pendiente').length;
 
   /**
-   * Cuántas faltas sin aviso lleva ese alumno en el mes de la clase, contando
-   * CLASES distintas — la misma función que el cupo del profesor, para que el
-   * "2.ª del mes" que lee el admin y el tope que aplica el pago no discrepen.
-   * El +1 es esta solicitud, que todavía no creó su registro.
+   * Cuántas CLASES PERDIDAS lleva ese alumno en el mes de la clase, contando
+   * CLASES distintas y los dos tipos juntos (falta sin aviso + cancelación sobre
+   * la hora comparten el tope) — la misma función que el cupo del profesor, para
+   * que el "2.ª del mes" que lee el admin y el tope que aplica el pago no
+   * discrepen. El +1 es esta solicitud, que todavía no creó su registro.
    */
   function absenceOrdinal(r: ClassReviewRequest): number {
-    const ya = studentAbsenceDatesInMonth(classRecords, r.teacherId, r.studentName, r.classDate.slice(0, 7)).length;
+    const ya = studentLostDatesInMonth(classRecords, r.teacherId, r.studentName, r.classDate.slice(0, 7)).length;
     return ya + 1;
   }
 
@@ -692,9 +693,11 @@ export default function ReviewRequestsTab() {
             const pagable = resolvedTypeCreatesJoinLog(tipo);
             const dur = durationBadge(horasDe(r));
             const horasCorregidas = horasDe(r) !== (r.durationHours ?? 1);
-            const esFalta = tipo === 'falta_sin_aviso';
+            // Los dos tipos de clase perdida gastan el MISMO cupo del mes, así que
+            // el contador y el aviso de "supera las cobrables" valen para ambos.
+            const esFalta = tipo === 'falta_sin_aviso' || tipo === 'cancelacion_hora';
             const ordinal = esFalta ? absenceOrdinal(r) : 0;
-            const superaCupo = esFalta && ordinal > ABSENCE_MONTHLY_CAP;
+            const superaCupo = esFalta && ordinal > LOST_CLASS_MONTHLY_CAP;
             const working = busy === r.id;
 
             return (
@@ -764,7 +767,7 @@ export default function ReviewRequestsTab() {
                       background: superaCupo ? 'rgba(239,68,68,0.1)' : 'rgba(255,196,0,0.2)',
                     }}>
                       {ORDINALES[ordinal] ?? `${ordinal}.ª`} del mes
-                      {superaCupo && ` · supera las ${ABSENCE_MONTHLY_CAP} cobrables`}
+                      {superaCupo && ` · supera las ${LOST_CLASS_MONTHLY_CAP} cobrables`}
                     </span>
                   )}
                 </div>

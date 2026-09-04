@@ -25,7 +25,7 @@ import {
 } from '@/lib/db';
 import type { AffectedTeacher, ChangeTeacherParams, ArchiveTeacherResult, StudentLeftGrid } from '@/lib/db';
 import type { AssignedSlot } from '@/types';
-import { calculateTeacherFinance, canMarkStudentAbsence, ABSENCE_CAP_MESSAGE, type ClassTranscriptRef } from '@/lib/finance';
+import { calculateTeacherFinance, canMarkStudentLostClass, LOST_CLASS_CAP_MESSAGE, type ClassTranscriptRef } from '@/lib/finance';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { checkSubscription } from '@/lib/useSubscriptionStatus';
 
@@ -551,7 +551,8 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
    * del alumno sin aviso" de "Añadir clase": un class_record de tipo
    * 'falta_sin_aviso' vía registerClassRecord. Un solo camino, un solo efecto.
    *
-   * El tope de 2 por alumno y mes se comprueba acá además de en la pantalla: el
+   * El tope de 2 clases perdidas por alumno y mes —faltas y cancelaciones sobre
+   * la hora juntas— se comprueba acá además de en la pantalla: el
    * botón se deshabilita, pero la comprobación de verdad no puede vivir solo en
    * el render (dos pestañas abiertas marcarían tres faltas sin enterarse).
    *
@@ -567,8 +568,8 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   ) {
     const yaExiste = await dbFindStudentAbsence(teacherId, studentName, date);
     if (yaExiste) return;   // ya está marcada: nada que hacer, y sin error que asuste
-    const { allowed } = canMarkStudentAbsence(classRecords, teacherId, studentName, date.slice(0, 7));
-    if (!allowed) throw new Error(ABSENCE_CAP_MESSAGE);
+    const { allowed } = canMarkStudentLostClass(classRecords, teacherId, studentName, date.slice(0, 7));
+    if (!allowed) throw new Error(LOST_CLASS_CAP_MESSAGE);
     await registerClassRecord(teacherId, studentName, date, time, null, 'falta_sin_aviso', comment);
   }
 

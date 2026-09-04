@@ -13,7 +13,12 @@ export const DAYS = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sáb
 // (botones "+ Añadir horario más temprano / más tarde"); su preferencia se guarda
 // en teachers.calendar_start_hour / calendar_end_hour. Estos son los topes duros
 // de la app: fuera de ellos no se puede ampliar.
-export const CAL_MIN_HOUR = 6;
+//
+// El tope de abajo es 00:00 (la clase de 00:00 a 01:00). No es un horario raro:
+// las 00:00 en España son las 19:00 en Argentina, donde están los profesores.
+// La medianoche va ARRIBA de su día, como en cualquier calendario — la madrugada
+// del martes es "Martes 00:00", no el final de la fila del lunes.
+export const CAL_MIN_HOUR = 0;
 export const CAL_MAX_HOUR = 23;
 export const CAL_DEFAULT_START = 9;
 export const CAL_DEFAULT_END = 22;
@@ -29,7 +34,7 @@ export function hourRange(start: number, end: number): string[] {
 export const clampHour = (h: number): number =>
   Math.min(CAL_MAX_HOUR, Math.max(CAL_MIN_HOUR, Math.round(Number.isFinite(h) ? h : CAL_DEFAULT_START)));
 
-// TODAS las horas seleccionables de la app (06:00–23:00). La usan los buscadores
+// TODAS las horas seleccionables de la app (00:00–23:00). La usan los buscadores
 // del setter: si un profesor abre las 08:00, esa hora tiene que poder filtrarse.
 export const HOURS_ES = hourRange(CAL_MIN_HOUR, CAL_MAX_HOUR);
 
@@ -316,21 +321,43 @@ export function visibleHours(grid: Grid, startHour: number, endHour: number): st
   return hourRange(from, to);
 }
 
-// Botón para ampliar el calendario. Se repite arriba y abajo de la columna de
-// horas (y en las dos vistas, agenda móvil y grilla), por eso vive suelto.
-function AddHourButton({ label, onClick, disabled, title }: {
+// Fila para ampliar el calendario: el botón suma UNA hora al borde y el selector
+// salta directo a una hora lejana. El selector no es un lujo: abrir las 00:00
+// teniendo el calendario desde las 09:00 serían nueve clics que además dejarían
+// ofrecidas como libres las ocho horas del medio (el setter podría asignar un
+// alumno a las 04:00). Se repite arriba y abajo de la columna de horas (y en las
+// dos vistas, agenda móvil y grilla), por eso vive suelto.
+function AddHourRow({ label, onClick, disabled, title, options, onJump }: {
   label: string; onClick: () => void; disabled: boolean; title: string;
+  options: number[]; onJump: (hour: number) => void;
 }) {
   return (
-    <button
-      type="button"
-      className="vc-addhour"
-      onClick={onClick}
-      disabled={disabled}
-      title={disabled ? 'Límite del calendario' : title}
-    >
-      + {label}
-    </button>
+    <div className="vc-addhour-row">
+      <button
+        type="button"
+        className="vc-addhour"
+        onClick={onClick}
+        disabled={disabled}
+        title={disabled ? 'Límite del calendario' : title}
+      >
+        + {label}
+      </button>
+      {options.length > 0 && (
+        <select
+          className="vc-addhour-jump"
+          value=""
+          aria-label={`${label}: elegir una hora concreta`}
+          title="Abre esa hora de una vez. Las horas del medio quedan a la vista pero sin ofrecer."
+          onChange={e => {
+            const h = parseInt(e.target.value, 10);
+            if (Number.isFinite(h)) onJump(h);
+          }}
+        >
+          <option value="">hora concreta…</option>
+          {options.map(h => <option key={h} value={h}>{hourLabel(h)}</option>)}
+        </select>
+      )}
+    </div>
   );
 }
 
@@ -428,14 +455,17 @@ export function VisualCalendar(props: Props) {
   const canLater   = canExtend && lastHour  < CAL_MAX_HOUR;
 
   /**
-   * Amplía el calendario una hora. Las celdas nuevas nacen 'libre' (el profesor
-   * amplió justamente para ofrecer ese horario) y se guardan en el grid como el
-   * resto: puede pasarlas a "No work" con un clic si no las quiere ofrecer.
+   * Abre el calendario hasta `newHour`. Las celdas de ESA hora —y solo de esa—
+   * nacen 'libre' (el profesor la abrió justamente para ofrecerla) y se guardan
+   * en el grid como el resto: puede pasarlas a "No work" con un clic. Las horas
+   * que quedan en el medio al saltar lejos (abrir las 00:00 con el calendario
+   * desde las 09:00) se dibujan vacías, o sea "No work": ampliar para dar las
+   * 00:00 no puede ofrecerle al setter las 04:00.
    */
-  function extend(direction: 'earlier' | 'later') {
+  function openHour(direction: 'earlier' | 'later', newHour: number) {
     if (props.mode !== 'teacher' || !props.onRangeChange) return;
-    const newHour = direction === 'earlier' ? firstHour - 1 : lastHour + 1;
     if (newHour < CAL_MIN_HOUR || newHour > CAL_MAX_HOUR) return;
+    if (direction === 'earlier' ? newHour >= firstHour : newHour <= lastHour) return;
 
     const nextGrid: Grid = { ...props.grid };
     for (const day of DAYS) {
@@ -451,20 +481,33 @@ export function VisualCalendar(props: Props) {
     );
   }
 
+  // Horas que todavía se pueden abrir en cada dirección, de la más cercana a la
+  // más lejana: las opciones del selector de la fila de ampliación.
+  const earlierOptions = canEarlier
+    ? Array.from({ length: firstHour - CAL_MIN_HOUR }, (_, i) => firstHour - 1 - i)
+    : [];
+  const laterOptions = canLater
+    ? Array.from({ length: CAL_MAX_HOUR - lastHour }, (_, i) => lastHour + 1 + i)
+    : [];
+
   const earlierBtn = canExtend ? (
-    <AddHourButton
+    <AddHourRow
       label="Añadir horario más temprano"
       title={canEarlier ? `Añadir las ${hourLabel(firstHour - 1)}` : ''}
       disabled={!canEarlier}
-      onClick={() => extend('earlier')}
+      onClick={() => openHour('earlier', firstHour - 1)}
+      options={earlierOptions}
+      onJump={h => openHour('earlier', h)}
     />
   ) : null;
   const laterBtn = canExtend ? (
-    <AddHourButton
+    <AddHourRow
       label="Añadir horario más tarde"
       title={canLater ? `Añadir las ${hourLabel(lastHour + 1)}` : ''}
       disabled={!canLater}
-      onClick={() => extend('later')}
+      onClick={() => openHour('later', lastHour + 1)}
+      options={laterOptions}
+      onJump={h => openHour('later', h)}
     />
   ) : null;
 
@@ -744,7 +787,7 @@ export function VisualCalendar(props: Props) {
       {props.mode === 'teacher' && (
         <div className="vc-hint">
           Clic en cualquier celda para cambiar su estado.
-          {canExtend && ' Con los botones de arriba y abajo ampliás tu calendario una hora (de 06:00 a 23:00).'}
+          {canExtend && ' Con los botones de arriba y abajo ampliás tu calendario una hora, o elegís una hora concreta en el desplegable de al lado (el día entero, de 00:00 a 23:00).'}
         </div>
       )}
       {props.mode === 'setter' && (
