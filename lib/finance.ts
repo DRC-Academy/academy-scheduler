@@ -417,7 +417,21 @@ function slotHoursForDate(a: Assignment | undefined, dateIso: string): number[] 
  * sesión se habría mostrado como "15:00 - 17:00" en vez de "14:00 - 16:00".
  */
 function sessionSpanFor(
-  a: Assignment | undefined, dateIso: string, anchorHour: string, observed: Set<number>,
+  a: Assignment | undefined,
+  /**
+   * Alumno de la FILA, no el de la assignment. Es el que hay que buscar en el
+   * calendario: el grid guarda el nombre tal como lo escribió el profesor y hay
+   * alumnos con clases dadas que ya no tienen assignment (se los desvinculó, se
+   * dieron de baja). Con `a?.studentName` esos alumnos buscaban con la cadena
+   * vacía, así que su calendario era invisible y un bloque de DOS horas de
+   * recuperación seguidas se pagaba como UNA — mientras `recoveryPartOfSession`,
+   * que sí usa este nombre, contaba la hora de recuperación dentro de la sesión
+   * de 1 h. Cuando la assignment existe, los dos nombres normalizan igual (la
+   * assignment se busca justamente por este nombre), así que esto no puede
+   * cambiarle la duración a nadie que ya la tuviera bien.
+   */
+  studentName: string,
+  dateIso: string, anchorHour: string, observed: Set<number>,
   occupancy: GridOccupancy,
   declared?: { hours?: number; source?: 'solicitud' | 'admin' },
 ): { durationHours: number; startHour: string; source: DurationSource } {
@@ -464,14 +478,14 @@ function sessionSpanFor(
   // así que se suman a la ocupación recurrente en todas las ramas de abajo. Es lo
   // que permite ver el bloque "normal 17:00 + recuperación 18:00" como una sesión
   // de 2h en vez de como una clase de 1h con una hora regalada.
-  const recHours = recoveryHoursOn(occupancy, a?.studentName ?? '', dateIso).map(r => r.hour);
+  const recHours = recoveryHoursOn(occupancy, studentName, dateIso).map(r => r.hour);
 
   // 1) EL CALENDARIO MANDA. Si el alumno tiene horario en el grid ese día, su
   //    palabra es definitiva: la ficha puede haberse quedado vieja (el profesor
   //    acordó otro horario y se cambió el calendario), y pagar 2 horas que el
   //    calendario no tiene ocupadas es cobrar de más.
   const day = DAY_NAMES_BY_JSDAY[new Date(dateIso + 'T00:00:00').getDay()];
-  const gridHours = occupancy.hours.get(`${nkName(a?.studentName ?? '')}|${day}`);
+  const gridHours = occupancy.hours.get(`${nkName(studentName)}|${day}`);
   if ((gridHours && gridHours.length > 0) || recHours.length > 0) {
     const calendarHours = [...(gridHours ?? []), ...recHours];
     const len = contiguousRunLength(calendarHours, anchor);
@@ -483,7 +497,7 @@ function sessionSpanFor(
 
   // 2) El alumno SÍ está en el calendario, pero no ese día: es una clase fuera de
   //    su horario. Manda lo observado (ingresos y registros).
-  const sigueEnElGrid = [...occupancy.hours.keys()].some(k => k.startsWith(`${nkName(a?.studentName ?? '')}|`));
+  const sigueEnElGrid = [...occupancy.hours.keys()].some(k => k.startsWith(`${nkName(studentName)}|`));
   if (sigueEnElGrid) {
     const len = contiguousRunLength([...observed], anchor);
     return len > 1
@@ -892,7 +906,7 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     // Sesión de 2h (celdas contiguas) → la fila vale 2. Aplica también a faltas y
     // cancelaciones: si la clase perdida era de 2 horas, la constancia vale 2.
     const { durationHours, startHour: hour, source: durationSource } =
-      sessionSpanFor(a, c.date, anchorHour, c.hours, gridOccupancy,
+      sessionSpanFor(a, c.studentName, c.date, anchorHour, c.hours, gridOccupancy,
         { hours: c.log?.durationHours, source: c.log?.durationSource });
 
     // Parte de RECUPERACIÓN de la sesión: cuántas de sus horas salen de una celda

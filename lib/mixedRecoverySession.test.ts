@@ -325,3 +325,47 @@ describe('calculateTeacherFinance — sesión 2h normal + recuperación', () => 
     expect(r.montoPagable).toBe(0);
   });
 });
+
+// ── Un alumno SIN assignment también tiene calendario ────────────────────────
+//
+// Ester Domènech (Wanda, 15/08/2026): dos celdas de recuperación seguidas de una
+// alumna que ya no tiene assignment. La duración de la sesión se buscaba en el
+// calendario con el nombre de la ASSIGNMENT (`a?.studentName ?? ''`), así que sin
+// assignment se buscaba con la cadena vacía: el bloque de dos horas se pagaba
+// como UNA, mientras la parte de recuperación —que sí usa el nombre de la fila—
+// contaba 1 hora dentro de esa sesión de 1 hora.
+describe('sesión de 2h de un alumno que ya no tiene assignment', () => {
+  const teacher = teacherWith([], [
+    { studentName: 'Ester', hour: '14:00', recoveryFor: LOST },
+    { studentName: 'Ester', hour: '15:00', recoveryFor: '2026-06-30' },
+  ]);
+
+  it('dos horas de recuperación seguidas se pagan como sesión de 2h', () => {
+    const l = log('Ester', DATE, '14:00');
+    const r = calc({
+      assignments: [], logs: [l], records: [],
+      analyses: [transcript('Ester', DATE, l.id)], teacher,
+    });
+
+    expect(r.rows).toHaveLength(1);
+    expect(r.rows[0].billingUnits).toBe(2);
+    expect(r.rows[0].recoveryUnits).toBe(2);
+    expect(r.rows[0].recoveryForDates).toEqual(['2026-06-30', LOST]);
+    expect(r.totalPagable).toBe(2);
+  });
+
+  it('y la sesión normal de 2h de un ex-alumno tampoco se recorta', () => {
+    // Misma raíz: sin assignment, sus horas recurrentes del grid eran invisibles.
+    const conGrid = teacherWith([
+      { studentName: 'Ester', hour: '14:00' }, { studentName: 'Ester', hour: '15:00' },
+    ]);
+    const l = log('Ester', DATE, '14:00');
+    const r = calc({
+      assignments: [], logs: [l], records: [],
+      analyses: [transcript('Ester', DATE, l.id)], teacher: conGrid,
+    });
+
+    expect(r.rows[0].billingUnits).toBe(2);
+    expect(r.rows[0].recoveryUnits).toBe(0);
+  });
+});
