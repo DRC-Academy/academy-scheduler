@@ -31,6 +31,7 @@ import { checkSubscription, type SubscriptionInfo } from '@/lib/useSubscriptionS
 import { markInterventionShown } from '@/lib/interventionsClient';
 import { AVOID_ITEMS, AVOID_TITLE, ESCALATED_GUARDRAIL, NATURAL_REMINDER, type RiskBriefing } from '@/lib/interventions';
 import { RISK_CAUSE_META } from '@/lib/aiTypes';
+import { fmtDateDMY } from '@/lib/teacherClasses';
 import type { Teacher, Student, Assignment, ClassRecord } from '@/types';
 
 /** Lo mínimo que el flujo necesita de una clase. `TeacherClass` lo cumple. */
@@ -472,17 +473,6 @@ export function normalizeUrl(url: string): string {
   const t = url.trim();
   if (!t) return t;
   return /^https?:\/\//i.test(t) ? t : `https://${t}`;
-}
-
-function fmtDateDMY(iso: string | null | undefined): string {
-  if (!iso) return '';
-  // Una fecha sola ('YYYY-MM-DD', como subscriptionStartDate) la parsea el motor
-  // como medianoche UTC, y al leerla con getDate() en Argentina (UTC−3) sale el
-  // día ANTERIOR. Se le añade la hora para que se interprete como local: es una
-  // fecha de calendario, no un instante. Las ISO completas no se tocan.
-  const d = new Date(iso.length <= 10 ? `${iso}T00:00:00` : iso);
-  if (isNaN(d.getTime())) return '';
-  return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
 }
 
 /** Copy + paleta del disclaimer de suscripción, según el estado de WooCommerce. */

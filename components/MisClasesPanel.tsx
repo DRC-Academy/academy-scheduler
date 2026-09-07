@@ -26,7 +26,7 @@ import { checkSubscription, subBadge, type SubscriptionInfo } from '@/lib/useSub
 import { isMilestone, getMilestoneSlides, MILESTONES, MILESTONE_SLIDES, MILESTONE_TITLES } from '@/lib/milestones';
 import {
   classesForDate, recoveriesForDate, addDaysIso, isoDateLocal, dayNameFromDate, mondayIsoOf,
-  rescheduledTargetFor, cancellationFor, cancellationLabel, transcriptForClass, hourLabel,
+  rescheduledTargetFor, cancellationFor, cancellationLabel, transcriptForClass, hourLabel, fmtDateDMY,
   weekDaysOf, weekRangeLabel, dayHeadingLabel,
   groupContiguousClasses, sessionHoursLabel, gridOccupancyOfTeacher,
   // Todas las clases de esta vista son SESIONES ya agrupadas: dos celdas
@@ -43,7 +43,7 @@ import { periodIndex, dbGetStudentDropouts, type StudentDropout } from '@/lib/st
 import { PresentationModal } from '@/components/PresentationModal';
 import FormStatusBadge from '@/components/FormStatusBadge';
 import { lookupToken, formStateOf, type FormTokenInfo } from '@/lib/formClient';
-import { fmtDateDMY, stripProtocol, usePresentationSent, PresentationEmailBadge } from '@/components/teacherPanelUi';
+import { stripProtocol, usePresentationSent, PresentationEmailBadge } from '@/components/teacherPanelUi';
 import type { Grid, Teacher, Assignment, Student, ClassRecord, ClassRecordType, ClassJoinLog } from '@/types';
 
 export type FormIndex = { byId: Map<string, FormTokenInfo>; byName: Map<string, FormTokenInfo> };

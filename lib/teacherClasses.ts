@@ -93,6 +93,29 @@ export function shortDateLabel(iso: string): string {
   return `${d.getUTCDate()} ${month}`;
 }
 
+/**
+ * Fecha para la UI del profesor: '2026-09-03' → '03/09/2026'.
+ *
+ * Una fecha de CALENDARIO ('YYYY-MM-DD') no es un instante: no se pasa por
+ * `Date`. `new Date('2026-09-03')` es medianoche UTC, y al leerla con
+ * `getDate()` desde Argentina (UTC−3) sale el día ANTERIOR — los profesores
+ * están todos allá, así que ese día de menos lo veían todos.
+ *
+ * Las ISO completas (un instante real, como `created_at`) sí se formatean en la
+ * zona del navegador: ahí el día local es la respuesta correcta.
+ *
+ * Vivía duplicada en components/teacherPanelUi y components/JoinClass, y solo la
+ * segunda copia trataba bien las fechas de calendario.
+ */
+export function fmtDateDMY(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const dateOnly = /^(d{4})-(d{2})-(d{2})$/.exec(iso.trim());
+  if (dateOnly) return `${dateOnly[3]}/${dateOnly[2]}/${dateOnly[1]}`;
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+}
+
 /** Cabecera de un día en la vista semanal: 'Lunes 27'. */
 export function dayHeadingLabel(iso: string): string {
   const d = new Date(iso + 'T12:00:00Z');

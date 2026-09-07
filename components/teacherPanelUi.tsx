@@ -13,12 +13,9 @@ export function stripProtocol(url: string): string {
   return url.replace(/^https?:\/\//, '').replace(/\/$/, '');
 }
 
-export function fmtDateDMY(iso: string | null | undefined): string {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return '';
-  return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
-}
+// `fmtDateDMY` vive en lib/teacherClasses, con el resto de los formateadores de
+// fecha del profesor. Estaba acá y duplicada en JoinClass, y solo una de las dos
+// copias trataba bien las fechas de calendario.
 
 // El estado de suscripción se verifica con la fuente única de verdad
 // (lib/useSubscriptionStatus.ts): mismo endpoint, misma interpretación y mismo
