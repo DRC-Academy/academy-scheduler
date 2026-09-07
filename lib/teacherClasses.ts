@@ -109,7 +109,7 @@ export function shortDateLabel(iso: string): string {
  */
 export function fmtDateDMY(iso: string | null | undefined): string {
   if (!iso) return '';
-  const dateOnly = /^(d{4})-(d{2})-(d{2})$/.exec(iso.trim());
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso.trim());
   if (dateOnly) return `${dateOnly[3]}/${dateOnly[2]}/${dateOnly[1]}`;
   const d = new Date(iso);
   if (isNaN(d.getTime())) return '';
@@ -432,6 +432,15 @@ export interface TeacherSession extends TeacherClass {
  * distinto alumno nunca son la misma sesión. (La contigüidad horaria y el
  * respaldo del calendario los comprueban `groupByContiguousHour` y `chain`.)
  */
+/**
+ * ¿Esta hora es el DESTINO de una clase movida dentro del mismo día? Su celda de
+ * recuperación repone una clase de su PROPIA fecha, cosa que solo ocurre cuando
+ * el profesor le cambió la hora sin cambiarle el día.
+ */
+function movidaEseDia(c: TeacherClass): boolean {
+  return !!c.isRecovery && !!c.recoveryFor && c.recoveryFor === c.date;
+}
+
 function sameSessionClass(a: TeacherClass, b: TeacherClass): boolean {
   return a.date === b.date
     && nkName(a.studentName) === nkName(b.studentName);
@@ -514,6 +523,17 @@ export function groupContiguousClasses(
       // El calendario tiene la última palabra sobre si dos horas son UNA clase.
       const chain = (a: TeacherClass, b: TeacherClass) => {
         if (!sameSessionClass(a, b)) return false;
+        // Una recuperación que repone una clase de ESE MISMO día no es una hora
+        // más de la sesión: es la misma clase movida de hora. El 16:00
+        // reprogramado y el 17:00 que lo repone son la MISMA clase en dos
+        // sitios, y fundirlos daba una tarjeta falsa "16:00 - 18:00" que además
+        // heredaba el tachado de la reprogramación y se comía la clase nueva.
+        //
+        // Se comparan LAS DOS horas y no basta con que una lo sea: dos horas
+        // movidas el mismo día SÍ van juntas (una sesión de 2 h que se mueve
+        // entera sigue siendo de 2 h), y una recuperación de OTRO día pegada a
+        // una clase normal también (el bloque mixto, que no se toca).
+        if (movidaEseDia(a) !== movidaEseDia(b)) return false;
         // Sin calendario a mano (llamador antiguo) se agrupa por contigüidad.
         if (!occupancy) return true;
         // Las recuperaciones son celdas PUNTUALES del grid: no están en la
@@ -652,13 +672,43 @@ const CANCEL_TYPES = new Set<string>([
   'cancelada_por_profesor',
 ]);
 
-/** Si esa clase (alumno + fecha) se reprogramó, la fecha destino. */
+/**
+ * Tramo horario de una sesión, en horas enteras: 16:00-18:00 es `{ start: 16,
+ * end: 18 }`. `end` es EXCLUSIVO, igual que `TeacherSession.endHourNum`.
+ */
+export interface HourSpan { start: number; end: number }
+
+/**
+ * ¿La constancia habla de ESTA sesión y no de otra clase del mismo alumno el
+ * mismo día? Sin `span` se compara solo por fecha, como se hizo siempre.
+ *
+ * COMPATIBILIDAD HACIA ATRÁS: una constancia SIN hora (las viejas, de antes de
+ * que se guardara `class_time`) cuenta como de esta sesión. Exigirle hora a lo
+ * que no la tiene habría destachado de golpe todas las reprogramaciones
+ * antiguas legítimas, que es bastante peor que el problema que esto arregla.
+ */
+function recordInSpan(r: ClassRecord, span?: HourSpan): boolean {
+  if (!span) return true;
+  const h = hourNum(r.classTime ?? '');
+  if (!Number.isFinite(h)) return true;
+  return h >= span.start && h < span.end;
+}
+
+/**
+ * Si esa clase se reprogramó, la fecha destino.
+ *
+ * `span` acota la búsqueda a las horas de la sesión: sin él, mover la clase de
+ * las 16:00 tachaba también la de las 18:00 del mismo alumno ese día, porque la
+ * constancia solo se cruzaba por alumno + fecha.
+ */
 export function rescheduledTargetFor(
   records: ClassRecord[], teacherId: string, studentName: string, dateIso: string,
+  span?: HourSpan,
 ): string | null {
   const rec = records.find(r =>
     r.teacherId === teacherId && !!r.rescheduledTo &&
-    nk(r.studentName) === nk(studentName) && r.classDate === dateIso,
+    nk(r.studentName) === nk(studentName) && r.classDate === dateIso &&
+    recordInSpan(r, span),
   );
   return rec?.rescheduledTo ?? null;
 }
@@ -670,11 +720,13 @@ export function rescheduledTargetFor(
  */
 export function cancellationFor(
   records: ClassRecord[], teacherId: string, studentName: string, dateIso: string,
+  span?: HourSpan,
 ): ClassRecordType | null {
   const rec = records.find(r =>
     r.teacherId === teacherId && !r.rescheduledTo &&
     CANCEL_TYPES.has(r.classType ?? '') &&
-    nk(r.studentName) === nk(studentName) && r.classDate === dateIso,
+    nk(r.studentName) === nk(studentName) && r.classDate === dateIso &&
+    recordInSpan(r, span),
   );
   return (rec?.classType as ClassRecordType) ?? null;
 }

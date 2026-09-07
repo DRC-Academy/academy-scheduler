@@ -171,15 +171,35 @@ const RESCHEDULE_REASONS = [
 ] as const;
 type RescheduleReason = typeof RESCHEDULE_REASONS[number]['id'];
 
-function RescheduleModal({ studentName, currentDate, currentHour, saving, onConfirm, onClose }: {
-  studentName: string; currentDate: string; currentHour: string; saving: boolean;
+/** 'HH' | 'H:M' | 'HH:MM' → 'HH:MM'. El grid guarda '17' y el input pide '17:00'. */
+function timeInputValue(hour: string): string {
+  const [h, m = '00'] = (hour ?? '').split(':');
+  const n = parseInt(h, 10);
+  return Number.isFinite(n) ? `${String(n).padStart(2, '0')}:${m.padStart(2, '0')}` : '';
+}
+
+function RescheduleModal({ studentName, currentDate, currentHour, todayIso, saving, onConfirm, onClose }: {
+  studentName: string; currentDate: string; currentHour: string; todayIso: string; saving: boolean;
   onConfirm: (data: { reason: RescheduleReason; reasonLabel: string; newDate: string; newTime: string }) => void;
   onClose: () => void;
 }) {
   const [reason, setReason] = useState<RescheduleReason>('alumno_antic');
   const [newDate, setNewDate] = useState('');
-  const [newTime, setNewTime] = useState(currentHour || '');
-  const canConfirm = !!newDate && !!newTime && !saving;
+  const [newTime, setNewTime] = useState(timeInputValue(currentHour));
+
+  // Reprogramar es MOVER LA CLASE HACIA ADELANTE. Antes no se comprobaba nada:
+  // se podía mandar una clase al año pasado, o "moverla" a su propio hueco, que
+  // es lo que dejaba la clase original tachada y la nueva en el mismo sitio.
+  const origen  = `${currentDate} ${timeInputValue(currentHour)}`;
+  const destino = newDate && newTime ? `${newDate} ${timeInputValue(newTime)}` : '';
+  const enPasado    = !!newDate && newDate < todayIso;
+  const noAvanza    = !!destino && destino <= origen;
+  const problema    = enPasado
+    ? 'La nueva fecha ya pasó: una clase solo se puede mover hacia adelante.'
+    : noAvanza
+      ? `La nueva fecha y hora tienen que ser POSTERIORES a las actuales (${fmtDateDMY(currentDate)} ${timeInputValue(currentHour)}).`
+      : '';
+  const canConfirm = !!newDate && !!newTime && !problema && !saving;
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 85, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
@@ -211,13 +231,21 @@ function RescheduleModal({ studentName, currentDate, currentHour, saving, onConf
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 18 }}>
           <div>
             <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>Nueva fecha</label>
-            <input type="date" value={newDate} onChange={e => setNewDate(e.target.value)} style={{ width: '100%' }} />
+            <input type="date" value={newDate} min={todayIso} onChange={e => setNewDate(e.target.value)} style={{ width: '100%' }} />
           </div>
           <div>
             <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>Nueva hora 🇪🇸</label>
             <input type="time" value={newTime} onChange={e => setNewTime(e.target.value)} style={{ width: '100%' }} />
           </div>
         </div>
+
+        {/* El motivo del bloqueo, dicho antes de que pulse: un botón apagado sin
+            explicación es lo que hace que el profesor lo intente tres veces. */}
+        {problema && (
+          <div style={{ fontSize: 11.5, color: '#b45309', background: 'rgba(255,196,0,0.12)', border: '1px solid rgba(255,196,0,0.4)', borderRadius: 8, padding: '8px 12px', marginTop: -8, marginBottom: 14, lineHeight: 1.5 }}>
+            ⚠️ {problema}
+          </div>
+        )}
 
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={onClose} disabled={saving} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: saving ? 'not-allowed' : 'pointer', fontSize: 13, fontFamily: 'inherit' }}>Cancelar</button>
@@ -470,11 +498,19 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
   // para no dejar una clase cancelada pintada como normal, con su botón de
   // "Ingresar a clase" incluido. Son declaraciones (no const) porque el resumen
   // del día de más arriba ya las usa.
-  function rescheduledFor(studentName: string, date: string) {
-    return rescheduledTargetFor(classRecords, teacher.id, studentName, date);
+  //
+  // A las dos se les pasa el TRAMO de la sesión (16:00-18:00), no solo la fecha:
+  // la constancia lleva la hora de la clase de la que habla, y sin cruzarla el
+  // movimiento de las 16:00 tachaba también la clase de las 18:00 del mismo
+  // alumno ese día.
+  function spanOf(c: TodayClass) {
+    return { start: c.startHourNum, end: c.endHourNum };
   }
-  function cancelledFor(studentName: string, date: string) {
-    return cancellationFor(classRecords, teacher.id, studentName, date);
+  function rescheduledFor(c: TodayClass, date: string) {
+    return rescheduledTargetFor(classRecords, teacher.id, c.studentName, date, spanOf(c));
+  }
+  function cancelledFor(c: TodayClass, date: string) {
+    return cancellationFor(classRecords, teacher.id, c.studentName, date, spanOf(c));
   }
 
   /** Transcript ya guardado de esa clase (mismo alumno, misma fecha). */
@@ -512,7 +548,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
 
   /** ¿Esta clase se dio de verdad? (no reprogramada ni cancelada) */
   function isRealClass(c: TodayClass, date: string) {
-    return !rescheduledFor(c.studentName, date) && !cancelledFor(c.studentName, date);
+    return !rescheduledFor(c, date) && !cancelledFor(c, date);
   }
 
   // Período de cada alumno (inicio de clases → baja). El horario del grid es
@@ -870,11 +906,11 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     const isNext     = status === 'next';
     // Una clase RECURRENTE se considera reprogramada si hay constancia; una fila de
     // recuperación (destino del movimiento) nunca se pinta como reprogramada.
-    const rescheduledTo = c.isRecovery ? null : rescheduledFor(c.studentName, date);
+    const rescheduledTo = c.isRecovery ? null : rescheduledFor(c, date);
     const rescheduled   = !!rescheduledTo;
     // Cancelada: constancia sin `rescheduledTo`. Se pinta igual que una
     // reprogramada (apagada y sin botón de ingreso), con su propia etiqueta.
-    const cancelledType = c.isRecovery ? null : cancelledFor(c.studentName, date);
+    const cancelledType = c.isRecovery ? null : cancelledFor(c, date);
     const cancelled     = !!cancelledType;
     const cancelLabel   = cancellationLabel(cancelledType);
     // Estado inactivo = la clase no se va a dar. Agrupa reprogramada y cancelada.
@@ -1343,6 +1379,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
           studentName={rescheduleModal.c.studentName}
           currentDate={rescheduleModal.date}
           currentHour={rescheduleModal.c.hour}
+          todayIso={todayIso}
           saving={savingReschedule}
           onConfirm={handleRescheduleConfirm}
           onClose={() => setRescheduleModal(null)}
