@@ -5,6 +5,7 @@
 // lib/analyzeForm, lib/nextClass ni lib/analyzeTranscript desde el cliente.
 
 import { supabase } from '@/lib/supabase';
+import type { GenerationOrigin } from '@/lib/aiUsage';
 import { fetchAllPages } from '@/lib/db';
 import {
   asObject, isRiskSignal,
@@ -394,6 +395,8 @@ export async function generateNextClassClient(args: {
   level?: string | null;
   domain?: AvatarDomain | null;
   classType?: ClassType | null;
+  /** Desde dónde se pidió, para el registro de uso (ver lib/aiUsage). */
+  origin?: GenerationOrigin;
   persist?: boolean;
 }): Promise<GeneratedClassIA> {
   const res = await fetch('/api/ai/generate-next-class', {

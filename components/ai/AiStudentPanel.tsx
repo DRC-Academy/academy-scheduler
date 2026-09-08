@@ -234,6 +234,8 @@ export default function AiStudentPanel({
       {nextClassOpen && ficha && (
         <NextClassModal
           profileId={profile.id}
+          teacherId={teacherId ?? profile.teacher_id}
+          studentId={profile.student_id ?? studentId}
           studentName={studentName}
           teacherName={teacherName}
           classNumber={forceRegen ? nextNumber : (nextClass?.classNumber ?? nextNumber)}

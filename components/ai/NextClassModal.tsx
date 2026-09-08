@@ -13,6 +13,9 @@ import { Modal, ModalHeader, primaryBtn, ghostBtn, outlineBtn, errBox, okBox } f
 
 interface Props {
   profileId: string;
+  /** Para atribuir la generación en el registro de uso (lib/aiUsage). */
+  teacherId?: string | null;
+  studentId?: string | null;
   studentName: string;
   teacherName: string;
   classNumber: number;
@@ -50,6 +53,8 @@ export default function NextClassModal(props: Props) {
   function buildParams(ct: ClassType) {
     return {
       profileId: props.profileId,
+      teacherId: props.teacherId ?? null,
+      studentId: props.studentId ?? null,
       studentName: props.studentName,
       teacherName: props.teacherName,
       classNumber: props.classNumber,
@@ -60,6 +65,8 @@ export default function NextClassModal(props: Props) {
       level: props.level,
       domain: props.ficha.domain,
       classType: ct,
+      // Se abre desde el panel del alumno, sin transcripción delante.
+      origin: 'directa' as const,
     };
   }
 

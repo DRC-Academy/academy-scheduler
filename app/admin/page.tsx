@@ -29,6 +29,7 @@ import { gridOccupancyOfTeacher, applyGridSlots } from '@/lib/teacherClasses';
 import { HelpTooltip } from '@/components/ui';
 import type { HelpTooltipKey } from '@/lib/help-tooltips';
 import AiRiskTab from '@/components/ai/AiRiskTab';
+import AiUsageTab from '@/components/admin/AiUsageTab';
 import LevelTestsTab from '@/components/admin/LevelTestsTab';
 import TranscriptValidationTab from '@/components/admin/TranscriptValidationTab';
 import ChurnTab from '@/components/admin/ChurnTab';
@@ -3820,7 +3821,7 @@ function ConflictDetailModal({ groups, onClose, onOpenAudit }: {
   );
 }
 
-const ADMIN_TABS = ['overview', 'teachers', 'emails', 'scoring', 'tracking', 'classlog', 'leveltests', 'validacion', 'ai', 'bajas', 'notifications'] as const;
+const ADMIN_TABS = ['overview', 'teachers', 'emails', 'scoring', 'tracking', 'classlog', 'leveltests', 'validacion', 'ai', 'aiusage', 'bajas', 'notifications'] as const;
 type AdminTab = typeof ADMIN_TABS[number];
 
 function AdminContent() {
@@ -3980,6 +3981,7 @@ function AdminContent() {
     { id: 'leveltests',     label: 'Tests de nivel' },
     { id: 'validacion',     label: 'Validación' },
     { id: 'ai',             label: 'Riesgo' },
+    { id: 'aiusage',        label: 'Uso de IA' },
     { id: 'bajas',          label: 'Bajas' },
     { id: 'notifications',  label: 'Notificaciones' },
   ] as const;
@@ -4691,6 +4693,9 @@ function AdminContent() {
 
         {/* AI & RISK TAB */}
         {activeTab === 'ai' && <AiRiskTab teachers={teachers} assignments={assignments} />}
+
+        {/* Quién usa la generación de clases con IA y quién no. */}
+        {activeTab === 'aiusage' && <AiUsageTab teachers={teachers} />}
 
         {/* CHURN / BAJAS TAB */}
         {activeTab === 'bajas' && <ChurnTab />}

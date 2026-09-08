@@ -12,6 +12,7 @@
 //     dominio y tipo de clase, y como mucho añadió tema y contexto.
 
 import { generateNextClass } from '@/lib/nextClass';
+import type { GenerationOrigin } from '@/lib/aiUsage';
 import { ensureProfileId } from '@/lib/transcriptStore';
 import { supabase } from '@/lib/supabase';
 export const runtime = 'nodejs';
@@ -37,6 +38,41 @@ interface Body {
   profileId?: string | null;
   studentId?: string | null;
   teacherId?: string | null;
+  /** Desde dónde se pidió la clase. Ver `logGeneration`. */
+  origin?: GenerationOrigin;
+}
+
+/**
+ * Deja constancia de que un profesor generó una clase con IA.
+ *
+ * SOLO METADATOS: quién, qué alumno, cuándo y desde dónde. Ni la transcripción
+ * ni la clase generada: las dos ya están guardadas (class_analyses y
+ * student_profiles) y duplicarlas aquí convertiría el listado del admin en una
+ * descarga de varios MB cada vez que se abre.
+ *
+ * NUNCA hace fallar la generación. Si falta correr supabase-ai-usage.sql, o el
+ * insert se cae por lo que sea, se avisa por consola y se sigue: el profesor ya
+ * tiene su clase delante y perder una fila de estadística no justifica
+ * quitársela.
+ */
+async function logGeneration(body: Body, studentName: string): Promise<void> {
+  try {
+    const { error } = await supabase.from('ai_class_generations').insert({
+      teacher_id:   body.teacherId ?? null,
+      teacher_name: body.teacherName?.trim() || null,
+      student_id:   body.studentId ?? null,
+      student_name: studentName,
+      origin:       body.origin === 'transcript' ? 'transcript' : 'directa',
+    });
+    if (!error) return;
+    // 42P01 / PGRST205 = la tabla todavía no existe.
+    const faltaTabla = error.code === '42P01' || error.code === 'PGRST205';
+    console.warn(faltaTabla
+      ? '[generate-next-class] Falta correr supabase-ai-usage.sql: el uso de la IA no se está registrando.'
+      : `[generate-next-class] No se pudo registrar el uso de la IA: ${error.message}`);
+  } catch (err) {
+    console.warn('[generate-next-class] No se pudo registrar el uso de la IA:', err);
+  }
 }
 
 const str = (v: unknown): string | null => {
@@ -122,6 +158,10 @@ export async function POST(request: Request): Promise<Response> {
     saveError = 'No se pudo crear ni encontrar la ficha del alumno para guardar la clase.';
     console.error(`[generate-next-class] Sin ficha para "${studentName}": la clase no se persiste.`);
   }
+
+  // Se registra aunque la clase no se haya podido colgar de una ficha: el
+  // profesor la pidió y la IA se pagó, que es lo que mide esta pestaña.
+  await logGeneration(body, studentName);
 
   return Response.json({
     success: true,

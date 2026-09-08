@@ -153,6 +153,8 @@ export default function ProximaClaseTab(p: Props) {
         classNumber,
         lastAnalysis: basedOn,
         classHistory: history,
+        // El profesor pulsó "Generar clase" sin pegar nada. Ver lib/aiUsage.
+        origin: 'directa',
       });
       p.onNextClass(nc);
       setGOpen(false);
@@ -197,6 +199,9 @@ export default function ProximaClaseTab(p: Props) {
           classNumber: claseDada + 1,
           lastAnalysis: a,
           classHistory: [{ clase: claseDada, fecha: date, resumen: a.classSummary, errores: a.errorsDetected }, ...history],
+          // Viene de pegar la transcripción: es LA acción que mide la pestaña
+          // de uso de IA del admin. Ver lib/aiUsage.
+          origin: 'transcript',
         });
         setNewClass(nc);
       } catch (err) {
