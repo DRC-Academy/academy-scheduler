@@ -16,6 +16,7 @@ const navItems = [
   // Primero de todo y solo para admin: es su pantalla de entrada y la que mira
   // todos los días. Antes era una pestaña más dentro de /admin.
   { href: '/dashboard',         label: 'Dashboard',         icon: LayoutDashboard, roles: ['admin'] },
+  { href: '/admin',             label: 'Admin',             icon: Settings,    roles: ['admin'] },
   { href: '/setter',            label: 'Buscar',            icon: Search,      roles: ['setter', 'admin'] },
   { href: '/students',          label: 'Alumnos',           icon: Users,       roles: ['setter', 'admin'] },
   // Retención: alumnos a los que se les acaba el plan. Ventas y admin, no el
@@ -32,7 +33,6 @@ const navItems = [
   // Clases del calendario SIN ingreso registrado: para finanzas no existen, así
   // que esta es la única vía que tiene el profesor de reclamarlas.
   { href: '/revisiones',        label: 'Revisiones',        icon: ClipboardCheck, roles: ['teacher'] },
-  { href: '/admin',             label: 'Admin',             icon: Settings,    roles: ['admin'] },
   { href: '/finanzas',          label: 'Finanzas',          icon: Wallet,      roles: ['admin'] },
 ];
 
