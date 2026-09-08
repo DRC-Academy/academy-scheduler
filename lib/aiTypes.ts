@@ -228,13 +228,6 @@ export interface TranscriptIA {
   riskExplanation: string;
   /** Causa del riesgo. Decide la intervención tanto como el color. */
   riskCause?: unknown;
-  /**
-   * Cada cosa detectada con SU acción emparejada. Se genera SIEMPRE, también en
-   * verde: "depende del español" o "ritmo lento" son hallazgos pedagógicos que
-   * merecen una acción aunque el alumno no esté en riesgo de baja. Ver
-   * lib/interventions.ts (el tipo vive allí para no acoplar este archivo).
-   */
-  detections?: unknown;
   nextClassGuide: NextClassGuide;
   /** Sugerencia de intervención (llega vacía si la clase sale en verde). Ver
    *  lib/interventions.ts: los tipos viven allí para no acoplar este archivo. */
@@ -269,8 +262,6 @@ export interface ClassAnalysisRow {
   risk_explanation: string | null;
   /** Causa del riesgo ('externa_temporal' | 'desmotivacion' | …). Ver RiskCause. */
   risk_cause?: string | null;
-  /** Detecciones con su acción emparejada (jsonb). Se llena también en verde. */
-  detections?: Array<Record<string, unknown>> | string | null;
   /** Sugerencia de intervención de ESTA clase (ver lib/interventions.ts). */
   intervention_suggestion?: Record<string, unknown> | string | null;
   analyzed_at: string;         // ← el timestamp se llama así, NO created_at

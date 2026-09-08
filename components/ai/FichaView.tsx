@@ -10,8 +10,8 @@ import {
   type RiskCause, type GeneratedClassIA, type ConversacionGuiadaIA,
 } from '@/lib/aiTypes';
 import {
-  asDetections, normalizeSuggestion, protocolFor,
-  type Detection, type InterventionSuggestion,
+  normalizeSuggestion, protocolFor,
+  type InterventionSuggestion,
 } from '@/lib/interventions';
 
 export const DRC = {
@@ -49,17 +49,15 @@ export const panelBox: CSSProperties = {
  * Antes el color llegaba solo: el profesor veía "amarillo" sin el porqué ni la
  * intervención, y tenía que deducir qué hacer.
  */
-export function RiskActionDetail({ explanation, cause, stillOpenReason, intervention, detections, risk }: {
+export function RiskActionDetail({ explanation, cause, stillOpenReason, intervention, risk }: {
   explanation?: string | null;
   cause?: RiskCause | null;
   stillOpenReason?: string | null;
   intervention?: InterventionSuggestion | null;
-  detections?: Detection[];
   /** Nivel de la alerta: decide qué protocolo de respaldo mostrar. */
   risk?: RiskSignal | null;
 }) {
-  const dets = detections ?? [];
-  const hayAlgo = !!explanation?.trim() || !!stillOpenReason?.trim() || !!intervention || dets.length > 0
+  const hayAlgo = !!explanation?.trim() || !!stillOpenReason?.trim() || !!intervention
     || (!!cause && cause !== 'no_aplica');
   if (!hayAlgo) return null;
 
@@ -136,24 +134,6 @@ export function RiskActionDetail({ explanation, cause, stillOpenReason, interven
               <b>Oportunidad:</b> {intervention.reconnectHook}
             </div>
           )}
-        </div>
-      )}
-
-      {/* Cada cosa detectada con SU acción. Van juntas a propósito: el
-          diagnóstico suelto es justo lo que no le servía al profesor. */}
-      {dets.length > 0 && (
-        <div>
-          <div style={eyebrowStyle}>Detectado en la clase, y qué hacer</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {dets.map((d, i) => (
-              <div key={i} style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: '9px 11px', background: 'white' }}>
-                <div style={{ fontSize: 13, color: '#374151', lineHeight: 1.5 }}>{d.finding}</div>
-                <div style={{ fontSize: 13, color: DRC.greenDark, lineHeight: 1.5, marginTop: 5, paddingTop: 5, borderTop: '1px dashed #e5e7eb' }}>
-                  <b>Prueba:</b> {d.action}
-                </div>
-              </div>
-            ))}
-          </div>
         </div>
       )}
     </div>
@@ -381,15 +361,14 @@ function TimelineRow({ row }: { row: ClassAnalysisRow }) {
           <Field label="Errores detectados" value={row.errors_detected} />
           <Field label="Progreso respecto a la anterior" value={row.progress_notes} />
           <Field label="Contenidos" value={row.topics_covered} />
-          {/* Motivo + causa + intervención + detecciones, en un solo bloque y con
-              la misma forma que ve el admin. Sustituye al "Motivo de la señal de
-              riesgo" suelto, que decía por qué pero no qué hacer. */}
+          {/* Motivo + causa + intervención, en un solo bloque y con la misma
+              forma que ve el admin. Sustituye al "Motivo de la señal de riesgo"
+              suelto, que decía por qué pero no qué hacer. */}
           <div style={{ marginTop: 4, marginBottom: 12 }}>
             <RiskActionDetail
               explanation={row.risk_explanation}
               cause={isRiskCause(row.risk_cause) ? row.risk_cause : null}
               intervention={normalizeSuggestion(asObject(row.intervention_suggestion))}
-              detections={asDetections(row.detections)}
               risk={risk}
             />
           </div>
@@ -433,13 +412,6 @@ export function TranscriptAnalysisView({ a }: { a: TranscriptIA }) {
           risk={risk}
         />
       </Section>
-      {/* Cada detección con su acción. Va en su propia sección y NO dentro del
-          riesgo: se generan también en verde, porque son hallazgos pedagógicos. */}
-      {asDetections(a.detections).length > 0 && (
-        <Section icon="🎯" title="Detectado, y qué hacer">
-          <RiskActionDetail detections={asDetections(a.detections)} />
-        </Section>
-      )}
       <Section icon="✨" title="Guía para la siguiente clase" defaultOpen>
         <Field label="Prioridad" value={a.nextClassGuide?.priority} />
         <Field label="Warm-up" value={a.nextClassGuide?.warmUp} />

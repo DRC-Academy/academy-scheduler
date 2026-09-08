@@ -16,50 +16,10 @@
 import { cleanAiText } from '@/lib/textCleanup';
 import { isRiskCause, type RiskCause, type RiskSignal } from '@/lib/aiTypes';
 
-// ── Detecciones con su acción emparejada ─────────────────────────────────────
-
-/**
- * Una cosa observada en la clase y QUÉ HACER con ella. Van siempre en pareja: el
- * diagnóstico suelto ("el alumno depende del español") no le sirve de nada al
- * profesor si no viene con la acción ("haz los primeros cinco minutos solo en
- * inglés, con apoyo visual").
- *
- * Se generan en TODAS las clases, también en verde: el ritmo lento o la
- * dependencia del español son hallazgos pedagógicos, no señales de baja.
- */
-export interface Detection {
-  finding: string;
-  action: string;
-}
-
-/** Tope duro. Más de tres deja de leerse y alarga el análisis sin aportar. */
-export const MAX_DETECTIONS = 3;
-
-export function normalizeDetections(raw: unknown): Detection[] {
-  if (!Array.isArray(raw)) return [];
-  const out: Detection[] = [];
-  for (const item of raw) {
-    if (!item || typeof item !== 'object') continue;
-    const r = item as Record<string, unknown>;
-    const finding = isNonEmpty(r.finding) ? cleanAiText(r.finding.trim()) : '';
-    const action  = isNonEmpty(r.action)  ? cleanAiText(r.action.trim())  : '';
-    // Sin las dos mitades no es una detección: un hallazgo sin acción es
-    // exactamente el problema que este campo viene a resolver.
-    if (!finding || !action) continue;
-    out.push({ finding, action });
-    if (out.length >= MAX_DETECTIONS) break;
-  }
-  return out;
-}
-
-/** Lee la columna jsonb `class_analyses.detections` (objeto o string JSON). */
-export function asDetections(v: unknown): Detection[] {
-  if (!v) return [];
-  if (typeof v === 'string') {
-    try { return normalizeDetections(JSON.parse(v)); } catch { return []; }
-  }
-  return normalizeDetections(v);
-}
+// Las DETECCIONES (parejas hallazgo + idea que se generaban en todas las clases,
+// también en verde) se retiraron enteras: eran observaciones pedagógicas suaves
+// que llegaban al profesor como si algo fuera mal. El aviso queda para lo
+// crítico. Lo ya guardado sigue en `class_analyses.detections` sin leerse.
 
 export type InterventionChannel = 'en_clase' | 'mensaje_previo' | 'escalar_soporte';
 export type InterventionConfidence = 'alta' | 'media' | 'baja';

@@ -14,7 +14,7 @@
 
 import { supabase } from '@/lib/supabase';
 import { isRiskCause, isRiskSignal, type TranscriptIA } from '@/lib/aiTypes';
-import { normalizeDetections, normalizeSuggestion } from '@/lib/interventions';
+import { normalizeSuggestion } from '@/lib/interventions';
 import { flagLabel } from '@/lib/transcriptValidation';
 import { statusForDecision, type TranscriptVerdict } from '@/lib/transcriptVerdict';
 
@@ -44,7 +44,6 @@ const OPTIONAL_COLUMNS: Record<string, string> = {
   validation_details:          'supabase-validation-details.sql',
   transcript_hash:             'supabase-transcript-hash.sql',
   join_log_id:                 'supabase-join-log-link.sql',
-  detections:                  'supabase-risk-actions.sql',
   risk_cause:                  'supabase-risk-actions.sql',
 };
 
@@ -239,9 +238,9 @@ export async function persistAnalysisFields(
     risk_signal:      isRiskSignal(a.riskSignal) ? a.riskSignal : 'verde',
     risk_explanation: a.riskExplanation,
     risk_cause:       isRiskCause(a.riskCause) ? a.riskCause : null,
-    // Detecciones con su acción emparejada. Se guardan SIEMPRE, también en las
-    // clases en verde: son hallazgos pedagógicos, no señales de baja.
-    detections:       normalizeDetections(a.detections),
+    // Sin `detections`: se dejaron de generar (ver lib/analyzeTranscript). La
+    // columna sigue en la base con lo ya guardado; las filas nuevas la dejan a
+    // null y nadie la lee.
     // Sugerencia de intervención de esta clase (null si la clase salió en verde).
     intervention_suggestion: normalizeSuggestion(a.interventionSuggestion),
 

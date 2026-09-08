@@ -48,27 +48,11 @@ const INTERVENTION_SCHEMA = {
   },
 } as const;
 
-/**
- * Cada cosa detectada, con su acción al lado. Tope de 3 a propósito: es lo que
- * cabe en pantalla, y cada elemento extra alarga el análisis, que corre contra
- * un timeout ajustado (ver analyzeTranscript, más abajo).
- *
- * El tope vive en la DESCRIPCIÓN, no en maxItems: la API rechaza ese parámetro
- * en las respuestas estructuradas (ver sanitizeSchemaForApi en lib/anthropic.ts).
- */
-const DETECTIONS_SCHEMA = {
-  type: 'array',
-  items: {
-    type: 'object',
-    additionalProperties: false,
-    required: ['finding', 'action'],
-    properties: {
-      finding: { type: 'string', description: 'Qué observaste EN EL ALUMNO, en una frase concreta y verificable en el transcript, sin valorar al profesor. Ej: "recurre al español cada vez que no encuentra una palabra".' },
-      action:  { type: 'string', description: 'Una idea OPCIONAL para la próxima clase, en una frase ejecutable y formulada como sugerencia, nunca en imperativo. Ej: "una opción sería arrancar con cinco minutos solo en inglés, con apoyo visual". Nunca un consejo genérico ni un reproche.' },
-    },
-  },
-  description: 'Array de 1 a 3 elementos, nunca más de 3: detecciones con su idea emparejada. Se rellena SIEMPRE, también cuando riskSignal es verde: son observaciones pedagógicas normales, NO señales de baja ni reproches al profesor.',
-} as const;
+// Las DETECCIONES (parejas hallazgo + idea, generadas en todas las clases,
+// también en verde) se quitaron: eran observaciones pedagógicas suaves que
+// llegaban al profesor como si algo fuera mal. El aviso queda reservado a lo
+// crítico. La columna `class_analyses.detections` sigue en la base con lo ya
+// generado, pero no se escribe ni se lee: nadie la borra y no estorba.
 
 const CHECK_SCHEMA = {
   type: 'object',
@@ -88,12 +72,11 @@ export const TRANSCRIPT_SCHEMA = {
   additionalProperties: false,
   required: [
     'classTitle', 'classSummary', 'errorsDetected', 'progressNotes', 'topicsCovered',
-    'progressScore', 'riskSignal', 'riskExplanation', 'riskCause', 'detections',
+    'progressScore', 'riskSignal', 'riskExplanation', 'riskCause',
     'nextClassGuide', 'interventionSuggestion',
   ],
   properties: {
     interventionSuggestion: INTERVENTION_SCHEMA,
-    detections: DETECTIONS_SCHEMA,
     classTitle:      { type: 'string', description: 'Título breve y descriptivo de lo que se trabajó, p. ej. "Present Perfect en contexto laboral".' },
     classSummary:    { type: 'string', description: 'Qué se trabajó y cómo fue.' },
     errorsDetected:  { type: 'string', description: 'Errores específicos y patrones.' },
@@ -165,14 +148,6 @@ La señal dice si hay riesgo; la causa dice qué encaja mejor, y dos alertas roj
 - sin_determinar: hay señales de riesgo pero NO puedes saber a qué se deben. Úsalo sin miedo: es una respuesta correcta y es mucho mejor que inventar una causa. Dilo también en riskExplanation, con estas palabras o parecidas: "no hay información suficiente para saber si la ausencia es temporal o una señal de desenganche".
 - no_aplica: solo cuando riskSignal es verde.
 Cuando la causa sea externa_temporal, la sugerencia NO va de retención: no hay nada que reenganchar en un alumno que avisó de que se iba de viaje.
-
-DETECCIONES CON SU ACCIÓN (detections):
-De 1 a 3, SIEMPRE, sea cual sea la señal de riesgo. Cada una es una pareja: qué observaste y qué idea se te ocurre al respecto. Aquí el listón es BAJO a propósito: son observaciones pedagógicas normales de cualquier clase, NO señales de baja ni reproches. Que haya detecciones no significa que algo vaya mal.
-- El finding describe lo observado en el alumno, verificable en la transcripción, sin valorar al profesor.
-- El action es una IDEA que el profesor puede coger o dejar, concreta y ejecutable en una clase, formulada como sugerencia.
-- Mal: finding "el alumno depende del español"; action "haz los primeros cinco minutos solo en inglés". Bien: finding "recurre al español cada vez que no encuentra una palabra"; action "una opción sería arrancar con cinco minutos solo en inglés, con apoyo visual, dándole sinónimos antes de que traduzca".
-- Mal: finding "ritmo lento". Bien: finding "tarda en arrancar y se queda en blanco en los ejercicios largos"; action "quizá ayuden ejercicios más cortos, de dos o tres minutos, con un cambio de actividad entre medias".
-- Nada de "mejorar la motivación" ni "prestar más atención": eso no es una idea, es un reproche vago.
 
 SUGERENCIA DE INTERVENCIÓN (interventionSuggestion):
 Si riskSignal es rojo, propón algo para el profesor. Si es verde, deja action y reconnectHook vacíos, steps como array vacío, escalateToSupport en false y channel en "en_clase".
@@ -274,11 +249,10 @@ ${input.transcript}`;
 // el informe mantiene la calidad (el esquema estructurado hace el trabajo duro).
 //
 // PRESUPUESTO DE SALIDA. Los campos que se añadieron después (riskCause,
-// detections, stillOpenReason) llevan tope —3 detecciones, riskExplanation de
-// unas 60 palabras— justo por esto: el análisis corre contra un timeout ajustado
-// y romperlo es peor que cualquier campo que se gane. Si en algún momento hay que
-// recortar, lo primero que se quita son las `detections` (bajar el número en su
-// `description`), nunca el effort ni el timeout.
+// stillOpenReason) llevan tope —riskExplanation de unas 60 palabras— justo por
+// esto: el análisis corre contra un timeout ajustado y romperlo es peor que
+// cualquier campo que se gane. Si en algún momento hay que recortar, se acortan
+// las `description` de los campos largos, nunca el effort ni el timeout.
 //
 // OJO: el tope se pide en prosa, en las `description`, NO con maxItems/minItems.
 // La API los rechaza en las respuestas estructuradas y la petición entera falla
