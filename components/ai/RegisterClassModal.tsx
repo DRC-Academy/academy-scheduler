@@ -270,7 +270,6 @@ function AnalysisEditor({ a, onChange }: { a: TranscriptIA; onChange: (a: Transc
             style={inputStyle}
           >
             <option value="verde">🟢 Verde — en buen camino</option>
-            <option value="amarillo">🟡 Amarillo — atención</option>
             <option value="rojo">🔴 Rojo — riesgo de baja</option>
           </select>
         </div>

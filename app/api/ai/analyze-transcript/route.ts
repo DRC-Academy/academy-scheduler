@@ -323,7 +323,9 @@ async function afterAnalysis(args: {
     console.error('[analyze-transcript] Auditoría de seguimiento no disponible:', err);
   }
 
-  if (risk === 'amarillo' || risk === 'rojo') {
+  // Solo el ROJO avisa. El amarillo se retiró entero: era una señal débil que
+  // generaba alerta e incomodaba sin decir nada accionable.
+  if (risk === 'rojo') {
     try {
       await notifyAdminRisk(risk, studentName, {
         teacherName: body.teacherName, classNumber: args.classNumber,
@@ -385,7 +387,7 @@ async function afterAnalysis(args: {
 }
 
 /**
- * BLOQUE 1 — la clase salió en amarillo/rojo: se abre la intervención.
+ * BLOQUE 1 — la clase salió en ROJO: se abre la intervención.
  *
  * Deja la sugerencia como alerta ABIERTA en la ficha y se la hace llegar al
  * profesor por los dos canales (campanita + email) con el mismo contenido.
@@ -398,7 +400,7 @@ async function openIntervention(args: {
   teacherId: string | null;
   body: Body;
   profileId: string | null;
-  risk: 'amarillo' | 'rojo';
+  risk: 'rojo';
 }): Promise<void> {
   const suggestion = normalizeSuggestion(args.analysis.interventionSuggestion);
   if (!suggestion) {
@@ -432,7 +434,7 @@ async function openIntervention(args: {
   if (!args.teacherId) return;   // sin profesor asignado no hay a quién avisar
 
   await notifyTeacherIntervention({
-    teacherId: args.teacherId, studentName: args.studentName, suggestion, context, risk: args.risk,
+    teacherId: args.teacherId, studentName: args.studentName, suggestion, context,
   });
 
   // Email: es el único correo ligado a las señales de riesgo y sale solo cuando
@@ -442,7 +444,6 @@ async function openIntervention(args: {
     if (teacher) {
       await sendInterventionEmail(teacher, {
         studentName: args.studentName, suggestion, classNumber: args.classNumber, context,
-        risk: args.risk,
       });
     }
   } catch (err) {

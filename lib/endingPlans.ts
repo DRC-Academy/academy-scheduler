@@ -94,6 +94,9 @@ export interface EndingProfileRow {
   risk_signal?: string | null;
 }
 
+// 'amarillo' sigue en el tipo SOLO porque el contrato del Zap de ventas
+// (lib/endingPlansWebhook) lo declara y ese mapeo va por nombre exacto. Ya no se
+// produce: `normalizeRetentionSignal` traduce las fichas viejas a verde.
 export type RetentionSignal = 'verde' | 'amarillo' | 'rojo' | null;
 
 export interface EndingPlan {
@@ -238,7 +241,7 @@ export function profileLookup(profiles: EndingProfileRow[]):
     if (!p) return null;
     return {
       progressScore: p.progress_score ?? null,
-      riskSignal: isRetentionSignal(p.risk_signal) ? (p.risk_signal as RetentionSignal) : null,
+      riskSignal: normalizeRetentionSignal(p.risk_signal),
     };
   };
 }
@@ -295,8 +298,18 @@ export function buildEndingPlans(args: {
   return out.sort((a, b) => a.daysLeft - b.daysLeft || a.studentName.localeCompare(b.studentName, 'es'));
 }
 
-function isRetentionSignal(v: unknown): boolean {
-  return v === 'verde' || v === 'amarillo' || v === 'rojo';
+/**
+ * Señal de retención que ve ventas, leída de `student_profiles.risk_signal`.
+ *
+ * El amarillo se retiró del sistema de riesgo, pero 44 fichas lo tienen aún
+ * guardado. Aquí se traducen a VERDE en vez de descartarse: por la regla nueva,
+ * todo lo que no es rojo está bien, y dejarlas en null las habría mandado a
+ * "Sin datos", que es mentira — hay análisis, y dicen que el alumno viene bien.
+ */
+function normalizeRetentionSignal(v: unknown): RetentionSignal {
+  if (v === 'rojo') return 'rojo';
+  if (v === 'verde' || v === 'amarillo') return 'verde';
+  return null;
 }
 
 /**

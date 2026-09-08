@@ -999,7 +999,8 @@ function RetryAnalysisRow({ row, ctx, onDone }: {
  */
 function InterventionCard({ intervention }: { intervention: ActiveIntervention }) {
   const escalate = intervention.escalateToSupport;
-  const accent = intervention.risk === 'rojo' ? '#DC2626' : '#FFC400';
+  // Toda alerta viva es roja: las amarillas dejaron de reconocerse como alerta.
+  const accent = '#DC2626';
 
   return (
     <div

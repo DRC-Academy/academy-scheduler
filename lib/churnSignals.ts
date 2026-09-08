@@ -122,6 +122,10 @@ export function computeChurnSignals(input: {
 
   const cancellations = myRecords.filter(r => CANCEL_TYPES.has(r.class_type ?? '')).length;
   const lateCount = myLogs.filter(l => l.punctuality === 'late' || l.punctuality === 'very_late').length;
+  // Cuenta también los 'amarillo' HISTÓRICOS a propósito: esto alimenta el
+  // dataset de predicción de bajas, que mira hacia atrás. El nivel ya no se
+  // genera, pero las clases que salieron en amarillo en su día siguen siendo la
+  // señal que fue. Borrarlas de la cuenta falsearía el histórico.
   const riskFlags = myAnalyses.filter(a => a.risk_signal === 'amarillo' || a.risk_signal === 'rojo').length;
 
   // Días desde la última actividad conocida. Si NO hay ninguna, se mide desde el

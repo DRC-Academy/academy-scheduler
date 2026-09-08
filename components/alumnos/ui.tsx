@@ -11,9 +11,8 @@ export const DRC_YELLOW = '#FFC400';
 
 // ── Señal de riesgo: punto de color + texto ───────────────────────────────────
 export const RISK_TEXT: Record<RiskSignal, { label: string; color: string }> = {
-  verde:    { label: 'En seguimiento',    color: DRC_GREEN },
-  amarillo: { label: 'Requiere atención', color: DRC_YELLOW },
-  rojo:     { label: 'Riesgo de baja',    color: '#DC2626' },
+  verde: { label: 'En seguimiento', color: DRC_GREEN },
+  rojo:  { label: 'Riesgo de baja', color: '#DC2626' },
 };
 
 export function RiskDot({ risk, showLabel = true, size = 8 }: {

@@ -22,10 +22,13 @@ import type { InterventionAuditRow, ActiveIntervention } from '@/lib/interventio
 import type { ClassRecord } from '@/types';
 
 // ── Severidad ────────────────────────────────────────────────────────────────
-export type Severity = 'riesgo' | 'atencion' | 'buen';
+//
+// Dos niveles, igual que la señal. 'atencion' (el amarillo) se retiró: no
+// distinguía nada accionable y llenaba la cola de casos que no había que tocar.
+export type Severity = 'riesgo' | 'buen';
 
 export const SEV_OF: Record<RiskSignal, Severity> = {
-  rojo: 'riesgo', amarillo: 'atencion', verde: 'buen',
+  rojo: 'riesgo', verde: 'buen',
 };
 
 export interface SevStyle {
@@ -33,16 +36,19 @@ export interface SevStyle {
 }
 
 /** Paleta del handoff. Los tintes/bordes son propios de esta vista: los tokens
- *  globales (RISK_META) usan rgba sobre el verde/amarillo DRC y no dan el mismo
+ *  globales (RISK_META) usan rgba sobre el verde DRC y no dan el mismo
  *  contraste en filas de una línea sobre fondo blanco. */
-export const SEV: Record<'riesgo' | 'atencion', SevStyle> = {
+export const SEV: Record<Severity, SevStyle> = {
   riesgo: {
     label: 'Riesgo de baja', accent: '#cf3a30', bg: '#fdeeec', bd: '#f3cfca', fg: '#a52b23',
     hint: 'intervenir hoy',
   },
-  atencion: {
-    label: 'Atención', accent: '#e0a92b', bg: '#fdf5e4', bd: '#eddfb6', fg: '#8a5f0a',
-    hint: 'vigilar esta semana',
+  // Ya no es un caso imposible: la pestaña "Verificar intervenciones" lista
+  // alumnos por sus auditorías, y uno con historial puede estar hoy en verde.
+  // Antes caía en el estilo del amarillo y se pintaba como si algo fuera mal.
+  buen: {
+    label: 'En buen camino', accent: '#12a04b', bg: '#eaf5ee', bd: '#cfe8d8', fg: '#157f3d',
+    hint: 'sin señales',
   },
 };
 
@@ -123,7 +129,7 @@ export function matchesSeverity(r: RiskRow, sev: Filters['sev']): boolean {
 // ── Orden ────────────────────────────────────────────────────────────────────
 export type SortKey = 'sev' | 'fecha' | 'alertas';
 
-const SEV_ORDER: Record<Severity, number> = { riesgo: 0, atencion: 1, buen: 2 };
+const SEV_ORDER: Record<Severity, number> = { riesgo: 0, buen: 1 };
 
 const ts = (iso: string | null): number => (iso ? new Date(iso).getTime() || 0 : 0);
 
@@ -175,9 +181,11 @@ const shortDate = (iso: string): string => {
   return isNaN(d.getTime()) ? '—' : d.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' });
 };
 
+// El historial es un registro de lo que PASÓ: las clases viejas que salieron en
+// amarillo siguen contándose como tales, aunque ya no se genere ninguna nueva.
 const RISK_EVENT: Record<string, string> = {
   rojo:     'Alerta roja generada por la IA',
-  amarillo: 'Alerta amarilla generada por la IA',
+  amarillo: 'Alerta amarilla generada por la IA (el nivel ya no existe)',
   verde:    'Clase analizada sin señales de riesgo',
 };
 
@@ -256,7 +264,7 @@ export function rowsToCsv(rows: RiskRow[]): string {
   const body = rows.map(r => [
     r.studentName,
     r.teacherName,
-    r.sev === 'riesgo' ? 'Riesgo de baja' : r.sev === 'atencion' ? 'Atención' : 'En buen camino',
+    r.sev === 'riesgo' ? 'Riesgo de baja' : 'En buen camino',
     formatRowDate(r.date),
     r.unattended,
     r.confidence ?? '—',

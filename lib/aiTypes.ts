@@ -12,12 +12,21 @@
 
 export type AiStatus = 'ready' | 'skipped' | 'error';
 
-export type RiskSignal = 'verde' | 'amarillo' | 'rojo';
+/**
+ * Solo hay DOS estados. El amarillo ("atención") se retiró: era una señal débil
+ * que generaba aviso, incomodaba al profesor y no distinguía nada accionable. O
+ * el alumno está bien, o hay una señal seria de baja.
+ *
+ * Los valores 'amarillo' que quedan en la base NO se migran: `isRiskSignal` los
+ * rechaza y todos los lectores hacen `isRiskSignal(x) ? x : 'verde'`, así que
+ * caen a verde solos y dejan de avisar. El histórico se conserva intacto.
+ */
+export type RiskSignal = 'verde' | 'rojo';
 
 /**
- * CAUSA del riesgo. Existe porque el color solo no basta para decidir qué hacer:
- * un amarillo por vacaciones y un amarillo por desmotivación piden intervenciones
- * opuestas, y antes los dos llegaban al profesor como "amarillo" a secas.
+ * CAUSA del riesgo. Existe porque la señal sola no basta para decidir qué hacer:
+ * una alerta por vacaciones y una por desmotivación piden intervenciones
+ * opuestas, y antes las dos llegaban al profesor como un color a secas.
  *
  * 'sin_determinar' es una respuesta legítima y se muestra como tal: es preferible
  * decir que no se sabe si la ausencia es temporal o desenganche a que la IA lo
@@ -342,12 +351,11 @@ export function isConversacionGuiada(c: GeneratedClassIA | null | undefined): c 
 
 export const RISK_META: Record<RiskSignal, { label: string; emoji: string; color: string; bg: string; border: string }> = {
   verde:    { label: 'En buen camino', emoji: '🟢', color: '#166534', bg: 'rgba(30,158,58,0.12)',  border: 'rgba(30,158,58,0.4)' },
-  amarillo: { label: 'Atención',       emoji: '🟡', color: '#92400e', bg: 'rgba(255,196,0,0.16)',  border: 'rgba(255,196,0,0.5)' },
   rojo:     { label: 'Riesgo de baja', emoji: '🔴', color: '#991b1b', bg: 'rgba(239,68,68,0.12)',  border: 'rgba(239,68,68,0.4)' },
 };
 
 export function isRiskSignal(v: unknown): v is RiskSignal {
-  return v === 'verde' || v === 'amarillo' || v === 'rojo';
+  return v === 'verde' || v === 'rojo';
 }
 
 /** Las columnas jsonb pueden llegar como objeto o como string JSON. */

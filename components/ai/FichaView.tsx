@@ -46,16 +46,14 @@ export const panelBox: CSSProperties = {
  * este "ver detalle": lo usan la ficha del alumno y la cola del admin, porque
  * una alerta amarilla no puede explicarse distinto según dónde se mire.
  *
- * Antes el color llegaba solo: el profesor veía "amarillo" sin el porqué ni la
+ * Antes el color llegaba solo: el profesor veía la señal sin el porqué ni la
  * intervención, y tenía que deducir qué hacer.
  */
-export function RiskActionDetail({ explanation, cause, stillOpenReason, intervention, risk }: {
+export function RiskActionDetail({ explanation, cause, stillOpenReason, intervention }: {
   explanation?: string | null;
   cause?: RiskCause | null;
   stillOpenReason?: string | null;
   intervention?: InterventionSuggestion | null;
-  /** Nivel de la alerta: decide qué protocolo de respaldo mostrar. */
-  risk?: RiskSignal | null;
 }) {
   const hayAlgo = !!explanation?.trim() || !!stillOpenReason?.trim() || !!intervention
     || (!!cause && cause !== 'no_aplica');
@@ -72,7 +70,7 @@ export function RiskActionDetail({ explanation, cause, stillOpenReason, interven
         </div>
       )}
 
-      {/* La causa cambia la intervención tanto como el color: un amarillo por
+      {/* La causa cambia la intervención tanto como la señal: una alerta por
           vacaciones y uno por desmotivación no se tratan igual. */}
       {causeMeta && (
         <div>
@@ -113,7 +111,7 @@ export function RiskActionDetail({ explanation, cause, stillOpenReason, interven
           {(() => {
             // Lo que ve el admin es lo MISMO que se le enseña al profesor: misma
             // función, así que no pueden discrepar.
-            const proto = protocolFor(intervention.steps, risk ?? 'amarillo');
+            const proto = protocolFor(intervention.steps);
             return (
               <>
                 <ol style={{ margin: 0, paddingLeft: 20, display: 'flex', flexDirection: 'column', gap: 5 }}>
@@ -369,7 +367,6 @@ function TimelineRow({ row }: { row: ClassAnalysisRow }) {
               explanation={row.risk_explanation}
               cause={isRiskCause(row.risk_cause) ? row.risk_cause : null}
               intervention={normalizeSuggestion(asObject(row.intervention_suggestion))}
-              risk={risk}
             />
           </div>
           {guide && (
@@ -409,7 +406,6 @@ export function TranscriptAnalysisView({ a }: { a: TranscriptIA }) {
         <RiskActionDetail
           cause={isRiskCause(a.riskCause) ? a.riskCause : null}
           intervention={normalizeSuggestion(a.interventionSuggestion)}
-          risk={risk}
         />
       </Section>
       <Section icon="✨" title="Guía para la siguiente clase" defaultOpen>

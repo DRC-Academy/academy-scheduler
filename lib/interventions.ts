@@ -6,7 +6,7 @@
 //
 // Qué es cada cosa:
 //   · InterventionSuggestion → lo que la IA propone al profesor cuando una clase
-//     sale en amarillo/rojo. Se guarda en class_analyses.intervention_suggestion.
+//     sale en ROJO. Se guarda en class_analyses.intervention_suggestion.
 //   · ActiveIntervention → esa misma sugerencia copiada a la ficha del alumno
 //     (student_profiles.active_intervention) como alerta ABIERTA, con los
 //     metadatos de la clase que la originó.
@@ -143,7 +143,7 @@ export const AVOID_ITEMS = [
 export const AVOID_TITLE = 'Ver qué suele funcionar peor';
 
 /**
- * Aviso para el alumno que está en amarillo o rojo pero todavía no tiene
+ * Aviso para el alumno que está en ROJO pero todavía no tiene
  * protocolo generado (la IA no ha llegado a proponer uno).
  *
  * Un aviso genérico NO se audita después: no habría contra qué comparar, y por
@@ -171,16 +171,11 @@ export const FALLBACK_STEPS_ROJO: string[] = [
   'Una buena forma de cerrar sería recordarle algo concreto que ha mejorado desde que empezó.',
 ];
 
-/** Alumno en AMARILLO. Reenganche: que salga con ganas de volver. */
-export const FALLBACK_STEPS_AMARILLO: string[] = [
-  'Podrías empezar preguntándole qué tal le está yendo con el inglés fuera de clase.',
-  'Una opción es ajustar la clase a lo que te diga: si lo ves espeso, algo más corto y hablado.',
-  'Quizá ayude darle una victoria clara a mitad de clase, algo que le salga bien y lo note.',
-  'Podrías cerrar acordando con él qué vais a trabajar la próxima vez.',
-];
-
-export function fallbackSteps(risk: RiskSignal): string[] {
-  return risk === 'rojo' ? FALLBACK_STEPS_ROJO : FALLBACK_STEPS_AMARILLO;
+// Ya no hay un segundo juego de pasos. Existía uno para el amarillo
+// (reenganche, más suave), pero las alertas solo se abren en rojo: el respaldo
+// es siempre el de contención.
+export function fallbackSteps(): string[] {
+  return FALLBACK_STEPS_ROJO;
 }
 
 /**
@@ -256,12 +251,12 @@ export function usableAction(action: string, context?: string | null): string {
  * ficha, para que los cuatro le digan al profesor exactamente lo mismo.
  */
 export function protocolFor(
-  steps: readonly string[] | undefined | null, risk: RiskSignal,
+  steps: readonly string[] | undefined | null,
 ): { steps: string[]; isFallback: boolean } {
   const propios = usableSteps(steps);
   return propios.length >= MIN_STEPS
     ? { steps: propios, isFallback: false }
-    : { steps: fallbackSteps(risk), isFallback: true };
+    : { steps: fallbackSteps(), isFallback: true };
 }
 
 /**
@@ -345,10 +340,15 @@ export function asIntervention(v: unknown): ActiveIntervention | null {
   const base = normalizeSuggestion(v);
   if (!base) return null;
   const r = v as Record<string, unknown>;
-  const risk = r.risk === 'rojo' ? 'rojo' : 'amarillo';
+  // UNA ALERTA ES ROJA O NO ES. Las que quedaron guardadas en amarillo dejan de
+  // existir aquí mismo: no se migra ni se borra nada en la base, simplemente no
+  // se reconocen como alerta y desaparecen del pop-up, de la cola del admin, de
+  // la ficha y de la campanita. Eran señales débiles que incomodaban al profesor
+  // sin decirle nada accionable.
+  if (r.risk !== 'rojo') return null;
   return {
     ...base,
-    risk,
+    risk: 'rojo',
     contextSummary: isNonEmpty(r.contextSummary) ? cleanAiText(r.contextSummary.trim()) : '',
     cause: isRiskCause(r.cause) ? r.cause : null,
     stillOpenReason: isNonEmpty(r.stillOpenReason) ? cleanAiText(r.stillOpenReason.trim()) : '',
@@ -380,7 +380,7 @@ export function currentReason(i: ActiveIntervention | null | undefined): string 
  *
  *   'protocolo' → hay intervención abierta: pasos numerados (o la acción suelta
  *                 si es una alerta anterior a los pasos). Se audita después.
- *   'generico'  → el alumno está en amarillo o rojo pero nadie ha generado un
+ *   'generico'  → el alumno está en ROJO pero nadie ha generado un
  *                 protocolo. Se avisa, pero NO se audita: no hay pasos que
  *                 cumplir y no puede contar como alerta no atendida.
  *   null        → no hay nada que mostrar; el profesor entra directo.
@@ -439,7 +439,7 @@ export function buildRiskBriefing(args: {
     // anteriores al protocolo, o las que solo decían "no intentes retenerlo" y
     // "deja que soporte lo gestione"), entra el respaldo. El pop-up nunca puede
     // abrirse sin decirle al profesor qué hacer durante esa hora.
-    const proto = protocolFor(intervention.steps, intervention.risk);
+    const proto = protocolFor(intervention.steps);
     const contextoAlerta = (intervention.contextSummary ?? '').trim() || fallbackContext;
     return {
       kind: 'protocolo',
@@ -465,7 +465,7 @@ export function buildRiskBriefing(args: {
     };
   }
 
-  if (args.risk === 'amarillo' || args.risk === 'rojo') {
+  if (args.risk === 'rojo') {
     return {
       kind: 'generico',
       studentName,
@@ -473,7 +473,7 @@ export function buildRiskBriefing(args: {
       // Antes esto era un párrafo de buenas intenciones ("presta especial
       // atención a cómo se siente"). Ahora son pasos, porque un aviso que no se
       // puede ejecutar no cambia nada de lo que pasa en la clase.
-      steps: fallbackSteps(args.risk),
+      steps: fallbackSteps(),
       usingFallbackSteps: true,
       body: GENERIC_RISK_BRIEFING,
       previousContext: fallbackContext,
@@ -510,13 +510,12 @@ export function countsAsUnattended(check: InterventionCheck): boolean {
  */
 export function interventionCopy(
   s: InterventionSuggestion, studentName: string, context?: string,
-  risk: RiskSignal = 'amarillo',
 ): { title: string; body: string } {
   // Los PASOS son el cuerpo del aviso, numerados, y con respaldo si la IA no dejó
   // ninguno utilizable. Antes esto mandaba `action` en una línea, que en los
   // casos escalados era "escala el caso a soporte": el profesor recibía un aviso
   // cuyo contenido era que no hiciera nada.
-  const lista = protocolFor(s.steps, risk).steps;
+  const lista = protocolFor(s.steps).steps;
   const pasos = `Ideas para esta clase:\n${lista.map((p, i) => `${i + 1}. ${p}`).join('\n')}`;
   const contexto = (context ?? '').trim() ? `En la última clase: ${context!.trim()}` : '';
   const accion = usableAction(s.action, context);

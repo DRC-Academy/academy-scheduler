@@ -15,7 +15,7 @@
 import type { CSSProperties, KeyboardEvent, ReactNode } from 'react';
 import {
   CONF_STYLE, SEV, cut, formatRowDate, unattendedLabel,
-  type HistoryEvent, type RiskRow,
+  type HistoryEvent, type RiskRow, type Severity,
 } from '@/lib/riskInbox';
 import { RiskActionDetail } from '@/components/ai/FichaView';
 
@@ -36,7 +36,7 @@ function rowKeyDown(onToggle: () => void) {
 
 // ── Piezas compartidas ───────────────────────────────────────────────────────
 
-export function SevBadge({ sev }: { sev: 'riesgo' | 'atencion' }) {
+export function SevBadge({ sev }: { sev: Severity }) {
   const s = SEV[sev];
   return (
     <span style={{
@@ -114,7 +114,7 @@ export interface ColaRowProps {
 
 export function ColaRow(p: ColaRowProps) {
   const { row } = p;
-  const sev = row.sev === 'riesgo' ? 'riesgo' : 'atencion';
+  const sev = row.sev;
   const s = SEV[sev];
   const panelId = `rk-panel-${row.id}`;
 
@@ -207,7 +207,6 @@ export function ColaRow(p: ColaRowProps) {
                   cause={row.active.cause}
                   stillOpenReason={row.active.stillOpenReason}
                   intervention={row.active}
-                  risk={row.active.risk}
                 />
               </div>
             )}
@@ -297,7 +296,7 @@ export interface VerifRowProps {
 
 export function VerifRow(p: VerifRowProps) {
   const { row } = p;
-  const sev = row.sev === 'riesgo' ? 'riesgo' : 'atencion';
+  const sev = row.sev;
   const s = SEV[sev];
   const panelId = `rk-vpanel-${row.id}`;
   // La evidencia de esta pestaña es la de la AUDITORÍA (qué observó la IA sobre

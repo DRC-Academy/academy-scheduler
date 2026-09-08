@@ -451,27 +451,25 @@ export async function notifyAdminTranscript(
   );
 }
 
-/** Aviso al admin por señal de riesgo de baja del alumno. */
+/**
+ * Aviso al admin por señal de riesgo de baja del alumno. Solo ROJO.
+ *
+ * Tenía una segunda rama, el "⚠️ Señal de atención" del amarillo, con su propio
+ * tipo `ai_risk_yellow`. Se quitó con el nivel: era el aviso que llenaba la
+ * bandeja de casos que no había que tocar. Los `ai_risk_yellow` ya insertados
+ * siguen en la tabla de notificaciones, como parte del histórico.
+ */
 export async function notifyAdminRisk(
-  risk: 'amarillo' | 'rojo', studentName: string,
+  risk: 'rojo', studentName: string,
   ctx: { teacherName?: string; classNumber?: number | null }, a: TranscriptIA,
 ): Promise<void> {
   const teacher = ctx.teacherName?.trim() || 'sin asignar';
-  const clase = ctx.classNumber != null ? `Clase ${ctx.classNumber} analizada` : 'Clase analizada';
 
-  await insertNotification('risk', risk === 'rojo'
-    ? {
-        title: `🔴 ALERTA — ${studentName} en riesgo de baja`,
-        body:  `Profesor: ${teacher} · Acción recomendada: contactar al alumno esta semana.\n\nMotivo: ${a.riskExplanation}`,
-        type:  'ai_risk_red',
-      }
-    : {
-        title: `⚠️ ${studentName} — Señal de atención`,
-        body:  `Profesor: ${teacher} · ${clase}\nMotivo: ${a.riskExplanation}`,
-        type:  'ai_risk_yellow',
-      },
-    'ia',
-  );
+  await insertNotification('risk', {
+    title: `🔴 ALERTA — ${studentName} en riesgo de baja`,
+    body:  `Profesor: ${teacher} · Acción recomendada: contactar al alumno esta semana.\n\nMotivo: ${a.riskExplanation}`,
+    type:  'ai_risk_red',
+  }, 'ia');
 }
 
 /** Payload de validación que se devuelve al cliente (mensajes neutros al profesor). */

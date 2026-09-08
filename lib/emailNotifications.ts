@@ -14,7 +14,6 @@ import {
   AVOID_ITEMS, ESCALATED_GUARDRAIL, NATURAL_REMINDER, protocolFor, usableAction,
   type InterventionSuggestion,
 } from '@/lib/interventions';
-import type { RiskSignal } from '@/lib/aiTypes';
 import { cleanAiText } from '@/lib/textCleanup';
 import { longDateEs, retentionLine, type EndingPlan } from '@/lib/endingPlans';
 import { PUBLIC_APP_URL as APP_URL } from '@/lib/appUrl';
@@ -263,7 +262,7 @@ export async function sendClassCancelledEmail(args: {
 // ═══ A.3) Intervención recomendada sobre una alerta de riesgo ═════════════════
 //
 // Es el ÚNICO email ligado a las señales de riesgo: las alertas de riesgo en sí
-// (amarillo/rojo) siguen sin enviarse por correo, solo generan aviso interno.
+// (solo rojo) siguen sin enviarse por correo, solo generan aviso interno.
 // Este sale cuando hay una sugerencia de intervención concreta que dar, con el
 // mismo contenido que la notificación de la campanita.
 export async function sendInterventionEmail(
@@ -272,20 +271,17 @@ export async function sendInterventionEmail(
     studentName: string; suggestion: InterventionSuggestion; classNumber?: number | null;
     /** Qué se detectó en la clase. Abre el email: primero el porqué, luego los pasos. */
     context?: string | null;
-    /** Decide qué protocolo de respaldo usar si la IA no dejó pasos ejecutables. */
-    risk?: RiskSignal;
   },
 ): Promise<boolean> {
   const s = info.suggestion;
   const escalate = s.escalateToSupport;
   const context = (info.context ?? '').trim();
-  const risk: RiskSignal = info.risk ?? (escalate ? 'rojo' : 'amarillo');
 
   // Los PASOS, numerados y SIEMPRE presentes: si la IA no dejó ninguno
   // ejecutable, entra el protocolo de respaldo. Antes el email llevaba solo
   // `action` en una línea, y en los casos escalados esa línea decía "escala el
   // caso a soporte": un correo cuyo contenido era que no hiciera nada.
-  const lista = protocolFor(s.steps, risk).steps;
+  const lista = protocolFor(s.steps).steps;
   const stepsBlock = `<div style="margin:0 0 16px; padding:14px 16px; border:1px solid #E0E0DA; border-radius:8px; background-color:#FFFFFF;">
   <div style="font-size:12px; font-weight:700; color:#1E9E3A; text-transform:uppercase; letter-spacing:0.04em; margin-bottom:8px;">Ideas para esta clase</div>
   <ol style="margin:0; padding-left:18px; font-size:14px; line-height:1.65; color:#1A1A1A;">${

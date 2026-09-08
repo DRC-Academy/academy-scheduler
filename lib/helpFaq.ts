@@ -105,8 +105,8 @@ export const HELP_ITEMS: HelpItem[] = [
   },
   {
     id: 'q16', category: 'ia',
-    question: '¿Qué significa la señal de riesgo verde/amarillo/rojo?',
-    answer: 'La señal refleja el estado del alumno según el análisis de sus clases. Verde significa que el alumno progresa y está comprometido. Amarillo indica señales de desmotivación o dificultades que requieren tu atención. Rojo significa riesgo de baja — en ese caso el equipo de DRC también recibe una alerta para actuar.',
+    question: '¿Qué significa la señal de riesgo verde/rojo?',
+    answer: 'La señal refleja el estado del alumno según el análisis de sus clases, y solo tiene dos niveles. Verde es lo normal y lo que verás casi siempre: el alumno sigue viniendo, aunque una clase salga floja o venga cansado. Rojo es excepcional y significa riesgo real de baja: el alumno dijo que se plantea dejarlo, o hay un patrón grave y sostenido. Solo el rojo genera aviso, y en ese caso el equipo de DRC también recibe la alerta. No hay nivel intermedio: ante la duda, el sistema marca verde.',
   },
   {
     id: 'q17', category: 'ia',

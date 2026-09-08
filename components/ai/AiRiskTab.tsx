@@ -59,7 +59,7 @@ interface ResolvedItem {
 const PAGE = 20;   // filas por grupo antes de "Ver N alertas más"
 
 /** 1 = verde … 3 = rojo. Para el riesgo promedio por profesor. */
-const RISK_SCORE: Record<RiskSignal, number> = { verde: 1, amarillo: 2, rojo: 3 };
+const RISK_SCORE: Record<RiskSignal, number> = { verde: 1, rojo: 2 };
 
 export default function AiRiskTab({ teachers, assignments }: Props) {
   const { user } = useAuth();
@@ -82,8 +82,8 @@ export default function AiRiskTab({ teachers, assignments }: Props) {
   const [sort, setSort] = useState<SortKey>('sev');
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [sel, setSel] = useState<Set<string>>(new Set());
-  const [gopen, setGopen] = useState({ riesgo: true, atencion: true });
-  const [shown, setShown] = useState<Record<string, number>>({ riesgo: PAGE, atencion: PAGE });
+  const [gopen, setGopen] = useState({ riesgo: true });
+  const [shown, setShown] = useState<Record<string, number>>({ riesgo: PAGE });
   const [toast, setToast] = useState<string | null>(null);
   const [resolved, setResolved] = useState<ResolvedItem[]>([]);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -237,9 +237,8 @@ export default function AiRiskTab({ teachers, assignments }: Props) {
   const resolvedIds = useMemo(() => new Set(resolved.map(r => r.id)), [resolved]);
 
   const counts = useMemo(() => ({
-    buen:     allRows.filter(r => r.sev === 'buen').length,
-    atencion: allRows.filter(r => r.sev === 'atencion').length,
-    riesgo:   allRows.filter(r => r.sev === 'riesgo').length,
+    buen:   allRows.filter(r => r.sev === 'buen').length,
+    riesgo: allRows.filter(r => r.sev === 'riesgo').length,
   }), [allRows]);
 
   // Objeto memoizado: si se recreara en cada render invalidaría los useMemo de
@@ -247,9 +246,9 @@ export default function AiRiskTab({ teachers, assignments }: Props) {
   const filters: Filters = useMemo(() => ({ q, prof, solo, sev }), [q, prof, solo, sev]);
   const filtering = isFiltering(filters);
 
-  /** Cola: alumnos en rojo o amarillo. */
+  /** Cola: alumnos en rojo. Es la única severidad que genera alerta. */
   const colaAll = useMemo(
-    () => allRows.filter(r => (r.sev === 'riesgo' || r.sev === 'atencion') && !resolvedIds.has(r.id)),
+    () => allRows.filter(r => r.sev === 'riesgo' && !resolvedIds.has(r.id)),
     [allRows, resolvedIds],
   );
   const colaVisible = useMemo(
@@ -371,7 +370,7 @@ export default function AiRiskTab({ teachers, assignments }: Props) {
 
   function pickSev(s: Severity) {
     setSev(prev => (prev === s ? 'todas' : s));
-    setShown({ riesgo: PAGE, atencion: PAGE });
+    setShown({ riesgo: PAGE });
   }
 
   function exportCsv() {
@@ -431,9 +430,8 @@ export default function AiRiskTab({ teachers, assignments }: Props) {
 
       {/* ── 2 · Tarjetas-resumen que filtran ── */}
       <div className="rk-cards">
-        <SummaryCard n={counts.buen}     numColor="#157f3d" dot="#12a04b" label="En buen camino"  aux="sin señales"    active={sev === 'buen'}     onClick={() => pickSev('buen')} />
-        <SummaryCard n={counts.atencion} numColor="#a97410" dot="#e0a92b" label="Atención"        aux="a vigilar"      active={sev === 'atencion'} onClick={() => pickSev('atencion')} />
-        <SummaryCard n={counts.riesgo}   numColor="#b8332a" dot="#cf3a30" label="Riesgo de baja"  aux="intervenir hoy" active={sev === 'riesgo'}   onClick={() => pickSev('riesgo')} />
+        <SummaryCard n={counts.buen}   numColor="#157f3d" dot="#12a04b" label="En buen camino" aux="sin señales"    active={sev === 'buen'}   onClick={() => pickSev('buen')} />
+        <SummaryCard n={counts.riesgo} numColor="#b8332a" dot="#cf3a30" label="Riesgo de baja" aux="intervenir hoy" active={sev === 'riesgo'} onClick={() => pickSev('riesgo')} />
       </div>
 
       {/* ── 3 · Card principal con tres pestañas ── */}
@@ -539,7 +537,7 @@ export default function AiRiskTab({ teachers, assignments }: Props) {
             rows={colaVisible}
             grouped={sev === 'todas'}
             filtering={filtering}
-            totals={{ riesgo: colaAll.filter(r => r.sev === 'riesgo').length, atencion: colaAll.filter(r => r.sev === 'atencion').length }}
+            totals={{ riesgo: colaAll.filter(r => r.sev === 'riesgo').length }}
             gopen={gopen}
             onToggleGroup={k => setGopen(g => ({ ...g, [k]: !g[k] }))}
             shown={shown}
@@ -709,9 +707,9 @@ function ColaTab(p: {
   rows: RiskRow[];
   grouped: boolean;
   filtering: boolean;
-  totals: { riesgo: number; atencion: number };
-  gopen: { riesgo: boolean; atencion: boolean };
-  onToggleGroup: (k: 'riesgo' | 'atencion') => void;
+  totals: { riesgo: number };
+  gopen: { riesgo: boolean };
+  onToggleGroup: (k: 'riesgo') => void;
   shown: Record<string, number>;
   onShowMore: (k: string) => void;
   open: Set<string>; sel: Set<string>; busyId: string | null;
@@ -750,7 +748,10 @@ function ColaTab(p: {
     return <div style={{ padding: '8px 0 6px' }}>{p.rows.map(renderRow)}</div>;
   }
 
-  const keys: Array<'riesgo' | 'atencion'> = ['riesgo', 'atencion'];
+  // Un solo grupo desde que no hay amarillo. Se conserva la estructura agrupada
+  // (cabecera con recuento y plegado) en vez de aplanarla: es la misma vista que
+  // el admin ya conoce, y el día que haya otra severidad vuelve a entrar sola.
+  const keys: Array<'riesgo'> = ['riesgo'];
   return (
     <div style={{ padding: '8px 0 6px' }}>
       {keys.map(k => {
@@ -1003,7 +1004,7 @@ function TeacherUsage({ open, onToggle, teachers, assignments, analyses, rows }:
                   </td>
                   <td style={tdStyle}>
                     {t.avgRisk == null ? '—' : (
-                      <span style={{ fontWeight: 700, color: RISK_META[t.avgRisk >= 2.5 ? 'rojo' : t.avgRisk >= 1.5 ? 'amarillo' : 'verde'].color }}>
+                      <span style={{ fontWeight: 700, color: RISK_META[t.avgRisk >= 1.5 ? 'rojo' : 'verde'].color }}>
                         {t.avgRisk.toFixed(2)}
                       </span>
                     )}
@@ -1077,9 +1078,9 @@ function AllStudentsModal({ rows, onClose, onOpen }: {
 // funciona de verdad el pipeline; no describe nada que el sistema no haga.
 function ScoringModal({ onClose }: { onClose: () => void }) {
   const items: Array<{ k: string; v: string }> = [
-    { k: 'En buen camino (verde)', v: 'El alumno progresa y sigue comprometido. No genera alerta ni protocolo.' },
-    { k: 'Atención (amarillo)', v: 'La IA vio señales de desmotivación, falta de estructura o dificultades. Genera aviso al profesor y una sugerencia de intervención.' },
-    { k: 'Riesgo de baja (rojo)', v: 'Hay señal directa de posible baja (lo dijo, faltó sin avisar, canceló repetido). Avisa al profesor y también al admin.' },
+    { k: 'En buen camino (verde)', v: 'El alumno sigue viniendo. Es el valor por defecto y la inmensa mayoría de las clases: una clase floja, un día de cansancio o una queja suelta son verde. No genera alerta ni protocolo.' },
+    { k: 'Riesgo de baja (rojo)', v: 'Excepcional. El alumno dijo de forma explícita que se plantea dejarlo, o hay un patrón grave y sostenido que el historial respalda. Avisa al profesor y también al admin.' },
+    { k: 'No hay nivel intermedio', v: 'El antiguo "atención" (amarillo) se retiró: era una señal débil que generaba aviso sin decir nada accionable. Ante la duda, la IA marca verde.' },
   ];
   return (
     <Modal onClose={onClose} maxWidth={560}>

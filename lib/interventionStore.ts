@@ -219,7 +219,7 @@ export async function recordInterventionAudit(args: {
   if (args.profileId) {
     if (args.check.signsOfIntervention) {
       // Hubo señales: la alerta se cierra. Si la clase nueva vuelve a salir en
-      // amarillo/rojo, se abrirá una intervención nueva justo después.
+      // rojo, se abrirá una intervención nueva justo después.
       await clearActiveIntervention(args.profileId);
     } else {
       // La alerta SIGUE ABIERTA. Antes esto solo subía un contador y el texto de
@@ -325,7 +325,7 @@ export async function notifyTeacherIntervention(args: {
   risk?: RiskSignal;
 }): Promise<void> {
   const { title, body } = interventionCopy(
-    args.suggestion, args.studentName, args.context ?? '', args.risk ?? 'amarillo',
+    args.suggestion, args.studentName, args.context ?? '',
   );
   await insertNotification({
     prefix: 'interv', targetUser: args.teacherId,
