@@ -33,13 +33,24 @@ describe('summarizeByTeacher — quién usa y quién no', () => {
   it('el contador "X de Y" cuenta solo a los que la han usado', () => {
     const r = summarizeByTeacher([gen({ teacher_id: 'p1' }), gen({ teacher_id: 'p1' })], teachers);
     expect(r.usan).toBe(1);
-    expect(r.totalProfesores).toBe(3);   // p1, p2, p3 — la cuenta de prueba no
+    expect(r.totalProfesores).toBe(4);
   });
 
-  it('las cuentas de prueba (t1/t2) quedan fuera: si no, vivirían para siempre en "sin usar"', () => {
+  // El fallo real de sep/2026: la primera generación registrada fue de `t1`
+  // ("Sebastian (test)"). Al excluirlo, su fila no cruzaba con nadie, caía en el
+  // saco de los huérfanos y el panel decía "0 de 28" con un uso real delante.
+  it('una cuenta de prueba que SÍ ha generado cuenta como que usa la herramienta', () => {
+    const r = summarizeByTeacher([gen({ teacher_id: 't1', teacher_name: 'Sebastian (test)' })], teachers);
+    const seba = r.perTeacher.find(t => t.teacherId === 't1')!;
+    expect(seba.total).toBe(1);
+    expect(seba.known).toBe(true);          // está en la plantilla: no es huérfana
+    expect(r.usan).toBe(1);
+  });
+
+  it('quien entra en el denominador lo decide quien llama, no esta función', () => {
     const r = summarizeByTeacher([], teachers);
-    expect(r.totalProfesores).toBe(3);
-    expect(r.perTeacher.some(t => t.teacherId === 't1')).toBe(false);
+    expect(r.totalProfesores).toBe(teachers.length);
+    expect(r.perTeacher.some(t => t.teacherId === 't1')).toBe(true);
   });
 
   it('cruza por id y, si la fila no lo trae, por nombre', () => {
@@ -80,7 +91,7 @@ describe('summarizeByTeacher — quién usa y quién no', () => {
     expect(sofia.known).toBe(false);
     // Y no cuenta en el "X de Y", que habla de la plantilla actual.
     expect(r.usan).toBe(0);
-    expect(r.totalProfesores).toBe(3);
+    expect(r.totalProfesores).toBe(4);
   });
 
   it('agrupa varias filas huérfanas del mismo nombre en una sola', () => {
@@ -107,11 +118,13 @@ describe('sortUsage', () => {
   ], teachers).perTeacher;
 
   it('"sin-usar" pone delante a quien nunca la usó, y detrás del más frío al más reciente', () => {
-    expect(sortUsage(base, 'sin-usar').map(t => t.teacherName)).toEqual(['Mauri', 'Johny', 'Seba']);
+    expect(sortUsage(base, 'sin-usar').map(t => t.teacherName))
+      .toEqual(['Mauri', 'Sebastian (test)', 'Johny', 'Seba']);
   });
 
   it('"mas-activos" ordena por volumen', () => {
-    expect(sortUsage(base, 'mas-activos').map(t => t.teacherName)).toEqual(['Seba', 'Johny', 'Mauri']);
+    expect(sortUsage(base, 'mas-activos').map(t => t.teacherName))
+      .toEqual(['Seba', 'Johny', 'Mauri', 'Sebastian (test)']);
   });
 
   it('no muta la lista original', () => {

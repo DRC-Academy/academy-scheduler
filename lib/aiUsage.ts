@@ -11,7 +11,6 @@
 // listado del admin empieza a descargarla sin que nadie lo pida.
 
 import { supabase } from '@/lib/supabase';
-import { sinProfesoresDePrueba } from '@/lib/externalTeachers';
 
 /**
  * De dónde salió la generación.
@@ -99,9 +98,9 @@ export interface TeacherUsage {
 
 export interface UsageSummary {
   perTeacher: TeacherUsage[];
-  /** Profesores activos que han usado la herramienta al menos una vez. */
+  /** Profesores de la lista que han usado la herramienta al menos una vez. */
   usan: number;
-  /** Profesores activos en total: el denominador del "X de Y". */
+  /** Profesores de la lista, en total: el denominador del "X de Y". */
   totalProfesores: number;
 }
 
@@ -110,25 +109,31 @@ interface TeacherLite { id: string; name: string }
 /**
  * Cruza el registro con la lista de profesores.
  *
- * Incluye a TODOS los profesores, también a los que tienen cero: esos son
- * justamente los que la pestaña quiere enseñar. El cruce es por id y, si la fila
- * no lo trae, por nombre normalizado — el mismo criterio tolerante que usa el
- * resto del sistema, porque NextClassModal se abre desde sitios que solo conocen
- * el nombre del profesor.
+ * Incluye a TODOS los profesores que le pasen, también a los que tienen cero:
+ * esos son justamente los que la pestaña quiere enseñar. El cruce es por id y,
+ * si la fila no lo trae, por nombre normalizado — el mismo criterio tolerante
+ * que usa el resto del sistema, porque NextClassModal se abre desde sitios que
+ * solo conocen el nombre del profesor.
  *
- * Las cuentas de prueba (t1/t2) quedan fuera: aparecerían para siempre en la
- * lista de "sin usar" y estropearían el "X de Y profesores".
+ * NO se filtran las cuentas de prueba. Se intentó (sep/2026) y salió mal: la
+ * primera generación registrada fue de `t1`, o sea "Sebastian (test)", y al
+ * estar excluido su fila no cruzaba con nadie, caía en el saco de los huérfanos
+ * y el panel decía "0 de 28 profesores" con un uso real delante — encima
+ * etiquetado como "ya no está en la plantilla", que era falso. `lib/externalTeachers`
+ * dice en su propia cabecera que su alcance es /api/external/* y que "no los
+ * oculta en DRC Gestión": este panel es DRC Gestión.
+ *
+ * La lista de quién entra la decide quien llama. El admin ya le pasa los
+ * profesores sin archivar, que es el denominador que quiere ver.
  */
 export function summarizeByTeacher(
   rows: readonly AiGenerationRow[],
   teachers: readonly TeacherLite[],
 ): UsageSummary {
-  const activos = sinProfesoresDePrueba(teachers);
-
   const porId = new Map<string, TeacherUsage>();
   const porNombre = new Map<string, TeacherUsage>();
 
-  for (const t of activos) {
+  for (const t of teachers) {
     const entry: TeacherUsage = {
       teacherId: t.id, teacherName: t.name,
       total: 0, fromTranscript: 0, lastUsed: null, known: true,
@@ -137,8 +142,8 @@ export function summarizeByTeacher(
     if (t.name) porNombre.set(norm(t.name), entry);
   }
 
-  // Filas cuyo profesor ya no está en la lista (borrado, archivado o cuenta de
-  // prueba). Se agrupan por nombre para no perder el total.
+  // Filas cuyo profesor ya no está en la lista (borrado o archivado). Se
+  // agrupan por nombre para no perder el total.
   const huerfanas = new Map<string, TeacherUsage>();
 
   for (const r of rows) {
@@ -168,7 +173,7 @@ export function summarizeByTeacher(
   return {
     perTeacher,
     usan: perTeacher.filter(t => t.known && t.total > 0).length,
-    totalProfesores: activos.length,
+    totalProfesores: teachers.length,
   };
 }
 
