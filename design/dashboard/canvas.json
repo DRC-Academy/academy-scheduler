@@ -1,0 +1,36 @@
+{
+  "artboards": [
+    { "file": "Main.dc.html", "x": 0, "y": 0, "w": 1440, "h": 3120, "title": "Dashboard · escritorio" }
+  ],
+  "annotations": [
+    {
+      "id": "nota-riesgo",
+      "x": 1520,
+      "y": 1180,
+      "w": 300,
+      "text": "Riesgo: el sistema NO tiene amarillo.\nDesde jul/2026 la IA solo clasifica en verde o rojo, a propósito.\nSi querés un nivel intermedio hay que inventar la regla que lo dispara, y no puede ser la IA."
+    },
+    {
+      "id": "nota-woo",
+      "x": 1520,
+      "y": 640,
+      "w": 300,
+      "text": "Los tres bloques de suscripciones salen por red a WooCommerce, que no se puede probar en local.\nSon los únicos que no vas a poder verificar hasta el deploy."
+    },
+    {
+      "id": "nota-finanzas",
+      "x": 1520,
+      "y": 2500,
+      "w": 300,
+      "text": "El bloque más caro: calculateTeacherFinance hay que llamarlo una vez por profesor.\nPropongo cargarlo después del resto, con las tarjetas en gris mientras llega."
+    },
+    {
+      "id": "nota-datos",
+      "x": -360,
+      "y": 0,
+      "w": 300,
+      "text": "Todos los números son de ejemplo.\nLa propuesta de qué dato real alimenta cada bloque, y qué cuesta, está en docs/dashboard-propuesta.md — con 13 decisiones marcadas para vos."
+    }
+  ],
+  "launch": { "view": "focused", "file": "Main.dc.html" }
+}

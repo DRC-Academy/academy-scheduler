@@ -1,0 +1,628 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Radio+Canada:wght@400;500;600;700&display=swap">
+  <style>
+    body { margin: 0; background: #F7F7F5; }
+    * { box-sizing: border-box; }
+    .pg {
+      font-family: 'Radio Canada', -apple-system, 'Segoe UI', system-ui, sans-serif;
+      font-variant-numeric: tabular-nums;
+      color: #1A1A1A;
+      background: #F7F7F5;
+      padding: 26px 40px 56px;
+    }
+    a { color: #167A2D; text-decoration: none; }
+    a:hover { color: #105F22; text-decoration: underline; }
+
+    .card { background: #fff; border: 1px solid #e6e7e2; border-radius: 14px; box-shadow: 0 1px 2px rgba(16,24,16,0.04); padding: 16px 18px 18px; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; display: inline-block; }
+
+    .banner { display: flex; align-items: center; gap: 9px; background: rgba(255,196,0,0.10); border: 1px solid rgba(255,196,0,0.45); border-radius: 10px; padding: 10px 14px; margin-bottom: 24px; font-size: 13px; color: #5c4a00; }
+
+    .h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; margin: 0; }
+    .date { margin: 3px 0 0; font-size: 13.5px; color: #6E6E66; }
+    .h2 { font-size: 17px; font-weight: 700; margin: 0; letter-spacing: -0.01em; }
+    .sub { margin: 2px 0 0; font-size: 13px; color: #6E6E66; }
+    .sechead { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+    .link { font-size: 13px; font-weight: 600; color: #167A2D; white-space: nowrap; }
+    .sec { margin-bottom: 34px; }
+    .cardhead { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; letter-spacing: 0.045em; text-transform: uppercase; color: #6E6E66; margin-bottom: 12px; }
+    .note { margin: 10px 0 0; font-size: 11.5px; color: #6E6E66; line-height: 1.5; }
+
+    .track { height: 6px; border-radius: 3px; background: #E8E8E4; overflow: hidden; margin-top: 8px; }
+    .fill { height: 100%; background: #1E9E3A; border-radius: 3px; }
+    .stack { display: flex; height: 10px; border-radius: 5px; overflow: hidden; gap: 2px; margin-bottom: 12px; }
+    .seg { height: 100%; }
+
+    .kpis { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+    .kpi { background: #fff; border: 1px solid #e6e7e2; border-radius: 14px; padding: 14px 16px 15px; }
+    .kpi-l { font-size: 11.5px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: #6E6E66; }
+    .kpi-v { font-size: 27px; font-weight: 700; line-height: 1.15; margin-top: 5px; }
+    .kpi-p { font-size: 11.5px; color: #6E6E66; margin-top: 4px; }
+
+    .actions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+    .action { display: flex; align-items: center; gap: 12px; border: 1px solid; border-radius: 12px; padding: 13px 14px; }
+    .action-n { font-size: 26px; font-weight: 700; line-height: 1; min-width: 34px; }
+    .action-l { font-size: 13px; font-weight: 600; line-height: 1.3; }
+    .action-d { font-size: 11.5px; color: #6E6E66; margin-top: 2px; }
+    .chev { color: #6E6E66; font-size: 17px; }
+
+    .g3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+    .g-risk { display: grid; grid-template-columns: 1fr 1.6fr; gap: 14px; }
+    .g-op { display: grid; grid-template-columns: 1fr 1fr 1.3fr; gap: 14px; }
+    .g-prof { display: grid; grid-template-columns: 1.7fr 1fr; gap: 14px; }
+    .g-fin { display: grid; grid-template-columns: 1fr 1.3fr 1fr; gap: 14px; }
+
+    .list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 9px; }
+    .row { display: flex; align-items: center; gap: 9px; font-size: 13px; }
+    .row-l { color: #4A4A4A; }
+    .row-n { margin-left: auto; font-weight: 700; }
+
+    .months { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; align-items: end; }
+    .month { text-align: center; }
+    .mbars { display: flex; align-items: flex-end; justify-content: center; gap: 3px; height: 88px; }
+    .bar { width: 13px; border-radius: 3px 3px 0 0; }
+    .mlabel { font-size: 11px; color: #6E6E66; margin-top: 6px; }
+    .mnet { font-size: 11.5px; font-weight: 700; }
+    .legend { display: flex; gap: 16px; font-size: 12px; color: #6E6E66; margin-top: 12px; }
+    .legend span { display: inline-flex; align-items: center; gap: 6px; }
+    .sw { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+
+    .funnel { display: flex; flex-direction: column; gap: 9px; }
+    .frow { display: grid; grid-template-columns: 165px 1fr 46px; align-items: center; gap: 12px; }
+    .flabel { font-size: 13px; color: #4A4A4A; }
+    .ftrack { background: #F0F0ED; border-radius: 6px; height: 28px; overflow: hidden; }
+    .ffill { height: 100%; background: linear-gradient(90deg, #1E9E3A, #46b85c); border-radius: 6px; display: flex; align-items: center; justify-content: flex-end; padding-right: 10px; }
+    .fn { font-size: 12.5px; font-weight: 700; color: #fff; }
+    .fdrop { font-size: 12px; color: #B42318; text-align: right; font-weight: 600; }
+
+    .risk-big { font-size: 42px; font-weight: 700; line-height: 1; color: #B42318; }
+    .risk-cap { font-size: 12.5px; color: #6E6E66; margin-top: 4px; }
+    .urg { list-style: none; margin: 0; padding: 0; }
+    .urow { display: flex; gap: 10px; align-items: flex-start; padding: 10px 0; border-top: 1px solid #E0E0DA; }
+    .uname { font-size: 13.5px; font-weight: 600; }
+    .ucausa { font-size: 12px; color: #6E6E66; margin-top: 1px; }
+    .umeta { text-align: right; font-size: 12px; color: #4A4A4A; white-space: nowrap; }
+    .udias { font-size: 11px; color: #6E6E66; }
+
+    .big { font-size: 32px; font-weight: 700; line-height: 1.1; }
+    .of { font-size: 17px; font-weight: 500; color: #6E6E66; }
+    .franjas { display: flex; flex-direction: column; gap: 8px; }
+    .franja { display: grid; grid-template-columns: 48px 1fr 26px; align-items: center; gap: 10px; }
+    .fr-l { font-size: 12px; color: #6E6E66; }
+    .fr-t { height: 16px; border-radius: 4px; background: #CFE6D5; overflow: hidden; }
+    .fr-o { height: 100%; background: #1E9E3A; }
+    .fr-n { font-size: 12px; font-weight: 700; text-align: right; color: #4A4A4A; }
+
+    .rank { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+    .rrow { display: grid; grid-template-columns: 74px 1fr 30px 150px; align-items: center; gap: 10px; }
+    .rname { font-size: 13px; font-weight: 600; }
+    .rtrack { height: 8px; border-radius: 4px; background: #F0F0ED; overflow: hidden; }
+    .rfill { display: block; height: 100%; background: #1E9E3A; border-radius: 4px; }
+    .rn { font-size: 12.5px; font-weight: 700; text-align: right; color: #4A4A4A; }
+    .tags { display: flex; gap: 5px; }
+    .tag { font-size: 10.5px; font-weight: 700; padding: 2px 7px; border-radius: 999px; white-space: nowrap; }
+    .tag-ok { background: rgba(22,122,45,0.10); color: #167A2D; }
+    .tag-w { background: rgba(255,196,0,0.20); color: #8a6d00; }
+    .chips { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+    .chip { font-size: 11.5px; padding: 3px 9px; border-radius: 999px; background: #F0F0ED; color: #4A4A4A; }
+
+    .fin-big { font-size: 30px; font-weight: 700; line-height: 1.1; }
+    .fin-d { font-size: 12.5px; font-weight: 600; margin-top: 5px; }
+
+    .tools { list-style: none; margin: 0; padding: 0; }
+    .tool { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; border-top: 1px solid #E0E0DA; font-size: 13.5px; color: #4A4A4A; }
+  </style>
+</helmet>
+
+<div class="pg">
+
+  <div class="banner">
+    <span class="dot" style="background: #FFC400"></span>
+    <strong>Vista previa con datos de ejemplo.</strong>
+    <span>Ningún número de esta pantalla sale de la base.</span>
+  </div>
+
+  <!-- 1 · Barra superior -->
+  <div style="margin-bottom: 30px">
+    <div style="margin-bottom: 18px">
+      <h1 class="h1">Buenos días, Facundo</h1>
+      <p class="date">Lunes, 8 de septiembre</p>
+    </div>
+    <div class="kpis">
+      <div class="kpi">
+        <div class="kpi-l">Alumnos activos</div>
+        <div class="kpi-v">168</div>
+        <div class="kpi-p">de 191 en la base</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-l">Profesores activos</div>
+        <div class="kpi-v">27</div>
+        <div class="kpi-p">de 30</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-l">Clases esta semana</div>
+        <div class="kpi-v">214</div>
+        <div class="kpi-p">231 programadas</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-l">Coste profesores</div>
+        <div class="kpi-v">8.420 €</div>
+        <div class="kpi-p">+460 € vs. mes anterior</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-l">Ocupación</div>
+        <div class="kpi-v">78 %</div>
+        <div class="track"><div class="fill" style="width: 78%"></div></div>
+        <div class="kpi-p">clases sobre cupos</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2 · Requiere acción -->
+  <div class="sec">
+    <div class="sechead">
+      <div>
+        <h2 class="h2">Requiere acción hoy</h2>
+        <p class="sub">7 cosas esperando a alguien.</p>
+      </div>
+    </div>
+    <div class="actions">
+      <div class="action" style="background: rgba(220,74,56,0.08); border-color: rgba(220,74,56,0.30)">
+        <div class="action-n" style="color: #B42318">14</div>
+        <div style="flex: 1">
+          <div class="action-l">Validaciones pendientes</div>
+          <div class="action-d">la más antigua, 6 días</div>
+        </div>
+        <span class="chev">›</span>
+      </div>
+      <div class="action" style="background: rgba(220,74,56,0.08); border-color: rgba(220,74,56,0.30)">
+        <div class="action-n" style="color: #B42318">3</div>
+        <div style="flex: 1">
+          <div class="action-l">Emails de presentación tarde</div>
+          <div class="action-d">más de 24 h sin enviar</div>
+        </div>
+        <span class="chev">›</span>
+      </div>
+      <div class="action" style="background: rgba(220,74,56,0.08); border-color: rgba(220,74,56,0.30)">
+        <div class="action-n" style="color: #B42318">9</div>
+        <div style="flex: 1">
+          <div class="action-l">Alumnos en riesgo</div>
+          <div class="action-d">sin intervención registrada</div>
+        </div>
+        <span class="chev">›</span>
+      </div>
+      <div class="action" style="background: rgba(255,196,0,0.12); border-color: rgba(255,196,0,0.45)">
+        <div class="action-n" style="color: #8a6d00">22</div>
+        <div style="flex: 1">
+          <div class="action-l">Transcripts sin subir</div>
+          <div class="action-d">clases con acceso registrado</div>
+        </div>
+        <span class="chev">›</span>
+      </div>
+      <div class="action" style="background: rgba(255,196,0,0.12); border-color: rgba(255,196,0,0.45)">
+        <div class="action-n" style="color: #8a6d00">6</div>
+        <div style="flex: 1">
+          <div class="action-l">Próximos a cancelar sin contactar</div>
+          <div class="action-d">les quedan menos de 7 días</div>
+        </div>
+        <span class="chev">›</span>
+      </div>
+      <div class="action" style="background: rgba(255,196,0,0.12); border-color: rgba(255,196,0,0.45)">
+        <div class="action-n" style="color: #8a6d00">4</div>
+        <div style="flex: 1">
+          <div class="action-l">Solicitudes de revisión</div>
+          <div class="action-d">clases que el profe no cobra</div>
+        </div>
+        <span class="chev">›</span>
+      </div>
+      <div class="action" style="background: rgba(255,196,0,0.12); border-color: rgba(255,196,0,0.45)">
+        <div class="action-n" style="color: #8a6d00">2</div>
+        <div style="flex: 1">
+          <div class="action-l">Alumnos sin profesor</div>
+          <div class="action-d">alta sin asignar</div>
+        </div>
+        <span class="chev">›</span>
+      </div>
+      <div class="action" style="background: #fff; border-color: #E0E0DA">
+        <div class="action-n" style="color: #6E6E66">—</div>
+        <div style="flex: 1">
+          <div class="action-l">Análisis de IA fallidos</div>
+          <div class="action-d">Nada pendiente</div>
+        </div>
+        <span class="chev">›</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3 · Salud del negocio -->
+  <div class="sec">
+    <div class="sechead">
+      <div>
+        <h2 class="h2">Salud del negocio</h2>
+        <p class="sub">Suscripciones, movimiento de alumnos y captación.</p>
+      </div>
+      <span class="link">Ver detalle ›</span>
+    </div>
+    <div class="g3">
+      <div class="card">
+        <div class="cardhead">Suscripciones por estado</div>
+        <ul class="list">
+          <li class="row"><span class="dot" style="background: #1E9E3A"></span><span class="row-l">Activas</span><span class="row-n">141</span></li>
+          <li class="row"><span class="dot" style="background: #1E9E3A"></span><span class="row-l">Cancelan al final</span><span class="row-n">12</span></li>
+          <li class="row"><span class="dot" style="background: #C8C8C0"></span><span class="row-l">En pausa</span><span class="row-n">7</span></li>
+          <li class="row"><span class="dot" style="background: #C8C8C0"></span><span class="row-l">Pendientes de pago</span><span class="row-n">4</span></li>
+          <li class="row"><span class="dot" style="background: #C8C8C0"></span><span class="row-l">Canceladas</span><span class="row-n">38</span></li>
+        </ul>
+        <p class="note">El punto verde marca los estados que dan acceso a clase.</p>
+      </div>
+
+      <div class="card">
+        <div class="cardhead">Alumnos activos por origen</div>
+        <div class="stack">
+          <div class="seg" style="width: 76.8%; background: #1E9E3A"></div>
+          <div class="seg" style="width: 14.3%; background: #2563eb"></div>
+          <div class="seg" style="width: 8.9%; background: #FFC400"></div>
+        </div>
+        <ul class="list">
+          <li class="row"><span class="dot" style="background: #1E9E3A"></span><span class="row-l">WooCommerce</span><span class="row-n">129</span></li>
+          <li class="row"><span class="dot" style="background: #2563eb"></span><span class="row-l">Manual</span><span class="row-n">24</span></li>
+          <li class="row"><span class="dot" style="background: #FFC400"></span><span class="row-l">Oritalk</span><span class="row-n">15</span></li>
+        </ul>
+        <p class="note">Un alumno cuenta en un solo origen: Oritalk, luego manual, luego suscripción.</p>
+      </div>
+
+      <div class="card">
+        <div class="cardhead">Altas y bajas · 6 meses</div>
+        <div class="months">
+          <div class="month">
+            <div class="mbars">
+              <div class="bar" style="height: 85.7%; background: #1E9E3A"></div>
+              <div class="bar" style="height: 52.4%; background: #dc4a38"></div>
+            </div>
+            <div class="mlabel">Abr</div>
+            <div class="mnet" style="color: #167A2D">+7</div>
+          </div>
+          <div class="month">
+            <div class="mbars">
+              <div class="bar" style="height: 71.4%; background: #1E9E3A"></div>
+              <div class="bar" style="height: 66.7%; background: #dc4a38"></div>
+            </div>
+            <div class="mlabel">May</div>
+            <div class="mnet" style="color: #167A2D">+1</div>
+          </div>
+          <div class="month">
+            <div class="mbars">
+              <div class="bar" style="height: 100%; background: #1E9E3A"></div>
+              <div class="bar" style="height: 42.9%; background: #dc4a38"></div>
+            </div>
+            <div class="mlabel">Jun</div>
+            <div class="mnet" style="color: #167A2D">+12</div>
+          </div>
+          <div class="month">
+            <div class="mbars">
+              <div class="bar" style="height: 57.1%; background: #1E9E3A"></div>
+              <div class="bar" style="height: 76.2%; background: #dc4a38"></div>
+            </div>
+            <div class="mlabel">Jul</div>
+            <div class="mnet" style="color: #B42318">−4</div>
+          </div>
+          <div class="month">
+            <div class="mbars">
+              <div class="bar" style="height: 81%; background: #1E9E3A"></div>
+              <div class="bar" style="height: 57.1%; background: #dc4a38"></div>
+            </div>
+            <div class="mlabel">Ago</div>
+            <div class="mnet" style="color: #167A2D">+5</div>
+          </div>
+          <div class="month">
+            <div class="mbars">
+              <div class="bar" style="height: 42.9%; background: #1E9E3A"></div>
+              <div class="bar" style="height: 23.8%; background: #dc4a38"></div>
+            </div>
+            <div class="mlabel">Sep</div>
+            <div class="mnet" style="color: #167A2D">+4</div>
+          </div>
+        </div>
+        <div class="legend">
+          <span><i class="sw" style="background: #1E9E3A"></i> Altas</span>
+          <span><i class="sw" style="background: #dc4a38"></i> Bajas</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top: 14px">
+      <div class="cardhead">Captación <span class="link" style="margin-left: auto; font-size: 12px">Tests de nivel ›</span></div>
+      <div class="funnel">
+        <div class="frow">
+          <div class="flabel">Formulario enviado</div>
+          <div class="ftrack"><div class="ffill" style="width: 100%"><span class="fn">96</span></div></div>
+          <div class="fdrop"></div>
+        </div>
+        <div class="frow">
+          <div class="flabel">Formulario completo</div>
+          <div class="ftrack"><div class="ffill" style="width: 74%"><span class="fn">71</span></div></div>
+          <div class="fdrop">−25</div>
+        </div>
+        <div class="frow">
+          <div class="flabel">Test de nivel hecho</div>
+          <div class="ftrack"><div class="ffill" style="width: 46.9%"><span class="fn">45</span></div></div>
+          <div class="fdrop">−26</div>
+        </div>
+        <div class="frow">
+          <div class="flabel">Primera clase dada</div>
+          <div class="ftrack"><div class="ffill" style="width: 39.6%"><span class="fn">38</span></div></div>
+          <div class="fdrop">−7</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4 · Riesgo -->
+  <div class="sec">
+    <div class="sechead">
+      <div>
+        <h2 class="h2">Riesgo de baja</h2>
+        <p class="sub">La IA clasifica cada clase en verde o rojo. No hay nivel intermedio.</p>
+      </div>
+      <span class="link">Ver detalle ›</span>
+    </div>
+    <div class="g-risk">
+      <div class="card">
+        <div class="cardhead">Reparto</div>
+        <div style="text-align: center; padding: 6px 0 2px">
+          <div class="risk-big">16</div>
+          <div class="risk-cap">en rojo · 10% del alumnado</div>
+        </div>
+        <div class="stack" style="margin-top: 14px">
+          <div class="seg" style="width: 90%; background: #1E9E3A"></div>
+          <div class="seg" style="width: 10%; background: #dc4a38"></div>
+        </div>
+        <ul class="list" style="margin-top: 10px">
+          <li class="row"><span class="dot" style="background: #1E9E3A"></span><span class="row-l">Sin señales</span><span class="row-n">152</span></li>
+          <li class="row"><span class="dot" style="background: #dc4a38"></span><span class="row-l">Con alerta abierta</span><span class="row-n">16</span></li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="cardhead">Los cinco más urgentes</div>
+        <ul class="urg">
+          <li class="urow" style="border-top: 0; padding-top: 0">
+            <span class="dot" style="background: #dc4a38; margin-top: 6px"></span>
+            <div style="flex: 1">
+              <div class="uname">Laura Villegas</div>
+              <div class="ucausa">Dos faltas seguidas sin aviso</div>
+            </div>
+            <div class="umeta">Johny<div class="udias">hace 12 d</div></div>
+          </li>
+          <li class="urow">
+            <span class="dot" style="background: #dc4a38; margin-top: 6px"></span>
+            <div style="flex: 1">
+              <div class="uname">Mohamed Al Hakeue</div>
+              <div class="ucausa">Pidió bajar la frecuencia</div>
+            </div>
+            <div class="umeta">Silvia<div class="udias">hace 9 d</div></div>
+          </li>
+          <li class="urow">
+            <span class="dot" style="background: #dc4a38; margin-top: 6px"></span>
+            <div style="flex: 1">
+              <div class="uname">Alba Rodríguez</div>
+              <div class="ucausa">Desmotivación detectada en clase</div>
+            </div>
+            <div class="umeta">Milagros<div class="udias">hace 7 d</div></div>
+          </li>
+          <li class="urow">
+            <span class="dot" style="background: #dc4a38; margin-top: 6px"></span>
+            <div style="flex: 1">
+              <div class="uname">Carles Aliaga</div>
+              <div class="ucausa">Plan termina y no renovó</div>
+            </div>
+            <div class="umeta">Cristian<div class="udias">hace 5 d</div></div>
+          </li>
+          <li class="urow">
+            <span class="dot" style="background: #dc4a38; margin-top: 6px"></span>
+            <div style="flex: 1">
+              <div class="uname">Elena Tapia</div>
+              <div class="ucausa">Tres clases seguidas canceladas</div>
+            </div>
+            <div class="umeta">Wanda<div class="udias">hace 3 d</div></div>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5 · Operación -->
+  <div class="sec">
+    <div class="sechead">
+      <div>
+        <h2 class="h2">Operación de clases</h2>
+        <p class="sub">Esta semana y lo que arrastra el mes.</p>
+      </div>
+      <span class="link">Ver detalle ›</span>
+    </div>
+    <div class="g-op">
+      <div class="card">
+        <div class="cardhead">Dadas sobre programadas</div>
+        <div class="big">198<span class="of"> / 231</span></div>
+        <div class="track"><div class="fill" style="width: 86%"></div></div>
+        <p class="note">86% de lo programado se dio. Las 33 restantes están sin registrar o se cancelaron.</p>
+      </div>
+      <div class="card">
+        <div class="cardhead">Del mes</div>
+        <ul class="list">
+          <li class="row"><span class="dot" style="background: #dc4a38"></span><span class="row-l">Faltas sin aviso</span><span class="row-n">7</span></li>
+          <li class="row"><span class="dot" style="background: #FFC400"></span><span class="row-l">Recuperaciones pendientes</span><span class="row-n">11</span></li>
+          <li class="row"><span class="dot" style="background: #2563eb"></span><span class="row-l">Sesiones de 2 h</span><span class="row-n">34</span></li>
+        </ul>
+      </div>
+      <div class="card">
+        <div class="cardhead">Cupos libres por franja</div>
+        <div class="franjas">
+          <div class="franja">
+            <div class="fr-l">08–11</div>
+            <div class="fr-t" style="width: 60.9%"><div class="fr-o" style="width: 78.6%"></div></div>
+            <div class="fr-n">6</div>
+          </div>
+          <div class="franja">
+            <div class="fr-l">11–14</div>
+            <div class="fr-t" style="width: 73.9%"><div class="fr-o" style="width: 91.2%"></div></div>
+            <div class="fr-n">3</div>
+          </div>
+          <div class="franja">
+            <div class="fr-l">14–17</div>
+            <div class="fr-t" style="width: 80.4%"><div class="fr-o" style="width: 75.7%"></div></div>
+            <div class="fr-n">9</div>
+          </div>
+          <div class="franja">
+            <div class="fr-l">17–20</div>
+            <div class="fr-t" style="width: 100%"><div class="fr-o" style="width: 95.7%"></div></div>
+            <div class="fr-n">2</div>
+          </div>
+          <div class="franja">
+            <div class="fr-l">20–23</div>
+            <div class="fr-t" style="width: 71.7%"><div class="fr-o" style="width: 57.6%"></div></div>
+            <div class="fr-n">14</div>
+          </div>
+        </div>
+        <p class="note">La parte clara es lo que queda libre. La franja de tarde está al tope.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 6 · Profesores -->
+  <div class="sec">
+    <div class="sechead">
+      <div>
+        <h2 class="h2">Profesores</h2>
+        <p class="sub">Carga del mes, cupos y quién arrastra transcripts.</p>
+      </div>
+      <span class="link">Ver detalle ›</span>
+    </div>
+    <div class="g-prof">
+      <div class="card">
+        <div class="cardhead">Clases del mes</div>
+        <ul class="rank">
+          <li class="rrow">
+            <span class="rname">Johny</span>
+            <span class="rtrack"><span class="rfill" style="width: 100%"></span></span>
+            <span class="rn">46</span>
+            <span class="tags"></span>
+          </li>
+          <li class="rrow">
+            <span class="rname">Silvia</span>
+            <span class="rtrack"><span class="rfill" style="width: 89.1%"></span></span>
+            <span class="rn">41</span>
+            <span class="tags"><span class="tag tag-ok">2 libres</span><span class="tag tag-w">3 sin subir</span></span>
+          </li>
+          <li class="rrow">
+            <span class="rname">Milagros</span>
+            <span class="rtrack"><span class="rfill" style="width: 82.6%"></span></span>
+            <span class="rn">38</span>
+            <span class="tags"><span class="tag tag-ok">1 libre</span></span>
+          </li>
+          <li class="rrow">
+            <span class="rname">Cristian</span>
+            <span class="rtrack"><span class="rfill" style="width: 76.1%"></span></span>
+            <span class="rn">35</span>
+            <span class="tags"><span class="tag tag-ok">4 libres</span><span class="tag tag-w">7 sin subir</span></span>
+          </li>
+          <li class="rrow">
+            <span class="rname">Wanda</span>
+            <span class="rtrack"><span class="rfill" style="width: 71.7%"></span></span>
+            <span class="rn">33</span>
+            <span class="tags"><span class="tag tag-ok">3 libres</span><span class="tag tag-w">1 sin subir</span></span>
+          </li>
+          <li class="rrow">
+            <span class="rname">Victoria</span>
+            <span class="rtrack"><span class="rfill" style="width: 63%"></span></span>
+            <span class="rn">29</span>
+            <span class="tags"><span class="tag tag-ok">6 libres</span></span>
+          </li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="cardhead">Uso de la IA <span class="link" style="margin-left: auto; font-size: 12px">Ver detalle ›</span></div>
+        <div class="big">11<span class="of"> / 30</span></div>
+        <div class="track"><div class="fill" style="width: 36.7%"></div></div>
+        <p class="note">Profesores que han generado alguna clase con IA. Los 19 restantes no han usado la herramienta.</p>
+        <ul class="chips">
+          <li class="chip">Milagros</li>
+          <li class="chip">Cristian</li>
+          <li class="chip">Victoria</li>
+          <li class="chip" style="background: transparent; color: #6E6E66">y 16 más</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- 7 · Finanzas -->
+  <div class="sec">
+    <div class="sechead">
+      <div>
+        <h2 class="h2">Finanzas del mes</h2>
+        <p class="sub">Lo que se le debe a los profesores.</p>
+      </div>
+      <span class="link">Ver detalle ›</span>
+    </div>
+    <div class="g-fin">
+      <div class="card">
+        <div class="cardhead">Total a pagar</div>
+        <div class="fin-big">8.420 €</div>
+        <div class="fin-d" style="color: #8a6d00">↑ 460 € (+6%) vs. mes anterior</div>
+        <p class="note">Incluye 340 € de bonus y −120 € de penalizaciones.</p>
+      </div>
+      <div class="card">
+        <div class="cardhead">En qué estado está</div>
+        <div class="stack">
+          <div class="seg" style="width: 86.8%; background: #1E9E3A"></div>
+          <div class="seg" style="width: 10.6%; background: #FFC400"></div>
+          <div class="seg" style="width: 2.6%; background: #C8C8C0"></div>
+        </div>
+        <ul class="list">
+          <li class="row"><span class="dot" style="background: #1E9E3A"></span><span class="row-l">Pagable</span><span class="row-n">7.310 €</span></li>
+          <li class="row"><span class="dot" style="background: #FFC400"></span><span class="row-l">A revisar</span><span class="row-n">890 €</span></li>
+          <li class="row"><span class="dot" style="background: #C8C8C0"></span><span class="row-l">Retenido</span><span class="row-n">220 €</span></li>
+        </ul>
+        <p class="note">«A revisar» son clases que esperan validación: hasta que se resuelvan, el profesor no cobra.</p>
+      </div>
+      <div class="card">
+        <div class="cardhead">Pagos hechos</div>
+        <div class="big">6<span class="of"> / 30</span></div>
+        <div class="track"><div class="fill" style="width: 20%"></div></div>
+        <p class="note">Profesores marcados como pagados este mes.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 8 · Herramientas -->
+  <div class="sec">
+    <div class="sechead">
+      <div>
+        <h2 class="h2">Herramientas de mantenimiento</h2>
+        <p class="sub">Se quedan como están, plegadas al final.</p>
+      </div>
+      <span class="link">Abrir las reales ›</span>
+    </div>
+    <div class="card">
+      <ul class="tools">
+        <li class="tool" style="border-top: 0; padding-top: 0"><span>Auditoría de vínculos</span><span style="color: #6E6E66">▾</span></li>
+        <li class="tool"><span>Sincronización calendario ↔ asignaciones</span><span style="color: #6E6E66">▾</span></li>
+        <li class="tool"><span>Sincronización con WooCommerce</span><span style="color: #6E6E66">▾</span></li>
+        <li class="tool"><span>Estilo de los textos de IA</span><span style="color: #6E6E66">▾</span></li>
+      </ul>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+</body>
+</html>
