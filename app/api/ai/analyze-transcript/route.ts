@@ -29,6 +29,7 @@ import {
   loadInterventionContext, saveActiveIntervention, recordInterventionAudit,
   notifyTeacherIntervention, notifyAdminUnattended, type InterventionContext,
 } from '@/lib/interventionStore';
+import { aiLevelOf, type ProfileLevelFields } from '@/lib/effectiveLevel';
 import { fetchTeacher, sendInterventionEmail } from '@/lib/emailNotifications';
 
 export const runtime = 'nodejs';
@@ -79,6 +80,44 @@ export async function POST(request: Request): Promise<Response> {
   return handleAnalyzeOnly(body, studentName);
 }
 
+/**
+ * EL NIVEL QUE VA AL PROMPT.
+ *
+ * El cuerpo trae `assignment.student_level`, o sea el CURSO CONTRATADO, que es
+ * la última fuente de la prioridad. Si el alumno tiene ficha mandan, por ese
+ * orden, el visto bueno del profesor y el resultado de la prueba de nivel.
+ *
+ * Se resuelve acá, en el servidor, y no en cada pantalla: /revisiones y
+ * /mis-clases registran clases sin cargar la ficha, así que le mandaban a la IA
+ * el nivel del curso aunque el profesor hubiera corregido al alumno. Regla
+ * única en lib/effectiveLevel.
+ */
+async function resolveAiLevel(args: {
+  profileId?: string | null; studentId?: string | null; studentName: string; level?: string;
+}): Promise<string | undefined> {
+  const read = (cols: string) => {
+    const base = supabase.from('student_profiles').select(cols);
+    const q = args.profileId  ? base.eq('id', args.profileId)
+            : args.studentId  ? base.eq('student_id', args.studentId)
+            :                   base.eq('student_name', args.studentName);
+    return q.limit(1).maybeSingle();
+  };
+
+  // `teacher_confirmed_level` llega con supabase-teacher-level.sql. Si todavía
+  // no se corrió, pedirla haría fallar la consulta ENTERA (42703) y el nivel se
+  // perdería en silencio: mismo reintento por grupos que el resto del archivo.
+  let res = await read('teacher_confirmed_level, current_level, level_test_cefr');
+  if (res.error?.code === '42703' || res.error?.code === 'PGRST204') {
+    res = await read('current_level, level_test_cefr');
+  }
+  if (res.error) console.warn('[analyze-transcript] Sin ficha para resolver el nivel; va el del curso:', res.error.message);
+
+  // Sin ficha, `aiLevelOf` devuelve el nivel del cuerpo: el comportamiento de
+  // siempre para los alumnos que no completaron el formulario.
+  const profile = (res.data ?? null) as ProfileLevelFields | null;
+  return aiLevelOf(profile, args.level) ?? undefined;
+}
+
 // ── Modo 1: analizar una fila ya guardada (paso 2 y "Reintentar análisis") ────
 async function handleAttach(body: Body, studentName: string, analysisId: string): Promise<Response> {
   // La fila manda: el transcript guardado es el bueno (en el reintento el cliente
@@ -114,7 +153,7 @@ async function handleAttach(body: Body, studentName: string, analysisId: string)
     studentName,
     teacherName: body.teacherName?.trim() || '',
     plan: body.plan,
-    level: body.level,
+    level: await resolveAiLevel({ profileId: body.profileId, studentId, studentName, level: body.level }),
     classNumber,
     classDate,
     studentProfile: body.studentProfile,
@@ -171,7 +210,7 @@ async function handleAnalyzeOnly(body: Body, studentName: string): Promise<Respo
     studentName,
     teacherName: body.teacherName?.trim() || '',
     plan: body.plan,
-    level: body.level,
+    level: await resolveAiLevel({ profileId: body.profileId, studentId: body.studentId, studentName, level: body.level }),
     classNumber: body.classNumber,
     classDate: body.classDate,
     studentProfile: body.studentProfile,

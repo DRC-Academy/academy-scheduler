@@ -13,15 +13,35 @@ describe('getEffectiveLevel — prioridad', () => {
     expect(r.origin).toBe('profesor');
   });
 
-  it('sin profesor manda la ficha, luego la prueba, luego el alta', () => {
-    expect(getEffectiveLevel({ fichaLevel: 'B2', testLevel: 'C1', assignmentLevel: 'B1' }).origin).toBe('ficha');
+  it('sin profesor manda la PRUEBA, por encima de la ficha y del curso', () => {
+    // La ficha (`current_level`) estaba por delante de la prueba. Al revés: la
+    // prueba es una medición, la ficha un texto libre que nadie escribe.
+    const r = getEffectiveLevel({ fichaLevel: 'B2', testLevel: 'C1', assignmentLevel: 'B1' });
+    expect(r.level).toBe('C1');
+    expect(r.origin).toBe('prueba');
+    expect(r.decided).toBe(true);
+  });
+
+  it('el CURSO CONTRATADO no decide: solo se muestra si nadie midió el nivel', () => {
+    // Con prueba, el curso no pinta nada…
     expect(getEffectiveLevel({ testLevel: 'C1', assignmentLevel: 'B1' }).origin).toBe('prueba');
-    expect(getEffectiveLevel({ assignmentLevel: 'B1' }).origin).toBe('alta');
+    // …y sin nada medido se devuelve igual, pero marcado como referencia.
+    const solo = getEffectiveLevel({ assignmentLevel: 'B1' });
+    expect(solo.level).toBe('B1');
+    expect(solo.origin).toBe('alta');
+    expect(solo.decided).toBe(false);
+  });
+
+  it('el curso contratado NO PONE TECHO al nivel medido', () => {
+    // Un alumno de curso "B1" que rinde C1 sale C1, y el profesor puede subirlo
+    // todavía más. La prioridad desempata entre fuentes, no limita.
+    expect(getEffectiveLevel({ testLevel: 'C1', assignmentLevel: 'B1 Exámenes' }).level).toBe('C1');
+    expect(getEffectiveLevel({ teacherConfirmed: 'C2', assignmentLevel: 'A2' }).level).toBe('C2');
   });
 
   it('sin ninguna fuente devuelve todo en null', () => {
     expect(getEffectiveLevel({})).toEqual({
-      level: null, raw: null, origin: null, correctedByTeacher: false,
+      level: null, raw: null, origin: null, correctedByTeacher: false, decided: false,
     });
   });
 });

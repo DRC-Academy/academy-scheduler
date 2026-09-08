@@ -11,6 +11,7 @@ import { fichaFromRow } from '@/lib/aiTypes';
 import { classCategoryBadge } from '@/lib/finance';
 import { planFieldsOf } from '@/lib/productUtils';
 import type { StudentBundle } from '@/lib/misAlumnos';
+import { effectiveLevelOf } from '@/lib/effectiveLevel';
 
 /** Color de la insignia por nivel CEFR. Neutro si el nivel no se reconoce. */
 const LEVEL_BADGE: Record<string, { bg: string; color: string }> = {
@@ -23,9 +24,15 @@ const LEVEL_BADGE: Record<string, { bg: string; color: string }> = {
 };
 const LEVEL_NEUTRAL = { bg: '#f0f1ee', color: '#5f6360' };
 
-export function levelOf(raw?: string | null): string | null {
-  const m = (raw ?? '').toUpperCase().match(/\b(A1|A2|B1|B2|C1|C2)\b/);
-  return m ? m[1] : null;
+/**
+ * Nivel CEFR del alumno para la insignia y los filtros de la cuadrícula.
+ *
+ * Antes salía de `assignment.studentLevel` a secas, o sea del CURSO CONTRATADO:
+ * la cuadrícula podía decir B1 mientras la ficha del mismo alumno decía C1
+ * porque el profesor lo había corregido. Misma regla que el resto de la app.
+ */
+export function bundleLevelOf(bundle: StudentBundle): string | null {
+  return effectiveLevelOf(bundle.profile, bundle.assignment.studentLevel).level;
 }
 
 /** Estado de la ficha de IA de un alumno. Deriva del dato real, no de un flag. */
@@ -52,7 +59,7 @@ export default function StudentCard({ bundle, studentKey, generating, onGenerate
   // acción, así que el check nunca se ponía verde y el recorrido no avanzaba.
   const { reportAction } = useOnboardingActions();
 
-  const level = levelOf(a.studentLevel);
+  const level = bundleLevelOf(bundle);
   const badge = level ? (LEVEL_BADGE[level] ?? LEVEL_NEUTRAL) : LEVEL_NEUTRAL;
   // planFieldsOf sin alumno: el bundle no trae students, así que clasifica solo
   // con la assignment. Si algún día el bundle incluye el alumno, va como 2º arg.

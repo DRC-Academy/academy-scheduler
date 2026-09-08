@@ -10,7 +10,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import type { LTQuestionPublic, LTProgress, WritingEvaluation, Cefr } from '@/lib/levelTest/types';
-import { SECTION_LABEL, CEFR_DESC, CEFR_COLOR } from '@/lib/levelTest/constants';
+import { SECTION_LABEL, CEFR_DESC, CEFR_COLOR, scoreToCefr } from '@/lib/levelTest/constants';
 
 interface Result {
   reading_score: number | null;
@@ -329,6 +329,12 @@ function ResultsScreen({ result, name }: { result: Result; name: string }) {
   const color = CEFR_COLOR[cefr] || '#1E9E3A';
   const overall = Math.round(result.overall_score ?? 0);
   const ev = result.ai_evaluation;
+
+  // El nivel quedó por debajo del que daba el puntaje: la compuerta de C1/C2 lo
+  // frenó porque la escritura no acompañaba (ver lib/levelTest/scoring). Sin una
+  // línea que lo explique, el alumno ve un 96 junto a un B2 y no entiende nada.
+  // Se deduce comparando, así no hace falta guardar ni una columna más.
+  const capped = result.cefr_level != null && scoreToCefr(result.overall_score ?? 0) !== result.cefr_level;
   return (
     <Shell>
       <CardHeader progress={null} />
@@ -342,6 +348,13 @@ function ResultsScreen({ result, name }: { result: Result; name: string }) {
             </div>
           </div>
           <p className="drc-t-cefr-desc">{CEFR_DESC[cefr]}</p>
+          {capped && (
+            <p className="drc-t-cap-note">
+              Tu comprensión lectora ha llegado más lejos que tu escritura, así que
+              tu nivel se fija por la parte que va más justa. Tu profesor lo revisa
+              en las primeras clases y puede subirlo.
+            </p>
+          )}
 
           <div className="drc-t-tiles">
             <ScoreTile label="Comprensión lectora" value={Math.round(result.reading_score ?? 0)} />
@@ -600,6 +613,7 @@ const TEST_CSS = `
 .drc-t-level-lbl { font-size: 13px; font-weight: 700; opacity: 0.85; }
 .drc-t-level-val { font-size: 22px; font-weight: 800; letter-spacing: -0.3px; }
 .drc-t-cefr-desc { font-size: 14.5px; color: #5c6a61; max-width: 48ch; margin: 4px auto 0; line-height: 1.6; }
+.drc-t-cap-note { font-size: 13.5px; color: #6b5a2a; background: rgba(255,196,0,0.12); border: 1px solid rgba(255,196,0,0.4); border-radius: 10px; padding: 10px 14px; max-width: 48ch; margin: 12px auto 0; line-height: 1.55; }
 .drc-t-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; width: 100%; margin: 22px 0 6px; }
 .drc-t-tile { background: #f6f8f5; border: 1px solid #E9EDE7; border-radius: 14px; padding: 16px 14px; text-align: center; }
 .drc-t-tile-val { font-size: 27px; font-weight: 800; color: #11241a; letter-spacing: -0.5px; }

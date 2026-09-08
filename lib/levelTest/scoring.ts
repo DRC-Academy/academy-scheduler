@@ -16,7 +16,7 @@
 // alumno, no cuántas acertó.
 
 import type { LTAnswerLite, Cefr, CefrPosition } from './types';
-import { scoreToCefr, cefrToScore, DIFFICULTY_TO_CEFR } from './constants';
+import { scoreToCefr, cefrToScore, DIFFICULTY_TO_CEFR, CEFR_TO_DIFFICULTY } from './constants';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -140,6 +140,86 @@ export function calculateOverall(readingScore: number | null, writingScore: numb
   if (writingScore == null) return round2(readingScore as number);
   if (readingScore == null) return round2(writingScore);
   return round2(readingScore * 0.6 + writingScore * 0.4);
+}
+
+// ── Compuerta de C1 y C2 (sep/2026) ──────────────────────────────────────────
+//
+// La plataforma repartía C1 y C2 con demasiada alegría: de los 45 tests con nivel
+// emitido, 16 daban C1 o C2 (36%). Y de los cuatro C1 que un profesor llegó a
+// revisar, BAJÓ tres (a B2, B1 y B2). El sesgo estaba medido, no era una
+// impresión.
+//
+// La causa NO es dónde están los cortes de `CEFR_BANDS`, son dos huecos de la
+// lectura:
+//
+//   · La lectura SATURA. El adaptativo topa en dificultad 6, así que el buen
+//     lector aparca ahí y sale C2/high = 95,83. Salía en 7 de los 45.
+//   · Un test SIN escritura emitía nivel igual, y como la lectura pesa el 60%,
+//     al faltar la otra mitad la lectura sola se queda con todo. El único C2 de
+//     la historia era exactamente eso: 95,83 de lectura y ni una línea escrita.
+//
+// Por eso la dureza no se aplicó subiendo los umbrales. Subirlos ensancha la
+// banda de B2, y ensancharla mueve `cefrToScore('B2', …)` hacia arriba, así que
+// los dudosos de B1 SUBEN a B2: en la simulación, B1 caía de 8 alumnos a 2. Eso
+// es exactamente lo contrario de "ante la duda, el nivel más bajo".
+//
+// Lo que se aplica es una compuerta que solo mira arriba: para certificar un C1
+// o un C2 automático, la ESCRITURA tiene que respaldarlo.
+//
+//   1. Sin escritura puntuada (no la hizo, intento no válido, IA caída) no se
+//      certifica C1 ni C2. Tope B2.
+//   2. La escritura no puede quedar a más de un nivel del veredicto. Si lo está,
+//      manda ella: el nivel baja a "escritura + 1".
+//
+// Efecto sobre los 45 tests reales: C1+ pasa de 16 a 6, y NINGÚN alumno del
+// tramo bajo se mueve ni un escalón. Los seis que sobreviven son los que tenían
+// C1 en las dos mitades.
+//
+// OJO, esto capa SOLO lo automático. El nivel que confirma el profesor manda
+// sobre el de la prueba (lib/effectiveLevel), así que un C1 de verdad que la
+// compuerta haya frenado se arregla en un clic desde la ficha.
+
+/** El techo cuando la escritura no respalda nada. */
+export const AUTO_TOP_CAP: Cefr = 'B2';
+
+export type LevelCapReason =
+  | 'sin_escritura'     // no hubo escritura puntuable con la que corroborar
+  | 'escritura_lejos';  // la hubo, pero a más de un nivel por debajo
+
+export const CAP_REASON_LABEL: Record<LevelCapReason, string> = {
+  sin_escritura:   'sin escritura puntuada: C1 y C2 no se certifican solo con la lectura',
+  escritura_lejos: 'la escritura queda a más de un nivel de la lectura',
+};
+
+export interface AutoLevel {
+  /** El nivel que se emite. */
+  level: Cefr;
+  /** El que habría salido del puntaje a secas. Igual a `level` si no se capó. */
+  scoreLevel: Cefr;
+  /** Por qué se bajó. null = no se tocó. */
+  capped: LevelCapReason | null;
+}
+
+/**
+ * Nivel AUTOMÁTICO del test: el puntaje, y después la compuerta de arriba.
+ *
+ * `writingLevel` es el nivel MCER que la IA le puso al TEXTO (no al puntaje), y
+ * tiene que venir null si la escritura no se puntuó de verdad: un intento
+ * descartado no corrobora nada.
+ */
+export function autoCefrLevel(overall: number, writingLevel: Cefr | null): AutoLevel {
+  const scoreLevel = scoreToCefr(overall);
+  const nivel = (c: Cefr) => CEFR_TO_DIFFICULTY[c];
+
+  // Por debajo de C1 la compuerta no existe: el tramo bajo no se toca.
+  if (nivel(scoreLevel) < nivel('C1')) return { level: scoreLevel, scoreLevel, capped: null };
+
+  if (!writingLevel) return { level: AUTO_TOP_CAP, scoreLevel, capped: 'sin_escritura' };
+
+  const techo = DIFFICULTY_TO_CEFR[Math.min(6, nivel(writingLevel) + 1)];
+  if (nivel(techo) < nivel(scoreLevel)) return { level: techo, scoreLevel, capped: 'escritura_lejos' };
+
+  return { level: scoreLevel, scoreLevel, capped: null };
 }
 
 export { scoreToCefr };

@@ -29,7 +29,7 @@ import {
   cefrSteps, milestoneProgress, skillsFromResponses, type SkillGauge,
 } from '@/lib/studentViz';
 import { classCategoryBadge } from '@/lib/finance';
-import { effectiveLevelOf } from '@/lib/effectiveLevel';
+import { effectiveLevelOf, aiLevelOf } from '@/lib/effectiveLevel';
 import { planFieldsOf } from '@/lib/productUtils';
 import { questionsForResponses } from '@/lib/formQuestions';
 import {
@@ -415,7 +415,7 @@ function StudentPageContent() {
             studentId: a.studentId || profile?.student_id || null,
             profileId: profile?.id ?? null,
             plan: a.plan,
-            level: a.studentLevel,
+            level: aiLevelOf(profile, a.studentLevel),
             ficha,
           }}
           onRetried={async (msg: string) => { await load(); showToast(msg); }}
@@ -668,7 +668,7 @@ function PendingTranscriptModal({ pending, assignment, profile, ficha, teacher, 
       teacherId: teacher.id,
       profileId: profile?.id ?? null,
       plan: assignment.plan,
-      level: assignment.studentLevel,
+      level: aiLevelOf(profile, assignment.studentLevel),
       classDate: pending.date,          // heredada del ingreso
       joinLogId: pending.joinLogId,     // vínculo explícito
       transcriptHash: hash || null,
@@ -802,7 +802,7 @@ function PerfilTab({ bundle, ficha, risk, teacher, onToast, onRefresh, onOpenFor
     if (!profile) return;
     setBusy(true);
     try {
-      await regenerateFicha({ profileId: profile.id, teacherName: teacher.name, plan: a.plan, level: a.studentLevel });
+      await regenerateFicha({ profileId: profile.id, teacherName: teacher.name, plan: a.plan, level: aiLevelOf(profile, a.studentLevel) });
       await onRefresh();
       onToast('Ficha generada correctamente');
     } catch (e) {

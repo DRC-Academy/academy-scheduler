@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   assessReading, readingWithinLevel, roundHalfDown, calculateOverall,
-  calculateWritingScore, READING_WINDOW, WITHIN_HIGH_MIN, WITHIN_MID_MIN,
+  calculateWritingScore, READING_WINDOW, WITHIN_HIGH_MIN, WITHIN_MID_MIN, autoCefrLevel,
 } from './scoring';
 import { cefrToScore } from './constants';
 import type { LTAnswerLite } from './types';
@@ -184,5 +184,67 @@ describe('calculateOverall — huecos', () => {
 describe('calculateWritingScore', () => {
   it('sin ai_score devuelve null, no 0', () => {
     expect(calculateWritingScore([{ section: 'writing', difficulty: 3, is_correct: null, ai_score: null }])).toBeNull();
+  });
+});
+
+// ── La compuerta de C1 y C2 ──────────────────────────────────────────────────
+//
+// Los casos llevan el nombre del alumno real: son los tests de producción sobre
+// los que se decidió la regla, no ejemplos inventados.
+describe('autoCefrLevel — C1 y C2 exigen que la escritura los respalde', () => {
+  it('por debajo de C1 no toca NADA: el tramo bajo se queda como está', () => {
+    // La queja contra subir los umbrales era justo esta: arrastraba a los B1.
+    for (const overall of [0, 22.5, 41.67, 50, 60, 65.83, 66.66]) {
+      const r = autoCefrLevel(overall, null);
+      expect(r.capped).toBeNull();
+      expect(r.level).toBe(r.scoreLevel);
+    }
+  });
+
+  it('sin escritura puntuada no se certifica C1 ni C2 — Cristina Mateo, 95,83 de pura lectura', () => {
+    const r = autoCefrLevel(95.83, null);
+    expect(r.scoreLevel).toBe('C2');
+    expect(r.level).toBe('B2');
+    expect(r.capped).toBe('sin_escritura');
+  });
+
+  it('el C1 de solo lectura también cae — Alba Maroño, 79,17 sin escribir', () => {
+    expect(autoCefrLevel(79.17, null).level).toBe('B2');
+  });
+
+  it('escritura a un nivel de distancia: se respeta — Carles Aliaga, lectura C2 y escritura B2', () => {
+    const r = autoCefrLevel(80.83, 'B2');
+    expect(r.level).toBe('C1');
+    expect(r.capped).toBeNull();
+  });
+
+  it('escritura a dos niveles: manda ella — Paloma Lleó, lectura C2 y escritura B1', () => {
+    const r = autoCefrLevel(75.83, 'B1');
+    expect(r.level).toBe('B2');          // B1 + 1
+    expect(r.scoreLevel).toBe('C1');
+    expect(r.capped).toBe('escritura_lejos');
+  });
+
+  it('escritura muy lejos: baja hasta escritura + 1 — Mohamed, lectura C2 y escritura A2', () => {
+    expect(autoCefrLevel(69.17, 'A2').level).toBe('B1');   // A2 + 1
+  });
+
+  it('las dos mitades en C1 se quedan en C1 — Elena García', () => {
+    const r = autoCefrLevel(68.33, 'B2');
+    expect(r.level).toBe('C1');
+    expect(r.capped).toBeNull();
+  });
+
+  it('un C2 de verdad sobrevive: hace falta escritura C1 o C2', () => {
+    expect(autoCefrLevel(95.83, 'C1').level).toBe('C2');
+    expect(autoCefrLevel(95.83, 'C2').level).toBe('C2');
+    expect(autoCefrLevel(95.83, 'B2').level).toBe('C1');   // B2 + 1, no llega al C2
+  });
+
+  it('nunca SUBE de nivel: la compuerta solo puede bajar', () => {
+    for (const [overall, w] of [[41.67, 'C2'], [60, 'C1'], [30, 'C2']] as const) {
+      const r = autoCefrLevel(overall, w);
+      expect(r.level).toBe(r.scoreLevel);
+    }
   });
 });

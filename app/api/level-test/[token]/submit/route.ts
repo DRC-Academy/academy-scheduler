@@ -14,11 +14,16 @@
 // o IA caída— el nivel sale solo de la lectura y queda marcado como provisional.
 // El motivo real viaja a la ficha del profesor; al alumno se le da siempre el
 // mismo texto neutro.
+//
+// C1 y C2 (sep/2026): el nivel que sale del puntaje pasa además por
+// `autoCefrLevel`, que no deja certificar un C1 o un C2 automático sin una
+// escritura que lo respalde. El porqué y los datos, en lib/levelTest/scoring.
+// Capa SOLO lo automático: el profesor sigue pudiendo confirmar un C1 real.
 
 import { supabase } from '@/lib/supabase';
-import { assessReading, calculateWritingScore, calculateOverall, scoreToCefr } from '@/lib/levelTest/scoring';
+import { assessReading, calculateWritingScore, calculateOverall, autoCefrLevel, CAP_REASON_LABEL } from '@/lib/levelTest/scoring';
 import { GRAND_TOTAL } from '@/lib/levelTest/constants';
-import type { LTAnswerLite, LTSection } from '@/lib/levelTest/types';
+import type { LTAnswerLite, LTSection, Cefr } from '@/lib/levelTest/types';
 
 export const dynamic = 'force-dynamic';
 
@@ -141,7 +146,6 @@ export async function POST(
   const readingScore = reading?.score ?? null;
   const writingScore = calculateWritingScore(lite);
   const overall = calculateOverall(readingScore, writingScore);
-  const cefr = scoreToCefr(overall);
 
   // Provisional = la escritura no aportó. Da igual por qué: el 40% del criterio
   // no está y el nivel no es definitivo.
@@ -150,6 +154,25 @@ export async function POST(
   const provisionalReason = provisional
     ? (writingRow?.invalid_reason ?? (writingRow ? 'ai_unavailable' : null))
     : null;
+
+  // ── El nivel ───────────────────────────────────────────────────────────────
+  // El puntaje decide la banda, y encima va la compuerta de C1/C2: sin escritura
+  // que los respalde no se certifican (ver lib/levelTest/scoring). El nivel de
+  // un test provisional queda topado en B2 por el primer motivo de la compuerta,
+  // que es exactamente lo que se busca: media prueba no da un C1.
+  //
+  // `overall_score` se guarda SIN tocar. Un 95,83 con un B2 al lado se lee raro,
+  // pero maquillar el puntaje para que cuadre sería perder el dato que explica
+  // la decisión: lectura excelente, escritura que no acompaña.
+  const writingEval = (writingRow?.ai_feedback ?? null) as { cefr_level?: string } | null;
+  const writingLevel = !provisional && writingEval?.cefr_level
+    ? (writingEval.cefr_level as Cefr)
+    : null;
+  const auto = autoCefrLevel(overall, writingLevel);
+  const cefr = auto.level;
+  if (auto.capped) {
+    console.info(`[level-test/submit] ${s.candidate_name}: ${auto.scoreLevel} → ${cefr} (${CAP_REASON_LABEL[auto.capped]}).`);
+  }
 
   // El feedback solo se muestra si la escritura se puntuó de verdad. Con un
   // intento descartado, enseñárselo al alumno sería enseñarle qué esquivar.

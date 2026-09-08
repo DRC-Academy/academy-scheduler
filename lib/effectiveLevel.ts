@@ -12,19 +12,38 @@
 // Esta es la única implementación de la regla. Todo el que necesite "el nivel
 // del alumno" llama acá.
 //
-// PRIORIDAD (gana el primero que sea un CEFR reconocible):
+// ── PRIORIDAD (fijada en septiembre de 2026) ─────────────────────────────────
 //
-//   1. teacher_confirmed_level  El profesor, tras las primeras clases. Manda.
-//   2. current_level            Columna histórica de la ficha. Ver nota abajo.
-//   3. level_test_cefr          La prueba de nivel automática.
-//   4. assignment.student_level Lo que tipeó el setter al dar de alta al alumno.
+// DECIDEN el nivel, gana el primero que sea un CEFR reconocible:
 //
-// Sobre `current_level`: está en el orden por fidelidad a lo que hacía la app,
-// pero HOY no la escribe ningún código (verificado en agosto/2026; los
-// `current_level:` de lib/db.ts son de la tabla `teachers`, el nivel 1/2/3 de
-// gamificación del profesor, otra cosa). Siempre es NULL, así que en la práctica
-// no compite con nadie. Se deja porque quitarla sería cambiar comportamiento
-// para arreglar algo que no está roto.
+//   1. teacher_confirmed_level  El VISTO BUENO DEL PROFESOR. Si confirmó o
+//                               corrigió, su nivel manda sobre todo lo demás.
+//   2. level_test_cefr          El RESULTADO DE LA PRUEBA. Vale mientras el
+//                               profesor no se haya pronunciado.
+//
+// NO DECIDEN NUNCA. Se muestran como referencia y nada más:
+//
+//   3. current_level            Columna histórica de la ficha.
+//   4. assignment.student_level El CURSO CONTRATADO / lo que tipeó el setter al
+//                               dar de alta al alumno.
+//
+// Dos reglas que van juntas y que antes no se cumplían:
+//
+//   · El curso contratado NO PONE TECHO. Ninguna fuente limita a otra: un alumno
+//     apuntado a un curso "B1" puede salir C1 en la prueba, y el profesor puede
+//     confirmarle un C1 aunque su curso diga otra cosa. Esta lista es un
+//     desempate entre fuentes, nunca un tope.
+//   · `current_level` estaba POR ENCIMA de la prueba, que es al revés de lo que
+//     se quiere: la prueba es una medición y la ficha un texto libre. Bajó a
+//     referencia. Sigue sin escribirla ningún código (verificado en agosto/2026;
+//     los `current_level:` de lib/db.ts son de la tabla `teachers`, el nivel
+//     1/2/3 de gamificación del profesor, otra cosa).
+//
+// Cuando NINGUNA fuente decisiva trae un CEFR se devuelve igualmente el de
+// referencia, pero con `decided: false`. Hace falta: la mayoría de los alumnos
+// todavía no hizo la prueba, y sin esto la escalera, los filtros y el prompt de
+// la IA se quedarían sin nivel. La bandera es lo que permite a quien lo necesite
+// distinguir "medido" de "es lo que compró" — sin recortar nada.
 //
 // Por qué "el primero que PARSEE" y no "el primero que no esté vacío": los
 // campos de nivel son texto libre y en producción `assignment.student_level`
@@ -41,7 +60,7 @@ export const LEVEL_ORIGIN_LABEL: Record<LevelOrigin, string> = {
   profesor: 'confirmado por el profesor',
   ficha:    'de la ficha',
   prueba:   'de la prueba de nivel',
-  alta:     'del alta del alumno',
+  alta:     'del curso contratado',
 };
 
 export interface LevelSources {
@@ -64,13 +83,25 @@ export interface EffectiveLevel {
   origin: LevelOrigin | null;
   /** true si el profesor se pronunció Y su nivel difiere del de la prueba. */
   correctedByTeacher: boolean;
+  /**
+   * true  → el nivel lo fijó una fuente que DECIDE (el profesor o la prueba).
+   * false → nadie lo midió todavía: lo que se devuelve es la referencia del
+   *         curso contratado o de la ficha. Sirve para etiquetarlo como
+   *         orientativo; nunca para recortarlo ni para ponerle techo.
+   */
+  decided: boolean;
 }
 
-const ORDER: Array<[LevelOrigin, keyof LevelSources]> = [
+/** Fuentes que DECIDEN el nivel, en orden de prioridad. */
+const DECIDE: Array<[LevelOrigin, keyof LevelSources]> = [
   ['profesor', 'teacherConfirmed'],
-  ['ficha',    'fichaLevel'],
   ['prueba',   'testLevel'],
-  ['alta',     'assignmentLevel'],
+];
+
+/** Fuentes de REFERENCIA: se muestran, pero nunca deciden ni limitan. */
+const REFERENCE: Array<[LevelOrigin, keyof LevelSources]> = [
+  ['ficha', 'fichaLevel'],
+  ['alta',  'assignmentLevel'],
 ];
 
 const clean = (v: string | null | undefined): string | null => {
@@ -84,23 +115,30 @@ export function getEffectiveLevel(src: LevelSources): EffectiveLevel {
   const test = parseCefr(src.testLevel);
   const correctedByTeacher = !!confirmed && !!test && confirmed !== test;
 
-  // Primera pasada: el primero que contenga un CEFR de verdad.
-  for (const [origin, key] of ORDER) {
+  // 1. La primera fuente DECISIVA que contenga un CEFR de verdad.
+  for (const [origin, key] of DECIDE) {
     const raw = clean(src[key]);
     const level = parseCefr(raw);
-    if (level) return { level, raw, origin, correctedByTeacher };
+    if (level) return { level, raw, origin, correctedByTeacher, decided: true };
   }
 
-  // Ninguna fuente trae un CEFR. Se devuelve igualmente el primer texto no vacío
-  // para que la ficha siga mostrando lo que muestra hoy ("Inglés general") en
-  // vez de un guion, pero con `level: null` para que quien necesite un CEFR de
-  // verdad (el prompt de la IA, la escalera) sepa que no lo hay.
-  for (const [origin, key] of ORDER) {
+  // 2. Nadie lo midió. Vale la referencia, marcada como tal.
+  for (const [origin, key] of REFERENCE) {
     const raw = clean(src[key]);
-    if (raw) return { level: null, raw, origin, correctedByTeacher };
+    const level = parseCefr(raw);
+    if (level) return { level, raw, origin, correctedByTeacher, decided: false };
   }
 
-  return { level: null, raw: null, origin: null, correctedByTeacher };
+  // 3. Ninguna fuente trae un CEFR. Se devuelve igualmente el primer texto no
+  // vacío para que la ficha siga mostrando lo que muestra hoy ("Inglés general")
+  // en vez de un guion, pero con `level: null` para que quien necesite un CEFR
+  // de verdad (el prompt de la IA, la escalera) sepa que no lo hay.
+  for (const [origin, key] of [...DECIDE, ...REFERENCE]) {
+    const raw = clean(src[key]);
+    if (raw) return { level: null, raw, origin, correctedByTeacher, decided: false };
+  }
+
+  return { level: null, raw: null, origin: null, correctedByTeacher, decided: false };
 }
 
 /** Lo que traen las pantallas: una ficha (puede no existir) y una assignment. */
@@ -127,9 +165,31 @@ export function effectiveLevelOf(
 }
 
 /**
+ * El nivel que se le pasa a la IA (ficha, próxima clase, análisis de
+ * transcripción). Se prefiere el CEFR limpio sobre el texto original porque este
+ * valor se interpola tal cual en el prompt: con `raw` el modelo leería "nivel B1
+ * Exámenes", que es como está escrito el campo en producción.
+ *
+ * Existe para que ningún sitio vuelva a mandarle a la IA `assignment.student_level`
+ * a pelo, que es lo que hacía que la prueba de nivel y el criterio del profesor no
+ * llegaran nunca al prompt.
+ */
+export function aiLevelOf(
+  profile: ProfileLevelFields | null | undefined,
+  assignmentLevel: string | null | undefined,
+): string | null {
+  const eff = effectiveLevelOf(profile, assignmentLevel);
+  return eff.level ?? eff.raw ?? assignmentLevel ?? null;
+}
+
+/**
  * El nivel de REFERENCIA que se le enseña al profesor junto al desplegable: lo
  * que había ANTES de que él opinara. Sin esto, el control mostraría su propia
  * respuesta como si fuera el dato de partida.
+ *
+ * Con la prioridad nueva aquí manda la PRUEBA, que es lo que el profesor tiene
+ * delante para confirmar o corregir. El curso contratado solo asoma cuando el
+ * alumno nunca hizo la prueba.
  */
 export function referenceLevelOf(
   profile: ProfileLevelFields | null | undefined,

@@ -21,7 +21,7 @@ import {
   type AssignmentRow, type FollowupSummary,
 } from '@/lib/formReminders';
 import type { WritingEvaluation } from '@/lib/levelTest/types';
-import { CEFR_COLOR, GRAND_TOTAL } from '@/lib/levelTest/constants';
+import { CEFR_COLOR, GRAND_TOTAL, scoreToCefr } from '@/lib/levelTest/constants';
 import { INVALID_REASON_LABEL } from '@/lib/levelTest/attemptValidity';
 
 const STATE_META: Record<LTState, { label: string; color: string; bg: string }> = {
@@ -106,8 +106,12 @@ const COLUMNS = [
   { key: 'cefr',      label: 'CEFR' },
   { key: 'profesor',  label: 'Nivel profesor' },
   { key: 'followup',  label: 'Último follow-up', sortable: true },
-  { key: 'creado',    label: 'Creado' },
-  { key: 'expira',    label: 'Expira' },
+  // Las dos fechas del ENLACE (creación y caducidad) se quitaron en septiembre
+  // de 2026: nadie sabía leerlas —el enlace se regenera, se reutiliza y caduca
+  // solo— y ocupaban el sitio de las dos que sí se preguntan. Siguen en el
+  // detalle de cada test, que es donde importan.
+  { key: 'hecho',     label: 'Test hecho' },
+  { key: 'validado',  label: 'Validado por el profe' },
   { key: 'acciones',  label: '' },
 ] as const;
 
@@ -325,13 +329,12 @@ export default function LevelTestsTab() {
                         {r.answered_count != null ? `${r.answered_count}/${GRAND_TOTAL}` : '—'}
                       </td>
                       <td style={{ padding: '10px 14px', color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>{r.overall_score != null ? `${Math.round(r.overall_score)}/100` : '—'}</td>
-                      <td style={{ padding: '10px 14px', whiteSpace: 'nowrap' }}>
-                        {r.cefr_level ? <span style={{ fontWeight: 700, color: CEFR_COLOR[r.cefr_level as keyof typeof CEFR_COLOR] || 'var(--text-primary)' }}>{r.cefr_level}</span> : '—'}
-                      </td>
+                      <CefrTd cefr={r.cefr_level} overall={r.overall_score} />
                       <NivelProfesorTd confirmado={nivelProfesorOf(r)} prueba={r.cefr_level ?? null} />
                       <FollowupCellTd cell={followupCellOf(r, infoOf(r), ahora)} />
-                      <td style={{ padding: '10px 14px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{fmtDate(r.created_at)}</td>
-                      <td style={{ padding: '10px 14px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{fmtDate(r.expires_at)}</td>
+                      <FechaHitoTd iso={r.completed_at} vacio="Sin realizar" />
+                      <FechaHitoTd iso={nivelProfesorOf(r)?.at ?? null} vacio="Sin validar"
+                        hecho={!!nivelProfesorOf(r)} />
                       <td style={{ padding: '10px 14px', whiteSpace: 'nowrap' }}>
                         <button onClick={e => { e.stopPropagation(); navigator.clipboard?.writeText(buildTestUrl(r.token)).catch(() => {}); }}
                           style={{ padding: '4px 10px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--bg-surface-2)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit' }}>
@@ -351,6 +354,54 @@ export default function LevelTestsTab() {
       {detailId && <DetailModal id={detailId} onClose={() => setDetailId(null)} />}
     </div>
   );
+}
+
+/**
+ * Nivel emitido por la prueba, con la marca ↓ cuando la COMPUERTA lo bajó: el
+ * puntaje daba C1 o C2 y la escritura no lo respaldaba (ver lib/levelTest/scoring).
+ *
+ * Se deduce comparando el nivel guardado con el que da el puntaje a secas, así no
+ * hace falta ninguna columna nueva ni correr SQL. Sin la marca, un 96/100 al lado
+ * de un B2 parece un error de la plataforma.
+ */
+function CefrTd({ cefr, overall }: { cefr: string | null; overall: number | null }) {
+  const td = { padding: '10px 14px', whiteSpace: 'nowrap' as const };
+  if (!cefr) return <td style={{ ...td, color: 'var(--text-muted)' }}>—</td>;
+
+  const color = CEFR_COLOR[cefr as keyof typeof CEFR_COLOR] || 'var(--text-primary)';
+  const porPuntaje = overall != null ? scoreToCefr(overall) : null;
+  const capado = porPuntaje != null && porPuntaje !== cefr;
+
+  return (
+    <td style={td} title={capado ? `El puntaje daba ${porPuntaje}; se bajó a ${cefr} porque la escritura no respalda un nivel alto` : undefined}>
+      <span style={{ fontWeight: 700, color }}>{cefr}</span>
+      {capado && (
+        <span style={{
+          marginLeft: 6, fontSize: 10.5, fontWeight: 700, padding: '1px 6px', borderRadius: 8,
+          background: 'rgba(255,196,0,0.18)', color: '#B54708',
+        }}>
+          ↓ {porPuntaje}
+        </span>
+      )}
+    </td>
+  );
+}
+
+/**
+ * Fecha de un hito del alumno: cuándo HIZO el test y cuándo lo VALIDÓ el profe.
+ *
+ * El hueco no se pinta con un guion sino con la frase que lo explica ("Sin
+ * realizar" / "Sin validar"): en un listado donde media tabla está a medias, un
+ * guion no distingue "todavía no pasó" de "no lo sabemos".
+ *
+ * `hecho` cubre el caso raro de una validación sin fecha (el profesor confirmó
+ * antes de que existiera la columna): pasó, pero no hay día que enseñar.
+ */
+function FechaHitoTd({ iso, vacio, hecho }: { iso: string | null; vacio: string; hecho?: boolean }) {
+  const td = { padding: '10px 14px', whiteSpace: 'nowrap' as const, color: 'var(--text-muted)' };
+  if (iso) return <td style={{ ...td, color: 'var(--text-secondary)' }}>{fmtDate(iso)}</td>;
+  if (hecho) return <td style={td} title="Sin fecha registrada">Validado</td>;
+  return <td style={{ ...td, fontStyle: 'italic', opacity: 0.75 }}>{vacio}</td>;
 }
 
 /**

@@ -16,7 +16,8 @@ import { getTeacherAssignments } from '@/lib/db';
 import { regenerateFicha } from '@/lib/aiClient';
 import { loadStudentBundles, norm, type StudentBundle } from '@/lib/misAlumnos';
 import { registerTourBridge } from '@/lib/tourBridge';
-import StudentCard, { fichaStateOf, levelOf } from '@/components/alumnos/StudentCard';
+import StudentCard, { fichaStateOf, bundleLevelOf } from '@/components/alumnos/StudentCard';
+import { aiLevelOf } from '@/lib/effectiveLevel';
 
 // 'all' | 'sin-ficha' | un nivel CEFR concreto.
 type Filter = string;
@@ -69,7 +70,7 @@ function MisAlumnosContent() {
         profileId: b.profile.id,
         teacherName: teacher.name,
         plan: b.assignment.plan,
-        level: b.assignment.studentLevel,
+        level: aiLevelOf(b.profile, b.assignment.studentLevel),
       });
       await load();
       showToast(`Ficha de ${b.assignment.studentName} generada`);
@@ -86,7 +87,7 @@ function MisAlumnosContent() {
   const levels = useMemo(() => {
     const set = new Set<string>();
     for (const b of bundles) {
-      const l = levelOf(b.assignment.studentLevel);
+      const l = bundleLevelOf(b);
       if (l) set.add(l);
     }
     return [...set].sort();
@@ -95,7 +96,7 @@ function MisAlumnosContent() {
   const matchesFilter = useCallback((b: StudentBundle) => {
     if (filter === 'all') return true;
     if (filter === 'sin-ficha') return fichaStateOf(b) !== 'ready';
-    return levelOf(b.assignment.studentLevel) === filter;
+    return bundleLevelOf(b) === filter;
   }, [filter]);
 
   const filtered = useMemo(() => {
@@ -123,7 +124,7 @@ function MisAlumnosContent() {
     ...levels.map(l => ({
       id: l,
       label: l,
-      count: bundles.filter(b => levelOf(b.assignment.studentLevel) === l).length,
+      count: bundles.filter(b => bundleLevelOf(b) === l).length,
     })),
     { id: 'sin-ficha', label: 'Sin ficha', count: sinFicha },
   ];
