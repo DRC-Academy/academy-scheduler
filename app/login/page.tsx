@@ -6,7 +6,7 @@ import { useAuth } from '@/lib/AuthContext';
 import { UserRole } from '@/types';
 
 const ROLE_REDIRECTS: Record<UserRole, string> = {
-  admin: '/admin', setter: '/setter', teacher: '/teacher',
+  admin: '/dashboard', setter: '/setter', teacher: '/teacher',
 };
 
 export default function LoginPage() {

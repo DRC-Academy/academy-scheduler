@@ -26,7 +26,7 @@ export function AuthGuard({ children, allowedRoles }: AuthGuardProps) {
     if (!allowedRoles.includes(user.role)) {
       // Redirect to their own area
       const redirects: Record<UserRole, string> = {
-        admin: '/admin',
+        admin: '/dashboard',
         setter: '/setter',
         teacher: '/teacher',
       };

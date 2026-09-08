@@ -11,7 +11,7 @@ export default function HomePage() {
     if (!user) {
       router.push('/login');
     } else {
-      const redirects = { admin: '/admin', setter: '/setter', teacher: '/teacher' };
+      const redirects = { admin: '/dashboard', setter: '/setter', teacher: '/teacher' };
       router.push(redirects[user.role]);
     }
   }, [user, router]);

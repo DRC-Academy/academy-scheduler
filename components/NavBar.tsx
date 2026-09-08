@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/AuthContext';
 import { NotificationBell } from '@/components/NotificationBell';
-import { Search, Users, Calendar, CalendarDays, Wallet, Settings, Menu, X, GraduationCap, CalendarCheck, CalendarClock, ClipboardCheck, LifeBuoy } from 'lucide-react';
+import { Search, Users, Calendar, CalendarDays, Wallet, Settings, Menu, X, GraduationCap, CalendarCheck, CalendarClock, ClipboardCheck, LifeBuoy, LayoutDashboard } from 'lucide-react';
 import { Button } from '@/components/ui';
 import { PresentationEmailReminder } from '@/components/PresentationEmailReminder';
 import { useOnboardingActions } from '@/lib/OnboardingContext';
@@ -13,6 +13,9 @@ import { dbCountPendingReviewRequests } from '@/lib/reviewRequests';
 // Íconos lucide en vez de emojis: /mis-clases y /finanzas usaban los dos el mismo
 // 💰, así que el ícono no distinguía nada.
 const navItems = [
+  // Primero de todo y solo para admin: es su pantalla de entrada y la que mira
+  // todos los días. Antes era una pestaña más dentro de /admin.
+  { href: '/dashboard',         label: 'Dashboard',         icon: LayoutDashboard, roles: ['admin'] },
   { href: '/setter',            label: 'Buscar',            icon: Search,      roles: ['setter', 'admin'] },
   { href: '/students',          label: 'Alumnos',           icon: Users,       roles: ['setter', 'admin'] },
   // Retención: alumnos a los que se les acaba el plan. Ventas y admin, no el

@@ -413,7 +413,7 @@ export async function sendPresentationAdminAlert12h(teacherName: string, student
   const subject = `Alerta: ${teacherName} · email sin enviar 12h`;
   const html = baseEmailTemplate(
     p(`<strong>${esc(teacherName)}</strong> lleva 12h sin enviar el email de presentación a <strong>${esc(studentName)}</strong>.`) +
-    ctaButton('Ver en DRC Gestión', `${APP_URL}/admin`),
+    ctaButton('Ver en DRC Gestión', `${APP_URL}/dashboard`),
     `${teacherName} · email sin enviar 12 h`,
   );
   return sendToAddress('sendPresentationAdminAlert12h', ADMIN_EMAIL, subject, html);
@@ -424,7 +424,7 @@ export async function sendPresentationAdminAlert24h(teacherName: string, student
   const subject = `🔴 ${teacherName} · email fuera de plazo`;
   const html = baseEmailTemplate(
     p(`<strong>${esc(teacherName)}</strong> no envió el email de presentación a <strong>${esc(studentName)}</strong> en 24 horas.`) +
-    ctaButton('Ver en DRC Gestión', `${APP_URL}/admin`),
+    ctaButton('Ver en DRC Gestión', `${APP_URL}/dashboard`),
     `${teacherName} · email fuera de plazo`,
   );
   return sendToAddress('sendPresentationAdminAlert24h', ADMIN_EMAIL, subject, html);
