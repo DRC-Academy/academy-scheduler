@@ -4228,27 +4228,122 @@ export async function dbFindStudentAbsence(
 // 'cancelacion_hora' sí son cobrables, dentro de las 2 clases perdidas del mes que
 // comparten con las faltas sin aviso. Resiliente si la BD no tiene aún las
 // columnas original_date/rescheduled_to.
+/**
+ * Inserta constancias tolerando que `lost_hours` no exista todavía en la base
+ * (supabase-reschedule-split.sql sin correr). Solo se reintenta quitando ESA
+ * columna, y el aviso queda en consola: `lost_hours` es una mejora del crédito, no
+ * el vínculo de la constancia, así que perderla no rompe nada — pero enterarse
+ * importa, porque sin ella el crédito se sigue deduciendo del calendario.
+ *
+ * Lo que NO se reintenta es la pérdida de `rescheduled_to` ni de
+ * `recovery_for_date`: ahí está el vínculo, y guardar la fila sin él dejaba una
+ * reprogramación muda (una clase tachada sin destino) o una recuperación que no
+ * salda nada. Si eso falla, falla la operación y el profesor se entera.
+ */
+async function insertClassRecordsTolerandoLostHours(
+  rows: Array<Record<string, unknown>>,
+): Promise<void> {
+  const { error } = await supabase.from('class_records').insert(rows);
+  if (!error) return;
+  if (!String(error.message ?? '').includes('lost_hours')) {
+    throw new Error(`No se pudo guardar la constancia de clase: ${error.message}`);
+  }
+  console.warn('[db] La columna class_records.lost_hours no existe: se guarda sin sellar el crédito. Correr supabase-reschedule-split.sql.');
+  const sinLostHours = rows.map(row => {
+    const copia = { ...row };
+    delete copia.lost_hours;
+    return copia;
+  });
+  const retry = await supabase.from('class_records').insert(sinLostHours);
+  if (retry.error) throw new Error(`No se pudo guardar la constancia de clase: ${retry.error.message}`);
+}
+
+/** Borra constancias por id. Es la reversión de `dbAddRescheduleSplit`. */
+export async function dbDeleteClassRecordsByIds(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  const { error } = await supabase.from('class_records').delete().in('id', ids);
+  if (error) throw new Error(`No se pudieron borrar las constancias ${ids.join(', ')}: ${error.message}`);
+}
+
 export async function dbAddRescheduleRecord(p: {
   teacherId: string; teacherName: string; studentName: string;
   originalDate: string; originalTime?: string;
   newDate: string; newTime?: string;
   classType: 'reprogramada' | 'cancelacion_hora';
   comment: string;
+  /** Horas que valía la clase al perderse: el crédito que abre. Ver lib/rescheduleSplit. */
+  lostHours?: number;
 }): Promise<import('@/types').ClassRecord> {
   const id        = `cr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   const createdAt = new Date().toISOString();
-  const base = {
+  await insertClassRecordsTolerandoLostHours([{
     id, teacher_id: p.teacherId, teacher_name: p.teacherName, student_name: p.studentName,
     class_date: p.originalDate, class_time: p.originalTime ?? null,
     screenshot_url: '', class_type: p.classType, comment: p.comment, created_at: createdAt,
-  };
-  const { error } = await supabase.from('class_records').insert({ ...base, original_date: p.originalDate, rescheduled_to: p.newDate });
-  if (error) await supabase.from('class_records').insert(base);
+    original_date: p.originalDate, rescheduled_to: p.newDate,
+    lost_hours: p.lostHours ?? null,
+  }]);
   return {
     id, teacherId: p.teacherId, teacherName: p.teacherName, studentName: p.studentName,
     classDate: p.originalDate, classTime: p.originalTime, screenshotUrl: '', classType: p.classType,
     comment: p.comment, originalDate: p.originalDate, rescheduledTo: p.newDate, createdAt,
   };
+}
+
+/**
+ * Reprogramar una clase de 2 h en DOS días distintos: la constancia de la clase
+ * original y las DOS de recuperación, en UNA sola sentencia.
+ *
+ * El insert múltiple es lo que hace la operación de todo o nada sin necesitar una
+ * transacción: Postgres aplica las tres filas o ninguna. Lo que queda fuera es el
+ * calendario, que es otra tabla y otro upsert — de eso se encarga el llamador,
+ * que escribe el grid DESPUÉS y revierte con `dbDeleteClassRecordsByIds` si falla.
+ * Se hace en ese orden a propósito: unas constancias sin celdas siguen dando el
+ * crédito correcto (el saldo las lee), mientras unas celdas sin la constancia
+ * `reprogramada` dejarían la clase original cobrándose como si se hubiera dado.
+ */
+export async function dbAddRescheduleSplit(p: {
+  teacherId: string; teacherName: string; studentName: string;
+  originalDate: string; originalTime?: string;
+  /** Horas que valía la clase original: el crédito que abre (2 en el caso normal). */
+  lostHours: number;
+  comment: string;
+  /** Las dos horas de recuperación, en orden. */
+  recuperaciones: Array<{ date: string; hour: string; recoveryFor: string }>;
+}): Promise<import('@/types').ClassRecord[]> {
+  const createdAt = new Date().toISOString();
+  const nuevoId = (n: number) => `cr_${Date.now()}_${n}_${Math.random().toString(36).slice(2, 7)}`;
+  const comun = { teacher_id: p.teacherId, teacher_name: p.teacherName, student_name: p.studentName, screenshot_url: '', created_at: createdAt };
+
+  const original = {
+    ...comun, id: nuevoId(0),
+    class_date: p.originalDate, class_time: p.originalTime ?? null,
+    class_type: 'reprogramada', comment: p.comment,
+    original_date: p.originalDate,
+    // La PRIMERA de las dos: es la fecha que muestra el badge "Reprogramada → …".
+    rescheduled_to: p.recuperaciones[0]?.date ?? null,
+    lost_hours: p.lostHours,
+  };
+  const recuperaciones = p.recuperaciones.map((r, i) => ({
+    ...comun, id: nuevoId(i + 1),
+    class_date: r.date, class_time: r.hour,
+    class_type: 'recuperacion',
+    comment: `Recuperación de clase del ${r.recoveryFor} — ${i + 1}ª de ${p.recuperaciones.length} horas`,
+    recovery_for_date: r.recoveryFor,
+  }));
+
+  await insertClassRecordsTolerandoLostHours([original, ...recuperaciones]);
+
+  return [original, ...recuperaciones].map(row => ({
+    id: row.id, teacherId: p.teacherId, teacherName: p.teacherName, studentName: p.studentName,
+    classDate: row.class_date, classTime: row.class_time ?? undefined, screenshotUrl: '',
+    classType: row.class_type as import('@/types').ClassRecordType,
+    comment: row.comment,
+    originalDate: 'original_date' in row ? (row.original_date as string) : undefined,
+    rescheduledTo: 'rescheduled_to' in row ? ((row.rescheduled_to as string) ?? undefined) : undefined,
+    recoveryForDate: 'recovery_for_date' in row ? (row.recovery_for_date as string) : undefined,
+    createdAt,
+  }));
 }
 
 // Registra una clase de RECUPERACIÓN vinculada al alumno y a la fecha original que

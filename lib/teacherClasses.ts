@@ -30,7 +30,7 @@ export const DAY_NAMES_BY_JSDAY = ['Domingo', 'Lunes', 'Martes', 'Miércoles', '
 // Días que existen en el grid del calendario. Espeja `DAYS` de VisualCalendar,
 // que no se puede importar acá (es un componente cliente y arrastraría todo el
 // calendario a cualquier módulo que use estas funciones).
-const GRID_DAY_ORDER = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+export const GRID_DAY_ORDER = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 
 const nk = (s: string) => (s ?? '').trim().toLowerCase();
 

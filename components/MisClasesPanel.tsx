@@ -15,7 +15,7 @@
 
 import { Fragment, useState, useEffect, useMemo, useRef, type CSSProperties } from 'react';
 import { cellKey, getSpainParts, spainWallClockToEpoch } from '@/components/VisualCalendar';
-import { calcRegisteredClassNumber } from '@/lib/db';
+import { calcRegisteredClassNumber, dbDeleteClassRecordsByIds } from '@/lib/db';
 import {
   classCategoryBadge, transcriptStateOf, transcriptStateBadge, transcriptNeedsTeacher,
   type ClassTranscriptRef,
@@ -34,6 +34,10 @@ import {
   type TeacherSession as TodayClass,
 } from '@/lib/teacherClasses';
 import { durationBadgeLabel, hourNum, nkName } from '@/lib/sessions';
+import {
+  planRescheduleSplit, splitSummaryText, splitRescheduleComment, canSplitReschedule,
+  type SplitSlot, type SplitResult,
+} from '@/lib/rescheduleSplit';
 import { useClassJoin } from '@/components/JoinClass';
 import { useOnboardingActions } from '@/lib/OnboardingContext';
 import { registerTourBridge } from '@/lib/tourBridge';
@@ -178,14 +182,41 @@ function timeInputValue(hour: string): string {
   return Number.isFinite(n) ? `${String(n).padStart(2, '0')}:${m.padStart(2, '0')}` : '';
 }
 
-function RescheduleModal({ studentName, currentDate, currentHour, todayIso, saving, onConfirm, onClose }: {
+function RescheduleModal({ studentName, currentDate, currentHour, durationHours, todayIso, saving, splitPlanOf, onConfirm, onClose }: {
   studentName: string; currentDate: string; currentHour: string; todayIso: string; saving: boolean;
-  onConfirm: (data: { reason: RescheduleReason; reasonLabel: string; newDate: string; newTime: string }) => void;
+  /** Duración de la clase que se mueve. Con 2 h aparece la opción de partirla. */
+  durationHours: number;
+  /** Valida las dos horas del modo partido. La decisión vive en lib/rescheduleSplit. */
+  splitPlanOf: (slots: SplitSlot[]) => SplitResult;
+  onConfirm: (data: {
+    reason: RescheduleReason; reasonLabel: string; newDate: string; newTime: string;
+    /** Presente solo en el modo partido: las dos horas elegidas. */
+    split?: SplitSlot[];
+  }) => void;
   onClose: () => void;
 }) {
   const [reason, setReason] = useState<RescheduleReason>('alumno_antic');
   const [newDate, setNewDate] = useState('');
   const [newTime, setNewTime] = useState(timeInputValue(currentHour));
+  // Modo partido: dos horas de 1 h en días distintos. Solo para clases de 2 h, y
+  // destildado por defecto — el comportamiento de siempre es mover el bloque.
+  const [split, setSplit] = useState(false);
+  const [slots, setSlots] = useState<SplitSlot[]>([{ date: '', time: '' }, { date: '', time: '' }]);
+  const puedePartir = canSplitReschedule(durationHours);
+  const setSlot = (i: number, patch: Partial<SplitSlot>) =>
+    setSlots(prev => prev.map((s, j) => (j === i ? { ...s, ...patch } : s)));
+
+  // El veredicto del módulo puro, en cuanto hay algo que juzgar. Los dos huecos son
+  // OBLIGATORIOS: sin los dos completos no hay plan y el botón queda apagado.
+  const splitCompleto = slots.every(s => !!s.date && !!s.time);
+  const splitResult = split && puedePartir && splitCompleto ? splitPlanOf(slots) : null;
+  const splitProblems = splitResult && !splitResult.ok ? splitResult.problems : [];
+  const splitWarning = splitResult
+    ? (splitResult.ok ? splitResult.plan.warning : splitResult.warning)
+    : undefined;
+  const splitSummary = splitCompleto
+    ? splitSummaryText({ originalDate: currentDate, durationHours, slots })
+    : '';
 
   // Reprogramar es MOVER LA CLASE HACIA ADELANTE. Antes no se comprobaba nada:
   // se podía mandar una clase al año pasado, o "moverla" a su propio hueco, que
@@ -199,7 +230,13 @@ function RescheduleModal({ studentName, currentDate, currentHour, todayIso, savi
     : noAvanza
       ? `La nueva fecha y hora tienen que ser POSTERIORES a las actuales (${fmtDateDMY(currentDate)} ${timeInputValue(currentHour)}).`
       : '';
-  const canConfirm = !!newDate && !!newTime && !problema && !saving;
+  // En modo partido manda el veredicto del módulo puro; en modo normal, la regla de
+  // siempre. Los dos exigen lo mismo de fondo: la clase se mueve hacia adelante.
+  const canConfirm = saving
+    ? false
+    : split && puedePartir
+      ? !!splitResult?.ok
+      : !!newDate && !!newTime && !problema;
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 85, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
@@ -228,30 +265,101 @@ function RescheduleModal({ studentName, currentDate, currentHour, todayIso, savi
           </div>
         )}
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 18 }}>
-          <div>
-            <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>Nueva fecha</label>
-            <input type="date" value={newDate} min={todayIso} onChange={e => setNewDate(e.target.value)} style={{ width: '100%' }} />
-          </div>
-          <div>
-            <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>Nueva hora 🇪🇸</label>
-            <input type="time" value={newTime} onChange={e => setNewTime(e.target.value)} style={{ width: '100%' }} />
-          </div>
-        </div>
+        {/* Clase de 2 h: se puede reponer en dos días de una hora cada uno. El
+            hueco de 2 horas seguidas es justo el que no aparece cuando hay que
+            recolocar a alguien, y antes esto se hacía a mano en dos modales. */}
+        {puedePartir && (
+          <button type="button" onClick={() => setSplit(v => !v)} disabled={saving}
+            style={{ display: 'flex', alignItems: 'flex-start', gap: 9, width: '100%', textAlign: 'left', padding: '10px 12px', borderRadius: 9, marginBottom: 14, fontFamily: 'inherit', cursor: saving ? 'not-allowed' : 'pointer',
+              border: `1.5px solid ${split ? '#1E9E3A' : 'var(--border)'}`,
+              background: split ? 'rgba(30,158,58,0.08)' : 'var(--bg-surface-2)',
+              color: 'var(--text-primary)', fontSize: 13 }}>
+            <span>{split ? '☑️' : '⬜'}</span>
+            <span>
+              <span style={{ fontWeight: 600 }}>Recuperar en dos días diferentes</span>
+              <span style={{ display: 'block', fontSize: 11.5, color: 'var(--text-muted)', marginTop: 2 }}>
+                Es una clase de 2 h. Sin tildar se mueve el bloque entero a un solo horario;
+                tildado se reparte en dos clases de 1 h, con su transcript cada una. Cobrás lo mismo.
+              </span>
+            </span>
+          </button>
+        )}
 
-        {/* El motivo del bloqueo, dicho antes de que pulse: un botón apagado sin
-            explicación es lo que hace que el profesor lo intente tres veces. */}
-        {problema && (
-          <div style={{ fontSize: 11.5, color: '#b45309', background: 'rgba(255,196,0,0.12)', border: '1px solid rgba(255,196,0,0.4)', borderRadius: 8, padding: '8px 12px', marginTop: -8, marginBottom: 14, lineHeight: 1.5 }}>
-            ⚠️ {problema}
-          </div>
+        {split && puedePartir ? (
+          <>
+            {[0, 1].map(i => (
+              <div key={i} style={{ marginBottom: 12 }}>
+                <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>
+                  {i === 0 ? 'Primera hora' : 'Segunda hora'}
+                </label>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                  <input type="date" value={slots[i].date} min={todayIso}
+                    onChange={e => setSlot(i, { date: e.target.value })} style={{ width: '100%' }} />
+                  <input type="time" value={slots[i].time}
+                    onChange={e => setSlot(i, { time: e.target.value })} style={{ width: '100%' }} />
+                </div>
+              </div>
+            ))}
+
+            {/* El resumen: lo que va a pasar, dicho en una frase, antes de pulsar. */}
+            {splitSummary && (
+              <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', background: 'var(--bg-surface-2)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px', marginBottom: 14, lineHeight: 1.55 }}>
+                {splitSummary}
+              </div>
+            )}
+
+            {/* Los problemas, todos, con su motivo. */}
+            {splitProblems.length > 0 && (
+              <div style={{ fontSize: 11.5, color: '#b45309', background: 'rgba(255,196,0,0.12)', border: '1px solid rgba(255,196,0,0.4)', borderRadius: 8, padding: '8px 12px', marginBottom: 14, lineHeight: 1.5 }}>
+                {splitProblems.map((p, i) => <div key={i} style={{ marginTop: i === 0 ? 0 : 5 }}>⚠️ {p}</div>)}
+              </div>
+            )}
+
+            {/* Aviso suave: no bloquea. */}
+            {splitWarning && splitProblems.length === 0 && (
+              <div style={{ fontSize: 11.5, color: 'var(--text-muted)', background: 'var(--bg-surface-2)', border: '1px dashed var(--border)', borderRadius: 8, padding: '8px 12px', marginBottom: 14, lineHeight: 1.5 }}>
+                💡 {splitWarning}
+              </div>
+            )}
+
+            {!splitCompleto && (
+              <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginBottom: 14, lineHeight: 1.5 }}>
+                Hacen falta las dos horas para reprogramar la clase.
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 18 }}>
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>Nueva fecha</label>
+                <input type="date" value={newDate} min={todayIso} onChange={e => setNewDate(e.target.value)} style={{ width: '100%' }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>Nueva hora 🇪🇸</label>
+                <input type="time" value={newTime} onChange={e => setNewTime(e.target.value)} style={{ width: '100%' }} />
+              </div>
+            </div>
+
+            {/* El motivo del bloqueo, dicho antes de que pulse: un botón apagado sin
+                explicación es lo que hace que el profesor lo intente tres veces. */}
+            {problema && (
+              <div style={{ fontSize: 11.5, color: '#b45309', background: 'rgba(255,196,0,0.12)', border: '1px solid rgba(255,196,0,0.4)', borderRadius: 8, padding: '8px 12px', marginTop: -8, marginBottom: 14, lineHeight: 1.5 }}>
+                ⚠️ {problema}
+              </div>
+            )}
+          </>
         )}
 
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={onClose} disabled={saving} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: saving ? 'not-allowed' : 'pointer', fontSize: 13, fontFamily: 'inherit' }}>Cancelar</button>
-          <button onClick={() => canConfirm && onConfirm({ reason, reasonLabel: RESCHEDULE_REASONS.find(r => r.id === reason)!.label, newDate, newTime })} disabled={!canConfirm}
+          <button onClick={() => canConfirm && onConfirm({
+              reason, reasonLabel: RESCHEDULE_REASONS.find(r => r.id === reason)!.label,
+              newDate, newTime,
+              ...(split && puedePartir ? { split: slots } : {}),
+            })} disabled={!canConfirm}
             style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: canConfirm ? '#1E9E3A' : 'var(--bg-surface-3)', color: canConfirm ? 'white' : 'var(--text-muted)', cursor: canConfirm ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
-            {saving ? 'Guardando...' : 'Reprogramar ✓'}
+            {saving ? 'Guardando...' : split && puedePartir ? 'Reprogramar en dos horas ✓' : 'Reprogramar ✓'}
           </button>
         </div>
       </div>
@@ -313,7 +421,7 @@ function CancelClassModal({ studentName, currentDate, currentHour, saving, onCon
 }
 
 // ─── Teacher Upcoming Classes Tab ─────────────────────────────────────────────
-export function MisClasesPanel({ teacher, myAssignments, students, classRecords, classAnalyses, classJoinLogs, grid, onGridChange, updateMeetLink, logClassJoin, addRescheduleRecord, registerClassRecord, onDataChanged, formIndex, refreshFormIndex }: {
+export function MisClasesPanel({ teacher, myAssignments, students, classRecords, classAnalyses, classJoinLogs, grid, onGridChange, updateMeetLink, logClassJoin, addRescheduleRecord, addRescheduleSplit, registerClassRecord, onDataChanged, formIndex, refreshFormIndex }: {
   teacher: Teacher;
   myAssignments: Assignment[];
   students: Student[];
@@ -328,7 +436,9 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
   onGridChange: (g: Grid) => Promise<void>;
   updateMeetLink: (assignmentId: string, link: string) => Promise<void>;
   logClassJoin: (teacherId: string, teacherName: string, studentName: string, scheduledDate: string, scheduledTime: string, subscriptionStatus?: string, enteredWithoutActive?: boolean, subscriptionDaysRemaining?: number | null) => Promise<void>;
-  addRescheduleRecord: (p: { teacherId: string; teacherName: string; studentName: string; originalDate: string; originalTime?: string; newDate: string; newTime?: string; classType: 'reprogramada' | 'cancelacion_hora'; comment: string }) => Promise<void>;
+  addRescheduleRecord: (p: { teacherId: string; teacherName: string; studentName: string; originalDate: string; originalTime?: string; newDate: string; newTime?: string; classType: 'reprogramada' | 'cancelacion_hora'; comment: string; lostHours?: number }) => Promise<void>;
+  /** Reprogramación PARTIDA: las tres constancias en un solo insert. Devuelve sus ids. */
+  addRescheduleSplit: (p: { teacherId: string; teacherName: string; studentName: string; originalDate: string; originalTime?: string; lostHours: number; comment: string; recuperaciones: Array<{ date: string; hour: string; recoveryFor: string }> }) => Promise<string[]>;
   registerClassRecord: (teacherId: string, studentName: string, date: string, time: string | undefined, screenshotFile: File | null, classType?: import('@/types').ClassRecordType, comment?: string, recoveryForDate?: string) => Promise<void>;
   formIndex: FormIndex;
   refreshFormIndex: () => void;
@@ -726,11 +836,82 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
   const atToday = range === 'week' ? visibleDays.includes(todayIso) : isToday;
   const step = range === 'week' ? 7 : 1;
 
-  async function handleRescheduleConfirm(data: { reason: RescheduleReason; reasonLabel: string; newDate: string; newTime: string }) {
+  /**
+   * Valida las dos horas del modo partido. La decisión entera vive en
+   * lib/rescheduleSplit; acá solo se le pasa la ocupación del calendario.
+   */
+  function splitPlanOf(c: TodayClass, date: string, slots: SplitSlot[]): SplitResult {
+    return planRescheduleSplit({
+      studentName: c.studentName,
+      original: { date, hour: c.hour, durationHours: c.durationHours },
+      slots,
+      todayIso,
+      cellAt: (day, hour) => grid[cellKey(day, hour)],
+    });
+  }
+
+  /**
+   * Reprogramar la clase de 2 h en DOS días de una hora cada uno.
+   *
+   * TODO O NADA, en este orden:
+   *   1. el plan (puro) valida; si algo falla no se escribe nada;
+   *   2. las TRES constancias en un solo insert — Postgres aplica las tres o ninguna;
+   *   3. el calendario en un solo upsert;
+   *   4. si el calendario falla, se borran las constancias del paso 2.
+   *
+   * El orden importa: unas constancias sin celdas siguen dando el crédito correcto
+   * (el saldo las lee), mientras unas celdas sin la constancia `reprogramada`
+   * dejarían la clase original cobrándose como si se hubiera dado.
+   */
+  async function reprogramarPartida(c: TodayClass, date: string, data: { reasonLabel: string; split: SplitSlot[] }) {
+    const result = splitPlanOf(c, date, data.split);
+    if (!result.ok) { showToast(`⚠️ ${result.problems[0]}`); return; }
+    const { plan } = result;
+
+    const ids = await addRescheduleSplit({
+      teacherId: teacher.id, teacherName: teacher.name, studentName: c.studentName,
+      originalDate: plan.reprogramada.originalDate,
+      originalTime: plan.reprogramada.originalTime,
+      lostHours: plan.reprogramada.lostHours,
+      comment: splitRescheduleComment({ recuperaciones: plan.recuperaciones, reasonLabel: data.reasonLabel }),
+      recuperaciones: plan.recuperaciones,
+    });
+
+    try {
+      const next: Grid = { ...grid };
+      for (const { day, hour, cell } of plan.cells) next[cellKey(day, hour)] = cell;
+      await onGridChange(next);
+    } catch (e) {
+      // El calendario no se pudo guardar: se deshacen las constancias para no
+      // dejar la clase tachada a medias. Si la reversión también falla, se dice —
+      // callarlo dejaría una clase original tachada sin sus recuperaciones.
+      try {
+        await dbDeleteClassRecordsByIds(ids);
+        await onDataChanged();
+        showToast('⚠️ No se pudo guardar el calendario: no se cambió nada.');
+      } catch {
+        showToast('⚠️ No se pudo guardar el calendario NI deshacer las constancias. Avisá al admin.');
+      }
+      // Ya se informó y ya se revirtió: el modal se queda abierto para reintentar.
+      console.error('[MisClases] Reprogramación partida: falló el calendario', e);
+      return;
+    }
+
+    setRescheduleModal(null);
+    showToast(`📅 Clase repartida en dos horas: ${fmtDateDMY(plan.recuperaciones[0].date)} y ${fmtDateDMY(plan.recuperaciones[1].date)}`);
+  }
+
+  async function handleRescheduleConfirm(data: { reason: RescheduleReason; reasonLabel: string; newDate: string; newTime: string; split?: SplitSlot[] }) {
     if (!rescheduleModal) return;
     const { c, date } = rescheduleModal;
     setSavingReschedule(true);
     try {
+      // Modo partido: camino aparte, de todo o nada. El de siempre sigue abajo,
+      // sin un solo cambio.
+      if (data.split) {
+        await reprogramarPartida(c, date, { reasonLabel: data.reasonLabel, split: data.split });
+        return;
+      }
       const classType = data.reason === 'alumno_hora' ? 'cancelacion_hora' : 'reprogramada';
       const comment = `Reprogramada para ${data.newDate}${data.newTime ? ` ${data.newTime}` : ''} — Motivo: ${data.reasonLabel}`;
       await addRescheduleRecord({
@@ -738,6 +919,10 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
         originalDate: date, originalTime: c.hour,
         newDate: data.newDate, newTime: data.newTime || undefined,
         classType, comment,
+        // El crédito que abre esta clase, sellado. Antes se re-deducía del
+        // calendario de hoy, que no guarda historia: un cambio de horario le
+        // cambiaba el tamaño a un crédito viejo.
+        lostHours: Math.max(1, Math.round(c.durationHours || 1)),
       });
 
       // Reflejar el movimiento en el grid (best-effort, no bloquea la constancia):
@@ -796,6 +981,13 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
 
       setRescheduleModal(null);
       showToast(`📅 Clase reprogramada para ${fmtDateDMY(data.newDate)}`);
+    } catch (e) {
+      // Antes esto no existía: si la constancia fallaba, el error se perdía y el
+      // modal se quedaba colgado sin decir nada (y la base guardaba, en el mejor de
+      // los casos, una reprogramación sin destino). El modal sigue abierto para
+      // reintentar.
+      console.error('[MisClases] No se pudo reprogramar la clase', e);
+      showToast(`⚠️ ${e instanceof Error ? e.message : 'No se pudo reprogramar la clase.'}`);
     } finally {
       setSavingReschedule(false);
     }
@@ -1379,8 +1571,10 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
           studentName={rescheduleModal.c.studentName}
           currentDate={rescheduleModal.date}
           currentHour={rescheduleModal.c.hour}
+          durationHours={rescheduleModal.c.durationHours}
           todayIso={todayIso}
           saving={savingReschedule}
+          splitPlanOf={slots => splitPlanOf(rescheduleModal.c, rescheduleModal.date, slots)}
           onConfirm={handleRescheduleConfirm}
           onClose={() => setRescheduleModal(null)}
         />

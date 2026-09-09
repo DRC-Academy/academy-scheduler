@@ -19,7 +19,7 @@ import {
   dbGetClassRecords, dbGetClassTranscripts, dbUploadClassScreenshot, dbAddClassRecord, dbAttachScreenshotToClass,
   dbGetFinanceRates, dbGetFinancePayments, dbMarkPaymentPaid,
   dbGetManualApprovals, dbAddManualApproval,
-  dbChangeStudentTeacher, dbAddRescheduleRecord, dbAddRecoveryClass, dbRemoveAssignment,
+  dbChangeStudentTeacher, dbAddRescheduleRecord, dbAddRescheduleSplit, dbAddRecoveryClass, dbRemoveAssignment,
   dbSetSalesContact,
   dbApplyFaltaSideEffects, dbRevertStudentAbsence, dbFindStudentAbsence,
 } from '@/lib/db';
@@ -93,7 +93,9 @@ interface TeachersContextType {
   approveExceedLimitClass: (teacherId: string, studentName: string, date: string, approvedBy?: string) => Promise<void>;
   changeStudentTeacher: (params: ChangeTeacherParams) => Promise<void>;
   removeAssignment: (assignmentId: string, teacherId: string, studentName: string, slots: AssignedSlot[]) => Promise<void>;
-  addRescheduleRecord: (p: { teacherId: string; teacherName: string; studentName: string; originalDate: string; originalTime?: string; newDate: string; newTime?: string; classType: 'reprogramada' | 'cancelacion_hora'; comment: string }) => Promise<void>;
+  addRescheduleRecord: (p: { teacherId: string; teacherName: string; studentName: string; originalDate: string; originalTime?: string; newDate: string; newTime?: string; classType: 'reprogramada' | 'cancelacion_hora'; comment: string; lostHours?: number }) => Promise<void>;
+  /** Reprograma una clase de 2 h en DOS días: las tres constancias en un solo insert. Devuelve sus ids, para poder revertir. */
+  addRescheduleSplit: (p: { teacherId: string; teacherName: string; studentName: string; originalDate: string; originalTime?: string; lostHours: number; comment: string; recuperaciones: Array<{ date: string; hour: string; recoveryFor: string }> }) => Promise<string[]>;
   addRecoveryClass: (p: { teacherId: string; teacherName: string; studentName: string; recoveryDate: string; originalDate: string; note?: string; classTime?: string }) => Promise<void>;
 }
 
@@ -148,6 +150,7 @@ const TeachersContext = createContext<TeachersContextType>({
   changeStudentTeacher:       async () => {},
   removeAssignment:           async () => {},
   addRescheduleRecord:        async () => {},
+  addRescheduleSplit:         async () => [],
   addRecoveryClass:           async () => {},
 });
 
@@ -662,9 +665,18 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   }
 
   // Constancia de clase reprogramada (punto 2).
-  async function addRescheduleRecord(p: { teacherId: string; teacherName: string; studentName: string; originalDate: string; originalTime?: string; newDate: string; newTime?: string; classType: 'reprogramada' | 'cancelacion_hora'; comment: string }) {
+  async function addRescheduleRecord(p: { teacherId: string; teacherName: string; studentName: string; originalDate: string; originalTime?: string; newDate: string; newTime?: string; classType: 'reprogramada' | 'cancelacion_hora'; comment: string; lostHours?: number }) {
     const record = await dbAddRescheduleRecord(p);
     setClassRecords(prev => [record, ...prev]);
+  }
+
+  // Reprogramación PARTIDA: la clase original y las dos recuperaciones de 1 h, en
+  // un solo insert (todo o nada). Devuelve los ids para que el llamador pueda
+  // revertir si después falla el calendario. Ver lib/rescheduleSplit.
+  async function addRescheduleSplit(p: { teacherId: string; teacherName: string; studentName: string; originalDate: string; originalTime?: string; lostHours: number; comment: string; recuperaciones: Array<{ date: string; hour: string; recoveryFor: string }> }) {
+    const records = await dbAddRescheduleSplit(p);
+    setClassRecords(prev => [...records, ...prev]);
+    return records.map(r => r.id);
   }
 
   // Clase de recuperaciÃ³n vinculada al alumno (punto 3).
@@ -690,7 +702,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
       updateMeetLink, markPresentationSent, logClassJoin, loadClassJoinLogs,
       loadClassRecords, loadFinanceData, registerClassRecord, attachScreenshotToClass,
       markPaymentAsPaid, markStudentAbsence, revertStudentAbsence, approveReviewClass, approveExceedLimitClass,
-      changeStudentTeacher, removeAssignment, addRescheduleRecord, addRecoveryClass,
+      changeStudentTeacher, removeAssignment, addRescheduleRecord, addRescheduleSplit, addRecoveryClass,
     }}>
       {children}
     </TeachersContext.Provider>

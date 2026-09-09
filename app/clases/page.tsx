@@ -26,7 +26,7 @@ function ClasesContent() {
   const { user } = useAuth();
   const {
     teachers, students, classRecords, classAnalyses, classJoinLogs,
-    updateMeetLink, logClassJoin, addRescheduleRecord, registerClassRecord,
+    updateMeetLink, logClassJoin, addRescheduleRecord, addRescheduleSplit, registerClassRecord,
     loadFinanceData, reloadAll,
   } = useTeachers();
 
@@ -106,6 +106,7 @@ function ClasesContent() {
               updateMeetLink={updateMeetLink}
               logClassJoin={logClassJoin}
               addRescheduleRecord={addRescheduleRecord}
+              addRescheduleSplit={addRescheduleSplit}
               registerClassRecord={registerClassRecord}
               onDataChanged={loadFinanceData}
               formIndex={formIndex}
