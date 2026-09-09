@@ -21,6 +21,8 @@
 // Capa SOLO lo automático: el profesor sigue pudiendo confirmar un C1 real.
 
 import { supabase } from '@/lib/supabase';
+import { fetchTeacher, sendLevelValidationRequest } from '@/lib/emailNotifications';
+import { markLevelValidationPending } from '@/lib/levelValidationPending';
 import { assessReading, calculateWritingScore, calculateOverall, autoCefrLevel, CAP_REASON_LABEL } from '@/lib/levelTest/scoring';
 import { GRAND_TOTAL } from '@/lib/levelTest/constants';
 import type { LTAnswerLite, LTSection, Cefr } from '@/lib/levelTest/types';
@@ -241,6 +243,24 @@ export async function POST(
       created_by:  'test-nivel',
     });
     if (notifErr) console.error('[level-test/submit] Error al notificar al profe:', notifErr);
+
+    // Y el email. La notificación in-app la ve solo si entra; el correo le llega.
+    // Best-effort: un fallo de email no puede tumbar el cierre del test.
+    const teacher = await fetchTeacher(s.teacher_id);
+    if (teacher) {
+      await sendLevelValidationRequest(teacher, {
+        studentName: s.student_name || s.candidate_name,
+        studentId: s.student_id,
+        level: cefr,
+        provisional,
+      }).catch(err => console.error('[level-test/submit] No se pudo enviar el aviso de validación:', err));
+    }
+  } else {
+    // SIN PROFESOR. Es el caso normal, no una excepción: el test se ofrece al
+    // terminar el formulario y la asignación suele llegar después. El aviso
+    // queda EN ESPERA y lo entrega `entregarAvisoDeNivel` cuando se le asigne
+    // profesor (ver lib/levelValidationPending.ts).
+    await markLevelValidationPending(s.student_id, s.student_name || s.candidate_name);
   }
 
   return Response.json({

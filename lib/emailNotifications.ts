@@ -524,7 +524,10 @@ export async function sendDailyTranscriptReminder(
 ): Promise<boolean> {
   if (classes.length === 0) return false;   // sin clases pendientes no se escribe
 
-  const subject = 'Recuerda subir los transcripts de hoy';
+  // El nombre del profesor va EN EL ASUNTO: en una bandeja con veinte correos
+  // del sistema, "Recuerda subir los transcripts de hoy" no se distingue de una
+  // circular. Con el nombre delante se lee como algo dirigido a él.
+  const subject = `${teacher.name}, tienes transcripts pendientes de hoy`;
   const varias = classes.length > 1;
   // Si TODAS son rechazadas, el profesor sí subió algo: la frase no puede decir
   // que no lo ha subido.
@@ -546,12 +549,22 @@ ${classes.map(c => `    <div style="font-size:14px; color:#1A1A1A; padding:3px 0
     ? copy(`Hoy has dado clase con estos alumnos y todavía ${falta} de esas clases:`)
     : `${copy('Hoy has dado clase con')} <strong>${esc(classes[0].studentName)}</strong>${classes[0].hours ? ` (${esc(classes[0].hours)})` : ''} ${copy(`y todavía ${falta} de esa clase.`)}`;
 
+  // Con un alumno se le nombra; con varios no se repite la lista, que ya está
+  // arriba en viñetas.
+  const consecuencia = varias
+    ? copy('Sin el transcript, esas clases no se contabilizan para tu pago y además tus alumnos no pueden generar su práctica personalizada.')
+    : `${copy('Sin el transcript, esa clase no se contabiliza para tu pago y además')} <strong>${esc(classes[0].studentName)}</strong> ${copy('no puede generar su práctica personalizada.')}`;
+
   const html = baseEmailTemplate(
     p(`Hola ${esc(teacher.name)}:`) +
     p(intro) +
     lista +
-    p(copy('Recuerda que para que la clase quede aprobada y puedas cobrarla, tienes que subir el transcript. Si se te ha olvidado, entra en Fathom, copia el transcript de la clase y pégalo en la ficha del alumno.')) +
-    p(copy('Es rápido y así te aseguras de que todas tus clases queden registradas y se te paguen.')) +
+    // Las dos consecuencias, y en este orden: primero la que le afecta a él
+    // (no cobra) y después la que le afecta al alumno (se queda sin práctica).
+    // La segunda es la que convierte el recordatorio en algo más que una
+    // gestión administrativa.
+    p(consecuencia) +
+    p(copy('Si se te ha olvidado, entra en Fathom, copia el transcript de la clase y pégalo en la ficha del alumno. Es rápido.')) +
     ctaButton('Subir transcript', `${APP_URL}/mis-clases`) +
     p(`${copy('Un saludo,')}<br />${copy('Equipo DRC Academy')}`),
     varias
@@ -560,6 +573,50 @@ ${classes.map(c => `    <div style="font-size:14px; color:#1A1A1A; padding:3px 0
   );
 
   return send('sendDailyTranscriptReminder', teacher, subject, html);
+}
+
+// ═══ I bis) Nivel del test listo para validar ═════════════════════════════════
+
+/**
+ * El alumno terminó el test de nivel: hay que pedirle al profesor que lo valide.
+ *
+ * Se manda en DOS momentos, y por eso vive acá y no dentro del submit del test:
+ *   · al terminar el test, si el alumno ya tiene profesor;
+ *   · al asignarle profesor, si cuando lo terminó no lo tenía (ver la marca
+ *     `level_validation_pending` en supabase-level-validation-pending.sql).
+ *
+ * El enlace va a la ficha del alumno, que es donde está el desplegable de
+ * niveles. Sale de `PUBLIC_APP_URL` como el resto: la URL de deployment de Vercel
+ * cambia en cada push y dejaría enlaces muertos en la bandeja del profesor.
+ */
+export async function sendLevelValidationRequest(
+  teacher: TeacherLike,
+  args: { studentName: string; studentId?: string | null; level: string; provisional?: boolean },
+): Promise<boolean> {
+  const subject = `${teacher.name}, hay un nivel para validar`;
+
+  // Un resultado provisional salió solo de la lectura porque la escritura no se
+  // pudo puntuar. Callarlo haría que el profesor validara un nivel a medias
+  // creyendo que está completo.
+  const aviso = args.provisional
+    ? p(copy(`Ojo: el resultado es provisional, se calculó solo con la parte de lectura porque la escritura no se pudo puntuar.`))
+    : '';
+
+  const ficha = args.studentId
+    ? `${APP_URL}/mis-alumnos/${encodeURIComponent(args.studentId)}`
+    : `${APP_URL}/mis-alumnos`;
+
+  const html = baseEmailTemplate(
+    p(`Hola ${esc(teacher.name)}:`) +
+    p(`<strong>${esc(args.studentName)}</strong> ${copy('ha completado el test de nivel con resultado')} <strong>${esc(args.level)}</strong>.`) +
+    aviso +
+    p(copy('Después de las primeras clases, recuerda validar o corregir su nivel desde la sección Alumnos. Tu criterio manda sobre el del test: lo que confirmes es lo que la plataforma usará para preparar sus clases.')) +
+    ctaButton('Ver ficha del alumno', ficha) +
+    p(`${copy('Un saludo,')}<br />${copy('Equipo DRC Academy')}`),
+    `${args.studentName} ha completado el test de nivel: ${args.level}`,
+  );
+
+  return send('sendLevelValidationRequest', teacher, subject, html);
 }
 
 // ═══ J) Circular del admin ════════════════════════════════════════════════════

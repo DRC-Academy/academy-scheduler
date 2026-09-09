@@ -300,6 +300,15 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     await dbNotifyNewAssignment(a.teacherId, a.studentName, a.studentEmail, {
       plan: a.plan, level: a.studentLevel, slots: a.slots, startDate: a.startDate,
     });
+    // Si el alumno hizo el test de nivel ANTES de tener profesor, su aviso de
+    // validación quedó en espera: este es el momento de entregarlo. El endpoint
+    // no hace nada cuando no hay marca, que es lo normal. Best-effort a
+    // propósito: la asignación ya está hecha y no puede depender de un email.
+    fetch('/api/students/level-validation-notice', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ studentId: a.studentId, studentName: a.studentName, teacherId: a.teacherId }),
+    }).catch(err => console.warn('[addAssignment] No se pudo entregar el aviso de nivel:', err));
     setAssignments(prev => [a, ...prev]);
     // The student now has an assignment â€” drop it from the unassigned list
     setUnassignedStudents(prev => prev.filter(s => s.id !== a.studentId && s.name !== a.studentName));

@@ -22,7 +22,8 @@ import { isoDateLocal, classesForDate, groupContiguousClasses, sessionHoursLabel
 import { periodIndex, dbGetStudentDropouts, type StudentDropout } from '@/lib/studentPeriod';
 import { StudentAutofillCard } from '@/components/StudentAutofillCard';
 import { useStudentAutofill } from '@/lib/useStudentAutofill';
-import { usePresentationSent, presentationBtnStyle, PresentationEmailBadge } from '@/components/teacherPanelUi';
+import { usePresentationSent, presentationBtnStyle, PresentationEmailBadge, PendingTasksCard, useNivelesSinValidar } from '@/components/teacherPanelUi';
+import { transcriptsPendientes } from '@/lib/dashboardMetrics';
 import { RETENTION_BONUS_DAYS, retentionDaysActive, retentionStartDate, retentionBonusDate, hasRetentionBonus } from '@/lib/retention';
 import { Grid, Teacher, Assignment, ScoringEvent, Student, AppNotification, ClassRecord } from '@/types';
 import FormStatusBadge from '@/components/FormStatusBadge';
@@ -1166,7 +1167,7 @@ type TeacherTab = typeof TEACHER_TABS[number];
 
 function TeacherContent() {
   const { user } = useAuth();
-  const { teachers, students, assignments, scoringEvents, notifications, classRecords, getTeacherGrid, updateTeacherGrid, addStudent, addAssignment, updateAssignmentStartDate, updateAssignmentSlots, reloadAll, updateTeacherSpecialties, loadNotifications, markNotificationRead, updateMeetLink, addRecoveryClass, removeAssignment, classJoinLogs, registerClassRecord } = useTeachers();
+  const { teachers, students, assignments, scoringEvents, notifications, classRecords, getTeacherGrid, updateTeacherGrid, addStudent, addAssignment, updateAssignmentStartDate, updateAssignmentSlots, reloadAll, updateTeacherSpecialties, loadNotifications, markNotificationRead, updateMeetLink, addRecoveryClass, removeAssignment, classJoinLogs, classAnalyses, registerClassRecord } = useTeachers();
   const [activeTab, setActiveTab] = useState<TeacherTab>('calendar');
 
   // El campanario del header navega a /teacher?tab=notifications. Sincronizamos
@@ -1585,6 +1586,10 @@ function TeacherContent() {
     setDismissedBonusInSession(prev => new Set([...prev, `${studentName}_${assignmentId}`]));
   }
 
+  // Los niveles sin validar se piden ANTES de la guarda: es un hook, y un hook
+  // detrás de un return condicional cambia de orden entre renders.
+  const nivelesSinValidar = useNivelesSinValidar(teacher?.id);
+
   if (!teacher) return null;
 
   // Alumnos del profesor. Hoy manda `assignments`; con ?strictGrid=1 se
@@ -1597,6 +1602,16 @@ function TeacherContent() {
   const freeCount    = Object.values(grid).filter(c => c.state === 'libre').length;
   const ocupadoCount = Object.values(grid).filter(c => c.state === 'ocupado').length;
   const bloqCount    = Object.values(grid).filter(c => c.state === 'bloqueado').length;
+
+  // ── Pendientes del profesor (tarjeta de arriba) ────────────────────────────
+  // Los transcripts salen de la MISMA función que usa el dashboard del admin y
+  // que sigue el criterio de finanzas, así que el panel, el correo del cron y la
+  // liquidación no pueden contradecirse. Solo sus ingresos, no los de nadie más.
+  const misTranscriptsPendientes = transcriptsPendientes(
+    classJoinLogs.filter(l => l.teacherId === teacher.id),
+    classAnalyses,
+  ).length;
+
 
   // checkClass15And30Banners: revisa cantidad de clases, sin mencionar bonos
   type BannerEntry = { studentName: string; milestone: 15 | 30; startDate: string; slotsPerWeek: number };
@@ -1679,6 +1694,11 @@ function TeacherContent() {
       <NavBar />
       <PullToRefresh onRefresh={reloadAll}>
       <div className="thd" style={{ maxWidth: 1180, margin: '0 auto', padding: '20px 16px 48px' }}>
+
+        {/* Lo que tiene sin hacer, antes que nada. Va encima de los hitos porque
+            el hito es una felicitación y esto es una tarea: si compiten por el
+            primer vistazo, gana la tarea. Desaparece sola cuando no hay nada. */}
+        <PendingTasksCard transcripts={misTranscriptsPendientes} niveles={nivelesSinValidar} />
 
         {/* Milestone banners — clase 15 (amarillo) y clase 30 (verde), sin mencionar bonos */}
         {visibleBanners.map(banner => (
