@@ -57,13 +57,32 @@ export async function fetchAllPages<T>(
 
 // ── AUTH ─────────────────────────────────────────────────────────────────────
 
+// El usuario se compara SIN distinguir mayúsculas; la contraseña SÍ.
+//
+// Antes se pasaba `username.toLowerCase()` a un `.eq()`, que en Postgres es
+// exacto: cualquier fila guardada con mayúscula quedaba fuera del alcance del
+// login para siempre, escribiera lo que escribiera la persona. Le pasó a tres
+// profesoras reales (Noeli, Lola, Ana.c), creadas desde el admin escribiendo el
+// usuario a mano — el modal solo baja a minúsculas el usuario que autogenera a
+// partir del nombre, no el que se teclea. El síntoma es el peor posible:
+// "usuario o contraseña incorrectos" con la contraseña correcta.
+//
+// `ilike` sin comodines es una igualdad insensible a mayúsculas. Hay que
+// neutralizar `%` y `_` (comodines de LIKE): sin escaparlos, un usuario "%"
+// casa con CUALQUIER fila, y bastaría acertar una contraseña genérica para
+// entrar como otra persona.
+function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/g, m => `\\${m}`);
+}
+
 export async function dbAuthenticate(username: string, password: string): Promise<AppUser | null> {
   const { data, error } = await supabase
     .from('app_users')
     .select('*')
-    .eq('username', username.toLowerCase().trim())
+    .ilike('username', escapeLikePattern(username.trim()))
     .eq('password', password)
-    .single();
+    .limit(1)
+    .maybeSingle();
 
   if (error || !data) return null;
 
@@ -263,19 +282,24 @@ export async function dbGetTeachers(
 }
 
 export async function dbAddTeacher(teacher: Teacher, username: string): Promise<void> {
+  // El usuario se guarda siempre en minúsculas, venga escrito como venga desde el
+  // admin: es un identificador de login, no un nombre para mostrar (para eso está
+  // display_name). Así "Noeli" y "noeli" no pueden convivir como cuentas distintas.
+  const login = username.toLowerCase().trim();
+
   await supabase.from('teachers').insert({
     id:         teacher.id,
     name:       teacher.name,
     email:      teacher.email,
     avatar:     teacher.avatar,
-    username:   username,
+    username:   login,
     password:   'profe123',
     specialties: ['Inglés'],
   });
 
   await supabase.from('app_users').insert({
     id:           `u_${teacher.id}`,
-    username:     username,
+    username:     login,
     password:     'profe123',
     role:         'teacher',
     teacher_id:   teacher.id,
