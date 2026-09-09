@@ -1,20 +1,52 @@
-# Dashboard principal — propuesta
+# Dashboard principal
 
-Maqueta navegable: **`/dashboard-preview`** (solo admin). Todos los números que
-se ven ahí están escritos a mano; no hay ninguna consulta nueva.
+**Estado: en producción, con datos reales, en `/dashboard`.** La maqueta
+`/dashboard-preview` se borró: ya no hacía falta.
 
-Este documento explica, bloque por bloque, **qué muestra**, **de dónde saldría el
-dato de verdad** y **cuánto cuesta traerlo**. Lo marcado con **[DECISIÓN]** es una
-regla de negocio que tenés que fijar vos: el código no puede inventarla.
+Este documento explica bloque por bloque **qué muestra** y **de dónde sale**. Lo
+marcado con **[DECISIÓN]** es una regla de negocio que sigue esperando tu
+criterio: donde hizo falta un umbral para poder conectar, se puso uno provisional
+y está señalado.
+
+## Qué quedó conectado y qué no
+
+| Bloque | Estado |
+|---|---|
+| Indicadores de cabecera | **Conectado** |
+| Requiere acción hoy (8 tarjetas) | **Conectado** |
+| Riesgo de baja | **Conectado** |
+| Operación de clases | **Conectado** |
+| Profesores + uso de IA | **Conectado** |
+| Finanzas del mes | **Conectado** |
+| Emails de presentación | **Conectado** (ya lo estaba) |
+| Herramientas de mantenimiento | **Conectado** (ya lo estaba) |
+| Suscripciones por estado y por origen | **Fuera.** Sale por red a WooCommerce y no se puede probar en local; además haría lento el arranque de la pantalla de entrada |
+| Altas y bajas · 6 meses | **Fuera.** Falta decidir qué cuenta como alta (ver abajo). Del mes en curso sí se muestran las bajas |
+| Embudo de captación | **Fuera.** Necesita cruzar `form_tokens` con `level_test_sessions` |
+| Cupos libres por franja | **Fuera.** El dato existe, pero antes hay que decidir qué es un cupo (ver abajo) |
+
+## Una corrección al diagnóstico inicial
+
+En la primera versión de este documento calculé mal el coste de medio dashboard.
+`loadFinanceData()` **ya corre al arrancar la app, para todos los roles**, así que
+clases, ingresos, análisis, tarifas, pagos y aprobaciones están en memoria antes
+de que el dashboard se pinte. Todo lo que yo había marcado como "medio" —clases de
+la semana, faltas, recuperaciones, ranking de profesores, transcripts pendientes y
+**las finanzas enteras**— sale en realidad **gratis**.
+
+El dashboard hace **cinco consultas nuevas en total**, todas ligeras y en
+paralelo: riesgo, bajas, uso de IA, validaciones pendientes y solicitudes de
+revisión. Más el conteo de análisis fallidos. Si alguna falla, el resto de la
+pantalla se pinta igual.
 
 ## Cómo leer el coste
 
 | | Qué significa |
 |---|---|
-| **Gratis** | El dato ya está cargado en memoria cuando abrís la app (contexto `useTeachers`: profesores, alumnos, asignaciones, clases registradas, eventos de scoring). Pintarlo no cuesta nada. |
+| **Gratis** | Ya está en memoria (contexto `useTeachers`). Pintarlo no cuesta nada. |
 | **Barato** | Una consulta de conteo, o una tabla chica. Milisegundos. |
-| **Medio** | Una tabla entera de tamaño moderado (unos cientos de filas) pidiendo solo las columnas necesarias. |
-| **Caro** | Sale de la red externa (WooCommerce) o cruza varias tablas grandes. Conviene cachearlo o cargarlo aparte, sin bloquear la pantalla. |
+| **Medio** | Una tabla entera de tamaño moderado pidiendo solo las columnas necesarias. |
+| **Caro** | Sale de la red externa (WooCommerce). Conviene cachearlo. |
 
 ---
 
@@ -225,3 +257,52 @@ recibir los datos ya leídos, así que es un arreglo chico.
 por red a un servicio externo. Si el dashboard es la pantalla de entrada del
 admin, se va a cargar muchas veces al día. Propongo guardar el último resultado
 unos minutos y mostrar la hora de la última lectura.
+
+---
+
+## Umbrales provisionales que hay que confirmar
+
+Tres decisiones había que tomar para poder conectar. Se tomaron con un valor
+razonable, están en un solo sitio del código y cambiarlas es editar un número.
+
+**[DECISIÓN] Cuándo un transcript está atrasado — hoy: 24 horas.**
+`lib/dashboardMetrics.transcriptsPendientes`, parámetro `desdeDias`. Una clase de
+las 20:00 subida a la mañana siguiente no aparece; a partir del día siguiente sí.
+
+**[DECISIÓN] Umbrales del semáforo de ocupación — hoy: verde ≥75%, amarillo
+≥60%, rojo por debajo.** `lib/dashboardMetrics.OCUPACION_OK` y `OCUPACION_AVISO`.
+
+**[DECISIÓN] Qué es un cupo.** La ocupación se calcula sobre las horas que el
+profesor tiene ABIERTAS en su calendario, descartando a quien no tiene ninguna.
+Un profesor con el calendario abierto de 8 a 23 que solo quiere trabajar seis
+horas hunde el porcentaje. Si tenés otra definición, es una línea en
+`ocupacionDe`.
+
+**[DECISIÓN] Qué cuenta como alta.** Sigue sin resolverse, y es lo que bloquea el
+gráfico de altas y bajas de seis meses: no hay tabla de altas, hay que derivarla
+de la fecha de la asignación o de la primera clase, y entre las dos suele haber
+una o dos semanas.
+
+**[DECISIÓN] ¿Reintroducimos un nivel intermedio de riesgo?** El sistema tiene
+dos: verde y rojo. El amarillo se quitó a propósito en julio de 2026 y la IA ya no
+lo puede emitir. Si lo querés de vuelta, hace falta una regla mecánica que lo
+dispare.
+
+## Decisiones que sí se resolvieron al conectar
+
+**Qué es "esta semana": de lunes a domingo, en hora de Madrid.** El lunes por la
+mañana el contador arranca a cero.
+
+**Qué cuenta como clase dada: `normal` y `recuperacion`.** Faltas, cancelaciones y
+reprogramaciones no. La lista es explícita en `esClaseDada`, así que un tipo nuevo
+no entra solo en el conteo.
+
+**Qué está pendiente de recuperar.** Solo lo que conserva el derecho, según la
+lista de `lib/recovery`: una falta sin aviso o una cancelación sobre la hora se le
+cobraron al alumno y no están pendientes de nada. (Este fue un error real que
+tenía el primer intento y que encontraron los tests.)
+
+**Alumnos: "con clase", no "activos".** La cabecera dice cuántos alumnos tienen
+una asignación, que es lo que la base sabe sola. "Activos" en el sentido de la
+suscripción necesita WooCommerce y es otro número: se etiqueta distinto a
+propósito para que nadie los confunda.

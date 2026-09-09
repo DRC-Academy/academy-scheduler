@@ -23,11 +23,26 @@
 // mantenimiento, que son acciones puntuales y no información de consulta.
 
 import { useState, useEffect, useRef } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useTeachers } from '@/lib/TeachersContext';
 import type { AssignedSlot } from '@/types';
 import { CrearVinculoModal } from '@/components/CrearVinculoModal';
 import { getPresentationEmailStatus } from '@/lib/presentationEmailUtils';
+import { calculateTeacherFinance } from '@/lib/finance';
+import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
+// Los números del dashboard: funciones puras sobre lo que el contexto ya trajo.
+import {
+  monthKey, weekRange, madridDateString, diasEntre,
+  alumnosResumen, ocupacionDe, tonoOcupacion, operacionDelMes,
+  clasesEnRango, clasesProgramadasSemana, faltasProfesorDelMes,
+  transcriptsPendientes, filasProfesores,
+} from '@/lib/dashboardMetrics';
+// Y las cinco lecturas que no están en memoria.
+import {
+  loadDashboardExtras, riesgoResumen, esRiesgoRojo, bajasDelMes,
+  type DashboardExtras,
+} from '@/lib/dashboardExtras';
 import {
   dbAuditStudentAssignments, dbRelinkAssignment, dbSyncAssignmentName, dbMergeDuplicateStudents,
   dbSyncStudentAssignments, dbDiagnoseAllCalendars, dbSyncAllCalendarsToAssignments, dbCreateFullLink,
@@ -35,13 +50,8 @@ import {
   type CalendarDiagnosisAllRow, type AuditResult,
 } from '@/lib/db';
 
-/**
- * Los tres filtros de la pestaña Emails a los que saltan los contadores de
- * presentación. Se escriben acá y no se importan de la página de admin: son
- * parámetros de URL, y traerse el tipo obligaría a importar /admin entero desde
- * el dashboard solo para leer cinco cadenas.
- */
-type EmailTileFilter = 'pending' | 'at_risk' | 'overdue';
+/** Constante estable: un Set nuevo en cada render rompe la memoización. */
+const VACIO_IDS: ReadonlySet<string> = new Set<string>();
 
 const AUDIT_REVIEWED_KEY = 'drc_audit_reviewed_multi';
 
@@ -1192,11 +1202,100 @@ function ConflictDetailModal({ groups, onClose, onOpenAudit }: {
   );
 }
 
+// ─── Piezas visuales ─────────────────────────────────────────────────────────
+
+const TONO = {
+  rojo:     { fg: '#B42318', bg: 'rgba(220,74,56,0.08)', bd: 'rgba(220,74,56,0.30)' },
+  aviso:    { fg: '#8a6d00', bg: 'rgba(255,196,0,0.12)', bd: 'rgba(255,196,0,0.45)' },
+  ok:       { fg: '#167A2D', bg: 'var(--bg-surface)',    bd: 'var(--border)' },
+} as const;
+type Tono = keyof typeof TONO;
+
+const eur = (n: number) => `${Math.round(n).toLocaleString('es-ES')} €`;
+
+/** Cabecera de sección, con su enlace al detalle. */
+function SecHead({ title, sub, href, cta = 'Ver detalle' }: {
+  title: string; sub?: string; href?: string; cta?: string;
+}) {
+  return (
+    <div className="dsh-sechead">
+      <div>
+        <h2 className="dsh-h2">{title}</h2>
+        {sub && <p className="dsh-sub">{sub}</p>}
+      </div>
+      {href && <Link href={href} className="dsh-link">{cta} ›</Link>}
+    </div>
+  );
+}
+
+/**
+ * Una cola que espera a alguien.
+ *
+ * A cero se apaga —fondo blanco y guion en vez del número— en lugar de
+ * desaparecer: que la tarjeta esté siempre en el mismo sitio es lo que permite
+ * mirar la fila entera de un vistazo y ver que no hay nada pendiente. Si
+ * apareciera y desapareciera, habría que leerlas todas cada vez.
+ */
+function Accion({ n, label, detalle, tono, href, onClick, cargando }: {
+  n: number | null; label: string; detalle: string; tono: Tono;
+  href?: string; onClick?: () => void; cargando?: boolean;
+}) {
+  const vacio = n === 0;
+  const t = vacio ? TONO.ok : TONO[tono];
+  const inner = (
+    <>
+      <div className="dsh-accion-n" style={{ color: vacio || n == null ? 'var(--text-muted)' : t.fg }}>
+        {cargando ? '·' : vacio ? '—' : n}
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div className="dsh-accion-l">{label}</div>
+        <div className="dsh-accion-d">{cargando ? 'Cargando…' : vacio ? 'Nada pendiente' : detalle}</div>
+      </div>
+      <span aria-hidden className="dsh-chev">›</span>
+    </>
+  );
+  const style = { background: vacio ? 'var(--bg-surface)' : t.bg, borderColor: vacio ? 'var(--border)' : t.bd };
+
+  if (onClick) {
+    return <button type="button" className="dsh-accion" style={style} onClick={onClick}>{inner}</button>;
+  }
+  return <Link href={href ?? '#'} className="dsh-accion" style={style}>{inner}</Link>;
+}
+
+function Barra({ pct, color = '#1E9E3A' }: { pct: number; color?: string }) {
+  return (
+    <div className="dsh-track" aria-hidden>
+      <div className="dsh-fill" style={{ width: `${Math.min(100, Math.max(0, pct))}%`, background: color }} />
+    </div>
+  );
+}
+
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 
 export default function DashboardGeneral() {
-  const { teachers, assignments, students } = useTeachers();
+  const {
+    teachers, students, assignments,
+    classRecords, classJoinLogs, classAnalyses,
+    financeRates, financePayments, scoringEvents, manualApprovals,
+  } = useTeachers();
   const router = useRouter();
+
+  // ── Lo que no está en memoria ──────────────────────────────────────────────
+  // Cinco lecturas ligeras, una sola vez. El resto de la pantalla se pinta sin
+  // esperarlas: hasta que llegan, sus tarjetas muestran "·".
+  const [extras, setExtras] = useState<DashboardExtras | null>(null);
+  useEffect(() => {
+    let cancelado = false;
+    loadDashboardExtras().then(e => { if (!cancelado) setExtras(e); }).catch(() => {});
+    return () => { cancelado = true; };
+  }, []);
+
+  // El "ahora" se congela al montar. Leerlo en cada render haría que las fechas
+  // se movieran solas entre renders, y el linter de pureza lo prohíbe con razón.
+  const [ahora] = useState(() => new Date());
+  const mes = monthKey(ahora);
+  const semana = weekRange(ahora);
+  const hoyIso = madridDateString(ahora);
 
   // ── Conflictos REALES ──────────────────────────────────────────────────────
   // Hasta ahora este contador salía de `mockAlerts`, un array fijo de lib/mock-data:
@@ -1265,216 +1364,369 @@ export default function DashboardGeneral() {
   // Abre la Auditoría de vínculos y la trae a la vista (contador "Conflictos").
   const [auditSignal, setAuditSignal] = useState(0);
 
-  // Referencia temporal para el estado de los emails de presentación. No hace
-  // falta un reloj vivo: se recalcula al recargar la página.
-  const nowMs = Date.now();
-  const presPendingStatuses = assignments.filter(a => !a.presentationEmailSent).map(a => getPresentationEmailStatus(a, nowMs));
-  const presOnTimeCount  = presPendingStatuses.filter(s => s.status === 'on_time' || s.status === 'warning').length;
-  const presAtRiskCount  = presPendingStatuses.filter(s => s.status === 'at_risk').length;
-  const presOverdueCount = presPendingStatuses.filter(s => s.status === 'overdue').length;
+  // ── Los números ────────────────────────────────────────────────────────────
+  // Todo esto sale de lo que el contexto ya tiene cargado. Ni una consulta.
+  const alumnos = alumnosResumen(students, assignments);
+  const ocup = ocupacionDe(teachers);
+  const op = operacionDelMes(classRecords, mes);
+  const clasesSemana = clasesEnRango(classRecords, semana);
+  const programadas = clasesProgramadasSemana(assignments);
+  const faltasProfe = faltasProfesorDelMes(scoringEvents, mes);
+  const profesActivos = teachers.filter(t => t.status !== 'vacation').length;
 
-  const activeTeachers  = teachers.filter(t => t.status !== 'vacation').length;
-  const totalClasses    = teachers.reduce((a, t) => a + t.upcomingClasses.length, 0);
-  const totalFreeSpots  = teachers.reduce((a, t) => a + t.freeSpots, 0);
-  const blockedCount    = teachers.filter(t => t.isBlocked).length;
+  // Sin useMemo a propósito: el proyecto compila con el compilador de React, que
+  // memoiza esto solo. Un useMemo escrito a mano se lo impide — el linter lo
+  // señala como "Existing memoization could not be preserved".
+  const pendientes = transcriptsPendientes(classJoinLogs, classAnalyses, { hoy: hoyIso });
 
-  // Punto de severidad de cada alerta (ya no se usan fondos ni iconos).
-  const alertColors = { high: '#dc4a38', medium: '#e0912f', low: '#8b8e88' };
+  const filas = filasProfesores({
+    teachers, records: classRecords, mes,
+    pendientes, teacherIdsConIA: extras?.teacherIdsConIA ?? VACIO_IDS,
+  });
 
-  /** Cada contador de presentación lleva a la pestaña Emails con SU filtro puesto. */
-  const goToEmails = (filter: EmailTileFilter) => {
-    router.push(`/admin?tab=emails&filter=${filter}`, { scroll: true });
-  };
+  const riesgo = riesgoResumen(extras?.risk ?? []);
+  const urgentes = (extras?.risk ?? [])
+    .filter(esRiesgoRojo)
+    .slice(0, 5)
+    .map(r => ({
+      alumno: r.student_name ?? '—',
+      profe: teachers.find(t => t.id === r.teacher_id)?.name ?? '—',
+      causa: (r.risk_explanation ?? '').trim() || 'Sin explicación registrada',
+      dias: r.risk_updated_at ? diasEntre(r.risk_updated_at.slice(0, 10), hoyIso) : null,
+    }));
+
+  // ── Finanzas ───────────────────────────────────────────────────────────────
+  // MISMAS entradas que /finanzas y que la vista del profesor. Si esta llamada y
+  // esa no reciben lo mismo, el dashboard y la liquidación dirían cosas distintas
+  // del mismo mes.
+  // Una sola pasada por profesor: `calculateTeacherFinance` es lo más caro de la
+  // pantalla y llamarlo cuatro veces por cada uno, una por importe, era pagar el
+  // cálculo entero cuatro veces.
+  const finanzas = (() => {
+    let total = 0, pagable = 0, aRevisar = 0, retenido = 0, pagados = 0;
+    for (const t of teachers) {
+      const payment = financePayments.find(p => p.teacherId === t.id && p.monthYear === mes) ?? null;
+      const r = calculateTeacherFinance({
+        teacherId: t.id, teacherName: t.name, monthYear: mes,
+        assignments, joinLogs: classJoinLogs, classRecords, classAnalyses,
+        rates: financeRates, scoringEvents, students, manualApprovals, payment,
+        gridOccupancy: gridOccupancyOfTeacher(t),
+      });
+      total += r.totalAPagar;
+      pagable += r.montoPagable;
+      aRevisar += r.montoARevisar;
+      retenido += r.montoRetenido;
+      if (r.paymentStatus === 'paid') pagados += 1;
+    }
+    return { total, pagable, aRevisar, retenido, pagados };
+  })();
+
+  // ── Emails de presentación ─────────────────────────────────────────────────
+  const nowMs = ahora.getTime();
+  const presStatuses = assignments.filter(a => !a.presentationEmailSent).map(a => getPresentationEmailStatus(a, nowMs));
+  const presOnTime  = presStatuses.filter(s => s.status === 'on_time' || s.status === 'warning').length;
+  const presAtRisk  = presStatuses.filter(s => s.status === 'at_risk').length;
+  const presOverdue = presStatuses.filter(s => s.status === 'overdue').length;
+
+  const cargandoExtras = extras == null;
+  const pctSemana = programadas > 0 ? Math.round((clasesSemana / programadas) * 100) : 0;
+  const tonoOc = tonoOcupacion(ocup.pct);
+
+  const kpis = [
+    { label: 'Alumnos con clase', valor: String(alumnos.conClase), pie: `de ${alumnos.total} en la base` },
+    { label: 'Profesores activos', valor: String(profesActivos), pie: `de ${teachers.length}` },
+    { label: 'Clases esta semana', valor: String(clasesSemana), pie: `${programadas} programadas · ${pctSemana}%` },
+    { label: 'Coste profesores', valor: eur(finanzas.total), pie: `del mes en curso` },
+    {
+      label: 'Ocupación', valor: `${ocup.pct} %`,
+      pie: `${ocup.ocupados} de ${ocup.total} horas`,
+      barra: ocup.pct,
+      color: tonoOc === 'ok' ? '#1E9E3A' : tonoOc === 'aviso' ? '#FFC400' : '#dc4a38',
+    },
+  ];
 
   return (
     <>
-      {/* KPIs monocromos: color solo en los que comunican estado. */}
-      <div className="adm-kpis">
-        {[
-          { label: 'Activos',       value: activeTeachers,  sub: `de ${teachers.length}`, alert: false },
-          { label: 'Clases semana', value: totalClasses,    sub: 'confirmadas',           alert: false },
-          { label: 'Cupos libres',  value: totalFreeSpots,  sub: 'disponibles',           alert: false },
-          {
-            label: 'Conflictos',
-            value: conflicts ?? '·',
-            sub: conflicts == null ? 'revisando…' : conflicts > 0 ? 'ver el detalle' : 'sin conflictos',
-            alert: (conflicts ?? 0) > 0,
-            // Solo es clickable si hay algo que mirar.
-            onClick: conflicts ? () => setConflictDetail(conflictGroups) : undefined,
-            title: conflictGroups.map(g => `${g.items.length} · ${g.label}`).join('\n'),
-          },
-          { label: 'Alumnos',       value: students.length, sub: 'registrados',           alert: false },
-          { label: 'Bloqueados',    value: blockedCount,    sub: 'baja retención',        alert: blockedCount > 0 },
-        ].map(s => {
-          const clickable = 'onClick' in s && !!s.onClick;
-          const Tag = clickable ? 'button' : 'div';
-          return (
-            <Tag
-              key={s.label}
-              className={`adm-card adm-kpi${clickable ? ' is-clickable' : ''}`}
-              onClick={clickable ? s.onClick : undefined}
-              title={('title' in s && s.title) || undefined}
-              {...(clickable ? { type: 'button' as const } : {})}
-            >
-              <div className="adm-kpi-label">
-                {s.label}
-                {clickable && <span aria-hidden className="adm-kpi-arrow">›</span>}
-              </div>
-              <div className={`adm-kpi-value${s.alert ? ' is-alert' : ''}`}>
-                {s.alert && <span className="adm-dot" style={{ background: '#dc4a38' }} />}
-                {s.value}
-              </div>
-              <div className="adm-kpi-sub">{s.sub}</div>
-            </Tag>
-          );
-        })}
+      {/* ── Indicadores ── */}
+      <div className="dsh-kpis">
+        {kpis.map(k => (
+          <div key={k.label} className="dsh-kpi">
+            <div className="dsh-kpi-l">{k.label}</div>
+            <div className="dsh-kpi-v">{k.valor}</div>
+            {k.barra != null && <Barra pct={k.barra} color={k.color} />}
+            <div className="dsh-kpi-p">{k.pie}</div>
+          </div>
+        ))}
       </div>
 
-      {/* Emails de presentación */}
-      <div className="adm-card" style={{ padding: '18px 20px', marginBottom: 18 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-          <span style={{ fontSize: 14, fontWeight: 600 }}>Emails de presentación</span>
-          <span style={{ marginLeft: 'auto', fontSize: 12.5, color: '#8b8e88' }}>
-            {presPendingStatuses.length} pendiente{presPendingStatuses.length !== 1 ? 's' : ''}
-          </span>
+      {/* ── Requiere acción ── */}
+      <section className="dsh-sec">
+        <SecHead title="Requiere acción hoy" sub="Las colas que esperan a alguien. A cero se apagan, pero no se mueven de sitio." />
+        <div className="dsh-acciones">
+          <Accion n={extras?.validaciones.total ?? null} cargando={cargandoExtras}
+            label="Validaciones pendientes" tono="rojo"
+            detalle={extras && extras.validaciones.oldestDays > 0 ? `la más antigua, ${extras.validaciones.oldestDays} días` : 'esperando revisión'}
+            href="/admin?tab=validacion" />
+
+          <Accion n={presOverdue} label="Emails de presentación tarde" tono="rojo"
+            detalle="más de 24 h sin enviar" href="/admin?tab=emails&filter=overdue" />
+
+          <Accion n={riesgo.sinAtender} cargando={cargandoExtras}
+            label="Alumnos en riesgo" tono="rojo"
+            detalle="sin intervención registrada" href="/admin?tab=ai" />
+
+          <Accion n={pendientes.length} label="Transcripts sin subir" tono="aviso"
+            detalle={pendientes.length > 0 ? `el más viejo, hace ${pendientes[0].dias} días` : ''}
+            href="/admin?tab=tracking" />
+
+          <Accion n={extras?.solicitudesRevision ?? null} cargando={cargandoExtras}
+            label="Solicitudes de revisión" tono="aviso"
+            detalle="clases que el profe no cobra" href="/finanzas" />
+
+          <Accion n={presAtRisk} label="Emails en riesgo" tono="aviso"
+            detalle="más de 12 h sin enviar" href="/admin?tab=emails&filter=at_risk" />
+
+          <Accion n={conflicts} cargando={audit == null}
+            label="Conflictos de datos" tono="aviso"
+            detalle={conflictGroups.length > 0 ? `${conflictGroups.length} tipos distintos` : ''}
+            onClick={() => conflicts ? setConflictDetail(conflictGroups) : setAuditSignal(n => n + 1)} />
+
+          <Accion n={extras?.analisisFallidos ?? null} cargando={cargandoExtras}
+            label="Análisis de IA fallidos" tono="aviso"
+            detalle="sin reintentar" href="/admin?tab=tracking" />
         </div>
-        {/* Cada contador lleva a la pestaña Emails con SU filtro puesto: el
-            admin hace clic en "En riesgo" y ve esos, sin volver a filtrar. */}
-        <div className="adm-tiles">
-          {[
-            { label: 'Pendientes a tiempo',    value: presOnTimeCount,  tone: 'is-ok',    dot: '#16a34a', filter: 'pending' as const },
-            { label: 'En riesgo (>12h)',       value: presAtRiskCount,  tone: 'is-warn',  dot: '#e0912f', filter: 'at_risk' as const },
-            { label: 'Fuera de tiempo (>24h)', value: presOverdueCount, tone: 'is-alert', dot: '#dc4a38', filter: 'overdue' as const },
-          ].map(c => (
-            <button
-              key={c.label}
-              type="button"
-              className={`adm-tile ${c.tone} is-clickable`}
-              onClick={() => goToEmails(c.filter)}
-              title={`Ver ${c.label.toLowerCase()} en la pestaña Emails`}
-            >
-              <div className="adm-tile-value">
-                <span className="adm-dot" style={{ background: c.dot }} />
-                {c.value}
-              </div>
-              <div className="adm-tile-label">
-                {c.label}
-                <span aria-hidden className="adm-kpi-arrow">›</span>
-              </div>
-            </button>
-          ))}
-        </div>
-      </div>
+      </section>
 
-      {/* Herramientas de mantenimiento. Van al final y plegadas: son acciones
-          puntuales, no información de consulta diaria, y en la portada le
-          quitarían el sitio a lo que sí se mira todos los días. */}
-      <div style={{ marginTop: 26 }}>
-        <div className="adm-sec-head" style={{ marginBottom: 4 }}>Herramientas de mantenimiento</div>
-        <p style={{ margin: '0 0 2px', fontSize: 12.5, color: 'var(--text-muted)' }}>
-          Auditorías y sincronizaciones que se lanzan a mano. Abrí solo la que necesites.
-        </p>
-      </div>
-      <div className="adm-tools">
-        <AdminTool
-          title="Auditoría de vínculos"
-          desc="Revisa la coherencia entre alumnos, asignaciones y fichas."
-          openSignal={auditSignal}
-        >
-          <AuditPanel />
-        </AdminTool>
-
-        <AdminTool
-          title="Sincronización calendario ↔ asignaciones"
-          desc="Detecta alumnos en el calendario sin assignment ni registro."
-        >
-          <SyncPanel />
-        </AdminTool>
-
-        {/* Los dos paneles de Woo viven juntos: son la misma tarea. */}
-        <AdminTool
-          title="Sincronización con WooCommerce"
-          desc="Actualiza planes y fechas de inicio con los datos reales de Woo."
-        >
-          <PlanSyncPanel />
-          <StartDateSyncPanel />
-          <CompanyPlanSyncPanel />
-        </AdminTool>
-
-        <AdminTool
-          title="Estilo de los textos de IA"
-          desc="Quita los guiones que la IA usaba como conectores en fichas y análisis ya guardados."
-        >
-          <CleanDashesPanel />
-        </AdminTool>
-      </div>
-
-      <div className="adm-bottom">
-        <div className="adm-card">
-          <div className="adm-sec-head">Alertas</div>
-          {/* Alertas REALES. Antes esta lista salía de `mockAlerts`: cinco
-              mensajes fijos escritos a mano ("Agustín supera 40 clases
-              semanales…") que nombraban profesores de verdad y no respondían
-              a ningún dato. Ahora sale de la misma auditoría que alimenta el
-              contador de Conflictos, así que las dos cosas no pueden
-              contradecirse. */}
-          <div className="adm-list">
-            {audit == null ? (
-              <div className="adm-empty">Revisando…</div>
-            ) : blockedCount === 0 && conflictGroups.length === 0 ? (
-              <div className="adm-empty">Sin alertas.</div>
+      {/* ── Riesgo ── */}
+      <section className="dsh-sec">
+        <SecHead title="Riesgo de baja"
+          sub="La IA clasifica cada clase en verde o rojo. No hay nivel intermedio."
+          href="/admin?tab=ai" />
+        <div className="dsh-g-risk">
+          <div className="adm-card dsh-card">
+            <div className="dsh-cardhead">Reparto</div>
+            {cargandoExtras ? <div className="dsh-vacio">Cargando…</div> : riesgo.rojo + riesgo.verde === 0 ? (
+              <div className="dsh-vacio">Todavía no hay clases analizadas.</div>
             ) : (
               <>
-                {blockedCount > 0 && (
-                  <div className="adm-alert">
-                    <span className="adm-dot" style={{ background: '#dc4a38', marginTop: 4 }} />
-                    <span className="adm-alert-text">
-                      {blockedCount} profesor{blockedCount !== 1 ? 'es' : ''} bloqueado{blockedCount !== 1 ? 's' : ''} por baja retención — no pueden recibir nuevos alumnos
-                    </span>
+                <div style={{ textAlign: 'center', padding: '6px 0 2px' }}>
+                  <div className="dsh-risk-big">{riesgo.rojo}</div>
+                  <div className="dsh-risk-cap">
+                    en rojo · {Math.round((riesgo.rojo / (riesgo.rojo + riesgo.verde)) * 100)}% de los analizados
                   </div>
-                )}
-                {conflictGroups.map(g => (
-                  <button
-                    key={g.label}
-                    type="button"
-                    className="adm-alert adm-alert-link"
-                    onClick={() => setConflictDetail([g])}
-                    title={`Ver los ${g.items.length} casos`}
-                  >
-                    <span className="adm-dot" style={{ background: alertColors.high, marginTop: 4 }} />
-                    <span className="adm-alert-text">
-                      {g.items.length} · {g.label}
-                      <span aria-hidden className="adm-kpi-arrow">›</span>
-                    </span>
-                  </button>
-                ))}
+                </div>
+                <div className="dsh-stack" style={{ marginTop: 14 }} aria-hidden>
+                  <div className="dsh-seg" style={{ width: `${(riesgo.verde / (riesgo.rojo + riesgo.verde)) * 100}%`, background: '#1E9E3A' }} />
+                  <div className="dsh-seg" style={{ width: `${(riesgo.rojo / (riesgo.rojo + riesgo.verde)) * 100}%`, background: '#dc4a38' }} />
+                </div>
+                <ul className="dsh-list" style={{ marginTop: 10 }}>
+                  <li className="dsh-row"><span className="adm-dot" style={{ background: '#1E9E3A' }} /><span className="dsh-row-l">Sin señales</span><span className="dsh-row-n">{riesgo.verde}</span></li>
+                  <li className="dsh-row"><span className="adm-dot" style={{ background: '#dc4a38' }} /><span className="dsh-row-l">Con alerta</span><span className="dsh-row-n">{riesgo.rojo}</span></li>
+                </ul>
               </>
             )}
           </div>
-        </div>
 
-        <div className="adm-card">
-          <div className="adm-sec-head">Asignaciones recientes</div>
-          <div className="adm-list">
-            {assignments.length === 0 ? (
-              <div className="adm-empty">Sin asignaciones todavía.</div>
-            ) : assignments.slice(0, 6).map(a => (
-              <div key={a.id} className="adm-row">
-                <div style={{ minWidth: 0 }}>
-                  <div className="adm-row-name">{a.studentName}</div>
-                  <div className="adm-row-meta">
-                    <span className="adm-row-teacher">{a.teacherName}</span>
-                    {' · '}{a.slots.map(s => `${s.day} ${s.hour}`).join(' · ')} · {a.weeklyHours}h/sem
-                  </div>
-                </div>
-                <span className="adm-row-time">
-                  {new Date(a.createdAt).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}
-                </span>
-              </div>
-            ))}
+          <div className="adm-card dsh-card">
+            <div className="dsh-cardhead">Los más urgentes</div>
+            {cargandoExtras ? <div className="dsh-vacio">Cargando…</div> : urgentes.length === 0 ? (
+              <div className="dsh-vacio">Ningún alumno en rojo.</div>
+            ) : (
+              <ul className="dsh-urg">
+                {urgentes.map((u, i) => (
+                  <li key={`${u.alumno}-${i}`} className="dsh-urow">
+                    <span className="adm-dot" style={{ background: '#dc4a38', marginTop: 6 }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div className="dsh-uname">{u.alumno}</div>
+                      <div className="dsh-ucausa">{u.causa}</div>
+                    </div>
+                    <div className="dsh-umeta">
+                      {u.profe}
+                      {u.dias != null && <div className="dsh-udias">hace {u.dias} d</div>}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         </div>
-      </div>
+      </section>
+
+      {/* ── Operación ── */}
+      <section className="dsh-sec">
+        <SecHead title="Operación de clases" sub="Esta semana y lo que arrastra el mes." href="/admin?tab=classlog" />
+        <div className="dsh-g3">
+          <div className="adm-card dsh-card">
+            <div className="dsh-cardhead">Dadas esta semana</div>
+            <div className="dsh-big">{clasesSemana}<span className="dsh-of"> / {programadas}</span></div>
+            <Barra pct={pctSemana} />
+            <p className="dsh-note">
+              {pctSemana}% de lo que el calendario tiene previsto. Del {semana.from.slice(8)} al {semana.to.slice(8)}.
+            </p>
+          </div>
+
+          <div className="adm-card dsh-card">
+            <div className="dsh-cardhead">Del mes</div>
+            <ul className="dsh-list">
+              <li className="dsh-row"><span className="adm-dot" style={{ background: '#1E9E3A' }} /><span className="dsh-row-l">Clases dadas</span><span className="dsh-row-n">{op.dadas}</span></li>
+              <li className="dsh-row"><span className="adm-dot" style={{ background: '#dc4a38' }} /><span className="dsh-row-l">Faltas del alumno sin aviso</span><span className="dsh-row-n">{op.faltasSinAviso}</span></li>
+              <li className="dsh-row"><span className="adm-dot" style={{ background: '#dc4a38' }} /><span className="dsh-row-l">Cancelaciones del profesor</span><span className="dsh-row-n">{faltasProfe}</span></li>
+              <li className="dsh-row"><span className="adm-dot" style={{ background: '#FFC400' }} /><span className="dsh-row-l">Pendientes de recuperar</span><span className="dsh-row-n">{op.recuperacionesPendientes}</span></li>
+            </ul>
+          </div>
+
+          <div className="adm-card dsh-card">
+            <div className="dsh-cardhead">Bajas y recuperaciones</div>
+            <ul className="dsh-list">
+              <li className="dsh-row"><span className="adm-dot" style={{ background: '#dc4a38' }} /><span className="dsh-row-l">Bajas este mes</span><span className="dsh-row-n">{cargandoExtras ? '·' : bajasDelMes(extras.dropouts, mes)}</span></li>
+              <li className="dsh-row"><span className="adm-dot" style={{ background: '#2563eb' }} /><span className="dsh-row-l">Recuperaciones dadas</span><span className="dsh-row-n">{op.recuperaciones}</span></li>
+              <li className="dsh-row"><span className="adm-dot" style={{ background: 'var(--text-muted)' }} /><span className="dsh-row-l">Clases que no se dieron</span><span className="dsh-row-n">{op.noDadas}</span></li>
+            </ul>
+            <p className="dsh-note">Una falta sin aviso no cuenta como pendiente de recuperar: se le cobró al alumno.</p>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Profesores ── */}
+      <section className="dsh-sec">
+        <SecHead title="Profesores" sub="Carga del mes, cupos y quién arrastra transcripts." href="/admin?tab=teachers" />
+        <div className="dsh-g-prof">
+          <div className="adm-card dsh-card">
+            <div className="dsh-cardhead">Clases del mes</div>
+            {filas.length === 0 ? <div className="dsh-vacio">Sin profesores.</div> : (
+              <ul className="dsh-rank">
+                {filas.slice(0, 8).map(f => (
+                  <li key={f.teacherId} className="dsh-rrow">
+                    <span className="dsh-rname">{f.teacherName}</span>
+                    <span className="dsh-rtrack">
+                      <span className="dsh-rfill" style={{ width: `${filas[0].clases > 0 ? (f.clases / filas[0].clases) * 100 : 0}%` }} />
+                    </span>
+                    <span className="dsh-rn">{f.clases}</span>
+                    <span className="dsh-tags">
+                      {f.cuposLibres > 0 && <span className="dsh-tag dsh-tag-ok">{f.cuposLibres} libres</span>}
+                      {f.transcriptsPendientes > 0 && <span className="dsh-tag dsh-tag-w">{f.transcriptsPendientes} sin subir</span>}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          <div className="adm-card dsh-card">
+            <div className="dsh-cardhead">
+              Uso de la IA
+              <Link href="/admin?tab=aiusage" className="dsh-link" style={{ marginLeft: 'auto', fontSize: 12 }}>Ver detalle ›</Link>
+            </div>
+            {cargandoExtras ? <div className="dsh-vacio">Cargando…</div> : (() => {
+              const usan = filas.filter(f => f.usaIA).length;
+              return (
+                <>
+                  <div className="dsh-big">{usan}<span className="dsh-of"> / {filas.length}</span></div>
+                  <Barra pct={filas.length > 0 ? (usan / filas.length) * 100 : 0} />
+                  <p className="dsh-note">
+                    Profesores que han generado alguna clase con IA.
+                    {filas.length - usan > 0 && ` Los ${filas.length - usan} restantes no han usado la herramienta.`}
+                  </p>
+                </>
+              );
+            })()}
+          </div>
+        </div>
+      </section>
+
+      {/* ── Finanzas ── */}
+      <section className="dsh-sec">
+        <SecHead title="Finanzas del mes" sub="Lo que se le debe a los profesores." href="/finanzas" />
+        <div className="dsh-g3">
+          <div className="adm-card dsh-card">
+            <div className="dsh-cardhead">Total a pagar</div>
+            <div className="dsh-fin-big">{eur(finanzas.total)}</div>
+            <p className="dsh-note">Incluye bonus y penalizaciones del mes.</p>
+          </div>
+
+          <div className="adm-card dsh-card">
+            <div className="dsh-cardhead">En qué estado está</div>
+            {(() => {
+              const t = finanzas.pagable + finanzas.aRevisar + finanzas.retenido;
+              const w = (n: number) => (t > 0 ? (n / t) * 100 : 0);
+              return (
+                <>
+                  <div className="dsh-stack" aria-hidden>
+                    <div className="dsh-seg" style={{ width: `${w(finanzas.pagable)}%`, background: '#1E9E3A' }} />
+                    <div className="dsh-seg" style={{ width: `${w(finanzas.aRevisar)}%`, background: '#FFC400' }} />
+                    <div className="dsh-seg" style={{ width: `${w(finanzas.retenido)}%`, background: '#C8C8C0' }} />
+                  </div>
+                  <ul className="dsh-list">
+                    <li className="dsh-row"><span className="adm-dot" style={{ background: '#1E9E3A' }} /><span className="dsh-row-l">Pagable</span><span className="dsh-row-n">{eur(finanzas.pagable)}</span></li>
+                    <li className="dsh-row"><span className="adm-dot" style={{ background: '#FFC400' }} /><span className="dsh-row-l">A revisar</span><span className="dsh-row-n">{eur(finanzas.aRevisar)}</span></li>
+                    <li className="dsh-row"><span className="adm-dot" style={{ background: '#C8C8C0' }} /><span className="dsh-row-l">Retenido</span><span className="dsh-row-n">{eur(finanzas.retenido)}</span></li>
+                  </ul>
+                  <p className="dsh-note">«A revisar» son clases esperando validación: hasta que se resuelvan, el profesor no cobra.</p>
+                </>
+              );
+            })()}
+          </div>
+
+          <div className="adm-card dsh-card">
+            <div className="dsh-cardhead">Pagos hechos</div>
+            <div className="dsh-big">{finanzas.pagados}<span className="dsh-of"> / {teachers.length}</span></div>
+            <Barra pct={teachers.length > 0 ? (finanzas.pagados / teachers.length) * 100 : 0} />
+            <p className="dsh-note">Profesores marcados como pagados este mes.</p>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Emails de presentación ── */}
+      <section className="dsh-sec">
+        <SecHead title="Emails de presentación"
+          sub={`${presStatuses.length} pendiente${presStatuses.length !== 1 ? 's' : ''} de enviar.`}
+          href="/admin?tab=emails" />
+        <div className="adm-tiles">
+          {[
+            { label: 'Pendientes a tiempo',    value: presOnTime,  tone: 'is-ok',    dot: '#16a34a', filter: 'pending' },
+            { label: 'En riesgo (>12h)',       value: presAtRisk,  tone: 'is-warn',  dot: '#e0912f', filter: 'at_risk' },
+            { label: 'Fuera de tiempo (>24h)', value: presOverdue, tone: 'is-alert', dot: '#dc4a38', filter: 'overdue' },
+          ].map(c => (
+            <button key={c.label} type="button" className={`adm-tile ${c.tone} is-clickable`}
+              onClick={() => router.push(`/admin?tab=emails&filter=${c.filter}`, { scroll: true })}
+              title={`Ver ${c.label.toLowerCase()} en la pestaña Emails`}>
+              <div className="adm-tile-value"><span className="adm-dot" style={{ background: c.dot }} />{c.value}</div>
+              <div className="adm-tile-label">{c.label}<span aria-hidden className="adm-kpi-arrow">›</span></div>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      {/* ── Herramientas ── */}
+      <section className="dsh-sec">
+        <SecHead title="Herramientas de mantenimiento"
+          sub="Auditorías y sincronizaciones que se lanzan a mano. Abrí solo la que necesites." />
+        <div className="adm-tools">
+          <AdminTool title="Auditoría de vínculos"
+            desc="Revisa la coherencia entre alumnos, asignaciones y fichas."
+            openSignal={auditSignal}>
+            <AuditPanel />
+          </AdminTool>
+
+          <AdminTool title="Sincronización calendario ↔ asignaciones"
+            desc="Detecta alumnos en el calendario sin assignment ni registro.">
+            <SyncPanel />
+          </AdminTool>
+
+          {/* Los dos paneles de Woo viven juntos: son la misma tarea. */}
+          <AdminTool title="Sincronización con WooCommerce"
+            desc="Actualiza planes y fechas de inicio con los datos reales de Woo.">
+            <PlanSyncPanel />
+            <StartDateSyncPanel />
+            <CompanyPlanSyncPanel />
+          </AdminTool>
+
+          <AdminTool title="Estilo de los textos de IA"
+            desc="Quita los guiones que la IA usaba como conectores en fichas y análisis ya guardados.">
+            <CleanDashesPanel />
+          </AdminTool>
+        </div>
+      </section>
 
       {conflictDetail && (
         <ConflictDetailModal
@@ -1483,6 +1735,99 @@ export default function DashboardGeneral() {
           onOpenAudit={() => { setConflictDetail(null); setAuditSignal(n => n + 1); }}
         />
       )}
+
+      <style>{ESTILOS}</style>
     </>
   );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Estilos propios del dashboard, con prefijo `dsh-`. Las tarjetas y los tiles
+// reutilizan las clases `adm-*` que ya existen; esto es solo lo que el Resumen
+// viejo no tenía. Colores: el verde de marca #1E9E3A para superficies y barras,
+// y --accent (#167A2D) para texto y enlaces, que es el que llega al contraste
+// mínimo en tamaño pequeño.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const ESTILOS = `
+.dsh-kpis { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 30px; }
+.dsh-kpi { background: var(--bg-surface); border: 1px solid #e6e7e2; border-radius: 14px; padding: 14px 16px 15px; }
+.dsh-kpi-l { font-size: 11.5px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-muted); }
+.dsh-kpi-v { font-size: 27px; font-weight: 700; line-height: 1.15; margin-top: 5px; color: var(--text-primary); }
+.dsh-kpi-p { font-size: 11.5px; color: var(--text-muted); margin-top: 4px; }
+
+.dsh-track { height: 6px; border-radius: 3px; background: var(--bg-surface-3); overflow: hidden; margin-top: 8px; }
+.dsh-fill { height: 100%; border-radius: 3px; }
+
+.dsh-sec { margin-bottom: 34px; }
+.dsh-sechead { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+.dsh-h2 { font-size: 17px; font-weight: 700; margin: 0; letter-spacing: -0.01em; color: var(--text-primary); }
+.dsh-sub { margin: 2px 0 0; font-size: 13px; color: var(--text-muted); }
+.dsh-link { font-size: 13px; font-weight: 600; color: var(--accent); text-decoration: none; white-space: nowrap; }
+.dsh-link:hover { color: var(--accent-hover); text-decoration: underline; }
+
+.dsh-card { padding: 16px 18px 18px; display: flex; flex-direction: column; }
+.dsh-cardhead { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; letter-spacing: 0.045em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 12px; }
+.dsh-note { margin: 10px 0 0; font-size: 11.5px; color: var(--text-muted); line-height: 1.5; }
+.dsh-vacio { padding: 18px 0; text-align: center; font-size: 13px; color: var(--text-muted); }
+
+.dsh-acciones { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.dsh-accion { display: flex; align-items: center; gap: 12px; border: 1px solid; border-radius: 12px; padding: 13px 14px; text-decoration: none; color: inherit; text-align: left; font-family: inherit; cursor: pointer; transition: transform 0.12s ease; }
+.dsh-accion:hover { transform: translateY(-1px); }
+.dsh-accion-n { font-size: 26px; font-weight: 700; line-height: 1; min-width: 34px; }
+.dsh-accion-l { font-size: 13px; font-weight: 600; color: var(--text-primary); line-height: 1.3; }
+.dsh-accion-d { font-size: 11.5px; color: var(--text-muted); margin-top: 2px; }
+.dsh-chev { color: var(--text-muted); font-size: 17px; }
+
+.dsh-g3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.dsh-g-risk { display: grid; grid-template-columns: 1fr 1.6fr; gap: 14px; }
+.dsh-g-prof { display: grid; grid-template-columns: 1.7fr 1fr; gap: 14px; }
+
+.dsh-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 9px; }
+.dsh-row { display: flex; align-items: center; gap: 9px; font-size: 13px; }
+.dsh-row-l { color: var(--text-secondary); }
+.dsh-row-n { margin-left: auto; font-weight: 700; color: var(--text-primary); }
+
+.dsh-stack { display: flex; height: 10px; border-radius: 5px; overflow: hidden; gap: 2px; margin-bottom: 12px; }
+.dsh-seg { height: 100%; }
+
+.dsh-risk-big { font-size: 42px; font-weight: 700; line-height: 1; color: #B42318; }
+.dsh-risk-cap { font-size: 12.5px; color: var(--text-muted); margin-top: 4px; }
+.dsh-urg { list-style: none; margin: 0; padding: 0; }
+.dsh-urow { display: flex; gap: 10px; align-items: flex-start; padding: 10px 0; border-top: 1px solid var(--border); }
+.dsh-urow:first-child { border-top: 0; padding-top: 0; }
+.dsh-uname { font-size: 13.5px; font-weight: 600; color: var(--text-primary); }
+.dsh-ucausa { font-size: 12px; color: var(--text-muted); margin-top: 1px; line-height: 1.45; }
+.dsh-umeta { text-align: right; font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
+.dsh-udias { font-size: 11px; color: var(--text-muted); }
+
+.dsh-big { font-size: 32px; font-weight: 700; line-height: 1.1; color: var(--text-primary); }
+.dsh-of { font-size: 17px; font-weight: 500; color: var(--text-muted); }
+.dsh-fin-big { font-size: 30px; font-weight: 700; line-height: 1.1; color: var(--text-primary); }
+
+.dsh-rank { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.dsh-rrow { display: grid; grid-template-columns: 90px 1fr 32px 150px; align-items: center; gap: 10px; }
+.dsh-rname { font-size: 13px; font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dsh-rtrack { height: 8px; border-radius: 4px; background: var(--bg-surface-2); overflow: hidden; }
+.dsh-rfill { display: block; height: 100%; background: #1E9E3A; border-radius: 4px; }
+.dsh-rn { font-size: 12.5px; font-weight: 700; text-align: right; color: var(--text-secondary); }
+.dsh-tags { display: flex; gap: 5px; justify-content: flex-end; }
+.dsh-tag { font-size: 10.5px; font-weight: 700; padding: 2px 7px; border-radius: 999px; white-space: nowrap; }
+.dsh-tag-ok { background: rgba(22,122,45,0.10); color: #167A2D; }
+.dsh-tag-w { background: rgba(255,196,0,0.20); color: #8a6d00; }
+
+@media (max-width: 1100px) {
+  .dsh-kpis { grid-template-columns: repeat(3, 1fr); }
+  .dsh-acciones { grid-template-columns: repeat(2, 1fr); }
+  .dsh-g3 { grid-template-columns: 1fr 1fr; }
+  .dsh-g-risk, .dsh-g-prof { grid-template-columns: 1fr; }
+}
+@media (max-width: 720px) {
+  .dsh-kpis { grid-template-columns: repeat(2, 1fr); }
+  .dsh-acciones, .dsh-g3 { grid-template-columns: 1fr; }
+  .dsh-rrow { grid-template-columns: 80px 1fr 30px; }
+  .dsh-tags { display: none; }
+}
+`;
+
+
