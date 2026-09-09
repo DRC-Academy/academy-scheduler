@@ -306,3 +306,39 @@ tenía el primer intento y que encontraron los tests.)
 una asignación, que es lo que la base sabe sola. "Activos" en el sentido de la
 suscripción necesita WooCommerce y es otro número: se etiqueta distinto a
 propósito para que nadie los confunda.
+
+---
+
+## Corrección de septiembre: "transcripts sin subir" daba un número falso
+
+La primera versión mostraba **99 clases sin subir para un profesor** y **400 en
+toda la academia**. Ninguno de los dos era cierto. Tres errores, y el número
+correcto es **2 y 35**.
+
+**1. Ignoraba el vínculo explícito.** Cuando un profesor sube el transcript desde
+la clase, el análisis queda enganchado al ingreso por `join_log_id` — hoy lo
+tienen 1.148 de los 1.460 análisis. Yo cruzaba solo por alumno y fecha, así que
+bastaba con que el profesor tecleara otra fecha en el análisis para que su clase
+apareciera como pendiente para siempre.
+
+**2. Exigía que la fecha coincidiera exacta.** El cruce que ya existía en
+`lib/pendingClasses` tolera ±1 día y consume cada transcript una sola vez.
+
+**3. No acotaba al mes, y ahí estaba el grueso.** Sin ventana contaba todo el
+histórico, y el histórico arrastra mucho: julio tiene 318 ingresos con 114
+análisis, y agosto 1.514 con 1.035. Casi 900 "pendientes" de meses ya liquidados.
+
+Y de paso apareció algo que no sabía: **hay 509 ingresos duplicados en la base**
+—el mismo profesor, alumno y fecha registrados dos veces—, 93 de ellos solo en
+septiembre sobre 424. El botón "Ingresar a clase" se pulsa dos veces y se
+registran dos. Ahora se agrupa por profesor + alumno + fecha, que es una clase por
+muchos clics que tenga.
+
+**[DECISIÓN] La ventana es el mes en curso.** Es lo que hace el número accionable:
+lo de meses cerrados ya no se va a subir. Si preferís los últimos 30 días o los
+últimos 45, es el parámetro `desde` de `transcriptsPendientes`.
+
+**Nota aparte:** `countPendingForTeacher` —lo que ve el profesor en su propia
+ficha— tiene los mismos dos últimos problemas: no acota y no agrupa duplicados.
+Da 162 para ese mismo profesor. No lo toqué porque es la pantalla del profesor y
+merece su propia decisión, pero conviene mirarlo.

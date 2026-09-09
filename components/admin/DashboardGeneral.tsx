@@ -1475,9 +1475,12 @@ export default function DashboardGeneral() {
             label="Alumnos en riesgo" tono="rojo"
             detalle="sin intervención registrada" href="/admin?tab=ai" />
 
+          {/* A Finanzas y no a Seguimiento: esa pestaña es de hitos (clase 15, 30),
+              no de transcripts. Donde se ven clase a clase es en el embudo de
+              cada profesor, que además explica por qué no suman todavía. */}
           <Accion n={pendientes.length} label="Transcripts sin subir" tono="aviso"
             detalle={pendientes.length > 0 ? `el más viejo, hace ${pendientes[0].dias} días` : ''}
-            href="/admin?tab=tracking" />
+            href="/finanzas" />
 
           <Accion n={extras?.solicitudesRevision ?? null} cargando={cargandoExtras}
             label="Solicitudes de revisión" tono="aviso"
@@ -1493,7 +1496,7 @@ export default function DashboardGeneral() {
 
           <Accion n={extras?.analisisFallidos ?? null} cargando={cargandoExtras}
             label="Análisis de IA fallidos" tono="aviso"
-            detalle="sin reintentar" href="/admin?tab=tracking" />
+            detalle="sin reintentar" href="/admin?tab=validacion" />
         </div>
       </section>
 

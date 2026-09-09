@@ -161,33 +161,86 @@ export interface TranscriptPendiente {
 /**
  * Clases a las que el profesor ENTRÓ y que siguen sin transcript.
  *
- * Se cruzan los ingresos con los análisis por alumno y fecha, que es el mismo
- * emparejamiento tolerante que usa el resto del sistema. `desdeDias` es el margen
- * antes de considerarlo un retraso: una clase de las 20:00 subida a la mañana
- * siguiente no es un problema.
+ * LAS REGLAS SON LAS DE `lib/pendingClasses`, que es donde vive este cruce desde
+ * antes y lo que ve el profesor en su ficha. Un ingreso está cubierto si:
+ *
+ *   1. algún análisis lo referencia por `join_log_id` — el vínculo explícito, y
+ *      hoy lo tienen 1.148 de 1.460 análisis;
+ *   2. o hay un transcript del mismo alumno a ±1 día, que se CONSUME. Es el
+ *      respaldo para las clases anteriores al vínculo. Sin consumirlo, un
+ *      transcript del lunes taparía también la clase del martes.
+ *
+ * ACOTADO A UNA VENTANA, y esto es lo que lo hace un número accionable. Sin
+ * ventana cuenta todo el histórico, y el histórico arrastra: en septiembre de
+ * 2026 había 424 ingresos con 46 sin transcript, pero julio (318 ingresos, 114
+ * análisis) y agosto (1.514 y 1.035) sumaban 900 "pendientes" de meses ya
+ * liquidados. Un profesor aparecía con 99 clases sin subir y ninguna era de este
+ * mes.
+ *
+ * `desdeDias` es el margen antes de llamarlo retraso: una clase de las 20:00
+ * subida a la mañana siguiente no es un problema.
  */
 export function transcriptsPendientes(
   joinLogs: readonly ClassJoinLog[],
   analyses: readonly ClassTranscriptRef[],
-  opts: { hoy?: string; desdeDias?: number } = {},
+  opts: { hoy?: string; desdeDias?: number; desde?: string } = {},
 ): TranscriptPendiente[] {
   const hoy = opts.hoy ?? madridDateString();
   const margen = opts.desdeDias ?? 1;
+  const desde = opts.desde ?? `${hoy.slice(0, 7)}-01`;   // por defecto, el mes en curso
 
-  const conTranscript = new Set<string>();
+  const tieneTexto = (a: ClassTranscriptRef): boolean =>
+    typeof a.has_transcript === 'boolean' ? a.has_transcript : !!(a.transcript ?? '').trim();
+
+  // 1. Vínculos explícitos.
+  const vinculados = new Set<string>();
   for (const a of analyses) {
-    if (a.has_transcript === false) continue;
-    conTranscript.add(`${norm(a.student_name)}|${a.class_date ?? ''}`);
+    const id = a.join_log_id;
+    if (id) vinculados.add(id);
   }
 
-  const vistos = new Set<string>();
+  // 2. Transcripts sin vínculo, por alumno, para consumir por cercanía de fecha.
+  const libresPorAlumno = new Map<string, string[]>();
+  for (const a of analyses) {
+    if (!tieneTexto(a) || a.join_log_id) continue;
+    const fecha = a.class_date || (a.analyzed_at ?? '').slice(0, 10);
+    if (!fecha) continue;
+    const k = norm(a.student_name);
+    const l = libresPorAlumno.get(k);
+    if (l) l.push(fecha); else libresPorAlumno.set(k, [fecha]);
+  }
+
+  // AGRUPADO por profesor, alumno y fecha: eso es UNA clase, por muchos ingresos
+  // que tenga. El botón "Ingresar a clase" se puede pulsar dos veces y se pulsa:
+  // en la base hay 509 ingresos de más por duplicado, 93 solo en septiembre de
+  // 2026 sobre 424. Contando ingresos sueltos, uno de cada cinco pendientes era
+  // el mismo clic repetido.
+  const grupos = new Map<string, ClassJoinLog[]>();
+  for (const l of joinLogs) {
+    if (l.scheduledDate < desde || l.scheduledDate > hoy) continue;
+    const k = `${l.teacherId}|${norm(l.studentName)}|${l.scheduledDate}`;
+    const g = grupos.get(k);
+    if (g) g.push(l); else grupos.set(k, [l]);
+  }
+
+  // Del más antiguo al más nuevo: el respaldo por cercanía se consume en orden, o
+  // el transcript de una clase taparía el de otra arbitrariamente.
+  const enOrden = [...grupos.values()]
+    .sort((a, b) => a[0].scheduledDate.localeCompare(b[0].scheduledDate));
+
   const out: TranscriptPendiente[] = [];
-  for (const log of joinLogs) {
-    const clave = `${norm(log.studentName)}|${log.scheduledDate}`;
-    if (conTranscript.has(clave) || vistos.has(clave)) continue;
+  for (const grupo of enOrden) {
+    // Basta con que UNO de los ingresos del grupo tenga transcript vinculado.
+    if (grupo.some(l => vinculados.has(l.id))) continue;
+
+    const log = grupo[0];
+    const libres = libresPorAlumno.get(norm(log.studentName)) ?? [];
+    let i = libres.findIndex(d => d === log.scheduledDate);
+    if (i < 0) i = libres.findIndex(d => Math.abs(diasEntre(d, log.scheduledDate)) <= 1);
+    if (i >= 0) { libres.splice(i, 1); continue; }
+
     const dias = diasEntre(log.scheduledDate, hoy);
     if (dias < margen) continue;          // todavía está en plazo
-    vistos.add(clave);
     out.push({
       teacherId: log.teacherId, teacherName: log.teacherName,
       studentName: log.studentName, fecha: log.scheduledDate, dias,

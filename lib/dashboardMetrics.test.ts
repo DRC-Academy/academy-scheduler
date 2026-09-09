@@ -167,6 +167,62 @@ describe('transcriptsPendientes', () => {
     expect(r).toHaveLength(0);
   });
 
+  // Los tres fallos que hacían que un profesor apareciera con 99 clases sin
+  // subir cuando ninguna era de este mes.
+  it('el vínculo explícito cubre el ingreso aunque la fecha no coincida', () => {
+    // 1.148 de los 1.460 análisis reales traen join_log_id. Ignorarlo era el
+    // fallo grande: bastaba que el profesor tecleara otra fecha en el análisis.
+    const l = log({ id: 'jl-1' });
+    const r = transcriptsPendientes(
+      [l],
+      [{ student_name: 'Ana', class_date: '2026-08-14', has_transcript: true, join_log_id: 'jl-1' }],
+      { hoy: '2026-09-10' },
+    );
+    expect(r).toHaveLength(0);
+  });
+
+  it('un transcript a un día de distancia también cubre', () => {
+    const r = transcriptsPendientes(
+      [log({ scheduledDate: '2026-09-02' })],
+      [{ student_name: 'Ana', class_date: '2026-09-01', has_transcript: true }],
+      { hoy: '2026-09-10' },
+    );
+    expect(r).toHaveLength(0);
+  });
+
+  it('un transcript se CONSUME: no puede cubrir dos clases', () => {
+    const r = transcriptsPendientes(
+      [log({ id: 'a', scheduledDate: '2026-09-01' }), log({ id: 'b', scheduledDate: '2026-09-02' })],
+      [{ student_name: 'Ana', class_date: '2026-09-01', has_transcript: true }],
+      { hoy: '2026-09-10' },
+    );
+    expect(r).toHaveLength(1);
+  });
+
+  it('solo mira la ventana: los meses ya liquidados no arrastran', () => {
+    const r = transcriptsPendientes(
+      [log({ scheduledDate: '2026-07-15' }), log({ scheduledDate: '2026-08-20' }), log({ scheduledDate: '2026-09-02' })],
+      [],
+      { hoy: '2026-09-10' },
+    );
+    expect(r).toHaveLength(1);
+    expect(r[0].fecha).toBe('2026-09-02');
+  });
+
+  it('la ventana se puede ampliar a mano', () => {
+    const r = transcriptsPendientes(
+      [log({ scheduledDate: '2026-07-15' }), log({ scheduledDate: '2026-09-02' })],
+      [],
+      { hoy: '2026-09-10', desde: '2026-07-01' },
+    );
+    expect(r).toHaveLength(2);
+  });
+
+  it('un ingreso del futuro no cuenta', () => {
+    const r = transcriptsPendientes([log({ scheduledDate: '2026-09-30' })], [], { hoy: '2026-09-10' });
+    expect(r).toHaveLength(0);
+  });
+
   it('cruza el alumno sin distinguir mayúsculas ni espacios', () => {
     const r = transcriptsPendientes(
       [log({ studentName: '  ana  ' })],
@@ -193,9 +249,28 @@ describe('transcriptsPendientes', () => {
     expect(anteayer[0].dias).toBe(2);
   });
 
+  // 509 ingresos duplicados en la base real, 93 de ellos en un solo mes: el botón
+  // "Ingresar a clase" se pulsa dos veces y se registran dos.
   it('dos ingresos de la misma clase cuentan una vez', () => {
-    const r = transcriptsPendientes([log({}), log({})], [], { hoy: '2026-09-10' });
+    const r = transcriptsPendientes([log({ id: 'a' }), log({ id: 'b' })], [], { hoy: '2026-09-10' });
     expect(r).toHaveLength(1);
+  });
+
+  it('basta con que UNO de los ingresos duplicados tenga el transcript vinculado', () => {
+    const r = transcriptsPendientes(
+      [log({ id: 'a' }), log({ id: 'b' })],
+      [{ student_name: 'Ana', class_date: '2026-09-01', has_transcript: true, join_log_id: 'b' }],
+      { hoy: '2026-09-10' },
+    );
+    expect(r).toHaveLength(0);
+  });
+
+  it('el mismo alumno con dos profesores el mismo día son dos clases', () => {
+    const r = transcriptsPendientes(
+      [log({ id: 'a', teacherId: 'p1' }), log({ id: 'b', teacherId: 'p2' })],
+      [], { hoy: '2026-09-10' },
+    );
+    expect(r).toHaveLength(2);
   });
 
   it('ordena del más viejo al más reciente', () => {
