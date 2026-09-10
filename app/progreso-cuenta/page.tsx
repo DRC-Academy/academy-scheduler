@@ -49,13 +49,31 @@ function Marco({ children }: { children: React.ReactNode }) {
   return (
     <div className="pg-page pg-embed">
       <ProgresoStyles />
-      {/* `min-height: 100dvh` de .pg-page dejaría el iframe siempre a la altura de
-          la pantalla y pelearía con el ajuste automático; dentro del marco el alto
-          lo manda el contenido. Y sin cabecera, el aire de arriba sobra. */}
+      {/*
+        Ajustes que valen SOLO dentro del iframe. Van aquí, en la página, y no en la
+        hoja compartida: /progreso/[token] es una página entera con su cabecera y
+        tiene que seguir centrada y con su ancho de lectura. Lo de dentro de "Mi
+        cuenta" es otra cosa — es un bloque más de una página ajena.
+
+        · `min-height: 100dvh` de .pg-page dejaría el iframe siempre a la altura de
+          la pantalla y pelearía con el ajuste automático de altura; dentro del
+          marco el alto lo manda el contenido.
+        · ANCHO COMPLETO. La ficha colgaba centrada a 780 px con aire muerto a los
+          lados, justo debajo del "Panel de estudiante" de WooCommerce, que va a
+          todo el ancho. Sin el `max-width` y sin el `margin: auto` la ficha
+          continúa la línea del panel en vez de flotar dentro de él.
+        · Sin padding lateral: el margen lo pone la plantilla de Mi cuenta, y
+          sumarle el nuestro dejaba la ficha metida hacia dentro otra vez.
+        · Y sin cabecera propia, el aire de arriba sobra.
+      */}
       <style>{`
         .pg-embed { min-height: 0; }
-        .pg-embed .pg-main { padding-top: 20px; padding-bottom: 28px; }
-        @media (max-width: 720px) { .pg-embed .pg-main { padding-top: 14px; padding-bottom: 20px; } }
+        .pg-embed .pg-main { max-width: none; margin: 0; padding: 20px 0 28px; }
+        /* La TARJETA va a ancho completo; el texto largo, no. Una línea de resumen
+           de 180 caracteres es incómoda de leer, así que el cuerpo de la línea de
+           tiempo conserva su medida aunque su tarjeta se estire. */
+        .pg-embed .pg-tl-card .pg-body { max-width: 70ch; }
+        @media (max-width: 720px) { .pg-embed .pg-main { padding: 14px 0 20px; } }
       `}</style>
       <main className="pg-main">{children}</main>
       <ProgresoAltura />
