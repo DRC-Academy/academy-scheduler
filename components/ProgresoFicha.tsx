@@ -477,8 +477,9 @@ const PROGRESO_CSS = `
 }
 .pg-bar-date { margin: 7px 0 0; font-size: 12.5px; line-height: 1.4; color: var(--pg-faint); }
 
-/* Boton: pildora verde centrada, sin hover llamativo. */
-.pg-cta-block { margin-top: 22px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+/* Boton: pildora verde centrada, sin hover llamativo. Es lo unico que va debajo
+   de las filas: la nota que repetia el ahorro y el descargo se quitaron. */
+.pg-cta-block { margin-top: 22px; display: flex; justify-content: center; }
 .pg-cta {
   display: inline-flex; align-items: center; justify-content: center; gap: 9px;
   min-height: 44px; padding: 12px 28px; border-radius: 999px;
@@ -486,12 +487,6 @@ const PROGRESO_CSS = `
   text-decoration: none; box-shadow: 0 6px 16px rgba(30, 158, 58, 0.26);
 }
 .pg-cta:focus-visible { outline: 3px solid var(--pg-green-dark); outline-offset: 3px; }
-.pg-cta-note {
-  margin: 0; font-size: 13px; line-height: 1.5; color: var(--pg-muted); text-align: center;
-  max-width: 44ch;
-}
-
-.pg-disclaimer { margin: 20px 0 0; font-size: 11.5px; line-height: 1.6; color: var(--pg-faint); }
 
 
 /* ── Fuertes / a reforzar ───────────────────────────────────────────────── */
@@ -571,7 +566,6 @@ const PROGRESO_CSS = `
   .pg-bar-months { font-size: 15px; min-width: 66px; }
   .pg-bar-line { gap: 10px; }
   .pg-save { font-size: 13.5px; padding: 5px 11px; }
-  .pg-cta-block { gap: 12px; }
   /* Ancho completo solo en móvil: ahí es más cómodo de tocar. */
   .pg-cta { width: 100%; }
   .pg-timeline { padding-left: 22px; }

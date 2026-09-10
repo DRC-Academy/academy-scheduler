@@ -35,8 +35,6 @@ interface Textos {
   entrada: (e: Estimacion) => string;
   /** Texto del botón. null = sin botón. */
   cta: string | null;
-  /** Nota bajo el botón. */
-  notaCta: ((e: Estimacion) => string) | null;
 }
 
 /**
@@ -53,21 +51,11 @@ export const TEXTOS: Record<EstadoVisible, Textos> = {
     titulo: () => '¡Puedes llegar antes de lo que crees!',
     entrada: () => '¿Cuánto tardarías en conseguir tu objetivo con otros planes?',
     cta: 'Amplía tu plan',
-    notaCta: e =>
-      `Con una hora más a la semana llegarías ${etiquetaMeses(e.opciones[1].mesesAhorrados)} antes.`
-      + (e.mejor && e.mejor.horasSemanales > e.opciones[1].horasSemanales
-        ? ` Con ${e.mejor.horasSemanales} horas, ${etiquetaMeses(e.mejor.mesesAhorrados)} antes.`
-        : ''),
   },
   examen: {
     titulo: () => '¡Puedes llegar preparado antes!',
     entrada: e => `¿Cuánto tardarías en llegar al ${e.meta.nivel} con otros planes?`,
     cta: 'Amplía tu plan',
-    notaCta: e =>
-      `Con una hora más a la semana llegarías ${etiquetaMeses(e.opciones[1].mesesAhorrados)} antes al examen.`
-      + (e.mejor && e.mejor.horasSemanales > e.opciones[1].horasSemanales
-        ? ` Con ${e.mejor.horasSemanales} horas, ${etiquetaMeses(e.mejor.mesesAhorrados)} antes.`
-        : ''),
   },
   // Sin ampliación que ofrecer, la pregunta del LMS ("¿con otros planes?") no
   // tiene respuesta: ya está en el más alto. Se le enseña su previsión y se le
@@ -76,14 +64,8 @@ export const TEXTOS: Record<EstadoVisible, Textos> = {
     titulo: () => '¡Vas al mejor ritmo posible!',
     entrada: () => 'Ya haces el máximo de clases a la semana. Esto es lo que tardarías en conseguir tu objetivo.',
     cta: null,
-    notaCta: null,
   },
 };
-
-const DESCARGO =
-  'Estimación orientativa. Partimos de las horas de estudio guiado que Cambridge asocia a cada '
-  + 'nivel del MCER y contamos con que practicas por tu cuenta entre clases. Tu ritmo real depende '
-  + 'de ti y de tu constancia.';
 
 /**
  * El banner. `estimacion` es null en el estado `sin_datos` (no hay nivel, no hay
@@ -145,11 +127,8 @@ export function BannerAmpliar({ estimacion }: { estimacion: Estimacion | null })
             {t.cta}
             <span className="pg-cta-arrow" aria-hidden>→</span>
           </a>
-          {t.notaCta && <p className="pg-cta-note">{t.notaCta(estimacion)}</p>}
         </div>
       )}
-
-      <p className="pg-disclaimer">{DESCARGO}</p>
     </section>
   );
 }
