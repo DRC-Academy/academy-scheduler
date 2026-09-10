@@ -32,6 +32,9 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# ...menos la plantilla: solo lleva nombres y comentarios, ningún valor real, y es
+# la referencia de qué variables hacen falta (la cita docs/progreso-wordpress.md).
+!.env.example
 
 # vercel
 .vercel

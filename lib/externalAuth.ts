@@ -13,8 +13,14 @@ import { timingSafeEqual } from 'node:crypto';
 
 export const DASHBOARD_SECRET_HEADER = 'x-dashboard-secret';
 
-/** Comparación en tiempo constante: un `===` filtra el secreto carácter a carácter. */
-function secretsMatch(a: string, b: string): boolean {
+/**
+ * Comparación en tiempo constante: un `===` filtra el secreto carácter a carácter.
+ *
+ * Se exporta porque la firma de /progreso-cuenta (lib/progresoSignature) compara
+ * un HMAC y necesita exactamente esto. Una segunda copia sería una segunda
+ * oportunidad de escribirla mal.
+ */
+export function secretsMatch(a: string, b: string): boolean {
   const ba = Buffer.from(a, 'utf8');
   const bb = Buffer.from(b, 'utf8');
   // timingSafeEqual exige misma longitud; comparar las longitudes antes no

@@ -1,5 +1,6 @@
 ﻿'use client';
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { useAuth } from '@/lib/AuthContext';
 import { Teacher, Student, Assignment, Grid, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, ClassRecord, ClassRecordType, FinanceRate, FinancePayment, FinanceManualApproval, EmailPreferences, SalesContactResult } from '@/types';
 import {
   dbGetTeachers, dbAddTeacher, dbArchiveTeacher,
@@ -155,6 +156,26 @@ const TeachersContext = createContext<TeachersContextType>({
 });
 
 export function TeachersProvider({ children }: { children: ReactNode }) {
+  // SIN SESIÓN NO SE CARGA NADA.
+  //
+  // Este provider está en el layout raíz, así que se monta en TODAS las rutas,
+  // incluidas las públicas: /progreso/[token], /progreso-cuenta, /formulario,
+  // /test y /login. Y su carga inicial trae la base entera al navegador —
+  // profesores, alumnos, assignments, constancias, ingresos, análisis— y la
+  // repetía cada 60 s. En la página de progreso eso significaba que un cliente
+  // que paga tenía los datos de toda la academia en su pestaña, y desde
+  // septiembre de 2026 esa página además vive dentro de un iframe en la web
+  // pública (Mi cuenta de WooCommerce).
+  //
+  // Con la guarda, las rutas públicas no hacen NI UNA consulta de este provider.
+  // Se comprobó una por una que ninguna las necesita: las 13 pantallas que leen
+  // este contexto están todas detrás de <AuthGuard>, y el único consumidor que se
+  // monta siempre (OnboardingProvider) solo mira `teachers` cuando el rol es
+  // profesor.
+  // La sesión llega en un efecto (localStorage), así que al principio `user` es null
+  // sin que eso signifique "no hay sesión": hasta que `loading` baja no se decide.
+  const { user, loading: loadingSession } = useAuth();
+
   const [teachers, setTeachers]         = useState<Teacher[]>([]);
   const [students, setStudents]         = useState<Student[]>([]);
   const [assignments, setAssignments]   = useState<Assignment[]>([]);
@@ -207,6 +228,22 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   }
 
   useEffect(() => {
+    // Mientras la sesion se lee del storage no se hace nada y NO se toca
+    // `loadingTeachers`, que nace en true.
+    //
+    // Es importante que se quede en true: las pantallas internas solo se montan
+    // cuando AuthGuard ya conoce la sesion, y si en ese primer render vieran el
+    // flag en false con los datos todavia vacios pintarian un fotograma de "no hay
+    // nada" antes del spinner.
+    if (loadingSession) return;
+
+    // Ya se sabe que no hay sesion: nada que cargar. El flag baja para que nadie
+    // se quede con un "cargando..." eterno.
+    if (!user) {
+      setLoadingTeachers(false);
+      return;
+    }
+
     // Initial load â€” show the loading state only once
     setLoadingTeachers(true);
     reloadAll().finally(() => setLoadingTeachers(false));
@@ -228,8 +265,11 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
       clearInterval(interval);
       document.removeEventListener('visibilitychange', handleVisibility);
     };
+  // Se reevalua cuando aparece (o desaparece) la sesion: al entrar por /login el
+  // provider ya esta montado, y sin esta dependencia se quedaria vacio hasta
+  // recargar la pagina.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [loadingSession, user]);
 
   async function addTeacher(t: Teacher, username: string) {
     await dbAddTeacher(t, username);
