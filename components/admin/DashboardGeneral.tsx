@@ -21,6 +21,13 @@
 // Tres secciones, en este orden: los indicadores del día, los emails de
 // presentación pendientes y —al final y plegadas— las herramientas de
 // mantenimiento, que son acciones puntuales y no información de consulta.
+//
+// DOS VISTAS, UNOS NÚMEROS. Por debajo de 768 px se muestra DashboardMovil
+// (secciones plegables, una columna, navegación inferior) y por encima esta
+// rejilla. Las dos leen el objeto `datos` que se arma una sola vez más abajo:
+// el cambio de vista es por CSS (.dsh-desk / .dsh-mob) para que no parpadee al
+// abrir en el teléfono, y las herramientas de mantenimiento se montan UNA vez,
+// compartidas, porque tienen estado propio y cargan cosas al abrirse.
 
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
@@ -43,6 +50,8 @@ import {
   loadDashboardExtras, riesgoResumen, esRiesgoRojo, bajasDelMes,
   type DashboardExtras,
 } from '@/lib/dashboardExtras';
+// La misma pantalla en el teléfono: recibe los números de acá, no calcula nada.
+import { DashboardMovil, type DashboardDatos } from './DashboardMovil';
 import {
   dbAuditStudentAssignments, dbRelinkAssignment, dbSyncAssignmentName, dbMergeDuplicateStudents,
   dbSyncStudentAssignments, dbDiagnoseAllCalendars, dbSyncAllCalendarsToAssignments, dbCreateFullLink,
@@ -1445,8 +1454,40 @@ export default function DashboardGeneral() {
     },
   ];
 
+  // ── Lo que ve el teléfono ──────────────────────────────────────────────────
+  // Los mismos números de arriba, empaquetados. Las colas van con su tono y su
+  // destino; "Conflictos" abre el modal en vez de navegar, igual que acá.
+  const datos: DashboardDatos = {
+    ahora, cargandoExtras, kpis,
+    alumnos: { conClase: alumnos.conClase, total: alumnos.total },
+    profesActivos,
+    ocupacion: { pct: ocup.pct, tono: tonoOc },
+    acciones: [
+      { key: 'validaciones', n: extras?.validaciones.total ?? null, label: 'Validaciones pendientes', tono: 'rojo',
+        detalle: extras && extras.validaciones.oldestDays > 0 ? `la más antigua, ${extras.validaciones.oldestDays} días` : 'esperando revisión',
+        href: '/admin?tab=validacion' },
+      { key: 'emails-tarde', n: presOverdue, label: 'Emails de presentación tarde', tono: 'rojo', detalle: 'más de 24 h sin enviar', href: '/admin?tab=emails&filter=overdue' },
+      { key: 'riesgo', n: cargandoExtras ? null : riesgo.sinAtender, label: 'Alumnos en riesgo', tono: 'rojo', detalle: 'sin intervención registrada', href: '/admin?tab=ai' },
+      { key: 'transcripts', n: pendientes.length, label: 'Transcripts sin subir', tono: 'aviso',
+        detalle: pendientes.length > 0 ? `el más viejo, hace ${pendientes[0].dias} días` : '', href: '/finanzas' },
+      { key: 'solicitudes', n: extras?.solicitudesRevision ?? null, label: 'Solicitudes de revisión', tono: 'aviso', detalle: 'clases que el profe no cobra', href: '/finanzas' },
+      { key: 'emails-riesgo', n: presAtRisk, label: 'Emails en riesgo', tono: 'aviso', detalle: 'más de 12 h sin enviar', href: '/admin?tab=emails&filter=at_risk' },
+      { key: 'conflictos', n: conflicts, label: 'Conflictos de datos', tono: 'aviso',
+        detalle: conflictGroups.length > 0 ? `${conflictGroups.length} tipos distintos` : '',
+        onClick: () => conflicts ? setConflictDetail(conflictGroups) : setAuditSignal(n => n + 1) },
+      { key: 'ia-fallidos', n: extras?.analisisFallidos ?? null, label: 'Análisis de IA fallidos', tono: 'aviso', detalle: 'sin reintentar', href: '/admin?tab=validacion' },
+    ],
+    riesgo, urgentes, semana, clasesSemana, programadas, op, faltasProfe,
+    bajasMes: extras ? bajasDelMes(extras.dropouts, mes) : null,
+    filas, finanzas, totalProfes: teachers.length,
+    emails: { pendientes: presStatuses.length, aTiempo: presOnTime, enRiesgo: presAtRisk, fuera: presOverdue },
+    solicitudesRevision: extras?.solicitudesRevision ?? null,
+  };
+
   return (
     <>
+      {/* Escritorio y tablet: la rejilla. */}
+      <div className="dsh-desk">
       {/* ── Indicadores ── */}
       <div className="dsh-kpis">
         {kpis.map(k => (
@@ -1700,8 +1741,15 @@ export default function DashboardGeneral() {
         </div>
       </section>
 
-      {/* ── Herramientas ── */}
-      <section className="dsh-sec">
+      </div>
+
+      {/* Teléfono: secciones plegables y navegación inferior. Mismos números. */}
+      <div className="dsh-mob">
+        <DashboardMovil datos={datos} />
+      </div>
+
+      {/* ── Herramientas ── Compartidas por las dos vistas: se montan una vez. */}
+      <section className="dsh-sec dsh-tools" id="herramientas">
         <SecHead title="Herramientas de mantenimiento"
           sub="Auditorías y sincronizaciones que se lanzan a mano. Abrí solo la que necesites." />
         <div className="adm-tools">
@@ -1753,6 +1801,20 @@ export default function DashboardGeneral() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const ESTILOS = `
+/* ── Qué vista se ve. 768 px es el corte: debajo, la de teléfono. ── */
+.dsh-mob { display: none; }
+@media (max-width: 767.98px) {
+  .dsh-desk { display: none; }
+  .dsh-mob { display: block; }
+  /* El título "Dashboard" de la página sobra en el teléfono: la fecha va en su lugar. */
+  .dsh-head { display: none; }
+  /* Las herramientas quedan al final, como una sección más, y dejan sitio a la barra inferior. */
+  .dsh-tools { margin-top: 10px; padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
+  .dsh-tools .dsh-sechead { padding: 0 2px; }
+  .dsh-tools .dsh-h2 { font-size: 16px; }
+  .dsh-tools .dsh-sub { font-size: 14px; }
+}
+
 .dsh-kpis { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 30px; }
 .dsh-kpi { background: var(--bg-surface); border: 1px solid #e6e7e2; border-radius: 14px; padding: 14px 16px 15px; }
 .dsh-kpi-l { font-size: 11.5px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-muted); }
@@ -1824,12 +1886,6 @@ const ESTILOS = `
   .dsh-acciones { grid-template-columns: repeat(2, 1fr); }
   .dsh-g3 { grid-template-columns: 1fr 1fr; }
   .dsh-g-risk, .dsh-g-prof { grid-template-columns: 1fr; }
-}
-@media (max-width: 720px) {
-  .dsh-kpis { grid-template-columns: repeat(2, 1fr); }
-  .dsh-acciones, .dsh-g3 { grid-template-columns: 1fr; }
-  .dsh-rrow { grid-template-columns: 80px 1fr 30px; }
-  .dsh-tags { display: none; }
 }
 `;
 

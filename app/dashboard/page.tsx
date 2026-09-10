@@ -24,7 +24,7 @@ function DashboardContent() {
       <NavBar />
       <PullToRefresh onRefresh={reloadAll}>
         <div className="adm">
-          <div className="adm-head">
+          <div className="adm-head dsh-head">
             <div>
               <h1 className="adm-title">Dashboard</h1>
               <p className="adm-sub">
