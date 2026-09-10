@@ -117,7 +117,7 @@ export function ProgresoFicha({ studentName, profile, analyses, assignment, stud
               El dato ya lo calculaba `effectiveLevelOf`; hasta ahora se tiraba.
             */}
             {level && !eff.decided && (
-              <span className="pg-stat-note">Estimado · confírmalo con tu profesor</span>
+              <span className="pg-stat-nota">Estimado · confírmalo con tu profesor</span>
             )}
           </div>
           <div className="pg-stat">
@@ -407,7 +407,7 @@ const PROGRESO_CSS = `
 }
 /* La nota bajo el nivel cuando nadie lo ha medido todavía. En minúsculas y sin
    negrita a propósito, para matizar la cifra sin competir con ella. */
-.pg-stat-note {
+.pg-stat-nota {
   display: block; margin-top: 4px; font-size: 10.5px; line-height: 1.35;
   color: var(--pg-faint); text-transform: none; letter-spacing: 0;
   text-wrap: balance;

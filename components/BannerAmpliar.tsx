@@ -53,10 +53,8 @@ interface Textos {
 export const TEXTOS: Record<EstadoVisible, Textos> = {
   ahorro: {
     kicker: 'Tu ritmo',
-    titulo: () => 'Puedes llegar antes de lo que crees',
-    entrada: e =>
-      `Para dar el salto al ${e.meta.nivel} te quedan unas ${e.horasObjetivo} horas de inglés. `
-      + 'Esto es lo que tardarías según las horas que hagas cada semana.',
+    titulo: () => '¡Puedes llegar antes de lo que crees!',
+    entrada: () => '¿Cuánto tardarías en conseguir tu objetivo con otros planes?',
     cta: 'Amplía tu plan',
     notaCta: e =>
       `Con una hora más a la semana llegarías ${etiquetaMeses(e.opciones[1].mesesAhorrados)} antes.`
@@ -66,10 +64,8 @@ export const TEXTOS: Record<EstadoVisible, Textos> = {
   },
   examen: {
     kicker: 'Tu examen',
-    titulo: () => 'Puedes llegar preparado antes',
-    entrada: e =>
-      `Para presentarte al ${e.meta.nivel} que preparas te quedan unas ${e.horasObjetivo} horas de inglés. `
-      + 'Esto es lo que tardarías según las horas que hagas cada semana.',
+    titulo: () => '¡Puedes llegar preparado antes!',
+    entrada: e => `¿Cuánto tardarías en llegar al ${e.meta.nivel} con otros planes?`,
     cta: 'Amplía tu plan',
     notaCta: e =>
       `Con una hora más a la semana llegarías ${etiquetaMeses(e.opciones[1].mesesAhorrados)} antes al examen.`
@@ -77,12 +73,13 @@ export const TEXTOS: Record<EstadoVisible, Textos> = {
         ? ` Con ${e.mejor.horasSemanales} horas, ${etiquetaMeses(e.mejor.mesesAhorrados)} antes.`
         : ''),
   },
+  // Sin ampliación que ofrecer, la pregunta del LMS ("¿con otros planes?") no
+  // tiene respuesta: ya está en el más alto. Se le enseña su previsión y se le
+  // reconoce el ritmo, que es lo único honesto que se le puede decir.
   tope: {
     kicker: 'Tu ritmo',
-    titulo: () => 'Vas al mejor ritmo posible',
-    entrada: e =>
-      `Para dar el salto al ${e.meta.nivel} te quedan unas ${e.horasObjetivo} horas de inglés, `
-      + 'y ya haces el máximo de clases a la semana. Esta es tu previsión.',
+    titulo: () => '¡Vas al mejor ritmo posible!',
+    entrada: () => 'Ya haces el máximo de clases a la semana. Esto es lo que tardarías en conseguir tu objetivo.',
     cta: null,
     notaCta: null,
   },
@@ -117,12 +114,19 @@ export function BannerAmpliar({ estimacion }: { estimacion: Estimacion | null })
       <ol className="pg-bars">
         {estimacion.opciones.map(o => (
           <li key={o.horasSemanales} className={`pg-bar-row${o.esActual ? ' is-current' : ''}`}>
+            {/*
+              El orden es el del LMS: plan · distintivo · meses · fecha.
+              El distintivo ocupa UN solo sitio y dice una de dos cosas: en el plan
+              que ya tiene, "Tu plan"; en los demás, lo que se ahorraría. Nunca las
+              dos, porque en el plan actual no hay ahorro que enseñar.
+            */}
             <div className="pg-bar-head">
-              <span className="pg-bar-plan">
-                {o.horasSemanales} h a la semana
-                {o.esActual && <span className="pg-chip">Tu plan</span>}
-              </span>
-              <span className="pg-bar-months">{etiquetaMeses(o.meses)}</span>
+              <span className="pg-bar-plan">{o.horasSemanales} h a la semana</span>
+              {o.esActual
+                ? <span className="pg-chip">Tu plan</span>
+                : o.mesesAhorrados > 0 && (
+                    <span className="pg-save">{etiquetaMeses(o.mesesAhorrados)} antes</span>
+                  )}
             </div>
 
             <div className="pg-track">
@@ -130,10 +134,8 @@ export function BannerAmpliar({ estimacion }: { estimacion: Estimacion | null })
             </div>
 
             <div className="pg-bar-foot">
+              <span className="pg-bar-months">{etiquetaMeses(o.meses)}</span>
               <span className="pg-bar-date">Llegarías en {o.llegada}</span>
-              {o.mesesAhorrados > 0 && (
-                <span className="pg-save">{etiquetaMeses(o.mesesAhorrados)} antes</span>
-              )}
             </div>
           </li>
         ))}
