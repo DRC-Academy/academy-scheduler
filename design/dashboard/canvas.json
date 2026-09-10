@@ -1,8 +1,8 @@
 {
   "artboards": [
     { "file": "Main.dc.html", "x": 0, "y": 0, "w": 1440, "h": 3120, "title": "Dashboard · escritorio" },
-    { "file": "Movil.dc.html", "x": 1900, "y": 0, "w": 390, "h": 844, "title": "Móvil · al abrir (390×844)" },
-    { "file": "MovilAbierto.dc.html", "x": 2380, "y": 0, "w": 390, "h": 5600, "title": "Móvil · todo desplegado" }
+    { "file": "Movil.dc.html", "x": 1900, "y": 0, "w": 390, "h": 2260, "title": "Móvil · 390 px" },
+    { "file": "Movil320.dc.html", "x": 2370, "y": 0, "w": 320, "h": 2440, "title": "Móvil · 320 px (el más estrecho)" }
   ],
   "annotations": [
     {
@@ -35,10 +35,10 @@
     },
     {
       "id": "nota-movil",
-      "x": 2860,
+      "x": 2780,
       "y": 0,
       "w": 320,
-      "text": "MÓVIL (por debajo de 768 px, misma ruta /dashboard-preview).\n\nEl primer teléfono es la pantalla tal como se abre: solo Requiere acción y Salud vienen desplegadas. El segundo es la misma pantalla con todo abierto, para leerla entera.\n\nA validar:\n· Orden: acción → salud → riesgo → clases → finanzas → profesores → herramientas.\n· Barra inferior: Inicio · Admin · Alumnos · Finanzas (con el contador de solicitudes). Quedan fuera Buscar y Próximos a cancelar.\n· Umbrales del punto de cada sección: riesgo rojo desde el 10 % en rojo; clases rojo por debajo del 80 % dado, amarillo por debajo del 90 % o con faltas; finanzas y profesores amarillo con algo a revisar o sin subir.\n· Las bajas del gráfico van en gris, no en rojo: una baja no es urgencia del admin.\n· Sin menú ni salir en la cabecera: si lo querés, va el burger de la barra actual."
+      "text": "MÓVIL, rediseño de sep/2026 (por debajo de 768 px, misma ruta /dashboard-preview).\n\nSeis bloques y nada más: Requiere acción · Alumnos activos · Este mes · Finanzas · Clases de la semana · Riesgo. Una columna, nada se desliza en horizontal (probado de 320 a 430 px).\n\nA validar:\n· Orden de los seis bloques.\n· Barra inferior: Inicio · Admin · Alumnos · Finanzas (con el contador de solicitudes).\n· Alertas: rojo para validaciones y riesgo, amarillo para transcripts y próximos a cancelar.\n· Riesgo en dos niveles (verde/rojo): el sistema no tiene amarillo.\n· \"Pendiente\" en finanzas = a revisar + retenido.\n· Bajas del gráfico en gris: una baja no es urgencia del admin."
     }
   ],
   "launch": { "view": "canvas" }
