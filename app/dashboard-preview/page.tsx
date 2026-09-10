@@ -13,140 +13,27 @@
 // Los enlaces "Ver detalle" SÍ son reales: llevan a la pestaña o pantalla que
 // hoy tiene ese dato, para poder comprobar de un clic que cada bloque tiene un
 // sitio al que ir.
+//
+// DOS VISTAS, UNA RUTA. Por debajo de 768 px se muestra DashboardMovil (un
+// rediseño para pulgar, no esta pantalla apretada) y por encima, esta. El cambio
+// es por CSS (.dpv-desk / .dpv-mob), no por JS: así no hay parpadeo al cargar
+// en el teléfono ni depende de que el navegador reporte el ancho antes de
+// pintar. Las dos leen los MISMOS datos de ./datos-ejemplo.ts.
 
 import Link from 'next/link';
 import { NavBar } from '@/components/NavBar';
 import { AuthGuard } from '@/components/AuthGuard';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// DATOS DE EJEMPLO. Nada de acá sale de la base.
-// Los valores están elegidos para parecerse a la academia real (≈30 profesores,
-// ≈170 alumnos) y para que se vean los tres estados de cada semáforo.
-// ─────────────────────────────────────────────────────────────────────────────
-
-const HOY = new Date();
-
-const RESUMEN = {
-  alumnosActivos: 168,
-  alumnosTotales: 191,
-  profesoresActivos: 27,
-  profesoresTotales: 30,
-  clasesSemana: 214,
-  clasesSemanaProgramadas: 231,
-  costeProfesoresMes: 8420,
-  costeProfesoresMesAnterior: 7960,
-  ocupacion: 78,          // clases confirmadas / cupos totales
-};
-
-/** Lo que hay que resolver hoy. `tono` decide el semáforo. */
-const ACCIONES = [
-  { n: 14, label: 'Validaciones pendientes',        detalle: 'la más antigua, 6 días',      href: '/admin?tab=validacion',            tono: 'rojo' },
-  { n: 3,  label: 'Emails de presentación tarde',   detalle: 'más de 24 h sin enviar',      href: '/admin?tab=emails&filter=overdue', tono: 'rojo' },
-  { n: 9,  label: 'Alumnos en riesgo',              detalle: 'sin intervención registrada', href: '/admin?tab=ai',                    tono: 'rojo' },
-  { n: 22, label: 'Transcripts sin subir',          detalle: 'clases con acceso registrado', href: '/admin?tab=tracking',             tono: 'amarillo' },
-  { n: 6,  label: 'Próximos a cancelar sin contactar', detalle: 'les quedan menos de 7 días', href: '/proximos-cancelar',             tono: 'amarillo' },
-  { n: 4,  label: 'Solicitudes de revisión',        detalle: 'clases que el profe no cobra', href: '/finanzas',                       tono: 'amarillo' },
-  { n: 2,  label: 'Alumnos sin profesor',           detalle: 'alta sin asignar',            href: '/dashboard',                       tono: 'amarillo' },
-  { n: 0,  label: 'Análisis de IA fallidos',        detalle: 'sin reintentar',              href: '/admin?tab=tracking',              tono: 'ok' },
-];
-
-const SUSCRIPCIONES = {
-  porEstado: [
-    { estado: 'active',         label: 'Activas',            n: 141, acceso: true },
-    { estado: 'pending-cancel', label: 'Cancelan al final',  n: 12,  acceso: true },
-    { estado: 'on-hold',        label: 'En pausa',           n: 7,   acceso: false },
-    { estado: 'pending',        label: 'Pendientes de pago', n: 4,   acceso: false },
-    { estado: 'cancelled',      label: 'Canceladas',         n: 38,  acceso: false },
-  ],
-  porOrigen: [
-    { origen: 'WooCommerce', n: 129, color: '#1E9E3A' },
-    { origen: 'Manual',      n: 24,  color: '#2563eb' },
-    { origen: 'Oritalk',     n: 15,  color: '#FFC400' },
-  ],
-};
-
-/** Últimos 6 meses. `altas` y `bajas` del mes cerrado. */
-const MOVIMIENTO = [
-  { mes: 'Abr', altas: 18, bajas: 11 },
-  { mes: 'May', altas: 15, bajas: 14 },
-  { mes: 'Jun', altas: 21, bajas: 9  },
-  { mes: 'Jul', altas: 12, bajas: 16 },
-  { mes: 'Ago', altas: 17, bajas: 12 },
-  { mes: 'Sep', altas: 9,  bajas: 5  },
-];
-
-/** Embudo de captación: cada paso es un subconjunto del anterior. */
-const EMBUDO_NIVEL = [
-  { paso: 'Formulario enviado',  n: 96 },
-  { paso: 'Formulario completo', n: 71 },
-  { paso: 'Test de nivel hecho', n: 45 },
-  { paso: 'Primera clase dada',  n: 38 },
-];
-
-const RIESGO = {
-  verde: 152,
-  rojo: 16,
-  urgentes: [
-    { alumno: 'Laura Villegas',   profe: 'Johny',     causa: 'Dos faltas seguidas sin aviso',       dias: 12 },
-    { alumno: 'Mohamed Al Hakeue', profe: 'Silvia',   causa: 'Pidió bajar la frecuencia',           dias: 9  },
-    { alumno: 'Alba Rodríguez',   profe: 'Milagros',  causa: 'Desmotivación detectada en clase',    dias: 7  },
-    { alumno: 'Carles Aliaga',    profe: 'Cristian',  causa: 'Plan termina y no renovó',            dias: 5  },
-    { alumno: 'Elena Tapia',      profe: 'Wanda',     causa: 'Tres clases seguidas canceladas',     dias: 3  },
-  ],
-};
-
-const OPERACION = {
-  dadas: 198,
-  programadas: 231,
-  faltasSinAviso: 7,
-  recuperacionesPendientes: 11,
-  clases2h: 34,
-  franjas: [
-    { franja: '08–11', ocupados: 22, libres: 6  },
-    { franja: '11–14', ocupados: 31, libres: 3  },
-    { franja: '14–17', ocupados: 28, libres: 9  },
-    { franja: '17–20', ocupados: 44, libres: 2  },
-    { franja: '20–23', ocupados: 19, libres: 14 },
-  ],
-};
-
-const PROFESORES = [
-  { nombre: 'Johny',     clases: 46, cuposLibres: 0, transcriptsTarde: 0, usaIA: true  },
-  { nombre: 'Silvia',    clases: 41, cuposLibres: 2, transcriptsTarde: 3, usaIA: true  },
-  { nombre: 'Milagros',  clases: 38, cuposLibres: 1, transcriptsTarde: 0, usaIA: false },
-  { nombre: 'Cristian',  clases: 35, cuposLibres: 4, transcriptsTarde: 7, usaIA: false },
-  { nombre: 'Wanda',     clases: 33, cuposLibres: 3, transcriptsTarde: 1, usaIA: true  },
-  { nombre: 'Victoria',  clases: 29, cuposLibres: 6, transcriptsTarde: 0, usaIA: false },
-];
-
-const IA = { usan: 11, total: 30 };
-
-const FINANZAS = {
-  totalAPagar: 8420,
-  montoPagable: 7310,
-  montoARevisar: 890,
-  montoRetenido: 220,
-  bonus: 340,
-  penalizaciones: -120,
-  mesAnterior: 7960,
-  profesoresPagados: 6,
-  profesoresTotales: 30,
-};
+import {
+  HOY, RESUMEN, ACCIONES, SUSCRIPCIONES, MOVIMIENTO, EMBUDO_NIVEL, RIESGO,
+  OPERACION, PROFESORES, IA, FINANZAS, HERRAMIENTAS, TONO, eur, fechaLarga,
+} from './datos-ejemplo';
+import { DashboardMovil } from './DashboardMovil';
 
 // ─────────────────────────────────────────────────────────────────────────────
-
-const TONO: Record<string, { fg: string; bg: string; bd: string; dot: string }> = {
-  rojo:     { fg: '#B42318', bg: 'rgba(220,74,56,0.08)',  bd: 'rgba(220,74,56,0.30)',  dot: '#dc4a38' },
-  amarillo: { fg: '#8a6d00', bg: 'rgba(255,196,0,0.12)',  bd: 'rgba(255,196,0,0.45)',  dot: '#FFC400' },
-  ok:       { fg: '#167A2D', bg: 'rgba(22,122,45,0.07)',  bd: 'rgba(22,122,45,0.22)',  dot: '#1E9E3A' },
-};
-
-const eur = (n: number) => `${n.toLocaleString('es-ES')} €`;
-
-function fechaLarga(d: Date): string {
-  const s = d.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' });
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
+// Los datos de ejemplo viven en ./datos-ejemplo.ts, compartidos con la vista
+// móvil. Acá solo está la vista de ESCRITORIO (a partir de 768 px).
+// ─────────────────────────────────────────────────────────────────────────────
 
 /** Cabecera de sección con su enlace al detalle real. */
 function SecHead({ title, sub, href, cta = 'Ver detalle' }: {
@@ -563,12 +450,7 @@ function Finanzas() {
 // ─── 8 · Herramientas ────────────────────────────────────────────────────────
 
 function Herramientas() {
-  const tools = [
-    'Auditoría de vínculos',
-    'Sincronización calendario ↔ asignaciones',
-    'Sincronización con WooCommerce',
-    'Estilo de los textos de IA',
-  ];
+  const tools = HERRAMIENTAS;
   return (
     <section className="dpv-sec">
       <SecHead title="Herramientas de mantenimiento" sub="Se quedan como están, plegadas al final." href="/dashboard" cta="Abrir las reales" />
@@ -592,22 +474,30 @@ function Herramientas() {
 function PreviewContent() {
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }}>
-      <NavBar />
-      <div className="adm dpv">
-        <div className="dpv-banner">
-          <span className="adm-dot" style={{ background: '#FFC400' }} />
-          <strong>Vista previa con datos de ejemplo.</strong>
-          <span>Ningún número de esta pantalla sale de la base. Los enlaces sí son reales.</span>
-        </div>
+      {/* Escritorio y tablet: la barra de la app y la maqueta de columnas. */}
+      <div className="dpv-desk">
+        <NavBar />
+        <div className="adm dpv">
+          <div className="dpv-banner">
+            <span className="adm-dot" style={{ background: '#FFC400' }} />
+            <strong>Vista previa con datos de ejemplo.</strong>
+            <span>Ningún número de esta pantalla sale de la base. Los enlaces sí son reales.</span>
+          </div>
 
-        <Cabecera />
-        <RequiereAccion />
-        <SaludNegocio />
-        <Riesgo />
-        <Operacion />
-        <Profesores />
-        <Finanzas />
-        <Herramientas />
+          <Cabecera />
+          <RequiereAccion />
+          <SaludNegocio />
+          <Riesgo />
+          <Operacion />
+          <Profesores />
+          <Finanzas />
+          <Herramientas />
+        </div>
+      </div>
+
+      {/* Teléfono: cabecera propia, secciones plegables y navegación inferior. */}
+      <div className="dpv-mob">
+        <DashboardMovil />
       </div>
 
       <style>{ESTILOS}</style>
@@ -634,6 +524,13 @@ export default function DashboardPreviewPage() {
 
 const ESTILOS = `
 .dpv { max-width: 1240px; }
+
+/* ── Qué vista se ve. 768 px es el corte: debajo, la de teléfono. ── */
+.dpv-mob { display: none; }
+@media (max-width: 767.98px) {
+  .dpv-desk { display: none; }
+  .dpv-mob { display: block; }
+}
 
 .dpv-banner {
   display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
@@ -786,10 +683,5 @@ const ESTILOS = `
   .dpv-actions { grid-template-columns: repeat(2, 1fr); }
   .dpv-grid3, .dpv-grid-op, .dpv-grid-fin { grid-template-columns: 1fr 1fr; }
   .dpv-grid-risk, .dpv-grid-prof { grid-template-columns: 1fr; }
-}
-@media (max-width: 720px) {
-  .dpv-kpis { grid-template-columns: repeat(2, 1fr); }
-  .dpv-actions, .dpv-grid3, .dpv-grid-op, .dpv-grid-fin { grid-template-columns: 1fr; }
-  .dpv-funnel-row { grid-template-columns: 120px 1fr 40px; }
 }
 `;
