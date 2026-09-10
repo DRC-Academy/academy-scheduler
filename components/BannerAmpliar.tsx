@@ -14,11 +14,11 @@
 // LOS TEXTOS VIVEN EN UN DICCIONARIO (`TEXTOS`), uno por estado. Cambiar el tono
 // o la promesa es editar ese objeto: no hay una sola frase suelta en el JSX.
 //
-// Las barras son CSS puro (un div con `width` en porcentaje). Se animan desde 0
-// al montar para que la diferencia de longitud se lea como movimiento y no como
-// un gráfico estático.
+// PLANO Y SIN ANIMACIONES. Las barras son CSS puro (un div con `width` en
+// porcentaje) y se pintan ya en su sitio: antes crecían desde 0 al montar, y el
+// diseño nuevo pide quieto y limpio. Lo único que se mueve es la entrada de la
+// tarjeta (`pg-rise`), que comparten todas las secciones de la ficha.
 
-import { useEffect, useState } from 'react';
 import {
   etiquetaMeses, type Estimacion, type EstadoBanner,
 } from '@/lib/estimacion';
@@ -29,8 +29,6 @@ const UPSELL_URL = process.env.NEXT_PUBLIC_UPSELL_URL || 'https://drcacademy.com
 type EstadoVisible = Exclude<EstadoBanner, 'sin_datos'>;
 
 interface Textos {
-  /** Epígrafe pequeño de arriba. */
-  kicker: string;
   /** Titular. */
   titulo: (e: Estimacion) => string;
   /** Frase de entrada. */
@@ -52,7 +50,6 @@ interface Textos {
  */
 export const TEXTOS: Record<EstadoVisible, Textos> = {
   ahorro: {
-    kicker: 'Tu ritmo',
     titulo: () => '¡Puedes llegar antes de lo que crees!',
     entrada: () => '¿Cuánto tardarías en conseguir tu objetivo con otros planes?',
     cta: 'Amplía tu plan',
@@ -63,7 +60,6 @@ export const TEXTOS: Record<EstadoVisible, Textos> = {
         : ''),
   },
   examen: {
-    kicker: 'Tu examen',
     titulo: () => '¡Puedes llegar preparado antes!',
     entrada: e => `¿Cuánto tardarías en llegar al ${e.meta.nivel} con otros planes?`,
     cta: 'Amplía tu plan',
@@ -77,7 +73,6 @@ export const TEXTOS: Record<EstadoVisible, Textos> = {
   // tiene respuesta: ya está en el más alto. Se le enseña su previsión y se le
   // reconoce el ritmo, que es lo único honesto que se le puede decir.
   tope: {
-    kicker: 'Tu ritmo',
     titulo: () => '¡Vas al mejor ritmo posible!',
     entrada: () => 'Ya haces el máximo de clases a la semana. Esto es lo que tardarías en conseguir tu objetivo.',
     cta: null,
@@ -96,18 +91,11 @@ const DESCARGO =
  * ficha sigue igual.
  */
 export function BannerAmpliar({ estimacion }: { estimacion: Estimacion | null }) {
-  const [crecido, setCrecido] = useState(false);
-  useEffect(() => {
-    const t = setTimeout(() => setCrecido(true), 260);
-    return () => clearTimeout(t);
-  }, []);
-
   if (!estimacion) return null;
   const t = TEXTOS[estimacion.estado];
 
   return (
     <section className="pg-card pg-pace pg-rise" style={{ animationDelay: '180ms' }}>
-      <p className="pg-kicker pg-kicker-light">{t.kicker}</p>
       <h2 className="pg-pace-title">{t.titulo(estimacion)}</h2>
       <p className="pg-pace-lede">{t.entrada(estimacion)}</p>
 
@@ -115,28 +103,31 @@ export function BannerAmpliar({ estimacion }: { estimacion: Estimacion | null })
         {estimacion.opciones.map(o => (
           <li key={o.horasSemanales} className={`pg-bar-row${o.esActual ? ' is-current' : ''}`}>
             {/*
-              El orden es el del LMS: plan · distintivo · meses · fecha.
-              El distintivo ocupa UN solo sitio y dice una de dos cosas: en el plan
-              que ya tiene, "Tu plan"; en los demás, lo que se ahorraría. Nunca las
-              dos, porque en el plan actual no hay ahorro que enseñar.
+              Orden de la fila: plan · distintivo · barra+meses · fecha.
+              El distintivo dice una de dos cosas y nunca las dos: en el plan que ya
+              tiene, "Tu plan" en gris y pequeño; en los de arriba, lo que se
+              ahorraría, en amarillo y grande. En el plan actual no hay ahorro que
+              enseñar, y en los otros la etiqueta gris solo restaría.
             */}
             <div className="pg-bar-head">
               <span className="pg-bar-plan">{o.horasSemanales} h a la semana</span>
-              {o.esActual
-                ? <span className="pg-chip">Tu plan</span>
-                : o.mesesAhorrados > 0 && (
-                    <span className="pg-save">{etiquetaMeses(o.mesesAhorrados)} antes</span>
-                  )}
+              {o.esActual && <span className="pg-chip">Tu plan</span>}
             </div>
 
-            <div className="pg-track">
-              <div className="pg-fill" style={{ width: crecido ? `${o.anchoPct}%` : '0%' }} aria-hidden />
-            </div>
+            {!o.esActual && o.mesesAhorrados > 0 && (
+              <span className="pg-save">{etiquetaMeses(o.mesesAhorrados)} antes</span>
+            )}
 
-            <div className="pg-bar-foot">
+            {/* La barra y los meses van juntos: el hueco de los meses es fijo, así
+                las tres barras arrancan y acaban en el mismo sitio. */}
+            <div className="pg-bar-line">
+              <div className="pg-track">
+                <div className="pg-fill" style={{ width: `${o.anchoPct}%` }} aria-hidden />
+              </div>
               <span className="pg-bar-months">{etiquetaMeses(o.meses)}</span>
-              <span className="pg-bar-date">Llegarías en {o.llegada}</span>
             </div>
+
+            <p className="pg-bar-date">Llegarías en {o.llegada}</p>
           </li>
         ))}
       </ol>

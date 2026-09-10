@@ -300,6 +300,10 @@ const PROGRESO_CSS = `
   --pg-green-deep: #103A1E;
   --pg-green-bright: #37C457;
   --pg-yellow: #FFC400;
+  /* Tintes de fondo de las filas del banner. El verde es el mismo que ya usan los
+     peldaños superados de la escalera, para no meter un tercer verde en la ficha. */
+  --pg-green-tint: #E9F4EB;
+  --pg-grey-tint: #F1F1EF;
   --pg-cream: #F7F7F5;
   --pg-surface: #FFFFFF;
   --pg-ink: #191A17;
@@ -420,67 +424,75 @@ const PROGRESO_CSS = `
   line-height: 1.62; color: #24271F; white-space: pre-wrap;
 }
 
-/* ── Banner de ritmo ────────────────────────────────────────────────────── */
-.pg-pace {
-  background: var(--pg-green-deep); border-color: var(--pg-green-deep); color: #fff;
-  padding: 28px 26px 24px; box-shadow: 0 14px 36px rgba(16, 58, 30, 0.22);
-}
-.pg-kicker-light { color: var(--pg-yellow); }
+/* ── Banner de ampliacion de plan ───────────────────────────────────────── */
+/*
+   TARJETA BLANCA, plana y sin animaciones. Antes era un bloque verde oscuro con
+   barras en degradado que crecian al entrar; ahora el unico elemento que salta
+   es la etiqueta amarilla del ahorro, que es lo que se quiere que mire el alumno.
+   Las tres filas comparten el mismo ancho de barra a proposito: si cada una
+   empezara en un sitio distinto, la comparacion visual mentiria.
+*/
+.pg-pace { padding: 28px 26px 24px; box-shadow: 0 2px 10px rgba(16, 32, 16, 0.05); }
 .pg-pace-title {
-  font-size: clamp(21px, 4.6vw, 27px); font-weight: 700; letter-spacing: -0.025em;
-  line-height: 1.2; margin: 0 0 10px; color: #fff; text-wrap: balance;
+  font-size: clamp(20px, 4.4vw, 25px); font-weight: 700; letter-spacing: -0.025em;
+  line-height: 1.22; margin: 0 0 8px; color: var(--pg-ink); text-wrap: balance;
 }
-.pg-pace-lede { font-size: 15px; line-height: 1.62; color: rgba(255, 255, 255, 0.76); margin: 0 0 24px; max-width: 52ch; }
-.pg-pace-lede strong { color: #fff; font-weight: 700; }
+.pg-pace-lede {
+  font-size: 14.5px; font-weight: 400; line-height: 1.55; color: var(--pg-muted);
+  margin: 0 0 20px; max-width: 52ch;
+}
 
-.pg-bars { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 18px; }
-.pg-bar-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 7px; }
-.pg-bar-plan {
-  font-size: 14px; font-weight: 600; color: rgba(255, 255, 255, 0.82);
-  display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap;
-}
+/* Cada plan, en su propio bloque redondeado. */
+.pg-bars { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.pg-bar-row { background: var(--pg-green-tint); border-radius: 14px; padding: 14px 16px; }
+/* El plan que ya tiene: gris neutro, para que los de arriba destaquen sobre el. */
+.pg-bar-row.is-current { background: var(--pg-grey-tint); }
+
+.pg-bar-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.pg-bar-plan { font-size: 14px; font-weight: 700; color: var(--pg-ink); }
 .pg-chip {
   font-size: 9.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
-  background: rgba(255, 255, 255, 0.16); color: rgba(255, 255, 255, 0.9);
-  padding: 3px 8px; border-radius: 999px;
+  background: var(--pg-line); color: var(--pg-muted);
+  padding: 3px 8px; border-radius: 999px; white-space: nowrap;
 }
-.pg-bar-months { font-size: 19px; font-weight: 700; letter-spacing: -0.02em; color: #fff; white-space: nowrap; }
-
-.pg-track { height: 12px; border-radius: 999px; background: rgba(255, 255, 255, 0.1); overflow: hidden; }
-.pg-fill {
-  height: 100%; border-radius: 999px; min-width: 12px;
-  background: linear-gradient(90deg, var(--pg-green) 0%, var(--pg-green-bright) 100%);
-  transition: width 0.9s cubic-bezier(0.22, 0.61, 0.36, 1);
-}
-.pg-bar-row.is-current .pg-fill { background: rgba(255, 255, 255, 0.26); }
-
-.pg-bar-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 7px; }
-.pg-bar-date { font-size: 12.5px; color: rgba(255, 255, 255, 0.58); }
+/* El ahorro: lo más visible de la fila, y bastante más grande que la etiqueta
+   "Tu plan" (14,5 px contra 9,5 px). Es lo que se quiere que mire el alumno. */
 .pg-save {
-  font-size: 11px; font-weight: 700; letter-spacing: 0.03em; white-space: nowrap;
-  background: var(--pg-yellow); color: #3D2C00; padding: 4px 10px; border-radius: 999px;
+  display: inline-block; margin-top: 9px;
+  font-size: 14.5px; font-weight: 700; letter-spacing: -0.01em; white-space: nowrap;
+  background: var(--pg-yellow); color: var(--pg-ink);
+  padding: 6px 13px; border-radius: 999px;
 }
 
-.pg-cta-block {
-  margin-top: 26px; padding-top: 22px; border-top: 1px solid rgba(255, 255, 255, 0.14);
-  display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+/* Barra + meses en la misma linea, con los meses SIEMPRE en el mismo sitio: es
+   lo que hace que las tres barras arranquen y acaben igual. */
+.pg-bar-line { display: flex; align-items: center; gap: 12px; margin-top: 11px; }
+.pg-track { flex: 1; height: 8px; border-radius: 999px; background: #DFE0DA; overflow: hidden; min-width: 0; }
+.pg-fill { height: 100%; border-radius: 999px; background: var(--pg-green); }
+/* El plan actual siempre esta lleno del todo, y en gris: es la referencia. */
+.pg-bar-row.is-current .pg-fill { background: #B9BAB3; }
+.pg-bar-months {
+  font-size: 16px; font-weight: 700; letter-spacing: -0.02em; color: var(--pg-ink);
+  white-space: nowrap; min-width: 74px; text-align: right;
 }
+.pg-bar-date { margin: 7px 0 0; font-size: 12.5px; line-height: 1.4; color: var(--pg-faint); }
+
+/* Boton: pildora verde centrada, sin hover llamativo. */
+.pg-cta-block { margin-top: 22px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
 .pg-cta {
-  display: inline-flex; align-items: center; gap: 10px; text-decoration: none;
-  background: var(--pg-yellow); color: #2E2100; border-radius: 12px;
-  padding: 14px 24px; font-size: 15.5px; font-weight: 700; letter-spacing: -0.01em;
-  box-shadow: 0 6px 18px rgba(255, 196, 0, 0.26);
-  transition: transform 0.18s ease, box-shadow 0.18s ease;
+  display: inline-flex; align-items: center; justify-content: center; gap: 9px;
+  min-height: 44px; padding: 12px 28px; border-radius: 999px;
+  background: var(--pg-green); color: #fff; font-size: 15px; font-weight: 700;
+  text-decoration: none; box-shadow: 0 6px 16px rgba(30, 158, 58, 0.26);
 }
-.pg-cta:hover { transform: translateY(-1px); box-shadow: 0 9px 24px rgba(255, 196, 0, 0.34); }
-.pg-cta:focus-visible { outline: 3px solid #fff; outline-offset: 3px; }
-.pg-cta-arrow { transition: transform 0.18s ease; }
-.pg-cta:hover .pg-cta-arrow { transform: translateX(3px); }
-.pg-cta-note { font-size: 13.5px; line-height: 1.55; color: rgba(255, 255, 255, 0.72); margin: 0; flex: 1; min-width: 200px; }
+.pg-cta:focus-visible { outline: 3px solid var(--pg-green-dark); outline-offset: 3px; }
+.pg-cta-note {
+  margin: 0; font-size: 13px; line-height: 1.5; color: var(--pg-muted); text-align: center;
+  max-width: 44ch;
+}
 
-.pg-disclaimer {
-  margin: 22px 0 0; font-size: 11.5px; line-height: 1.6; color: rgba(255, 255, 255, 0.45);
-}
+.pg-disclaimer { margin: 20px 0 0; font-size: 11.5px; line-height: 1.6; color: var(--pg-faint); }
+
 
 /* ── Fuertes / a reforzar ───────────────────────────────────────────────── */
 .pg-split { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
@@ -552,10 +564,16 @@ const PROGRESO_CSS = `
   .pg-stat-num { font-size: 23px; }
   .pg-split { grid-template-columns: 1fr; gap: 14px; }
   .pg-goal-text { font-size: 16px; }
-  .pg-bar-months { font-size: 17px; }
-  .pg-cta-block { gap: 14px; }
-  .pg-cta { width: 100%; justify-content: center; }
-  .pg-cta-note { min-width: 0; text-align: center; }
+  /* A 360 px el hueco de los meses se estrecha, pero NO desaparece: sigue siendo
+     fijo para las tres filas, que es lo que mantiene las barras alineadas. Con
+     nowrap el número nunca se parte ni se monta sobre la barra. */
+  .pg-bar-row { padding: 13px 14px; border-radius: 12px; }
+  .pg-bar-months { font-size: 15px; min-width: 66px; }
+  .pg-bar-line { gap: 10px; }
+  .pg-save { font-size: 13.5px; padding: 5px 11px; }
+  .pg-cta-block { gap: 12px; }
+  /* Ancho completo solo en móvil: ahí es más cómodo de tocar. */
+  .pg-cta { width: 100%; }
   .pg-timeline { padding-left: 22px; }
   .pg-tl-node { left: -22px; top: 19px; }
   .pg-tl-card { padding: 16px 16px; }
