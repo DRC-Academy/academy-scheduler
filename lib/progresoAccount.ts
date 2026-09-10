@@ -26,7 +26,8 @@
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import {
   PROFILE_COLS, PROFILE_COLS_EXTRA, ANALYSIS_COLS, ASSIGNMENT_COLS,
-  isMissingColumnError, pickAssignment, type AssignmentLite,
+  STUDENT_COLS, isMissingColumnError, pickAssignment,
+  type AssignmentLite, type StudentLite,
 } from '@/lib/progresoData';
 import { normalizeProgresoEmail } from '@/lib/progresoSignature';
 import type { ClassAnalysisRow, StudentProfileRow } from '@/lib/aiTypes';
@@ -43,6 +44,8 @@ export interface ProgresoPayload {
   profile: StudentProfileRow | null;
   analyses: ClassAnalysisRow[];
   assignment: AssignmentLite | null;
+  /** `plan` y `product_name`: de ahí sale la meta cuando prepara un examen. */
+  studentLite: StudentLite | null;
 }
 
 export type ProgresoLookup =
@@ -118,11 +121,12 @@ export async function loadProgresoFor(student: ProgresoStudent): Promise<Progres
   const profileQ = (cols: string) =>
     db.from('student_profiles').select(cols).eq('student_id', student.id).limit(1);
 
-  const [firstP, aRes, asgRes] = await Promise.all([
+  const [firstP, aRes, asgRes, stRes] = await Promise.all([
     profileQ(PROFILE_COLS_EXTRA),
     db.from('class_analyses').select(ANALYSIS_COLS)
       .eq('student_id', student.id).order('analyzed_at', { ascending: false }),
     db.from('assignments').select(ASSIGNMENT_COLS).eq('student_id', student.id),
+    db.from('students').select(STUDENT_COLS).eq('id', student.id).limit(1),
   ]);
 
   // Mismo respaldo que la otra ruta: si supabase-teacher-level.sql no se corrió, se
@@ -134,5 +138,6 @@ export async function loadProgresoFor(student: ProgresoStudent): Promise<Progres
     profile: (pRes.data?.[0] ?? null) as unknown as StudentProfileRow | null,
     analyses: (aRes.data ?? []) as unknown as ClassAnalysisRow[],
     assignment: pickAssignment((asgRes.data ?? []) as unknown as AssignmentLite[]),
+    studentLite: (stRes.data?.[0] ?? null) as unknown as StudentLite | null,
   };
 }

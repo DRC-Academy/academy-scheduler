@@ -11,6 +11,24 @@
 // llevado el texto completo de cada clase al navegador del alumno sin que nadie lo
 // notara.
 
+/**
+ * Lo poco que hace falta de `students`: los dos textos donde está escrito qué
+ * compró el alumno.
+ *
+ * `product_name` es el nombre del producto de WooCommerce y es la MEJOR fuente
+ * para saber si prepara un examen: de los 63 alumnos de examen de septiembre de
+ * 2026, **54 solo se detectan por aquí** ("Preparación B2 First Certificate",
+ * "intensivo PET"), frente a 1 por `assignments.plan` y 4 por `objetivo`. Sin
+ * estas dos columnas la detección de meta se pierde a casi todos.
+ */
+export interface StudentLite {
+  plan: string | null;
+  product_name: string | null;
+}
+
+/** Solo esas dos. Ningún dato personal más del que la ficha ya muestra. */
+export const STUDENT_COLS = 'plan, product_name';
+
 /** Lo poco que hace falta de `assignments`: horas del plan y textos del objetivo. */
 export interface AssignmentLite {
   weekly_hours: number | null;

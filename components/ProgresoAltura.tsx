@@ -52,10 +52,20 @@ export function ProgresoAltura() {
     window.addEventListener('load', enviar);
     window.addEventListener('resize', enviar);
 
+    // Al TERMINAR las animaciones de entrada. `pg-rise` anima opacidad y
+    // `transform`, que no cambian el alto de la maquetación y por tanto no
+    // disparan el observer — pero las barras del banner crecen 260 ms después de
+    // montar, y cualquier animación futura que sí mueva la altura pasaría
+    // desapercibida. Escuchar el final de la animación es el cinturón.
+    document.addEventListener('animationend', enviar, true);
+    document.addEventListener('transitionend', enviar, true);
+
     return () => {
       observer.disconnect();
       window.removeEventListener('load', enviar);
       window.removeEventListener('resize', enviar);
+      document.removeEventListener('animationend', enviar, true);
+      document.removeEventListener('transitionend', enviar, true);
     };
   }, []);
 

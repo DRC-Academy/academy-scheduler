@@ -16,8 +16,8 @@ import { useParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { ProgresoFicha, ProgresoStyles } from '@/components/ProgresoFicha';
 import {
-  PROFILE_COLS, PROFILE_COLS_EXTRA, ANALYSIS_COLS, ASSIGNMENT_COLS,
-  isMissingColumnError, pickAssignment, type AssignmentLite,
+  PROFILE_COLS, PROFILE_COLS_EXTRA, ANALYSIS_COLS, ASSIGNMENT_COLS, STUDENT_COLS,
+  isMissingColumnError, pickAssignment, type AssignmentLite, type StudentLite,
 } from '@/lib/progresoData';
 import type { ClassAnalysisRow, StudentProfileRow } from '@/lib/aiTypes';
 
@@ -32,7 +32,7 @@ type LoadState =
   | { kind: 'loading' }
   | { kind: 'invalid' }
   | { kind: 'expired' }
-  | { kind: 'ready'; row: TokenRow; profile: StudentProfileRow | null; analyses: ClassAnalysisRow[]; assignment: AssignmentLite | null };
+  | { kind: 'ready'; row: TokenRow; profile: StudentProfileRow | null; analyses: ClassAnalysisRow[]; assignment: AssignmentLite | null; student: StudentLite | null };
 
 export default function ProgresoPage() {
   const params = useParams<{ token: string }>();
@@ -68,7 +68,16 @@ export default function ProgresoPage() {
         ? supabase.from('assignments').select(ASSIGNMENT_COLS).eq('student_id', row.student_id)
         : supabase.from('assignments').select(ASSIGNMENT_COLS).ilike('student_name', row.student_name);
 
-      const [firstP, aRes, asgRes] = await Promise.all([profileQ(PROFILE_COLS_EXTRA), analysesQ, assignQ]);
+      // La fila de `students` solo se puede pedir con el id; sin el (tokens
+      // viejos que solo guardaron el nombre) la meta se detecta con los textos de
+      // la assignment, como antes.
+      const studentQ = row.student_id
+        ? supabase.from('students').select(STUDENT_COLS).eq('id', row.student_id).limit(1)
+        : null;
+
+      const [firstP, aRes, asgRes, stRes] = await Promise.all([
+        profileQ(PROFILE_COLS_EXTRA), analysesQ, assignQ, studentQ ?? Promise.resolve({ data: null }),
+      ]);
       // 42703 / PGRST204 = supabase-teacher-level.sql sin correr. Se reintenta
       // sin esa columna: el alumno ve su progreso igual, con el nivel de antes.
       const pRes = isMissingColumnError(firstP.error) ? await profileQ(PROFILE_COLS) : firstP;
@@ -79,6 +88,7 @@ export default function ProgresoPage() {
         profile: (pRes.data?.[0] ?? null) as unknown as StudentProfileRow | null,
         analyses: (aRes.data ?? []) as unknown as ClassAnalysisRow[],
         assignment: pickAssignment((asgRes.data ?? []) as unknown as AssignmentLite[]),
+        student: ((stRes as { data: unknown[] | null }).data?.[0] ?? null) as StudentLite | null,
       });
     })();
     return () => { cancelled = true; };
@@ -122,6 +132,7 @@ export default function ProgresoPage() {
             profile={state.profile}
             analyses={state.analyses}
             assignment={state.assignment}
+            student={state.student}
           />
         )}
       </main>

@@ -165,6 +165,7 @@ export default async function ProgresoCuentaPage({ searchParams }: {
         profile={payload.profile}
         analyses={payload.analyses}
         assignment={payload.assignment}
+        student={payload.studentLite}
       />
     </Marco>
   );

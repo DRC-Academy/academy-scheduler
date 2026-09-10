@@ -31,19 +31,21 @@ import { keepForStudent, forStudentOrNull } from '@/lib/studentFacing';
 import { CEFR_LADDER } from '@/lib/studentViz';
 import { effectiveLevelOf } from '@/lib/effectiveLevel';
 import { getNextMilestone, isMilestone } from '@/lib/milestones';
-import { buildEstimate, monthsLabel, type Estimate } from '@/lib/progressEstimate';
-import { resolveWeeklyHours, type AssignmentLite } from '@/lib/progresoData';
+import { construirEstimacion, type Estimacion } from '@/lib/estimacion';
+import { resolveWeeklyHours, type AssignmentLite, type StudentLite } from '@/lib/progresoData';
+import { BannerAmpliar } from '@/components/BannerAmpliar';
 import type { ClassAnalysisRow, StudentProfileRow } from '@/lib/aiTypes';
 
-/** A donde lleva "Amplia tu plan". Configurable sin tocar codigo. */
-const UPSELL_URL = process.env.NEXT_PUBLIC_UPSELL_URL || 'https://drcacademy.com/mi-cuenta';
-
-export function ProgresoFicha({ studentName, profile, analyses, assignment }: {
+export function ProgresoFicha({ studentName, profile, analyses, assignment, student }: {
   /** Nombre completo del alumno. Solo se usa el nombre de pila. */
   studentName: string;
   profile: StudentProfileRow | null;
   analyses: ClassAnalysisRow[];
   assignment: AssignmentLite | null;
+  /** Fila de `students`: de aquí sale el producto de WooCommerce, que es lo que
+   *  mejor dice si el alumno prepara un examen. Opcional: sin ella la detección
+   *  cae a los textos de la assignment, como antes. */
+  student?: StudentLite | null;
 }) {
   const firstName = studentName.trim().split(/\s+/)[0] || studentName;
 
@@ -71,11 +73,21 @@ export function ProgresoFicha({ studentName, profile, analyses, assignment }: {
 
   const nextMilestone = getNextMilestone(classCount);
 
-  const estimate = useMemo<Estimate | null>(() => buildEstimate({
-    currentLevel: rawLevel,
-    weeklyHours,
-    planTexts: [assignment?.plan, assignment?.objetivo, objective],
-  }), [rawLevel, weeklyHours, assignment?.plan, assignment?.objetivo, objective]);
+  // Las fuentes van EN ORDEN y gana la primera con un examen reconocible. El
+  // producto de WooCommerce va primero porque es lo que el alumno compró y lo más
+  // específico: 54 de los 63 alumnos de examen solo se detectan por ahí.
+  const estimacion = useMemo<Estimacion | null>(() => construirEstimacion({
+    nivelActual: rawLevel,
+    horasSemanales: weeklyHours,
+    fuentes: {
+      productoWoo: student?.product_name,
+      planAlumno: student?.plan,
+      planAssignment: assignment?.plan,
+      objetivo: assignment?.objetivo,
+      objetivoPersonal: objective,
+    },
+  }), [rawLevel, weeklyHours, student?.product_name, student?.plan,
+       assignment?.plan, assignment?.objetivo, objective]);
 
   return (
     <>
@@ -88,7 +100,7 @@ export function ProgresoFicha({ studentName, profile, analyses, assignment }: {
       </section>
 
       <section className="pg-card pg-hero pg-rise" style={{ animationDelay: '60ms' }}>
-        <LevelLadder level={level} target={estimate?.target.level ?? null} />
+        <LevelLadder level={level} target={estimacion?.meta.nivel ?? null} />
 
         <div className="pg-stats">
           <div className="pg-stat">
@@ -98,6 +110,15 @@ export function ProgresoFicha({ studentName, profile, analyses, assignment }: {
           <div className="pg-stat">
             <span className="pg-stat-num">{level ?? '—'}</span>
             <span className="pg-stat-label">Nivel actual</span>
+            {/*
+              `decided` es false cuando el nivel NO lo fijó ni el profesor ni la
+              prueba: lo que se enseña es el curso que contrató o un texto viejo
+              de la ficha. Enseñarlo sin más lo haría pasar por una medición.
+              El dato ya lo calculaba `effectiveLevelOf`; hasta ahora se tiraba.
+            */}
+            {level && !eff.decided && (
+              <span className="pg-stat-note">Estimado · confírmalo con tu profesor</span>
+            )}
           </div>
           <div className="pg-stat">
             <span className="pg-stat-num">
@@ -122,7 +143,7 @@ export function ProgresoFicha({ studentName, profile, analyses, assignment }: {
         </section>
       )}
 
-      {estimate && <PaceBanner estimate={estimate} />}
+      <BannerAmpliar estimacion={estimacion} />
 
       {(strong.length > 0 || weak.length > 0) && (
         <section className="pg-split pg-rise" style={{ animationDelay: '240ms' }}>
@@ -199,89 +220,6 @@ function LevelLadder({ level, target }: { level: string | null; target: string |
   );
 }
 
-/**
- * EL BANNER. La misma distancia recorrida a dos o tres velocidades, con la fecha
- * de llegada de cada una. La fecha es lo que convence: "29 meses" es abstracto,
- * "mayo de 2028" se entiende de golpe.
- *
- * Las barras se animan desde 0 al montar para que la diferencia de longitud se
- * lea como movimiento y no como un gráfico estático.
- */
-function PaceBanner({ estimate }: { estimate: Estimate }) {
-  const [grown, setGrown] = useState(false);
-  useEffect(() => {
-    const t = setTimeout(() => setGrown(true), 260);
-    return () => clearTimeout(t);
-  }, []);
-
-  const best = estimate.options[estimate.options.length - 1];
-  const targetIsExam = estimate.target.source === 'examen';
-
-  return (
-    <section className="pg-card pg-pace pg-rise" style={{ animationDelay: '180ms' }}>
-      <p className="pg-kicker pg-kicker-light">Tu ritmo</p>
-      <h2 className="pg-pace-title">
-        {estimate.hasUpgrade ? 'Puedes llegar antes de lo que crees' : 'Vas al mejor ritmo posible'}
-      </h2>
-      <p className="pg-pace-lede">
-        Para alcanzar el <strong>{estimate.target.level}</strong>
-        {targetIsExam ? ' que preparas' : ''} quedan unas <strong>{estimate.hoursNeeded} horas</strong> de inglés.
-        {estimate.hasUpgrade
-          ? ' Esto es lo que tardarías según las horas que hagas cada semana.'
-          : ' A tu ritmo actual, esta es la previsión.'}
-      </p>
-
-      <ol className="pg-bars">
-        {estimate.options.map(o => (
-          <li key={o.weeklyHours} className={`pg-bar-row${o.isCurrent ? ' is-current' : ''}`}>
-            <div className="pg-bar-head">
-              <span className="pg-bar-plan">
-                {o.weeklyHours} h a la semana
-                {o.isCurrent && <span className="pg-chip">Tu plan</span>}
-              </span>
-              <span className="pg-bar-months">{monthsLabel(o.months)}</span>
-            </div>
-
-            <div className="pg-track">
-              <div
-                className="pg-fill"
-                style={{ width: grown ? `${o.barPct}%` : '0%' }}
-                aria-hidden
-              />
-            </div>
-
-            <div className="pg-bar-foot">
-              <span className="pg-bar-date">Llegarías en {o.arrival}</span>
-              {o.monthsSaved > 0 && (
-                <span className="pg-save">{monthsLabel(o.monthsSaved)} antes</span>
-              )}
-            </div>
-          </li>
-        ))}
-      </ol>
-
-      {estimate.hasUpgrade && (
-        <div className="pg-cta-block">
-          <a className="pg-cta" href={UPSELL_URL} target="_blank" rel="noopener noreferrer">
-            Amplía tu plan
-            <span className="pg-cta-arrow" aria-hidden>→</span>
-          </a>
-          <p className="pg-cta-note">
-            Con una hora más a la semana llegarías {monthsLabel(estimate.options[1].monthsSaved)} antes.
-            {best.weeklyHours > estimate.options[1].weeklyHours &&
-              ` Con ${best.weeklyHours} horas, ${monthsLabel(best.monthsSaved)} antes.`}
-          </p>
-        </div>
-      )}
-
-      <p className="pg-disclaimer">
-        Estimación orientativa. Partimos de las horas de estudio guiado que Cambridge asocia a cada
-        nivel del MCER y contamos con que practicas por tu cuenta entre clases. Tu ritmo real depende
-        de ti y de tu constancia.
-      </p>
-    </section>
-  );
-}
 
 /** "19 de agosto de 2026", o null si la fila no trae una fecha usable. */
 function classDate(r: ClassAnalysisRow): string | null {
@@ -466,6 +404,13 @@ const PROGRESO_CSS = `
 .pg-stat-label {
   display: block; margin-top: 5px; font-size: 11px; font-weight: 600;
   letter-spacing: 0.06em; text-transform: uppercase; color: var(--pg-faint);
+}
+/* La nota bajo el nivel cuando nadie lo ha medido todavía. En minúsculas y sin
+   negrita a propósito, para matizar la cifra sin competir con ella. */
+.pg-stat-note {
+  display: block; margin-top: 4px; font-size: 10.5px; line-height: 1.35;
+  color: var(--pg-faint); text-transform: none; letter-spacing: 0;
+  text-wrap: balance;
 }
 
 /* ── Objetivo (las palabras del propio alumno, en cursiva) ──────────────── */
