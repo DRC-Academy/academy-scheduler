@@ -24,6 +24,8 @@ export const RESUMEN = {
 export type Tono = 'rojo' | 'amarillo' | 'ok';
 
 export interface Accion {
+  /** Identificador estable: la vista móvil elige por acá qué colas muestra. */
+  clave: string;
   n: number;
   label: string;
   detalle: string;
@@ -33,14 +35,14 @@ export interface Accion {
 
 /** Lo que hay que resolver hoy. `tono` decide el semáforo. */
 export const ACCIONES: Accion[] = [
-  { n: 14, label: 'Validaciones pendientes',        detalle: 'la más antigua, 6 días',      href: '/admin?tab=validacion',            tono: 'rojo' },
-  { n: 3,  label: 'Emails de presentación tarde',   detalle: 'más de 24 h sin enviar',      href: '/admin?tab=emails&filter=overdue', tono: 'rojo' },
-  { n: 9,  label: 'Alumnos en riesgo',              detalle: 'sin intervención registrada', href: '/admin?tab=ai',                    tono: 'rojo' },
-  { n: 22, label: 'Transcripts sin subir',          detalle: 'clases con acceso registrado', href: '/admin?tab=tracking',             tono: 'amarillo' },
-  { n: 6,  label: 'Próximos a cancelar sin contactar', detalle: 'les quedan menos de 7 días', href: '/proximos-cancelar',             tono: 'amarillo' },
-  { n: 4,  label: 'Solicitudes de revisión',        detalle: 'clases que el profe no cobra', href: '/finanzas',                       tono: 'amarillo' },
-  { n: 2,  label: 'Alumnos sin profesor',           detalle: 'alta sin asignar',            href: '/dashboard',                       tono: 'amarillo' },
-  { n: 0,  label: 'Análisis de IA fallidos',        detalle: 'sin reintentar',              href: '/admin?tab=tracking',              tono: 'ok' },
+  { clave: 'validaciones', n: 14, label: 'Validaciones pendientes',        detalle: 'la más antigua, 6 días',      href: '/admin?tab=validacion',            tono: 'rojo' },
+  { clave: 'emails-tarde', n: 3,  label: 'Emails de presentación tarde',   detalle: 'más de 24 h sin enviar',      href: '/admin?tab=emails&filter=overdue', tono: 'rojo' },
+  { clave: 'riesgo', n: 9,  label: 'Alumnos en riesgo',              detalle: 'sin intervención registrada', href: '/admin?tab=ai',                    tono: 'rojo' },
+  { clave: 'transcripts', n: 22, label: 'Transcripts sin subir',          detalle: 'clases con acceso registrado', href: '/admin?tab=tracking',             tono: 'amarillo' },
+  { clave: 'proximos-cancelar', n: 6,  label: 'Próximos a cancelar sin contactar', detalle: 'les quedan menos de 7 días', href: '/proximos-cancelar',             tono: 'amarillo' },
+  { clave: 'solicitudes', n: 4,  label: 'Solicitudes de revisión',        detalle: 'clases que el profe no cobra', href: '/finanzas',                       tono: 'amarillo' },
+  { clave: 'sin-profesor', n: 2,  label: 'Alumnos sin profesor',           detalle: 'alta sin asignar',            href: '/dashboard',                       tono: 'amarillo' },
+  { clave: 'ia-fallidos', n: 0,  label: 'Análisis de IA fallidos',        detalle: 'sin reintentar',              href: '/admin?tab=tracking',              tono: 'ok' },
 ];
 
 export const SUSCRIPCIONES = {

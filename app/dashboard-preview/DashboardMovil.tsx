@@ -2,24 +2,26 @@
 
 // VISTA MÓVIL de la maqueta del dashboard (por debajo de 768 px).
 //
-// No es la pantalla de escritorio apretada: está pensada para el pulgar, con
-// una mano, en 360–430 px. El admin la abre varias veces al día para contestar
-// UNA pregunta —"¿hay algo que tenga que resolver ahora?"— y, si no hay nada,
-// ver en diez segundos cómo viene el mes.
+// Rediseño de septiembre de 2026, desde cero y con una sola pregunta en la
+// cabeza: "¿tengo que resolver algo ahora?" y, si no, "¿cómo viene el mes?".
+// Todo lo que no contesta una de las dos se quedó en el escritorio.
 //
-// Reglas que gobiernan esta pantalla:
-//   · Una columna. Los KPI van en una fila deslizable (scroll-snap), nunca en
-//     rejilla.
-//   · Lo accionable primero: número grande, color de urgencia, botón "Ver".
-//     Sin pendientes → "Todo al día".
-//   · Cada sección es un <details> con el resumen en el encabezado, para leer
-//     el estado sin abrirla. Abiertas: Requiere acción y Salud. El resto, no.
-//   · Cuerpo ≥ 14 px, cifras secundarias 16 px, principales 32–36 px. Zonas
-//     táctiles ≥ 44 px.
-//   · Gráficos que se entienden sin hover: barras, semáforos, seis puntos.
-//   · Listas de 5 como máximo, con "Ver todos". Nunca tablas.
-//   · Rojo SOLO para urgencia real. Las bajas del gráfico de movimiento van en
-//     gris por eso mismo: una baja no es una emergencia del admin.
+// Reglas que gobiernan esta pantalla (no negociables):
+//   · De 320 a 767 px NADA se desliza en horizontal: ni carruseles, ni tablas,
+//     ni gráficos más anchos que la pantalla. Solo scroll vertical.
+//   · Una sola columna. Como máximo, pares de tarjetas 2×N cuando son dos
+//     cifras cortas.
+//   · Ningún texto se corta ni desborda: las etiquetas parten en dos líneas y
+//     los nombres largos se recortan con puntos suspensivos.
+//   · Cabecera compacta (logo, fecha, aviso de datos de ejemplo) y navegación
+//     inferior fija, las dos respetando la zona segura del iPhone.
+//   · Zonas táctiles ≥ 44 px. Cuerpo 14–15 px, cifras principales 28–32 px.
+//   · Rojo solo para urgencias reales.
+//
+// Seis bloques, en este orden: Requiere acción · Alumnos activos · Este mes ·
+// Finanzas del mes · Clases de la semana · Riesgo de baja. Fuera quedan cupos
+// por franja, conflictos, uso de IA, ranking de profesores, emails de
+// presentación, embudo del test y las herramientas de mantenimiento.
 //
 // Los datos son los MISMOS de ./datos-ejemplo.ts que usa la vista de
 // escritorio. Nada sale de la base. Los enlaces sí son reales.
@@ -27,446 +29,259 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutDashboard, Settings, Users, Wallet, ChevronDown, ChevronRight, CircleCheck } from 'lucide-react';
+import { LayoutDashboard, Settings, Users, Wallet, ChevronRight, CircleCheck } from 'lucide-react';
 import {
-  HOY, RESUMEN, ACCIONES, SUSCRIPCIONES, MOVIMIENTO, EMBUDO_NIVEL, RIESGO,
-  OPERACION, PROFESORES, IA, FINANZAS, HERRAMIENTAS, TONO, eur, fechaCorta,
-  type Tono,
+  HOY, RESUMEN, ACCIONES, SUSCRIPCIONES, MOVIMIENTO, RIESGO, OPERACION, FINANZAS,
+  TONO, fechaCorta, type Accion,
 } from './datos-ejemplo';
 
-const MAX_LISTA = 5;
+// ─── Qué colas entran en el teléfono ─────────────────────────────────────────
+// Solo las cuatro que el admin resuelve desde el celular. El resto (emails,
+// solicitudes, alumnos sin profesor, análisis fallidos) se queda en escritorio.
+const COLAS_MOVIL = ['validaciones', 'transcripts', 'riesgo', 'proximos-cancelar'];
+
+/** "8.420 €", con el punto de miles que en el teléfono se lee mejor. */
+const eur = (n: number) => `${Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')} €`;
+const num = (n: number) => n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
 
 // ─── Piezas ──────────────────────────────────────────────────────────────────
 
-/**
- * Sección plegable. El encabezado lleva el punto de estado y un resumen de una
- * línea, para que la pantalla se lea entera sin abrir nada. `<details>` nativo:
- * accesible, sin JS, y el estado abierto/cerrado lo maneja el navegador.
- */
-function Seccion({ id, titulo, resumen, tono, abierta = false, children }: {
-  id: string; titulo: string; resumen: string; tono?: Tono; abierta?: boolean; children: React.ReactNode;
+/** Título de bloque con su enlace a la pantalla real, si la tiene. */
+function Bloque({ titulo, href, cta = 'Ver', children }: {
+  titulo: string; href?: string; cta?: string; children: React.ReactNode;
 }) {
   return (
-    <details className="dpm-sec" open={abierta} id={id}>
-      <summary className="dpm-sum">
-        {tono && <span className="adm-dot dpm-sum-dot" style={{ background: TONO[tono].dot }} />}
-        <span className="dpm-sum-body">
-          <span className="dpm-sum-title">{titulo}</span>
-          <span className="dpm-sum-res">{resumen}</span>
-        </span>
-        <ChevronDown className="dpm-chev" size={20} strokeWidth={2} aria-hidden />
-      </summary>
-      <div className="dpm-body">{children}</div>
-    </details>
+    <section className="dpm-bloque">
+      <div className="dpm-bloque-head">
+        <h2 className="dpm-h2">{titulo}</h2>
+        {href && <Link href={href} className="dpm-link">{cta} <ChevronRight size={16} strokeWidth={2.25} aria-hidden /></Link>}
+      </div>
+      {children}
+    </section>
   );
 }
 
-/** Barra apilada de segmentos, sin tooltip: los números van en la lista de abajo. */
-function Apilada({ partes }: { partes: Array<{ n: number; color: string }> }) {
+/** Barra segmentada de ancho completo. Sin tooltip: los números van debajo. */
+function Segmentada({ partes, alto = 12 }: { partes: Array<{ n: number; color: string }>; alto?: number }) {
   const total = partes.reduce((s, p) => s + p.n, 0);
   return (
-    <div className="dpm-stack" aria-hidden>
+    <div className="dpm-seg" style={{ height: alto }} aria-hidden>
       {partes.map((p, i) => (
-        <div key={i} className="dpm-stack-seg" style={{ width: `${(p.n / total) * 100}%`, background: p.color }} />
+        <div key={i} style={{ width: `${total > 0 ? (p.n / total) * 100 : 0}%`, background: p.color }} />
       ))}
     </div>
   );
 }
 
-/** Fila "etiqueta … número" con su barra debajo. Una sola línea de lectura. */
-function FilaBarra({ label, valor, pct, color = '#1E9E3A', track, sub }: {
-  label: React.ReactNode; valor: React.ReactNode; pct: number; color?: string; track?: string; sub?: React.ReactNode;
-}) {
+function Fila({ color, label, n, sub }: { color: string; label: string; n: React.ReactNode; sub?: string }) {
   return (
-    <div className="dpm-brow">
-      <div className="dpm-brow-top">
-        <span className="dpm-brow-label">{label}</span>
-        <span className="dpm-brow-n">{valor}</span>
-      </div>
-      <div className="dpm-brow-track" style={{ background: track }}>
-        <div className="dpm-brow-fill" style={{ width: `${Math.max(0, Math.min(100, pct))}%`, background: color }} />
-      </div>
-      {sub && <div className="dpm-brow-sub">{sub}</div>}
-    </div>
-  );
-}
-
-function BotonEnlace({ href, children, primario = false }: { href: string; children: React.ReactNode; primario?: boolean }) {
-  return (
-    <Link href={href} className={`dpm-btn${primario ? ' is-primary' : ''}`}>
-      {children} <ChevronRight size={18} strokeWidth={2} aria-hidden />
-    </Link>
+    <li className="dpm-fila">
+      <span className="adm-dot" style={{ background: color }} />
+      <span className="dpm-fila-l">{label}{sub && <span className="dpm-fila-sub"> · {sub}</span>}</span>
+      <span className="dpm-fila-n">{n}</span>
+    </li>
   );
 }
 
 // ─── 1 · Requiere acción hoy ─────────────────────────────────────────────────
 
 function RequiereAccion({ simularVacio, onSimular }: { simularVacio: boolean; onSimular: () => void }) {
-  const [verTodas, setVerTodas] = useState(false);
-  // Orden de urgencia: rojas, después amarillas. Las colas en cero no se listan:
-  // una cola vacía no es una noticia, y el sitio se lo lleva lo que sí espera.
-  const pendientes = simularVacio ? [] : ACCIONES.filter(a => a.n > 0)
-    .sort((a, b) => (a.tono === b.tono ? 0 : a.tono === 'rojo' ? -1 : 1));
-  const rojas = pendientes.filter(a => a.tono === 'rojo').length;
-  const amarillas = pendientes.length - rojas;
-  const tono: Tono = rojas ? 'rojo' : amarillas ? 'amarillo' : 'ok';
-  const resumen = pendientes.length === 0
-    ? 'Todo al día'
-    : [rojas && `${rojas} urgente${rojas > 1 ? 's' : ''}`, amarillas && `${amarillas} pendiente${amarillas > 1 ? 's' : ''}`].filter(Boolean).join(' · ');
-  const visibles = verTodas ? pendientes : pendientes.slice(0, MAX_LISTA);
-  const ocultas = pendientes.length - visibles.length;
+  // En el orden en que están en los datos (que ya va de rojo a amarillo).
+  const colas: Accion[] = simularVacio ? [] : ACCIONES.filter(a => COLAS_MOVIL.includes(a.clave) && a.n > 0);
 
   return (
-    <Seccion id="accion" titulo="Requiere acción hoy" resumen={resumen} tono={tono} abierta>
-      {pendientes.length === 0 ? (
+    <Bloque titulo="Requiere acción hoy">
+      {colas.length === 0 ? (
         <div className="adm-card dpm-card dpm-vacio">
-          <CircleCheck size={40} strokeWidth={1.75} color="#1E9E3A" aria-hidden />
-          <div className="dpm-vacio-title">Todo al día</div>
-          <div className="dpm-vacio-sub">No hay nada que resolver ahora mismo.</div>
+          <CircleCheck size={36} strokeWidth={1.75} color="#1E9E3A" aria-hidden />
+          <div className="dpm-vacio-t">Todo al día</div>
+          <div className="dpm-vacio-s">No hay nada que resolver ahora mismo.</div>
         </div>
       ) : (
-        <div className="dpm-acts">
-          {visibles.map((a, i) => {
+        <div className="dpm-alertas">
+          {colas.map(a => {
             const t = TONO[a.tono];
             return (
-              <Link key={a.label} href={a.href} className={`dpm-act${i === 0 ? ' is-first' : ''}`}
-                style={{ background: t.bg, borderColor: t.bd }}>
-                <span className="dpm-act-n" style={{ color: t.fg }}>{a.n}</span>
-                <span className="dpm-act-body">
-                  <span className="dpm-act-label">{a.label}</span>
-                  <span className="dpm-act-det">{a.detalle}</span>
+              <Link key={a.clave} href={a.href} className="dpm-alerta" style={{ background: t.bg, borderColor: t.bd }}>
+                <span className="dpm-alerta-n" style={{ color: t.fg }}>{a.n}</span>
+                <span className="dpm-alerta-body">
+                  <span className="dpm-alerta-l">{a.label}</span>
+                  <span className="dpm-alerta-d">{a.detalle}</span>
                 </span>
-                <span className="dpm-act-btn" style={{ color: t.fg, borderColor: t.bd }}>
-                  Ver <ChevronRight size={16} strokeWidth={2.25} aria-hidden />
-                </span>
+                <span className="dpm-alerta-btn" style={{ color: t.fg, borderColor: t.bd }}>Ver</span>
               </Link>
             );
           })}
-          {ocultas > 0 && (
-            <button type="button" className="dpm-btn is-ghost" onClick={() => setVerTodas(true)}>
-              Ver {ocultas === 1 ? 'la que falta' : `las ${ocultas} restantes`} <ChevronDown size={18} strokeWidth={2} aria-hidden />
-            </button>
-          )}
         </div>
       )}
       {/* Control SOLO de la maqueta: para ver los dos estados sin tocar datos. */}
       <button type="button" className="dpm-mock" onClick={onSimular}>
-        {simularVacio ? 'Volver a los datos de ejemplo' : 'Ver cómo queda sin pendientes'} <span>· solo maqueta</span>
+        {simularVacio ? 'Volver a los datos de ejemplo' : 'Ver cómo queda sin pendientes'}<span> · solo maqueta</span>
       </button>
-    </Seccion>
+    </Bloque>
   );
 }
 
-// ─── 2 · Salud del negocio ───────────────────────────────────────────────────
+// ─── 2 · Alumnos activos ─────────────────────────────────────────────────────
 
-function SaludNegocio() {
-  const deltaCoste = RESUMEN.costeProfesoresMes - RESUMEN.costeProfesoresMesAnterior;
-  const kpis = [
-    { label: 'Alumnos activos',    valor: String(RESUMEN.alumnosActivos),   pie: `de ${RESUMEN.alumnosTotales} en la base` },
-    { label: 'Profesores activos', valor: String(RESUMEN.profesoresActivos), pie: `de ${RESUMEN.profesoresTotales}` },
-    { label: 'Clases esta semana', valor: String(RESUMEN.clasesSemana),      pie: `${RESUMEN.clasesSemanaProgramadas} programadas` },
-    { label: 'Coste profesores',   valor: eur(RESUMEN.costeProfesoresMes),   pie: `${deltaCoste >= 0 ? '+' : ''}${eur(deltaCoste)} vs. mes anterior` },
-    { label: 'Ocupación',          valor: `${RESUMEN.ocupacion} %`,          pie: 'clases sobre cupos', barra: RESUMEN.ocupacion },
-  ];
-  const mesActual = MOVIMIENTO[MOVIMIENTO.length - 1];
-  const neto = mesActual.altas - mesActual.bajas;
-  const maxMov = Math.max(...MOVIMIENTO.flatMap(m => [m.altas, m.bajas]));
-  const maxEstado = Math.max(...SUSCRIPCIONES.porEstado.map(s => s.n));
-  const maxEmbudo = EMBUDO_NIVEL[0].n;
-  const totalOrigen = SUSCRIPCIONES.porOrigen.reduce((s, o) => s + o.n, 0);
-
+function AlumnosActivos() {
+  const total = SUSCRIPCIONES.porOrigen.reduce((s, o) => s + o.n, 0);
   return (
-    <Seccion id="salud" titulo="Salud del negocio" tono={neto < 0 ? 'amarillo' : 'ok'} abierta
-      resumen={`${RESUMEN.alumnosActivos} activos · ${neto >= 0 ? '+' : ''}${neto} en ${mesActual.mes.toLowerCase()}`}>
-
-      {/* KPI en fila deslizable: se ve la tercera tarjeta asomando, que es la pista de que hay más. */}
-      <div className="dpm-kpis">
-        {kpis.map(k => (
-          <div key={k.label} className="dpm-kpi">
-            <div className="dpm-kpi-l">{k.label}</div>
-            <div className="dpm-kpi-v">{k.valor}</div>
-            {k.barra != null && (
-              <div className="dpm-track" aria-hidden><div className="dpm-fill" style={{ width: `${k.barra}%` }} /></div>
-            )}
-            <div className="dpm-kpi-p">{k.pie}</div>
-          </div>
-        ))}
-      </div>
-
+    <Bloque titulo="Alumnos activos" href="/students">
       <div className="adm-card dpm-card">
-        <div className="dpm-card-head">Activos por origen</div>
-        <Apilada partes={SUSCRIPCIONES.porOrigen} />
-        <ul className="dpm-list">
+        <div className="dpm-cifra">
+          <span className="dpm-cifra-n">{num(RESUMEN.alumnosActivos)}</span>
+          <span className="dpm-cifra-l">activos de {num(RESUMEN.alumnosTotales)} en la base</span>
+        </div>
+        <Segmentada partes={SUSCRIPCIONES.porOrigen} />
+        <ul className="dpm-filas">
           {SUSCRIPCIONES.porOrigen.map(o => (
-            <li key={o.origen} className="dpm-row">
-              <span className="adm-dot" style={{ background: o.color }} />
-              <span className="dpm-row-label">{o.origen}</span>
-              <span className="dpm-row-pct">{Math.round((o.n / totalOrigen) * 100)} %</span>
-              <span className="dpm-row-n">{o.n}</span>
-            </li>
+            <Fila key={o.origen} color={o.color} label={o.origen} sub={`${Math.round((o.n / total) * 100)} %`} n={o.n} />
           ))}
         </ul>
       </div>
+    </Bloque>
+  );
+}
 
+// ─── 3 · Este mes ────────────────────────────────────────────────────────────
+
+function EsteMes() {
+  const actual = MOVIMIENTO[MOVIMIENTO.length - 1];
+  const neto = actual.altas - actual.bajas;
+  const max = Math.max(...MOVIMIENTO.flatMap(m => [m.altas, m.bajas]));
+  return (
+    <Bloque titulo="Este mes" href="/students">
       <div className="adm-card dpm-card">
-        <div className="dpm-card-head">Suscripciones por estado</div>
-        <div className="dpm-brows">
-          {SUSCRIPCIONES.porEstado.map(s => (
-            <FilaBarra key={s.estado}
-              label={<><span className="adm-dot" style={{ background: s.acceso ? '#1E9E3A' : '#C8C8C0' }} /> {s.label}</>}
-              valor={s.n} pct={(s.n / maxEstado) * 100} color={s.acceso ? '#1E9E3A' : '#C8C8C0'} />
-          ))}
+        <div className="dpm-par">
+          <div className="dpm-par-item">
+            <span className="dpm-par-n" style={{ color: '#167A2D' }}>+{actual.altas}</span>
+            <span className="dpm-par-l">altas</span>
+          </div>
+          <div className="dpm-par-item">
+            <span className="dpm-par-n" style={{ color: 'var(--text-secondary)' }}>−{actual.bajas}</span>
+            <span className="dpm-par-l">bajas</span>
+          </div>
         </div>
-        <p className="dpm-note">El punto verde marca los estados que dan acceso a clase.</p>
-      </div>
+        <div className="dpm-neto" style={{ color: neto < 0 ? '#B42318' : '#167A2D' }}>
+          {neto >= 0 ? '+' : ''}{neto} alumnos netos en {actual.mes.toLowerCase()}
+        </div>
 
-      <div className="adm-card dpm-card">
-        <div className="dpm-card-head">Altas y bajas · 6 meses</div>
-        <div className="dpm-months">
+        {/* Seis meses a lo ancho de la tarjeta: seis columnas iguales, nunca más anchas que ella. */}
+        <div className="dpm-meses" aria-label="Altas y bajas de los últimos seis meses">
           {MOVIMIENTO.map(m => {
             const n = m.altas - m.bajas;
             return (
-              <div key={m.mes} className="dpm-month">
-                <div className="dpm-month-bars">
-                  <div className="dpm-bar" style={{ height: `${(m.altas / maxMov) * 100}%`, background: '#1E9E3A' }} />
-                  <div className="dpm-bar" style={{ height: `${(m.bajas / maxMov) * 100}%`, background: '#C8C8C0' }} />
+              <div key={m.mes} className="dpm-mes">
+                <div className="dpm-mes-barras">
+                  <div className="dpm-mes-barra" style={{ height: `${(m.altas / max) * 100}%`, background: '#1E9E3A' }} />
+                  <div className="dpm-mes-barra" style={{ height: `${(m.bajas / max) * 100}%`, background: '#C8C8C0' }} />
                 </div>
-                <div className="dpm-month-l">{m.mes}</div>
-                <div className="dpm-month-net" style={{ color: n < 0 ? '#B42318' : '#167A2D' }}>{n >= 0 ? '+' : ''}{n}</div>
+                <div className="dpm-mes-l">{m.mes}</div>
+                <div className="dpm-mes-neto" style={{ color: n < 0 ? '#B42318' : '#167A2D' }}>{n >= 0 ? '+' : ''}{n}</div>
               </div>
             );
           })}
         </div>
-        <div className="dpm-legend">
-          <span><i className="dpm-sw" style={{ background: '#1E9E3A' }} /> Altas</span>
-          <span><i className="dpm-sw" style={{ background: '#C8C8C0' }} /> Bajas</span>
-          <span className="dpm-legend-note">{mesActual.mes} en curso</span>
+        <div className="dpm-leyenda">
+          <span><i style={{ background: '#1E9E3A' }} /> Altas</span>
+          <span><i style={{ background: '#C8C8C0' }} /> Bajas</span>
+          <span className="dpm-leyenda-nota">{actual.mes} en curso</span>
         </div>
       </div>
-
-      <div className="adm-card dpm-card">
-        <div className="dpm-card-head">Captación</div>
-        <div className="dpm-brows">
-          {EMBUDO_NIVEL.map((p, i) => {
-            const caida = i === 0 ? 0 : EMBUDO_NIVEL[i - 1].n - p.n;
-            return (
-              <FilaBarra key={p.paso} label={p.paso} pct={(p.n / maxEmbudo) * 100}
-                valor={<>{i > 0 && <span className="dpm-drop">−{caida}</span>} {p.n}</>} />
-            );
-          })}
-        </div>
-        <BotonEnlace href="/admin?tab=leveltests">Tests de nivel</BotonEnlace>
-      </div>
-    </Seccion>
+    </Bloque>
   );
 }
 
-// ─── 3 · Riesgo de baja ──────────────────────────────────────────────────────
+// ─── 4 · Finanzas del mes ────────────────────────────────────────────────────
+
+function Finanzas() {
+  // "Pendiente" junta lo que todavía no se paga: a revisar y retenido.
+  const pendiente = FINANZAS.montoARevisar + FINANZAS.montoRetenido;
+  return (
+    <Bloque titulo="Finanzas del mes" href="/finanzas">
+      <div className="adm-card dpm-card">
+        <div className="dpm-cifra">
+          <span className="dpm-cifra-n">{eur(FINANZAS.totalAPagar)}</span>
+          <span className="dpm-cifra-l">a pagar a profesores</span>
+        </div>
+        <Segmentada partes={[{ n: FINANZAS.montoPagable, color: '#1E9E3A' }, { n: pendiente, color: '#FFC400' }]} />
+        <div className="dpm-par">
+          <div className="dpm-par-item">
+            <span className="dpm-par-n">{eur(FINANZAS.montoPagable)}</span>
+            <span className="dpm-par-l"><i className="dpm-punto" style={{ background: '#1E9E3A' }} />pagable</span>
+          </div>
+          <div className="dpm-par-item">
+            <span className="dpm-par-n">{eur(pendiente)}</span>
+            <span className="dpm-par-l"><i className="dpm-punto" style={{ background: '#FFC400' }} />pendiente</span>
+          </div>
+        </div>
+      </div>
+    </Bloque>
+  );
+}
+
+// ─── 5 · Clases de la semana ─────────────────────────────────────────────────
+
+function Clases() {
+  const pct = Math.round((OPERACION.dadas / OPERACION.programadas) * 100);
+  return (
+    <Bloque titulo="Clases de la semana" href="/admin?tab=classlog">
+      <div className="adm-card dpm-card">
+        <div className="dpm-cifra">
+          <span className="dpm-cifra-n">{OPERACION.dadas}<span className="dpm-cifra-de"> de {OPERACION.programadas}</span></span>
+          <span className="dpm-cifra-l">dadas sobre las programadas · {pct} %</span>
+        </div>
+        <div className="dpm-track" aria-hidden><div className="dpm-fill" style={{ width: `${pct}%` }} /></div>
+        <ul className="dpm-filas" style={{ marginTop: 6 }}>
+          <Fila color="#dc4a38" label="Faltas sin aviso" n={OPERACION.faltasSinAviso} />
+        </ul>
+      </div>
+    </Bloque>
+  );
+}
+
+// ─── 6 · Riesgo de baja ──────────────────────────────────────────────────────
 
 function Riesgo() {
   const total = RIESGO.verde + RIESGO.rojo;
   const pct = Math.round((RIESGO.rojo / total) * 100);
-  // Umbral a validar: a partir del 10 % del alumnado en rojo, la sección entera
-  // se marca en rojo; con alguno en rojo pero menos del 10 %, amarillo.
-  const tono: Tono = pct >= 10 ? 'rojo' : RIESGO.rojo > 0 ? 'amarillo' : 'ok';
-
   return (
-    <Seccion id="riesgo" titulo="Riesgo de baja" tono={tono} resumen={`${RIESGO.rojo} en rojo · ${pct} % del alumnado`}>
+    <Bloque titulo="Riesgo de baja" href="/admin?tab=ai" cta="Ver todos">
       <div className="adm-card dpm-card">
-        <div className="dpm-figure">
-          <span className="dpm-big" style={{ color: '#B42318' }}>{RIESGO.rojo}</span>
-          <span className="dpm-big-cap">alumnos con alerta abierta</span>
+        <div className="dpm-cifra">
+          <span className="dpm-cifra-n" style={{ color: '#B42318' }}>{RIESGO.rojo}</span>
+          <span className="dpm-cifra-l">en rojo · {pct} % del alumnado</span>
         </div>
-        <Apilada partes={[{ n: RIESGO.verde, color: '#1E9E3A' }, { n: RIESGO.rojo, color: '#dc4a38' }]} />
-        <ul className="dpm-list">
-          <li className="dpm-row"><span className="adm-dot" style={{ background: '#1E9E3A' }} /><span className="dpm-row-label">Sin señales</span><span className="dpm-row-n">{RIESGO.verde}</span></li>
-          <li className="dpm-row"><span className="adm-dot" style={{ background: '#dc4a38' }} /><span className="dpm-row-label">Con alerta abierta</span><span className="dpm-row-n">{RIESGO.rojo}</span></li>
+        {/* Dos niveles, no tres: desde julio de 2026 la IA clasifica en verde o rojo. */}
+        <Segmentada partes={[{ n: RIESGO.verde, color: '#1E9E3A' }, { n: RIESGO.rojo, color: '#dc4a38' }]} />
+        <ul className="dpm-filas">
+          <Fila color="#1E9E3A" label="Sin señales" n={RIESGO.verde} />
+          <Fila color="#dc4a38" label="Con alerta abierta" n={RIESGO.rojo} />
         </ul>
-        <p className="dpm-note">La IA clasifica cada clase en verde o rojo. No hay nivel intermedio.</p>
       </div>
 
-      <div className="adm-card dpm-card dpm-card-list">
-        <div className="dpm-card-head">Los cinco más urgentes</div>
-        <ul className="dpm-people">
-          {RIESGO.urgentes.slice(0, MAX_LISTA).map(u => (
+      <div className="adm-card dpm-card dpm-card-lista">
+        <div className="dpm-card-head">Los tres más urgentes</div>
+        <ul className="dpm-urgentes">
+          {RIESGO.urgentes.slice(0, 3).map(u => (
             <li key={u.alumno}>
-              <Link href="/admin?tab=ai" className="dpm-person">
-                <span className="adm-dot" style={{ background: '#dc4a38' }} />
-                <span className="dpm-person-body">
-                  <span className="dpm-person-name">{u.alumno}</span>
-                  <span className="dpm-person-sub">{u.causa}</span>
+              <Link href="/admin?tab=ai" className="dpm-urgente">
+                <span className="dpm-urgente-body">
+                  <span className="dpm-urgente-nombre">{u.alumno}</span>
+                  <span className="dpm-urgente-causa">{u.causa}</span>
                 </span>
-                <span className="dpm-person-meta">
-                  <span>{u.profe}</span>
-                  <span className="dpm-person-dias">hace {u.dias} d</span>
+                <span className="dpm-urgente-meta">
+                  <span className="dpm-urgente-profe">{u.profe}</span>
+                  <span className="dpm-urgente-dias">hace {u.dias} d</span>
                 </span>
+                <ChevronRight size={18} strokeWidth={2} aria-hidden className="dpm-urgente-chev" />
               </Link>
             </li>
           ))}
         </ul>
-        <BotonEnlace href="/admin?tab=ai">Ver los {RIESGO.rojo} en riesgo</BotonEnlace>
       </div>
-    </Seccion>
-  );
-}
-
-// ─── 4 · Clases de la semana ─────────────────────────────────────────────────
-
-function Clases() {
-  const pct = Math.round((OPERACION.dadas / OPERACION.programadas) * 100);
-  // Umbral a validar: menos del 80 % dado es rojo; menos del 90 %, o cualquier
-  // falta sin aviso, amarillo.
-  const tono: Tono = pct < 80 ? 'rojo' : (pct < 90 || OPERACION.faltasSinAviso > 0) ? 'amarillo' : 'ok';
-
-  return (
-    <Seccion id="clases" titulo="Clases de la semana" tono={tono}
-      resumen={`${OPERACION.dadas} de ${OPERACION.programadas} dadas · ${OPERACION.faltasSinAviso} faltas sin aviso`}>
-      <div className="adm-card dpm-card">
-        <div className="dpm-card-head">Dadas sobre programadas</div>
-        <div className="dpm-figure is-left">
-          <span className="dpm-big">{OPERACION.dadas}<span className="dpm-big-of"> / {OPERACION.programadas}</span></span>
-        </div>
-        <div className="dpm-track" aria-hidden><div className="dpm-fill" style={{ width: `${pct}%` }} /></div>
-        <p className="dpm-note">{pct} % de lo programado se dio. Las {OPERACION.programadas - OPERACION.dadas} restantes están sin registrar o se cancelaron.</p>
-      </div>
-
-      <div className="adm-card dpm-card">
-        <div className="dpm-card-head">Del mes</div>
-        <ul className="dpm-list">
-          <li className="dpm-row"><span className="adm-dot" style={{ background: '#dc4a38' }} /><span className="dpm-row-label">Faltas sin aviso</span><span className="dpm-row-n">{OPERACION.faltasSinAviso}</span></li>
-          <li className="dpm-row"><span className="adm-dot" style={{ background: '#FFC400' }} /><span className="dpm-row-label">Recuperaciones pendientes</span><span className="dpm-row-n">{OPERACION.recuperacionesPendientes}</span></li>
-          <li className="dpm-row"><span className="adm-dot" style={{ background: '#2563eb' }} /><span className="dpm-row-label">Sesiones de 2 h</span><span className="dpm-row-n">{OPERACION.clases2h}</span></li>
-        </ul>
-      </div>
-
-      <div className="adm-card dpm-card">
-        <div className="dpm-card-head">Cupos libres por franja</div>
-        <div className="dpm-brows">
-          {OPERACION.franjas.map(f => {
-            const total = f.ocupados + f.libres;
-            return (
-              <FilaBarra key={f.franja} label={`${f.franja} h`} valor={<>{f.libres} <span className="dpm-brow-unit">libres</span></>}
-                pct={(f.ocupados / total) * 100} track="#CFE6D5" />
-            );
-          })}
-        </div>
-        <p className="dpm-note">La parte clara es lo que queda libre. La franja de tarde está al tope.</p>
-        <BotonEnlace href="/admin?tab=classlog">Registro de clases</BotonEnlace>
-      </div>
-    </Seccion>
-  );
-}
-
-// ─── 5 · Finanzas del mes ────────────────────────────────────────────────────
-
-function Finanzas() {
-  const delta = FINANZAS.totalAPagar - FINANZAS.mesAnterior;
-  const pctDelta = Math.round((delta / FINANZAS.mesAnterior) * 100);
-  const partes = [
-    { label: 'Pagable',   n: FINANZAS.montoPagable,  color: '#1E9E3A' },
-    { label: 'A revisar', n: FINANZAS.montoARevisar, color: '#FFC400' },
-    { label: 'Retenido',  n: FINANZAS.montoRetenido, color: '#C8C8C0' },
-  ];
-  const tono: Tono = FINANZAS.montoARevisar > 0 ? 'amarillo' : 'ok';
-
-  return (
-    <Seccion id="finanzas" titulo="Finanzas del mes" tono={tono}
-      resumen={`${eur(FINANZAS.totalAPagar)} a pagar · ${eur(FINANZAS.montoARevisar)} a revisar`}>
-      <div className="adm-card dpm-card">
-        <div className="dpm-card-head">Total a pagar</div>
-        <div className="dpm-figure is-left">
-          <span className="dpm-big">{eur(FINANZAS.totalAPagar)}</span>
-        </div>
-        <div className="dpm-delta" style={{ color: delta >= 0 ? '#8a6d00' : '#167A2D' }}>
-          {delta >= 0 ? '↑' : '↓'} {eur(Math.abs(delta))} ({pctDelta >= 0 ? '+' : ''}{pctDelta} %) vs. mes anterior
-        </div>
-        <p className="dpm-note">Incluye {eur(FINANZAS.bonus)} de bonus y {eur(FINANZAS.penalizaciones)} de penalizaciones.</p>
-      </div>
-
-      <div className="adm-card dpm-card">
-        <div className="dpm-card-head">En qué estado está</div>
-        <Apilada partes={partes} />
-        <ul className="dpm-list">
-          {partes.map(p => (
-            <li key={p.label} className="dpm-row">
-              <span className="adm-dot" style={{ background: p.color }} />
-              <span className="dpm-row-label">{p.label}</span>
-              <span className="dpm-row-n">{eur(p.n)}</span>
-            </li>
-          ))}
-        </ul>
-        <p className="dpm-note">&quot;A revisar&quot; son clases que esperan validación: hasta que se resuelvan, el profesor no cobra.</p>
-      </div>
-
-      <div className="adm-card dpm-card">
-        <FilaBarra label="Profesores pagados este mes" valor={<>{FINANZAS.profesoresPagados} <span className="dpm-brow-unit">/ {FINANZAS.profesoresTotales}</span></>}
-          pct={(FINANZAS.profesoresPagados / FINANZAS.profesoresTotales) * 100} />
-        <BotonEnlace href="/finanzas" primario>Abrir finanzas</BotonEnlace>
-      </div>
-    </Seccion>
-  );
-}
-
-// ─── 6 · Profesores ──────────────────────────────────────────────────────────
-
-function Profesores() {
-  const transcriptsTarde = PROFESORES.reduce((s, p) => s + p.transcriptsTarde, 0);
-  const cuposLibres = PROFESORES.reduce((s, p) => s + p.cuposLibres, 0);
-  const max = Math.max(...PROFESORES.map(p => p.clases));
-  // Primero los que arrastran transcripts: es lo que el admin tiene que reclamar.
-  const orden = [...PROFESORES].sort((a, b) => b.transcriptsTarde - a.transcriptsTarde || b.clases - a.clases).slice(0, MAX_LISTA);
-  const sinIA = PROFESORES.filter(p => !p.usaIA).map(p => p.nombre);
-  const tono: Tono = transcriptsTarde > 0 ? 'amarillo' : 'ok';
-
-  return (
-    <Seccion id="profesores" titulo="Profesores" tono={tono}
-      resumen={`${transcriptsTarde} transcripts atrasados · ${cuposLibres} cupos libres`}>
-      <div className="adm-card dpm-card">
-        <div className="dpm-card-head">Clases del mes</div>
-        <div className="dpm-brows">
-          {orden.map(p => (
-            <FilaBarra key={p.nombre} pct={(p.clases / max) * 100} valor={p.clases}
-              label={<>
-                {p.nombre}
-                {p.transcriptsTarde > 0 && <span className="dpm-tag is-warn">{p.transcriptsTarde} sin subir</span>}
-                {p.cuposLibres > 0 && <span className="dpm-tag is-ok">{p.cuposLibres} libres</span>}
-              </>} />
-          ))}
-        </div>
-        <BotonEnlace href="/admin?tab=teachers">Ver los {RESUMEN.profesoresTotales} profesores</BotonEnlace>
-      </div>
-
-      <div className="adm-card dpm-card">
-        <FilaBarra label="Usan la IA para preparar clases" valor={<>{IA.usan} <span className="dpm-brow-unit">/ {IA.total}</span></>}
-          pct={(IA.usan / IA.total) * 100} />
-        <p className="dpm-note">
-          Sin usarla: {sinIA.join(', ')} y {IA.total - IA.usan - sinIA.length} más.
-        </p>
-        <BotonEnlace href="/admin?tab=aiusage">Uso de la IA</BotonEnlace>
-      </div>
-    </Seccion>
-  );
-}
-
-// ─── 7 · Herramientas de mantenimiento ───────────────────────────────────────
-
-function Herramientas() {
-  return (
-    <Seccion id="herramientas" titulo="Herramientas de mantenimiento" resumen={`${HERRAMIENTAS.length} paneles · viven en /dashboard`}>
-      <div className="adm-card dpm-card dpm-card-list">
-        <ul className="dpm-tools">
-          {HERRAMIENTAS.map(t => (
-            <li key={t}>
-              <Link href="/dashboard" className="dpm-tool">
-                <span>{t}</span>
-                <ChevronRight size={18} strokeWidth={2} aria-hidden />
-              </Link>
-            </li>
-          ))}
-        </ul>
-        <p className="dpm-note">En la maqueta no hacen nada: los paneles funcionales siguen en /dashboard.</p>
-      </div>
-    </Seccion>
+    </Bloque>
   );
 }
 
@@ -474,11 +289,11 @@ function Herramientas() {
 
 /**
  * Las cuatro entradas que el admin usa desde el teléfono. Inicio es esta misma
- * pantalla; Admin concentra seis de las ocho colas de "Requiere acción";
- * Alumnos es donde se busca a alguien cuando escribe o llama; Finanzas es la
- * única entrada de la barra real que lleva contador (solicitudes de revisión).
- * Buscar (setter) y Próximos a cancelar se quedan fuera: son tareas de
- * escritorio, y la segunda ya entra por su cola en "Requiere acción".
+ * pantalla; Admin es donde aterrizan tres de las cuatro colas de "Requiere
+ * acción"; Alumnos es donde se busca a alguien cuando escribe o llama;
+ * Finanzas es la única entrada de la barra real que lleva contador. Buscar
+ * (setter) y Próximos a cancelar quedan fuera: la primera es tarea de
+ * escritorio y la segunda ya entra por su alerta.
  */
 const NAV = [
   { href: '/dashboard-preview', label: 'Inicio',   Icon: LayoutDashboard },
@@ -489,7 +304,7 @@ const NAV = [
 
 function NavInferior() {
   const path = usePathname();
-  const revisiones = ACCIONES.find(a => a.href === '/finanzas')?.n ?? 0;
+  const revisiones = ACCIONES.find(a => a.clave === 'solicitudes')?.n ?? 0;
   return (
     <nav className="dpm-nav" aria-label="Navegación principal">
       {NAV.map(({ href, label, Icon }) => {
@@ -514,22 +329,21 @@ export function DashboardMovil() {
   return (
     <div className="dpm">
       <header className="dpm-top">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img className="dpm-logo" src="/drc-logo.png" alt="DRC Academy" />
-        <span className="dpm-date">{fechaCorta(HOY)}</span>
-        <span className="dpm-pill" title="Ningún número de esta pantalla sale de la base. Los enlaces sí son reales.">
-          <span className="adm-dot" style={{ background: '#FFC400' }} /> Datos de ejemplo
-        </span>
+        <div className="dpm-top-row">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img className="dpm-logo" src="/drc-logo.png" alt="DRC Academy" />
+          <span className="dpm-fecha">{fechaCorta(HOY)}</span>
+        </div>
+        <div className="dpm-aviso"><span className="adm-dot" style={{ background: '#FFC400' }} /> Vista previa con datos de ejemplo</div>
       </header>
 
       <main className="dpm-main">
         <RequiereAccion simularVacio={simularVacio} onSimular={() => setSimularVacio(v => !v)} />
-        <SaludNegocio />
-        <Riesgo />
-        <Clases />
+        <AlumnosActivos />
+        <EsteMes />
         <Finanzas />
-        <Profesores />
-        <Herramientas />
+        <Clases />
+        <Riesgo />
       </main>
 
       <NavInferior />
@@ -540,8 +354,9 @@ export function DashboardMovil() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Estilos de la vista móvil, con prefijo `dpm-`. Mismos colores y tokens que la
-// app; nada de esto toca otra pantalla. Tamaños: cuerpo 14 px, cifras
-// secundarias 16 px, principales 32–36 px. Zonas táctiles ≥ 44 px.
+// app; nada de esto toca otra pantalla. Cuerpo 14–15 px, cifras principales
+// 30–32 px, zonas táctiles ≥ 44 px. Nada tiene ancho mínimo ni fijo mayor que
+// la pantalla: a 320 px todo sigue en una columna.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const ESTILOS = `
@@ -552,212 +367,125 @@ const ESTILOS = `
   background: var(--bg-base);
   min-height: 100dvh;
   font-size: 14px; line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 .dpm a { -webkit-tap-highlight-color: rgba(30,158,58,0.15); }
+.dpm * { box-sizing: border-box; min-width: 0; }
 
-/* ── Cabecera fija y compacta ── */
+/* ── Cabecera fija: una fila (logo · fecha) y la franja del aviso ── */
 .dpm-top {
   position: fixed; top: 0; left: 0; right: 0; z-index: 40;
-  height: calc(52px + env(safe-area-inset-top));
-  padding: env(safe-area-inset-top) 16px 0;
-  display: flex; align-items: center; gap: 10px;
+  padding-top: env(safe-area-inset-top);
   background: rgba(255,255,255,0.96); backdrop-filter: saturate(180%) blur(8px);
   border-bottom: 1px solid var(--border);
 }
+.dpm-top-row { height: 50px; padding: 0 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .dpm-logo { height: 24px; width: auto; display: block; flex-shrink: 0; }
-.dpm-date { font-size: 14px; font-weight: 600; color: var(--text-secondary); white-space: nowrap; }
-.dpm-pill {
-  margin-left: auto; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
-  font-size: 12px; font-weight: 600; color: #5c4a00;
-  background: rgba(255,196,0,0.14); border: 1px solid rgba(255,196,0,0.5);
-  border-radius: 999px; padding: 5px 10px;
+.dpm-fecha { font-size: 14px; font-weight: 600; color: var(--text-secondary); white-space: nowrap; }
+.dpm-aviso {
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+  height: 26px; padding: 0 12px;
+  background: rgba(255,196,0,0.14); border-top: 1px solid rgba(255,196,0,0.35);
+  font-size: 13px; font-weight: 600; color: #5c4a00; white-space: nowrap;
 }
 
-/* ── Cuerpo: deja sitio a la cabecera y a la barra inferior (zona segura incluida) ── */
+/* ── Cuerpo: deja sitio a la cabecera (50 + 26) y a la barra inferior ── */
 .dpm-main {
-  padding: calc(52px + env(safe-area-inset-top) + 12px) 16px calc(64px + env(safe-area-inset-bottom) + 24px);
-  display: flex; flex-direction: column; gap: 10px;
+  padding: calc(76px + env(safe-area-inset-top) + 14px) 16px calc(64px + env(safe-area-inset-bottom) + 20px);
+  display: flex; flex-direction: column; gap: 18px;
 }
 
-/* ── Sección plegable ── */
-.dpm-sec {
-  background: #fff; border: 1px solid #e6e7e2; border-radius: 14px;
-  box-shadow: 0 1px 2px rgba(16,24,16,0.04);
-}
-.dpm-sum {
-  list-style: none; cursor: pointer; user-select: none;
+/* ── Bloques ── */
+.dpm-bloque { display: flex; flex-direction: column; gap: 8px; }
+.dpm-bloque-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 28px; padding: 0 2px; }
+.dpm-h2 { margin: 0; font-size: 16px; font-weight: 700; letter-spacing: -0.01em; }
+.dpm-link { display: inline-flex; align-items: center; gap: 2px; min-height: 44px; padding: 0 4px 0 8px; font-size: 14px; font-weight: 600; color: var(--accent); text-decoration: none; white-space: nowrap; }
+
+.dpm-card { padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.dpm-card-lista { gap: 0; padding-bottom: 6px; }
+.dpm-card-head { font-size: 14px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 4px; }
+
+/* ── Cifra principal ── */
+.dpm-cifra { display: flex; flex-direction: column; gap: 2px; }
+.dpm-cifra-n { font-size: 32px; font-weight: 700; line-height: 1.1; letter-spacing: -0.01em; }
+.dpm-cifra-de { font-size: 18px; font-weight: 500; color: var(--text-muted); letter-spacing: 0; }
+.dpm-cifra-l { font-size: 14px; color: var(--text-muted); }
+
+/* ── Par de cifras (2×N) ── */
+.dpm-par { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.dpm-par-item { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; background: var(--bg-base); border-radius: 10px; }
+.dpm-par-n { font-size: 24px; font-weight: 700; line-height: 1.15; }
+.dpm-par-l { font-size: 14px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
+.dpm-punto { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+.dpm-neto { font-size: 15px; font-weight: 600; }
+
+/* ── Barras ── */
+.dpm-seg { display: flex; width: 100%; border-radius: 6px; overflow: hidden; gap: 2px; }
+.dpm-seg > div { height: 100%; }
+.dpm-track { height: 10px; border-radius: 5px; background: var(--bg-surface-3); overflow: hidden; }
+.dpm-fill { height: 100%; background: #1E9E3A; border-radius: 5px; }
+
+/* ── Filas etiqueta · número ── */
+.dpm-filas { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.dpm-fila { display: flex; align-items: center; gap: 10px; min-height: 34px; font-size: 14px; }
+.dpm-fila-l { color: var(--text-secondary); flex: 1; }
+.dpm-fila-sub { color: var(--text-muted); }
+.dpm-fila-n { font-size: 16px; font-weight: 700; white-space: nowrap; }
+
+/* ── Alertas ── */
+.dpm-alertas { display: flex; flex-direction: column; gap: 8px; }
+.dpm-alerta {
   display: flex; align-items: center; gap: 12px;
-  min-height: 60px; padding: 10px 14px 10px 16px;
-}
-.dpm-sum::-webkit-details-marker { display: none; }
-.dpm-sum-dot { width: 10px; height: 10px; }
-.dpm-sum-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
-.dpm-sum-title { font-size: 16px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.25; }
-.dpm-sum-res { font-size: 14px; color: var(--text-muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.dpm-chev { color: var(--text-muted); flex-shrink: 0; transition: transform 0.18s ease; }
-.dpm-sec[open] > .dpm-sum .dpm-chev { transform: rotate(180deg); }
-.dpm-sec[open] > .dpm-sum { border-bottom: 1px solid var(--border); }
-.dpm-body { padding: 12px; display: flex; flex-direction: column; gap: 10px; background: var(--bg-base); border-radius: 0 0 14px 14px; }
-
-/* ── Tarjetas dentro de la sección ── */
-.dpm-card { padding: 14px 14px 14px; display: flex; flex-direction: column; }
-.dpm-card-list { padding-bottom: 12px; }
-.dpm-card-head {
-  font-size: 14px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase;
-  color: var(--text-muted); margin-bottom: 10px;
-}
-.dpm-note { margin: 10px 0 0; font-size: 14px; color: var(--text-muted); line-height: 1.45; }
-
-/* ── Requiere acción ── */
-.dpm-acts { display: flex; flex-direction: column; gap: 8px; }
-.dpm-act {
-  display: flex; align-items: center; gap: 12px;
-  border: 1px solid; border-radius: 12px; padding: 12px 12px 12px 14px; min-height: 64px;
+  border: 1px solid; border-radius: 12px; padding: 12px 12px 12px 14px; min-height: 68px;
   text-decoration: none; color: inherit;
 }
-.dpm-act:active { transform: scale(0.99); }
-.dpm-act-n { font-size: 32px; font-weight: 700; line-height: 1; min-width: 44px; text-align: center; }
-.dpm-act.is-first { min-height: 76px; }
-.dpm-act.is-first .dpm-act-n { font-size: 36px; }
-.dpm-act-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.dpm-act-label { font-size: 15px; font-weight: 600; line-height: 1.3; color: var(--text-primary); }
-.dpm-act-det { font-size: 14px; color: var(--text-secondary); }
-.dpm-act-btn {
-  display: inline-flex; align-items: center; justify-content: center; gap: 2px; flex-shrink: 0;
-  min-height: 44px; min-width: 64px; padding: 0 10px 0 14px;
-  background: #fff; border: 1px solid; border-radius: 10px;
-  font-size: 15px; font-weight: 700;
-}
-.dpm-vacio { align-items: center; text-align: center; padding: 26px 16px 24px; gap: 6px; }
-.dpm-vacio-title { font-size: 22px; font-weight: 700; margin-top: 4px; }
-.dpm-vacio-sub { font-size: 14px; color: var(--text-muted); }
-.dpm-mock {
-  align-self: center; margin-top: 2px; min-height: 44px; padding: 0 12px;
-  border: none; background: transparent; font-family: inherit; font-size: 14px;
-  color: var(--accent); font-weight: 600; cursor: pointer;
-}
+.dpm-alerta:active { transform: scale(0.99); }
+.dpm-alerta-n { font-size: 32px; font-weight: 700; line-height: 1; min-width: 40px; text-align: center; flex-shrink: 0; }
+.dpm-alerta-body { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.dpm-alerta-l { font-size: 15px; font-weight: 600; line-height: 1.3; }
+.dpm-alerta-d { font-size: 14px; color: var(--text-secondary); }
+.dpm-alerta-btn { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; min-height: 44px; min-width: 56px; padding: 0 12px; background: #fff; border: 1px solid; border-radius: 10px; font-size: 15px; font-weight: 700; }
+.dpm-vacio { align-items: center; text-align: center; padding: 22px 16px 20px; gap: 4px; }
+.dpm-vacio-t { font-size: 22px; font-weight: 700; margin-top: 4px; }
+.dpm-vacio-s { font-size: 14px; color: var(--text-muted); }
+.dpm-mock { align-self: center; min-height: 44px; padding: 0 12px; border: none; background: transparent; font-family: inherit; font-size: 14px; color: var(--accent); font-weight: 600; cursor: pointer; }
 .dpm-mock span { color: var(--text-muted); font-weight: 400; }
 
-/* ── Botones ── */
-.dpm-btn {
-  display: flex; align-items: center; justify-content: center; gap: 4px;
-  min-height: 48px; margin-top: 12px; padding: 0 16px; border-radius: 10px;
-  border: 1px solid var(--border-light); background: #fff;
-  font-family: inherit; font-size: 15px; font-weight: 600; color: var(--accent);
-  text-decoration: none; cursor: pointer;
-}
-.dpm-btn.is-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-.dpm-btn.is-ghost { margin-top: 2px; border-color: transparent; background: transparent; }
-.dpm-btn:active { opacity: 0.85; }
+/* ── Seis meses, a lo ancho ── */
+.dpm-meses { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; align-items: end; margin-top: 4px; }
+.dpm-mes { text-align: center; }
+.dpm-mes-barras { display: flex; align-items: flex-end; justify-content: center; gap: 3px; height: 56px; }
+.dpm-mes-barra { width: 10px; border-radius: 3px 3px 0 0; min-height: 3px; }
+.dpm-mes-l { font-size: 14px; color: var(--text-muted); margin-top: 6px; }
+.dpm-mes-neto { font-size: 14px; font-weight: 700; }
+.dpm-leyenda { display: flex; gap: 14px; font-size: 14px; color: var(--text-muted); align-items: center; }
+.dpm-leyenda span { display: inline-flex; align-items: center; gap: 6px; }
+.dpm-leyenda i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.dpm-leyenda-nota { margin-left: auto; }
 
-/* ── KPI en fila deslizable ── */
-.dpm-kpis {
-  display: flex; gap: 10px; overflow-x: auto; scroll-snap-type: x mandatory;
-  margin: 0 -12px; padding: 0 12px 4px; scroll-padding-left: 12px;
-  -webkit-overflow-scrolling: touch; scrollbar-width: none;
-}
-.dpm-kpis::-webkit-scrollbar { display: none; }
-.dpm-kpi {
-  /* Dos tarjetas y un tercio de la siguiente asomando, en cualquier ancho: la
-     pista de que la fila se desliza. */
-  flex: 0 0 calc(50% - 22px); scroll-snap-align: start;
-  background: #fff; border: 1px solid #e6e7e2; border-radius: 14px; padding: 12px 14px 13px;
-}
-.dpm-kpi-l { font-size: 13px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; color: var(--text-muted); line-height: 1.25; }
-.dpm-kpi-v { font-size: 28px; font-weight: 700; line-height: 1.15; margin-top: 6px; }
-.dpm-kpi-p { font-size: 14px; color: var(--text-muted); margin-top: 4px; }
-
-.dpm-track { height: 8px; border-radius: 4px; background: var(--bg-surface-3); overflow: hidden; margin-top: 8px; }
-.dpm-fill { height: 100%; background: #1E9E3A; border-radius: 4px; }
-
-/* ── Listas ── */
-.dpm-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
-.dpm-row { display: flex; align-items: center; gap: 10px; min-height: 36px; font-size: 14px; }
-.dpm-row-label { color: var(--text-secondary); flex: 1; min-width: 0; }
-.dpm-row-pct { font-size: 14px; color: var(--text-muted); }
-.dpm-row-n { font-size: 16px; font-weight: 700; min-width: 40px; text-align: right; }
-
-/* ── Barra apilada ── */
-.dpm-stack { display: flex; height: 12px; border-radius: 6px; overflow: hidden; gap: 2px; margin-bottom: 8px; }
-.dpm-stack-seg { height: 100%; }
-
-/* ── Fila con barra debajo ── */
-.dpm-brows { display: flex; flex-direction: column; gap: 10px; }
-.dpm-brow { display: flex; flex-direction: column; gap: 5px; }
-.dpm-brow-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 14px; }
-.dpm-brow-label { color: var(--text-secondary); display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
-.dpm-brow-n { font-size: 16px; font-weight: 700; white-space: nowrap; }
-.dpm-brow-unit { font-size: 14px; font-weight: 500; color: var(--text-muted); }
-.dpm-brow-track { height: 10px; border-radius: 5px; background: var(--bg-surface-3); overflow: hidden; }
-.dpm-brow-fill { height: 100%; border-radius: 5px; }
-.dpm-brow-sub { font-size: 14px; color: var(--text-muted); }
-.dpm-drop { font-size: 14px; font-weight: 600; color: #B42318; margin-right: 4px; }
-.dpm-tag { font-size: 13px; font-weight: 700; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
-.dpm-tag.is-ok { background: rgba(22,122,45,0.10); color: #167A2D; }
-.dpm-tag.is-warn { background: rgba(255,196,0,0.22); color: #8a6d00; }
-
-/* ── Altas y bajas ── */
-.dpm-months { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; align-items: end; }
-.dpm-month { text-align: center; }
-.dpm-month-bars { display: flex; align-items: flex-end; justify-content: center; gap: 3px; height: 64px; }
-.dpm-bar { width: 12px; border-radius: 3px 3px 0 0; min-height: 3px; }
-.dpm-month-l { font-size: 14px; color: var(--text-muted); margin-top: 6px; }
-.dpm-month-net { font-size: 14px; font-weight: 700; }
-.dpm-legend { display: flex; gap: 14px; font-size: 14px; color: var(--text-muted); margin-top: 12px; align-items: center; }
-.dpm-legend span { display: inline-flex; align-items: center; gap: 6px; }
-.dpm-legend-note { margin-left: auto; }
-.dpm-sw { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
-
-/* ── Cifras grandes ── */
-.dpm-figure { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 2px; padding: 4px 0 10px; }
-.dpm-figure.is-left { align-items: flex-start; text-align: left; padding: 0 0 4px; }
-.dpm-big { font-size: 34px; font-weight: 700; line-height: 1.1; }
-.dpm-big-of { font-size: 18px; font-weight: 500; color: var(--text-muted); }
-.dpm-big-cap { font-size: 14px; color: var(--text-muted); }
-.dpm-delta { font-size: 14px; font-weight: 600; margin-top: 4px; }
-
-/* ── Personas (riesgo) ── */
-.dpm-people { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
-.dpm-person {
-  display: flex; align-items: center; gap: 10px; min-height: 56px; padding: 8px 0;
-  border-top: 1px solid var(--border); text-decoration: none; color: inherit;
-}
-.dpm-people li:first-child .dpm-person { border-top: 0; }
-.dpm-person-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.dpm-person-name { font-size: 15px; font-weight: 600; }
-.dpm-person-sub { font-size: 14px; color: var(--text-muted); }
-.dpm-person-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-size: 14px; color: var(--text-secondary); white-space: nowrap; }
-.dpm-person-dias { color: var(--text-muted); }
-
-/* ── Herramientas ── */
-.dpm-tools { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
-.dpm-tool {
-  display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  min-height: 48px; padding: 6px 0; border-top: 1px solid var(--border);
-  font-size: 15px; color: var(--text-primary); text-decoration: none;
-}
-.dpm-tools li:first-child .dpm-tool { border-top: 0; }
-.dpm-tool svg { color: var(--text-muted); flex-shrink: 0; }
+/* ── Urgentes ── */
+.dpm-urgentes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.dpm-urgente { display: flex; align-items: center; gap: 10px; min-height: 56px; padding: 8px 0; border-top: 1px solid var(--border); text-decoration: none; color: inherit; }
+.dpm-urgentes li:first-child .dpm-urgente { border-top: 0; }
+.dpm-urgente-body { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.dpm-urgente-nombre { font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dpm-urgente-causa { font-size: 14px; color: var(--text-muted); }
+.dpm-urgente-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-size: 14px; color: var(--text-secondary); max-width: 40%; }
+.dpm-urgente-profe { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.dpm-urgente-dias { color: var(--text-muted); white-space: nowrap; }
+.dpm-urgente-chev { color: var(--text-muted); flex-shrink: 0; }
 
 /* ── Navegación inferior fija, respetando la zona segura del iPhone ── */
 .dpm-nav {
   position: fixed; bottom: 0; left: 0; right: 0; z-index: 40;
-  display: grid; grid-template-columns: repeat(4, 1fr);
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
   height: calc(64px + env(safe-area-inset-bottom));
   padding-bottom: env(safe-area-inset-bottom);
   background: #fff; border-top: 1px solid var(--border);
 }
-.dpm-nav-item {
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
-  min-height: 44px; text-decoration: none; color: var(--text-muted);
-}
+.dpm-nav-item { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-height: 44px; text-decoration: none; color: var(--text-muted); }
 .dpm-nav-item.is-active { color: var(--accent); }
 .dpm-nav-icon { position: relative; display: inline-flex; }
-.dpm-nav-badge {
-  position: absolute; top: -6px; right: -12px;
-  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
-  background: #FFC400; color: #3d3000; font-size: 11px; font-weight: 700;
-  display: inline-flex; align-items: center; justify-content: center;
-}
+.dpm-nav-badge { position: absolute; top: -6px; right: -12px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: #FFC400; color: #3d3000; font-size: 11px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
 .dpm-nav-label { font-size: 12px; font-weight: 600; letter-spacing: 0.01em; }
 `;
