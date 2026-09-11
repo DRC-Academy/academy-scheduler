@@ -990,7 +990,10 @@ function StudentsContent() {
           </div>
         ) : (
           <>
-            <div style={{ display: 'grid', gridTemplateColumns: twoCols ? '1fr 1fr' : '1fr', gap: 12, alignItems: 'start' }}>
+            {/* minmax(0, 1fr) y no 1fr: con 1fr el minimo de la columna es 'auto' y una
+                sola tarjeta con contenido ancho (pills que no parten) ensanchaba la
+                columna entera mas alla del telefono y la pagina se deslizaba de costado. */}
+            <div style={{ display: 'grid', gridTemplateColumns: twoCols ? 'minmax(0, 1fr) minmax(0, 1fr)' : 'minmax(0, 1fr)', gap: 12, alignItems: 'start' }}>
               {visible.map(s => {
                 const studentAssignments = assignmentsForStudent(s);
                 const horarios = studentAssignments.flatMap(a => a.slots.map(sl => `${sl.day} ${sl.hour}`)).join(', ');
@@ -1064,7 +1067,9 @@ function StudentsContent() {
                         )}
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-                        {s.email && <div style={{ maxWidth: 200 }}>{renderSubBadge(s)}</div>}
+                        {/* En el telefono el badge baja a su propia fila (mas abajo): aca
+                            al lado del nombre lo aplastaba letra por letra. */}
+                        {s.email && !isMobile && <div style={{ maxWidth: 200 }}>{renderSubBadge(s)}</div>}
                         {/* Menú tres puntos */}
                         <div style={{ position: 'relative', flexShrink: 0 }}>
                           <button onClick={() => setMenuOpenId(menuOpen ? null : s.id)} title="Acciones"
@@ -1155,6 +1160,9 @@ function StudentsContent() {
                         </div>
                       </div>
                     </div>
+
+                    {/* Telefono: suscripcion y acciones de acceso en su propia fila, a lo ancho. */}
+                    {isMobile && s.email && <div style={{ marginTop: 10 }}>{renderSubBadge(s)}</div>}
 
                     {/* Fila secundaria: nivel · plan + clasificación */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', fontSize: 12.5, color: 'var(--text-secondary)', marginTop: 12 }}>
