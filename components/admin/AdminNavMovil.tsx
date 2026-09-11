@@ -38,6 +38,15 @@ export type AdminTabId =
   | 'teachers' | 'emails' | 'scoring' | 'tracking' | 'classlog' | 'leveltests'
   | 'validacion' | 'ai' | 'aiusage' | 'bajas' | 'notifications';
 
+/**
+ * Secciones que existen (código, datos y cron siguen ahí) pero NO se muestran,
+ * ni en las pestañas de escritorio ni en el "Más" del teléfono ni por ?tab=.
+ * "Bajas" se ocultó en septiembre de 2026 a pedido de Facundo: en fase de
+ * recopilación no aportaba nada y no se entendía. Para reactivar una sección,
+ * basta con quitarla de acá.
+ */
+export const SECCIONES_OCULTAS: ReadonlySet<AdminTabId> = new Set<AdminTabId>(['bajas']);
+
 /** Contadores de pendientes. null = todavía cargando (se muestra sin número). */
 export interface AdminContadores {
   validacion: number;
@@ -147,7 +156,7 @@ export function AdminNavMovil({ activeTab, contadores, onSelect, onVolver, child
               <button type="button" className="anm-sheet-x" onClick={() => setMasAbierto(false)} aria-label="Cerrar"><X size={20} strokeWidth={2} /></button>
             </div>
             {GRUPOS.map(g => {
-              const secs = g.secciones.filter(s => !FIJAS.includes(s.id as AdminTabId));
+              const secs = g.secciones.filter(s => !FIJAS.includes(s.id as AdminTabId) && !SECCIONES_OCULTAS.has(s.id as AdminTabId));
               if (!secs.length) return null;
               return (
                 <div key={g.nombre}>

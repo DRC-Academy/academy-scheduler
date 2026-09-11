@@ -31,7 +31,7 @@ import { triggerEmail } from '@/lib/emailClient';
 import { notificationDirection, notificationTypeInfo, type NotificationDirection } from '@/lib/notificationDirection';
 // Navegación del teléfono: barra inferior con las cuatro secciones más usadas,
 // "Más" para el resto y "Volver". Sus contadores salen de acá.
-import { AdminNavMovil } from '@/components/admin/AdminNavMovil';
+import { AdminNavMovil, SECCIONES_OCULTAS } from '@/components/admin/AdminNavMovil';
 import { fetchRiskLite, riesgoResumen } from '@/lib/dashboardExtras';
 import { proximosSinContactar } from '@/lib/dashboardMetrics';
 import { madridToday } from '@/lib/subscriptionAccess';
@@ -2423,7 +2423,7 @@ function AdminContent() {
     // Un enlace viejo a la pestaña Resumen: su contenido es ahora /dashboard.
     // `replace` y no `push` para que el botón de volver no rebote otra vez acá.
     if (t === MOVED_TO_DASHBOARD) { router.replace('/dashboard'); return; }
-    if (t && (ADMIN_TABS as readonly string[]).includes(t)) setActiveTab(t as AdminTab);
+    if (t && (ADMIN_TABS as readonly string[]).includes(t) && !SECCIONES_OCULTAS.has(t as AdminTab)) setActiveTab(t as AdminTab);
   }, [searchParams, router]);
 
   // Filtro de la pestaña Emails, también en la URL: así el enlace se puede
@@ -2510,6 +2510,9 @@ function AdminContent() {
     { id: 'bajas',          label: 'Bajas' },
     { id: 'notifications',  label: 'Notificaciones' },
   ] as const;
+  // Las ocultas (ver SECCIONES_OCULTAS) no se pintan; su contenido sigue abajo,
+  // listo para cuando se reactiven.
+  const tabsVisibles = tabs.filter(t => !SECCIONES_OCULTAS.has(t.id));
 
   return (
     <div style={{ minHeight: '100vh', background: '#f4f5f2' }}>
@@ -2534,7 +2537,7 @@ function AdminContent() {
         </div>
 
         <div className="adm-tabs" role="tablist">
-          {tabs.map(tab => (
+          {tabsVisibles.map(tab => (
             <button key={tab.id} role="tab" aria-selected={activeTab === tab.id}
               className={`adm-tab${activeTab === tab.id ? ' is-active' : ''}`}
               onClick={() => irA(tab.id)}>
