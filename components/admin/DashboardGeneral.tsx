@@ -1470,7 +1470,6 @@ export default function DashboardGeneral() {
     semana, clasesSemana, programadas,
     faltasSinAvisoMes: op.faltasSinAviso,
     riesgo, urgentes,
-    solicitudesRevision: extras?.solicitudesRevision ?? null,
   };
 
   return (

@@ -24,6 +24,16 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { ClipboardCheck, AlertTriangle, Users, Mail, MoreHorizontal, ChevronLeft, ChevronRight, X } from 'lucide-react';
 
+/** Las otras pantallas del admin, al final de "Más": acá la barra global no se
+ *  pinta (dos barras apiladas no caben), así que este es el atajo. */
+const OTRAS_PANTALLAS = [
+  { href: '/dashboard', label: 'Inicio (Dashboard)' },
+  { href: '/students',  label: 'Alumnos' },
+  { href: '/finanzas',  label: 'Finanzas' },
+  { href: '/setter',    label: 'Buscar' },
+  { href: '/ayuda',     label: 'Centro de ayuda' },
+];
+
 export type AdminTabId =
   | 'teachers' | 'emails' | 'scoring' | 'tracking' | 'classlog' | 'leveltests'
   | 'validacion' | 'ai' | 'aiusage' | 'bajas' | 'notifications';
@@ -154,6 +164,12 @@ export function AdminNavMovil({ activeTab, contadores, onSelect, onVolver, child
                 </div>
               );
             })}
+            <p className="anm-grp">Otras pantallas</p>
+            <div className="anm-rows">
+              {OTRAS_PANTALLAS.map(o => (
+                <Link key={o.href} href={o.href} className="anm-row"><span className="anm-row-l">{o.label}</span><ChevronRight size={18} strokeWidth={2} aria-hidden className="anm-chev" /></Link>
+              ))}
+            </div>
           </div>
         </>
       )}

@@ -20,13 +20,13 @@
 //     los nombres largos se recortan con puntos suspensivos.
 //   · Zonas táctiles ≥ 44 px. Cuerpo 14–15 px, cifras principales 32 px.
 //   · Rojo solo para urgencias reales.
-//   · La barra de la app (logo, campana, menú) se conserva arriba: es la única
-//     vía al resto de rutas y a "Salir". Abajo, navegación fija con las cuatro
-//     entradas que el admin usa desde el teléfono.
+//   · La barra de la app (logo, campana, menú) se conserva arriba. La
+//     navegación inferior fija (Inicio · Admin · Alumnos · Finanzas · Más) la
+//     pone el NavBar en todas las pantallas del admin: ver
+//     components/AdminBottomNav.
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
-import { LayoutDashboard, Settings, Users, Wallet, ChevronRight } from 'lucide-react';
+import { ChevronRight } from 'lucide-react';
 import type { DateRange, MovimientoMes, OrigenActivos } from '@/lib/dashboardMetrics';
 import type { RiesgoResumen } from '@/lib/dashboardExtras';
 
@@ -46,8 +46,6 @@ export interface DashboardDatos {
   faltasSinAvisoMes: number;
   riesgo: RiesgoResumen;
   urgentes: Array<{ alumno: string; profe: string; causa: string; dias: number | null }>;
-  /** Contador de la barra inferior (Finanzas). null mientras carga. */
-  solicitudesRevision: number | null;
 }
 
 // ─── Piezas ──────────────────────────────────────────────────────────────────
@@ -288,43 +286,6 @@ function Riesgo({ d }: { d: DashboardDatos }) {
   );
 }
 
-// ─── Navegación inferior ─────────────────────────────────────────────────────
-
-/**
- * Las cuatro entradas que el admin usa desde el teléfono. Inicio es esta misma
- * pantalla; Admin es donde aterrizan las validaciones y el riesgo; Alumnos es
- * donde se busca a alguien cuando escribe o llama; Finanzas es la única entrada
- * de la barra de arriba que lleva contador (solicitudes de revisión). Buscar
- * (setter) y Próximos a cancelar siguen en el menú de arriba.
- */
-const NAV = [
-  { href: '/dashboard', label: 'Inicio',   Icon: LayoutDashboard },
-  { href: '/admin',     label: 'Admin',    Icon: Settings },
-  { href: '/students',  label: 'Alumnos',  Icon: Users },
-  { href: '/finanzas',  label: 'Finanzas', Icon: Wallet },
-];
-
-function NavInferior({ revisiones }: { revisiones: number | null }) {
-  const path = usePathname();
-  return (
-    <nav className="dpm-nav" aria-label="Navegación principal">
-      {NAV.map(({ href, label, Icon }) => {
-        const activo = path === href;
-        const badge = href === '/finanzas' ? (revisiones ?? 0) : 0;
-        return (
-          <Link key={href} href={href} className={`dpm-nav-item${activo ? ' is-active' : ''}`} aria-current={activo ? 'page' : undefined}>
-            <span className="dpm-nav-icon">
-              <Icon size={22} strokeWidth={activo ? 2.25 : 1.75} aria-hidden />
-              {badge > 0 && <span className="dpm-nav-badge">{badge}</span>}
-            </span>
-            <span className="dpm-nav-label">{label}</span>
-          </Link>
-        );
-      })}
-    </nav>
-  );
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function DashboardMovil({ datos }: { datos: DashboardDatos }) {
@@ -338,7 +299,6 @@ export function DashboardMovil({ datos }: { datos: DashboardDatos }) {
         <Clases d={datos} />
         <Riesgo d={datos} />
       </div>
-      <NavInferior revisiones={datos.solicitudesRevision} />
       <style>{ESTILOS}</style>
     </div>
   );
@@ -355,7 +315,7 @@ const ESTILOS = `
 .dpm a { -webkit-tap-highlight-color: rgba(30,158,58,0.15); }
 .dpm * { box-sizing: border-box; min-width: 0; }
 .dpm-fecha { margin: 0 0 12px 2px; font-size: 14px; font-weight: 600; color: var(--text-secondary); }
-.dpm-main { display: flex; flex-direction: column; gap: 18px; padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
+.dpm-main { display: flex; flex-direction: column; gap: 18px; }
 
 /* ── Bloques ── */
 .dpm-bloque { display: flex; flex-direction: column; gap: 8px; }
@@ -419,11 +379,4 @@ const ESTILOS = `
 .dpm-urgente-dias { color: var(--text-muted); white-space: nowrap; }
 .dpm-urgente-chev { color: var(--text-muted); flex-shrink: 0; }
 
-/* ── Navegación inferior fija, respetando la zona segura del iPhone ── */
-.dpm-nav { position: fixed; bottom: 0; left: 0; right: 0; z-index: 39; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); height: calc(64px + env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom); background: #fff; border-top: 1px solid var(--border); }
-.dpm-nav-item { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-height: 44px; text-decoration: none; color: var(--text-muted); }
-.dpm-nav-item.is-active { color: var(--accent); }
-.dpm-nav-icon { position: relative; display: inline-flex; }
-.dpm-nav-badge { position: absolute; top: -6px; right: -12px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: #FFC400; color: #3d3000; font-size: 11px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
-.dpm-nav-label { font-size: 12px; font-weight: 600; letter-spacing: 0.01em; }
 `;
