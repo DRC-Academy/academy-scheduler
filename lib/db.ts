@@ -4887,6 +4887,26 @@ export async function dbMarkPaymentPaid(
 }
 
 /**
+ * Deshace un "Marcar pagado": el mes vuelve a 'pending' y a calcularse en vivo.
+ *
+ * Los totales congelados se dejan en la fila (son historia de lo que se llegó a
+ * marcar); al estar 'pending', calculateTeacherFinance los ignora. Si nunca se
+ * marcó, no hay fila y no hay nada que deshacer: devuelve null.
+ */
+export async function dbMarkPaymentPending(
+  teacherId: string, monthYear: string,
+): Promise<import('@/types').FinancePayment | null> {
+  const id = financePaymentId(teacherId, monthYear);
+  const { data, error } = await supabase.from('finance_payments')
+    .update({ status: 'pending', paid_at: null })
+    .eq('id', id)
+    .select('*')
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data ? mapFinancePayment(data) : null;
+}
+
+/**
  * ¿Ya hay un ingreso de ese alumno en esa fecha? Devuelve su id.
  *
  * Guard de idempotencia al aprobar una solicitud de revisión: sin él, aprobar

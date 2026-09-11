@@ -18,7 +18,7 @@ import {
   dbUpdateMeetLink, dbLogClassJoin, dbGetClassJoinLogs, dbGetUnassignedStudents,
   dbNotifyNewAssignment,
   dbGetClassRecords, dbGetClassTranscripts, dbUploadClassScreenshot, dbAddClassRecord, dbAttachScreenshotToClass,
-  dbGetFinanceRates, dbGetFinancePayments, dbMarkPaymentPaid,
+  dbGetFinanceRates, dbGetFinancePayments, dbMarkPaymentPaid, dbMarkPaymentPending,
   dbGetManualApprovals, dbAddManualApproval,
   dbChangeStudentTeacher, dbAddRescheduleRecord, dbAddRescheduleSplit, dbAddRecoveryClass, dbRemoveAssignment,
   dbSetSalesContact,
@@ -88,6 +88,8 @@ interface TeachersContextType {
   registerClassRecord: (teacherId: string, studentName: string, date: string, time: string | undefined, screenshotFile: File | null, classType?: ClassRecordType, comment?: string, recoveryForDate?: string) => Promise<void>;
   attachScreenshotToClass: (teacherId: string, studentName: string, date: string, time: string | undefined, screenshotFile: File, comment?: string) => Promise<void>;
   markPaymentAsPaid: (teacherId: string, monthYear: string) => Promise<void>;
+  /** Deshace un "Marcar pagado" (el mes vuelve a pendiente y a calcularse en vivo). */
+  markPaymentAsPending: (teacherId: string, monthYear: string) => Promise<void>;
   markStudentAbsence: (teacherId: string, studentName: string, date: string, time: string | undefined, comment?: string) => Promise<void>;
   revertStudentAbsence: (recordId: string, adminName: string) => Promise<void>;
   approveReviewClass: (teacherId: string, studentName: string, date: string, approvedBy?: string) => Promise<void>;
@@ -144,6 +146,7 @@ const TeachersContext = createContext<TeachersContextType>({
   registerClassRecord:        async () => {},
   attachScreenshotToClass:    async () => {},
   markPaymentAsPaid:          async () => {},
+  markPaymentAsPending:       async () => {},
   markStudentAbsence:         async () => {},
   revertStudentAbsence:       async () => {},
   approveReviewClass:         async () => {},
@@ -673,6 +676,12 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     });
   }
 
+  async function markPaymentAsPending(teacherId: string, monthYear: string) {
+    const saved = await dbMarkPaymentPending(teacherId, monthYear);
+    if (!saved) return;
+    setFinancePayments(prev => prev.map(p => (p.id === saved.id ? saved : p)));
+  }
+
   // AprobaciÃ³n manual de una clase puntual: persiste en finance_manual_approvals
   // y actualiza el estado local para que el cÃ¡lculo se recompute al instante.
   async function approveClass(teacherId: string, studentName: string, date: string, reason: string, approvedBy?: string) {
@@ -741,7 +750,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
       sendNotification, loadNotifications, markNotificationRead, markAllNotificationsRead,
       updateMeetLink, markPresentationSent, logClassJoin, loadClassJoinLogs,
       loadClassRecords, loadFinanceData, registerClassRecord, attachScreenshotToClass,
-      markPaymentAsPaid, markStudentAbsence, revertStudentAbsence, approveReviewClass, approveExceedLimitClass,
+      markPaymentAsPaid, markPaymentAsPending, markStudentAbsence, revertStudentAbsence, approveReviewClass, approveExceedLimitClass,
       changeStudentTeacher, removeAssignment, addRescheduleRecord, addRescheduleSplit, addRecoveryClass,
     }}>
       {children}
