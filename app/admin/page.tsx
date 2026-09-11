@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useMemo, Fragment, Suspense } from 'react';
+import { useState, useEffect, useMemo, useRef, Fragment, Suspense } from 'react';
 import { NavBar } from '@/components/NavBar';
 import { StatusBadge } from '@/components/StatusBadge';
 import { AuthGuard } from '@/components/AuthGuard';
@@ -33,6 +33,12 @@ import TranscriptValidationTab from '@/components/admin/TranscriptValidationTab'
 import ChurnTab from '@/components/admin/ChurnTab';
 import { triggerEmail } from '@/lib/emailClient';
 import { notificationDirection, notificationTypeInfo, type NotificationDirection } from '@/lib/notificationDirection';
+// Navegación del teléfono: barra inferior con las cuatro secciones más usadas,
+// "Más" para el resto y "Volver". Sus contadores salen de acá.
+import { AdminNavMovil } from '@/components/admin/AdminNavMovil';
+import { fetchRiskLite, riesgoResumen } from '@/lib/dashboardExtras';
+import { proximosSinContactar } from '@/lib/dashboardMetrics';
+import { madridToday } from '@/lib/subscriptionAccess';
 
 // ─── Edit Teacher Modal ───────────────────────────────────────────────────────
 function EditTeacherModal({ teacher, onClose, onSave, onArchive }: {
@@ -2714,6 +2720,25 @@ function AdminContent() {
   // Las solicitudes de revisión viven en /finanzas (son clases esperando cobro).
   // Su contador está en el badge de "Finanzas" del NavBar, no acá.
 
+  // ── Navegación del teléfono ────────────────────────────────────────────────
+  // Historial de secciones visitadas en esta visita, para "Volver": vuelve a la
+  // sección anterior y, si no hay, al Dashboard. Los saltos que vienen de la
+  // URL (?tab=) no lo alimentan: ahí "volver" es salir de Admin.
+  const historialTabs = useRef<AdminTab[]>([]);
+  const irA = (tab: AdminTab) => {
+    if (tab !== activeTab) historialTabs.current.push(activeTab);
+    setActiveTab(tab);
+  };
+  const volver = () => {
+    const previa = historialTabs.current.pop();
+    if (previa) setActiveTab(previa);
+    else router.push('/dashboard');
+  };
+  // Alumnos en rojo, para el contador de Riesgo en la barra. Lectura ligera
+  // (sin fichas ni contenidos), una vez por visita.
+  const [riesgoRojo, setRiesgoRojo] = useState<number | null>(null);
+  useEffect(() => { fetchRiskLite().then(rows => setRiesgoRojo(riesgoResumen(rows).rojo)).catch(() => {}); }, []);
+
 
   const [editCalendarTeacher, setEditCalendarTeacher] = useState<Teacher | null>(null);
   const [editTeacher, setEditTeacher] = useState<Teacher | null>(null);
@@ -2791,7 +2816,7 @@ function AdminContent() {
           {tabs.map(tab => (
             <button key={tab.id} role="tab" aria-selected={activeTab === tab.id}
               className={`adm-tab${activeTab === tab.id ? ' is-active' : ''}`}
-              onClick={() => setActiveTab(tab.id)}>
+              onClick={() => irA(tab.id)}>
               {tab.label}
               {/* Cola de validación: mientras no se vio desde fuera, se acumularon
                   clases que no le contaban a nadie. Ámbar a partir de 3 días
@@ -2811,6 +2836,24 @@ function AdminContent() {
             </button>
           ))}
         </div>
+
+        <AdminNavMovil
+          activeTab={activeTab}
+          onSelect={irA}
+          onVolver={volver}
+          contadores={{
+            validacion: pendingValidations.total,
+            validacionUrgente: pendingValidations.oldestDays >= 3,
+            riesgo: riesgoRojo,
+            emails: assignments.filter(a => !a.presentationEmailSent && getPresentationEmailStatus(a, nowMs).status === 'overdue').length,
+            proximosACancelar: proximosSinContactar(students, madridToday()),
+          }}>
+          {activeTab === 'teachers' && (
+            <button className="adm-btn adm-btn-primary" style={{ alignSelf: 'flex-start', minHeight: 44 }} onClick={() => setShowNewTeacher(true)}>
+              Nuevo profesor
+            </button>
+          )}
+        </AdminNavMovil>
 
         {/* TEACHERS TAB */}
         {activeTab === 'teachers' && (
