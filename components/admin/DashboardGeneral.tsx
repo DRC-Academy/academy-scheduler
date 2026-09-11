@@ -44,8 +44,8 @@ import {
   alumnosResumen, ocupacionDe, tonoOcupacion, operacionDelMes,
   clasesEnRango, clasesProgramadasSemana, faltasProfesorDelMes,
   transcriptsPendientes, filasProfesores,
-  // Los tres números que solo ve el teléfono (reglas provisionales, ver ahí).
-  origenDeActivos, movimientoMensual, proximosSinContactar,
+  // Los dos números que solo ve el teléfono (reglas provisionales, ver ahí).
+  origenDeActivos, movimientoMensual,
 } from '@/lib/dashboardMetrics';
 // Y las cinco lecturas que no están en memoria.
 import {
@@ -1457,23 +1457,12 @@ export default function DashboardGeneral() {
   ];
 
   // ── Lo que ve el teléfono ──────────────────────────────────────────────────
-  // Los mismos números de arriba, empaquetados, más tres que el escritorio no
+  // Los mismos números de arriba, empaquetados, más dos que el escritorio no
   // muestra y salen de reglas PROVISIONALES (lib/dashboardMetrics, al final):
-  // el origen del acceso sin consultar Woo, las altas por primera asignación y
-  // "próximos a cancelar sin contactar" = sin marca de ventas en el ciclo.
+  // el origen del acceso sin consultar Woo y las altas por primera asignación.
+  // Las colas de "Requiere acción" NO van al teléfono (pedido del admin).
   const datos: DashboardDatos = {
     ahora, cargandoExtras,
-    acciones: [
-      { key: 'validaciones', n: extras?.validaciones.total ?? null, label: 'Validaciones pendientes', tono: 'rojo',
-        detalle: extras && extras.validaciones.oldestDays > 0 ? `la más antigua, ${extras.validaciones.oldestDays} días` : 'esperando revisión',
-        href: '/admin?tab=validacion' },
-      { key: 'riesgo', n: cargandoExtras ? null : riesgo.sinAtender, label: 'Alumnos en riesgo', tono: 'rojo',
-        detalle: 'en rojo y sin intervención registrada', href: '/admin?tab=ai' },
-      { key: 'transcripts', n: pendientes.length, label: 'Transcripts sin subir', tono: 'aviso',
-        detalle: pendientes.length > 0 ? `el más viejo, hace ${pendientes[0].dias} días` : '', href: '/finanzas' },
-      { key: 'proximos-cancelar', n: proximosSinContactar(students, hoyIso), label: 'Próximos a cancelar sin contactar', tono: 'aviso',
-        detalle: 'les quedan 7 días o menos', href: '/proximos-cancelar' },
-    ],
     alumnos: { conClase: alumnos.conClase, total: alumnos.total },
     origen: origenDeActivos(students, assignments, hoyIso),
     movimiento: movimientoMensual(assignments, extras?.dropouts ?? [], mes),

@@ -2,9 +2,9 @@
 
 // DASHBOARD EN EL TELÉFONO (por debajo de 768 px).
 //
-// Rediseño de septiembre de 2026 con una sola pregunta en la cabeza: "¿tengo
-// que resolver algo ahora?" y, si no, "¿cómo viene el mes?". Todo lo que no
-// contesta una de las dos se quedó en el escritorio: cupos por franja,
+// Rediseño de septiembre de 2026 con una sola pregunta en la cabeza: "¿cómo
+// viene el mes?". Lo que hay que resolver hoy (las colas de "Requiere acción")
+// se quedó en el escritorio a pedido del admin, igual que cupos por franja,
 // conflictos de datos, uso de IA, ranking de profesores, emails de
 // presentación y las herramientas de mantenimiento.
 //
@@ -26,27 +26,15 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutDashboard, Settings, Users, Wallet, ChevronRight, CircleCheck } from 'lucide-react';
+import { LayoutDashboard, Settings, Users, Wallet, ChevronRight } from 'lucide-react';
 import type { DateRange, MovimientoMes, OrigenActivos } from '@/lib/dashboardMetrics';
 import type { RiesgoResumen } from '@/lib/dashboardExtras';
 
 // ─── Lo que recibe ───────────────────────────────────────────────────────────
 
-export interface AccionMovil {
-  key: string;
-  /** null = todavía cargando. */
-  n: number | null;
-  label: string;
-  detalle: string;
-  tono: 'rojo' | 'aviso';
-  href: string;
-}
-
 export interface DashboardDatos {
   ahora: Date;
   cargandoExtras: boolean;
-  /** Las cuatro colas del teléfono, en orden de urgencia. */
-  acciones: AccionMovil[];
   alumnos: { conClase: number; total: number };
   origen: OrigenActivos;
   /** Seis meses, el actual al final. Las bajas llegan con los extras. */
@@ -63,11 +51,6 @@ export interface DashboardDatos {
 }
 
 // ─── Piezas ──────────────────────────────────────────────────────────────────
-
-const TONO = {
-  rojo:  { fg: '#B42318', bg: 'rgba(220,74,56,0.08)', bd: 'rgba(220,74,56,0.30)' },
-  aviso: { fg: '#8a6d00', bg: 'rgba(255,196,0,0.12)', bd: 'rgba(255,196,0,0.45)' },
-} as const;
 
 /** "8.420 €", con el punto de miles que en el teléfono se lee mejor. */
 const num = (n: number) => Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
@@ -122,46 +105,7 @@ function Fila({ color, label, n, sub }: { color: string; label: string; n: React
   );
 }
 
-// ─── 1 · Requiere acción hoy ─────────────────────────────────────────────────
-
-function RequiereAccion({ acciones }: { acciones: AccionMovil[] }) {
-  // Las que tienen algo, y detrás las que aún cargan (atenuadas, para que se
-  // sepa que falta un número). "Todo al día" solo cuando las cuatro dicen cero.
-  const visibles = acciones.filter(a => a.n == null || a.n > 0);
-  return (
-    <Bloque titulo="Requiere acción hoy">
-      {visibles.length === 0 ? (
-        <div className="adm-card dpm-card dpm-vacio">
-          <CircleCheck size={36} strokeWidth={1.75} color="#1E9E3A" aria-hidden />
-          <div className="dpm-vacio-t">Todo al día</div>
-          <div className="dpm-vacio-s">No hay nada que resolver ahora mismo.</div>
-        </div>
-      ) : (
-        <div className="dpm-alertas">
-          {visibles.map(a => {
-            const cargando = a.n == null;
-            const t = TONO[a.tono];
-            const style = cargando
-              ? { background: 'var(--bg-surface)', borderColor: 'var(--border)' }
-              : { background: t.bg, borderColor: t.bd };
-            return (
-              <Link key={a.key} href={a.href} className="dpm-alerta" style={style}>
-                <span className="dpm-alerta-n" style={{ color: cargando ? 'var(--text-muted)' : t.fg }}>{cargando ? '·' : a.n}</span>
-                <span className="dpm-alerta-body">
-                  <span className="dpm-alerta-l">{a.label}</span>
-                  <span className="dpm-alerta-d">{cargando ? 'Cargando…' : a.detalle}</span>
-                </span>
-                <span className="dpm-alerta-btn" style={{ color: t.fg, borderColor: t.bd }}>Ver</span>
-              </Link>
-            );
-          })}
-        </div>
-      )}
-    </Bloque>
-  );
-}
-
-// ─── 2 · Alumnos activos ─────────────────────────────────────────────────────
+// ─── 1 · Alumnos activos ─────────────────────────────────────────────────────
 
 function AlumnosActivos({ d }: { d: DashboardDatos }) {
   const partes = [
@@ -190,7 +134,7 @@ function AlumnosActivos({ d }: { d: DashboardDatos }) {
   );
 }
 
-// ─── 3 · Este mes ────────────────────────────────────────────────────────────
+// ─── 2 · Este mes ────────────────────────────────────────────────────────────
 
 function EsteMes({ d }: { d: DashboardDatos }) {
   const actual = d.movimiento[d.movimiento.length - 1];
@@ -243,7 +187,7 @@ function EsteMes({ d }: { d: DashboardDatos }) {
   );
 }
 
-// ─── 4 · Finanzas del mes ────────────────────────────────────────────────────
+// ─── 3 · Finanzas del mes ────────────────────────────────────────────────────
 
 function Finanzas({ d }: { d: DashboardDatos }) {
   const f = d.finanzas;
@@ -271,7 +215,7 @@ function Finanzas({ d }: { d: DashboardDatos }) {
   );
 }
 
-// ─── 5 · Clases de la semana ─────────────────────────────────────────────────
+// ─── 4 · Clases de la semana ─────────────────────────────────────────────────
 
 function Clases({ d }: { d: DashboardDatos }) {
   const pct = d.programadas > 0 ? Math.round((d.clasesSemana / d.programadas) * 100) : 0;
@@ -291,7 +235,7 @@ function Clases({ d }: { d: DashboardDatos }) {
   );
 }
 
-// ─── 6 · Riesgo de baja ──────────────────────────────────────────────────────
+// ─── 5 · Riesgo de baja ──────────────────────────────────────────────────────
 
 function Riesgo({ d }: { d: DashboardDatos }) {
   const { rojo, verde } = d.riesgo;
@@ -388,7 +332,6 @@ export function DashboardMovil({ datos }: { datos: DashboardDatos }) {
     <div className="dpm">
       <p className="dpm-fecha">{fechaLarga(datos.ahora)}</p>
       <div className="dpm-main">
-        <RequiereAccion acciones={datos.acciones} />
         <AlumnosActivos d={datos} />
         <EsteMes d={datos} />
         <Finanzas d={datos} />
@@ -451,19 +394,6 @@ const ESTILOS = `
 .dpm-fila-l { color: var(--text-secondary); flex: 1; }
 .dpm-fila-sub { color: var(--text-muted); }
 .dpm-fila-n { font-size: 16px; font-weight: 700; white-space: nowrap; }
-
-/* ── Alertas ── */
-.dpm-alertas { display: flex; flex-direction: column; gap: 8px; }
-.dpm-alerta { display: flex; align-items: center; gap: 12px; border: 1px solid; border-radius: 12px; padding: 12px 12px 12px 14px; min-height: 68px; text-decoration: none; color: inherit; }
-.dpm-alerta:active { transform: scale(0.99); }
-.dpm-alerta-n { font-size: 32px; font-weight: 700; line-height: 1; min-width: 40px; text-align: center; flex-shrink: 0; }
-.dpm-alerta-body { flex: 1; display: flex; flex-direction: column; gap: 2px; }
-.dpm-alerta-l { font-size: 15px; font-weight: 600; line-height: 1.3; }
-.dpm-alerta-d { font-size: 14px; color: var(--text-secondary); }
-.dpm-alerta-btn { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; min-height: 44px; min-width: 56px; padding: 0 12px; background: #fff; border: 1px solid; border-radius: 10px; font-size: 15px; font-weight: 700; }
-.dpm-vacio { align-items: center; text-align: center; padding: 22px 16px 20px; gap: 4px; }
-.dpm-vacio-t { font-size: 22px; font-weight: 700; margin-top: 4px; }
-.dpm-vacio-s { font-size: 14px; color: var(--text-muted); }
 
 /* ── Seis meses, a lo ancho ── */
 .dpm-meses { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; align-items: end; margin-top: 4px; }
