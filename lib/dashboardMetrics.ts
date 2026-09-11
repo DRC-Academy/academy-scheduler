@@ -18,6 +18,11 @@ import type { ClassTranscriptRef } from '@/lib/finance';
 // recuperación. Una falta sin aviso o una cancelación sobre la hora se le
 // cobraron al alumno, así que no están pendientes de nada.
 import { RECUPERABLES } from '@/lib/recovery';
+// Para los tres números que solo ve el teléfono (al final del archivo): el
+// origen del acceso y los planes que terminan, con las mismas reglas que el
+// resto de la app.
+import { accessOverrideOf } from '@/lib/subscriptionAccess';
+import { buildEndingPlans, ENDING_NOTICE_DAYS, type EndingStudentRow } from '@/lib/endingPlans';
 
 const norm = (s: string | null | undefined): string => (s ?? '').trim().toLowerCase();
 
@@ -380,4 +385,107 @@ export function alumnosResumen(
     !conAsignacion.has(s.id) && !conAsignacion.has(norm(s.name)),
   ).length;
   return { conClase: conAsignacion.size, total: students.length, sinProfesor };
+}
+
+// ── Lo que ve el teléfono ────────────────────────────────────────────────────
+//
+// Tres números que el escritorio no muestra y la vista móvil sí. Los tres salen
+// de REGLAS PROVISIONALES, marcadas en docs/dashboard-propuesta.md como
+// [DECISIÓN] pendiente. Están acá, puras y con test, para que cambiar la regla
+// sea cambiar una función y no rebuscar en la pantalla.
+
+/**
+ * Alumnos con clase, repartidos por el origen de su acceso — SIN preguntarle a
+ * WooCommerce. La regla es la misma precedencia que usa lib/subscriptionAccess
+ * (Oritalk vigente → override manual vigente → lo demás), con una salvedad:
+ * a quien no tiene override se lo cuenta como "suscripción" sin verificarla,
+ * porque verificarla es una llamada de red por alumno.
+ *
+ * PROVISIONAL: "suscripción" acá significa "no es Oritalk ni manual", no
+ * "Woo dice que está activo".
+ */
+export interface OrigenActivos { suscripcion: number; manual: number; oritalk: number }
+
+export function origenDeActivos(
+  students: readonly { id: string; name: string; manualActiveUntil?: string | null; isOritalk?: boolean | null; oritalkUntil?: string | null }[],
+  assignments: readonly Assignment[],
+  today: string,
+): OrigenActivos {
+  const conAsignacion = new Set<string>();
+  for (const a of assignments) conAsignacion.add(a.studentId || norm(a.studentName));
+
+  const out: OrigenActivos = { suscripcion: 0, manual: 0, oritalk: 0 };
+  for (const s of students) {
+    if (!conAsignacion.has(s.id) && !conAsignacion.has(norm(s.name))) continue;
+    const override = accessOverrideOf({
+      manual_active_until: s.manualActiveUntil ?? null,
+      is_oritalk: s.isOritalk ?? null,
+      oritalk_until: s.oritalkUntil ?? null,
+    }, today);
+    if (override?.kind === 'oritalk') out.oritalk += 1;
+    else if (override?.kind === 'manual') out.manual += 1;
+    else out.suscripcion += 1;
+  }
+  return out;
+}
+
+/**
+ * Altas y bajas de los últimos `meses` meses (el último es `mes`), para la mini
+ * tendencia del teléfono.
+ *
+ * PROVISIONAL — qué es un alta: el mes en que se creó la PRIMERA asignación del
+ * alumno. Se mira la primera y no cada una porque un cambio de profesor crea
+ * otra asignación y no es un alumno nuevo. La alternativa (la primera clase
+ * registrada) suele caer una o dos semanas después.
+ *
+ * Las bajas se cuentan como en `bajasDelMes` (filas de student_dropouts), para
+ * que el mes en curso dé el mismo número que la tarjeta del escritorio.
+ */
+export interface MovimientoMes { mes: string; altas: number; bajas: number }
+
+export function movimientoMensual(
+  assignments: readonly Assignment[],
+  dropouts: readonly { droppedAt?: string }[],
+  mes: string,
+  meses = 6,
+): MovimientoMes[] {
+  const claves: string[] = [mes];
+  while (claves.length < meses) claves.unshift(previousMonth(claves[0]));
+
+  // Primera asignación de cada alumno → su mes de alta.
+  const primera = new Map<string, string>();
+  for (const a of assignments) {
+    const k = a.studentId || norm(a.studentName);
+    const m = (a.createdAt ?? '').slice(0, 7);
+    if (!m) continue;
+    const prev = primera.get(k);
+    if (!prev || m < prev) primera.set(k, m);
+  }
+  const altasPorMes = new Map<string, number>();
+  for (const m of primera.values()) altasPorMes.set(m, (altasPorMes.get(m) ?? 0) + 1);
+
+  const bajasPorMes = new Map<string, number>();
+  for (const d of dropouts) {
+    const m = (d.droppedAt ?? '').slice(0, 7);
+    if (m) bajasPorMes.set(m, (bajasPorMes.get(m) ?? 0) + 1);
+  }
+
+  return claves.map(k => ({ mes: k, altas: altasPorMes.get(k) ?? 0, bajas: bajasPorMes.get(k) ?? 0 }));
+}
+
+/**
+ * Alumnos cuyo plan termina en `ventanaDias` días y todavía no tienen contacto
+ * manual de ventas en este ciclo.
+ *
+ * PROVISIONAL — "sin contactar" = sin marca de ventas (`salesContactForCycle`).
+ * El aviso automático del sistema NO cuenta como contacto: lo manda un cron y
+ * no quita a nadie de la lista de llamadas.
+ */
+export function proximosSinContactar(
+  students: readonly EndingStudentRow[],
+  today: string,
+  ventanaDias = ENDING_NOTICE_DAYS,
+): number {
+  return buildEndingPlans({ students: [...students], today, windowDays: ventanaDias })
+    .filter(p => !p.salesContact).length;
 }

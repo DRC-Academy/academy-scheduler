@@ -44,6 +44,8 @@ import {
   alumnosResumen, ocupacionDe, tonoOcupacion, operacionDelMes,
   clasesEnRango, clasesProgramadasSemana, faltasProfesorDelMes,
   transcriptsPendientes, filasProfesores,
+  // Los tres números que solo ve el teléfono (reglas provisionales, ver ahí).
+  origenDeActivos, movimientoMensual, proximosSinContactar,
 } from '@/lib/dashboardMetrics';
 // Y las cinco lecturas que no están en memoria.
 import {
@@ -1455,32 +1457,30 @@ export default function DashboardGeneral() {
   ];
 
   // ── Lo que ve el teléfono ──────────────────────────────────────────────────
-  // Los mismos números de arriba, empaquetados. Las colas van con su tono y su
-  // destino; "Conflictos" abre el modal en vez de navegar, igual que acá.
+  // Los mismos números de arriba, empaquetados, más tres que el escritorio no
+  // muestra y salen de reglas PROVISIONALES (lib/dashboardMetrics, al final):
+  // el origen del acceso sin consultar Woo, las altas por primera asignación y
+  // "próximos a cancelar sin contactar" = sin marca de ventas en el ciclo.
   const datos: DashboardDatos = {
-    ahora, cargandoExtras, kpis,
-    alumnos: { conClase: alumnos.conClase, total: alumnos.total },
-    profesActivos,
-    ocupacion: { pct: ocup.pct, tono: tonoOc },
+    ahora, cargandoExtras,
     acciones: [
       { key: 'validaciones', n: extras?.validaciones.total ?? null, label: 'Validaciones pendientes', tono: 'rojo',
         detalle: extras && extras.validaciones.oldestDays > 0 ? `la más antigua, ${extras.validaciones.oldestDays} días` : 'esperando revisión',
         href: '/admin?tab=validacion' },
-      { key: 'emails-tarde', n: presOverdue, label: 'Emails de presentación tarde', tono: 'rojo', detalle: 'más de 24 h sin enviar', href: '/admin?tab=emails&filter=overdue' },
-      { key: 'riesgo', n: cargandoExtras ? null : riesgo.sinAtender, label: 'Alumnos en riesgo', tono: 'rojo', detalle: 'sin intervención registrada', href: '/admin?tab=ai' },
+      { key: 'riesgo', n: cargandoExtras ? null : riesgo.sinAtender, label: 'Alumnos en riesgo', tono: 'rojo',
+        detalle: 'en rojo y sin intervención registrada', href: '/admin?tab=ai' },
       { key: 'transcripts', n: pendientes.length, label: 'Transcripts sin subir', tono: 'aviso',
         detalle: pendientes.length > 0 ? `el más viejo, hace ${pendientes[0].dias} días` : '', href: '/finanzas' },
-      { key: 'solicitudes', n: extras?.solicitudesRevision ?? null, label: 'Solicitudes de revisión', tono: 'aviso', detalle: 'clases que el profe no cobra', href: '/finanzas' },
-      { key: 'emails-riesgo', n: presAtRisk, label: 'Emails en riesgo', tono: 'aviso', detalle: 'más de 12 h sin enviar', href: '/admin?tab=emails&filter=at_risk' },
-      { key: 'conflictos', n: conflicts, label: 'Conflictos de datos', tono: 'aviso',
-        detalle: conflictGroups.length > 0 ? `${conflictGroups.length} tipos distintos` : '',
-        onClick: () => conflicts ? setConflictDetail(conflictGroups) : setAuditSignal(n => n + 1) },
-      { key: 'ia-fallidos', n: extras?.analisisFallidos ?? null, label: 'Análisis de IA fallidos', tono: 'aviso', detalle: 'sin reintentar', href: '/admin?tab=validacion' },
+      { key: 'proximos-cancelar', n: proximosSinContactar(students, hoyIso), label: 'Próximos a cancelar sin contactar', tono: 'aviso',
+        detalle: 'les quedan 7 días o menos', href: '/proximos-cancelar' },
     ],
-    riesgo, urgentes, semana, clasesSemana, programadas, op, faltasProfe,
-    bajasMes: extras ? bajasDelMes(extras.dropouts, mes) : null,
-    filas, finanzas, totalProfes: teachers.length,
-    emails: { pendientes: presStatuses.length, aTiempo: presOnTime, enRiesgo: presAtRisk, fuera: presOverdue },
+    alumnos: { conClase: alumnos.conClase, total: alumnos.total },
+    origen: origenDeActivos(students, assignments, hoyIso),
+    movimiento: movimientoMensual(assignments, extras?.dropouts ?? [], mes),
+    finanzas: { total: finanzas.total, pagable: finanzas.pagable, pendiente: finanzas.aRevisar + finanzas.retenido },
+    semana, clasesSemana, programadas,
+    faltasSinAvisoMes: op.faltasSinAviso,
+    riesgo, urgentes,
     solicitudesRevision: extras?.solicitudesRevision ?? null,
   };
 
@@ -1748,7 +1748,7 @@ export default function DashboardGeneral() {
         <DashboardMovil datos={datos} />
       </div>
 
-      {/* ── Herramientas ── Compartidas por las dos vistas: se montan una vez. */}
+      {/* ── Herramientas ── Se montan una vez; en el teléfono no se muestran. */}
       <section className="dsh-sec dsh-tools" id="herramientas">
         <SecHead title="Herramientas de mantenimiento"
           sub="Auditorías y sincronizaciones que se lanzan a mano. Abrí solo la que necesites." />
@@ -1808,11 +1808,8 @@ const ESTILOS = `
   .dsh-mob { display: block; }
   /* El título "Dashboard" de la página sobra en el teléfono: la fecha va en su lugar. */
   .dsh-head { display: none; }
-  /* Las herramientas quedan al final, como una sección más, y dejan sitio a la barra inferior. */
-  .dsh-tools { margin-top: 10px; padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
-  .dsh-tools .dsh-sechead { padding: 0 2px; }
-  .dsh-tools .dsh-h2 { font-size: 16px; }
-  .dsh-tools .dsh-sub { font-size: 14px; }
+  /* Las herramientas de mantenimiento son de escritorio. */
+  .dsh-tools { display: none; }
 }
 
 .dsh-kpis { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 30px; }

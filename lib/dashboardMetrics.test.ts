@@ -4,8 +4,10 @@ import {
   esClaseDada, operacionDelMes, clasesEnRango, clasesProgramadasSemana,
   transcriptsPendientes, ocupacionDe, tonoOcupacion, filasProfesores,
   faltasProfesorDelMes, alumnosResumen,
+  origenDeActivos, movimientoMensual, proximosSinContactar,
 } from './dashboardMetrics';
 import type { ClassRecord, ClassJoinLog, ScoringEvent, Teacher, Assignment } from '@/types';
+import type { EndingStudentRow } from '@/lib/endingPlans';
 
 const rec = (o: Partial<ClassRecord>): ClassRecord => ({
   id: Math.random().toString(36).slice(2),
@@ -377,5 +379,53 @@ describe('alumnosResumen', () => {
     expect(r.total).toBe(3);
     expect(r.conClase).toBe(2);
     expect(r.sinProfesor).toBe(1);   // Cris
+  });
+});
+
+describe('origenDeActivos (provisional, sin Woo)', () => {
+  const asig = (studentId: string, studentName: string) => ({ id: 'a' + studentId, studentId, studentName, createdAt: '2026-08-01T00:00:00Z' } as unknown as Assignment);
+  it('reparte a los que tienen clase: Oritalk vigente, manual vigente, el resto suscripción', () => {
+    const students = [
+      { id: 's1', name: 'Ana', isOritalk: true, oritalkUntil: '2026-12-31' },
+      { id: 's2', name: 'Bea', manualActiveUntil: '2026-12-31' },
+      { id: 's3', name: 'Cai' },
+      { id: 's4', name: 'Dan', manualActiveUntil: '2026-01-01' },   // override vencido → suscripción
+      { id: 's5', name: 'Eva' },                                    // sin clase → no cuenta
+    ];
+    const r = origenDeActivos(students, [asig('s1', 'Ana'), asig('s2', 'Bea'), asig('s3', 'Cai'), asig('s4', 'Dan')], '2026-09-11');
+    expect(r).toEqual({ oritalk: 1, manual: 1, suscripcion: 2 });
+  });
+});
+
+describe('movimientoMensual (provisional: alta = primera asignación)', () => {
+  const asig = (studentId: string, createdAt: string) => ({ id: 'a' + studentId + createdAt, studentId, studentName: studentId, createdAt } as unknown as Assignment);
+  it('devuelve los últimos meses en orden, con el pedido al final', () => {
+    const r = movimientoMensual([], [], '2026-09', 3);
+    expect(r.map(m => m.mes)).toEqual(['2026-07', '2026-08', '2026-09']);
+  });
+  it('un cambio de profesor no es un alta: cuenta la primera asignación del alumno', () => {
+    const r = movimientoMensual(
+      [asig('s1', '2026-07-03T00:00:00Z'), asig('s1', '2026-09-02T00:00:00Z'), asig('s2', '2026-09-20T00:00:00Z')],
+      [{ droppedAt: '2026-09-05T00:00:00Z' }, { droppedAt: '2026-08-30T00:00:00Z' }],
+      '2026-09', 3,
+    );
+    expect(r).toEqual([
+      { mes: '2026-07', altas: 1, bajas: 0 },
+      { mes: '2026-08', altas: 0, bajas: 1 },
+      { mes: '2026-09', altas: 1, bajas: 1 },
+    ]);
+  });
+});
+
+describe('proximosSinContactar (provisional: sin marca de ventas)', () => {
+  const stu = (id: string, o: Record<string, unknown>): EndingStudentRow => ({ id, name: id, productType: 'one_time', manualActiveUntil: '2026-09-15', ...o });
+  it('cuenta los que terminan en la ventana y no tienen contacto de ventas en este ciclo', () => {
+    const students = [
+      stu('a', {}),                                                                                  // termina en 4 días, sin contacto → cuenta
+      stu('b', { salesContactedAt: '2026-09-10T00:00:00Z', salesContactResult: 'renovo', salesContactForDate: '2026-09-15' }), // contactado → no
+      stu('c', { endingNoticeSentAt: '2026-09-08T00:00:00Z', endingNoticeForDate: '2026-09-15' }), // solo aviso automático → cuenta
+      stu('d', { manualActiveUntil: '2026-10-30' }),                                                // fuera de la ventana → no
+    ];
+    expect(proximosSinContactar(students, '2026-09-11')).toBe(2);
   });
 });
