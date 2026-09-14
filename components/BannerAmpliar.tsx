@@ -94,32 +94,37 @@ export function BannerAmpliar({ estimacion }: { estimacion: Estimacion | null })
           return (
           <li key={o.horasSemanales} className={`pg-bar-row${o.esActual ? ' is-current' : ''}${esMejor ? ' is-best' : ''}`}>
             {/*
-              Orden de la fila: plan · distintivo · barra+meses · fecha.
+              Cada tarjeta, de arriba abajo: plan (+ "Tu plan" o "Recomendado") ·
+              hueco del ahorro · meses en grande · barra · fecha. En escritorio las
+              tres van en columnas y comparten las filas de la rejilla (subgrid),
+              así el hueco del ahorro de la primera —que no lo tiene— mide lo mismo
+              que la etiqueta amarilla de las otras y las barras arrancan a la misma
+              altura. En móvil se apilan en versión compacta: los meses suben a la
+              línea del plan y la barra ocupa todo el ancho.
+
               El distintivo dice una de dos cosas y nunca las dos: en el plan que ya
-              tiene, "Tu plan" en gris y pequeño; en los de arriba, lo que se
-              ahorraría, en amarillo y grande. En el plan actual no hay ahorro que
-              enseñar, y en los otros la etiqueta gris solo restaría.
+              tiene, "Tu plan"; en los de arriba, lo que se ahorraría, en amarillo.
             */}
             <div className="pg-bar-head">
               <span className="pg-bar-plan">{o.horasSemanales} h a la semana</span>
               {o.esActual && <span className="pg-chip">Tu plan</span>}
-              {/* Va dentro de la cabecera de la fila (y no en posición absoluta)
-                  para que en 360 px nunca se monte sobre "4 h a la semana": si
-                  no cabe, baja de línea. */}
+              {/* Dentro de la cabecera (no en posición absoluta) para que en 360 px
+                  nunca se monte sobre "4 h a la semana": si no cabe, baja de línea. */}
               {esMejor && <span className="pg-badge-best">Recomendado</span>}
             </div>
 
-            {!o.esActual && o.mesesAhorrados > 0 && (
-              <span className="pg-save">{etiquetaMeses(o.mesesAhorrados)} antes</span>
-            )}
+            {/* El hueco existe SIEMPRE, con etiqueta o vacío: es lo que mantiene las
+                tres tarjetas cuadradas entre sí. */}
+            <div className="pg-save-slot">
+              {!o.esActual && o.mesesAhorrados > 0 && (
+                <span className="pg-save">{etiquetaMeses(o.mesesAhorrados)} antes</span>
+              )}
+            </div>
 
-            {/* La barra y los meses van juntos: el hueco de los meses es fijo, así
-                las tres barras arrancan y acaban en el mismo sitio. */}
-            <div className="pg-bar-line">
-              <div className="pg-track">
-                <div className="pg-fill" style={{ width: `${o.anchoPct}%` }} aria-hidden />
-              </div>
-              <span className="pg-bar-months">{etiquetaMeses(o.meses)}</span>
+            <span className="pg-bar-months">{etiquetaMeses(o.meses)}</span>
+
+            <div className="pg-track">
+              <div className="pg-fill" style={{ width: `${o.anchoPct}%` }} aria-hidden />
             </div>
 
             <p className="pg-bar-date">Llegarías en {o.llegada}</p>

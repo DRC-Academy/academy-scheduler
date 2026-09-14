@@ -130,14 +130,16 @@ export function ProgresoFicha({ profile, analyses, assignment, student }: {
         </div>
       </section>
 
+      <BannerAmpliar estimacion={estimacion} />
+
+      {/* La caja de objetivo va DEBAJO del banner (antes iba encima): así el
+          botón "Amplía tu plan" queda más arriba. Misma caja, mismo estilo. */}
       {objective && (
         <section className="pg-card pg-goal pg-rise" style={{ animationDelay: '120ms' }}>
           <p className="pg-kicker">Tu objetivo</p>
           <blockquote className="pg-goal-text">{objective}</blockquote>
         </section>
       )}
-
-      <BannerAmpliar estimacion={estimacion} />
 
       {(strong.length > 0 || weak.length > 0) && (
         <section className="pg-split pg-rise" style={{ animationDelay: '240ms' }}>
@@ -321,10 +323,6 @@ const PROGRESO_CSS = `
   display: flex; align-items: center; justify-content: space-between; gap: 16px;
 }
 .pg-logo { height: 30px; width: auto; object-fit: contain; display: block; }
-.pg-header-tag {
-  font-size: 11px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase;
-  color: var(--pg-faint);
-}
 
 .pg-main {
   max-width: 780px; margin: 0 auto; padding: 28px 20px 72px;
@@ -427,52 +425,67 @@ const PROGRESO_CSS = `
   margin: 0 0 22px; max-width: 52ch;
 }
 
-/* Cada plan, en su propio bloque redondeado. Tres pesos:
+/* Cada plan, en su propia tarjeta. Tres pesos:
    · el actual: gris apagado, sin borde — el punto de partida;
    · los superiores: blanco con borde suave — "vivos" al lado del primero;
-   · el de más horas: verde clarísimo y borde verde algo más marcado. */
-.pg-bars { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+   · el de más horas: verde clarísimo y borde verde algo más marcado.
+
+   ESCRITORIO Y TABLET: tres columnas. Las tarjetas comparten las CINCO filas de
+   la rejilla madre (subgrid: plan · hueco del ahorro · meses · barra · fecha),
+   así todas miden lo mismo, el hueco vacío de la primera es tan alto como la
+   etiqueta amarilla de las otras, y las tres barras arrancan a la misma altura
+   y miden el mismo ancho. La comparación no puede mentir. */
+.pg-bars {
+  list-style: none; margin: 0; padding: 0;
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-auto-rows: auto; gap: 12px;
+}
 .pg-bar-row {
-  background: #FFFFFF; border: 1px solid #E0ECE2; border-radius: 14px; padding: 16px 18px;
+  display: grid; grid-row: span 5; grid-template-rows: subgrid; row-gap: 0; min-width: 0;
+  background: #FFFFFF; border: 1px solid #E0ECE2; border-radius: 14px; padding: 16px 16px 14px;
 }
 .pg-bar-row.is-current { background: #F2F3F0; border-color: transparent; }
-.pg-bar-row.is-best { background: #F1FAF3; border-color: #9BD6A8; }
+.pg-bar-row.is-best { background: #F1FAF3; border-color: #9BD6A8; position: relative; }
 
-.pg-bar-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.pg-bar-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; align-self: start; }
 .pg-bar-plan { font-size: 15px; font-weight: 700; color: var(--pg-ink); }
 .pg-bar-row.is-current .pg-bar-plan { color: var(--pg-muted); }
 .pg-chip {
   font-size: 13px; font-weight: 400; color: var(--pg-faint); white-space: nowrap;
 }
-/* Distintivo del plan de más horas: chico, verde de marca, arriba a la derecha
-   de la cabecera de la fila. Secundario a propósito: la etiqueta amarilla es la
-   que tiene que llamar la atención. */
+/* Distintivo del plan de más horas: chico, verde de marca, montado sobre el
+   borde superior de la tarjeta, a la derecha. Así no ocupa sitio en la línea
+   del plan (en una columna de 200 px no cabían los dos) y en 360 px nunca se
+   monta sobre "4 h a la semana". Secundario a propósito: la etiqueta amarilla
+   es la que tiene que llamar la atención. */
 .pg-badge-best {
-  margin-left: auto; font-size: 11.5px; font-weight: 700; letter-spacing: 0.02em; line-height: 1;
+  position: absolute; top: -10px; right: 12px;
+  font-size: 11px; font-weight: 700; letter-spacing: 0.02em; line-height: 1;
   background: var(--pg-green); color: #fff; padding: 5px 9px; border-radius: 999px; white-space: nowrap;
 }
-/* El ahorro: lo más visible de la fila. Es lo que se quiere que mire el alumno. */
+/* El hueco del ahorro existe en las tres tarjetas (vacío en la del plan actual):
+   es lo que las mantiene cuadradas entre sí. */
+.pg-save-slot { margin-top: 10px; min-height: 32px; display: flex; align-items: flex-start; }
+/* El ahorro: lo más visible de la tarjeta. Es lo que se quiere que mire el alumno. */
 .pg-save {
-  display: inline-block; margin-top: 10px;
+  display: inline-block;
   font-size: 15px; font-weight: 700; letter-spacing: -0.01em; white-space: nowrap;
   background: var(--pg-yellow); color: var(--pg-ink);
   padding: 6px 13px; border-radius: 999px;
 }
 
-/* Barra + meses en la misma linea, con los meses SIEMPRE en el mismo sitio: es
-   lo que hace que las tres barras arranquen y acaben igual. Barra fina con las
-   puntas redondeadas. */
-.pg-bar-line { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
-.pg-track { flex: 1; height: 6px; border-radius: 999px; background: #E9EBE6; overflow: hidden; min-width: 0; }
+/* Los meses, en grande, encima de la barra; la barra ocupa el ancho de la
+   tarjeta, fina y con las puntas redondeadas. */
+.pg-bar-months {
+  display: block; margin-top: 12px;
+  font-size: 26px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.1; color: var(--pg-ink);
+  white-space: nowrap;
+}
+.pg-bar-row.is-current .pg-bar-months { color: var(--pg-muted); }
+.pg-track { height: 6px; margin-top: 10px; border-radius: 999px; background: #E9EBE6; overflow: hidden; min-width: 0; align-self: center; }
 .pg-fill { height: 100%; border-radius: 999px; background: var(--pg-green); }
 /* El plan actual siempre esta lleno del todo, y en gris: es la referencia. */
 .pg-bar-row.is-current .pg-fill { background: #C4C6BF; }
-.pg-bar-months {
-  font-size: 15px; font-weight: 700; letter-spacing: -0.01em; color: var(--pg-ink);
-  white-space: nowrap; min-width: 74px; text-align: right;
-}
-.pg-bar-row.is-current .pg-bar-months { color: var(--pg-muted); }
-.pg-bar-date { margin: 8px 0 0; font-size: 13px; line-height: 1.4; color: var(--pg-faint); }
+.pg-bar-date { margin: 10px 0 0; font-size: 13px; line-height: 1.4; color: var(--pg-faint); align-self: end; }
 
 /* Boton: pildora verde centrada, sin hover llamativo. Es lo unico que va debajo
    de las filas: la nota que repetia el ahorro y el descargo se quitaron. */
@@ -556,20 +569,30 @@ const PROGRESO_CSS = `
   .pg-stat-num { font-size: 23px; }
   .pg-split { grid-template-columns: 1fr; gap: 14px; }
   .pg-goal-text { font-size: 16px; }
-  /* A 360 px el hueco de los meses se estrecha, pero NO desaparece: sigue siendo
-     fijo para las tres filas, que es lo que mantiene las barras alineadas. Con
-     nowrap el número nunca se parte ni se monta sobre la barra. */
-  .pg-bar-row { padding: 14px 14px; border-radius: 12px; }
-  .pg-bar-months { min-width: 66px; }
-  .pg-bar-line { gap: 10px; }
-  .pg-save { font-size: 14px; padding: 5px 11px; }
-  .pg-badge-best { font-size: 11px; padding: 4px 8px; }
+  /* Tres columnas no entran: las tarjetas se apilan en versión compacta. Los
+     meses suben a la línea del plan (a la derecha), la etiqueta amarilla va
+     debajo solo donde existe (el hueco vacío no ocupa altura), la barra ocupa
+     todo el ancho y la fecha cierra. Con nowrap el número nunca se parte. */
+  /* 12 px de hueco entre filas: el distintivo asoma 10 px por encima de su tarjeta. */
+  .pg-bars { display: flex; flex-direction: column; gap: 12px; }
+  .pg-bar-row {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto;
+    grid-template-areas: "head months" "save save" "track track" "date date";
+    align-items: center; column-gap: 10px; padding: 11px 12px 10px; border-radius: 12px;
+  }
+  .pg-bar-head { grid-area: head; gap: 6px 8px; }
+  .pg-bar-months { grid-area: months; margin: 0; font-size: 17px; letter-spacing: -0.01em; }
+  .pg-save-slot { grid-area: save; margin: 0; min-height: 0; }
+  .pg-save-slot:empty { display: none; }
+  .pg-save { margin-top: 7px; font-size: 14px; padding: 4px 11px; }
+  .pg-track { grid-area: track; margin-top: 8px; }
+  .pg-bar-date { grid-area: date; margin-top: 6px; font-size: 12.5px; }
+  .pg-badge-best { padding: 4px 8px; }
   /* Ancho completo solo en móvil: ahí es más cómodo de tocar. */
   .pg-cta { width: 100%; }
   .pg-timeline { padding-left: 22px; }
   .pg-tl-node { left: -22px; top: 19px; }
   .pg-tl-card { padding: 16px 16px; }
-  .pg-header-tag { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {

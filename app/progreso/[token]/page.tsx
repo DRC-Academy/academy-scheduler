@@ -103,7 +103,6 @@ export default function ProgresoPage() {
         <div className="pg-header-in">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/drc-logo.png" alt="DRC Academy" className="pg-logo" />
-          <span className="pg-header-tag">Informe de progreso</span>
         </div>
       </header>
 
