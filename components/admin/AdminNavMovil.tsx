@@ -35,7 +35,7 @@ const OTRAS_PANTALLAS = [
 ];
 
 export type AdminTabId =
-  | 'teachers' | 'emails' | 'scoring' | 'tracking' | 'classlog' | 'leveltests'
+  | 'teachers' | 'emails' | 'scoring' | 'bonos' | 'tracking' | 'classlog' | 'leveltests'
   | 'validacion' | 'ai' | 'aiusage' | 'bajas' | 'notifications';
 
 /**
@@ -72,6 +72,7 @@ const GRUPOS: Array<{ nombre: string; secciones: Seccion[] }> = [
   { nombre: 'Profesores', secciones: [
     { id: 'teachers', label: 'Profesores' },
     { id: 'scoring', label: 'Scoring' },
+    { id: 'bonos', label: 'Bonos' },
     { id: 'aiusage', label: 'Uso de IA' },
   ] },
   { nombre: 'Clases', secciones: [
@@ -125,7 +126,7 @@ export function AdminNavMovil({ activeTab, contadores, onSelect, onVolver, child
     ai: <AlertTriangle size={22} strokeWidth={1.75} aria-hidden />,
     teachers: <Users size={22} strokeWidth={1.75} aria-hidden />,
     emails: <Mail size={22} strokeWidth={1.75} aria-hidden />,
-    scoring: null, tracking: null, classlog: null, leveltests: null, aiusage: null, bajas: null, notifications: null,
+    scoring: null, bonos: null, tracking: null, classlog: null, leveltests: null, aiusage: null, bajas: null, notifications: null,
   };
 
   return (

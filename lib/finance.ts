@@ -34,7 +34,8 @@
 //     · Falta/cancelación más allá de las 2 clases perdidas cobrables del mes →
 //       'excede_limite_tipo'.
 
-import { Assignment, ClassJoinLog, ClassRecord, FinanceRate, ScoringEvent, FinancePayment, Student, ClassRecordType, FinanceManualApproval } from '@/types';
+import { Assignment, ClassJoinLog, ClassRecord, FinanceRate, ScoringEvent, FinancePayment, Student, ClassRecordType, FinanceManualApproval, TeacherBonus } from '@/types';
+import { bonusesForMonth, sumBonusEuros } from '@/lib/bonuses';
 import { classifyPlan, classifyFor, planBadgeStyle, type PlanClassification } from '@/lib/productUtils';
 import { contiguousRunLength, hourNum, hourText, nkName, runStartHour, sessionRangeLabel } from '@/lib/sessions';
 // Qué estado de suscripción da acceso (y cómo se llama) es UNA sola decisión,
@@ -64,6 +65,14 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // el descuento que se le aplicaba al PROFESOR por este mismo registro. Estaba al
 // revés (el que faltó fue el alumno) y ya no se emite; ver dbApplyFaltaSideEffects.
 // Este tipo de clase SUMA dinero, nunca resta.
+
+// ── Bonos que ya NO se pagan por scoring_events ──────────────────────────────
+//
+// Desde septiembre de 2026 el bono de retención (6 meses) y los upsells son filas
+// de `teacher_bonuses` (lib/bonuses.ts) y entran al total por `bonusFromBonuses`.
+// Estos dos tipos siguen existiendo en scoring_events (dan puntos), pero sus
+// euros se ignoran acá: es la garantía de que un bono no se cuente dos veces.
+export const TIPOS_MIGRADOS_A_BONOS: ReadonlySet<string> = new Set(['bonus_retencion', 'upsell']);
 
 /**
  * Máximo de CLASES PERDIDAS del alumno cobrables por alumno y MES.
@@ -312,7 +321,16 @@ export interface TeacherFinanceResult {
   montoPagable: number;
   montoARevisar: number;
   montoRetenido: number;
+  /**
+   * Euros POSITIVOS de scoring_events del mes. Desde sep/2026 los bonos de
+   * retención y los upsells NO pasan por acá (ver TIPOS_MIGRADOS_A_BONOS), así
+   * que en la práctica es 0 salvo que aparezca un tipo positivo nuevo.
+   */
   bonusFromScoring: number;
+  /** Bonos de teacher_bonuses (aprobados/pagados) cuyo mes contable es este. */
+  bonusFromBonuses: number;
+  /** Las filas que componen `bonusFromBonuses`, para el desglose y para marcarlas pagadas. */
+  bonusRows: TeacherBonus[];
   penaltiesFromScoring: number;   // suma NEGATIVA de penalizaciones del mes (Bloque 4)
   totalAPagar: number;
   paymentStatus: 'pending' | 'paid';
@@ -653,6 +671,19 @@ export interface CalcInput {
   /** Pago del mes; `null` si no existe. Si está 'paid', el mes queda congelado. */
   payment: FinancePayment | null;
   /**
+   * Pago del MES ANTERIOR; `null` si no existe. Decide si un bono aprobado
+   * después de cerrar ese mes pasa a este (ver lib/bonuses.bonusesForMonth).
+   * Obligatorio por el mismo motivo que `classAnalyses`: si se omitiera, el
+   * bono desaparecería del total sin ningún aviso.
+   */
+  previousPayment: FinancePayment | null;
+  /**
+   * Bonos del profesor (tabla teacher_bonuses). Obligatorio: sin ellos el total
+   * del mes no incluye los bonos aprobados. Pasá `[]` solo donde de verdad no
+   * hay bonos que considerar (pantallas que solo miran las filas de clases).
+   */
+  teacherBonuses: TeacherBonus[];
+  /**
    * Ocupación del CALENDARIO del profesor (`gridOccupancyOfTeacher`). Es lo que
    * decide si dos horas seguidas son UNA clase de 2h: el calendario es la prueba
    * real del horario y la ficha puede estar desactualizada. Obligatorio — sin él
@@ -666,6 +697,7 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
   const {
     teacherId, teacherName, monthYear, assignments, joinLogs, classRecords,
     classAnalyses, rates, scoringEvents, students, manualApprovals, payment, gridOccupancy,
+    previousPayment, teacherBonuses,
   } = input;
 
   const myAssignments = assignments.filter(a => a.teacherId === teacherId);
@@ -1119,16 +1151,23 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     !e.reverted &&
     e.eventType !== 'penalizacion_revertida');
 
+  // Los euros positivos de scoring EXCLUYEN los tipos que ya se pagan por
+  // teacher_bonuses: así un bono viejo cargado por Scoring aporta puntos pero
+  // nunca euros, y no puede contarse dos veces. (Al migrar, sep/2026, no había
+  // ni un solo evento de esos tipos en la base: no se pierde nada.)
   const bonusFromScoring = scoringThisMonth
-    .filter(e => (e.euros ?? 0) > 0)
+    .filter(e => (e.euros ?? 0) > 0 && !TIPOS_MIGRADOS_A_BONOS.has(e.eventType))
     .reduce((s, e) => s + (e.euros ?? 0), 0);
+  // Bonos de la tabla nueva cuyo mes contable es este (aprobados o pagados).
+  const bonusRows = bonusesForMonth(teacherBonuses, teacherId, monthYear, payment, previousPayment);
+  const bonusFromBonuses = sumBonusEuros(bonusRows);
   // Suma NEGATIVA (penalizaciones: falta sin aviso, etc.). FIX del bug histórico:
   // antes solo se sumaban los euros > 0, así que las penalizaciones no restaban.
   const penaltiesFromScoring = scoringThisMonth
     .filter(e => (e.euros ?? 0) < 0)
     .reduce((s, e) => s + (e.euros ?? 0), 0);
 
-  let totalAPagar = montoPagable + bonusFromScoring + penaltiesFromScoring;
+  let totalAPagar = montoPagable + bonusFromScoring + bonusFromBonuses + penaltiesFromScoring;
 
   let paymentStatus: 'pending' | 'paid' = 'pending';
   let paidAt: string | undefined;
@@ -1151,7 +1190,7 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     hasInactiveSubPayable,
     payableSubStatuses,
     montoPagable, montoARevisar, montoRetenido,
-    bonusFromScoring, penaltiesFromScoring, totalAPagar,
+    bonusFromScoring, bonusFromBonuses, bonusRows, penaltiesFromScoring, totalAPagar,
     paymentStatus, paidAt,
     studentQuota: quota,
   };

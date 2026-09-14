@@ -79,7 +79,7 @@ export const HELP_ITEMS: HelpItem[] = [
   {
     id: 'q11', category: 'clases',
     question: '¿Cuándo y cómo solicito el bono de retención?',
-    answer: 'Cuando un alumno lleva 6 meses contigo, recibirás una notificación en la app y por email avisándote que tienes derecho al bono de €30. Para solicitarlo, escribe a pagos@drcacademy.com indicando el nombre del alumno y la fecha de inicio de su suscripción.',
+    answer: 'Cuando un alumno lleva 6 meses contigo (con vos como profesor, no en la academia), recibirás una notificación en la app y por email. Para reclamarlo, entrá en Mi Scoring y pulsá "Reclamar bono" junto al nombre del alumno. El equipo lo aprueba y los €30 se suman a tu liquidación del mes en que se aprueba. Si el alumno cambia de profesor, el contador de 6 meses arranca de cero para el profesor nuevo.',
   },
   {
     id: 'q12', category: 'clases',

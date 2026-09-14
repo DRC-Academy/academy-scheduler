@@ -195,6 +195,9 @@ async function findPending(targetDate: string, monthYear: string, nowMs: number)
       assignments, joinLogs, classRecords, classAnalyses, rates,
       scoringEvents, students, manualApprovals,
       payment: payments.find(p => p.teacherId === t.id && p.monthYear === monthYear) ?? null,
+      // Este cron solo mira las FILAS (qué clase está sin transcript); los bonos
+      // y el pago del mes anterior solo mueven el total, que acá no se usa.
+      previousPayment: null, teacherBonuses: [],
       gridOccupancy: gridOccupancyOfTeacher(t),
     });
 

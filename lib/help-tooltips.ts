@@ -17,7 +17,7 @@ export const helpTexts = {
     totalCobrar:       'Lo que cobrás este mes: SOLO las clases pagables (ingreso + transcript), más bonos y menos penalizaciones. Lo pendiente de transcript no está incluido.',
     pagables:          'Clases con ingreso registrado y transcript subido. Son las que se pagan.',
     aRevisar:          'Clases que diste y entraron por tu ingreso, pero que todavía no se pagan porque falta el transcript. Al subirlo pasan solas a pagables.',
-    bonosScoring:      'Importe de bonos por tu puntaje de desempeño (scoring) que se suma a la liquidación del mes.',
+    bonosScoring:      'Bonos de retención (6 meses con el alumno) y upsells aprobados por el equipo, que se suman a la liquidación del mes en que se aprueban.',
     tipoClase:         'Tipo de registro: clase normal, recuperación, falta sin aviso o cancelación sobre la hora. Solo normal y recuperación cuentan para el seguimiento de clases.',
     pegarTranscript:   'Abre “Añadir clase” con el alumno y la fecha ya cargados para que solo pegues el transcript y verifiques esa clase.',
   },
@@ -71,7 +71,7 @@ export const helpTexts = {
 
   // ── Scoring / bonos ──────────────────────────────────────────────────────────
   scoring: {
-    bono6meses:  'Bono de retención que se habilita cuando el alumno cumple 6 meses de clases con vos.',
+    bono6meses:  'Bono de retención que se habilita cuando el alumno cumple 6 meses de clases con vos (si cambia de profesor, el contador arranca de cero). Se reclama desde Mi Scoring.',
     emailTardio: 'Penalización de −5 puntos si el email de presentación se envía pasadas las 24 h de la asignación.',
   },
 } as const;

@@ -24,7 +24,9 @@ import { StudentAutofillCard } from '@/components/StudentAutofillCard';
 import { useStudentAutofill } from '@/lib/useStudentAutofill';
 import { usePresentationSent, presentationBtnStyle, PresentationEmailBadge, PendingTasksCard, useNivelesSinValidar } from '@/components/teacherPanelUi';
 import { transcriptsPendientes } from '@/lib/dashboardMetrics';
-import { RETENTION_BONUS_DAYS, retentionDaysActive, retentionStartDate, retentionBonusDate, hasRetentionBonus } from '@/lib/retention';
+import { BONUS_CLAIM_ENABLED, RETENTION_BONUS_DAYS, retentionDaysActive, retentionStartIso, retentionBonusFor } from '@/lib/retention';
+import { buildBonusRows, bonusesForMonth, previousMonthYear, sumBonusEuros, type BonusRow } from '@/lib/bonuses';
+import { BonusClaimCard, estadoProfesor, fechaCorta } from '@/components/BonusClaimCard';
 import { Grid, Teacher, Assignment, ScoringEvent, Student, AppNotification, ClassRecord } from '@/types';
 import FormStatusBadge from '@/components/FormStatusBadge';
 import { maybeSendBonusEmail } from '@/lib/milestoneEmails';
@@ -51,15 +53,9 @@ function markBannerSeen(teacherId: string, studentName: string, milestone: numbe
   catch {}
 }
 
-// ── localStorage helpers for 6-month bonus banner ────────────────────────────
-function hasSeenBonusBanner(teacherId: string, studentName: string, assignmentId: string): boolean {
-  try { return localStorage.getItem(`banner_6meses_seen_${teacherId}_${studentName}_${assignmentId}`) === '1'; }
-  catch { return false; }
-}
-function markBonusBannerSeen(teacherId: string, studentName: string, assignmentId: string): void {
-  try { localStorage.setItem(`banner_6meses_seen_${teacherId}_${studentName}_${assignmentId}`, '1'); }
-  catch {}
-}
+// El banner del bono de 6 meses ya NO guarda un "visto" en localStorage: su
+// estado lo da la tabla teacher_bonuses (desaparece al reclamar). Ver
+// bonusBanners más abajo y lib/bonuses.ts.
 
 // ── Milestone date estimator ──────────────────────────────────────────────────
 // ── AssignConfirmData ─────────────────────────────────────────────────────────
@@ -462,15 +458,42 @@ const MOTIVATIONAL: Record<number, string> = {
 };
 
 // ─── Teacher Scoring Tab ──────────────────────────────────────────────────────
-function TeacherScoringTab({ teacher, myAssignments, myEvents }: {
+function TeacherScoringTab({ teacher, myAssignments, myEvents, bonusRows }: {
   teacher: Teacher;
   myAssignments: Assignment[];
   myEvents: ScoringEvent[];
+  /** Filas de bonos del profesor (lib/bonuses.buildBonusRows), ya calculadas por el panel. */
+  bonusRows: BonusRow[];
 }) {
+  const { teacherBonuses, financePayments, claimRetentionBonus } = useTeachers();
   const today      = new Date();
   const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
 
   const myMonthEvents = myEvents.filter(e => new Date(e.createdAt) >= monthStart);
+
+  // Bonos del mes en curso: los MISMOS que suma finanzas (mes contable del bono,
+  // ver lib/bonuses.bonusesForMonth), así el número de acá y el de Mis clases no
+  // pueden separarse.
+  const monthYear = getSpainParts(today).dateStr.slice(0, 7);
+  const pagoMes = financePayments.find(p => p.teacherId === teacher.id && p.monthYear === monthYear) ?? null;
+  const pagoAnterior = financePayments.find(p => p.teacherId === teacher.id && p.monthYear === previousMonthYear(monthYear)) ?? null;
+  const bonosMes = bonusesForMonth(teacherBonuses, teacher.id, monthYear, pagoMes, pagoAnterior);
+  const retencionMes = bonosMes.filter(b => b.bonusType === 'retencion_6m');
+  const upsellMes    = bonosMes.filter(b => b.bonusType === 'upsell');
+
+  // Lo que espera al profesor (solo con el reclamo habilitado) y su historial.
+  const disponibles = BONUS_CLAIM_ENABLED ? bonusRows.filter(r => r.estado === 'disponible' && r.assignment) : [];
+  const proximos    = BONUS_CLAIM_ENABLED ? bonusRows.filter(r => r.estado === 'proximo') : [];
+  const historial   = bonusRows.filter(r => r.bonus !== null);
+
+  // Progreso de retención por alumno: días CON ESTE profesor (teacher_since,
+  // lib/retention.ts) y el bono del par si ya existe.
+  const studentProgress = myAssignments.map(a => {
+    const daysActive = retentionDaysActive(a, today);
+    const pct        = Math.min(100, Math.max(0, (daysActive / RETENTION_BONUS_DAYS) * 100));
+    const bonus      = retentionBonusFor(teacherBonuses, a) ?? null;
+    return { a, daysActive, pct, bonus, startIso: retentionStartIso(a) };
+  }).sort((x, y) => y.daysActive - x.daysActive);
 
   // Score calculation
   const manualPoints   = myEvents.reduce((s, e) => s + e.points, 0);
@@ -499,32 +522,25 @@ function TeacherScoringTab({ teacher, myAssignments, myEvents }: {
   const levelInfo     = LEVEL_INFO[(currentLevel as 1|2|3)];
   const nextLevelInfo = LEVEL_INFO[(nextLevel as 1|2|3)];
 
-  // Bonuses this month
-  const totalMonthlyEuros  = myMonthEvents.reduce((s, e) => s + e.euros, 0);
-  const upsellEuros        = myMonthEvents.filter(e => e.eventType === 'upsell').reduce((s, e) => s + e.euros, 0);
-  const retentionEuros     = myMonthEvents.filter(e => e.eventType === 'bonus_retencion').reduce((s, e) => s + e.euros, 0);
+  // Bonuses this month (teacher_bonuses; los euros de scoring por estos conceptos
+  // ya no se pagan, ver lib/finance.TIPOS_MIGRADOS_A_BONOS).
+  const totalMonthlyEuros  = sumBonusEuros(bonosMes);
+  const upsellEuros        = sumBonusEuros(upsellMes);
+  const retentionEuros     = sumBonusEuros(retencionMes);
   const trustpilotCount    = myMonthEvents.filter(e => e.eventType === 'review_trustpilot').length;
-  const upsellCount        = myMonthEvents.filter(e => e.eventType === 'upsell').reduce((s, e) => s + (e.quantity ?? 1), 0);
-  const retentionCount     = myMonthEvents.filter(e => e.eventType === 'bonus_retencion').length;
+  const upsellCount        = upsellMes.length;
+  const retentionCount     = retencionMes.length;
 
   // Level requirements
   const faltasThisMonth  = myMonthEvents.filter(e => e.eventType === 'falta_injustificada' || e.eventType === 'falta_justificada').length;
   const quejasActive     = myMonthEvents.filter(e => e.eventType === 'queja').length;
-  const upsellsTotal     = myEvents.filter(e => e.eventType === 'upsell').reduce((s, e) => s + (e.quantity ?? 1), 0);
+  // Upsells de todo el historial: los cargados en Bonos (aprobados, pagados o
+  // pagados por fuera) más los que quedaran en scoring de antes de la migración.
+  const upsellsTotal     = myEvents.filter(e => e.eventType === 'upsell').reduce((s, e) => s + (e.quantity ?? 1), 0)
+    + teacherBonuses.filter(b => b.teacherId === teacher.id && b.bonusType === 'upsell' && b.status !== 'rechazado').length;
   const monthsOnPlatform = teacher.createdAt
     ? Math.floor((Date.now() - new Date(teacher.createdAt).getTime()) / (30 * 24 * 60 * 60 * 1000))
     : 0;
-
-  // Retention progress per student
-  const studentProgress = myAssignments.map(a => {
-    const daysActive = retentionDaysActive(a, today);
-    const pct        = Math.min(100, (daysActive / RETENTION_BONUS_DAYS) * 100);
-    const hasBonus   = hasRetentionBonus(myEvents, a.studentName);
-    return { a, daysActive, pct, hasBonus, start: retentionStartDate(a) };
-  }).sort((a, b) => b.daysActive - a.daysActive);
-
-  const availableBonuses = studentProgress.filter(s => s.daysActive >= RETENTION_BONUS_DAYS && !s.hasBonus);
-  const nextBonus        = studentProgress.filter(s => s.daysActive < RETENTION_BONUS_DAYS).sort((a, b) => b.daysActive - a.daysActive)[0];
 
   const currentReqs = currentLevel === 1
     ? [
@@ -623,15 +639,55 @@ function TeacherScoringTab({ teacher, myAssignments, myEvents }: {
           <div style={{ fontSize: 13, color: '#6b7280' }}>Sin bonos este mes todavía.</div>
         )}
 
-        {availableBonuses.length > 0 && (
-          <div style={{ marginTop: 12, background: 'rgba(30,158,58,0.1)', border: '1px solid rgba(30,158,58,0.3)', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: '#1E9E3A', fontWeight: 600 }}>
-            🎉 Bono disponible: {availableBonuses.map(b => b.a.studentName).join(', ')}
+        {/* Bonos disponibles: una tarjeta por alumno con el botón de reclamo. Solo
+            con BONUS_CLAIM_ENABLED (lib/retention.ts); apagado, el profesor ve
+            únicamente su historial de abajo. */}
+        {disponibles.length > 0 && (
+          <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {disponibles.map(r => (
+              <BonusClaimCard
+                key={r.key}
+                assignment={r.assignment as Assignment}
+                dueDate={r.dueDate}
+                euros={r.euros}
+                estado={r.estado}
+                onClaim={claimRetentionBonus}
+              />
+            ))}
           </div>
         )}
 
-        {nextBonus && availableBonuses.length === 0 && (
-          <div style={{ marginTop: 12, fontSize: 13, color: '#6b7280' }}>
-            Próximo bono: te faltan <b style={{ color: '#374151' }}>{180 - nextBonus.daysActive} días</b> para el bono de <b style={{ color: '#374151' }}>{nextBonus.a.studentName}</b>
+        {proximos.length > 0 && (
+          <div style={{ marginTop: 12, fontSize: 13, color: '#6b7280', display: 'flex', flexDirection: 'column', gap: 3 }}>
+            {proximos.map(r => (
+              <div key={r.key}>
+                Próximo bono: <b style={{ color: '#374151' }}>{r.studentName}</b>, te faltan <b style={{ color: '#374151' }}>{r.daysLeft} día{r.daysLeft === 1 ? '' : 's'}</b> (cumple el {fechaCorta(r.dueDate)})
+              </div>
+            ))}
+          </div>
+        )}
+
+        {historial.length > 0 && (
+          <div style={{ marginTop: 16 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 6 }}>Mis bonos</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {historial.map(r => {
+                const b = r.bonus;
+                if (!b) return null;
+                const fecha = b.status === 'pagado' || b.status === 'pagado_externo'
+                  ? (b.paidMonth ? `mes ${b.paidMonth}` : '')
+                  : b.status === 'aprobado' || b.status === 'rechazado'
+                    ? fechaCorta(b.approvedAt)
+                    : fechaCorta(b.claimedAt ?? b.createdAt);
+                const color = b.status === 'rechazado' ? '#B91C1C' : b.status === 'reclamado' ? '#B45309' : '#1E9E3A';
+                return (
+                  <div key={r.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, fontSize: 13, color: '#374151', flexWrap: 'wrap' }}>
+                    <span><b>{r.studentName}</b> · {r.bonusType === 'upsell' ? 'Upsell' : 'Retención 6 meses'} · €{r.euros}</span>
+                    <span style={{ fontSize: 12, fontWeight: 600, color }}>{estadoProfesor(b.status, b.note)}{fecha ? ` · ${fecha}` : ''}</span>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
       </div>
@@ -699,16 +755,18 @@ function TeacherScoringTab({ teacher, myAssignments, myEvents }: {
         <div style={cardStyle}>
           <div style={{ fontWeight: 700, fontSize: 15, color: '#111827', marginBottom: 14 }}>👥 Progreso de retención por alumno</div>
           <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>Bono disponible al cumplir 180 días (6 meses) de continuidad.</div>
-          {studentProgress.map(({ a, daysActive, pct, hasBonus }) => (
+          {studentProgress.map(({ a, daysActive, pct, bonus, startIso }) => (
             <div key={a.id} style={{ marginBottom: 14 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <span style={{ fontSize: 13, fontWeight: 600, color: '#111827' }}>{a.studentName}</span>
-                  {daysActive >= 180 && !hasBonus && (
+                  {BONUS_CLAIM_ENABLED && daysActive >= RETENTION_BONUS_DAYS && !bonus && (
                     <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 12, background: 'rgba(30,158,58,0.15)', border: '1px solid rgba(30,158,58,0.3)', color: '#1E9E3A', fontWeight: 700 }}>🎉 Bono disponible</span>
                   )}
-                  {hasBonus && (
-                    <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 12, background: 'rgba(107,114,128,0.1)', color: '#6b7280' }}>✓ Bono cobrado</span>
+                  {bonus && (
+                    <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 12, background: 'rgba(107,114,128,0.1)', color: '#6b7280' }}>
+                      {bonus.status === 'reclamado' ? '⏳ Bono reclamado' : bonus.status === 'aprobado' ? '✓ Bono aprobado' : '✓ Bono cobrado'}
+                    </span>
                   )}
                 </div>
                 <span style={{ fontSize: 12, color: daysActive >= 180 ? '#1E9E3A' : '#6b7280', fontWeight: 600 }}>
@@ -719,8 +777,8 @@ function TeacherScoringTab({ teacher, myAssignments, myEvents }: {
                 <div style={{ width: `${pct}%`, height: '100%', borderRadius: 4, background: daysActive >= 180 ? '#1E9E3A' : daysActive >= 120 ? '#FFC400' : '#3b82f6', transition: 'width 0.4s' }} />
               </div>
               <div style={{ fontSize: 10, color: '#9ca3af', marginTop: 3 }}>
-                Inicio: {new Date(a.startDate ?? a.createdAt).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' })}
-                {daysActive < 180 && ` · faltan ${180 - daysActive} días`}
+                Con vos desde: {fechaCorta(startIso)}
+                {daysActive < RETENTION_BONUS_DAYS && ` · faltan ${RETENTION_BONUS_DAYS - daysActive} días`}
               </div>
             </div>
           ))}
@@ -756,9 +814,11 @@ function resolveAssignmentForNotif(body: string, myAssignments: Assignment[]): A
 }
 
 // ─── Notifications Tab (teacher) ─────────────────────────────────────────────
-function TeacherNotificationsTab({ teacher, myAssignments, students, classRecords, notifications, loadNotifications, markNotificationRead, updateMeetLink, formIndex, refreshFormIndex }: {
+function TeacherNotificationsTab({ teacher, myAssignments, bonusRows, students, classRecords, notifications, loadNotifications, markNotificationRead, updateMeetLink, formIndex, refreshFormIndex }: {
   teacher: Teacher;
   myAssignments: Assignment[];
+  /** Filas de bonos del profesor (lib/bonuses.buildBonusRows). */
+  bonusRows: BonusRow[];
   students: Student[];
   classRecords: ClassRecord[];
   notifications: AppNotification[];
@@ -768,7 +828,6 @@ function TeacherNotificationsTab({ teacher, myAssignments, students, classRecord
   refreshFormIndex: () => void;
   updateMeetLink: (assignmentId: string, link: string) => Promise<void>;
 }) {
-  const today = new Date();
   const [presentationModal, setPresentationModal] = useState<Assignment | null>(null);
   const { isSent, markSent } = usePresentationSent(teacher.id);
 
@@ -793,19 +852,24 @@ function TeacherNotificationsTab({ teacher, myAssignments, students, classRecord
     .filter(({ classNum }) => classNum < 15 && (15 - classNum) <= 3)
     .map(({ a, classNum }) => ({ name: a.studentName, classNum, faltanClases: 15 - classNum }));
 
-  // Section B: near 6 months (≤15 days or already there).
-  // Fuente única (lib/retention.ts): ya NO se descartan las asignaciones sin
-  // startDate (antes `.filter(a => a.startDate)` las dejaba fuera del bono).
-  const near6m = myAssignments
-    .map(a => {
-      const daysActive = retentionDaysActive(a, today);
-      const daysTo6m   = Math.max(0, RETENTION_BONUS_DAYS - daysActive);
-      return { a, daysActive, daysTo6m, bonusDate: retentionBonusDate(a), bonusAvailable: daysActive >= RETENTION_BONUS_DAYS };
-    })
-    .filter(({ daysTo6m, bonusAvailable }) => bonusAvailable || daysTo6m <= 15);
+  // Section B: bono de 6 meses, disponible o próximo (≤30 días). Misma regla
+  // que Mi Scoring y que el admin (lib/bonuses): un par que ya tiene bono no
+  // aparece. Con el reclamo apagado (BONUS_CLAIM_ENABLED) no se muestra nada.
+  const near6m = BONUS_CLAIM_ENABLED
+    ? bonusRows
+        .filter(r => (r.estado === 'disponible' || r.estado === 'proximo') && r.assignment)
+        .map(r => ({
+          a: r.assignment as Assignment,
+          daysActive: RETENTION_BONUS_DAYS - (r.daysLeft ?? 0),
+          daysTo6m: Math.max(0, r.daysLeft ?? 0),
+          bonusDate: r.dueDate,
+          bonusAvailable: r.estado === 'disponible',
+        }))
+    : [];
 
   // Aviso por email de los bonos ya disponibles. maybeSendBonusEmail no reenvía:
   // se anota en assignments.milestone_emails_sent con la etiqueta 'bonus6m'.
+  // Solo con el reclamo habilitado: near6m ya viene vacío si está apagado.
   const bonusReady = near6m.filter(d => d.bonusAvailable);
   useEffect(() => {
     if (bonusReady.length === 0) return;
@@ -899,15 +963,10 @@ function TeacherNotificationsTab({ teacher, myAssignments, students, classRecord
                       <>Inicio: {new Date(item.a.startDate + 'T00:00:00').toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' })}{' · '}</>
                     )}
                     {item.bonusAvailable
-                      ? <span style={{ fontWeight: 700 }}>¡Cumplió 6 meses! Solicitar bono</span>
-                      : <>Cumple 6 meses el <b>{item.bonusDate.toLocaleDateString('es-ES', { day: 'numeric', month: 'long' })}</b> · Faltan <b>{item.daysTo6m}</b> días</>
+                      ? <span style={{ fontWeight: 700 }}>¡Cumplió 6 meses con vos! Reclamá el bono desde Mi Scoring</span>
+                      : <>Cumple 6 meses el <b>{fechaCorta(item.bonusDate)}</b> · Faltan <b>{item.daysTo6m}</b> días</>
                     }
                   </div>
-                  {item.bonusAvailable && (
-                    <div style={{ marginTop: 6, fontSize: 12, background: 'rgba(255,196,0,0.2)', border: '1px solid #D97706', borderRadius: 7, padding: '5px 10px', color: '#92400E', fontWeight: 600 }}>
-                      🎁 Bono disponible — escribir a <span style={{ fontWeight: 700 }}>pagos@drcacademy.com</span>
-                    </div>
-                  )}
                 </div>
               </div>
             </div>
@@ -1167,7 +1226,7 @@ type TeacherTab = typeof TEACHER_TABS[number];
 
 function TeacherContent() {
   const { user } = useAuth();
-  const { teachers, students, assignments, scoringEvents, notifications, classRecords, getTeacherGrid, updateTeacherGrid, addStudent, addAssignment, updateAssignmentStartDate, updateAssignmentSlots, reloadAll, updateTeacherSpecialties, loadNotifications, markNotificationRead, updateMeetLink, addRecoveryClass, removeAssignment, classJoinLogs, classAnalyses, registerClassRecord } = useTeachers();
+  const { teachers, students, assignments, scoringEvents, notifications, classRecords, getTeacherGrid, updateTeacherGrid, addStudent, addAssignment, updateAssignmentStartDate, updateAssignmentSlots, reloadAll, updateTeacherSpecialties, loadNotifications, markNotificationRead, updateMeetLink, addRecoveryClass, removeAssignment, classJoinLogs, classAnalyses, registerClassRecord, teacherBonuses, claimRetentionBonus } = useTeachers();
   const [activeTab, setActiveTab] = useState<TeacherTab>('calendar');
 
   // El campanario del header navega a /teacher?tab=notifications. Sincronizamos
@@ -1191,7 +1250,6 @@ function TeacherContent() {
   const [gridLoading, setGridLoading]   = useState(true);
   const [saveStatus, setSaveStatus]     = useState<'idle' | 'saving' | 'saved'>('idle');
   const [dismissedInSession, setDismissedInSession] = useState<Set<string>>(new Set());
-  const [dismissedBonusInSession, setDismissedBonusInSession] = useState<Set<string>>(new Set());
   const [pendingOcupado, setPendingOcupado] = useState<{ day: string; hour: string; resolve: (name: string) => void } | null>(null);
   // Aviso "este alumno ya tiene profesor": guarda la asignación a la espera de decisión.
   const [yaAsignado, setYaAsignado] = useState<{ data: AssignConfirmData; matches: ExistingAssignmentMatch[] } | null>(null);
@@ -1581,11 +1639,6 @@ function TeacherContent() {
     setDismissedInSession(prev => new Set([...prev, `${studentName}_${milestone}`]));
   }
 
-  function dismissBonusBanner(teacherId: string, studentName: string, assignmentId: string) {
-    markBonusBannerSeen(teacherId, studentName, assignmentId);
-    setDismissedBonusInSession(prev => new Set([...prev, `${studentName}_${assignmentId}`]));
-  }
-
   // Los niveles sin validar se piden ANTES de la guarda: es un hook, y un hook
   // detrás de un return condicional cambia de orden entre renders.
   const nivelesSinValidar = useNivelesSinValidar(teacher?.id);
@@ -1627,20 +1680,12 @@ function TeacherContent() {
     }
   }
 
-  // check6MonthBonusBanners: fuente única (lib/retention.ts). Ya NO descarta las
-  // asignaciones sin start_date, y mide días de continuidad como el resto.
-  type BonusBannerEntry = { studentName: string; assignmentId: string };
-  const visibleBonusBanners: BonusBannerEntry[] = [];
-  const today6m = new Date();
-  for (const a of myAssignments) {
-    if (
-      retentionDaysActive(a, today6m) >= RETENTION_BONUS_DAYS &&
-      !hasSeenBonusBanner(teacher.id, a.studentName, a.id) &&
-      !dismissedBonusInSession.has(`${a.studentName}_${a.id}`)
-    ) {
-      visibleBonusBanners.push({ studentName: a.studentName, assignmentId: a.id });
-    }
-  }
+  // Bonos del profesor: fuente única (lib/bonuses sobre lib/retention.ts), la
+  // misma lista que ve el admin en su pestaña Bonos. El banner dorado sale de
+  // acá (una fila 'disponible' = un banner) y desaparece al reclamar, porque el
+  // estado lo da la tabla y no un "visto" guardado en el navegador.
+  const bonusRows = buildBonusRows({ assignments: myAssignments, bonuses: teacherBonuses, teachers, teacherId: teacher.id });
+  const bonusBanners = BONUS_CLAIM_ENABLED ? bonusRows.filter(r => r.estado === 'disponible' && r.assignment) : [];
 
   // Grid-only students (ocupado cells without a DB assignment)
   const assignedNames = new Set(myAssignments.map(a => a.studentName));
@@ -1724,26 +1769,18 @@ function TeacherContent() {
           </div>
         ))}
 
-        {/* 6-month bonus banners — dorado, independiente de cantidad de clases */}
-        {visibleBonusBanners.map(banner => (
-          <div key={`bonus_6m_${banner.assignmentId}`} className="milestone-banner" style={{
-            background: '#FFFBEB',
-            border: '2px solid #D97706',
-            borderLeft: '5px solid #D97706',
-            borderRadius: 12, padding: '14px 20px', marginBottom: 14,
-            display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12,
-          }}>
-            <div style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.5, color: '#92400E' }}>
-              {`🎁 ¡${banner.studentName} cumplió 6 meses! Recordá solicitar el bono de retención escribiendo a `}
-              <span style={{ fontWeight: 700, color: '#B45309' }}>pagos@drcacademy.com</span>
-            </div>
-            <button
-              className="milestone-banner-close"
-              onClick={() => dismissBonusBanner(teacher.id, banner.studentName, banner.assignmentId)}
-              style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 20, color: '#92400E', flexShrink: 0, opacity: 0.75, fontFamily: 'inherit', lineHeight: 1 }}
-            >
-              ✕
-            </button>
+        {/* Banner del bono de 6 meses: dorado, con el botón de reclamo. Se va solo
+            al reclamar (la fila pasa a 'reclamado'). Solo con BONUS_CLAIM_ENABLED. */}
+        {bonusBanners.map(r => (
+          <div key={`bonus_6m_${r.key}`} className="milestone-banner" style={{ marginBottom: 14 }}>
+            <BonusClaimCard
+              assignment={r.assignment as Assignment}
+              dueDate={r.dueDate}
+              euros={r.euros}
+              estado={r.estado}
+              onClaim={claimRetentionBonus}
+              compact
+            />
           </div>
         ))}
 
@@ -1931,6 +1968,7 @@ function TeacherContent() {
             teacher={teacher}
             myAssignments={myAssignments}
             myEvents={myEvents}
+            bonusRows={bonusRows}
           />
         )}
 
@@ -1941,6 +1979,7 @@ function TeacherContent() {
             <TeacherNotificationsTab
               teacher={teacher}
               myAssignments={myAssignments}
+              bonusRows={bonusRows}
               students={students}
               classRecords={classRecords}
               notifications={notifications}

@@ -35,6 +35,9 @@ import { AdminNavMovil, SECCIONES_OCULTAS } from '@/components/admin/AdminNavMov
 import { fetchRiskLite, riesgoResumen } from '@/lib/dashboardExtras';
 import { proximosSinContactar } from '@/lib/dashboardMetrics';
 import { madridToday } from '@/lib/subscriptionAccess';
+import { RETENTION_BONUS_DAYS, RETENTION_UPCOMING_DAYS, retentionDaysLeft, retentionBonusFor } from '@/lib/retention';
+import { BONUS_STATE_LABEL } from '@/lib/bonuses';
+import BonusesTab from '@/components/admin/BonusesTab';
 
 // ─── Edit Teacher Modal ───────────────────────────────────────────────────────
 function EditTeacherModal({ teacher, onClose, onSave, onArchive }: {
@@ -1011,7 +1014,7 @@ function EventModal({ teacher, students, createdBy, onClose, onSave }: {
   onClose: () => void;
   onSave: (event: Omit<ScoringEvent, 'id' | 'createdAt'>) => Promise<void>;
 }) {
-  const [eventType, setEventType] = useState<ScoringEventType>('upsell');
+  const [eventType, setEventType] = useState<ScoringEventType>('bonus_puntualidad');
   const [note, setNote] = useState('');
   const [quantity, setQuantity] = useState(1);
   const [studentRef, setStudentRef] = useState('');
@@ -1034,8 +1037,12 @@ function EventModal({ teacher, students, createdBy, onClose, onSave }: {
     fontFamily: "'Radio Canada', sans-serif",
   };
 
+  // Bonos con euros: se cargan en la pestaña Bonos, nunca desde acá (el select
+  // los muestra deshabilitados; esta guarda cubre el caso de que lleguen igual).
+  const migradoABonos = eventType === 'upsell' || eventType === 'bonus_retencion';
+
   async function handleSave() {
-    if (!note.trim()) return;
+    if (!note.trim() || migradoABonos) return;
     setSaving(true);
     await onSave({
       teacherId:   teacher.id,
@@ -1046,7 +1053,8 @@ function EventModal({ teacher, students, createdBy, onClose, onSave }: {
       note:        note.trim(),
       createdBy,
       studentRef:  studentRef || undefined,
-      quantity:    eventType === 'upsell' ? quantity : undefined,
+      // `quantity` solo tenía sentido para el upsell, que ya no se carga desde acá.
+      quantity:    undefined,
     });
     setSaving(false);
     onClose();
@@ -1082,8 +1090,11 @@ function EventModal({ teacher, students, createdBy, onClose, onSave }: {
                 <option value="cambio_por_profesor">⚠️ Profesor abandonó al alumno (−20 pts)</option>
               </optgroup>
               <optgroup label="Logros positivos">
-                <option value="upsell">📈 Upsell (+25 pts + €20/upsell)</option>
-                <option value="bonus_retencion">🏅 Bonus retención 6 meses (+30 pts + €30)</option>
+                {/* Los dos con euros se gestionan en la pestaña Bonos desde sep/2026:
+                    acá quedan a la vista pero deshabilitados, para que nadie los
+                    cargue por scoring (no sumarían euros: ver TIPOS_MIGRADOS_A_BONOS). */}
+                <option value="upsell" disabled>📈 Upsell — ahora se gestiona en Bonos</option>
+                <option value="bonus_retencion" disabled>🏅 Bonus retención 6 meses — ahora se gestiona en Bonos</option>
                 <option value="bonus_puntualidad">⭐ Bonus puntualidad del mes (+20 pts)</option>
                 <option value="review_trustpilot">⭐ Reseña Trustpilot (+15 pts)</option>
                 <option value="bonus_feedback">💬 Bonus feedback mensual (+10 pts)</option>
@@ -1308,7 +1319,7 @@ function ProfeDelMesModal({ scored, isQuarter, onClose, onConfirm }: {
 // ─── Scoring Tab ──────────────────────────────────────────────────────────────
 function ScoringTab() {
   const {
-    teachers, assignments, students, scoringEvents,
+    teachers, assignments, students, scoringEvents, teacherBonuses,
     addScoringEvent, assignTeacherOfMonth, assignTeacherOfQuarter,
     forceMonthlyReset, forceQuarterlyReset, reloadAll,
   } = useTeachers();
@@ -1367,7 +1378,10 @@ function ScoringTab() {
 
     const faltasInjust  = monthEvents.filter(e => e.eventType === 'falta_injustificada').length;
     const faltasJust    = monthEvents.filter(e => e.eventType === 'falta_justificada').length;
-    const upsellsTotal  = te.filter(e => e.eventType === 'upsell').reduce((s, e) => s + (e.quantity ?? 1), 0);
+    // Upsells: los de la pestaña Bonos (aprobados, pagados o pagados por fuera)
+    // más los que quedaran en scoring de antes de la migración (hoy, ninguno).
+    const upsellsTotal  = te.filter(e => e.eventType === 'upsell').reduce((s, e) => s + (e.quantity ?? 1), 0)
+      + teacherBonuses.filter(b => b.teacherId === t.id && b.bonusType === 'upsell' && b.status !== 'rechazado').length;
     const monthsOnPlatform = t.createdAt
       ? Math.floor((Date.now() - new Date(t.createdAt).getTime()) / (30 * 24 * 60 * 60 * 1000))
       : 0;
@@ -1837,7 +1851,7 @@ function TrackingMiniBar({ pct, color }: { pct: number; color: string }) {
 
 // ─── Class Tracking Tab ───────────────────────────────────────────────────────
 function ClassTrackingTab() {
-  const { assignments, teachers, classRecords } = useTeachers();
+  const { assignments, teachers, classRecords, teacherBonuses } = useTeachers();
 
   const [search, setSearch]               = useState('');
   const [teacherFilter, setTeacherFilter] = useState('');
@@ -1854,9 +1868,15 @@ function ClassTrackingTab() {
       : null;
     const seniorityMonths = totalDays !== null ? Math.floor(totalDays / 30) : null;
     const seniorityDays   = totalDays !== null ? totalDays % 30 : null;
-    const daysToBonus     = totalDays !== null ? Math.max(0, 180 - totalDays) : null;
-    const bonusAvailable  = totalDays !== null && totalDays >= 180;
-    const bonusPct        = totalDays !== null ? Math.min(100, (totalDays / 180) * 100) : 0;
+    // Bono de 6 meses: MISMA regla que el profesor y que la pestaña Bonos
+    // (lib/retention.ts sobre teacher_since, y el bono ya cargado del par).
+    // Antes esta pestaña tenía su propia cuenta desde start_date y no miraba si
+    // el bono ya se había otorgado, así que admin y profesor no coincidían.
+    const daysLeftBonus   = retentionDaysLeft(a, today);
+    const bonusVigente    = retentionBonusFor(teacherBonuses, a) ?? null;
+    const daysToBonus     = Math.max(0, daysLeftBonus);
+    const bonusAvailable  = daysLeftBonus <= 0 && !bonusVigente;
+    const bonusPct        = Math.min(100, Math.max(0, ((RETENTION_BONUS_DAYS - daysLeftBonus) / RETENTION_BONUS_DAYS) * 100));
     const toClass15       = Math.max(0, 15 - classNum);
     const class15Reached  = classNum >= 15;
     const class15Pct      = Math.min(100, (classNum / 15) * 100);
@@ -1865,7 +1885,7 @@ function ClassTrackingTab() {
     const class30Pct      = Math.min(100, (classNum / 30) * 100);
     return {
       a, classNum, totalDays, seniorityMonths, seniorityDays,
-      daysToBonus, bonusAvailable, bonusPct,
+      daysToBonus, bonusAvailable, bonusPct, bonusVigente,
       toClass15, class15Reached, class15Pct,
       toClass30, class30Reached, class30Pct,
     };
@@ -1886,7 +1906,7 @@ function ClassTrackingTab() {
     if (teacherFilter && d.a.teacherId !== teacherFilter) return false;
     if (statusFilter === 'near15' && (d.class15Reached || d.toClass15 > 3)) return false;
     if (statusFilter === 'near30' && (!d.class15Reached || d.class30Reached || d.toClass30 > 3)) return false;
-    if (statusFilter === 'near6m' && (d.bonusAvailable || d.daysToBonus === null || d.daysToBonus > 15)) return false;
+    if (statusFilter === 'near6m' && (d.bonusAvailable || d.bonusVigente || d.daysToBonus > RETENTION_UPCOMING_DAYS)) return false;
     if (statusFilter === 'bonus'  && !d.bonusAvailable) return false;
     return true;
   });
@@ -1895,7 +1915,7 @@ function ClassTrackingTab() {
     return Math.min(
       !d.class15Reached && d.toClass15 <= 3 ? d.toClass15 : 9999,
       d.class15Reached && !d.class30Reached && d.toClass30 <= 3 ? d.toClass30 : 9999,
-      !d.bonusAvailable && d.daysToBonus !== null && d.daysToBonus <= 15 ? d.daysToBonus : 9999,
+      !d.bonusAvailable && !d.bonusVigente && d.daysToBonus <= RETENTION_UPCOMING_DAYS ? d.daysToBonus : 9999,
     );
   }
 
@@ -2088,20 +2108,22 @@ function ClassTrackingTab() {
                         }
                       </td>
 
-                      {/* Bono 6 meses */}
+                      {/* Bono 6 meses (con ESTE profesor; ver lib/retention.ts) */}
                       <td style={{ padding: '12px 12px', minWidth: 140 }}>
-                        {d.totalDays === null ? (
-                          <span style={{ color: 'var(--text-muted)', fontSize: 11, fontStyle: 'italic' }}>Sin fecha</span>
+                        {d.bonusVigente ? (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 12, background: 'rgba(30,158,58,0.1)', border: '1px solid rgba(30,158,58,0.35)', color: '#1E9E3A', fontSize: 11, fontWeight: 700 }}>
+                            {BONUS_STATE_LABEL[d.bonusVigente.status]}
+                          </span>
                         ) : d.bonusAvailable ? (
                           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 12, background: 'rgba(255,196,0,0.15)', border: '1px solid #D97706', color: '#92400E', fontSize: 11, fontWeight: 700, boxShadow: '0 0 6px rgba(255,196,0,0.2)' }}>
                             🎁 Disponible
                           </span>
                         ) : (
                           <>
-                            <div style={{ fontSize: 12, color: d.daysToBonus! <= 15 ? '#b8860b' : 'var(--text-secondary)', fontWeight: d.daysToBonus! <= 15 ? 700 : 400, marginBottom: 4 }}>
+                            <div style={{ fontSize: 12, color: d.daysToBonus <= RETENTION_UPCOMING_DAYS ? '#b8860b' : 'var(--text-secondary)', fontWeight: d.daysToBonus <= RETENTION_UPCOMING_DAYS ? 700 : 400, marginBottom: 4 }}>
                               Faltan {d.daysToBonus} días
                             </div>
-                            <TrackingMiniBar pct={d.bonusPct} color={d.daysToBonus! <= 15 ? '#FFC400' : '#6b7280'} />
+                            <TrackingMiniBar pct={d.bonusPct} color={d.daysToBonus <= RETENTION_UPCOMING_DAYS ? '#FFC400' : '#6b7280'} />
                           </>
                         )}
                       </td>
@@ -2397,7 +2419,7 @@ function DuplicatesBanner() {
 }
 
 // ─── Admin Content ────────────────────────────────────────────────────────────
-const ADMIN_TABS = ['teachers', 'emails', 'scoring', 'tracking', 'classlog', 'leveltests', 'validacion', 'ai', 'aiusage', 'bajas', 'notifications'] as const;
+const ADMIN_TABS = ['teachers', 'emails', 'scoring', 'bonos', 'tracking', 'classlog', 'leveltests', 'validacion', 'ai', 'aiusage', 'bajas', 'notifications'] as const;
 type AdminTab = typeof ADMIN_TABS[number];
 
 /**
@@ -2501,6 +2523,7 @@ function AdminContent() {
     { id: 'teachers',       label: 'Profesores' },
     { id: 'emails',         label: 'Emails' },
     { id: 'scoring',        label: 'Scoring' },
+    { id: 'bonos',          label: 'Bonos' },
     { id: 'tracking',       label: 'Seguimiento' },
     { id: 'classlog',       label: 'Registro de clases' },
     { id: 'leveltests',     label: 'Tests de nivel' },
@@ -3042,6 +3065,9 @@ function AdminContent() {
 
         {/* SCORING TAB */}
         {activeTab === 'scoring' && <ScoringTab />}
+
+        {/* BONOS: retención (6 meses) y upsells. Ver lib/bonuses.ts. */}
+        {activeTab === 'bonos' && <BonusesTab />}
 
         {/* TRACKING TAB */}
         {activeTab === 'tracking' && <ClassTrackingTab />}

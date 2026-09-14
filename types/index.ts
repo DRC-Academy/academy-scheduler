@@ -194,6 +194,13 @@ export interface Assignment {
   availability: string;          // free text: "Lunes a Viernes 16:00hs"
   notes: string;
   startDate?: string;
+  /**
+   * Desde cuándo está el alumno con ESTE profesor ('YYYY-MM-DD', hora de
+   * España). Es el reloj del bono de retención (180 días, ver lib/retention.ts):
+   * se pone a hoy al cambiar de profesor, así el que hereda no cobra por los
+   * meses del anterior. Se sembró con start_date; ausente = fila sin migrar.
+   */
+  teacherSince?: string;
   createdAt: string;
   manualClassAdjustment?: number;
   meetLink?: string;
@@ -470,6 +477,38 @@ export interface FinancePayment {
   status: 'pending' | 'paid';
   paidAt?: string;
   approvedOverrides?: string[]; // claves 'studentName__YYYY-MM-DD' forzadas a pagable
+}
+
+// ── Bonos a profesores (tabla teacher_bonuses) ──────────────────────────────
+//
+// Un bono es UNA fila por alumno+profesor+tipo. El de retención lo reclama el
+// profesor a los 180 días con el alumno (lib/retention.ts), el admin lo aprueba
+// en la pestaña Bonos y pasa a 'pagado' al marcar el mes en Finanzas. Los upsells
+// los carga el admin ya aprobados. 'pagado_externo' son los históricos que se
+// pagaron por email antes de existir esto: bloquean el par para siempre y NUNCA
+// suman a finanzas. Un 'rechazado' deja el par disponible otra vez.
+export type BonusType = 'retencion_6m' | 'upsell';
+export type BonusStatus = 'reclamado' | 'aprobado' | 'pagado' | 'rechazado' | 'pagado_externo';
+
+export interface TeacherBonus {
+  id: string;               // uuid (lo genera la base)
+  teacherId: string;
+  /** Null en históricos sin alumno identificado o en alumnos ya de baja. */
+  assignmentId?: string | null;
+  studentName: string;
+  bonusType: BonusType;
+  euros: number;
+  status: BonusStatus;
+  /** Día en que el alumno cumplió (o cumple) los 180 días. */
+  dueDate?: string | null;
+  claimedAt?: string | null;
+  approvedAt?: string | null;
+  approvedBy?: string | null;
+  /** 'YYYY-MM' del mes de finanzas en que se pagó (o se pagó por fuera). */
+  paidMonth?: string | null;
+  scoringEventId?: string | null;
+  note?: string | null;
+  createdAt: string;
 }
 
 // Tarifa por tipo de plan + antigüedad.

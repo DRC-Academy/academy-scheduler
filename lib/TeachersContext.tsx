@@ -1,7 +1,7 @@
 ﻿'use client';
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { useAuth } from '@/lib/AuthContext';
-import { Teacher, Student, Assignment, Grid, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, ClassRecord, ClassRecordType, FinanceRate, FinancePayment, FinanceManualApproval, EmailPreferences, SalesContactResult } from '@/types';
+import { Teacher, Student, Assignment, Grid, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, ClassRecord, ClassRecordType, FinanceRate, FinancePayment, FinanceManualApproval, EmailPreferences, SalesContactResult, TeacherBonus, BonusType } from '@/types';
 import {
   dbGetTeachers, dbAddTeacher, dbArchiveTeacher,
   dbGetStudents, dbUpsertStudent, dbDeleteStudent, dbUpdateStudent,
@@ -23,12 +23,16 @@ import {
   dbChangeStudentTeacher, dbAddRescheduleRecord, dbAddRescheduleSplit, dbAddRecoveryClass, dbRemoveAssignment,
   dbSetSalesContact,
   dbApplyFaltaSideEffects, dbRevertStudentAbsence, dbFindStudentAbsence,
+  dbGetTeacherBonuses, dbClaimRetentionBonus, dbApproveBonus, dbRejectBonus, dbMarkBonusesPaidExternal,
+  dbAddUpsellBonuses, dbUpdateBonusStudentName, dbUpdateAssignmentTeacherSince, dbSetBonusesPaid, dbUnsetBonusesPaid,
 } from '@/lib/db';
 import type { AffectedTeacher, ChangeTeacherParams, ArchiveTeacherResult, StudentLeftGrid } from '@/lib/db';
 import type { AssignedSlot } from '@/types';
 import { calculateTeacherFinance, canMarkStudentLostClass, LOST_CLASS_CAP_MESSAGE, type ClassTranscriptRef } from '@/lib/finance';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { checkSubscription } from '@/lib/useSubscriptionStatus';
+import { bonusEurosFor, previousMonthYear } from '@/lib/bonuses';
+import { retentionDueIso } from '@/lib/retention';
 
 interface TeachersContextType {
   teachers: Teacher[];
@@ -47,6 +51,8 @@ interface TeachersContextType {
   financeRates: FinanceRate[];
   financePayments: FinancePayment[];
   manualApprovals: FinanceManualApproval[];
+  /** Bonos de retención y upsells (tabla teacher_bonuses). Ver lib/bonuses.ts. */
+  teacherBonuses: TeacherBonus[];
   lastUpdated: Date | null;
   addTeacher: (t: Teacher, username: string) => Promise<void>;
   archiveTeacher: (teacherId: string) => Promise<ArchiveTeacherResult>;
@@ -90,6 +96,17 @@ interface TeachersContextType {
   markPaymentAsPaid: (teacherId: string, monthYear: string) => Promise<void>;
   /** Deshace un "Marcar pagado" (el mes vuelve a pendiente y a calcularse en vivo). */
   markPaymentAsPending: (teacherId: string, monthYear: string) => Promise<void>;
+  // ── Bonos ──
+  loadTeacherBonuses: () => Promise<void>;
+  /** El profesor reclama el bono de retención de un alumno (queda 'reclamado'). */
+  claimRetentionBonus: (assignment: Assignment) => Promise<TeacherBonus>;
+  approveBonus: (bonusId: string, adminName: string) => Promise<void>;
+  rejectBonus: (bonusId: string, note: string, adminName: string) => Promise<void>;
+  /** Históricos pagados por email: crea filas 'pagado_externo'. Devuelve los pares que ya existían. */
+  markBonusesPaidExternal: (items: Array<{ teacherId: string; assignmentId: string | null; studentName: string; bonusType: BonusType; dueDate?: string | null; paidMonth?: string | null; note?: string | null }>) => Promise<string[]>;
+  addUpsellBonuses: (p: { teacherId: string; assignmentId: string | null; studentName: string; quantity: number; approvedBy: string; note?: string }) => Promise<void>;
+  updateBonusStudentName: (bonusId: string, studentName: string, teacherId: string) => Promise<void>;
+  updateAssignmentTeacherSince: (assignmentId: string, teacherSince: string) => Promise<void>;
   markStudentAbsence: (teacherId: string, studentName: string, date: string, time: string | undefined, comment?: string) => Promise<void>;
   revertStudentAbsence: (recordId: string, adminName: string) => Promise<void>;
   approveReviewClass: (teacherId: string, studentName: string, date: string, approvedBy?: string) => Promise<void>;
@@ -106,7 +123,7 @@ const TeachersContext = createContext<TeachersContextType>({
   teachers: [], students: [], assignments: [], teacherGrids: {},
   loadingTeachers: true, scoringEvents: [], classCounts: [], notifications: [],
   unassignedStudents: [], classJoinLogs: [], classRecords: [], classAnalyses: [],
-  financeRates: [], financePayments: [], manualApprovals: [], lastUpdated: null,
+  financeRates: [], financePayments: [], manualApprovals: [], teacherBonuses: [], lastUpdated: null,
   addTeacher:               async () => {},
   archiveTeacher:           async () => ({ ok: true }),
   addStudent:               async () => {},
@@ -146,6 +163,14 @@ const TeachersContext = createContext<TeachersContextType>({
   registerClassRecord:        async () => {},
   attachScreenshotToClass:    async () => {},
   markPaymentAsPaid:          async () => {},
+  loadTeacherBonuses:         async () => {},
+  claimRetentionBonus:        async () => { throw new Error('sin contexto'); },
+  approveBonus:               async () => {},
+  rejectBonus:                async () => {},
+  markBonusesPaidExternal:    async () => [],
+  addUpsellBonuses:           async () => {},
+  updateBonusStudentName:     async () => {},
+  updateAssignmentTeacherSince: async () => {},
   markPaymentAsPending:       async () => {},
   markStudentAbsence:         async () => {},
   revertStudentAbsence:       async () => {},
@@ -194,6 +219,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   const [financeRates, setFinanceRates] = useState<FinanceRate[]>([]);
   const [financePayments, setFinancePayments] = useState<FinancePayment[]>([]);
   const [manualApprovals, setManualApprovals] = useState<FinanceManualApproval[]>([]);
+  const [teacherBonuses, setTeacherBonuses] = useState<TeacherBonus[]>([]);
   const [lastUpdated, setLastUpdated]   = useState<Date | null>(null);
 
   // Silent reload â€” no loading spinner, just swaps in fresh data.
@@ -555,13 +581,14 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   }
 
   async function loadFinanceData() {
-    const [rates, payments, records, logs, approvals, analyses] = await Promise.all([
+    const [rates, payments, records, logs, approvals, analyses, bonuses] = await Promise.all([
       dbGetFinanceRates(),
       dbGetFinancePayments(),
       dbGetClassRecords(),
       dbGetClassJoinLogs(),
       dbGetManualApprovals(),
       dbGetClassTranscripts(),
+      dbGetTeacherBonuses(),
     ]);
     setFinanceRates(rates);
     setFinancePayments(payments);
@@ -569,6 +596,21 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     setClassJoinLogs(logs);
     setManualApprovals(approvals);
     setClassAnalyses(analyses);
+    setTeacherBonuses(bonuses);
+  }
+
+  async function loadTeacherBonuses() {
+    setTeacherBonuses(await dbGetTeacherBonuses());
+  }
+
+  /** Reemplaza (o agrega) filas de bonos en el estado local, por id. */
+  function mergeBonuses(rows: TeacherBonus[]) {
+    if (rows.length === 0) return;
+    setTeacherBonuses(prev => {
+      const byId = new Map(prev.map(b => [b.id, b]));
+      for (const r of rows) byId.set(r.id, r);
+      return [...byId.values()];
+    });
   }
 
   async function registerClassRecord(
@@ -657,29 +699,80 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     const teacher = teachers.find(t => t.id === teacherId);
     const teacherName = teacher?.name ?? '';
     const existing = financePayments.find(p => p.teacherId === teacherId && p.monthYear === monthYear) ?? null;
+    const previousPayment = financePayments.find(p => p.teacherId === teacherId && p.monthYear === previousMonthYear(monthYear)) ?? null;
     const result = calculateTeacherFinance({
       teacherId, teacherName, monthYear,
       assignments, joinLogs: classJoinLogs, classRecords, classAnalyses, rates: financeRates,
-      scoringEvents, students, manualApprovals, payment: existing,
+      scoringEvents, students, manualApprovals, payment: existing, previousPayment, teacherBonuses,
       // Lo que se LIQUIDA usa la misma fuente que las pantallas: el calendario.
       gridOccupancy: gridOccupancyOfTeacher(teacher),
     });
     const saved = await dbMarkPaymentPaid(teacherId, teacherName, monthYear, {
       totalClassesPayable: result.totalPagable,
       totalAmount:         result.totalAPagar,
-      bonusAmount:         result.bonusFromScoring,
+      bonusAmount:         result.bonusFromScoring + result.bonusFromBonuses,
     });
     setFinancePayments(prev => {
       const idx = prev.findIndex(p => p.id === saved.id);
       if (idx >= 0) { const next = [...prev]; next[idx] = saved; return next; }
       return [...prev, saved];
     });
+    // Los bonos aprobados que entraron en este total quedan 'pagado' con el mes.
+    // Se hace DESPUÉS de congelar el pago: si esto fallara, el total ya está
+    // guardado y el bono sigue 'aprobado' a la vista en la pestaña Bonos.
+    const aprobados = result.bonusRows.filter(b => b.status === 'aprobado').map(b => b.id);
+    mergeBonuses(await dbSetBonusesPaid(aprobados, monthYear));
   }
 
   async function markPaymentAsPending(teacherId: string, monthYear: string) {
     const saved = await dbMarkPaymentPending(teacherId, monthYear);
     if (!saved) return;
     setFinancePayments(prev => prev.map(p => (p.id === saved.id ? saved : p)));
+    // Los bonos que se pagaron con ese mes vuelven a 'aprobado' y a calcularse en vivo.
+    mergeBonuses(await dbUnsetBonusesPaid(teacherId, monthYear));
+  }
+
+  // ── Bonos (teacher_bonuses) ─────────────────────────────────────────────────
+
+  async function claimRetentionBonus(assignment: Assignment): Promise<TeacherBonus> {
+    const bonus = await dbClaimRetentionBonus({
+      teacherId:    assignment.teacherId,
+      assignmentId: assignment.id,
+      studentName:  assignment.studentName,
+      euros:        bonusEurosFor('retencion_6m'),
+      dueDate:      retentionDueIso(assignment),
+    });
+    mergeBonuses([bonus]);
+    return bonus;
+  }
+
+  async function approveBonus(bonusId: string, adminName: string) {
+    mergeBonuses([await dbApproveBonus(bonusId, adminName)]);
+  }
+
+  async function rejectBonus(bonusId: string, note: string, adminName: string) {
+    mergeBonuses([await dbRejectBonus(bonusId, note, adminName)]);
+  }
+
+  async function markBonusesPaidExternal(items: Array<{ teacherId: string; assignmentId: string | null; studentName: string; bonusType: BonusType; dueDate?: string | null; paidMonth?: string | null; note?: string | null }>): Promise<string[]> {
+    const { inserted, duplicated } = await dbMarkBonusesPaidExternal(
+      items.map(it => ({ ...it, euros: bonusEurosFor(it.bonusType) })),
+    );
+    mergeBonuses(inserted);
+    return duplicated;
+  }
+
+  async function addUpsellBonuses(p: { teacherId: string; assignmentId: string | null; studentName: string; quantity: number; approvedBy: string; note?: string }) {
+    mergeBonuses(await dbAddUpsellBonuses({ ...p, euros: bonusEurosFor('upsell') }));
+  }
+
+  async function updateBonusStudentName(bonusId: string, studentName: string, teacherId: string) {
+    mergeBonuses([await dbUpdateBonusStudentName(bonusId, studentName, teacherId)]);
+  }
+
+  async function updateAssignmentTeacherSince(assignmentId: string, teacherSince: string) {
+    await dbUpdateAssignmentTeacherSince(assignmentId, teacherSince);
+    setAssignments(prev => prev.map(a => (a.id === assignmentId ? { ...a, teacherSince } : a)));
   }
 
   // AprobaciÃ³n manual de una clase puntual: persiste en finance_manual_approvals
@@ -738,7 +831,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     <TeachersContext.Provider value={{
       teachers, students, assignments, teacherGrids, loadingTeachers,
       scoringEvents, classCounts, notifications, unassignedStudents, classJoinLogs,
-      classRecords, classAnalyses, financeRates, financePayments, manualApprovals, lastUpdated,
+      classRecords, classAnalyses, financeRates, financePayments, manualApprovals, teacherBonuses, lastUpdated,
       addTeacher, archiveTeacher, addStudent, deleteStudent, updateStudent, markSalesContact, addAssignment,
       getTeacherGrid, updateTeacherGrid, updateTeacherRating,
       updateTeacherSpecialties, updateTeacherInfo, updateTeacherEmailPreferences,
@@ -751,6 +844,8 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
       updateMeetLink, markPresentationSent, logClassJoin, loadClassJoinLogs,
       loadClassRecords, loadFinanceData, registerClassRecord, attachScreenshotToClass,
       markPaymentAsPaid, markPaymentAsPending, markStudentAbsence, revertStudentAbsence, approveReviewClass, approveExceedLimitClass,
+      loadTeacherBonuses, claimRetentionBonus, approveBonus, rejectBonus, markBonusesPaidExternal, addUpsellBonuses,
+      updateBonusStudentName, updateAssignmentTeacherSince,
       changeStudentTeacher, removeAssignment, addRescheduleRecord, addRescheduleSplit, addRecoveryClass,
     }}>
       {children}

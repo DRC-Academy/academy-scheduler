@@ -354,7 +354,7 @@ describe('reprogramar 2 h en dos días — finanzas y cupo salen solos', () => {
     teacherId: T, teacherName: 'Profe', monthYear: '2026-09',
     assignments: [ana], joinLogs: logs, classRecords: records,
     classAnalyses: logs.map(l => transcript(l.scheduledDate, l.id)),
-    rates: RATES, scoringEvents: [], students: [] as Student[],
+    rates: RATES, scoringEvents: [], teacherBonuses: [], previousPayment: null, students: [] as Student[],
     manualApprovals: [], payment: null,
     gridOccupancy: gridOccupancyOfTeacher(teacher),
   });
@@ -405,7 +405,7 @@ describe('reprogramar 2 h en dos días — finanzas y cupo salen solos', () => {
       teacherId: T, teacherName: 'Profe', monthYear: '2026-09',
       assignments: [ana], joinLogs: logs, classRecords: conFalta,
       classAnalyses: [transcript('2026-09-17', logs[0].id)],
-      rates: RATES, scoringEvents: [], students: [] as Student[],
+      rates: RATES, scoringEvents: [], teacherBonuses: [], previousPayment: null, students: [] as Student[],
       manualApprovals: [], payment: null,
       gridOccupancy: gridOccupancyOfTeacher(teacher),
     });

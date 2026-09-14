@@ -63,7 +63,7 @@ function armar(opts: {
   const finance = calculateTeacherFinance({
     teacherId: T, teacherName: 'Prof', monthYear: MES,
     assignments: opts.assignments, joinLogs, classRecords, classAnalyses: analyses,
-    rates, scoringEvents: [], students: opts.assignments.map(a => student(a.studentName)),
+    rates, scoringEvents: [], teacherBonuses: [], previousPayment: null, students: opts.assignments.map(a => student(a.studentName)),
     manualApprovals: [], payment: null, gridOccupancy,
   });
   const funnel = buildClassFunnel({

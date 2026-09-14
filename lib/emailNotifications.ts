@@ -474,16 +474,14 @@ export async function sendMilestoneEmail(
 // ═══ I) Bono de 6 meses ═══════════════════════════════════════════════════════
 export async function sendBonusAvailableEmail(teacher: TeacherLike, studentName: string): Promise<boolean> {
   const subject = `Bono de retención disponible · ${studentName}`;
+  // Desde septiembre de 2026 el bono se reclama desde la app (Mi Scoring →
+  // "Reclamar bono"), no por email a pagos@: el admin lo aprueba en su pestaña
+  // Bonos y entra en la liquidación del mes.
   const html = baseEmailTemplate(
     p(`Hola ${esc(teacher.name)},`) +
-    p(`<strong>${esc(studentName)}</strong> lleva 6 meses contigo. Tienes derecho a solicitar el bono de retención.`) +
-    p('Para solicitarlo, escribe a:') +
-    `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:0 0 16px;">
-  <tr><td align="center" style="background-color:#FFF9E0; border:1px solid #FFC400; border-radius:8px; padding:14px;">
-    <a href="mailto:${PAGOS_EMAIL}" style="font-size:16px; font-weight:600; color:#1E9E3A; text-decoration:none;">${PAGOS_EMAIL}</a>
-  </td></tr>
-</table>` +
-    p('Indica el nombre del alumno y la fecha de inicio de la suscripción.'),
+    p(`<strong>${esc(studentName)}</strong> lleva 6 meses contigo. Ya puedes reclamar el bono de retención.`) +
+    p('Para reclamarlo, entra en la app, abre <strong>Mi Scoring</strong> y pulsa <strong>Reclamar bono</strong> junto al nombre del alumno. El equipo lo aprueba y se suma a tu liquidación del mes.') +
+    p('No hace falta escribir a nadie: el reclamo queda registrado en la app.'),
     `Bono disponible por ${studentName}`,
   );
   return send('sendBonusAvailableEmail', teacher, subject, html);

@@ -29,6 +29,7 @@ import { LastUpdated } from '@/components/LastUpdated';
 import { getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
+import { previousMonthYear } from '@/lib/bonuses';
 import { calculateTeacherFinance, estimateClassAmount, TeacherFinanceResult, ClassFinanceRow, classTypeBadge, durationSourceBadge, subscriptionBadge, rowHoursLabel, financeStatusBadge, transcriptStateBadge, lostClassBreakdownLabel, isStudentAbsence, recoveryCreditLabel, studentQuotaOf } from '@/lib/finance';
 import { isActiveWooStatus } from '@/lib/subscriptionAccess';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
@@ -178,21 +179,24 @@ function accesoDeLaClase(r: ClassFinanceRow): AccesoClase {
 }
 
 // ─── Extras del mes (bonos y upsells) ─────────────────────────────────────────
-/** Los euros positivos del scoring del mes, partidos por concepto. */
+/**
+ * Los bonos del mes, partidos por concepto. Salen de `bonusRows` del cálculo
+ * (teacher_bonuses aprobados/pagados cuyo mes contable es este, ver
+ * lib/bonuses.bonusesForMonth), no de scoring_events. `otros` es lo que todavía
+ * llegue por scoring con euros positivos (hoy, nada).
+ */
 interface Extras { bonos: number; nBonos: number; upsells: number; nUpsells: number; otros: number; detBonos: string[] }
 
-function extrasDe(scoringEvents: ScoringEvent[], teacherId: string, monthYear: string): Extras {
-  const del = scoringEvents.filter(e =>
-    e.teacherId === teacherId && (e.createdAt ?? '').slice(0, 7) === monthYear && !e.reverted &&
-    e.eventType !== 'penalizacion_revertida' && (e.euros ?? 0) > 0);
-  const bonos = del.filter(e => e.eventType === 'bonus_retencion');
-  const ups = del.filter(e => e.eventType === 'upsell');
-  const otros = del.filter(e => e.eventType !== 'bonus_retencion' && e.eventType !== 'upsell');
+function extrasDe(r: TeacherFinanceResult | undefined): Extras {
+  const rows = r?.bonusRows ?? [];
+  const bonos = rows.filter(b => b.bonusType === 'retencion_6m');
+  const ups = rows.filter(b => b.bonusType === 'upsell');
+  const suma = (xs: typeof rows) => xs.reduce((s, b) => s + (Number(b.euros) || 0), 0);
   return {
-    bonos: bonos.reduce((s, e) => s + (e.euros ?? 0), 0), nBonos: bonos.length,
-    upsells: ups.reduce((s, e) => s + (e.euros ?? 0), 0), nUpsells: ups.length,
-    otros: otros.reduce((s, e) => s + (e.euros ?? 0), 0),
-    detBonos: bonos.map(e => e.studentRef).filter((x): x is string => !!x),
+    bonos: suma(bonos), nBonos: bonos.length,
+    upsells: suma(ups), nUpsells: ups.length,
+    otros: r?.bonusFromScoring ?? 0,
+    detBonos: bonos.map(b => b.studentName),
   };
 }
 
@@ -641,7 +645,7 @@ function FinanceTab({ onHow }: { onHow: () => void }) {
   const { user } = useAuth();
   const {
     teachers, students, assignments, classJoinLogs, classRecords, classAnalyses, financeRates, financePayments,
-    scoringEvents, manualApprovals,
+    scoringEvents, manualApprovals, teacherBonuses,
     loadFinanceData, markPaymentAsPaid, markPaymentAsPending, approveReviewClass, approveExceedLimitClass, revertStudentAbsence,
   } = useTeachers();
   const approvedBy = user?.displayName || user?.username || 'admin';
@@ -714,22 +718,22 @@ function FinanceTab({ onHow }: { onHow: () => void }) {
   // tipo restaría del total sin salir en la lista ni poder revertirse.
   const penaltiesOf = (teacherId: string): ScoringEvent[] => scoringEvents.filter(e =>
     e.teacherId === teacherId && (e.euros ?? 0) < 0 && (e.createdAt ?? '').slice(0, 7) === monthYear);
-  const extras = (teacherId: string) => extrasDe(scoringEvents, teacherId, monthYear);
-
   // Finanzas de cada profesor: MISMAS entradas que la vista del profesor
   // (app/mis-clases) y que la liquidación (TeachersContext.markPaymentAsPaid).
   const results = useMemo<TeacherFinanceResult[]>(() => teachers.map(t => {
     const payment = financePayments.find(p => p.teacherId === t.id && p.monthYear === monthYear) ?? null;
+    const previousPayment = financePayments.find(p => p.teacherId === t.id && p.monthYear === previousMonthYear(monthYear)) ?? null;
     return calculateTeacherFinance({
       teacherId: t.id, teacherName: t.name, monthYear,
       assignments, joinLogs: classJoinLogs, classRecords, classAnalyses, rates: financeRates,
-      scoringEvents, students, manualApprovals, payment,
+      scoringEvents, students, manualApprovals, payment, previousPayment, teacherBonuses,
       gridOccupancy: gridOccupancyOfTeacher(t),
     });
-  }), [teachers, students, monthYear, assignments, classJoinLogs, classRecords, classAnalyses, financeRates, scoringEvents, manualApprovals, financePayments]);
+  }), [teachers, students, monthYear, assignments, classJoinLogs, classRecords, classAnalyses, financeRates, scoringEvents, manualApprovals, financePayments, teacherBonuses]);
+  const extras = (teacherId: string) => extrasDe(results.find(r => r.teacherId === teacherId));
 
   // Solo profesores con actividad en el mes.
-  const conActividad = results.filter(r => r.rows.length > 0 || r.bonusFromScoring > 0 || r.penaltiesFromScoring < 0 || r.paymentStatus === 'paid');
+  const conActividad = results.filter(r => r.rows.length > 0 || r.bonusFromScoring > 0 || r.bonusFromBonuses > 0 || r.penaltiesFromScoring < 0 || r.paymentStatus === 'paid');
   const visible = conActividad.filter(r => statusFilter === 'all' || (statusFilter === 'paid' ? r.paymentStatus === 'paid' : r.paymentStatus !== 'paid'));
   const cifras = useMemo(() => cifrasDe(conActividad, extras), [conActividad]); // eslint-disable-line react-hooks/exhaustive-deps
   const cerrado = cifras.nTot > 0 && cifras.nPag === cifras.nTot;

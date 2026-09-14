@@ -15,7 +15,7 @@ export const MILESTONE_SLIDES: Record<number, string> = {
 export const MILESTONE_COPY: Record<number, string> = {
   1:  'Esta es la clase 1 con [ALUMNO]. Recuerda presentarte con las diapositivas de bienvenida y grabar la sesión con Fathom.',
   15: 'Esta es la clase 15 con [ALUMNO]. Recuerda grabar la clase con Fathom, subir el enlace al Excel y aprovechar para pedir una reseña en Trustpilot.',
-  30: 'Esta es la clase 30 con [ALUMNO]. Recuerda grabar la clase con Fathom y subir el enlace al Excel. También podés solicitar el bono de retención al admin.',
+  30: 'Esta es la clase 30 con [ALUMNO]. Recuerda grabar la clase con Fathom y subir el enlace al Excel. Si ya lleva 6 meses con vos, reclamá el bono de retención desde Mi Scoring.',
   50: 'Esta es la clase 50 con [ALUMNO]. ¡Un hito increíble! Recuerda grabar la clase con Fathom y subir el enlace al Excel.',
 };
 

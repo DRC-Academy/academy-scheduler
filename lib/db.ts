@@ -1,10 +1,17 @@
 import { supabase } from './supabase';
 import { triggerEmail } from './emailClient';
 import { baseStateOf, baseStudentOf, withBaseState, assignableCellKeys, puntualCellDates, puntualDateOf } from './cells';
-import { minutesLateSpain } from './spainTime';
+import { minutesLateSpain, getSpainParts } from './spainTime';
+import { EVENT_POINTS } from './scoringConstants';
 import { fetchOpenAlertState } from './interventionsClient';
 import { findContiguityMismatches, type ContiguityMismatch } from './teacherClasses';
-import { Teacher, Student, Assignment, AppUser, Grid, TeacherStatus, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, AssignedSlot, EmailPreferences, SalesContactResult, RecoveryCell } from '@/types';
+import { Teacher, Student, Assignment, AppUser, Grid, TeacherStatus, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, AssignedSlot, EmailPreferences, SalesContactResult, RecoveryCell, TeacherBonus, BonusType } from '@/types';
+import {
+  BONUS_CLAIM_ENABLED, RETENTION_UPCOMING_DAYS, isActiveAssignmentLike, retentionBonusFor, retentionDaysLeft,
+} from './retention';
+
+/** Hoy en hora de España ('YYYY-MM-DD'). Las fechas de negocio se cortan en Madrid, nunca en UTC. */
+const spainToday = (): string => getSpainParts(new Date()).dateStr;
 
 // ── PAGINACIÓN ───────────────────────────────────────────────────────────────
 //
@@ -850,6 +857,7 @@ export async function dbGetAssignments(): Promise<Assignment[]> {
     availability:          row.availability ?? '',
     notes:                 row.notes ?? '',
     startDate:             row.start_date ?? undefined,
+    teacherSince:          row.teacher_since ?? undefined,
     createdAt:             row.created_at,
     manualClassAdjustment: row.manual_class_adjustment ?? 0,
     meetLink:              row.meet_link ?? undefined,
@@ -1392,15 +1400,19 @@ export async function dbCreateFullLink(params: {
   const payload = {
     student_id: studentId, student_name: nameTrim, student_email: emailTrim,
     student_level: params.level, slots: params.slots, plan: params.plan,
-    weekly_hours: params.weeklyHours, start_date: params.startDate || new Date().toISOString().slice(0, 10),
+    weekly_hours: params.weeklyHours, start_date: params.startDate || spainToday(),
     availability: params.slots.map(s => `${s.day} ${s.hour}`).join(', '),
   };
+  // Vínculo NUEVO con este profesor: el reloj del bono arranca en la fecha de
+  // inicio declarada (o hoy). Al actualizar uno existente NO se toca
+  // teacher_since: es el mismo profesor.
   const { error: linkErr } = asgId
     ? await supabase.from('assignments').update(payload).eq('id', asgId)
     : await supabase.from('assignments').insert({
         id: crypto.randomUUID(),
         teacher_id: params.teacherId, teacher_name: params.teacherName, teacher_email: params.teacherEmail,
         objetivo: '', notes: '', manual_class_adjustment: 0, ...payload,
+        teacher_since: payload.start_date,
       });
   if (linkErr) {
     console.error('[dbCreateFullLink] guardado de assignment falló:', linkErr);
@@ -1464,7 +1476,9 @@ export async function dbEnsureStudentAndAssignment(params: {
     student_id: student.id, student_name: student.name, student_email: student.email, student_level: student.level,
     slots: params.slots, objetivo: '', plan: params.plan ?? student.plan ?? '', weekly_hours: params.slots.length,
     availability: params.slots.map(s => `${s.day} ${s.hour}`).join(', '), notes: '',
-    start_date: params.startDate ?? new Date().toISOString().slice(0, 10), manual_class_adjustment: 0,
+    start_date: params.startDate ?? spainToday(), manual_class_adjustment: 0,
+    // Reloj del bono de retención (lib/retention.ts): arranca con el vínculo.
+    teacher_since: params.startDate ?? spainToday(),
   });
   if (asgErr) {
     console.error('[dbEnsureStudentAndAssignment] INSERT en assignments falló:', asgErr);
@@ -1507,7 +1521,9 @@ export async function dbSyncAllCalendarsToAssignments(): Promise<{ autoFixed: nu
           student_id: stu.id, student_name: stu.name, student_email: stu.email, student_level: stu.level,
           slots, objetivo: '', plan: stu.plan ?? '', weekly_hours: slots.length,
           availability: slots.map(s => `${s.day} ${s.hour}`).join(', '), notes: '',
-          start_date: null, manual_class_adjustment: 0,
+          // Sin fecha de inicio conocida: el reloj del bono arranca hoy, que es
+          // lo único que se sabe con certeza (el alumno está en el grid ahora).
+          start_date: null, teacher_since: spainToday(), manual_class_adjustment: 0,
         });
       } else {
         pendingManual.push(`${name} (${t.name})`);
@@ -1736,6 +1752,10 @@ export async function dbRepairMisplacedStudent(m: MisplacedStudent): Promise<voi
     slots:         m.gridSlots,
     weekly_hours:  m.gridSlots.length,
     availability:  m.gridSlots.map(s => `${s.day} ${s.hour}`).join(', '),
+    // Es un cambio de profesor detectado tarde: el reloj del bono de retención
+    // arranca de cero para el profesor nuevo (lib/retention.ts). Si la fecha
+    // real fue otra, el admin la corrige en la pestaña Bonos.
+    teacher_since: spainToday(),
   }).eq('id', m.assignmentId);
 
   if (error) throw new Error(`No se pudo reparar a ${m.studentName}: ${error.message}`);
@@ -1797,6 +1817,7 @@ export async function dbGetAssignmentsByTeacher(teacherId: string): Promise<Assi
     availability:          row.availability ?? '',
     notes:                 row.notes ?? '',
     startDate:             row.start_date ?? undefined,
+    teacherSince:          row.teacher_since ?? undefined,
     createdAt:             row.created_at,
     manualClassAdjustment: row.manual_class_adjustment ?? 0,
     meetLink:              row.meet_link ?? undefined,
@@ -1825,7 +1846,10 @@ export async function dbAddAssignment(a: Assignment): Promise<void> {
     // Default a hoy si viene vacío: el reloj del bono de retención (6 meses) se
     // mide desde start_date. Sin fecha, la asignación quedaba fuera de la
     // detección del bono. Ver lib/retention.ts.
-    start_date:             a.startDate ?? new Date().toISOString().slice(0, 10),
+    start_date:             a.startDate ?? spainToday(),
+    // Reloj del bono de retención (lib/retention.ts): con ESTE profesor desde la
+    // fecha de inicio declarada, o desde hoy.
+    teacher_since:          a.teacherSince ?? a.startDate ?? spainToday(),
     manual_class_adjustment: a.manualClassAdjustment ?? 0,
   });
   // CRÍTICO: no tragar el error. Si el INSERT falla (RLS / FK / columna
@@ -2315,40 +2339,9 @@ export async function dbUpdateStudent(student: Student): Promise<void> {
 }
 
 // ── SCORING CONSTANTS ─────────────────────────────────────────────────────────
-
-export const EVENT_POINTS: Record<string, number> = {
-  falta_injustificada: -15,
-  falta_justificada:    -5,
-  atraso:               -8,
-  queja:               -20,
-  cancelacion_tardia:  -10,
-  upsell:               25,
-  bonus_retencion:      30,
-  bonus_puntualidad:    20,
-  review_trustpilot:    15,
-  bonus_feedback:       10,
-  cambio_por_alumno:   -10,
-  cambio_por_profesor: -20,
-  profe_del_mes:        50,
-  profe_del_trimestre: 100,
-  email_presentacion_tardio: -5,
-  // Se carga SOLO a mano desde la auditoría de intervenciones (panel de admin).
-  // El sistema nunca lo aplica automáticamente: una intervención sutil puede no
-  // verse en el transcript, así que la decisión es humana.
-  alerta_no_atendida:  -10,
-};
-
-// Importe en euros de cada tipo de evento. Los NEGATIVOS son penalizaciones y se
-// restan del pago del mes (lib/finance.ts los suma aparte para mostrarlos en rojo).
-export const EVENT_EUROS: Record<string, number> = {
-  upsell:          20,
-  bonus_retencion: 30,
-  // Una falta injustificada resta 15 puntos de scoring Y 5 € del pago, igual que
-  // la falta sin aviso registrada desde el calendario. Antes solo restaba puntos,
-  // así que el admin la cargaba esperando ver el descuento en finanzas y no pasaba
-  // nada.
-  falta_injustificada: -5,
-};
+// Definidas en lib/scoringConstants.ts (módulo puro, sin Supabase) y re-exportadas
+// acá para que los imports existentes sigan funcionando.
+export { EVENT_POINTS, EVENT_EUROS } from './scoringConstants';
 
 // ── RETENTION RATE ────────────────────────────────────────────────────────────
 
@@ -3464,14 +3457,23 @@ export async function dbMarkAllNotificationsRead(userId: string, role: string): 
 export async function dbUpsertTeacherAlerts(
   teacherId: string,
   assignments: Array<{
+    id: string;
+    teacherId: string;
     studentName: string;
     startDate?: string;
+    teacherSince?: string;
+    createdAt: string;
+    status?: string;
     slots: Array<{ day: string; hour: string }>;
     manualClassAdjustment?: number;
   }>,
 ): Promise<void> {
   const today = new Date();
   const toInsert: any[] = [];
+  // Bonos ya cargados del profesor: un par con bono (reclamado, aprobado, pagado
+  // o pagado por fuera) no vuelve a avisarse. Solo hace falta si el reclamo está
+  // abierto (BONUS_CLAIM_ENABLED); si no, no se genera ningún aviso de bono.
+  const bonuses = BONUS_CLAIM_ENABLED ? await dbGetTeacherBonusesOf(teacherId) : [];
 
   // Conteo por clases registradas (normal/recuperacion) del profesor, en una sola
   // query, para detectar la cercanía a la clase 15 con el número real.
@@ -3508,13 +3510,12 @@ export async function dbUpsertTeacherAlerts(
       });
     }
 
-    // Near 6-month bonus (0-15 days remaining) or already reached
-    if (a.startDate) {
-      const start     = new Date(a.startDate + 'T00:00:00');
-      const daysActive = Math.floor((today.getTime() - start.getTime()) / 86400000);
-      const daysLeft   = 180 - daysActive;
-
-      if (daysLeft <= 15) {
+    // Bono de retención (6 meses CON este profesor): misma regla que el panel y
+    // el admin (lib/retention.ts). Solo mientras el reclamo esté habilitado y el
+    // par no tenga ya un bono cargado.
+    if (BONUS_CLAIM_ENABLED && isActiveAssignmentLike(a) && !retentionBonusFor(bonuses, a)) {
+      const daysLeft = retentionDaysLeft(a, today);
+      if (daysLeft <= RETENTION_UPCOMING_DAYS) {
         toInsert.push({
           id:          `alert_6m_${teacherId}_${slugName}`,
           target_user: teacherId,
@@ -3522,8 +3523,8 @@ export async function dbUpsertTeacherAlerts(
             ? `🎁 Bono disponible — ${a.studentName}`
             : `🎁 ${a.studentName} cumple 6 meses pronto`,
           body:        daysLeft <= 0
-            ? `${a.studentName} lleva más de 6 meses. Solicitá el bono de retención a pagos@drcacademy.com.`
-            : `Faltan ${daysLeft} día${daysLeft === 1 ? '' : 's'} para que ${a.studentName} cumpla 6 meses. Prepará la solicitud del bono.`,
+            ? `${a.studentName} lleva 6 meses con vos. Reclamá el bono de retención desde Mi Scoring.`
+            : `Faltan ${daysLeft} día${daysLeft === 1 ? '' : 's'} para que ${a.studentName} cumpla 6 meses con vos. Después vas a poder reclamar el bono desde Mi Scoring.`,
           type:        'bono6m',
           read_by:     [],
           created_at:  new Date().toISOString(),
@@ -4511,6 +4512,10 @@ export async function dbChangeStudentTeacher(p: ChangeTeacherParams): Promise<vo
     presentation_email_sent:    false,
     presentation_email_sent_at: null,
     created_at:                 new Date().toISOString(),
+    // Reloj del bono de retención: seis meses CON EL PROFESOR ACTUAL. El que
+    // hereda al alumno empieza de cero; start_date no se toca (es la fecha de
+    // alta del alumno en la academia y la usan otras pantallas).
+    teacher_since:              spainToday(),
   }).eq('id', p.assignmentId);
   if (asgError) {
     throw new TransferError('reapuntar la ficha del alumno al profesor nuevo', completed, asgError);
@@ -4904,6 +4909,231 @@ export async function dbMarkPaymentPending(
     .maybeSingle();
   if (error) throw new Error(error.message);
   return data ? mapFinancePayment(data) : null;
+}
+
+// ── TEACHER BONUSES (bonos de retención y upsells) ────────────────────────────
+//
+// Tabla `teacher_bonuses`: una fila por bono. El flujo y la regla de los 180
+// días están en lib/retention.ts y lib/bonuses.ts; acá solo se lee y escribe.
+//
+// `id` es UUID (lo genera la base); `assignment_id` es TEXT (assignments.id es
+// texto: hay uuids y también ids tipo 'a_1787058984653').
+//
+// El índice único `teacher_bonuses_one_retention_per_pair` (alumno en minúsculas
+// + profesor, bonos de retención no rechazados) es la última barrera contra un
+// bono duplicado: PostgREST devuelve el código 23505 y acá se traduce a
+// BonusAlreadyExistsError para que la pantalla diga "ya reclamado".
+
+export class BonusAlreadyExistsError extends Error {
+  constructor(studentName: string) {
+    super(`Ya hay un bono de retención cargado para ${studentName} con este profesor.`);
+    this.name = 'BonusAlreadyExistsError';
+  }
+}
+
+type TeacherBonusRow = {
+  id: string; teacher_id: string; assignment_id: string | null; student_name: string; bonus_type: string;
+  euros: number | string | null; status: TeacherBonus['status']; due_date: string | null; claimed_at: string | null;
+  approved_at: string | null; approved_by: string | null; paid_month: string | null; scoring_event_id: string | null;
+  note: string | null; created_at: string;
+};
+
+function mapTeacherBonus(row: TeacherBonusRow): TeacherBonus {
+  return {
+    id:             row.id,
+    teacherId:      row.teacher_id,
+    assignmentId:   row.assignment_id ?? null,
+    studentName:    row.student_name,
+    bonusType:      row.bonus_type as BonusType,
+    euros:          Number(row.euros ?? 0),
+    status:         row.status,
+    dueDate:        row.due_date ?? null,
+    claimedAt:      row.claimed_at ?? null,
+    approvedAt:     row.approved_at ?? null,
+    approvedBy:     row.approved_by ?? null,
+    paidMonth:      row.paid_month ?? null,
+    scoringEventId: row.scoring_event_id ?? null,
+    note:           row.note ?? null,
+    createdAt:      row.created_at,
+  };
+}
+
+const BONUS_COLS = 'id, teacher_id, assignment_id, student_name, bonus_type, euros, status, due_date, claimed_at, approved_at, approved_by, paid_month, scoring_event_id, note, created_at';
+
+/** Todos los bonos (paginado: PostgREST corta en 1000). */
+export async function dbGetTeacherBonuses(): Promise<TeacherBonus[]> {
+  const { rows, error } = await fetchAllPages<TeacherBonusRow>('teacher_bonuses', (from, to) =>
+    supabase.from('teacher_bonuses').select(BONUS_COLS)
+      .order('created_at', { ascending: false }).order('id', { ascending: false }).range(from, to));
+  if (error) {
+    // La tabla puede no existir todavía en un entorno nuevo: sin bonos, no sin app.
+    console.error('[db] No se pudieron leer los bonos:', error);
+    return [];
+  }
+  return rows.map(mapTeacherBonus);
+}
+
+/** Bonos de UN profesor. */
+export async function dbGetTeacherBonusesOf(teacherId: string): Promise<TeacherBonus[]> {
+  const { rows, error } = await fetchAllPages<TeacherBonusRow>('teacher_bonuses', (from, to) =>
+    supabase.from('teacher_bonuses').select(BONUS_COLS).eq('teacher_id', teacherId)
+      .order('created_at', { ascending: false }).order('id', { ascending: false }).range(from, to));
+  if (error) { console.error('[db] No se pudieron leer los bonos del profesor:', error); return []; }
+  return rows.map(mapTeacherBonus);
+}
+
+async function insertBonusOrThrow(row: Record<string, unknown>, studentName: string): Promise<TeacherBonus> {
+  const { data, error } = await supabase.from('teacher_bonuses').insert(row).select(BONUS_COLS).single();
+  if (error) {
+    if (error.code === '23505') throw new BonusAlreadyExistsError(studentName);
+    console.error('[db] INSERT en teacher_bonuses falló:', error);
+    throw new Error(`No se pudo guardar el bono: ${error.message}`);
+  }
+  return mapTeacherBonus(data);
+}
+
+/**
+ * El profesor reclama el bono de retención de un alumno. Queda 'reclamado' hasta
+ * que el admin lo apruebe. Lanza BonusAlreadyExistsError si el par ya tiene bono.
+ */
+export async function dbClaimRetentionBonus(p: {
+  teacherId: string; assignmentId: string; studentName: string; euros: number; dueDate: string;
+}): Promise<TeacherBonus> {
+  return insertBonusOrThrow({
+    teacher_id:    p.teacherId,
+    assignment_id: p.assignmentId,
+    student_name:  p.studentName,
+    bonus_type:    'retencion_6m',
+    euros:         p.euros,
+    status:        'reclamado',
+    due_date:      p.dueDate,
+    claimed_at:    new Date().toISOString(),
+  }, p.studentName);
+}
+
+/** El admin aprueba un bono reclamado. Desde este instante suma al mes (lib/bonuses). */
+export async function dbApproveBonus(id: string, approvedBy: string): Promise<TeacherBonus> {
+  const { data, error } = await supabase.from('teacher_bonuses')
+    .update({ status: 'aprobado', approved_at: new Date().toISOString(), approved_by: approvedBy })
+    .eq('id', id).eq('status', 'reclamado')
+    .select(BONUS_COLS).maybeSingle();
+  if (error) throw new Error(`No se pudo aprobar el bono: ${error.message}`);
+  if (!data) throw new Error('El bono ya no está en estado reclamado.');
+  return mapTeacherBonus(data);
+}
+
+/** El admin rechaza un bono reclamado, con motivo. El par vuelve a quedar disponible. */
+export async function dbRejectBonus(id: string, note: string, rejectedBy: string): Promise<TeacherBonus> {
+  const { data, error } = await supabase.from('teacher_bonuses')
+    .update({ status: 'rechazado', note: note.trim() || null, approved_by: rejectedBy, approved_at: new Date().toISOString() })
+    .eq('id', id).eq('status', 'reclamado')
+    .select(BONUS_COLS).maybeSingle();
+  if (error) throw new Error(`No se pudo rechazar el bono: ${error.message}`);
+  if (!data) throw new Error('El bono ya no está en estado reclamado.');
+  return mapTeacherBonus(data);
+}
+
+/**
+ * Marca bonos como pagados FUERA del sistema (históricos por email): crea la
+ * fila 'pagado_externo', que bloquea el par para siempre y nunca suma a
+ * finanzas. Devuelve lo insertado y los pares que ya estaban cargados.
+ */
+export async function dbMarkBonusesPaidExternal(items: Array<{
+  teacherId: string; assignmentId: string | null; studentName: string; bonusType: BonusType;
+  euros: number; dueDate?: string | null; paidMonth?: string | null; note?: string | null;
+}>): Promise<{ inserted: TeacherBonus[]; duplicated: string[] }> {
+  const inserted: TeacherBonus[] = [];
+  const duplicated: string[] = [];
+  for (const it of items) {
+    try {
+      inserted.push(await insertBonusOrThrow({
+        teacher_id:    it.teacherId,
+        assignment_id: it.assignmentId,
+        student_name:  it.studentName,
+        bonus_type:    it.bonusType,
+        euros:         it.euros,
+        status:        'pagado_externo',
+        due_date:      it.dueDate ?? null,
+        paid_month:    it.paidMonth ?? null,
+        note:          it.note ?? null,
+      }, it.studentName));
+    } catch (err) {
+      if (err instanceof BonusAlreadyExistsError) duplicated.push(it.studentName);
+      else throw err;
+    }
+  }
+  return { inserted, duplicated };
+}
+
+/** El admin carga `quantity` upsells de un alumno, ya aprobados (una fila por upsell). */
+export async function dbAddUpsellBonuses(p: {
+  teacherId: string; assignmentId: string | null; studentName: string; euros: number;
+  quantity: number; approvedBy: string; note?: string;
+}): Promise<TeacherBonus[]> {
+  const now = new Date().toISOString();
+  const rows = Array.from({ length: Math.max(1, p.quantity) }, () => ({
+    teacher_id:    p.teacherId,
+    assignment_id: p.assignmentId,
+    student_name:  p.studentName,
+    bonus_type:    'upsell',
+    euros:         p.euros,
+    status:        'aprobado',
+    approved_at:   now,
+    approved_by:   p.approvedBy,
+    note:          p.note?.trim() || null,
+  }));
+  const { data, error } = await supabase.from('teacher_bonuses').insert(rows).select(BONUS_COLS);
+  if (error) throw new Error(`No se pudo cargar el upsell: ${error.message}`);
+  return (data ?? []).map(mapTeacherBonus);
+}
+
+/**
+ * Corrige el nombre del alumno de un bono (los históricos "SIN NOMBRE — …") e
+ * intenta enlazar la assignment de ese profesor por nombre. Devuelve la fila.
+ */
+export async function dbUpdateBonusStudentName(id: string, studentName: string, teacherId: string): Promise<TeacherBonus> {
+  const name = studentName.trim();
+  let assignmentId: string | null = null;
+  {
+    const { data } = await supabase.from('assignments').select('id')
+      .eq('teacher_id', teacherId).ilike('student_name', name).limit(1).maybeSingle();
+    if (data) assignmentId = data.id;
+  }
+  const patch: Record<string, unknown> = { student_name: name };
+  if (assignmentId) patch.assignment_id = assignmentId;
+  const { data, error } = await supabase.from('teacher_bonuses').update(patch).eq('id', id).select(BONUS_COLS).single();
+  if (error) {
+    if (error.code === '23505') throw new BonusAlreadyExistsError(name);
+    throw new Error(`No se pudo corregir el alumno del bono: ${error.message}`);
+  }
+  return mapTeacherBonus(data);
+}
+
+/** El admin corrige desde cuándo está el alumno con el profesor (reloj del bono). */
+export async function dbUpdateAssignmentTeacherSince(assignmentId: string, teacherSince: string): Promise<void> {
+  const { error } = await supabase.from('assignments').update({ teacher_since: teacherSince }).eq('id', assignmentId);
+  if (error) throw new Error(`No se pudo guardar la fecha: ${error.message}`);
+}
+
+/** Al marcar el mes pagado: los bonos aprobados que sumaron pasan a 'pagado'. */
+export async function dbSetBonusesPaid(ids: string[], monthYear: string): Promise<TeacherBonus[]> {
+  if (ids.length === 0) return [];
+  const { data, error } = await supabase.from('teacher_bonuses')
+    .update({ status: 'pagado', paid_month: monthYear })
+    .in('id', ids).eq('status', 'aprobado')
+    .select(BONUS_COLS);
+  if (error) throw new Error(`No se pudieron marcar los bonos como pagados: ${error.message}`);
+  return (data ?? []).map(mapTeacherBonus);
+}
+
+/** Al deshacer "Marcar pagado": los bonos pagados de ese profesor y mes vuelven a 'aprobado'. */
+export async function dbUnsetBonusesPaid(teacherId: string, monthYear: string): Promise<TeacherBonus[]> {
+  const { data, error } = await supabase.from('teacher_bonuses')
+    .update({ status: 'aprobado', paid_month: null })
+    .eq('teacher_id', teacherId).eq('paid_month', monthYear).eq('status', 'pagado')
+    .select(BONUS_COLS);
+  if (error) throw new Error(`No se pudieron reabrir los bonos del mes: ${error.message}`);
+  return (data ?? []).map(mapTeacherBonus);
 }
 
 /**

@@ -29,16 +29,17 @@
 import {
   dbGetTeachers, dbGetStudents, dbGetAssignments, dbGetScoringEvents,
   dbGetFinanceRates, dbGetFinancePayments, dbGetClassRecords, dbGetClassJoinLogs,
-  dbGetManualApprovals, dbGetClassTranscripts, dbGetProductPrices,
+  dbGetManualApprovals, dbGetClassTranscripts, dbGetProductPrices, dbGetTeacherBonuses,
 } from '@/lib/db';
 import { calculateTeacherFinance } from '@/lib/finance';
+import { previousMonthYear } from '@/lib/bonuses';
 import { margenDe } from '@/lib/billing';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { madridToday } from '@/lib/subscriptionAccess';
 import { esProfesorDePrueba, sinProfesoresDePrueba } from '@/lib/externalTeachers';
 import type {
   Teacher, Student, Assignment, ScoringEvent, FinanceRate, FinancePayment,
-  ClassRecord, ClassJoinLog, FinanceManualApproval, ProductPrice,
+  ClassRecord, ClassJoinLog, FinanceManualApproval, ProductPrice, TeacherBonus,
 } from '@/types';
 
 // ── "Alumno activo" ──────────────────────────────────────────────────────────
@@ -94,6 +95,8 @@ export interface PayoutDataset {
   students: Student[];
   assignments: Assignment[];
   scoringEvents: ScoringEvent[];
+  /** Bonos de retención y upsells (teacher_bonuses): suman en el mes en que se aprueban. */
+  teacherBonuses: TeacherBonus[];
   rates: FinanceRate[];
   payments: FinancePayment[];
   classRecords: ClassRecord[];
@@ -122,7 +125,7 @@ export async function loadPayoutDataset(force = false): Promise<PayoutDataset> {
   const [
     todosLosTeachers, students, assignments, scoringEvents,
     rates, payments, classRecords, joinLogs, manualApprovals, classAnalyses,
-    productPrices,
+    productPrices, teacherBonuses,
   ] = await Promise.all([
     // CON los archivados: un profesor que se fue en agosto siguió costando lo que
     // costó en julio. Si el dataset dejara de verlo, el gasto de un mes ya cerrado
@@ -132,6 +135,7 @@ export async function loadPayoutDataset(force = false): Promise<PayoutDataset> {
     dbGetStudents(), dbGetAssignments(), dbGetScoringEvents(),
     dbGetFinanceRates(), dbGetFinancePayments(), dbGetClassRecords(), dbGetClassJoinLogs(),
     dbGetManualApprovals(), dbGetClassTranscripts(), dbGetProductPrices(),
+    dbGetTeacherBonuses(),
   ]);
 
   // Las cuentas de prueba se quitan ACÁ, en el dataset, y no al construir la
@@ -187,7 +191,7 @@ export async function loadPayoutDataset(force = false): Promise<PayoutDataset> {
   }
 
   cached = {
-    teachers, students, assignments, scoringEvents, rates, payments,
+    teachers, students, assignments, scoringEvents, teacherBonuses, rates, payments,
     classRecords, joinLogs, manualApprovals, classAnalyses,
     activeTeacherIds, productPrices, rosterByTeacher, loadedAt: Date.now(),
   };
@@ -299,6 +303,8 @@ export function computeMonth(ds: PayoutDataset, monthYear: string): MonthPayouts
 
   const teachers: TeacherPayout[] = ds.teachers.map(t => {
     const payment = ds.payments.find(p => p.teacherId === t.id && p.monthYear === monthYear) ?? null;
+    const prevMonth = previousMonthYear(monthYear);
+    const previousPayment = ds.payments.find(p => p.teacherId === t.id && p.monthYear === prevMonth) ?? null;
 
     // MISMAS entradas que app/finanzas y que la vista del profesor. Si esta
     // llamada recibiera menos, el dashboard mostraría un número que no coincide
@@ -311,9 +317,11 @@ export function computeMonth(ds: PayoutDataset, monthYear: string): MonthPayouts
       classAnalyses: ds.classAnalyses,
       rates: ds.rates,
       scoringEvents: ds.scoringEvents,
+      teacherBonuses: ds.teacherBonuses,
       students: ds.students,
       manualApprovals: ds.manualApprovals,
       payment,
+      previousPayment,
       gridOccupancy: gridOccupancyOfTeacher(t),
     });
 

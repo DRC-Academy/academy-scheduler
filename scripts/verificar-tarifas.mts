@@ -7,6 +7,7 @@ for (const line of readFileSync('.env.local', 'utf8').split('\n')) {
 }
 const { loadPayoutDataset } = await import('@/lib/externalPayouts');
 const { calculateTeacherFinance } = await import('@/lib/finance');
+const { previousMonthYear } = await import('@/lib/bonuses');
 const { gridOccupancyOfTeacher } = await import('@/lib/teacherClasses');
 
 const MES = process.env.MES ?? '2026-08';
@@ -17,8 +18,9 @@ const fin = calculateTeacherFinance({
   teacherId: teacher.id, teacherName: teacher.name, monthYear: MES,
   assignments: ds.assignments, joinLogs: ds.joinLogs, classRecords: ds.classRecords,
   classAnalyses: ds.classAnalyses, rates: ds.rates, scoringEvents: ds.scoringEvents,
-  students: ds.students, manualApprovals: ds.manualApprovals,
+  students: ds.students, manualApprovals: ds.manualApprovals, teacherBonuses: ds.teacherBonuses,
   payment: ds.payments.find(p => p.teacherId === T && p.monthYear === MES) ?? null,
+  previousPayment: ds.payments.find(p => p.teacherId === T && p.monthYear === previousMonthYear(MES)) ?? null,
   gridOccupancy: gridOccupancyOfTeacher(teacher),
 });
 
