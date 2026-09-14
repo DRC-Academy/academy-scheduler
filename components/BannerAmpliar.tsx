@@ -16,8 +16,15 @@
 //
 // PLANO Y SIN ANIMACIONES. Las barras son CSS puro (un div con `width` en
 // porcentaje) y se pintan ya en su sitio: antes crecían desde 0 al montar, y el
-// diseño nuevo pide quieto y limpio. Lo único que se mueve es la entrada de la
-// tarjeta (`pg-rise`), que comparten todas las secciones de la ficha.
+// diseño nuevo pide quieto y limpio. Esta tarjeta tampoco lleva la entrada
+// escalonada (`pg-rise`) del resto de la ficha: nada se mueve en el banner.
+//
+// TRES FILAS, TRES PESOS. El plan actual es el punto de partida (gris, sin
+// borde); los planes superiores van en claro con borde suave; el de MÁS horas
+// (`estimacion.mejor`, el último de la lista) lleva además el distintivo
+// "Recomendado" y un borde verde algo más marcado, sin cambiar de tamaño ni
+// de altura respecto a los otros. La etiqueta amarilla del ahorro sigue siendo
+// lo que más salta; el distintivo es secundario.
 
 import {
   etiquetaMeses, type Estimacion, type EstadoBanner,
@@ -77,13 +84,15 @@ export function BannerAmpliar({ estimacion }: { estimacion: Estimacion | null })
   const t = TEXTOS[estimacion.estado];
 
   return (
-    <section className="pg-card pg-pace pg-rise" style={{ animationDelay: '180ms' }}>
+    <section className="pg-card pg-pace">
       <h2 className="pg-pace-title">{t.titulo(estimacion)}</h2>
       <p className="pg-pace-lede">{t.entrada(estimacion)}</p>
 
       <ol className="pg-bars">
-        {estimacion.opciones.map(o => (
-          <li key={o.horasSemanales} className={`pg-bar-row${o.esActual ? ' is-current' : ''}`}>
+        {estimacion.opciones.map(o => {
+          const esMejor = !o.esActual && estimacion.mejor?.horasSemanales === o.horasSemanales;
+          return (
+          <li key={o.horasSemanales} className={`pg-bar-row${o.esActual ? ' is-current' : ''}${esMejor ? ' is-best' : ''}`}>
             {/*
               Orden de la fila: plan · distintivo · barra+meses · fecha.
               El distintivo dice una de dos cosas y nunca las dos: en el plan que ya
@@ -94,6 +103,10 @@ export function BannerAmpliar({ estimacion }: { estimacion: Estimacion | null })
             <div className="pg-bar-head">
               <span className="pg-bar-plan">{o.horasSemanales} h a la semana</span>
               {o.esActual && <span className="pg-chip">Tu plan</span>}
+              {/* Va dentro de la cabecera de la fila (y no en posición absoluta)
+                  para que en 360 px nunca se monte sobre "4 h a la semana": si
+                  no cabe, baja de línea. */}
+              {esMejor && <span className="pg-badge-best">Recomendado</span>}
             </div>
 
             {!o.esActual && o.mesesAhorrados > 0 && (
@@ -111,7 +124,8 @@ export function BannerAmpliar({ estimacion }: { estimacion: Estimacion | null })
 
             <p className="pg-bar-date">Llegarías en {o.llegada}</p>
           </li>
-        ))}
+          );
+        })}
       </ol>
 
       {t.cta && (

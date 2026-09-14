@@ -36,7 +36,10 @@ import { resolveWeeklyHours, type AssignmentLite, type StudentLite } from '@/lib
 import { BannerAmpliar } from '@/components/BannerAmpliar';
 import type { ClassAnalysisRow, StudentProfileRow } from '@/lib/aiTypes';
 
-export function ProgresoFicha({ studentName, profile, analyses, assignment, student }: {
+// `studentName` ya no se muestra (el saludo con el nombre se quitó en
+// septiembre de 2026: la página empieza directamente con la escalera de
+// niveles). Sigue en la firma para no tocar a los dos que la montan.
+export function ProgresoFicha({ profile, analyses, assignment, student }: {
   /** Nombre completo del alumno. Solo se usa el nombre de pila. */
   studentName: string;
   profile: StudentProfileRow | null;
@@ -47,8 +50,6 @@ export function ProgresoFicha({ studentName, profile, analyses, assignment, stud
    *  cae a los textos de la assignment, como antes. */
   student?: StudentLite | null;
 }) {
-  const firstName = studentName.trim().split(/\s+/)[0] || studentName;
-
   // Todo lo que sale de la ficha pasa por el cortafuegos: está escrita para el
   // profesor y, con el formulario a medias, la IA deja ahí notas de trabajo que
   // no puede leer un cliente. Ver lib/studentFacing.ts.
@@ -91,15 +92,8 @@ export function ProgresoFicha({ studentName, profile, analyses, assignment, stud
 
   return (
     <>
-      <section className="pg-intro pg-rise" style={{ animationDelay: '0ms' }}>
-        <p className="pg-eyebrow">Tu progreso en inglés</p>
-        <h1 className="pg-h1">Esto es lo que llevas conseguido, {firstName}.</h1>
-        <p className="pg-lede">
-          Un resumen de tu nivel, de lo que ya dominas y de hacia dónde vamos en las próximas clases.
-        </p>
-      </section>
-
-      <section className="pg-card pg-hero pg-rise" style={{ animationDelay: '60ms' }}>
+      {/* Sin encabezado: lo primero que ve el alumno es la escalera de niveles. */}
+      <section className="pg-card pg-hero pg-rise" style={{ animationDelay: '0ms' }}>
         <LevelLadder level={level} target={estimacion?.meta.nivel ?? null} />
 
         <div className="pg-stats">
@@ -333,25 +327,13 @@ const PROGRESO_CSS = `
 }
 
 .pg-main {
-  max-width: 780px; margin: 0 auto; padding: 36px 20px 72px;
+  max-width: 780px; margin: 0 auto; padding: 28px 20px 72px;
   display: flex; flex-direction: column; gap: 18px;
 }
 
 /* ── Entrada escalonada ─────────────────────────────────────────────────── */
 .pg-rise { animation: pg-rise 0.55s cubic-bezier(0.22, 0.61, 0.36, 1) backwards; }
 @keyframes pg-rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
-
-/* ── Cabecera de contenido ──────────────────────────────────────────────── */
-.pg-intro { padding: 6px 2px 4px; }
-.pg-eyebrow {
-  font-size: 11.5px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
-  color: var(--pg-green-dark); margin: 0 0 12px;
-}
-.pg-h1 {
-  font-size: clamp(27px, 6.2vw, 40px); font-weight: 700; letter-spacing: -0.03em;
-  line-height: 1.12; margin: 0; text-wrap: balance;
-}
-.pg-lede { font-size: 15.5px; line-height: 1.6; color: var(--pg-muted); margin: 12px 0 0; max-width: 46ch; }
 
 /* ── Tarjeta base ───────────────────────────────────────────────────────── */
 .pg-card {
@@ -432,50 +414,65 @@ const PROGRESO_CSS = `
    Las tres filas comparten el mismo ancho de barra a proposito: si cada una
    empezara en un sitio distinto, la comparacion visual mentiria.
 */
-.pg-pace { padding: 28px 26px 24px; box-shadow: 0 2px 10px rgba(16, 32, 16, 0.05); }
+/* Luminoso y plano: sin sombra en la tarjeta, borde casi imperceptible, aire
+   entre elementos. Dos tamaños de texto en todo el banner (20 px el título, 15 px
+   el resto, 13 px lo secundario): el contraste lo pone el peso, no el tamaño. */
+.pg-pace { padding: 28px 26px 26px; box-shadow: none; border-color: #ECEDE8; }
 .pg-pace-title {
-  font-size: clamp(20px, 4.4vw, 25px); font-weight: 700; letter-spacing: -0.025em;
-  line-height: 1.22; margin: 0 0 8px; color: var(--pg-ink); text-wrap: balance;
+  font-size: 20px; font-weight: 700; letter-spacing: -0.02em;
+  line-height: 1.25; margin: 0 0 6px; color: var(--pg-ink); text-wrap: balance;
 }
 .pg-pace-lede {
-  font-size: 14.5px; font-weight: 400; line-height: 1.55; color: var(--pg-muted);
-  margin: 0 0 20px; max-width: 52ch;
+  font-size: 15px; font-weight: 400; line-height: 1.55; color: var(--pg-muted);
+  margin: 0 0 22px; max-width: 52ch;
 }
 
-/* Cada plan, en su propio bloque redondeado. */
-.pg-bars { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
-.pg-bar-row { background: var(--pg-green-tint); border-radius: 14px; padding: 14px 16px; }
-/* El plan que ya tiene: gris neutro, para que los de arriba destaquen sobre el. */
-.pg-bar-row.is-current { background: var(--pg-grey-tint); }
+/* Cada plan, en su propio bloque redondeado. Tres pesos:
+   · el actual: gris apagado, sin borde — el punto de partida;
+   · los superiores: blanco con borde suave — "vivos" al lado del primero;
+   · el de más horas: verde clarísimo y borde verde algo más marcado. */
+.pg-bars { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.pg-bar-row {
+  background: #FFFFFF; border: 1px solid #E0ECE2; border-radius: 14px; padding: 16px 18px;
+}
+.pg-bar-row.is-current { background: #F2F3F0; border-color: transparent; }
+.pg-bar-row.is-best { background: #F1FAF3; border-color: #9BD6A8; }
 
-.pg-bar-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
-.pg-bar-plan { font-size: 14px; font-weight: 700; color: var(--pg-ink); }
+.pg-bar-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.pg-bar-plan { font-size: 15px; font-weight: 700; color: var(--pg-ink); }
+.pg-bar-row.is-current .pg-bar-plan { color: var(--pg-muted); }
 .pg-chip {
-  font-size: 9.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
-  background: var(--pg-line); color: var(--pg-muted);
-  padding: 3px 8px; border-radius: 999px; white-space: nowrap;
+  font-size: 13px; font-weight: 400; color: var(--pg-faint); white-space: nowrap;
 }
-/* El ahorro: lo más visible de la fila, y bastante más grande que la etiqueta
-   "Tu plan" (14,5 px contra 9,5 px). Es lo que se quiere que mire el alumno. */
+/* Distintivo del plan de más horas: chico, verde de marca, arriba a la derecha
+   de la cabecera de la fila. Secundario a propósito: la etiqueta amarilla es la
+   que tiene que llamar la atención. */
+.pg-badge-best {
+  margin-left: auto; font-size: 11.5px; font-weight: 700; letter-spacing: 0.02em; line-height: 1;
+  background: var(--pg-green); color: #fff; padding: 5px 9px; border-radius: 999px; white-space: nowrap;
+}
+/* El ahorro: lo más visible de la fila. Es lo que se quiere que mire el alumno. */
 .pg-save {
-  display: inline-block; margin-top: 9px;
-  font-size: 14.5px; font-weight: 700; letter-spacing: -0.01em; white-space: nowrap;
+  display: inline-block; margin-top: 10px;
+  font-size: 15px; font-weight: 700; letter-spacing: -0.01em; white-space: nowrap;
   background: var(--pg-yellow); color: var(--pg-ink);
   padding: 6px 13px; border-radius: 999px;
 }
 
 /* Barra + meses en la misma linea, con los meses SIEMPRE en el mismo sitio: es
-   lo que hace que las tres barras arranquen y acaben igual. */
-.pg-bar-line { display: flex; align-items: center; gap: 12px; margin-top: 11px; }
-.pg-track { flex: 1; height: 8px; border-radius: 999px; background: #DFE0DA; overflow: hidden; min-width: 0; }
+   lo que hace que las tres barras arranquen y acaben igual. Barra fina con las
+   puntas redondeadas. */
+.pg-bar-line { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+.pg-track { flex: 1; height: 6px; border-radius: 999px; background: #E9EBE6; overflow: hidden; min-width: 0; }
 .pg-fill { height: 100%; border-radius: 999px; background: var(--pg-green); }
 /* El plan actual siempre esta lleno del todo, y en gris: es la referencia. */
-.pg-bar-row.is-current .pg-fill { background: #B9BAB3; }
+.pg-bar-row.is-current .pg-fill { background: #C4C6BF; }
 .pg-bar-months {
-  font-size: 16px; font-weight: 700; letter-spacing: -0.02em; color: var(--pg-ink);
+  font-size: 15px; font-weight: 700; letter-spacing: -0.01em; color: var(--pg-ink);
   white-space: nowrap; min-width: 74px; text-align: right;
 }
-.pg-bar-date { margin: 7px 0 0; font-size: 12.5px; line-height: 1.4; color: var(--pg-faint); }
+.pg-bar-row.is-current .pg-bar-months { color: var(--pg-muted); }
+.pg-bar-date { margin: 8px 0 0; font-size: 13px; line-height: 1.4; color: var(--pg-faint); }
 
 /* Boton: pildora verde centrada, sin hover llamativo. Es lo unico que va debajo
    de las filas: la nota que repetia el ahorro y el descargo se quitaron. */
@@ -547,7 +544,7 @@ const PROGRESO_CSS = `
 
 /* ── Móvil ──────────────────────────────────────────────────────────────── */
 @media (max-width: 720px) {
-  .pg-main { padding: 26px 14px 56px; gap: 14px; }
+  .pg-main { padding: 20px 14px 56px; gap: 14px; }
   .pg-card { padding: 20px 18px; border-radius: 16px; }
   .pg-pace { padding: 24px 18px 20px; }
   .pg-ladder { gap: 4px; }
@@ -562,10 +559,11 @@ const PROGRESO_CSS = `
   /* A 360 px el hueco de los meses se estrecha, pero NO desaparece: sigue siendo
      fijo para las tres filas, que es lo que mantiene las barras alineadas. Con
      nowrap el número nunca se parte ni se monta sobre la barra. */
-  .pg-bar-row { padding: 13px 14px; border-radius: 12px; }
-  .pg-bar-months { font-size: 15px; min-width: 66px; }
+  .pg-bar-row { padding: 14px 14px; border-radius: 12px; }
+  .pg-bar-months { min-width: 66px; }
   .pg-bar-line { gap: 10px; }
-  .pg-save { font-size: 13.5px; padding: 5px 11px; }
+  .pg-save { font-size: 14px; padding: 5px 11px; }
+  .pg-badge-best { font-size: 11px; padding: 4px 8px; }
   /* Ancho completo solo en móvil: ahí es más cómodo de tocar. */
   .pg-cta { width: 100%; }
   .pg-timeline { padding-left: 22px; }
