@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { Assignment, Teacher, TeacherBonus, FinancePayment } from '@/types';
-import { buildBonusRows, bonusesForMonth, bonusCounters, previousMonthYear, spainMonthOf } from './bonuses';
+import { buildBonusRows, bonusesForMonth, bonusCounters, accrualMonthFor, nextMonthYear } from './bonuses';
 import { retentionDaysLeft, retentionDueIso, retentionStartIso, isRetentionBonusDue, hasRetentionBonus } from './retention';
 
 // Hoy fijo: 14/09/2026 a las 12:00 en España (10:00 UTC).
@@ -101,9 +101,10 @@ describe('buildBonusRows: una fila por par con su estado', () => {
     expect(rows[0].estado).toBe('disponible');
   });
 
-  it('orden: reclamados, disponibles, próximos, y el resto', () => {
-    const rows = buildBonusRows({ assignments, bonuses, teachers: T, now: HOY });
-    expect(rows.map(r => r.estado).slice(0, 3)).toEqual(['reclamado', 'disponible', 'proximo']);
+  it('orden: reclamados, disponibles, historial, y al final lo que aún no cumplió', () => {
+    const estados = buildBonusRows({ assignments, bonuses, teachers: T, now: HOY }).map(r => r.estado);
+    expect(estados.slice(0, 2)).toEqual(['reclamado', 'disponible']);
+    expect(estados.slice(-2)).toEqual(['proximo', 'en_curso']);
   });
 
   it('las cifras cuentan reclamados, próximos y disponibles', () => {
@@ -112,51 +113,37 @@ describe('buildBonusRows: una fila por par con su estado', () => {
   });
 });
 
-describe('bonusesForMonth: mes contable de un bono aprobado', () => {
-  const pago = (monthYear: string, paidAt: string | null): FinancePayment => ({
+describe('bonusesForMonth y accrualMonthFor: en qué liquidación entra un bono', () => {
+  const pago = (monthYear: string, paid: boolean): FinancePayment => ({
     id: `fp_t9_${monthYear}`, teacherId: 't9', teacherName: 'T9', monthYear,
     totalClassesPayable: 0, totalAmount: 0, bonusAmount: 0,
-    status: paidAt ? 'paid' : 'pending', paidAt: paidAt ?? undefined,
+    status: paid ? 'paid' : 'pending', paidAt: paid ? '2026-09-05T10:00:00Z' : undefined,
   });
-  const aprobadoSep = bonus({ id: 'a', teacherId: 't9', studentName: 'A', status: 'aprobado', approvedAt: '2026-09-10T10:00:00Z' });
-  const aprobadoAgo = bonus({ id: 'b', teacherId: 't9', studentName: 'B', status: 'aprobado', approvedAt: '2026-08-30T10:00:00Z' });
+  const pagadoSep   = bonus({ id: 'a', teacherId: 't9', studentName: 'A', status: 'pagado', approvedAt: '2026-09-10T10:00:00Z', paidMonth: '2026-09' });
+  const pagadoOct   = bonus({ id: 'b', teacherId: 't9', studentName: 'B', status: 'pagado', approvedAt: '2026-09-28T10:00:00Z', paidMonth: '2026-10' });
   const externo     = bonus({ id: 'c', teacherId: 't9', studentName: 'C', status: 'pagado_externo', paidMonth: '2026-09' });
-  const rechazado   = bonus({ id: 'd', teacherId: 't9', studentName: 'D', status: 'rechazado', approvedAt: '2026-09-10T10:00:00Z' });
   const reclamado   = bonus({ id: 'e', teacherId: 't9', studentName: 'E', status: 'reclamado', claimedAt: '2026-09-10T10:00:00Z' });
-  const otroProfe   = bonus({ id: 'f', teacherId: 't10', studentName: 'F', status: 'aprobado', approvedAt: '2026-09-10T10:00:00Z' });
+  const otroProfe   = bonus({ id: 'f', teacherId: 't10', studentName: 'F', status: 'pagado', approvedAt: '2026-09-10T10:00:00Z', paidMonth: '2026-09' });
 
-  it('suma solo aprobados/pagados del mes; nunca pagado_externo, rechazado ni reclamado', () => {
-    const r = bonusesForMonth([aprobadoSep, aprobadoAgo, externo, rechazado, reclamado, otroProfe], 't9', '2026-09', null, null);
-    expect(r.map(b => b.id)).toEqual(['a']);
+  it('suma solo los pagados desde la app con ese paid_month; nunca los históricos por email ni los reclamados', () => {
+    expect(bonusesForMonth([pagadoSep, pagadoOct, externo, reclamado, otroProfe], 't9', '2026-09').map(b => b.id)).toEqual(['a']);
+    expect(bonusesForMonth([pagadoSep, pagadoOct, externo, reclamado, otroProfe], 't9', '2026-10').map(b => b.id)).toEqual(['b']);
   });
 
-  it('aprobado DESPUÉS de marcar el mes pagado pasa al mes siguiente', () => {
-    const sepPagado = pago('2026-09', '2026-09-05T10:00:00Z');   // se pagó el 5, el bono se aprobó el 10
-    expect(bonusesForMonth([aprobadoSep], 't9', '2026-09', sepPagado, null)).toEqual([]);
-    expect(bonusesForMonth([aprobadoSep], 't9', '2026-10', null, sepPagado).map(b => b.id)).toEqual(['a']);
+  it('marcado en un mes abierto: entra en ese mes', () => {
+    expect(accrualMonthFor(null, HOY)).toBe('2026-09');
+    expect(accrualMonthFor(pago('2026-09', false), HOY)).toBe('2026-09');
   });
 
-  it('aprobado ANTES de marcar el mes pagado se queda en su mes', () => {
-    const sepPagado = pago('2026-09', '2026-09-20T10:00:00Z');
-    expect(bonusesForMonth([aprobadoSep], 't9', '2026-09', sepPagado, null).map(b => b.id)).toEqual(['a']);
-    expect(bonusesForMonth([aprobadoSep], 't9', '2026-10', null, sepPagado)).toEqual([]);
+  it('marcado cuando Finanzas ya cerró el mes: pasa al siguiente', () => {
+    expect(accrualMonthFor(pago('2026-09', true), HOY)).toBe('2026-10');
+    // Un pago cerrado de OTRO mes no cuenta.
+    expect(accrualMonthFor(pago('2026-08', true), HOY)).toBe('2026-09');
   });
 
-  it('si el mes anterior se deshizo (pending), el bono vuelve a ese mes', () => {
-    const sepPendiente = pago('2026-09', null);
-    expect(bonusesForMonth([aprobadoSep], 't9', '2026-10', null, sepPendiente)).toEqual([]);
-    expect(bonusesForMonth([aprobadoSep], 't9', '2026-09', sepPendiente, null).map(b => b.id)).toEqual(['a']);
-  });
-
-  it('un bono ya pagado se ancla a paid_month', () => {
-    const pagado = bonus({ id: 'g', teacherId: 't9', studentName: 'G', status: 'pagado', approvedAt: '2026-08-30T10:00:00Z', paidMonth: '2026-09' });
-    expect(bonusesForMonth([pagado], 't9', '2026-09', null, null).map(b => b.id)).toEqual(['g']);
-    expect(bonusesForMonth([pagado], 't9', '2026-08', null, null)).toEqual([]);
-  });
-
-  it('el mes del approved_at se corta en hora de España', () => {
-    // 31/08 a las 22:30 UTC = 1/09 00:30 en Madrid → septiembre.
-    expect(spainMonthOf('2026-08-31T22:30:00Z')).toBe('2026-09');
-    expect(previousMonthYear('2026-01')).toBe('2025-12');
+  it('el mes en curso se corta en hora de España', () => {
+    // 30/09 a las 22:30 UTC = 1/10 00:30 en Madrid → octubre.
+    expect(accrualMonthFor(null, new Date('2026-09-30T22:30:00Z'))).toBe('2026-10');
+    expect(nextMonthYear('2026-12')).toBe('2027-01');
   });
 });

@@ -5,13 +5,16 @@
 // MISMA lista que ve el profesor en Mi Scoring y que usa Seguimiento, así el
 // "disponible" no puede diferir entre pantallas.
 //
-// Qué hace el admin acá:
-//   · reclamado        → Aprobar (suma al mes de la aprobación) o Rechazar (motivo).
-//   · disponible/próximo → "Ya pagado fuera del sistema" (uno o varios a la vez):
-//                        crea la fila pagado_externo, que bloquea el par y no suma.
-//   · pagado_externo   → el alumno es editable (históricos "SIN NOMBRE — …").
-//   · cualquier fila con asignación → "con el profe desde" editable (teacher_since).
-//   · Cargar upsell    → filas 'aprobado' directas (el profesor no reclama upsells).
+// Una sola acción: "Marcar pagado". Solo se puede pulsar cuando el bono ya
+// cumplió (disponible, o reclamado por el profesor); mientras no cumpla, el
+// botón está deshabilitado y dice cuántos días faltan. Al marcarlo, el bono
+// entra en la liquidación del mes en curso (o del siguiente si Finanzas ya
+// cerró el mes) y el profesor lo ve como pagado. "Pagado" es uno solo: los
+// históricos que se pagaron por email antes de la app se ven igual.
+//
+// Además: "con el profe desde" (teacher_since) es editable con el lápiz, porque
+// la semilla asumió que nadie cambió de profesor; y "Cargar upsell" crea filas
+// ya pagadas (el profesor no reclama upsells).
 //
 // Mismo lenguaje visual que Finanzas (clases fz-* → acá bz-*). En el teléfono
 // cada fila es una tarjeta; nada se desliza en horizontal.
@@ -20,7 +23,7 @@ import { useMemo, useState } from 'react';
 import { useTeachers } from '@/lib/TeachersContext';
 import { useAuth } from '@/lib/AuthContext';
 import {
-  buildBonusRows, bonusCounters, bonusEurosFor, BONUS_STATE_LABEL,
+  buildBonusRows, bonusCounters, bonusEurosFor, bonusIsPayable, accrualMonthFor, BONUS_STATE_LABEL,
   type BonusRow, type BonusRowState,
 } from '@/lib/bonuses';
 import { normName, spainTodayIso, isActiveAssignmentLike } from '@/lib/retention';
@@ -36,53 +39,53 @@ function fecha(iso: string | null | undefined): string {
 function eur(n: number): string {
   return `${Math.round(n)} €`;
 }
+const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+function mesLargo(monthYear: string): string {
+  const [y, m] = monthYear.split('-').map(Number);
+  return `${MESES[(m ?? 1) - 1]} ${y}`;
+}
 
-// "Todos" es todo lo que ya es (o está por ser) un bono. Los pares a los que les
-// falta más de un mes van aparte, en "En curso": solo sirven para ver y corregir
-// la fecha "con el profe desde".
-const ESTADOS: Array<{ id: 'todos' | BonusRowState; label: string }> = [
+/** Los filtros. "Todos" es lo que ya es un bono; lo que aún no cumplió va aparte en "En curso". */
+type Filtro = 'todos' | 'disponible' | 'reclamado' | 'pagado' | 'en_curso';
+const FILTROS: Array<{ id: Filtro; label: string }> = [
   { id: 'todos', label: 'Todos' },
-  { id: 'reclamado', label: 'Reclamados' },
   { id: 'disponible', label: 'Disponibles' },
-  { id: 'proximo', label: 'Próximos' },
-  { id: 'aprobado', label: 'Aprobados' },
+  { id: 'reclamado', label: 'Reclamados' },
   { id: 'pagado', label: 'Pagados' },
-  { id: 'pagado_externo', label: 'Pagados fuera' },
-  { id: 'rechazado', label: 'Rechazados' },
   { id: 'en_curso', label: 'En curso' },
 ];
+const ES_PAGADO = new Set<BonusRowState>(['pagado', 'pagado_externo', 'aprobado']);
+const ES_EN_CURSO = new Set<BonusRowState>(['en_curso', 'proximo']);
+function pasaFiltro(r: BonusRow, f: Filtro): boolean {
+  if (f === 'todos') return !ES_EN_CURSO.has(r.estado);
+  if (f === 'pagado') return ES_PAGADO.has(r.estado);
+  if (f === 'en_curso') return ES_EN_CURSO.has(r.estado);
+  return r.estado === f;
+}
 
 const PILL: Record<BonusRowState, string> = {
-  reclamado: 'ambar', disponible: 'verde', proximo: 'azul', en_curso: 'gris',
-  aprobado: 'verde', pagado: 'gris', pagado_externo: 'gris', rechazado: 'rojo',
+  reclamado: 'ambar', disponible: 'verde', proximo: 'gris', en_curso: 'gris',
+  aprobado: 'gris', pagado: 'gris', pagado_externo: 'gris', rechazado: 'rojo',
 };
 
 // ─── Componente ──────────────────────────────────────────────────────────────
 
 export default function BonusesTab() {
   const {
-    teachers, assignments, teacherBonuses,
-    approveBonus, rejectBonus, markBonusesPaidExternal, addUpsellBonuses,
-    updateBonusStudentName, updateAssignmentTeacherSince, loadTeacherBonuses,
+    teachers, assignments, teacherBonuses, financePayments,
+    markBonusPaid, addUpsellBonuses, updateAssignmentTeacherSince, loadTeacherBonuses,
   } = useTeachers();
   const { user } = useAuth();
   const adminName = user?.displayName || user?.username || 'admin';
 
-  const [estado, setEstado]     = useState<'todos' | BonusRowState>('todos');
+  const [filtro, setFiltro]     = useState<Filtro>('todos');
   const [profe, setProfe]       = useState('');
   const [busqueda, setBusqueda] = useState('');
-  const [sel, setSel]           = useState<Set<string>>(new Set());
   const [busy, setBusy]         = useState<string | null>(null);
   const [error, setError]       = useState<string | null>(null);
   const [aviso, setAviso]       = useState<string | null>(null);
-
-  // Modales
-  const [rechazo, setRechazo]       = useState<BonusRow | null>(null);
-  const [externo, setExterno]       = useState<BonusRow[] | null>(null);
+  const [aPagar, setAPagar]     = useState<BonusRow | null>(null);
   const [upsellOpen, setUpsellOpen] = useState(false);
-
-  // Edición inline
-  const [editNombre, setEditNombre] = useState<{ key: string; value: string } | null>(null);
   const [editSince, setEditSince]   = useState<{ key: string; value: string } | null>(null);
 
   // Lista global (sin cuentas de prueba): de acá salen las cifras. Con un
@@ -99,8 +102,7 @@ export default function BonusesTab() {
 
   const q = normName(busqueda);
   const visibles = rows.filter(r =>
-    (estado === 'todos' ? r.estado !== 'en_curso' : r.estado === estado) &&
-    (!q || normName(r.studentName).includes(q) || normName(r.teacherName).includes(q)));
+    pasaFiltro(r, filtro) && (!q || normName(r.studentName).includes(q) || normName(r.teacherName).includes(q)));
 
   // Profesores del desplegable: los vigentes más los que tengan bonos (archivados).
   const conBonos = new Set(teacherBonuses.map(b => b.teacherId));
@@ -108,8 +110,11 @@ export default function BonusesTab() {
     .filter(t => !t.archivedAt || conBonos.has(t.id))
     .sort((a, b) => a.name.localeCompare(b.name));
 
-  const seleccionables = visibles.filter(r => r.estado === 'disponible' || r.estado === 'proximo');
-  const seleccionadas  = seleccionables.filter(r => sel.has(r.key));
+  /** Mes de liquidación en que entraría un bono marcado ahora para ese profesor. */
+  function mesLiquidacion(teacherId: string): string {
+    const mes = accrualMonthFor(null);
+    return accrualMonthFor(financePayments.find(p => p.teacherId === teacherId && p.monthYear === mes) ?? null);
+  }
 
   async function correr(key: string, fn: () => Promise<unknown>) {
     setBusy(key); setError(null); setAviso(null);
@@ -121,44 +126,14 @@ export default function BonusesTab() {
     } finally { setBusy(null); }
   }
 
-  async function aprobar(r: BonusRow) {
-    if (!r.bonus) return;
-    await correr(r.key, () => approveBonus(r.bonus!.id, adminName));
-  }
-
-  async function confirmarRechazo(motivo: string) {
-    if (!rechazo?.bonus) return;
-    const r = rechazo;
-    setRechazo(null);
-    await correr(r.key, () => rejectBonus(r.bonus!.id, motivo, adminName));
-  }
-
-  async function confirmarExterno(paidMonth: string, note: string) {
-    if (!externo) return;
-    const lote = externo;
-    setExterno(null);
-    await correr('lote', async () => {
-      const duplicados = await markBonusesPaidExternal(lote.map(r => ({
-        teacherId: r.teacherId,
-        assignmentId: r.assignment?.id ?? null,
-        studentName: r.studentName,
-        bonusType: 'retencion_6m' as const,
-        dueDate: r.dueDate,
-        paidMonth: paidMonth || null,
-        note: note.trim() || null,
-      })));
-      setSel(new Set());
-      if (duplicados.length > 0) setAviso(`Ya tenían bono cargado (se saltaron): ${duplicados.join(', ')}.`);
-      else setAviso(`${lote.length} bono${lote.length === 1 ? '' : 's'} marcado${lote.length === 1 ? '' : 's'} como pagado${lote.length === 1 ? '' : 's'} fuera del sistema.`);
+  async function confirmarPago() {
+    if (!aPagar) return;
+    const r = aPagar;
+    setAPagar(null);
+    await correr(r.key, async () => {
+      await markBonusPaid(r, adminName);
+      setAviso(`Bono de ${r.studentName} (${r.teacherName}) marcado como pagado: entra en la liquidación de ${mesLargo(mesLiquidacion(r.teacherId))}.`);
     });
-  }
-
-  async function guardarNombre(r: BonusRow) {
-    if (!editNombre || !r.bonus) return;
-    const value = editNombre.value.trim();
-    setEditNombre(null);
-    if (!value || value === r.studentName) return;
-    await correr(r.key, () => updateBonusStudentName(r.bonus!.id, value, r.teacherId));
   }
 
   async function guardarSince(r: BonusRow) {
@@ -169,14 +144,6 @@ export default function BonusesTab() {
     await correr(r.key, () => updateAssignmentTeacherSince(r.assignment!.id, value));
   }
 
-  function toggleSel(key: string) {
-    setSel(prev => { const n = new Set(prev); if (n.has(key)) n.delete(key); else n.add(key); return n; });
-  }
-  function toggleTodas() {
-    if (seleccionadas.length === seleccionables.length) setSel(new Set());
-    else setSel(new Set(seleccionables.map(r => r.key)));
-  }
-
   return (
     <div className="bz">
       <style dangerouslySetInnerHTML={{ __html: ESTILOS }} />
@@ -184,7 +151,7 @@ export default function BonusesTab() {
       <div className="bz-head">
         <div>
           <h2 className="bz-h1">Bonos</h2>
-          <p className="bz-sub">Retención a los 6 meses con el profesor y upsells. Un bono aprobado suma en el mes en que se aprueba.</p>
+          <p className="bz-sub">Retención a los 6 meses con el profesor, y upsells. «Marcar pagado» lo suma a la liquidación del mes.</p>
         </div>
         <div className="bz-head-r">
           <button type="button" className="adm-btn adm-btn-ghost" onClick={() => { setError(null); loadTeacherBonuses(); }}>Recargar</button>
@@ -197,37 +164,34 @@ export default function BonusesTab() {
 
       {/* Las tres cifras */}
       <div className="bz-kpis">
-        <button type="button" className={`adm-card bz-kpi${estado === 'reclamado' ? ' is-on' : ''}`} onClick={() => setEstado(estado === 'reclamado' ? 'todos' : 'reclamado')}>
-          <span className="bz-kpi-l">Reclamados sin aprobar</span>
+        <button type="button" className={`adm-card bz-kpi${filtro === 'reclamado' ? ' is-on' : ''}`} onClick={() => setFiltro(filtro === 'reclamado' ? 'todos' : 'reclamado')}>
+          <span className="bz-kpi-l">Reclamados</span>
           <span className="bz-kpi-v" style={{ color: cifras.reclamados > 0 ? '#B45309' : undefined }}>{cifras.reclamados}</span>
-          <span className="bz-kpi-def">El profesor ya pidió el bono. Aprobalo o rechazalo.</span>
+          <span className="bz-kpi-def">El profesor ya pidió el bono. Falta marcarlo pagado.</span>
         </button>
-        <button type="button" className={`adm-card bz-kpi${estado === 'proximo' ? ' is-on' : ''}`} onClick={() => setEstado(estado === 'proximo' ? 'todos' : 'proximo')}>
-          <span className="bz-kpi-l">Próximos a cobrar</span>
+        <button type="button" className={`adm-card bz-kpi${filtro === 'en_curso' ? ' is-on' : ''}`} onClick={() => setFiltro(filtro === 'en_curso' ? 'todos' : 'en_curso')}>
+          <span className="bz-kpi-l">Próximos a cumplir</span>
           <span className="bz-kpi-v">{cifras.proximos}</span>
           <span className="bz-kpi-def">Cumplen 6 meses con su profesor en los próximos 30 días.</span>
         </button>
-        <button type="button" className={`adm-card bz-kpi${estado === 'disponible' ? ' is-on' : ''}`} onClick={() => setEstado(estado === 'disponible' ? 'todos' : 'disponible')}>
-          <span className="bz-kpi-l">Disponibles sin reclamar</span>
+        <button type="button" className={`adm-card bz-kpi${filtro === 'disponible' ? ' is-on' : ''}`} onClick={() => setFiltro(filtro === 'disponible' ? 'todos' : 'disponible')}>
+          <span className="bz-kpi-l">Disponibles</span>
           <span className="bz-kpi-v" style={{ color: cifras.disponibles > 0 ? '#167A2D' : undefined }}>{cifras.disponibles}</span>
-          <span className="bz-kpi-def">Ya cumplieron y el profesor todavía no reclamó. Si ya se pagó por email, marcalo como pagado fuera.</span>
+          <span className="bz-kpi-def">Ya cumplieron y todavía no se pagaron.</span>
         </button>
       </div>
 
       {/* Filtros */}
       <div className="bz-filtros">
         <div className="bz-chips" role="group" aria-label="Estado">
-          {ESTADOS.map(e => {
-            const n = e.id === 'todos' ? rows.filter(r => r.estado !== 'en_curso').length : rows.filter(r => r.estado === e.id).length;
-            return (
-              <button key={e.id} type="button" className="bz-chip" aria-pressed={estado === e.id} onClick={() => setEstado(e.id)}>
-                {e.label} <span className="n">{n}</span>
-              </button>
-            );
-          })}
+          {FILTROS.map(f => (
+            <button key={f.id} type="button" className="bz-chip" aria-pressed={filtro === f.id} onClick={() => setFiltro(f.id)}>
+              {f.label} <span className="n">{rows.filter(r => pasaFiltro(r, f.id)).length}</span>
+            </button>
+          ))}
         </div>
         <div className="bz-filtros-r">
-          <select className="bz-sel" value={profe} onChange={e => { setProfe(e.target.value); setSel(new Set()); }} aria-label="Profesor">
+          <select className="bz-sel" value={profe} onChange={e => setProfe(e.target.value)} aria-label="Profesor">
             <option value="">Todos los profesores</option>
             {profesores.map(t => <option key={t.id} value={t.id}>{t.name}{t.archivedAt ? ' (archivado)' : ''}</option>)}
           </select>
@@ -235,23 +199,9 @@ export default function BonusesTab() {
         </div>
       </div>
 
-      {/* Acción masiva */}
-      {seleccionables.length > 0 && (
-        <div className="bz-lote">
-          <label className="bz-lote-l">
-            <input type="checkbox" checked={seleccionadas.length > 0 && seleccionadas.length === seleccionables.length} onChange={toggleTodas} />
-            {seleccionadas.length > 0 ? `${seleccionadas.length} seleccionado${seleccionadas.length === 1 ? '' : 's'}` : `Seleccionar los ${seleccionables.length} disponibles/próximos a la vista`}
-          </label>
-          <button type="button" className="adm-btn adm-btn-ghost bz-btn-sm" disabled={seleccionadas.length === 0 || busy === 'lote'} onClick={() => setExterno(seleccionadas)}>
-            Marcar como pagados fuera del sistema
-          </button>
-        </div>
-      )}
-
       {/* Tabla */}
       <div className="adm-card bz-tabla">
         <div className="bz-row head" aria-hidden>
-          <span className="bz-chk-h" />
           <span>Alumno</span><span>Profesor</span><span>Tipo</span><span>Importe</span>
           <span>Con el profe desde</span><span>Cumple el</span><span>Estado</span><span>Acciones</span>
         </div>
@@ -259,36 +209,16 @@ export default function BonusesTab() {
           <div className="bz-vacio">Nada que mostrar con estos filtros.</div>
         )}
         {visibles.map(r => {
-          const ocupado = busy === r.key || busy === 'lote';
-          const seleccionable = r.estado === 'disponible' || r.estado === 'proximo';
-          const nombreEditable = r.estado === 'pagado_externo' && !!r.bonus;
-          const editandoNombre = editNombre?.key === r.key;
+          const ocupado = busy === r.key;
+          const pagable = bonusIsPayable(r.estado);
+          const pagado = ES_PAGADO.has(r.estado);
           const editandoSince = editSince?.key === r.key;
+          const faltan = r.daysLeft !== null && r.daysLeft > 0 ? r.daysLeft : null;
           return (
             <div key={r.key} className={`bz-row is-${r.estado}${ocupado ? ' is-busy' : ''}`}>
-              <span className="bz-chk">
-                {seleccionable && <input type="checkbox" checked={sel.has(r.key)} onChange={() => toggleSel(r.key)} aria-label={`Seleccionar ${r.studentName}`} />}
-              </span>
-
               <span className="bz-nom">
-                {editandoNombre ? (
-                  <input
-                    className="bz-in bz-in-inline" autoFocus value={editNombre.value}
-                    onChange={e => setEditNombre({ key: r.key, value: e.target.value })}
-                    onBlur={() => guardarNombre(r)}
-                    onKeyDown={e => { if (e.key === 'Enter') guardarNombre(r); if (e.key === 'Escape') setEditNombre(null); }}
-                    aria-label="Nombre del alumno"
-                  />
-                ) : (
-                  <>
-                    <b className={r.studentName.toUpperCase().startsWith('SIN NOMBRE') ? 'bz-sinnombre' : ''}>{r.studentName}</b>
-                    {nombreEditable && (
-                      <button type="button" className="bz-lapiz" title="Corregir el alumno" onClick={() => setEditNombre({ key: r.key, value: r.studentName })}>✎</button>
-                    )}
-                    {r.bonus?.note && r.estado !== 'rechazado' && <small className="bz-nota">{r.bonus.note}</small>}
-                    {r.estado === 'rechazado' && r.bonus?.note && <small className="bz-nota">Motivo: {r.bonus.note}</small>}
-                  </>
-                )}
+                <b>{r.studentName}</b>
+                {r.bonus?.note && <small className="bz-nota">{r.bonus.note}</small>}
               </span>
 
               {/* En escritorio son tres columnas (display: contents); en el teléfono, una línea. */}
@@ -311,40 +241,38 @@ export default function BonusesTab() {
                   ) : (
                     <>
                       {fecha(r.teacherSince)}
-                      <button type="button" className="bz-lapiz" title="Corregir desde cuándo está con este profesor" onClick={() => setEditSince({ key: r.key, value: r.teacherSince ?? spainTodayIso() })}>✎</button>
+                      {!pagado && (
+                        <button type="button" className="bz-lapiz" title="Corregir desde cuándo está con este profesor" onClick={() => setEditSince({ key: r.key, value: r.teacherSince ?? spainTodayIso() })}>✎</button>
+                      )}
                     </>
                   )
-                ) : <span className="bz-muted">sin asignación</span>}
+                ) : <span className="bz-muted">{r.teacherSince ? fecha(r.teacherSince) : 'sin asignación'}</span>}
               </span>
 
               <span className="bz-due">
                 {r.dueDate ? (
                   <>
                     {fecha(r.dueDate)}
-                    {r.daysLeft !== null && (r.estado === 'proximo' || r.estado === 'disponible' || r.estado === 'en_curso') && (
-                      <small className="bz-nota">{r.daysLeft > 0 ? `faltan ${r.daysLeft} día${r.daysLeft === 1 ? '' : 's'}` : r.daysLeft === 0 ? 'hoy' : `hace ${-r.daysLeft} día${r.daysLeft === -1 ? '' : 's'}`}</small>
-                    )}
+                    {faltan !== null && !pagado && <small className="bz-nota">faltan {faltan} día{faltan === 1 ? '' : 's'}</small>}
                   </>
                 ) : <span className="bz-muted">—</span>}
               </span>
 
               <span className="bz-est">
                 <span className={`bz-pill ${PILL[r.estado]}`}>{BONUS_STATE_LABEL[r.estado]}</span>
-                {r.bonus?.status === 'pagado' && r.bonus.paidMonth && <small className="bz-nota">mes {r.bonus.paidMonth}</small>}
-                {r.bonus?.status === 'pagado_externo' && r.bonus.paidMonth && <small className="bz-nota">mes {r.bonus.paidMonth}</small>}
-                {r.bonus?.status === 'aprobado' && r.bonus.approvedAt && <small className="bz-nota">aprobado el {fecha(r.bonus.approvedAt)}</small>}
-                {r.bonus?.status === 'reclamado' && r.bonus.claimedAt && <small className="bz-nota">reclamado el {fecha(r.bonus.claimedAt)}</small>}
+                {pagado && r.bonus?.paidMonth && <small className="bz-nota">{mesLargo(r.bonus.paidMonth)}</small>}
+                {r.estado === 'reclamado' && r.bonus?.claimedAt && <small className="bz-nota">reclamado el {fecha(r.bonus.claimedAt)}</small>}
               </span>
 
               <span className="bz-act">
-                {r.estado === 'reclamado' && (
-                  <>
-                    <button type="button" className="adm-btn bz-btn-ok" disabled={ocupado} onClick={() => aprobar(r)}>{ocupado ? '…' : 'Aprobar'}</button>
-                    <button type="button" className="adm-btn adm-btn-ghost bz-btn-sm" disabled={ocupado} onClick={() => setRechazo(r)}>Rechazar</button>
-                  </>
-                )}
-                {seleccionable && (
-                  <button type="button" className="adm-btn adm-btn-ghost bz-btn-sm" disabled={ocupado} onClick={() => setExterno([r])}>Ya pagado fuera del sistema</button>
+                {!pagado && (
+                  <button
+                    type="button" className="adm-btn bz-btn-ok" disabled={!pagable || ocupado}
+                    title={pagable ? `Entra en la liquidación de ${mesLargo(mesLiquidacion(r.teacherId))}` : faltan !== null ? `Todavía no cumplió los 6 meses: faltan ${faltan} días` : 'Todavía no se puede pagar'}
+                    onClick={() => setAPagar(r)}
+                  >
+                    {ocupado ? '…' : 'Marcar pagado'}
+                  </button>
                 )}
               </span>
             </div>
@@ -352,20 +280,28 @@ export default function BonusesTab() {
         })}
       </div>
 
-      {rechazo && (
-        <RechazoModal row={rechazo} onClose={() => setRechazo(null)} onConfirm={confirmarRechazo} />
-      )}
-      {externo && (
-        <ExternoModal rows={externo} onClose={() => setExterno(null)} onConfirm={confirmarExterno} />
+      {aPagar && (
+        <Modal onClose={() => setAPagar(null)}>
+          <div className="bz-mod-t">Marcar pagado el bono de {aPagar.studentName}</div>
+          <p className="bz-mod-s">
+            {aPagar.bonusType === 'upsell' ? 'Upsell' : 'Bono de retención'} de <b>{eur(aPagar.euros)}</b> para <b>{aPagar.teacherName}</b>.
+            Entra en la liquidación de <b>{mesLargo(mesLiquidacion(aPagar.teacherId))}</b> y el profesor lo ve como pagado.
+          </p>
+          <div className="bz-mod-b">
+            <button type="button" className="adm-btn adm-btn-ghost" onClick={() => setAPagar(null)}>Cancelar</button>
+            <button type="button" className="adm-btn adm-btn-primary" onClick={confirmarPago}>Marcar pagado</button>
+          </div>
+        </Modal>
       )}
       {upsellOpen && (
         <UpsellModal
+          mesDe={mesLiquidacion}
           onClose={() => setUpsellOpen(false)}
           onConfirm={async p => {
             setUpsellOpen(false);
             await correr('upsell', async () => {
-              await addUpsellBonuses({ ...p, approvedBy: adminName });
-              setAviso(`${p.quantity} upsell${p.quantity === 1 ? '' : 's'} de ${p.studentName} cargado${p.quantity === 1 ? '' : 's'} (${eur(bonusEurosFor('upsell') * p.quantity)}).`);
+              await addUpsellBonuses({ ...p, paidBy: adminName });
+              setAviso(`${p.quantity} upsell${p.quantity === 1 ? '' : 's'} de ${p.studentName} cargado${p.quantity === 1 ? '' : 's'} (${eur(bonusEurosFor('upsell') * p.quantity)}) en la liquidación de ${mesLargo(mesLiquidacion(p.teacherId))}.`);
             });
           }}
         />
@@ -384,45 +320,8 @@ function Modal({ children, onClose }: { children: React.ReactNode; onClose: () =
   );
 }
 
-function RechazoModal({ row, onClose, onConfirm }: { row: BonusRow; onClose: () => void; onConfirm: (motivo: string) => void }) {
-  const [motivo, setMotivo] = useState('');
-  return (
-    <Modal onClose={onClose}>
-      <div className="bz-mod-t">Rechazar el bono de {row.studentName}</div>
-      <p className="bz-mod-s">El profesor ({row.teacherName}) verá el motivo en Mi Scoring. El par vuelve a quedar disponible: si fue un error, puede reclamar de nuevo.</p>
-      <label className="bz-mod-l" htmlFor="bz-motivo">Motivo</label>
-      <textarea id="bz-motivo" className="bz-mod-ta" rows={3} value={motivo} onChange={e => setMotivo(e.target.value)} placeholder="Por ejemplo: el alumno cambió de profesor en julio." />
-      <div className="bz-mod-b">
-        <button type="button" className="adm-btn adm-btn-ghost" onClick={onClose}>Cancelar</button>
-        <button type="button" className="adm-btn adm-btn-primary" disabled={!motivo.trim()} onClick={() => onConfirm(motivo)}>Rechazar</button>
-      </div>
-    </Modal>
-  );
-}
-
-function ExternoModal({ rows, onClose, onConfirm }: { rows: BonusRow[]; onClose: () => void; onConfirm: (paidMonth: string, note: string) => void }) {
-  const [mes, setMes]   = useState(spainTodayIso().slice(0, 7));
-  const [nota, setNota] = useState('');
-  return (
-    <Modal onClose={onClose}>
-      <div className="bz-mod-t">{rows.length === 1 ? `Bono de ${rows[0].studentName} pagado fuera del sistema` : `${rows.length} bonos pagados fuera del sistema`}</div>
-      <p className="bz-mod-s">Queda registrado como <b>pagado fuera del sistema</b>: el profesor no podrá reclamarlo y <b>no suma</b> a ninguna liquidación. Es para lo que ya se pagó por email antes de existir esta pestaña.</p>
-      {rows.length > 1 && (
-        <ul className="bz-mod-lista">{rows.map(r => <li key={r.key}>{r.studentName} · {r.teacherName}</li>)}</ul>
-      )}
-      <label className="bz-mod-l" htmlFor="bz-mes">Mes en que se pagó</label>
-      <input id="bz-mes" className="bz-in" type="month" value={mes} onChange={e => setMes(e.target.value)} style={{ marginBottom: 14 }} />
-      <label className="bz-mod-l" htmlFor="bz-nota">Nota (opcional)</label>
-      <textarea id="bz-nota" className="bz-mod-ta" rows={2} value={nota} onChange={e => setNota(e.target.value)} />
-      <div className="bz-mod-b">
-        <button type="button" className="adm-btn adm-btn-ghost" onClick={onClose}>Cancelar</button>
-        <button type="button" className="adm-btn adm-btn-primary" onClick={() => onConfirm(mes, nota)}>Confirmar</button>
-      </div>
-    </Modal>
-  );
-}
-
-function UpsellModal({ onClose, onConfirm }: {
+function UpsellModal({ mesDe, onClose, onConfirm }: {
+  mesDe: (teacherId: string) => string;
   onClose: () => void;
   onConfirm: (p: { teacherId: string; assignmentId: string | null; studentName: string; quantity: number; note?: string }) => void;
 }) {
@@ -441,7 +340,7 @@ function UpsellModal({ onClose, onConfirm }: {
   return (
     <Modal onClose={onClose}>
       <div className="bz-mod-t">Cargar upsell</div>
-      <p className="bz-mod-s">Queda <b>aprobado</b> directamente y suma {eur(bonusEurosFor('upsell'))} por upsell a la liquidación de este mes del profesor.</p>
+      <p className="bz-mod-s">Queda pagado directamente: {eur(bonusEurosFor('upsell'))} por upsell en la liquidación de {teacherId ? mesLargo(mesDe(teacherId)) : 'este mes'}.</p>
       <label className="bz-mod-l" htmlFor="bz-up-p">Profesor</label>
       <select id="bz-up-p" className="bz-sel" value={teacherId} onChange={e => { setTeacherId(e.target.value); setAsgId(''); }} style={{ width: '100%', marginBottom: 14 }}>
         <option value="">— Elegir —</option>
@@ -469,7 +368,7 @@ function UpsellModal({ onClose, onConfirm }: {
 
 // ─── Estilos ─────────────────────────────────────────────────────────────────
 // Misma anatomía que Finanzas (fz-*). Por debajo de 768 px cada fila es una
-// tarjeta: alumno y estado arriba, datos en una línea, acciones abajo.
+// tarjeta: alumno y estado arriba, datos en una línea, acción abajo.
 const ESTILOS = `
 .bz { font-family: var(--font-app); color: #1a1c1a; position: relative; }
 .bz-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 18px; }
@@ -492,32 +391,28 @@ const ESTILOS = `
 .bz-chip[aria-pressed="true"] { border-color: #1E9E3A; background: rgba(30,158,58,0.1); color: #1E9E3A; font-weight: 700; }
 .bz-chip .n { font-size: 12px; font-weight: 700; color: #6E6E66; } .bz-chip[aria-pressed="true"] .n { color: #1E9E3A; }
 .bz-sel, .bz-in { min-height: 36px; padding: 6px 10px; border-radius: 8px; border: 1.5px solid #E0E0DA; background: #fff; font-family: inherit; font-size: 13px; color: #1a1c1a; box-sizing: border-box; }
-.bz-in { width: 100%; max-width: 260px; } .bz-in-inline { max-width: 200px; min-height: 32px; padding: 4px 8px; }
-.bz-lote { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; background: #FAFAF8; border: 1px solid #ECECE8; border-radius: 10px; padding: 8px 12px; margin-bottom: 10px; font-size: 13px; }
-.bz-lote-l { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; flex: 1; min-width: 0; }
+.bz-in { width: 100%; max-width: 260px; } .bz-in-inline { max-width: 170px; min-height: 32px; padding: 4px 8px; }
+.bz-filtros-r .bz-sel { width: auto; max-width: 320px; flex: 0 0 auto; }
 .bz-tabla { overflow: hidden; }
-.bz-row { display: grid; grid-template-columns: 28px minmax(0, 1.4fr) minmax(0, 0.9fr) 92px 70px 130px 130px minmax(0, 1fr) minmax(0, 1.1fr); align-items: center; gap: 10px; min-height: 52px; padding: 6px 14px; border-top: 1px solid #ECECE8; font-size: 13.5px; }
+.bz-row { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 0.9fr) 92px 70px 150px 130px minmax(0, 1fr) 150px; align-items: center; gap: 10px; min-height: 52px; padding: 6px 14px; border-top: 1px solid #ECECE8; font-size: 13.5px; }
 .bz-row.head { min-height: 36px; font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #6E6E66; background: #FAFAF8; border-top: 0; }
 .bz-row.is-busy { opacity: 0.6; }
 .bz-row.is-reclamado { background: #FFFBEB; }
-.bz-chk { display: flex; align-items: center; } .bz-chk input { width: 18px; height: 18px; cursor: pointer; }
 .bz-meta { display: contents; }
-.bz-nom { min-width: 0; display: flex; flex-direction: column; } .bz-nom b { font-weight: 600; display: inline-flex; align-items: center; gap: 4px; }
-.bz-sinnombre { color: #B45309; }
+.bz-nom { min-width: 0; display: flex; flex-direction: column; } .bz-nom b { font-weight: 600; }
 .bz-nota { display: block; font-size: 11.5px; color: #6E6E66; line-height: 1.3; margin-top: 1px; }
 .bz-muted { color: #a4a7a1; }
 .bz-lapiz { background: none; border: 0; cursor: pointer; color: #6E6E66; font-size: 13px; padding: 0 4px; min-height: 0; line-height: 1; font-family: inherit; } .bz-lapiz:hover { color: #1E9E3A; }
-.bz-since, .bz-due { display: flex; flex-direction: column; align-items: flex-start; }
-.bz-since { flex-direction: row; align-items: center; gap: 2px; flex-wrap: wrap; }
+.bz-since { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; }
+.bz-due { display: flex; flex-direction: column; align-items: flex-start; }
 .bz-imp { font-weight: 600; white-space: nowrap; }
 .bz-est { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
 .bz-pill { display: inline-flex; align-items: center; height: 24px; padding: 0 9px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
 .bz-pill.verde { background: #EAF5EC; color: #167A2D; } .bz-pill.ambar { background: #FFF6E0; color: #B45309; }
-.bz-pill.azul { background: #E8F0FE; color: #1D4ED8; } .bz-pill.gris { background: #F0F0ED; color: #4A4A4A; } .bz-pill.rojo { background: #FDECEC; color: #C81E1E; }
-.bz-act { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
-.bz-btn-ok { border: 1px solid rgba(22,122,45,0.30); background: #EAF5EC; color: #167A2D; min-height: 32px; padding: 5px 11px; font-size: 12.5px; border-radius: 7px; }
-.bz-btn-ok:hover:not(:disabled) { background: #1E9E3A; color: #fff; } .bz-btn-ok:disabled { opacity: 0.5; cursor: default; }
-.bz-btn-sm { min-height: 32px; padding: 5px 11px; font-size: 12.5px; border-radius: 7px; }
+.bz-pill.gris { background: #F0F0ED; color: #4A4A4A; } .bz-pill.rojo { background: #FDECEC; color: #C81E1E; }
+.bz-act { display: flex; justify-content: flex-end; }
+.bz-btn-ok { border: 1px solid rgba(22,122,45,0.30); background: #EAF5EC; color: #167A2D; min-height: 32px; padding: 5px 11px; font-size: 12.5px; border-radius: 7px; white-space: nowrap; }
+.bz-btn-ok:hover:not(:disabled) { background: #1E9E3A; color: #fff; } .bz-btn-ok:disabled { opacity: 0.45; cursor: not-allowed; }
 .bz-vacio { padding: 28px 16px; text-align: center; color: #6E6E66; font-size: 13.5px; }
 .bz-scrim { position: fixed; inset: 0; background: rgba(0,0,0,0.5); backdrop-filter: blur(3px); z-index: 100; display: flex; align-items: center; justify-content: center; padding: 16px; }
 .bz-mod { background: #fff; border: 1px solid var(--border); border-radius: 14px; padding: 22px; width: 100%; max-width: 460px; max-height: 90vh; overflow-y: auto; }
@@ -525,11 +420,10 @@ const ESTILOS = `
 .bz-mod-s { font-size: 13.5px; color: #4A4A4A; line-height: 1.55; margin: 0 0 16px; }
 .bz-mod-l { display: block; font-size: 12px; font-weight: 700; color: var(--text-secondary); margin-bottom: 6px; }
 .bz-mod-ta { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1.5px solid var(--border); font-size: 13px; background: #fff; color: var(--text-primary); font-family: inherit; box-sizing: border-box; resize: vertical; margin-bottom: 14px; }
-.bz-mod-lista { margin: 0 0 14px; padding-left: 18px; font-size: 13px; color: #4A4A4A; max-height: 160px; overflow-y: auto; }
 .bz-mod-b { display: flex; gap: 10px; } .bz-mod-b .adm-btn { flex: 1; }
 .bz-mod .bz-in { max-width: none; }
 @media (max-width: 1100px) {
-  .bz-row { grid-template-columns: 28px minmax(0, 1.3fr) minmax(0, 0.8fr) 80px 60px 110px 110px minmax(0, 1fr) minmax(0, 1fr); gap: 8px; font-size: 13px; }
+  .bz-row { grid-template-columns: minmax(0, 1.3fr) minmax(0, 0.8fr) 80px 60px 130px 110px minmax(0, 1fr) 130px; gap: 8px; font-size: 13px; }
 }
 @media (max-width: 767px) {
   .bz-head { margin-bottom: 12px; } .bz-sub { display: none; }
@@ -537,12 +431,10 @@ const ESTILOS = `
   .bz-kpis { display: flex; flex-direction: column; gap: 10px; }
   .bz-kpi { padding: 12px 14px; gap: 4px; } .bz-kpi-v { font-size: 24px; }
   .bz-filtros-r { width: 100%; } .bz-filtros-r .bz-sel, .bz-filtros-r .bz-in { flex: 1; max-width: none; min-height: 44px; }
-  .bz-lote .adm-btn { width: 100%; min-height: 44px; }
   .bz-tabla { background: transparent; border: 0; box-shadow: none; overflow: visible; }
   .bz-row.head { display: none; }
-  .bz-row { grid-template-columns: 28px minmax(0, 1fr) auto; grid-template-areas: "chk nom est" "chk meta meta" "chk since due" "chk act act"; gap: 6px 10px; padding: 12px 12px 12px 14px; min-height: 0; background: #fff; border: 1px solid #E0E0DA; border-radius: 10px; margin-bottom: 8px; }
+  .bz-row { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "nom est" "meta meta" "since due" "act act"; gap: 6px 10px; padding: 12px 14px; min-height: 0; background: #fff; border: 1px solid #E0E0DA; border-radius: 10px; margin-bottom: 8px; }
   .bz-row.is-reclamado { border-color: #D97706; }
-  .bz-chk { grid-area: chk; align-self: start; padding-top: 2px; } .bz-chk input { width: 22px; height: 22px; }
   .bz-nom { grid-area: nom; } .bz-nom b { font-size: 15px; }
   .bz-est { grid-area: est; align-items: flex-end; }
   .bz-meta { grid-area: meta; display: flex; gap: 6px; flex-wrap: wrap; font-size: 12.5px; color: #6E6E66; }
@@ -551,7 +443,7 @@ const ESTILOS = `
   .bz-since { grid-area: since; font-size: 12.5px; color: #4A4A4A; flex-wrap: nowrap; white-space: nowrap; } .bz-since::before { content: 'Desde '; color: #6E6E66; margin-right: 2px; }
   .bz-due { grid-area: due; font-size: 12.5px; color: #4A4A4A; flex-direction: row; gap: 6px; flex-wrap: wrap; justify-content: flex-end; } .bz-due::before { content: 'Cumple '; color: #6E6E66; }
   .bz-due .bz-nota { display: inline; margin: 0; }
-  .bz-act { grid-area: act; justify-content: flex-start; margin-top: 4px; }
+  .bz-act { grid-area: act; justify-content: stretch; margin-top: 4px; } .bz-act:empty { display: none; }
   .bz-act .adm-btn { min-height: 40px; flex: 1; }
   .bz-lapiz { min-height: 32px; min-width: 32px; }
   .bz-scrim { align-items: flex-end; padding: 0; }

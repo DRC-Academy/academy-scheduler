@@ -327,7 +327,7 @@ export interface TeacherFinanceResult {
    * que en la práctica es 0 salvo que aparezca un tipo positivo nuevo.
    */
   bonusFromScoring: number;
-  /** Bonos de teacher_bonuses (aprobados/pagados) cuyo mes contable es este. */
+  /** Bonos de teacher_bonuses marcados pagados con este mes de liquidación. */
   bonusFromBonuses: number;
   /** Las filas que componen `bonusFromBonuses`, para el desglose y para marcarlas pagadas. */
   bonusRows: TeacherBonus[];
@@ -671,16 +671,9 @@ export interface CalcInput {
   /** Pago del mes; `null` si no existe. Si está 'paid', el mes queda congelado. */
   payment: FinancePayment | null;
   /**
-   * Pago del MES ANTERIOR; `null` si no existe. Decide si un bono aprobado
-   * después de cerrar ese mes pasa a este (ver lib/bonuses.bonusesForMonth).
-   * Obligatorio por el mismo motivo que `classAnalyses`: si se omitiera, el
-   * bono desaparecería del total sin ningún aviso.
-   */
-  previousPayment: FinancePayment | null;
-  /**
    * Bonos del profesor (tabla teacher_bonuses). Obligatorio: sin ellos el total
-   * del mes no incluye los bonos aprobados. Pasá `[]` solo donde de verdad no
-   * hay bonos que considerar (pantallas que solo miran las filas de clases).
+   * del mes no incluye los bonos marcados pagados. Pasá `[]` solo donde de verdad
+   * no hay bonos que considerar (pantallas que solo miran las filas de clases).
    */
   teacherBonuses: TeacherBonus[];
   /**
@@ -697,7 +690,7 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
   const {
     teacherId, teacherName, monthYear, assignments, joinLogs, classRecords,
     classAnalyses, rates, scoringEvents, students, manualApprovals, payment, gridOccupancy,
-    previousPayment, teacherBonuses,
+    teacherBonuses,
   } = input;
 
   const myAssignments = assignments.filter(a => a.teacherId === teacherId);
@@ -1158,8 +1151,9 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
   const bonusFromScoring = scoringThisMonth
     .filter(e => (e.euros ?? 0) > 0 && !TIPOS_MIGRADOS_A_BONOS.has(e.eventType))
     .reduce((s, e) => s + (e.euros ?? 0), 0);
-  // Bonos de la tabla nueva cuyo mes contable es este (aprobados o pagados).
-  const bonusRows = bonusesForMonth(teacherBonuses, teacherId, monthYear, payment, previousPayment);
+  // Bonos marcados pagados desde la app con este mes de liquidación (paid_month).
+  // Los históricos pagados por email (pagado_externo) nunca entran.
+  const bonusRows = bonusesForMonth(teacherBonuses, teacherId, monthYear);
   const bonusFromBonuses = sumBonusEuros(bonusRows);
   // Suma NEGATIVA (penalizaciones: falta sin aviso, etc.). FIX del bug histórico:
   // antes solo se sumaban los euros > 0, así que las penalizaciones no restaban.

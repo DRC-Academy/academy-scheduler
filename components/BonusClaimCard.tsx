@@ -23,8 +23,8 @@ export function fechaCorta(iso: string | null | undefined): string {
 /** Texto del estado tal como lo lee el profesor. */
 export function estadoProfesor(estado: BonusRowState, note?: string | null): string {
   switch (estado) {
-    case 'reclamado':      return 'Reclamado · pendiente de aprobación';
-    case 'aprobado':       return 'Aprobado · se suma a tu liquidación';
+    case 'reclamado':      return 'Reclamado · pendiente de pago';
+    case 'aprobado':       return 'Pagado';
     case 'pagado':         return 'Pagado';
     case 'pagado_externo': return 'Pagado';
     case 'rechazado':      return note ? `Rechazado: ${note}` : 'Rechazado';
@@ -99,7 +99,7 @@ export function BonusClaimCard({ assignment, dueDate, euros, estado, onClaim, co
           fontSize: 12, fontWeight: 700, color: '#92400E', background: 'rgba(217,119,6,0.14)',
           border: '1px solid rgba(217,119,6,0.4)', borderRadius: 999, padding: '5px 11px', whiteSpace: 'nowrap',
         }}>
-          {yaReclamado ? 'Reclamado · pendiente de aprobación' : estadoProfesor(estado)}
+          {yaReclamado ? 'Reclamado · pendiente de pago' : estadoProfesor(estado)}
         </span>
       )}
     </div>

@@ -7,7 +7,6 @@ for (const line of readFileSync('.env.local', 'utf8').split('\n')) {
 }
 const { loadPayoutDataset } = await import('@/lib/externalPayouts');
 const { calculateTeacherFinance, studentQuotaOf } = await import('@/lib/finance');
-const { previousMonthYear } = await import('@/lib/bonuses');
 const { gridOccupancyOfTeacher } = await import('@/lib/teacherClasses');
 
 const MES = process.env.MES ?? '2026-08';
@@ -25,7 +24,6 @@ for (const teacher of cands) {
     classAnalyses: ds.classAnalyses, rates: ds.rates, scoringEvents: ds.scoringEvents,
     students: ds.students, manualApprovals: ds.manualApprovals, teacherBonuses: ds.teacherBonuses,
     payment: ds.payments.find(p => p.teacherId === teacher.id && p.monthYear === MES) ?? null,
-    previousPayment: ds.payments.find(p => p.teacherId === teacher.id && p.monthYear === previousMonthYear(MES)) ?? null,
     gridOccupancy: gridOccupancyOfTeacher(teacher),
   });
   console.log(`\n════ ${teacher.name} (${teacher.id}) — ${MES} ════`);

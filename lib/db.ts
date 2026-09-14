@@ -5011,32 +5011,47 @@ export async function dbClaimRetentionBonus(p: {
   }, p.studentName);
 }
 
-/** El admin aprueba un bono reclamado. Desde este instante suma al mes (lib/bonuses). */
-export async function dbApproveBonus(id: string, approvedBy: string): Promise<TeacherBonus> {
-  const { data, error } = await supabase.from('teacher_bonuses')
-    .update({ status: 'aprobado', approved_at: new Date().toISOString(), approved_by: approvedBy })
-    .eq('id', id).eq('status', 'reclamado')
-    .select(BONUS_COLS).maybeSingle();
-  if (error) throw new Error(`No se pudo aprobar el bono: ${error.message}`);
-  if (!data) throw new Error('El bono ya no está en estado reclamado.');
-  return mapTeacherBonus(data);
-}
-
-/** El admin rechaza un bono reclamado, con motivo. El par vuelve a quedar disponible. */
-export async function dbRejectBonus(id: string, note: string, rejectedBy: string): Promise<TeacherBonus> {
-  const { data, error } = await supabase.from('teacher_bonuses')
-    .update({ status: 'rechazado', note: note.trim() || null, approved_by: rejectedBy, approved_at: new Date().toISOString() })
-    .eq('id', id).eq('status', 'reclamado')
-    .select(BONUS_COLS).maybeSingle();
-  if (error) throw new Error(`No se pudo rechazar el bono: ${error.message}`);
-  if (!data) throw new Error('El bono ya no está en estado reclamado.');
-  return mapTeacherBonus(data);
+/**
+ * El admin marca un bono como PAGADO: única acción sobre un bono que ya cumplió.
+ *
+ * Si el profesor lo había reclamado (`existingId`), se actualiza esa fila; si
+ * no, se crea. `paidMonth` es el mes de liquidación en que entra (ver
+ * lib/bonuses.accrualMonthFor): desde ese momento suma al total del profesor
+ * en Finanzas. Lanza BonusAlreadyExistsError si el par ya tenía bono.
+ */
+export async function dbMarkBonusPaid(p: {
+  existingId?: string | null;
+  teacherId: string; assignmentId: string | null; studentName: string;
+  bonusType: BonusType; euros: number; dueDate: string | null; paidMonth: string; paidBy: string;
+}): Promise<TeacherBonus> {
+  const now = new Date().toISOString();
+  if (p.existingId) {
+    const { data, error } = await supabase.from('teacher_bonuses')
+      .update({ status: 'pagado', approved_at: now, approved_by: p.paidBy, paid_month: p.paidMonth })
+      .eq('id', p.existingId).eq('status', 'reclamado')
+      .select(BONUS_COLS).maybeSingle();
+    if (error) throw new Error(`No se pudo marcar el bono como pagado: ${error.message}`);
+    if (!data) throw new Error('El bono ya no está en estado reclamado.');
+    return mapTeacherBonus(data);
+  }
+  return insertBonusOrThrow({
+    teacher_id:    p.teacherId,
+    assignment_id: p.assignmentId,
+    student_name:  p.studentName,
+    bonus_type:    p.bonusType,
+    euros:         p.euros,
+    status:        'pagado',
+    due_date:      p.dueDate,
+    approved_at:   now,
+    approved_by:   p.paidBy,
+    paid_month:    p.paidMonth,
+  }, p.studentName);
 }
 
 /**
- * Marca bonos como pagados FUERA del sistema (históricos por email): crea la
- * fila 'pagado_externo', que bloquea el par para siempre y nunca suma a
- * finanzas. Devuelve lo insertado y los pares que ya estaban cargados.
+ * Históricos pagados por email ANTES de la app (scripts/import-bonos-historicos):
+ * crea filas 'pagado_externo', que bloquean el par y nunca suman a finanzas.
+ * Devuelve lo insertado y los pares que ya estaban cargados.
  */
 export async function dbMarkBonusesPaidExternal(items: Array<{
   teacherId: string; assignmentId: string | null; studentName: string; bonusType: BonusType;
@@ -5065,10 +5080,10 @@ export async function dbMarkBonusesPaidExternal(items: Array<{
   return { inserted, duplicated };
 }
 
-/** El admin carga `quantity` upsells de un alumno, ya aprobados (una fila por upsell). */
+/** El admin carga `quantity` upsells de un alumno, ya pagados (una fila por upsell) en el mes `paidMonth`. */
 export async function dbAddUpsellBonuses(p: {
   teacherId: string; assignmentId: string | null; studentName: string; euros: number;
-  quantity: number; approvedBy: string; note?: string;
+  quantity: number; paidBy: string; paidMonth: string; note?: string;
 }): Promise<TeacherBonus[]> {
   const now = new Date().toISOString();
   const rows = Array.from({ length: Math.max(1, p.quantity) }, () => ({
@@ -5077,9 +5092,10 @@ export async function dbAddUpsellBonuses(p: {
     student_name:  p.studentName,
     bonus_type:    'upsell',
     euros:         p.euros,
-    status:        'aprobado',
+    status:        'pagado',
     approved_at:   now,
-    approved_by:   p.approvedBy,
+    approved_by:   p.paidBy,
+    paid_month:    p.paidMonth,
     note:          p.note?.trim() || null,
   }));
   const { data, error } = await supabase.from('teacher_bonuses').insert(rows).select(BONUS_COLS);
@@ -5087,53 +5103,10 @@ export async function dbAddUpsellBonuses(p: {
   return (data ?? []).map(mapTeacherBonus);
 }
 
-/**
- * Corrige el nombre del alumno de un bono (los históricos "SIN NOMBRE — …") e
- * intenta enlazar la assignment de ese profesor por nombre. Devuelve la fila.
- */
-export async function dbUpdateBonusStudentName(id: string, studentName: string, teacherId: string): Promise<TeacherBonus> {
-  const name = studentName.trim();
-  let assignmentId: string | null = null;
-  {
-    const { data } = await supabase.from('assignments').select('id')
-      .eq('teacher_id', teacherId).ilike('student_name', name).limit(1).maybeSingle();
-    if (data) assignmentId = data.id;
-  }
-  const patch: Record<string, unknown> = { student_name: name };
-  if (assignmentId) patch.assignment_id = assignmentId;
-  const { data, error } = await supabase.from('teacher_bonuses').update(patch).eq('id', id).select(BONUS_COLS).single();
-  if (error) {
-    if (error.code === '23505') throw new BonusAlreadyExistsError(name);
-    throw new Error(`No se pudo corregir el alumno del bono: ${error.message}`);
-  }
-  return mapTeacherBonus(data);
-}
-
 /** El admin corrige desde cuándo está el alumno con el profesor (reloj del bono). */
 export async function dbUpdateAssignmentTeacherSince(assignmentId: string, teacherSince: string): Promise<void> {
   const { error } = await supabase.from('assignments').update({ teacher_since: teacherSince }).eq('id', assignmentId);
   if (error) throw new Error(`No se pudo guardar la fecha: ${error.message}`);
-}
-
-/** Al marcar el mes pagado: los bonos aprobados que sumaron pasan a 'pagado'. */
-export async function dbSetBonusesPaid(ids: string[], monthYear: string): Promise<TeacherBonus[]> {
-  if (ids.length === 0) return [];
-  const { data, error } = await supabase.from('teacher_bonuses')
-    .update({ status: 'pagado', paid_month: monthYear })
-    .in('id', ids).eq('status', 'aprobado')
-    .select(BONUS_COLS);
-  if (error) throw new Error(`No se pudieron marcar los bonos como pagados: ${error.message}`);
-  return (data ?? []).map(mapTeacherBonus);
-}
-
-/** Al deshacer "Marcar pagado": los bonos pagados de ese profesor y mes vuelven a 'aprobado'. */
-export async function dbUnsetBonusesPaid(teacherId: string, monthYear: string): Promise<TeacherBonus[]> {
-  const { data, error } = await supabase.from('teacher_bonuses')
-    .update({ status: 'aprobado', paid_month: null })
-    .eq('teacher_id', teacherId).eq('paid_month', monthYear).eq('status', 'pagado')
-    .select(BONUS_COLS);
-  if (error) throw new Error(`No se pudieron reabrir los bonos del mes: ${error.message}`);
-  return (data ?? []).map(mapTeacherBonus);
 }
 
 /**

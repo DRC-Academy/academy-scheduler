@@ -9,7 +9,6 @@ import { LastUpdated } from '@/components/LastUpdated';
 import { getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
-import { previousMonthYear } from '@/lib/bonuses';
 import { calculateTeacherFinance, ClassFinanceRow, ingresoBadge, classTypeBadge, subscriptionBadge, rowHoursLabel, durationBadge, sessionBreakdownLabel, transcriptStateBadge, transcriptNeedsTeacher, financeStatusBadge, canMarkStudentLostClass, lostClassBreakdownLabel, mixedSessionBadge, recoveryCreditLabel, estimateClassAmount, LOST_CLASS_MONTHLY_CAP, LOST_CLASS_CAP_MESSAGE } from '@/lib/finance';
 import { dbGetAssignmentsByTeacher, calcRegisteredClassNumber, getTeacherAssignments } from '@/lib/db';
 import { buildClassFunnel } from '@/lib/classFunnel';
@@ -270,9 +269,6 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
 
   // Resumen de pago (cálculo de finanzas).
   const payment = financePayments.find(p => p.teacherId === teacher.id && p.monthYear === monthYear) ?? null;
-  // El pago del mes anterior decide si un bono aprobado después de cerrar ese mes
-  // pasa a este (lib/bonuses.bonusesForMonth).
-  const previousPayment = financePayments.find(p => p.teacherId === teacher.id && p.monthYear === previousMonthYear(monthYear)) ?? null;
   // classAnalyses es el SEGUNDO FACTOR de verificación (el transcript). Sin él,
   // este cálculo daba `hasTranscript: false` en todas las filas y el profesor veía
   // "a revisar" y €0 pagables aunque hubiera subido todos los transcripts — el
@@ -280,10 +276,10 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
   const finance = useMemo(() => calculateTeacherFinance({
     teacherId: teacher.id, teacherName: teacher.name, monthYear,
     assignments: myAssignments, joinLogs: classJoinLogs, classRecords, classAnalyses, rates: financeRates,
-    scoringEvents, students, manualApprovals, payment, previousPayment, teacherBonuses,
+    scoringEvents, students, manualApprovals, payment, teacherBonuses,
     // El calendario decide qué es una clase de 2h (ver lib/finance.sessionSpanFor).
     gridOccupancy: gridOccupancyOfTeacher(teacher),
-  }), [teacher, monthYear, myAssignments, classJoinLogs, classRecords, classAnalyses, financeRates, scoringEvents, students, manualApprovals, payment, previousPayment, teacherBonuses]);
+  }), [teacher, monthYear, myAssignments, classJoinLogs, classRecords, classAnalyses, financeRates, scoringEvents, students, manualApprovals, payment, teacherBonuses]);
 
   const spainNow = getSpainParts(new Date());
   const todayIso = spainNow.dateStr;

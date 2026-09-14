@@ -25,7 +25,7 @@ import { useStudentAutofill } from '@/lib/useStudentAutofill';
 import { usePresentationSent, presentationBtnStyle, PresentationEmailBadge, PendingTasksCard, useNivelesSinValidar } from '@/components/teacherPanelUi';
 import { transcriptsPendientes } from '@/lib/dashboardMetrics';
 import { BONUS_CLAIM_ENABLED, RETENTION_BONUS_DAYS, retentionDaysActive, retentionStartIso, retentionBonusFor } from '@/lib/retention';
-import { buildBonusRows, bonusesForMonth, previousMonthYear, sumBonusEuros, type BonusRow } from '@/lib/bonuses';
+import { buildBonusRows, bonusesForMonth, sumBonusEuros, type BonusRow } from '@/lib/bonuses';
 import { BonusClaimCard, estadoProfesor, fechaCorta } from '@/components/BonusClaimCard';
 import { Grid, Teacher, Assignment, ScoringEvent, Student, AppNotification, ClassRecord } from '@/types';
 import FormStatusBadge from '@/components/FormStatusBadge';
@@ -465,19 +465,17 @@ function TeacherScoringTab({ teacher, myAssignments, myEvents, bonusRows }: {
   /** Filas de bonos del profesor (lib/bonuses.buildBonusRows), ya calculadas por el panel. */
   bonusRows: BonusRow[];
 }) {
-  const { teacherBonuses, financePayments, claimRetentionBonus } = useTeachers();
+  const { teacherBonuses, claimRetentionBonus } = useTeachers();
   const today      = new Date();
   const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
 
   const myMonthEvents = myEvents.filter(e => new Date(e.createdAt) >= monthStart);
 
-  // Bonos del mes en curso: los MISMOS que suma finanzas (mes contable del bono,
+  // Bonos del mes en curso: los MISMOS que suma finanzas (paid_month del bono,
   // ver lib/bonuses.bonusesForMonth), así el número de acá y el de Mis clases no
   // pueden separarse.
   const monthYear = getSpainParts(today).dateStr.slice(0, 7);
-  const pagoMes = financePayments.find(p => p.teacherId === teacher.id && p.monthYear === monthYear) ?? null;
-  const pagoAnterior = financePayments.find(p => p.teacherId === teacher.id && p.monthYear === previousMonthYear(monthYear)) ?? null;
-  const bonosMes = bonusesForMonth(teacherBonuses, teacher.id, monthYear, pagoMes, pagoAnterior);
+  const bonosMes = bonusesForMonth(teacherBonuses, teacher.id, monthYear);
   const retencionMes = bonosMes.filter(b => b.bonusType === 'retencion_6m');
   const upsellMes    = bonosMes.filter(b => b.bonusType === 'upsell');
 
@@ -765,7 +763,7 @@ function TeacherScoringTab({ teacher, myAssignments, myEvents, bonusRows }: {
                   )}
                   {bonus && (
                     <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 12, background: 'rgba(107,114,128,0.1)', color: '#6b7280' }}>
-                      {bonus.status === 'reclamado' ? '⏳ Bono reclamado' : bonus.status === 'aprobado' ? '✓ Bono aprobado' : '✓ Bono cobrado'}
+                      {bonus.status === 'reclamado' ? '⏳ Bono reclamado' : '✓ Bono pagado'}
                     </span>
                   )}
                 </div>

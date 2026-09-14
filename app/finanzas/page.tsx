@@ -29,7 +29,6 @@ import { LastUpdated } from '@/components/LastUpdated';
 import { getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
-import { previousMonthYear } from '@/lib/bonuses';
 import { calculateTeacherFinance, estimateClassAmount, TeacherFinanceResult, ClassFinanceRow, classTypeBadge, durationSourceBadge, subscriptionBadge, rowHoursLabel, financeStatusBadge, transcriptStateBadge, lostClassBreakdownLabel, isStudentAbsence, recoveryCreditLabel, studentQuotaOf } from '@/lib/finance';
 import { isActiveWooStatus } from '@/lib/subscriptionAccess';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
@@ -722,11 +721,10 @@ function FinanceTab({ onHow }: { onHow: () => void }) {
   // (app/mis-clases) y que la liquidación (TeachersContext.markPaymentAsPaid).
   const results = useMemo<TeacherFinanceResult[]>(() => teachers.map(t => {
     const payment = financePayments.find(p => p.teacherId === t.id && p.monthYear === monthYear) ?? null;
-    const previousPayment = financePayments.find(p => p.teacherId === t.id && p.monthYear === previousMonthYear(monthYear)) ?? null;
     return calculateTeacherFinance({
       teacherId: t.id, teacherName: t.name, monthYear,
       assignments, joinLogs: classJoinLogs, classRecords, classAnalyses, rates: financeRates,
-      scoringEvents, students, manualApprovals, payment, previousPayment, teacherBonuses,
+      scoringEvents, students, manualApprovals, payment, teacherBonuses,
       gridOccupancy: gridOccupancyOfTeacher(t),
     });
   }), [teachers, students, monthYear, assignments, classJoinLogs, classRecords, classAnalyses, financeRates, scoringEvents, manualApprovals, financePayments, teacherBonuses]);

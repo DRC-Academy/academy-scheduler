@@ -32,7 +32,6 @@ import {
   dbGetManualApprovals, dbGetClassTranscripts, dbGetProductPrices, dbGetTeacherBonuses,
 } from '@/lib/db';
 import { calculateTeacherFinance } from '@/lib/finance';
-import { previousMonthYear } from '@/lib/bonuses';
 import { margenDe } from '@/lib/billing';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { madridToday } from '@/lib/subscriptionAccess';
@@ -303,8 +302,6 @@ export function computeMonth(ds: PayoutDataset, monthYear: string): MonthPayouts
 
   const teachers: TeacherPayout[] = ds.teachers.map(t => {
     const payment = ds.payments.find(p => p.teacherId === t.id && p.monthYear === monthYear) ?? null;
-    const prevMonth = previousMonthYear(monthYear);
-    const previousPayment = ds.payments.find(p => p.teacherId === t.id && p.monthYear === prevMonth) ?? null;
 
     // MISMAS entradas que app/finanzas y que la vista del profesor. Si esta
     // llamada recibiera menos, el dashboard mostraría un número que no coincide
@@ -321,7 +318,6 @@ export function computeMonth(ds: PayoutDataset, monthYear: string): MonthPayouts
       students: ds.students,
       manualApprovals: ds.manualApprovals,
       payment,
-      previousPayment,
       gridOccupancy: gridOccupancyOfTeacher(t),
     });
 

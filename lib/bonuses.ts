@@ -6,14 +6,18 @@
 //
 //   estado                de dónde sale
 //   ───────────────────── ──────────────────────────────────────────────────────
-//   disponible            ≥180 días con el profe y ningún bono (no rechazado)
-//   proximo               cumple 180 en los próximos 30 días, sin bono
-//   reclamado / aprobado  fila de teacher_bonuses con ese status
-//   pagado / pagado_externo / rechazado   ídem
+//   en_curso / proximo    todavía no cumplió 180 días con el profe (próximo = ≤30 días)
+//   disponible            cumplió y no hay bono para el par
+//   reclamado             el profesor lo pidió (fila 'reclamado')
+//   pagado                el admin lo marcó pagado (fila 'pagado'), o histórico
+//                         pagado por email antes de la app (fila 'pagado_externo')
 //
-// Los 'rechazado' aparecen como historial, en su propia fila; el par vuelve a
-// 'disponible' (o 'proximo') en la fila de la asignación. Los upsells son
-// siempre filas de la tabla (nunca "disponibles": los carga el admin).
+// El admin tiene UNA acción: "Marcar pagado", solo cuando el bono ya cumplió
+// (disponible o reclamado). Marcarlo lo mete en la liquidación del mes en curso
+// (o del siguiente si ese mes ya se cerró en Finanzas): ver accrualMonthFor.
+// 'pagado_externo' se muestra igual que 'pagado' pero NUNCA suma a finanzas:
+// ese dinero ya salió por email. Los upsells son siempre filas de la tabla
+// (nunca "disponibles": los carga el admin, ya pagados).
 //
 // CUENTAS DE PRUEBA (t1/t2): quedan fuera de las listas globales y de las
 // cifras, como en /api/external. Cuando se pide UN profesor concreto sí se
@@ -56,20 +60,28 @@ export function bonusEurosFor(type: BonusType): number {
   return type === 'retencion_6m' ? EVENT_EUROS.bonus_retencion : EVENT_EUROS.upsell;
 }
 
+// Para el admin y el profesor "pagado" es uno solo: el histórico por email y el
+// marcado en la app se leen igual. 'aprobado' y 'rechazado' ya no se producen
+// (quedan en el tipo porque la tabla los admite).
 export const BONUS_STATE_LABEL: Record<BonusRowState, string> = {
   disponible:     'Disponible',
-  proximo:        'Próximo',
+  proximo:        'En curso',
   en_curso:       'En curso',
   reclamado:      'Reclamado',
-  aprobado:       'Aprobado',
+  aprobado:       'Pagado',
   pagado:         'Pagado',
-  pagado_externo: 'Pagado fuera del sistema',
+  pagado_externo: 'Pagado',
   rechazado:      'Rechazado',
 };
 
-/** Orden por defecto: primero lo que espera al admin, después lo que espera al profe. */
+/** ¿Ya cumplió y se puede marcar pagado? */
+export function bonusIsPayable(estado: BonusRowState): boolean {
+  return estado === 'disponible' || estado === 'reclamado';
+}
+
+/** Orden por defecto: primero lo que espera al admin, después el historial, al final lo que aún no cumplió. */
 const ORDEN_ESTADO: Record<BonusRowState, number> = {
-  reclamado: 0, disponible: 1, proximo: 2, aprobado: 3, pagado: 4, pagado_externo: 5, rechazado: 6, en_curso: 7,
+  reclamado: 0, disponible: 1, aprobado: 2, pagado: 2, pagado_externo: 2, rechazado: 3, proximo: 4, en_curso: 5,
 };
 
 /** ¿La asignación cuenta como activa? (`status` ausente = anterior a la migración). */
@@ -200,58 +212,43 @@ export function bonusCounters(rows: BonusRow[]): { reclamados: number; proximos:
   };
 }
 
-// ── Mes contable de un bono aprobado ─────────────────────────────────────────
+// ── Mes en que un bono entra a la liquidación ────────────────────────────────
 //
-// Un bono aprobado suma en el mes de `approved_at` (hora de España, igual que
-// las clases). Si ese mes YA estaba marcado como pagado cuando se aprobó
-// (paid_at < approved_at), el total está congelado y el bono pasa al mes
-// siguiente: por eso `calculateTeacherFinance` recibe también el pago del mes
-// anterior. Un bono ya 'pagado' se ancla a su `paid_month` y no se recalcula.
+// Al marcarlo pagado, el bono queda anclado a `paid_month`: el mes en curso (hora
+// de España, como las clases) o el SIGUIENTE si Finanzas ya cerró el mes en
+// curso para ese profesor (el total está congelado y el bono se perdería).
+// Decidirlo en ese momento, y guardarlo, es lo que evita que el cálculo del mes
+// dependa de los pagos de otros meses.
 
-/** 'YYYY-MM' del mes anterior. */
-export function previousMonthYear(monthYear: string): string {
+/** 'YYYY-MM' del mes siguiente. */
+export function nextMonthYear(monthYear: string): string {
   const [y, m] = monthYear.split('-').map(Number);
-  const d = new Date(Date.UTC(y, (m ?? 1) - 2, 1));
+  const d = new Date(Date.UTC(y, m ?? 1, 1));
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
-/** 'YYYY-MM' (España) de un instante ISO. */
-export function spainMonthOf(iso: string): string {
-  return toSpainDateIso(iso).slice(0, 7);
-}
-
-function pagadoAntesDe(payment: FinancePayment | null, iso: string): boolean {
-  return !!payment && payment.status === 'paid' && !!payment.paidAt && payment.paidAt < iso;
-}
-
 /**
- * Bonos de un profesor que suman en `monthYear`: aprobados (o ya pagados) cuyo
- * mes contable es ese. `payment` es el pago de `monthYear`, `previousPayment`
- * el del mes anterior (ambos null si no existen).
+ * Mes de liquidación para un bono que se marca pagado AHORA. `currentMonthPayment`
+ * es el pago de Finanzas del profesor para el mes en curso (null si no existe).
  */
-export function bonusesForMonth(
-  bonuses: TeacherBonus[], teacherId: string, monthYear: string,
-  payment: FinancePayment | null, previousPayment: FinancePayment | null,
-): TeacherBonus[] {
-  const prev = previousMonthYear(monthYear);
-  return bonuses.filter(b => {
-    if (b.teacherId !== teacherId) return false;
-    if (b.status === 'pagado') return b.paidMonth === monthYear;
-    if (b.status !== 'aprobado' || !b.approvedAt) return false;
-    const m = spainMonthOf(b.approvedAt);
-    if (m === monthYear) return !pagadoAntesDe(payment, b.approvedAt);
-    if (m === prev) return pagadoAntesDe(previousPayment, b.approvedAt);
-    return false;
-  });
+export function accrualMonthFor(currentMonthPayment: FinancePayment | null, now: Date = new Date()): string {
+  const mes = spainTodayIso(now).slice(0, 7);
+  const cerrado = !!currentMonthPayment && currentMonthPayment.monthYear === mes && currentMonthPayment.status === 'paid';
+  return cerrado ? nextMonthYear(mes) : mes;
+}
+
+/** ¿Suma a finanzas? Solo los pagados desde la app; nunca los históricos por email. */
+export function bonusCountsForFinance(b: TeacherBonus): boolean {
+  return b.status === 'pagado' && !!b.paidMonth;
+}
+
+/** Bonos de un profesor que suman en `monthYear`: los pagados desde la app con ese `paid_month`. */
+export function bonusesForMonth(bonuses: TeacherBonus[], teacherId: string, monthYear: string): TeacherBonus[] {
+  return bonuses.filter(b => b.teacherId === teacherId && bonusCountsForFinance(b) && b.paidMonth === monthYear);
 }
 
 export function sumBonusEuros(bonuses: TeacherBonus[]): number {
   return bonuses.reduce((s, b) => s + (Number(b.euros) || 0), 0);
-}
-
-/** ¿Suma a finanzas? Solo aprobado y pagado; nunca pagado_externo ni rechazado. */
-export function bonusCountsForFinance(b: TeacherBonus): boolean {
-  return b.status === 'aprobado' || b.status === 'pagado';
 }
 
 export { bonusBlocksPair };

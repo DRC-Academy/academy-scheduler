@@ -100,7 +100,7 @@ describe('el duplicado ya no quema cupo en el pago', () => {
   const calc = (classRecords: ClassRecord[], monthYear = '2026-08') => calculateTeacherFinance({
     teacherId: T, teacherName: 'Jimena', monthYear,
     assignments: [asgn], joinLogs: [], classRecords, classAnalyses: [],
-    rates, scoringEvents: [], teacherBonuses: [], previousPayment: null, students, manualApprovals: [], payment: null,
+    rates, scoringEvents: [], teacherBonuses: [], students, manualApprovals: [], payment: null,
     gridOccupancy: EMPTY_GRID_OCCUPANCY,
   });
 
@@ -243,7 +243,7 @@ describe('el duplicado ya no quema cupo en el pago', () => {
           cancelacion('dup1', '2026-08-21', '2026-08-21T11:25:00Z'),
           cancelacion('dup2', '2026-08-21', '2026-08-21T11:25:00Z'),
         ],
-        rates, scoringEvents: [], teacherBonuses: [], previousPayment: null, students, manualApprovals: [], payment: null,
+        rates, scoringEvents: [], teacherBonuses: [], students, manualApprovals: [], payment: null,
         gridOccupancy: EMPTY_GRID_OCCUPANCY,
       });
       const pagables = rows.filter(r => r.status === 'pagable');

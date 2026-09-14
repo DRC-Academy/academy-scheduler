@@ -229,7 +229,7 @@ function calc(opts: {
   return calculateTeacherFinance({
     teacherId: T, teacherName: 'Profe', monthYear: '2026-07',
     assignments: [ana], joinLogs: opts.logs, classRecords: opts.records,
-    classAnalyses: opts.analyses ?? [], rates: RATES, scoringEvents: [], teacherBonuses: [], previousPayment: null,
+    classAnalyses: opts.analyses ?? [], rates: RATES, scoringEvents: [], teacherBonuses: [],
     students: [] as Student[], manualApprovals: [], payment: null,
     gridOccupancy: gridOccupancyOfTeacher(opts.teacher),
   });

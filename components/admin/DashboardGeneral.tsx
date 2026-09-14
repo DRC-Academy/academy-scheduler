@@ -37,7 +37,6 @@ import type { AssignedSlot } from '@/types';
 import { CrearVinculoModal } from '@/components/CrearVinculoModal';
 import { getPresentationEmailStatus } from '@/lib/presentationEmailUtils';
 import { calculateTeacherFinance } from '@/lib/finance';
-import { previousMonthYear } from '@/lib/bonuses';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 // Los números del dashboard: funciones puras sobre lo que el contexto ya trajo.
 import {
@@ -1418,11 +1417,10 @@ export default function DashboardGeneral() {
     let total = 0, pagable = 0, aRevisar = 0, retenido = 0, pagados = 0;
     for (const t of teachers) {
       const payment = financePayments.find(p => p.teacherId === t.id && p.monthYear === mes) ?? null;
-      const previousPayment = financePayments.find(p => p.teacherId === t.id && p.monthYear === previousMonthYear(mes)) ?? null;
       const r = calculateTeacherFinance({
         teacherId: t.id, teacherName: t.name, monthYear: mes,
         assignments, joinLogs: classJoinLogs, classRecords, classAnalyses,
-        rates: financeRates, scoringEvents, students, manualApprovals, payment, previousPayment, teacherBonuses,
+        rates: financeRates, scoringEvents, students, manualApprovals, payment, teacherBonuses,
         gridOccupancy: gridOccupancyOfTeacher(t),
       });
       total += r.totalAPagar;

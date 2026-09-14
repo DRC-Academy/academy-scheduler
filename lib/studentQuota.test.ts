@@ -50,7 +50,7 @@ function armar(opts: {
     teacherId: T, teacherName: 'Prof', monthYear: MES,
     assignments: opts.assignments, joinLogs: opts.joinLogs ?? [],
     classRecords: opts.classRecords ?? [], classAnalyses: opts.analyses ?? [], rates,
-    scoringEvents: [], teacherBonuses: [], previousPayment: null, students: opts.assignments.map(a => student(a.studentName)),
+    scoringEvents: [], teacherBonuses: [], students: opts.assignments.map(a => student(a.studentName)),
     manualApprovals: [], payment: null, gridOccupancy: opts.occupancy ?? EMPTY_GRID_OCCUPANCY,
   });
 }

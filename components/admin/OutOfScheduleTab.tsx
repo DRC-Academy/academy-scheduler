@@ -89,8 +89,8 @@ export default function OutOfScheduleTab({ monthYear, monthLabel }: {
           teacherId: t.id, teacherName: t.name, monthYear,
           assignments, joinLogs: classJoinLogs, classRecords, classAnalyses,
           rates: financeRates, scoringEvents, students, manualApprovals, payment: null,
-          // Solo se usan las FILAS: los bonos y el pago anterior no las cambian.
-          previousPayment: null, teacherBonuses: [],
+          // Solo se usan las FILAS: los bonos no las cambian.
+          teacherBonuses: [],
           gridOccupancy: gridOccupancyOfTeacher(t),
         }).rows,
       })),

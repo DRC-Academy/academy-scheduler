@@ -116,8 +116,8 @@ function financeOf(teacherId: string, teacherName: string, monthYear: string) {
     students, manualApprovals,
     payment: payments.find(p => p.teacherId === teacherId && p.monthYear === monthYear) ?? null,
     // Este diagnóstico mira FILAS (sesiones de recuperación), no el total: los
-    // bonos y el pago del mes anterior no cambian ninguna fila.
-    previousPayment: null, teacherBonuses: [],
+    // bonos no cambian ninguna fila.
+    teacherBonuses: [],
     gridOccupancy: gridOccupancyOfTeacher(t),
   });
   cache.set(k, r);
