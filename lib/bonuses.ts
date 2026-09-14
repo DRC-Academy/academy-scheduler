@@ -101,9 +101,10 @@ export interface BuildBonusRowsInput {
  * Filas de bonos para el profesor (`teacherId`) o para todos.
  *
  * Con `teacherId` se devuelve TODO lo de ese profesor. Sin él, se excluyen los
- * profesores archivados y las cuentas de prueba, salvo los bonos que ya existen
- * de un archivado (historial: un bono pagado no desaparece porque el profe se
- * fue después).
+ * profesores archivados y las cuentas de prueba, salvo las filas que YA existen
+ * en teacher_bonuses (un bono reclamado o pagado es un registro real y tiene
+ * que verse, sea de un archivado o de una cuenta de prueba); lo que se excluye
+ * de ellos es lo CALCULADO (disponible, próximo, en curso), que solo mete ruido.
  */
 export function buildBonusRows(input: BuildBonusRowsInput): BonusRow[] {
   const { assignments, bonuses, teachers, teacherId } = input;
@@ -111,11 +112,9 @@ export function buildBonusRows(input: BuildBonusRowsInput): BonusRow[] {
   const teacherById = new Map(teachers.map(t => [t.id, t]));
   const nameOf = (id: string, fallback?: string) => teacherById.get(id)?.name ?? fallback ?? id;
 
-  const quiereProfe = (id: string) => {
-    if (teacherId) return id === teacherId;
-    if (PROFESORES_DE_PRUEBA.has(id)) return false;
-    return true;
-  };
+  const quiereProfe = (id: string) => !teacherId || id === teacherId;
+  // Sin filtro de profesor, las cuentas de prueba solo aportan sus filas reales.
+  const soloFilasReales = (id: string) => !teacherId && PROFESORES_DE_PRUEBA.has(id);
   const profeVigente = (id: string) => {
     const t = teacherById.get(id);
     return !!t && !t.archivedAt;
@@ -128,6 +127,7 @@ export function buildBonusRows(input: BuildBonusRowsInput): BonusRow[] {
   for (const a of assignments) {
     if (!isActiveAssignment(a) || !quiereProfe(a.teacherId) || !profeVigente(a.teacherId)) continue;
     const vigente = retentionBonusFor(bonuses, a);
+    if (soloFilasReales(a.teacherId) && !vigente) continue;
     const teacherSince = retentionStartIso(a);
     const dueDate = retentionDueIso(a);
     const daysLeft = retentionDaysLeft(a, now);

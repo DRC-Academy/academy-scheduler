@@ -88,11 +88,15 @@ describe('buildBonusRows: una fila por par con su estado', () => {
     expect(rows.find(r => r.studentName === 'Proximo')?.dueDate).toBe('2026-09-21');
   });
 
-  it('en la lista global no entran inactivas, cuentas de prueba ni profesores archivados', () => {
+  it('en la lista global no entran inactivas, ni lo calculado de cuentas de prueba o archivados', () => {
     const rows = buildBonusRows({ assignments, bonuses, teachers: T, now: HOY });
     expect(rows.some(r => r.studentName === 'Inactiva')).toBe(false);
     expect(rows.some(r => r.teacherId === 't1')).toBe(false);
     expect(rows.some(r => r.studentName === 'Del archivado')).toBe(false);
+    // Pero una fila REAL de una cuenta de prueba (reclamada) sí se ve: es un registro.
+    const reclamadoDePrueba = bonus({ id: 'bt', teacherId: 't1', studentName: 'De prueba', assignmentId: 'test', status: 'reclamado', claimedAt: '2026-09-14T10:00:00Z' });
+    const conPrueba = buildBonusRows({ assignments, bonuses: [...bonuses, reclamadoDePrueba], teachers: T, now: HOY });
+    expect(conPrueba.filter(r => r.teacherId === 't1').map(r => r.estado)).toEqual(['reclamado']);
   });
 
   it('pidiendo UN profesor sí se ve la cuenta de prueba (para probar el circuito)', () => {

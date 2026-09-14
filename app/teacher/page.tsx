@@ -24,7 +24,7 @@ import { StudentAutofillCard } from '@/components/StudentAutofillCard';
 import { useStudentAutofill } from '@/lib/useStudentAutofill';
 import { usePresentationSent, presentationBtnStyle, PresentationEmailBadge, PendingTasksCard, useNivelesSinValidar } from '@/components/teacherPanelUi';
 import { transcriptsPendientes } from '@/lib/dashboardMetrics';
-import { BONUS_CLAIM_ENABLED, RETENTION_BONUS_DAYS, retentionDaysActive, retentionStartIso, retentionBonusFor } from '@/lib/retention';
+import { bonusClaimEnabledFor, RETENTION_BONUS_DAYS, retentionDaysActive, retentionStartIso, retentionBonusFor } from '@/lib/retention';
 import { buildBonusRows, bonusesForMonth, sumBonusEuros, type BonusRow } from '@/lib/bonuses';
 import { BonusClaimCard, estadoProfesor, fechaCorta } from '@/components/BonusClaimCard';
 import { Grid, Teacher, Assignment, ScoringEvent, Student, AppNotification, ClassRecord } from '@/types';
@@ -480,8 +480,9 @@ function TeacherScoringTab({ teacher, myAssignments, myEvents, bonusRows }: {
   const upsellMes    = bonosMes.filter(b => b.bonusType === 'upsell');
 
   // Lo que espera al profesor (solo con el reclamo habilitado) y su historial.
-  const disponibles = BONUS_CLAIM_ENABLED ? bonusRows.filter(r => r.estado === 'disponible' && r.assignment) : [];
-  const proximos    = BONUS_CLAIM_ENABLED ? bonusRows.filter(r => r.estado === 'proximo') : [];
+  const reclamoAbierto = bonusClaimEnabledFor(teacher.id);
+  const disponibles = reclamoAbierto ? bonusRows.filter(r => r.estado === 'disponible' && r.assignment) : [];
+  const proximos    = reclamoAbierto ? bonusRows.filter(r => r.estado === 'proximo') : [];
   const historial   = bonusRows.filter(r => r.bonus !== null);
 
   // Progreso de retención por alumno: días CON ESTE profesor (teacher_since,
@@ -758,7 +759,7 @@ function TeacherScoringTab({ teacher, myAssignments, myEvents, bonusRows }: {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <span style={{ fontSize: 13, fontWeight: 600, color: '#111827' }}>{a.studentName}</span>
-                  {BONUS_CLAIM_ENABLED && daysActive >= RETENTION_BONUS_DAYS && !bonus && (
+                  {reclamoAbierto && daysActive >= RETENTION_BONUS_DAYS && !bonus && (
                     <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 12, background: 'rgba(30,158,58,0.15)', border: '1px solid rgba(30,158,58,0.3)', color: '#1E9E3A', fontWeight: 700 }}>🎉 Bono disponible</span>
                   )}
                   {bonus && (
@@ -852,8 +853,8 @@ function TeacherNotificationsTab({ teacher, myAssignments, bonusRows, students, 
 
   // Section B: bono de 6 meses, disponible o próximo (≤30 días). Misma regla
   // que Mi Scoring y que el admin (lib/bonuses): un par que ya tiene bono no
-  // aparece. Con el reclamo apagado (BONUS_CLAIM_ENABLED) no se muestra nada.
-  const near6m = BONUS_CLAIM_ENABLED
+  // aparece. Con el reclamo apagado (bonusClaimEnabledFor) no se muestra nada.
+  const near6m = bonusClaimEnabledFor(teacher.id)
     ? bonusRows
         .filter(r => (r.estado === 'disponible' || r.estado === 'proximo') && r.assignment)
         .map(r => ({
@@ -1683,7 +1684,7 @@ function TeacherContent() {
   // acá (una fila 'disponible' = un banner) y desaparece al reclamar, porque el
   // estado lo da la tabla y no un "visto" guardado en el navegador.
   const bonusRows = buildBonusRows({ assignments: myAssignments, bonuses: teacherBonuses, teachers, teacherId: teacher.id });
-  const bonusBanners = BONUS_CLAIM_ENABLED ? bonusRows.filter(r => r.estado === 'disponible' && r.assignment) : [];
+  const bonusBanners = bonusClaimEnabledFor(teacher.id) ? bonusRows.filter(r => r.estado === 'disponible' && r.assignment) : [];
 
   // Grid-only students (ocupado cells without a DB assignment)
   const assignedNames = new Set(myAssignments.map(a => a.studentName));
@@ -1768,7 +1769,7 @@ function TeacherContent() {
         ))}
 
         {/* Banner del bono de 6 meses: dorado, con el botón de reclamo. Se va solo
-            al reclamar (la fila pasa a 'reclamado'). Solo con BONUS_CLAIM_ENABLED. */}
+            al reclamar (la fila pasa a 'reclamado'). Solo con el reclamo abierto (bonusClaimEnabledFor). */}
         {bonusBanners.map(r => (
           <div key={`bonus_6m_${r.key}`} className="milestone-banner" style={{ marginBottom: 14 }}>
             <BonusClaimCard

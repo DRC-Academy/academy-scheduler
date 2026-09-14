@@ -23,6 +23,7 @@
 
 import type { Assignment, TeacherBonus } from '@/types';
 import { getSpainParts } from '@/lib/spainTime';
+import { PROFESORES_DE_PRUEBA } from '@/lib/externalTeachers';
 
 /**
  * INTERRUPTOR del reclamo por parte del profesor.
@@ -37,6 +38,15 @@ import { getSpainParts } from '@/lib/spainTime';
  * que ya cobró por email aparecería como reclamable.
  */
 export const BONUS_CLAIM_ENABLED = false;
+
+/**
+ * ¿Este profesor ve el reclamo? El interruptor global, o una cuenta de prueba
+ * (t1/t2): así se puede ensayar el circuito completo en producción sin que
+ * ningún profesor real vea el botón todavía.
+ */
+export function bonusClaimEnabledFor(teacherId: string): boolean {
+  return BONUS_CLAIM_ENABLED || PROFESORES_DE_PRUEBA.has(teacherId);
+}
 
 // Días de continuidad necesarios para el bono de retención (6 meses).
 export const RETENTION_BONUS_DAYS = 180;

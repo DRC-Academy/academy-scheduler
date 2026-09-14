@@ -7,7 +7,7 @@ import { fetchOpenAlertState } from './interventionsClient';
 import { findContiguityMismatches, type ContiguityMismatch } from './teacherClasses';
 import { Teacher, Student, Assignment, AppUser, Grid, TeacherStatus, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, AssignedSlot, EmailPreferences, SalesContactResult, RecoveryCell, TeacherBonus, BonusType } from '@/types';
 import {
-  BONUS_CLAIM_ENABLED, RETENTION_UPCOMING_DAYS, isActiveAssignmentLike, retentionBonusFor, retentionDaysLeft,
+  bonusClaimEnabledFor, RETENTION_UPCOMING_DAYS, isActiveAssignmentLike, retentionBonusFor, retentionDaysLeft,
 } from './retention';
 
 /** Hoy en hora de España ('YYYY-MM-DD'). Las fechas de negocio se cortan en Madrid, nunca en UTC. */
@@ -3472,8 +3472,9 @@ export async function dbUpsertTeacherAlerts(
   const toInsert: any[] = [];
   // Bonos ya cargados del profesor: un par con bono (reclamado, aprobado, pagado
   // o pagado por fuera) no vuelve a avisarse. Solo hace falta si el reclamo está
-  // abierto (BONUS_CLAIM_ENABLED); si no, no se genera ningún aviso de bono.
-  const bonuses = BONUS_CLAIM_ENABLED ? await dbGetTeacherBonusesOf(teacherId) : [];
+  // abierto (bonusClaimEnabledFor); si no, no se genera ningún aviso de bono.
+  const reclamoAbierto = bonusClaimEnabledFor(teacherId);
+  const bonuses = reclamoAbierto ? await dbGetTeacherBonusesOf(teacherId) : [];
 
   // Conteo por clases registradas (normal/recuperacion) del profesor, en una sola
   // query, para detectar la cercanía a la clase 15 con el número real.
@@ -3513,7 +3514,7 @@ export async function dbUpsertTeacherAlerts(
     // Bono de retención (6 meses CON este profesor): misma regla que el panel y
     // el admin (lib/retention.ts). Solo mientras el reclamo esté habilitado y el
     // par no tenga ya un bono cargado.
-    if (BONUS_CLAIM_ENABLED && isActiveAssignmentLike(a) && !retentionBonusFor(bonuses, a)) {
+    if (reclamoAbierto && isActiveAssignmentLike(a) && !retentionBonusFor(bonuses, a)) {
       const daysLeft = retentionDaysLeft(a, today);
       if (daysLeft <= RETENTION_UPCOMING_DAYS) {
         toInsert.push({
