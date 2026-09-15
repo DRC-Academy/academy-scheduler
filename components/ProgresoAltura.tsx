@@ -28,10 +28,23 @@ export function ProgresoAltura() {
   useEffect(() => {
     if (window.parent === window) return;   // no está dentro de un iframe
 
+    // Se mide la FICHA (.pg-page), no el documento entero. `documentElement
+    // .scrollHeight` nunca baja del alto del propio iframe (900 px al arrancar):
+    // con él el recuadro solo podía crecer, nunca encoger, y en el móvil quedaba
+    // aire al final. Si por lo que sea no está el envoltorio, se cae al documento:
+    // medir de más es mejor que dejar el iframe clavado sin medir nunca.
+    const ficha = document.querySelector<HTMLElement>('.pg-page');
+
+    function medir(): number {
+      if (!ficha) return document.documentElement.scrollHeight;
+      // Borde inferior de la ficha medido desde el principio del documento:
+      // cuenta lo que haya por encima (márgenes incluidos) y no depende del
+      // alto del iframe, así que también puede BAJAR.
+      return ficha.getBoundingClientRect().bottom + window.scrollY;
+    }
+
     function enviar() {
-      // `scrollHeight` del <html> es el alto real del contenido, márgenes
-      // incluidos; `offsetHeight` del body se queda corto con márgenes colapsados.
-      const alto = Math.ceil(document.documentElement.scrollHeight);
+      const alto = Math.ceil(medir());
       if (!Number.isFinite(alto) || alto <= 0) return;
       // Un píxel arriba o abajo no merece un mensaje (ni el reflow del padre).
       if (Math.abs(alto - ultima.current) < 2) return;
@@ -48,7 +61,7 @@ export function ProgresoAltura() {
     // La ficha entra con una animación escalonada (`pg-rise`), así que su alto
     // cambia durante el primer segundo: el observer lo cubre sin poner timeouts.
     const observer = new ResizeObserver(enviar);
-    observer.observe(document.documentElement);
+    observer.observe(ficha ?? document.documentElement);
     window.addEventListener('load', enviar);
     window.addEventListener('resize', enviar);
 
