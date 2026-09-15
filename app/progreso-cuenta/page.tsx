@@ -21,7 +21,10 @@
 // Distinguirlos le diría a quien prueba emails al azar cuáles existen.
 
 import type { Metadata } from 'next';
+import { Suspense } from 'react';
 import { ProgresoFicha, ProgresoStyles } from '@/components/ProgresoFicha';
+import { DiplomaFromPromise, DiplomaSlot } from '@/components/DiplomaBanner';
+import { getLmsDiploma } from '@/lib/lmsDiploma';
 import { ProgresoAltura } from '@/components/ProgresoAltura';
 import { verifyProgresoLink } from '@/lib/progresoSignature';
 import { findStudentsByEmail, loadProgresoFor, type ProgresoStudent } from '@/lib/progresoAccount';
@@ -176,6 +179,16 @@ export default async function ProgresoCuentaPage({ searchParams }: {
   const payload = await loadProgresoFor(student);
   if (!payload) return <Marco><Caducado /></Marco>;
 
+  // 4) EL DIPLOMA, SIN ESPERARLO. El LMS tarda hasta 5-6 s en frío y la ficha no
+  // puede quedarse en blanco por una barra: la promesa se pasa tal cual y la
+  // lee un componente cliente con `use()` dentro de un Suspense. El HTML de la
+  // ficha sale entero de inmediato con el hueco reservado; el bloque llega por
+  // el mismo stream cuando el LMS contesta (o el hueco se cierra si no lo hace).
+  // Se hace aquí y no en el cliente porque la identidad ya está verificada y el
+  // secreto del LMS no tiene que salir del servidor. Nunca rechaza: ver
+  // lib/lmsDiploma.
+  const diploma = getLmsDiploma(student.id);
+
   return (
     <Marco>
       <ProgresoFicha
@@ -184,6 +197,11 @@ export default async function ProgresoCuentaPage({ searchParams }: {
         analyses={payload.analyses}
         assignment={payload.assignment}
         student={payload.studentLite}
+        diplomaSlot={
+          <Suspense fallback={<DiplomaSlot diploma="cargando" />}>
+            <DiplomaFromPromise promise={diploma} />
+          </Suspense>
+        }
       />
     </Marco>
   );

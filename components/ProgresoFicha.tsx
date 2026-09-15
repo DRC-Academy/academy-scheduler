@@ -34,12 +34,13 @@ import { getNextMilestone, isMilestone } from '@/lib/milestones';
 import { construirEstimacion, type Estimacion } from '@/lib/estimacion';
 import { resolveWeeklyHours, type AssignmentLite, type StudentLite } from '@/lib/progresoData';
 import { BannerAmpliar } from '@/components/BannerAmpliar';
+import { DIPLOMA_CSS } from '@/components/DiplomaBanner';
 import type { ClassAnalysisRow, StudentProfileRow } from '@/lib/aiTypes';
 
 // `studentName` ya no se muestra (el saludo con el nombre se quitó en
 // septiembre de 2026: la página empieza directamente con la escalera de
 // niveles). Sigue en la firma para no tocar a los dos que la montan.
-export function ProgresoFicha({ profile, analyses, assignment, student }: {
+export function ProgresoFicha({ profile, analyses, assignment, student, diplomaSlot }: {
   /** Nombre completo del alumno. Solo se usa el nombre de pila. */
   studentName: string;
   profile: StudentProfileRow | null;
@@ -49,6 +50,10 @@ export function ProgresoFicha({ profile, analyses, assignment, student }: {
    *  mejor dice si el alumno prepara un examen. Opcional: sin ella la detección
    *  cae a los textos de la assignment, como antes. */
   student?: StudentLite | null;
+  /** La barra del diploma del LMS (components/DiplomaBanner), ya envuelta por la
+   *  ruta en lo que difiere su carga. Va la primera, encima de la escalera. Sin
+   *  ella la ficha es exactamente la de antes. */
+  diplomaSlot?: React.ReactNode;
 }) {
   // Todo lo que sale de la ficha pasa por el cortafuegos: está escrita para el
   // profesor y, con el formulario a medias, la IA deja ahí notas de trabajo que
@@ -92,6 +97,8 @@ export function ProgresoFicha({ profile, analyses, assignment, student }: {
 
   return (
     <>
+      {diplomaSlot}
+
       {/* Sin encabezado: lo primero que ve el alumno es la escalera de niveles. */}
       <section className="pg-card pg-hero pg-rise" style={{ animationDelay: '0ms' }}>
         <LevelLadder level={level} target={estimacion?.meta.nivel ?? null} />
@@ -286,7 +293,7 @@ function Timeline({ analyses }: { analyses: ClassAnalysisRow[] }) {
 }
 
 export function ProgresoStyles() {
-  return <style dangerouslySetInnerHTML={{ __html: PROGRESO_CSS }} />;
+  return <style dangerouslySetInnerHTML={{ __html: PROGRESO_CSS + DIPLOMA_CSS }} />;
 }
 
 const PROGRESO_CSS = `

@@ -7,7 +7,12 @@ import { fileURLToPath } from 'node:url';
 export default defineConfig({
   resolve: {
     // Mismo alias que tsconfig.json ("@/*" → "./*").
-    alias: { '@': fileURLToPath(new URL('.', import.meta.url)) },
+    alias: {
+      '@': fileURLToPath(new URL('.', import.meta.url)),
+      // `server-only` lanza al importarse fuera de un Server Component (también en
+      // Node): los módulos que lo llevan se prueban con este stub vacío.
+      'server-only': fileURLToPath(new URL('./lib/__stubs__/server-only.ts', import.meta.url)),
+    },
   },
   test: {
     environment: 'node',
