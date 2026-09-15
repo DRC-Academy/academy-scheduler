@@ -184,20 +184,46 @@ function accesoDeLaClase(r: ClassFinanceRow): AccesoClase {
  * lib/bonuses.bonusesForMonth), no de scoring_events. `otros` es lo que todavía
  * llegue por scoring con euros positivos (hoy, nada).
  */
-interface Extras { bonos: number; nBonos: number; upsells: number; nUpsells: number; otros: number; detBonos: string[] }
+interface Extras {
+  bonos: number; nBonos: number; upsells: number; nUpsells: number; otros: number; detBonos: string[];
+  /** Pagados FUERA del sistema (históricos por email). Se ven, no suman: ver `bonusRowsExternal`. */
+  externos: number; nExternos: number; detExternos: string[];
+}
 
 function extrasDe(r: TeacherFinanceResult | undefined): Extras {
   const rows = r?.bonusRows ?? [];
   const bonos = rows.filter(b => b.bonusType === 'retencion_6m');
   const ups = rows.filter(b => b.bonusType === 'upsell');
+  const externos = r?.bonusRowsExternal ?? [];
   const suma = (xs: typeof rows) => xs.reduce((s, b) => s + (Number(b.euros) || 0), 0);
   return {
     bonos: suma(bonos), nBonos: bonos.length,
     upsells: suma(ups), nUpsells: ups.length,
     otros: r?.bonusFromScoring ?? 0,
     detBonos: bonos.map(b => b.studentName),
+    externos: r?.bonusExternalEuros ?? 0, nExternos: externos.length,
+    detExternos: externos.map(b => b.studentName),
   };
 }
+
+/**
+ * Los bonos pagados fuera del sistema en el mes, sumados sobre TODOS los
+ * profesores y no solo sobre los listados: en junio de 2026 casi nadie tiene
+ * clases registradas en la app y aun así se pagaron 34 bonos por email. Si la
+ * cifra saliera solo de las filas visibles, el mes diría menos de lo que se pagó.
+ */
+interface ExternosMes { euros: number; nBonos: number; nProfes: number }
+
+function externosDe(rs: TeacherFinanceResult[]): ExternosMes {
+  const con = rs.filter(r => r.bonusRowsExternal.length > 0);
+  return {
+    euros: con.reduce((s, r) => s + r.bonusExternalEuros, 0),
+    nBonos: con.reduce((s, r) => s + r.bonusRowsExternal.length, 0),
+    nProfes: con.length,
+  };
+}
+
+const NOTA_EXTERNOS = 'Pagados antes de que existiera la gestión de bonos en la app. No incluidos en el total.';
 
 /** "Hace un momento": la fila y las cifras muestran el movimiento durante estos ms. */
 const VENTANA_DESHACER_MS = 8000;
@@ -225,7 +251,7 @@ function cifrasDe(rs: TeacherFinanceResult[], extras: (id: string) => Extras): C
   return c;
 }
 
-function CabeceraMes({ c, reciente, cerrado, mesLabel }: { c: Cifras; reciente: Reciente | null; cerrado: boolean; mesLabel: string }) {
+function CabeceraMes({ c, externos, reciente, cerrado, mesLabel }: { c: Cifras; externos: ExternosMes; reciente: Reciente | null; cerrado: boolean; mesLabel: string }) {
   const inicio = c.nPag === 0 && c.pag < c.dadas * 0.5;
   const sumaConceptos = c.clases + c.bonos + c.upsells + c.otros;
   const fila = (label: string, v: number, color: string, extra?: string) => (
@@ -287,6 +313,14 @@ function CabeceraMes({ c, reciente, cerrado, mesLabel }: { c: Cifras; reciente: 
           )}
           <div className="fz-dr total"><span className="n">Total</span><span className="v">{eur(c.total)}</span><span className="pct" /></div>
         </div>
+        {/* Lo pagado por email antes de la app, para que el mes no diga "0 €" de
+            bonos. Fuera del desglose y del total: es historia, no deuda. */}
+        {externos.euros > 0 && (
+          <div className="fz-kpi-def fz-ext">
+            <div className="fz-dr"><span className="n">Bonos pagados fuera del sistema</span><span className="v">{eur(externos.euros)}</span></div>
+            <div className="fz-ext-sub">{externos.nBonos} bono{externos.nBonos === 1 ? '' : 's'} · {externos.nProfes} profesor{externos.nProfes === 1 ? '' : 'es'} · {NOTA_EXTERNOS}</div>
+          </div>
+        )}
       </div>
 
       {/* 3 · Estado del pago */}
@@ -603,6 +637,16 @@ function DetalleProfesor({ r, teacher, extras, penalties, funnelData, monthYear,
             ))}
             <div className="fz-lrow tot"><span>A pagar</span><span /><span className="v">{eur(r.totalAPagar)}</span></div>
           </div>
+          {extras.externos > 0 && (
+            <div className="fz-nota fz-ext">
+              <div className="fz-lrow" style={{ border: 0, padding: 0 }}>
+                <span>Bonos pagados fuera del sistema<span className="sub">{extras.detExternos.join(', ')}</span></span>
+                <span className="q">{extras.nExternos}</span>
+                <span className="v">{eur(extras.externos)}</span>
+              </div>
+              <div className="fz-ext-sub">{NOTA_EXTERNOS}</div>
+            </div>
+          )}
         </div>
 
         {/* No entra en el pago (todavía) */}
@@ -734,6 +778,8 @@ function FinanceTab({ onHow }: { onHow: () => void }) {
   const conActividad = results.filter(r => r.rows.length > 0 || r.bonusFromScoring > 0 || r.bonusFromBonuses > 0 || r.penaltiesFromScoring < 0 || r.paymentStatus === 'paid');
   const visible = conActividad.filter(r => statusFilter === 'all' || (statusFilter === 'paid' ? r.paymentStatus === 'paid' : r.paymentStatus !== 'paid'));
   const cifras = useMemo(() => cifrasDe(conActividad, extras), [conActividad]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Sobre TODOS los profesores del mes, no solo los con actividad: ver externosDe.
+  const externosMes = useMemo(() => externosDe(results), [results]);
   const cerrado = cifras.nTot > 0 && cifras.nPag === cifras.nTot;
   const pendientes = conActividad.filter(r => r.paymentStatus !== 'paid');
   const actual = abierto ? results.find(r => r.teacherId === abierto) ?? null : null;
@@ -814,7 +860,7 @@ function FinanceTab({ onHow }: { onHow: () => void }) {
             </div>
           </div>
 
-          <CabeceraMes c={cifras} reciente={reciente} cerrado={cerrado} mesLabel={mesLabel.charAt(0).toUpperCase() + mesLabel.slice(1)} />
+          <CabeceraMes c={cifras} externos={externosMes} reciente={reciente} cerrado={cerrado} mesLabel={mesLabel.charAt(0).toUpperCase() + mesLabel.slice(1)} />
 
           <div className="adm-card fz-lista">
             <div className="fz-lh">
@@ -1043,6 +1089,13 @@ const ESTILOS = `
 .fz-lrow.tot .v { font-size: 20px; }
 .fz-fuera .fz-lrow .v { color: #B45309; } .fz-fuera .fz-lrow .v.cero { color: #a4a7a1; }
 .fz-nota { font-size: 12.5px; color: #4A4A4A; line-height: 1.45; padding-top: 10px; border-top: 1px dashed #E0E0DA; margin-top: 8px; }
+/* Bonos pagados fuera del sistema: misma fila que el desglose, en gris, y sin
+   punto de color porque no es un tramo de la barra del total. */
+.fz-ext { margin-top: 10px; }
+.fz-ext .fz-dr { grid-template-columns: minmax(0, 1fr) auto; }
+.fz-ext .fz-dr .n, .fz-ext .fz-lrow > span:first-child { color: #6E6E66; }
+.fz-ext .fz-dr .v, .fz-ext .fz-lrow .v { color: #6E6E66; font-weight: 600; }
+.fz-ext-sub { font-size: 12px; color: #8b8e88; line-height: 1.45; margin-top: 4px; }
 .fz-emb { display: flex; flex-direction: column; gap: 8px; }
 .fz-emb-g { display: flex; flex-direction: column; gap: 2px; padding: 8px 0; border-top: 1px solid #ECECE8; }
 .fz-emb-g:first-child { border-top: 0; padding-top: 0; }

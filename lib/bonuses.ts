@@ -247,6 +247,16 @@ export function bonusesForMonth(bonuses: TeacherBonus[], teacherId: string, mont
   return bonuses.filter(b => b.teacherId === teacherId && bonusCountsForFinance(b) && b.paidMonth === monthYear);
 }
 
+/**
+ * Bonos de un profesor pagados FUERA del sistema en `monthYear`: los históricos
+ * por email (pagado_externo) con ese `paid_month`. Se enseñan en Finanzas y en
+ * la vista del profesor para que ese dinero no desaparezca del mes, pero NUNCA
+ * suman: ya salió por email antes de que existiera la gestión de bonos.
+ */
+export function externalBonusesForMonth(bonuses: TeacherBonus[], teacherId: string, monthYear: string): TeacherBonus[] {
+  return bonuses.filter(b => b.teacherId === teacherId && b.status === 'pagado_externo' && b.paidMonth === monthYear);
+}
+
 export function sumBonusEuros(bonuses: TeacherBonus[]): number {
   return bonuses.reduce((s, b) => s + (Number(b.euros) || 0), 0);
 }

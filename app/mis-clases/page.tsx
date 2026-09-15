@@ -573,6 +573,28 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
             ))}
           </div>
         )}
+
+        {/* Bonos que este mes se pagaron por email, antes de que existiera la
+            gestión de bonos en la app (pagado_externo). Se ven para que el mes
+            no diga "Bonos €0" cuando sí se cobraron; no entran en el total. */}
+        {finance.bonusExternalEuros > 0 && (
+          <div className="fin-pen fin-ext">
+            <div className="fin-pen-row fin-ext-head">
+              <span>Bonos pagados fuera del sistema</span>
+              <span style={{ whiteSpace: 'nowrap' }}>€{finance.bonusExternalEuros.toFixed(2)}</span>
+            </div>
+            {finance.bonusRowsExternal.map(b => (
+              <div key={b.id} className="fin-pen-row">
+                <span>{b.studentName} · {b.bonusType === 'upsell' ? 'Upsell' : 'Retención 6 meses'}</span>
+                <span style={{ whiteSpace: 'nowrap' }}>
+                  <span className="fin-ext-paid">Pagado</span>
+                  €{Number(b.euros).toFixed(2)}
+                </span>
+              </div>
+            ))}
+            <div className="fin-ext-note">Pagados antes de que existiera la gestión de bonos en la app. No incluidos en el total.</div>
+          </div>
+        )}
       </div>
 
       <div className="mcf-content">
