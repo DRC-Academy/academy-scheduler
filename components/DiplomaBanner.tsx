@@ -7,13 +7,20 @@
 // Mismo dibujo: una línea con la cifra y el recuento, y debajo un carril de
 // 12 px con el relleno en verde de marca y la punta clara.
 //
-// LLEGA TARDE Y NO PUEDE MOVER NADA. El dato lo da el LMS (lib/lmsDiploma.ts),
-// que tarda hasta 5-6 s en frío, así que la ficha se pinta entera sin él y este
-// bloque aparece después. Para que la página no pegue un salto, el hueco queda
-// reservado desde el primer render con la MISMA altura que tendrá el bloque
-// (`min-height` en `.pg-diploma`, igual en los cuatro estados), con un
-// esqueleto tenue dentro. Si no hay nada que enseñar —sin curso, o el LMS no
-// contestó— el hueco se cierra con una transición corta y desaparece.
+// ES UNA TARJETA MÁS (`pg-card`), entre la escalera de niveles y el banner de
+// ritmo: mismo fondo, borde, radio y padding que sus vecinas, y la separación la
+// pone el `gap` de `.pg-main` (por eso no lleva margen propio). Un poco más ancha
+// que las otras donde hay margen lateral para ello, para que resalte.
+//
+// LLEGA TARDE Y NO PUEDE MOVER NADA DE LO DE ABAJO. El dato lo da el LMS
+// (lib/lmsDiploma.ts), que tarda hasta 5-6 s en frío, así que la ficha se pinta
+// entera sin él y esta tarjeta se rellena después. Para que el banner de ritmo
+// no se desplace, el hueco queda reservado desde el primer render con la MISMA
+// altura que tendrá la tarjeta (`min-height` del contenido, igual en los
+// cuatro estados), con un esqueleto tenue dentro. Si no hay nada que enseñar
+// —sin curso, o el LMS no contestó— la tarjeta entera se cierra con una
+// transición (altura, padding, borde y el hueco del gap) y desaparece: no queda
+// una caja blanca vacía.
 //
 // Va DENTRO de `.pg-page` (es hijo de `.pg-main`): así la medición de altura
 // para el iframe de Mi cuenta (components/ProgresoAltura.tsx) lo incluye, y
@@ -72,10 +79,14 @@ export function DiplomaSlot({ diploma }: { diploma: DiplomaEstadoSlot }) {
 
   if (vacio && fase === 'cerrado') return null;
 
-  const clase = `pg-diploma${fase === 'cerrando' ? ' pg-diploma-cerrando' : ''}`;
-  if (vacio) return <div className={clase} aria-hidden />;
-  if (diploma === 'cargando') return <div className={clase} aria-hidden><Esqueleto /></div>;
-  return <section className={clase} aria-label={T.tuDiploma}><DiplomaBanner diploma={diploma} /></section>;
+  const clase = `pg-card pg-diploma${fase === 'cerrando' ? ' pg-diploma-cerrando' : ''}`;
+  if (vacio) return <div className={clase} aria-hidden><div className="pg-diploma-in" /></div>;
+  if (diploma === 'cargando') return <div className={clase} aria-hidden><div className="pg-diploma-in"><Esqueleto /></div></div>;
+  return (
+    <section className={clase} aria-label={T.tuDiploma}>
+      <div className="pg-diploma-in pg-diploma-llega"><DiplomaBanner diploma={diploma} /></div>
+    </section>
+  );
 }
 
 /** Ficha embebida (/progreso-cuenta): el servidor pasa la promesa sin esperarla. */
@@ -205,21 +216,40 @@ function IconoDiploma({ conseguido = false }: { conseguido?: boolean }) {
 // oscuro #14722A, tinta, gris medio, gris tenue); el carril (#E8EEE9) y la punta
 // (#6FD98A) van literales, como allí.
 //
-// LA ALTURA RESERVADA: línea de 14,5 px × 1,25 (≈18 px) + 11 px + carril 12 px
-// = 41 px. El estado "sin empezar" son dos líneas de 18 px con 5 px entre ellas:
-// los mismos 41 px. El esqueleto mide igual. Ningún estado mueve la página.
+// LA ALTURA RESERVADA: línea de 18 px + 11 px + carril 12 px = 41 px de contenido.
+// El estado "sin empezar" son dos líneas de 18 px con 5 px entre ellas: los
+// mismos 41 px. El esqueleto mide igual. Con el padding de `pg-card` (24/20 px)
+// y el borde, la tarjeta mide lo mismo en los cuatro estados: nada de lo de
+// abajo se mueve.
+//
+// EL CIERRE: se animan a cero la altura, el padding, el borde y, con un margen
+// negativo, el `gap` que `.pg-main` deja después de la tarjeta (18 px, 14 en
+// móvil). Al terminar, el slot la desmonta: no hay salto residual.
 
 export const DIPLOMA_CSS = `
 .pg-diploma {
   box-sizing: border-box;
-  min-height: 41px;
-  margin: 0 0 18px;
-  max-height: 120px;
+  max-height: 200px;
   opacity: 1;
   overflow: hidden;
-  transition: max-height 300ms ease, min-height 300ms ease, opacity 220ms ease, margin 300ms ease;
+  transition: max-height 300ms ease, padding 300ms ease, border-width 300ms ease, margin 300ms ease, opacity 200ms ease;
 }
-.pg-diploma-cerrando { max-height: 0; min-height: 0; opacity: 0; margin-bottom: 0; }
+.pg-diploma-in { min-height: 41px; }
+.pg-diploma-cerrando {
+  max-height: 0; opacity: 0;
+  padding-top: 0; padding-bottom: 0; border-top-width: 0; border-bottom-width: 0;
+  margin-bottom: -18px;
+}
+/* Un poco más ancha que sus vecinas, comiéndose 12 px del margen lateral de
+   .pg-main a cada lado. Solo donde ese margen existe: en el móvil es de 14 px y
+   dentro de Mi cuenta (.pg-embed) es cero, y ahí una tarjeta más ancha que la
+   página se recorta. */
+@media (min-width: 721px) { .pg-diploma { margin-left: -12px; margin-right: -12px; } }
+@media (max-width: 720px) { .pg-diploma-cerrando { margin-bottom: -14px; } }
+.pg-embed .pg-diploma { margin-left: 0; margin-right: 0; }
+/* El contenido entra con un fundido; la tarjeta no se mueve. */
+.pg-diploma-llega { animation: pg-diploma-llega 220ms ease-out both; }
+@keyframes pg-diploma-llega { from { opacity: 0; } to { opacity: 1; } }
 
 /* Altura FIJA de 18 px: con align-items baseline y dos cuerpos distintos la línea crecía
    medio píxel y el bloque dejaba de medir lo reservado. */
@@ -267,6 +297,6 @@ export const DIPLOMA_CSS = `
 
 @media (prefers-reduced-motion: reduce) {
   .pg-diploma { transition: none; }
-  .pg-diploma-skel-linea, .pg-diploma-skel-barra { animation: none; }
+  .pg-diploma-llega, .pg-diploma-skel-linea, .pg-diploma-skel-barra { animation: none; }
 }
 `;

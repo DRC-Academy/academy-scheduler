@@ -50,9 +50,10 @@ export function ProgresoFicha({ profile, analyses, assignment, student, diplomaS
    *  mejor dice si el alumno prepara un examen. Opcional: sin ella la detección
    *  cae a los textos de la assignment, como antes. */
   student?: StudentLite | null;
-  /** La barra del diploma del LMS (components/DiplomaBanner), ya envuelta por la
-   *  ruta en lo que difiere su carga. Va la primera, encima de la escalera. Sin
-   *  ella la ficha es exactamente la de antes. */
+  /** La tarjeta del diploma del LMS (components/DiplomaBanner), ya envuelta por la
+   *  ruta en lo que difiere su carga. Va entre la escalera y el banner de ritmo,
+   *  como una tercera caja de la misma familia. Sin ella la ficha es exactamente
+   *  la de antes. */
   diplomaSlot?: React.ReactNode;
 }) {
   // Todo lo que sale de la ficha pasa por el cortafuegos: está escrita para el
@@ -97,8 +98,6 @@ export function ProgresoFicha({ profile, analyses, assignment, student, diplomaS
 
   return (
     <>
-      {diplomaSlot}
-
       {/* Sin encabezado: lo primero que ve el alumno es la escalera de niveles. */}
       <section className="pg-card pg-hero pg-rise" style={{ animationDelay: '0ms' }}>
         <LevelLadder level={level} target={estimacion?.meta.nivel ?? null} />
@@ -136,6 +135,10 @@ export function ProgresoFicha({ profile, analyses, assignment, student, diplomaS
           </div>
         </div>
       </section>
+
+      {/* El diploma del LMS, entre la escalera y el ritmo. Llega tarde y con el
+          hueco ya reservado: nada de lo de abajo se mueve cuando aparece. */}
+      {diplomaSlot}
 
       <BannerAmpliar estimacion={estimacion} />
 
