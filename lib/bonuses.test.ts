@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { Assignment, Teacher, TeacherBonus, FinancePayment } from '@/types';
-import { buildBonusRows, bonusesForMonth, externalBonusesForMonth, bonusCounters, accrualMonthFor, nextMonthYear } from './bonuses';
+import { buildBonusRows, bonusesForMonth, bonusCounters, accrualMonthFor, nextMonthYear } from './bonuses';
 import { retentionDaysLeft, retentionDueIso, retentionStartIso, isRetentionBonusDue, hasRetentionBonus } from './retention';
 
 // Hoy fijo: 14/09/2026 a las 12:00 en España (10:00 UTC).
@@ -129,20 +129,13 @@ describe('bonusesForMonth y accrualMonthFor: en qué liquidación entra un bono'
   const reclamado   = bonus({ id: 'e', teacherId: 't9', studentName: 'E', status: 'reclamado', claimedAt: '2026-09-10T10:00:00Z' });
   const otroProfe   = bonus({ id: 'f', teacherId: 't10', studentName: 'F', status: 'pagado', approvedAt: '2026-09-10T10:00:00Z', paidMonth: '2026-09' });
 
-  it('suma solo los pagados desde la app con ese paid_month; nunca los históricos por email ni los reclamados', () => {
-    expect(bonusesForMonth([pagadoSep, pagadoOct, externo, reclamado, otroProfe], 't9', '2026-09').map(b => b.id)).toEqual(['a']);
-    expect(bonusesForMonth([pagadoSep, pagadoOct, externo, reclamado, otroProfe], 't9', '2026-10').map(b => b.id)).toEqual(['b']);
-  });
-
-  it('los pagados fuera del sistema se listan aparte, por su paid_month, y solo los de ese profesor', () => {
-    const externoJun = bonus({ id: 'g', teacherId: 't9', studentName: 'G', status: 'pagado_externo', paidMonth: '2026-06' });
-    const externoOtro = bonus({ id: 'h', teacherId: 't10', studentName: 'H', status: 'pagado_externo', paidMonth: '2026-09' });
-    const todos = [pagadoSep, pagadoOct, externo, reclamado, otroProfe, externoJun, externoOtro];
-    expect(externalBonusesForMonth(todos, 't9', '2026-09').map(b => b.id)).toEqual(['c']);
-    expect(externalBonusesForMonth(todos, 't9', '2026-06').map(b => b.id)).toEqual(['g']);
-    expect(externalBonusesForMonth(todos, 't9', '2026-10')).toEqual([]);
-    // Un pagado desde la app nunca se cuela entre los externos, ni al revés.
-    expect(bonusesForMonth(todos, 't9', '2026-06')).toEqual([]);
+  it('suma los pagados con ese paid_month, desde la app o por email antes de ella; nunca los reclamados ni los de otro profesor', () => {
+    const todos = [pagadoSep, pagadoOct, externo, reclamado, otroProfe];
+    expect(bonusesForMonth(todos, 't9', '2026-09').map(b => b.id)).toEqual(['a', 'c']);
+    expect(bonusesForMonth(todos, 't9', '2026-10').map(b => b.id)).toEqual(['b']);
+    // Un histórico sin mes asignado no puede caer en ninguna liquidación.
+    const sinMes = bonus({ id: 'g', teacherId: 't9', studentName: 'G', status: 'pagado_externo' });
+    expect(bonusesForMonth([sinMes], 't9', '2026-09')).toEqual([]);
   });
 
   it('marcado en un mes abierto: entra en ese mes', () => {

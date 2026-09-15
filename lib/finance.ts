@@ -35,7 +35,7 @@
 //       'excede_limite_tipo'.
 
 import { Assignment, ClassJoinLog, ClassRecord, FinanceRate, ScoringEvent, FinancePayment, Student, ClassRecordType, FinanceManualApproval, TeacherBonus } from '@/types';
-import { bonusesForMonth, externalBonusesForMonth, sumBonusEuros } from '@/lib/bonuses';
+import { bonusesForMonth, sumBonusEuros } from '@/lib/bonuses';
 import { classifyPlan, classifyFor, planBadgeStyle, type PlanClassification } from '@/lib/productUtils';
 import { contiguousRunLength, hourNum, hourText, nkName, runStartHour, sessionRangeLabel } from '@/lib/sessions';
 // Qué estado de suscripción da acceso (y cómo se llama) es UNA sola decisión,
@@ -331,14 +331,6 @@ export interface TeacherFinanceResult {
   bonusFromBonuses: number;
   /** Las filas que componen `bonusFromBonuses`, para el desglose y para marcarlas pagadas. */
   bonusRows: TeacherBonus[];
-  /**
-   * Bonos pagados FUERA del sistema con este mes (pagado_externo, los históricos
-   * por email de antes de la app). Solo para verlos: NO entran en `totalAPagar`
-   * ni en `bonusFromBonuses`.
-   */
-  bonusRowsExternal: TeacherBonus[];
-  /** Suma de `bonusRowsExternal`. Informativa, nunca se paga. */
-  bonusExternalEuros: number;
   penaltiesFromScoring: number;   // suma NEGATIVA de penalizaciones del mes (Bloque 4)
   totalAPagar: number;
   paymentStatus: 'pending' | 'paid';
@@ -1159,14 +1151,11 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
   const bonusFromScoring = scoringThisMonth
     .filter(e => (e.euros ?? 0) > 0 && !TIPOS_MIGRADOS_A_BONOS.has(e.eventType))
     .reduce((s, e) => s + (e.euros ?? 0), 0);
-  // Bonos marcados pagados desde la app con este mes de liquidación (paid_month).
-  // Los históricos pagados por email (pagado_externo) nunca entran.
+  // Bonos pagados con este mes de liquidación (paid_month): los marcados desde la
+  // app y los históricos pagados por email antes de ella (pagado_externo). Los
+  // dos son dinero del mes; ver lib/bonuses.bonusCountsForFinance.
   const bonusRows = bonusesForMonth(teacherBonuses, teacherId, monthYear);
   const bonusFromBonuses = sumBonusEuros(bonusRows);
-  // Los históricos SÍ se exponen, para que junio/julio/agosto no digan "0 €" de
-  // bonos cuando ese mes se pagaron por email. Van aparte y no tocan el total.
-  const bonusRowsExternal = externalBonusesForMonth(teacherBonuses, teacherId, monthYear);
-  const bonusExternalEuros = sumBonusEuros(bonusRowsExternal);
   // Suma NEGATIVA (penalizaciones: falta sin aviso, etc.). FIX del bug histórico:
   // antes solo se sumaban los euros > 0, así que las penalizaciones no restaban.
   const penaltiesFromScoring = scoringThisMonth
@@ -1196,7 +1185,7 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     hasInactiveSubPayable,
     payableSubStatuses,
     montoPagable, montoARevisar, montoRetenido,
-    bonusFromScoring, bonusFromBonuses, bonusRows, bonusRowsExternal, bonusExternalEuros, penaltiesFromScoring, totalAPagar,
+    bonusFromScoring, bonusFromBonuses, bonusRows, penaltiesFromScoring, totalAPagar,
     paymentStatus, paidAt,
     studentQuota: quota,
   };

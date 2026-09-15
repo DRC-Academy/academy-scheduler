@@ -485,8 +485,9 @@ export interface FinancePayment {
 // profesor a los 180 días con el alumno (lib/retention.ts), el admin lo aprueba
 // en la pestaña Bonos y pasa a 'pagado' al marcar el mes en Finanzas. Los upsells
 // los carga el admin ya aprobados. 'pagado_externo' son los históricos que se
-// pagaron por email antes de existir esto: bloquean el par para siempre y NUNCA
-// suman a finanzas. Un 'rechazado' deja el par disponible otra vez.
+// pagaron por email antes de existir esto: bloquean el par para siempre y suman
+// a la liquidación de su paid_month como cualquier bono pagado (desde el 15/09/2026:
+// bonos son bonos). Un 'rechazado' deja el par disponible otra vez.
 export type BonusType = 'retencion_6m' | 'upsell';
 export type BonusStatus = 'reclamado' | 'aprobado' | 'pagado' | 'rechazado' | 'pagado_externo';
 

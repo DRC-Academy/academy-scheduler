@@ -3515,11 +3515,6 @@ body.driver-active .drc-modal-backdrop * { pointer-events: auto; }
 }
 .fin-pen-row.is-reverted { color: var(--text-muted); text-decoration: line-through; }
 .fin-pen-back { text-decoration: none; color: var(--accent); margin-right: 6px; }
-/* Bonos pagados fuera del sistema: mismo bloque que las penalizaciones, en gris,
-   con cada bono marcado "Pagado" y una nota de que no entran en el total. */
-.fin-ext-head { font-weight: var(--fw-semibold); color: var(--text-primary); }
-.fin-ext-paid { color: var(--accent); font-weight: var(--fw-semibold); margin-right: 6px; }
-.fin-ext-note { font-size: var(--fs-caption); color: var(--text-muted); margin-top: 2px; }
 
 /* ── 2. La acción, antes del detalle ── */
 .fin-claim {

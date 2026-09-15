@@ -1,7 +1,9 @@
 // Importa a `teacher_bonuses` los bonos que ya se pagaron POR FUERA (por email a
 // pagos@) antes de que existiera la pestaña Bonos, como 'pagado_externo': así
 // (a) el profesor no puede volver a reclamarlos y (b) quedan en el historial.
-// NUNCA suman a finanzas (ver lib/bonuses.bonusCountsForFinance).
+// Suman a la liquidación de su paid_month como cualquier bono pagado (ver
+// lib/bonuses.bonusCountsForFinance): en un mes ya liquidado el total queda
+// congelado y solo cambia el desglose; en uno abierto, suman al total.
 //
 //   node --env-file=.env.local --import tsx scripts/import-bonos-historicos.ts
 //       ← DRY-RUN (por defecto): resuelve profesores y alumnos, lista candidatos

@@ -5051,7 +5051,8 @@ export async function dbMarkBonusPaid(p: {
 
 /**
  * Históricos pagados por email ANTES de la app (scripts/import-bonos-historicos):
- * crea filas 'pagado_externo', que bloquean el par y nunca suman a finanzas.
+ * crea filas 'pagado_externo', que bloquean el par y suman a la liquidación de
+ * su paid_month como cualquier bono pagado (lib/bonuses.bonusCountsForFinance).
  * Devuelve lo insertado y los pares que ya estaban cargados.
  */
 export async function dbMarkBonusesPaidExternal(items: Array<{

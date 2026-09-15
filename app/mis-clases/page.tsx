@@ -544,8 +544,11 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
           <div className="fin-chips">
             <span className="fin-chip">Clases €{finance.montoPagable.toFixed(2)}</span>
             <span className="fin-chip-sep">·</span>
-            <span className={`fin-chip${finance.bonusFromScoring > 0 ? '' : ' is-muted'}`}>
-              Bonos €{finance.bonusFromScoring.toFixed(2)}
+            {/* TODOS los bonos que suman al total (teacher_bonuses del mes + lo que
+                quede en scoring). Antes solo scoring: el chip decía €0 con un total
+                que sí llevaba el bono. */}
+            <span className={`fin-chip${finance.bonusFromScoring + finance.bonusFromBonuses > 0 ? '' : ' is-muted'}`}>
+              Bonos €{(finance.bonusFromScoring + finance.bonusFromBonuses).toFixed(2)}
             </span>
             <span className="fin-chip-sep">·</span>
             <span className={`fin-chip${finance.penaltiesFromScoring < 0 ? ' is-bad' : ' is-muted'}`}>
@@ -571,28 +574,6 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                 </span>
               </div>
             ))}
-          </div>
-        )}
-
-        {/* Bonos que este mes se pagaron por email, antes de que existiera la
-            gestión de bonos en la app (pagado_externo). Se ven para que el mes
-            no diga "Bonos €0" cuando sí se cobraron; no entran en el total. */}
-        {finance.bonusExternalEuros > 0 && (
-          <div className="fin-pen fin-ext">
-            <div className="fin-pen-row fin-ext-head">
-              <span>Bonos pagados fuera del sistema</span>
-              <span style={{ whiteSpace: 'nowrap' }}>€{finance.bonusExternalEuros.toFixed(2)}</span>
-            </div>
-            {finance.bonusRowsExternal.map(b => (
-              <div key={b.id} className="fin-pen-row">
-                <span>{b.studentName} · {b.bonusType === 'upsell' ? 'Upsell' : 'Retención 6 meses'}</span>
-                <span style={{ whiteSpace: 'nowrap' }}>
-                  <span className="fin-ext-paid">Pagado</span>
-                  €{Number(b.euros).toFixed(2)}
-                </span>
-              </div>
-            ))}
-            <div className="fin-ext-note">Pagados antes de que existiera la gestión de bonos en la app. No incluidos en el total.</div>
           </div>
         )}
       </div>

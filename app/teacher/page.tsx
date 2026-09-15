@@ -25,7 +25,7 @@ import { useStudentAutofill } from '@/lib/useStudentAutofill';
 import { usePresentationSent, presentationBtnStyle, PresentationEmailBadge, PendingTasksCard, useNivelesSinValidar } from '@/components/teacherPanelUi';
 import { transcriptsPendientes } from '@/lib/dashboardMetrics';
 import { bonusClaimEnabledFor, RETENTION_BONUS_DAYS, retentionDaysActive, retentionStartIso, retentionBonusFor } from '@/lib/retention';
-import { buildBonusRows, bonusesForMonth, externalBonusesForMonth, sumBonusEuros, type BonusRow } from '@/lib/bonuses';
+import { buildBonusRows, bonusesForMonth, sumBonusEuros, type BonusRow } from '@/lib/bonuses';
 import { BonusClaimCard, estadoProfesor, fechaCorta } from '@/components/BonusClaimCard';
 import { Grid, Teacher, Assignment, ScoringEvent, Student, AppNotification, ClassRecord } from '@/types';
 import FormStatusBadge from '@/components/FormStatusBadge';
@@ -478,8 +478,6 @@ function TeacherScoringTab({ teacher, myAssignments, myEvents, bonusRows }: {
   const bonosMes = bonusesForMonth(teacherBonuses, teacher.id, monthYear);
   const retencionMes = bonosMes.filter(b => b.bonusType === 'retencion_6m');
   const upsellMes    = bonosMes.filter(b => b.bonusType === 'upsell');
-  // Pagados por email con este mes (históricos): se enseñan, no suman al "€ este mes".
-  const externosMes  = externalBonusesForMonth(teacherBonuses, teacher.id, monthYear);
 
   // Lo que espera al profesor (solo con el reclamo habilitado) y su historial.
   const reclamoAbierto = bonusClaimEnabledFor(teacher.id);
@@ -638,16 +636,6 @@ function TeacherScoringTab({ teacher, myAssignments, myEvents, bonusRows }: {
           </div>
         ) : (
           <div style={{ fontSize: 13, color: '#6b7280' }}>Sin bonos este mes todavía.</div>
-        )}
-
-        {externosMes.length > 0 && (
-          <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px dashed #e5e7eb', fontSize: 13, color: '#6b7280' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
-              <span>Bonos pagados fuera del sistema · {externosMes.map(b => b.studentName).join(', ')}</span>
-              <span style={{ whiteSpace: 'nowrap' }}><b style={{ color: '#1E9E3A' }}>Pagado</b> · €{sumBonusEuros(externosMes)}</span>
-            </div>
-            <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 2 }}>Pagados antes de que existiera la gestión de bonos en la app. No incluidos en el total.</div>
-          </div>
         )}
 
         {/* Bonos disponibles: una tarjeta por alumno con el botón de reclamo. Solo

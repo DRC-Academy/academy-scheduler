@@ -15,9 +15,12 @@
 // El admin tiene UNA acción: "Marcar pagado", solo cuando el bono ya cumplió
 // (disponible o reclamado). Marcarlo lo mete en la liquidación del mes en curso
 // (o del siguiente si ese mes ya se cerró en Finanzas): ver accrualMonthFor.
-// 'pagado_externo' se muestra igual que 'pagado' pero NUNCA suma a finanzas:
-// ese dinero ya salió por email. Los upsells son siempre filas de la tabla
-// (nunca "disponibles": los carga el admin, ya pagados).
+// 'pagado_externo' (histórico pagado por email antes de la app) es un bono como
+// cualquier otro: suma a la liquidación del mes de su paid_month igual que un
+// 'pagado'. Hasta el 15/09/2026 no sumaba y Finanzas decía "0 €" de bonos en los
+// meses en que sí se pagaron; el director lo zanjó: bonos son bonos. Los upsells
+// son siempre filas de la tabla (nunca "disponibles": los carga el admin, ya
+// pagados).
 //
 // CUENTAS DE PRUEBA (t1/t2): quedan fuera de las listas globales y de las
 // cifras, como en /api/external. Cuando se pide UN profesor concreto sí se
@@ -237,24 +240,14 @@ export function accrualMonthFor(currentMonthPayment: FinancePayment | null, now:
   return cerrado ? nextMonthYear(mes) : mes;
 }
 
-/** ¿Suma a finanzas? Solo los pagados desde la app; nunca los históricos por email. */
+/** ¿Suma a finanzas? Todo bono pagado con mes asignado: desde la app o por email antes de ella. */
 export function bonusCountsForFinance(b: TeacherBonus): boolean {
-  return b.status === 'pagado' && !!b.paidMonth;
+  return (b.status === 'pagado' || b.status === 'pagado_externo') && !!b.paidMonth;
 }
 
-/** Bonos de un profesor que suman en `monthYear`: los pagados desde la app con ese `paid_month`. */
+/** Bonos de un profesor que suman en `monthYear`: los pagados con ese `paid_month`. */
 export function bonusesForMonth(bonuses: TeacherBonus[], teacherId: string, monthYear: string): TeacherBonus[] {
   return bonuses.filter(b => b.teacherId === teacherId && bonusCountsForFinance(b) && b.paidMonth === monthYear);
-}
-
-/**
- * Bonos de un profesor pagados FUERA del sistema en `monthYear`: los históricos
- * por email (pagado_externo) con ese `paid_month`. Se enseñan en Finanzas y en
- * la vista del profesor para que ese dinero no desaparezca del mes, pero NUNCA
- * suman: ya salió por email antes de que existiera la gestión de bonos.
- */
-export function externalBonusesForMonth(bonuses: TeacherBonus[], teacherId: string, monthYear: string): TeacherBonus[] {
-  return bonuses.filter(b => b.teacherId === teacherId && b.status === 'pagado_externo' && b.paidMonth === monthYear);
 }
 
 export function sumBonusEuros(bonuses: TeacherBonus[]): number {
