@@ -21,6 +21,9 @@ import { AddClassModal, saveTeacherClass, ANALYSIS_FAILED_NOTICE } from '@/compo
 import { Teacher, Assignment, ClassRecordType, ClassReviewRequest } from '@/types';
 import { HelpTooltip } from '@/components/ui';
 import type { HelpTooltipKey } from '@/lib/help-tooltips';
+// Plazo de 24 h del transcript: cuenta regresiva en las pendientes y aviso de
+// vencida. La misma fuente que Mis clases, la ficha y Asistencias.
+import { hoursLeftLabel, deadlineLabel } from '@/lib/transcriptDeadline';
 
 // Las etiquetas de ingresoBadge / classTypeBadge / subscriptionBadge vienen con
 // emoji desde lib/finance (fuente compartida con el panel de admin). Acá solo se
@@ -72,7 +75,7 @@ function daysDiff(aIso: string, bIso: string): number {
  * que dos pantallas dieran números distintos sobre las mismas clases.
  */
 type ListFilter =
-  | { kind: 'todas' | 'pagables' | 'pendientes' }
+  | { kind: 'todas' | 'pagables' | 'pendientes' | 'vencidas' }
   | { kind: 'origen'; key: string; label: string; rows: Set<ClassFinanceRow> };
 
 const TODAS: ListFilter = { kind: 'todas' };
@@ -86,7 +89,9 @@ function matchesFilter(r: ClassFinanceRow, f: ListFilter): boolean {
   switch (f.kind) {
     case 'todas':      return true;
     case 'pagables':   return r.status === 'pagable';
-    case 'pendientes': return r.status !== 'pagable';
+    // Vencidas aparte: ya no dependen del profesor (salvo reapertura del equipo).
+    case 'pendientes': return r.status !== 'pagable' && r.status !== 'vencida';
+    case 'vencidas':   return r.status === 'vencida';
     case 'origen':     return f.rows.has(r);
   }
 }
@@ -108,6 +113,9 @@ function settlementLabel(monthYear: string): string {
  * transcript. La rama del ingreso queda como red de seguridad.
  */
 function missingReason(r: ClassFinanceRow): string {
+  if (r.status === 'vencida') {
+    return 'pasaron 24 h desde el final de la clase sin transcript. No se valida para el pago; si crees que es un error, pide al equipo que reabra el plazo';
+  }
   return r.transcriptState === 'rejected' ? 'el equipo rechazó el transcript: subí el correcto'
     : r.transcriptState === 'none'        ? 'subir transcript en Añadir clase, o marcar la falta si el alumno no vino'
     : !r.hasJoinLog                       ? 'ingresar con el botón Meet (no quedó registro de acceso)'
@@ -322,8 +330,16 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
       todas: units({ kind: 'todas' }),
       pagables: units({ kind: 'pagables' }),
       pendientes: units({ kind: 'pendientes' }),
+      vencidas: units({ kind: 'vencidas' }),
     };
   }, [finance.rows]);
+
+  // ¿Alguna clase del mes con menos de 6 h de plazo o ya vencida? Deja el banner
+  // del plazo fijo en el modal de "Añadir clase".
+  const deadlineUrgent = useMemo(
+    () => finance.rows.some(r => r.status === 'vencida' || r.deadline.urgent),
+    [finance.rows],
+  );
 
   /** Todas las líneas del embudo, planas, para poder buscarlas por clave. */
   const funnelLines = useMemo(
@@ -347,6 +363,7 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
     if (key === 'reclamables') { router.push('/revisiones'); return; }
     if (key === 'pagables')   setListFilter({ kind: 'pagables' });
     else if (key === 'pendientes') setListFilter({ kind: 'pendientes' });
+    else if (key === 'vencidas')   setListFilter({ kind: 'vencidas' });
     else {
       const line = funnelLines.find(l => l.key === key);
       // Sin filas propias (p. ej. la rama padre) no hay nada que acotar: se
@@ -626,7 +643,10 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                   { k: 'todas', label: 'Todas' },
                   { k: 'pagables', label: 'Pagables' },
                   { k: 'pendientes', label: 'Pendientes' },
-                ] as Array<{ k: 'todas' | 'pagables' | 'pendientes'; label: string }>).map(f => (
+                  // Solo cuando hay alguna: un chip "Vencidas 0" permanente
+                  // sería un recordatorio de algo que no pasó.
+                  ...(filterCounts.vencidas > 0 ? [{ k: 'vencidas', label: 'Vencidas' }] : []),
+                ] as Array<{ k: 'todas' | 'pagables' | 'pendientes' | 'vencidas'; label: string }>).map(f => (
                   <button
                     key={f.k}
                     className={`fin-filter${listFilter.kind === f.k ? ' is-on' : ''}`}
@@ -656,6 +676,8 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                   ? <>No hay clases detectadas este mes. Registrá clases con <b>Añadir clase</b> o ingresá con el botón Meet.</>
                   : listFilter.kind === 'pendientes'
                     ? <>No te queda ninguna clase pendiente de cobro este mes.</>
+                    : listFilter.kind === 'vencidas'
+                      ? <>No tienes ninguna clase con el plazo del transcript vencido este mes.</>
                     : listFilter.kind === 'origen'
                       ? <>Ninguna clase de este mes entra en «{listFilter.label}».</>
                       : <>Ninguna clase de este mes está en ese estado.</>}
@@ -757,9 +779,15 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                           // sentido: clase pendiente, con ingreso y SIN nada subido.
                           // Con un transcript en revisión o rechazado la clase sí se
                           // dio, así que ahí marcar una falta sería mentir.
-                          const canMarkAbsence = r.status === 'a_revisar' && r.hasJoinLog
+                          // También en una VENCIDA: si el alumno no vino, la falta es
+                          // la salida correcta y no hay transcript que subir.
+                          const canMarkAbsence = (r.status === 'a_revisar' || r.status === 'vencida') && r.hasJoinLog
                             && r.transcriptState === 'none' && !isFalta
                             && finance.paymentStatus !== 'paid';
+                          // Plazo de 24 h: cuenta regresiva en la pendiente (amarillo
+                          // por debajo de 6 h). La vencida ya lo dice su estado.
+                          const plazo = r.status === 'a_revisar' && r.deadline.hoursLeft != null
+                            ? hoursLeftLabel(r.deadline.hoursLeft) : null;
                           const absenceCap = canMarkAbsence
                             ? canMarkStudentLostClass(classRecords, teacher.id, g.name, r.date.slice(0, 7))
                             : null;
@@ -769,7 +797,7 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                           const mixed = mixedSessionBadge(r);
                           const recNote = recoveryCreditLabel(r);
                           return (
-                            <div key={i} className={`mcf-cls${r.status === 'a_revisar' ? ' is-review' : ''}`}
+                            <div key={i} className={`mcf-cls${r.status === 'a_revisar' || r.status === 'vencida' ? ' is-review' : ''}`}
                               onClick={() => toggleClass(clsKey)} aria-expanded={clsOpen}>
 
                               {/* ── Fila compacta: cuándo · estado · importe ── */}
@@ -781,6 +809,14 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                                   <span className="mcf-dot" style={{ background: st.dot }} />
                                   {st.short}
                                 </span>
+                                {plazo && (
+                                  <span className="mcf-pill" title={`Plazo ${deadlineLabel(r.deadline.deadlineAt)} (hora de España)`}
+                                    style={r.deadline.urgent
+                                      ? { background: '#FFF4BF', color: '#8a6d00', fontWeight: 700 }
+                                      : { background: '#f0f1ee', color: '#5f6360' }}>
+                                    {plazo}
+                                  </span>
+                                )}
                               </div>
 
                               {/* Importe = tarifa × unidades (2× en una sesión de 2h) */}
@@ -871,6 +907,9 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                                   {r.status === 'a_revisar' && (
                                     <div className="mcf-cls-reason">Falta: {missingReason(r)}</div>
                                   )}
+                                  {r.status === 'vencida' && (
+                                    <div className="mcf-cls-reason" style={{ color: '#b91c1c' }}>Vencida: {missingReason(r)}.</div>
+                                  )}
                                   {isExcede && (
                                     <div className="mcf-cls-reason">
                                       {r.status === 'excede_limite_tipo'
@@ -959,6 +998,12 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
           myAssignments={myAssignments}
           classRecords={classRecords}
           initial={addPrefill}
+          // Plazo de 24 h de la clase desde la que se abrió (cuenta regresiva o
+          // aviso de vencida en el modal). Sin prefill no hay clase concreta.
+          deadline={addPrefill
+            ? finance.rows.find(r => r.studentName === addPrefill.studentName && r.date === addPrefill.date)?.deadline ?? null
+            : null}
+          deadlineUrgent={deadlineUrgent}
           onClose={() => { setShowAdd(false); setAddPrefill(null); }}
           onSaved={handleAddClass}
         />

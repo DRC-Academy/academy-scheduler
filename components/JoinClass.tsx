@@ -41,12 +41,15 @@ export interface JoinableClass {
   studentName: string;
   hour: string;
   meetLink?: string;
+  /** Horas de la sesión (2 en un bloque de dos celdas). Lo usa la guarda de doble clic del ingreso. */
+  durationHours?: number;
 }
 
 export type LogClassJoinFn = (
   teacherId: string, teacherName: string, studentName: string,
   scheduledDate: string, scheduledTime: string,
   subscriptionStatus?: string, enteredWithoutActive?: boolean, subscriptionDaysRemaining?: number | null,
+  durationHours?: number,
 ) => Promise<void>;
 
 export interface UseClassJoinArgs {
@@ -152,7 +155,9 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
 
   function registrarIngreso(c: JoinableClass, subscriptionStatus: string, enteredWithoutActive: boolean, daysRemaining: number | null) {
     if (!teacher) return;
-    logClassJoin(teacher.id, teacher.name, c.studentName, todayIso, c.hour, subscriptionStatus, enteredWithoutActive, daysRemaining);
+    // La guarda de doble clic vive en dbLogClassJoin: un segundo clic sobre la
+    // misma clase (misma fecha, hora dentro del tramo) no crea otro ingreso.
+    logClassJoin(teacher.id, teacher.name, c.studentName, todayIso, c.hour, subscriptionStatus, enteredWithoutActive, daysRemaining, c.durationHours ?? 1);
     setJoined(prev => new Set([...prev, c.key]));
   }
 

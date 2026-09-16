@@ -23,6 +23,8 @@ import { getProgressLink } from '@/lib/progressClient';
 import { registerClassWithTranscript, retryAnalysis } from '@/lib/aiClient';
 import { checkTranscriptDuplicates, transcriptHash, type DupeCheck } from '@/lib/transcriptDupes';
 import { pendingClassesFor, type PendingClass } from '@/lib/pendingClasses';
+import { hoursLeftLabel, deadlineLabel, EXPIRED_LABEL } from '@/lib/transcriptDeadline';
+import { TranscriptDeadlineBanner } from '@/components/TranscriptDeadlineBanner';
 import type { Assignment } from '@/types';
 import type { StudentProfileRow } from '@/lib/aiTypes';
 import {
@@ -673,6 +675,8 @@ function PendingTranscriptModal({ pending, assignment, profile, ficha, teacher, 
       joinLogId: pending.joinLogId,     // vínculo explícito
       transcriptHash: hash || null,
       studentProfile: ficha,
+      // Un transcript cubre TODO el bloque: la validación tiene que saber que son 2 h.
+      durationMinutes: pending.durationHours * 60,
     };
     try {
       // Devuelve en cuanto la clase está GUARDADA y VALIDADA. El informe de IA
@@ -728,6 +732,19 @@ function PendingTranscriptModal({ pending, assignment, profile, ficha, teacher, 
         <div style={{ fontSize: 13, color: 'var(--sp-t2)', marginBottom: 16 }}>
           {assignment.studentName}{pending.time ? ` · ${pending.time}` : ''} · Pega el transcript de Fathom.
         </div>
+
+        {/* Plazo de 24 h: mismo banner fijo que en Mis clases. */}
+        <TranscriptDeadlineBanner compact urgent={pending.deadline.status === 'vencido' || pending.deadline.urgent} />
+        {pending.deadline.status === 'vencido' ? (
+          <div style={{ fontSize: 12.5, color: '#b91c1c', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.35)', borderRadius: 8, padding: '9px 12px', lineHeight: 1.5, marginBottom: 14 }}>
+            <b>Plazo vencido.</b> Puedes subir el transcript igualmente para que el alumno tenga su práctica,
+            pero la clase <b>no se valida para el pago</b>. Si crees que es un error, pide al equipo que reabra el plazo.
+          </div>
+        ) : pending.deadline.hoursLeft != null ? (
+          <div style={{ fontSize: 12.5, color: pending.deadline.urgent ? '#8a6d00' : 'var(--sp-t2)', background: pending.deadline.urgent ? '#FFF4BF' : '#f0f1ee', borderRadius: 8, padding: '8px 12px', lineHeight: 1.5, marginBottom: 14 }}>
+            <b>{hoursLeftLabel(pending.deadline.hoursLeft)}</b> para subir este transcript ({deadlineLabel(pending.deadline.deadlineAt)}, hora de España).
+          </div>
+        ) : null}
 
         <textarea
           value={text}
@@ -1091,21 +1108,35 @@ function SeguimientoTab({ analyses, risk, intervention, progressScore, classNumb
             Clases pendientes de transcript · {pending.length}
           </div>
           <div style={{ fontSize: 13, color: 'var(--sp-t2)', lineHeight: 1.6, marginBottom: 12 }}>
-            Entraste a estas clases pero todavía no subiste el transcript. Hasta que lo
-            hagas quedan como “a revisar” en finanzas.
+            Entraste a estas clases pero todavía no subiste el transcript. Tienes 24 horas
+            desde el final de cada clase; pasado ese plazo la clase queda vencida y no se
+            valida para el pago.
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {pending.map(p => (
-              <div key={p.joinLogId} style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', borderTop: '1px solid #f2e2c9', paddingTop: 10 }}>
-                <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#e0912f', flexShrink: 0 }} />
-                <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, fontWeight: 600 }}>
-                  {formatDate(p.date)}{p.time ? ` · ${p.time}` : ''}
-                </span>
-                <button onClick={() => onCompletePending(p)} style={{ ...btnPrimary, padding: '7px 14px', fontSize: 12.5 }}>
-                  Pegar transcript
-                </button>
-              </div>
-            ))}
+            {pending.map(p => {
+              // Estado frente al plazo (fuente única: lib/transcriptDeadline).
+              const vencida = p.deadline.status === 'vencido';
+              const urgente = p.deadline.urgent;
+              const plazo = vencida ? EXPIRED_LABEL
+                : p.deadline.hoursLeft != null ? hoursLeftLabel(p.deadline.hoursLeft)
+                : 'Sin plazo';
+              const plazoColor = vencida ? '#b91c1c' : urgente ? '#8a6d00' : 'var(--sp-t2)';
+              return (
+                <div key={p.joinLogId} style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', borderTop: '1px solid #f2e2c9', paddingTop: 10 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: vencida ? '#dc2626' : urgente ? '#FFC400' : '#e0912f', flexShrink: 0 }} />
+                  <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, fontWeight: 600 }}>
+                    {formatDate(p.date)}{p.time ? ` · ${p.time}` : ''}{p.durationHours > 1 ? ` · ${p.durationHours}h` : ''}
+                    <span style={{ display: 'block', fontSize: 12.5, fontWeight: vencida || urgente ? 700 : 500, color: plazoColor }}
+                      title={p.deadline.deadlineAt != null && !vencida ? `Plazo ${deadlineLabel(p.deadline.deadlineAt)} (hora de España)` : undefined}>
+                      {plazo}
+                    </span>
+                  </span>
+                  <button onClick={() => onCompletePending(p)} style={{ ...(vencida ? btnSecondary : btnPrimary), padding: '7px 14px', fontSize: 12.5 }}>
+                    Pegar transcript
+                  </button>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}

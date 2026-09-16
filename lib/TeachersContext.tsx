@@ -86,7 +86,7 @@ interface TeachersContextType {
   markAllNotificationsRead: (userId: string, role: string) => Promise<void>;
   updateMeetLink: (assignmentId: string, link: string) => Promise<void>;
   markPresentationSent: (assignmentId: string) => Promise<{ hoursElapsed: number; sentOnTime: boolean }>;
-  logClassJoin: (teacherId: string, teacherName: string, studentName: string, scheduledDate: string, scheduledTime: string, subscriptionStatus?: string, enteredWithoutActive?: boolean, subscriptionDaysRemaining?: number | null) => Promise<void>;
+  logClassJoin: (teacherId: string, teacherName: string, studentName: string, scheduledDate: string, scheduledTime: string, subscriptionStatus?: string, enteredWithoutActive?: boolean, subscriptionDaysRemaining?: number | null, durationHours?: number) => Promise<void>;
   loadClassJoinLogs: () => Promise<void>;
   loadClassRecords: () => Promise<void>;
   loadFinanceData: () => Promise<void>;
@@ -558,9 +558,12 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     subscriptionStatus?: string,
     enteredWithoutActive?: boolean,
     subscriptionDaysRemaining?: number | null,
+    durationHours?: number,
   ) {
-    const log = await dbLogClassJoin(teacherId, teacherName, studentName, scheduledDate, scheduledTime, subscriptionStatus, enteredWithoutActive, subscriptionDaysRemaining);
-    setClassJoinLogs(prev => [log, ...prev]);
+    const log = await dbLogClassJoin(teacherId, teacherName, studentName, scheduledDate, scheduledTime, subscriptionStatus, enteredWithoutActive, subscriptionDaysRemaining, durationHours);
+    // Con la guarda de doble clic el ingreso puede ser uno que ya estaba: no se
+    // duplica en el estado.
+    setClassJoinLogs(prev => prev.some(l => l.id === log.id) ? prev : [log, ...prev]);
   }
 
   async function loadClassJoinLogs() {

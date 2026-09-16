@@ -13,6 +13,9 @@
 
 import type { Assignment, ClassJoinLog, ClassRecord, ScoringEvent, Teacher } from '@/types';
 import type { ClassTranscriptRef } from '@/lib/finance';
+// Regla ÚNICA de "¿cuál es el transcript de esta clase?" y del plazo de 24 h.
+import { findTranscriptFor, getTranscriptStatus, reopenedDeadlineFor, type TranscriptExclusions } from '@/lib/transcriptDeadline';
+import { hourNum } from '@/lib/sessions';
 // Qué clase perdida conserva el derecho a recuperarse NO se decide acá: es la
 // regla de lib/recovery, la misma que aplica el profesor al registrar una
 // recuperación. Una falta sin aviso o una cancelación sobre la hora se le
@@ -161,19 +164,25 @@ export interface TranscriptPendiente {
   studentName: string;
   fecha: string;
   dias: number;
+  /** El plazo de 24 h ya pasó (solo clases desde el 22/09/2026). */
+  vencida: boolean;
 }
 
 /**
  * Clases a las que el profesor ENTRÓ y que siguen sin transcript.
  *
- * LAS REGLAS SON LAS DE `lib/pendingClasses`, que es donde vive este cruce desde
- * antes y lo que ve el profesor en su ficha. Un ingreso está cubierto si:
+ * LA REGLA ES LA DE `lib/transcriptDeadline.findTranscriptFor`, la misma que
+ * usan la ficha del alumno, Mis clases, Asistencias y Finanzas. Un ingreso está
+ * cubierto si:
  *
  *   1. algún análisis lo referencia por `join_log_id` — el vínculo explícito, y
  *      hoy lo tienen 1.148 de 1.460 análisis;
- *   2. o hay un transcript del mismo alumno a ±1 día, que se CONSUME. Es el
- *      respaldo para las clases anteriores al vínculo. Sin consumirlo, un
+ *   2. o hay un transcript del mismo alumno de esa fecha exacta;
+ *   3. o —solo en clases anteriores al 22/09/2026— uno a ±1 día, que se CONSUME.
+ *      Es el respaldo para las clases anteriores al vínculo. Sin consumirlo, un
  *      transcript del lunes taparía también la clase del martes.
+ *
+ * Un transcript RECHAZADO por el equipo no cubre: la clase sigue pendiente.
  *
  * ACOTADO A UNA VENTANA, y esto es lo que lo hace un número accionable. Sin
  * ventana cuenta todo el histórico, y el histórico arrastra: en septiembre de
@@ -188,32 +197,15 @@ export interface TranscriptPendiente {
 export function transcriptsPendientes(
   joinLogs: readonly ClassJoinLog[],
   analyses: readonly ClassTranscriptRef[],
-  opts: { hoy?: string; desdeDias?: number; desde?: string } = {},
+  opts: { hoy?: string; desdeDias?: number; desde?: string; now?: number } = {},
 ): TranscriptPendiente[] {
   const hoy = opts.hoy ?? madridDateString();
   const margen = opts.desdeDias ?? 1;
   const desde = opts.desde ?? `${hoy.slice(0, 7)}-01`;   // por defecto, el mes en curso
 
-  const tieneTexto = (a: ClassTranscriptRef): boolean =>
-    typeof a.has_transcript === 'boolean' ? a.has_transcript : !!(a.transcript ?? '').trim();
-
-  // 1. Vínculos explícitos.
-  const vinculados = new Set<string>();
-  for (const a of analyses) {
-    const id = a.join_log_id;
-    if (id) vinculados.add(id);
-  }
-
-  // 2. Transcripts sin vínculo, por alumno, para consumir por cercanía de fecha.
-  const libresPorAlumno = new Map<string, string[]>();
-  for (const a of analyses) {
-    if (!tieneTexto(a) || a.join_log_id) continue;
-    const fecha = a.class_date || (a.analyzed_at ?? '').slice(0, 10);
-    if (!fecha) continue;
-    const k = norm(a.student_name);
-    const l = libresPorAlumno.get(k);
-    if (l) l.push(fecha); else libresPorAlumno.set(k, [fecha]);
-  }
+  // Transcripts ya asignados a una clase: no pueden cubrir otra.
+  const usados: TranscriptExclusions = new Set();
+  const analysesArr = analyses as ClassTranscriptRef[];
 
   // AGRUPADO por profesor, alumno y fecha: eso es UNA clase, por muchos ingresos
   // que tenga. El botón "Ingresar a clase" se puede pulsar dos veces y se pulsa:
@@ -235,20 +227,27 @@ export function transcriptsPendientes(
 
   const out: TranscriptPendiente[] = [];
   for (const grupo of enOrden) {
-    // Basta con que UNO de los ingresos del grupo tenga transcript vinculado.
-    if (grupo.some(l => vinculados.has(l.id))) continue;
-
     const log = grupo[0];
-    const libres = libresPorAlumno.get(norm(log.studentName)) ?? [];
-    let i = libres.findIndex(d => d === log.scheduledDate);
-    if (i < 0) i = libres.findIndex(d => Math.abs(diasEntre(d, log.scheduledDate)) <= 1);
-    if (i >= 0) { libres.splice(i, 1); continue; }
+    const transcript = findTranscriptFor(analysesArr, {
+      teacherId: log.teacherId, studentName: log.studentName, dateIso: log.scheduledDate,
+      joinLogIds: grupo.map(l => l.id), exclude: usados,
+    });
+    // Duración observada: las horas distintas de los ingresos del día.
+    const horas = grupo.map(l => hourNum(l.scheduledTime)).filter(Number.isFinite) as number[];
+    const estado = getTranscriptStatus({
+      date: log.scheduledDate,
+      startHour: horas.length ? Math.min(...horas) : log.scheduledTime,
+      durationHours: horas.length ? Math.max(...horas) - Math.min(...horas) + 1 : 1,
+      transcript, reopenedDeadlineAt: reopenedDeadlineFor(grupo), now: opts.now ?? Date.now(),
+    });
+    if (estado.status === 'subido' || estado.status === 'no_aplica') continue;
 
     const dias = diasEntre(log.scheduledDate, hoy);
     if (dias < margen) continue;          // todavía está en plazo
     out.push({
       teacherId: log.teacherId, teacherName: log.teacherName,
       studentName: log.studentName, fecha: log.scheduledDate, dias,
+      vencida: estado.status === 'vencido',
     });
   }
   return out.sort((a, b) => b.dias - a.dias);

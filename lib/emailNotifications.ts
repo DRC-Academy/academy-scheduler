@@ -562,6 +562,10 @@ ${classes.map(c => `    <div style="font-size:14px; color:#1A1A1A; padding:3px 0
     // La segunda es la que convierte el recordatorio en algo más que una
     // gestión administrativa.
     p(consecuencia) +
+    // El plazo, con todas las letras: desde el 22/09/2026 son 24 h desde el final
+    // de la clase (lib/transcriptDeadline). Antes no había plazo y el correo no
+    // decía nada; ahora es lo que convierte el recordatorio en urgente.
+    p(`<strong>${copy('Recuerda que tienes 24 horas desde el final de cada clase para subir el transcript.')}</strong> ${copy('Pasado ese plazo la clase queda vencida: no se valida para el pago y solo el equipo puede reabrirla.')}`) +
     p(copy('Si se te ha olvidado, entra en Fathom, copia el transcript de la clase y pégalo en la ficha del alumno. Es rápido.')) +
     ctaButton('Subir transcript', `${APP_URL}/mis-clases`) +
     p(`${copy('Un saludo,')}<br />${copy('Equipo DRC Academy')}`),

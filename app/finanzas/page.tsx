@@ -32,7 +32,9 @@ import { useTeachers } from '@/lib/TeachersContext';
 import { calculateTeacherFinance, estimateClassAmount, TeacherFinanceResult, ClassFinanceRow, classTypeBadge, durationSourceBadge, subscriptionBadge, rowHoursLabel, financeStatusBadge, transcriptStateBadge, lostClassBreakdownLabel, isStudentAbsence, recoveryCreditLabel, studentQuotaOf } from '@/lib/finance';
 import { isActiveWooStatus } from '@/lib/subscriptionAccess';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
-import { dbRevertPenalty, dbGetAllTeacherAssignments } from '@/lib/db';
+import { dbRevertPenalty, dbGetAllTeacherAssignments, dbReopenTranscriptDeadline } from '@/lib/db';
+// Plazo de 24 h del transcript: cuenta regresiva, reapertura y su etiqueta.
+import { hoursLeftLabel, deadlineLabel, TRANSCRIPT_REOPEN_HOURS } from '@/lib/transcriptDeadline';
 import { buildClassFunnel, type ClassFunnel, type FunnelBranch } from '@/lib/classFunnel';
 import { dbGetReviewRequests } from '@/lib/reviewRequests';
 import { dbGetStudentDropouts, type StudentDropout } from '@/lib/studentPeriod';
@@ -206,22 +208,23 @@ interface Reciente { teacherId: string; nombre: string; importe: number; deshech
 
 // ─── Cifras del mes ───────────────────────────────────────────────────────────
 interface Cifras {
-  pag: number; pendTx: number; fueraCupo: number; dadas: number;
+  pag: number; pendTx: number; vencidas: number; fueraCupo: number; dadas: number;
   retEur: number; clases: number; bonos: number; upsells: number; otros: number; pen: number; total: number;
   porPagar: number; pagado: number; nPag: number; nTot: number;
 }
 
 function cifrasDe(rs: TeacherFinanceResult[], extras: (id: string) => Extras): Cifras {
-  const c: Cifras = { pag: 0, pendTx: 0, fueraCupo: 0, dadas: 0, retEur: 0, clases: 0, bonos: 0, upsells: 0, otros: 0, pen: 0, total: 0, porPagar: 0, pagado: 0, nPag: 0, nTot: rs.length };
+  const c: Cifras = { pag: 0, pendTx: 0, vencidas: 0, fueraCupo: 0, dadas: 0, retEur: 0, clases: 0, bonos: 0, upsells: 0, otros: 0, pen: 0, total: 0, porPagar: 0, pagado: 0, nPag: 0, nTot: rs.length };
   for (const r of rs) {
     const x = extras(r.teacherId);
-    c.pag += r.totalPagable; c.pendTx += r.totalARevisar; c.fueraCupo += r.totalExcedeLimite + r.totalExcedeLimiteTipo;
+    c.pag += r.totalPagable; c.pendTx += r.totalARevisar; c.vencidas += r.totalVencidas; c.fueraCupo += r.totalExcedeLimite + r.totalExcedeLimiteTipo;
     c.retEur += r.montoARevisar; c.clases += r.montoPagable;
     c.bonos += x.bonos; c.upsells += x.upsells; c.otros += x.otros; c.pen += r.penaltiesFromScoring;
     c.total += r.totalAPagar;
     if (r.paymentStatus === 'paid') { c.pagado += r.totalAPagar; c.nPag++; } else c.porPagar += r.totalAPagar;
   }
-  c.dadas = c.pag + c.pendTx + c.fueraCupo;
+  // Las vencidas también se dieron: cuentan como dadas aunque no se paguen.
+  c.dadas = c.pag + c.pendTx + c.vencidas + c.fueraCupo;
   return c;
 }
 
@@ -329,6 +332,7 @@ function FilaProfesor({ r, extras, reciente, ocupado, onAbrir, onPagar, onDeshac
 }) {
   const pagado = r.paymentStatus === 'paid';
   const ret = r.montoARevisar;
+  const dadas = r.totalPagable + r.totalARevisar + r.totalVencidas + r.totalExcedeLimite + r.totalExcedeLimiteTipo;
   const partes: string[] = [];
   if (extras.bonos > 0) partes.push(`+${Math.round(extras.bonos)} € bono`);
   if (extras.upsells > 0) partes.push(`+${Math.round(extras.upsells)} € upsell`);
@@ -343,11 +347,11 @@ function FilaProfesor({ r, extras, reciente, ocupado, onAbrir, onPagar, onDeshac
           <span className="fz-warn" title={`Clases pagables sin suscripción con acceso: ${r.payableSubStatuses.filter(s => !s.countsAsActive).map(s => `${s.count} en «${s.label}»`).join(', ')}`}>!</span>
         )}
       </button>
-      <span className="fz-cl"><b>{r.totalPagable}</b> de {r.totalPagable + r.totalARevisar + r.totalExcedeLimite + r.totalExcedeLimiteTipo}</span>
+      <span className="fz-cl"><b>{r.totalPagable}</b> de {dadas}{r.totalVencidas > 0 && <span className="fz-warn" style={{ background: '#dc2626' }} title={`${r.totalVencidas} clase${r.totalVencidas === 1 ? '' : 's'} con el plazo del transcript vencido: ${eur(r.montoVencidas)} sin pagar`}>{r.totalVencidas}</span>}</span>
       <span className={`fz-ret${ret > 0 ? '' : ' cero'}`}>{ret > 0 ? eur(ret) : '—'}</span>
       <span className={`fz-ex${partes.length ? '' : ' cero'}`}>{partes.length ? partes.join(' · ') : '—'}</span>
       {/* En el teléfono, la línea de abajo de la tarjeta. */}
-      <span className="fz-meta">{r.totalPagable} de {r.totalPagable + r.totalARevisar + r.totalExcedeLimite + r.totalExcedeLimiteTipo} clase{r.totalPagable + r.totalARevisar + r.totalExcedeLimite + r.totalExcedeLimiteTipo === 1 ? '' : 's'}{ret > 0 && <> · <b>{eur(ret)} retenido</b></>}{extrasMovil > 0 && <> · +{Math.round(extrasMovil)} € extras</>}</span>
+      <span className="fz-meta">{r.totalPagable} de {dadas} clase{dadas === 1 ? '' : 's'}{ret > 0 && <> · <b>{eur(ret)} retenido</b></>}{r.totalVencidas > 0 && <> · <b style={{ color: '#b91c1c' }}>{r.totalVencidas} vencida{r.totalVencidas === 1 ? '' : 's'}</b></>}{extrasMovil > 0 && <> · +{Math.round(extrasMovil)} € extras</>}</span>
       <span className="fz-imp">{eur(r.totalAPagar)}{pagado && <span className="fz-imp-est">{reciente ? 'Pagado ahora' : `Pagado ${r.paidAt ? finDateShort(r.paidAt.slice(0, 10)) : ''}`}</span>}</span>
       <span className="fz-est">
         {!pagado ? (
@@ -400,9 +404,10 @@ function EmbudoCompacto({ funnel, claimAmount }: { funnel: ClassFunnel; claimAmo
   );
 }
 
-function FilaClase({ r, result, approvals, onApproveReview, onApproveExceed, onRevertAbsence }: {
+function FilaClase({ r, result, approvals, onApproveReview, onApproveExceed, onRevertAbsence, onReopenDeadline }: {
   r: ClassFinanceRow; result: TeacherFinanceResult; approvals: FinanceManualApproval[];
   onApproveReview: (date: string) => void; onApproveExceed: (date: string) => void; onRevertAbsence: (row: ClassFinanceRow) => void;
+  onReopenDeadline: (row: ClassFinanceRow) => void;
 }) {
   const st = financeStatusBadge(r.status);
   const ct = classTypeBadge(r.classType);
@@ -416,6 +421,10 @@ function FilaClase({ r, result, approvals, onApproveReview, onApproveExceed, onR
   const notas = [
     r.manuallyApproved ? `Aprobada por el equipo${approvalBy(approvals, result.teacherId, r.studentName, r.date)}` : null,
     lostClassBreakdownLabel(r), recoveryCreditLabel(r),
+    // Plazo del transcript: cuenta regresiva en la pendiente, y constancia de la
+    // reapertura cuando la hubo (quién y hasta cuándo).
+    r.status === 'a_revisar' && r.deadline.hoursLeft != null ? `Plazo: ${hoursLeftLabel(r.deadline.hoursLeft)} (${deadlineLabel(r.deadline.deadlineAt)})` : null,
+    r.deadline.reopened ? `Plazo reabierto${r.deadline.deadlineAt != null ? ` ${deadlineLabel(r.deadline.deadlineAt)}` : ''}` : null,
   ].filter((x): x is string => !!x);
   return (
     <div className={`fz-cls${acc.kind === 'sin' ? ' rojo' : ''}`} title={acc.kind === 'sin' ? acc.title : undefined}>
@@ -434,6 +443,14 @@ function FilaClase({ r, result, approvals, onApproveReview, onApproveExceed, onR
         {editable && r.status === 'a_revisar' && (
           <button type="button" className="adm-btn adm-btn-ghost fz-btn-sm" onClick={() => onApproveReview(r.date)}>Pagar sin transcript</button>
         )}
+        {/* Vencida: el admin puede reabrir el plazo (24 h más, con motivo) o
+            pagarla igual sin transcript, que es el override de siempre. */}
+        {editable && r.status === 'vencida' && r.joinLogId && (
+          <button type="button" className="adm-btn adm-btn-ghost fz-btn-sm" onClick={() => onReopenDeadline(r)}>Reabrir plazo</button>
+        )}
+        {editable && r.status === 'vencida' && (
+          <button type="button" className="adm-btn adm-btn-ghost fz-btn-sm" onClick={() => onApproveReview(r.date)}>Pagar sin transcript</button>
+        )}
         {editable && (r.status === 'excede_limite' || r.status === 'excede_limite_tipo') && (
           <button type="button" className="adm-btn adm-btn-ghost fz-btn-sm" onClick={() => onApproveExceed(r.date)}>Incluir igual</button>
         )}
@@ -445,10 +462,11 @@ function FilaClase({ r, result, approvals, onApproveReview, onApproveExceed, onR
   );
 }
 
-function AlumnoFila({ result, name, rows, assignments, approvals, abierto, onToggle, onApproveReview, onApproveExceed, onRevertAbsence }: {
+function AlumnoFila({ result, name, rows, assignments, approvals, abierto, onToggle, onApproveReview, onApproveExceed, onRevertAbsence, onReopenDeadline }: {
   result: TeacherFinanceResult; name: string; rows: ClassFinanceRow[]; assignments: Assignment[]; approvals: FinanceManualApproval[];
   abierto: boolean; onToggle: () => void;
   onApproveReview: (studentName: string, date: string) => void; onApproveExceed: (studentName: string, date: string) => void; onRevertAbsence: (row: ClassFinanceRow) => void;
+  onReopenDeadline: (row: ClassFinanceRow) => void;
 }) {
   // Emparejamiento TOLERANTE, como en el resto del código.
   const asgn = assignments.find(a => a.teacherId === result.teacherId && nkStudent(a.studentName) === nkStudent(name));
@@ -456,6 +474,7 @@ function AlumnoFila({ result, name, rows, assignments, approvals, abierto, onTog
   const euros = (rs: ClassFinanceRow[]) => rs.reduce((s, r) => s + r.rate * r.billingUnits, 0);
   const pagables = rows.filter(r => r.status === 'pagable');
   const revisar  = rows.filter(r => r.status === 'a_revisar');
+  const vencidas = rows.filter(r => r.status === 'vencida');
   const excede   = rows.filter(r => r.status === 'excede_limite');
   const excTipo  = rows.filter(r => r.status === 'excede_limite_tipo');
   const quota = studentQuotaOf(result, name);
@@ -465,6 +484,7 @@ function AlumnoFila({ result, name, rows, assignments, approvals, abierto, onTog
   const plan = planContratado(rows[0]);
   const problemas: Array<{ n: number; amount: number; txt: string; det: string }> = [];
   if (revisar.length > 0) problemas.push({ n: units(revisar), amount: euros(revisar), txt: 'sin transcript', det: 'Las dio y todavía no subió el texto. Pasan a pagables solas en cuanto lo suba, o se pagan a mano desde la fila.' });
+  if (vencidas.length > 0) problemas.push({ n: units(vencidas), amount: euros(vencidas), txt: 'con el plazo vencido', det: 'Pasaron 24 h desde el final de la clase sin transcript: no se validan ni se pagan. Desde la fila se puede reabrir el plazo (24 h más, con motivo) o pagarla sin transcript.' });
   if (excede.length > 0) problemas.push({ n: units(excede), amount: euros(excede), txt: 'fuera del cupo del mes', det: `Superan las ${quota?.limit ?? '—'} que incluye su plan. Cada una se puede incluir igual desde la fila.` });
   if (excTipo.length > 0) problemas.push({ n: units(excTipo), amount: euros(excTipo), txt: 'faltas o cancelaciones de más', det: 'Superan las 2 cobrables de ese tipo en el mes. Cada una se puede incluir igual desde la fila.' });
 
@@ -478,6 +498,7 @@ function AlumnoFila({ result, name, rows, assignments, approvals, abierto, onTog
             ? <span className="fz-pill ok">Al día</span>
             : <>
                 {revisar.length > 0 && <span className="fz-pill pend">{units(revisar)} sin transcript</span>}
+                {vencidas.length > 0 && <span className="fz-pill pend" style={{ color: '#b91c1c', background: 'rgba(239,68,68,0.10)' }}>{units(vencidas)} vencida{units(vencidas) === 1 ? '' : 's'}</span>}
                 {(excede.length > 0 || excTipo.length > 0) && <span className="fz-pill pend">{units(excede) + units(excTipo)} fuera del cupo</span>}
               </>}
         </span>
@@ -514,7 +535,8 @@ function AlumnoFila({ result, name, rows, assignments, approvals, abierto, onTog
             <div className="fz-cls head" aria-hidden><span>Fecha</span><span>Hora</span><span>Estado</span><span>Tipo y notas</span><span style={{ textAlign: 'right' }}>Importe</span><span /></div>
             {rows.map((r, i) => (
               <FilaClase key={i} r={r} result={result} approvals={approvals}
-                onApproveReview={date => onApproveReview(name, date)} onApproveExceed={date => onApproveExceed(name, date)} onRevertAbsence={onRevertAbsence} />
+                onApproveReview={date => onApproveReview(name, date)} onApproveExceed={date => onApproveExceed(name, date)} onRevertAbsence={onRevertAbsence}
+                onReopenDeadline={onReopenDeadline} />
             ))}
           </div>
         </div>
@@ -523,12 +545,13 @@ function AlumnoFila({ result, name, rows, assignments, approvals, abierto, onTog
   );
 }
 
-function DetalleProfesor({ r, teacher, extras, penalties, funnelData, monthYear, assignments, approvals, reciente, ocupado, onVolver, onPagar, onDeshacer, onRevertPenalty, onApproveReview, onApproveExceed, onRevertAbsence }: {
+function DetalleProfesor({ r, teacher, extras, penalties, funnelData, monthYear, assignments, approvals, reciente, ocupado, onVolver, onPagar, onDeshacer, onRevertPenalty, onApproveReview, onApproveExceed, onRevertAbsence, onReopenDeadline }: {
   r: TeacherFinanceResult; teacher: Teacher | undefined; extras: Extras; penalties: ScoringEvent[];
   funnelData: ReturnType<typeof useFunnelData>; monthYear: string; assignments: Assignment[]; approvals: FinanceManualApproval[];
   reciente: boolean; ocupado: boolean;
   onVolver: () => void; onPagar: () => void; onDeshacer: () => void; onRevertPenalty: (p: ScoringEvent) => void;
   onApproveReview: (studentName: string, date: string) => void; onApproveExceed: (studentName: string, date: string) => void; onRevertAbsence: (row: ClassFinanceRow) => void;
+  onReopenDeadline: (row: ClassFinanceRow) => void;
 }) {
   const { classJoinLogs, classRecords, classAnalyses, students, financeRates } = useTeachers();
   const [filtro, setFiltro] = useState<'todos' | 'pendiente'>('todos');
@@ -541,7 +564,7 @@ function DetalleProfesor({ r, teacher, extras, penalties, funnelData, monthYear,
     for (const row of r.rows) { if (!m.has(row.studentName)) m.set(row.studentName, []); m.get(row.studentName)!.push(row); }
     return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   }, [r.rows]);
-  const conPendiente = (rows: ClassFinanceRow[]) => rows.some(x => x.status === 'a_revisar' || x.status === 'excede_limite' || x.status === 'excede_limite_tipo');
+  const conPendiente = (rows: ClassFinanceRow[]) => rows.some(x => x.status === 'a_revisar' || x.status === 'vencida' || x.status === 'excede_limite' || x.status === 'excede_limite_tipo');
   const alumnos = porAlumno.filter(([, rows]) => filtro === 'todos' || conPendiente(rows));
   const nPend = porAlumno.filter(([, rows]) => conPendiente(rows)).length;
 
@@ -550,7 +573,7 @@ function DetalleProfesor({ r, teacher, extras, penalties, funnelData, monthYear,
   const euros = (rs: ClassFinanceRow[]) => rs.reduce((s, x) => s + x.rate * x.billingUnits, 0);
   const excede = r.rows.filter(x => x.status === 'excede_limite');
   const excTipo = r.rows.filter(x => x.status === 'excede_limite_tipo');
-  const dadas = r.totalPagable + r.totalARevisar + r.totalExcedeLimite + r.totalExcedeLimiteTipo;
+  const dadas = r.totalPagable + r.totalARevisar + r.totalVencidas + r.totalExcedeLimite + r.totalExcedeLimiteTipo;
 
   // El embudo: misma función que ve el profesor en /mis-clases.
   const spain = getSpainParts(new Date());
@@ -610,10 +633,13 @@ function DetalleProfesor({ r, teacher, extras, penalties, funnelData, monthYear,
           <p className="fz-sec-t">No entra en el pago (todavía)</p>
           <div className="fz-led">
             <div className="fz-lrow"><span>Retenido hasta el transcript</span><span className="q">{r.totalARevisar} clase{r.totalARevisar === 1 ? '' : 's'}</span><span className={`v${r.montoARevisar ? '' : ' cero'}`}>{eur(r.montoARevisar)}</span></div>
+            {/* Fila propia del embudo: no se mezcla con lo retenido, porque ya no
+                entra sola aunque llegue el transcript. */}
+            <div className="fz-lrow"><span style={{ color: r.totalVencidas ? '#b91c1c' : undefined }}>Vencidas sin transcript</span><span className="q">{r.totalVencidas} clase{r.totalVencidas === 1 ? '' : 's'}</span><span className={`v${r.montoVencidas ? '' : ' cero'}`} style={{ color: r.montoVencidas ? '#b91c1c' : undefined }}>{eur(r.montoVencidas)}</span></div>
             <div className="fz-lrow"><span>Fuera del cupo del plan</span><span className="q">{r.totalExcedeLimite}</span><span className={`v${excede.length ? '' : ' cero'}`}>{eur(euros(excede))}</span></div>
             <div className="fz-lrow"><span>Faltas o cancelaciones de más</span><span className="q">{r.totalExcedeLimiteTipo}</span><span className={`v${excTipo.length ? '' : ' cero'}`}>{eur(euros(excTipo))}</span></div>
           </div>
-          <div className="fz-nota">Las tres se pueden incluir a mano desde la lista de clases del alumno; las retenidas entran solas cuando llega el transcript.</div>
+          <div className="fz-nota">Todas se pueden incluir a mano desde la lista de clases del alumno; las retenidas entran solas cuando llega el transcript. Las vencidas (24 h desde el final de la clase sin transcript) solo con «Reabrir plazo» o «Pagar sin transcript».</div>
         </div>
 
         {/* Embudo */}
@@ -632,7 +658,8 @@ function DetalleProfesor({ r, teacher, extras, penalties, funnelData, monthYear,
         {alumnos.map(([name, rows]) => (
           <AlumnoFila key={name} result={r} name={name} rows={rows} assignments={assignments} approvals={approvals}
             abierto={abierto === name} onToggle={() => setAbierto(abierto === name ? null : name)}
-            onApproveReview={onApproveReview} onApproveExceed={onApproveExceed} onRevertAbsence={onRevertAbsence} />
+            onApproveReview={onApproveReview} onApproveExceed={onApproveExceed} onRevertAbsence={onRevertAbsence}
+            onReopenDeadline={onReopenDeadline} />
         ))}
       </div>
     </div>
@@ -665,6 +692,10 @@ function FinanceTab({ onHow }: { onHow: () => void }) {
   const [revertModal, setRevertModal] = useState<ScoringEvent | null>(null);
   const [revertReason, setRevertReason] = useState('');
   const [reverting, setReverting] = useState(false);
+  // Reabrir el plazo del transcript de una clase vencida (24 h más, con motivo).
+  const [reopenModal, setReopenModal] = useState<{ row: ClassFinanceRow; teacherId: string; teacherName: string } | null>(null);
+  const [reopenReason, setReopenReason] = useState('');
+  const [reopening, setReopening] = useState(false);
   // Reversión de una falta sin aviso del ALUMNO (otra cosa que la penalización).
   const [absenceModal, setAbsenceModal] = useState<{ row: ClassFinanceRow; teacherName: string } | null>(null);
   const [absenceError, setAbsenceError] = useState('');
@@ -690,6 +721,26 @@ function FinanceTab({ onHow }: { onHow: () => void }) {
       setAbsenceError((e as Error).message || 'No se pudo revertir la falta.');
     } finally {
       setRevertingAbsence(false);
+    }
+  }
+
+  async function handleReopen() {
+    if (!reopenModal || !reopenReason.trim() || !reopenModal.row.joinLogId) return;
+    setReopening(true);
+    try {
+      const row = reopenModal.row;
+      await dbReopenTranscriptDeadline({
+        joinLogId: row.joinLogId!, teacherId: reopenModal.teacherId, studentName: row.studentName, classDate: row.date,
+        previousDeadlineAt: row.deadline.deadlineAt != null ? new Date(row.deadline.deadlineAt).toISOString() : null,
+        newDeadlineAt: new Date(Date.now() + TRANSCRIPT_REOPEN_HOURS * 3_600_000).toISOString(),
+        reason: reopenReason.trim(), adminName: approvedBy,
+      });
+      setReopenModal(null); setReopenReason('');
+      await loadFinanceData();
+    } catch (e) {
+      setError(`No se pudo reabrir el plazo: ${(e as Error).message}`);
+    } finally {
+      setReopening(false);
     }
   }
 
@@ -803,6 +854,7 @@ function FinanceTab({ onHow }: { onHow: () => void }) {
           onApproveReview={(student, date) => approveReviewClass(actual.teacherId, student, date, approvedBy)}
           onApproveExceed={(student, date) => approveExceedLimitClass(actual.teacherId, student, date, approvedBy)}
           onRevertAbsence={row => { setAbsenceModal({ row, teacherName: actual.teacherName }); setAbsenceError(''); }}
+          onReopenDeadline={row => { setReopenModal({ row, teacherId: actual.teacherId, teacherName: actual.teacherName }); setReopenReason(''); }}
         />
       ) : (
         <>
@@ -902,6 +954,22 @@ function FinanceTab({ onHow }: { onHow: () => void }) {
       )}
 
       {/* Reversión de penalización (Bloque 4.5): devuelve euros al profesor. */}
+      {reopenModal && (
+        <Modal onClose={() => { if (!reopening) setReopenModal(null); }}>
+          <div className="fz-mod-t">Reabrir plazo del transcript</div>
+          <p className="fz-mod-s">
+            La clase de <b>{reopenModal.row.studentName}</b> del {finDateShort(reopenModal.row.date)}{reopenModal.row.hour ? ` a las ${rowHoursLabel(reopenModal.row)}` : ''} ({reopenModal.teacherName})
+            tiene el plazo vencido. Al reabrirlo, <b>{reopenModal.teacherName}</b> tendrá <b>{TRANSCRIPT_REOPEN_HOURS} horas más</b> desde ahora para subir el transcript,
+            y la clase volverá a «Pendiente de transcript». Queda registrado quién lo reabrió y por qué.
+          </p>
+          <label className="fz-mod-l">Motivo de la reapertura</label>
+          <textarea value={reopenReason} onChange={e => setReopenReason(e.target.value)} rows={3} autoFocus placeholder="Ej: Fathom no generó el transcript hasta el día siguiente" className="fz-mod-ta" />
+          <div className="fz-mod-b">
+            <button type="button" className="adm-btn adm-btn-ghost" onClick={() => setReopenModal(null)} disabled={reopening}>Cancelar</button>
+            <button type="button" className="adm-btn adm-btn-primary" onClick={handleReopen} disabled={reopening || !reopenReason.trim()}>{reopening ? 'Reabriendo…' : 'Reabrir 24 horas'}</button>
+          </div>
+        </Modal>
+      )}
       {revertModal && (
         <Modal onClose={() => { if (!reverting) setRevertModal(null); }}>
           <div className="fz-mod-t">Revertir penalización</div>

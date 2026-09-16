@@ -322,7 +322,7 @@ describe('filasProfesores', () => {
     ],
     mes: '2026-09',
     pendientes: [
-      { teacherId: 'p2', teacherName: 'Mauri', studentName: 'Ana', fecha: '2026-09-01', dias: 4 },
+      { teacherId: 'p2', teacherName: 'Mauri', studentName: 'Ana', fecha: '2026-09-01', dias: 4, vencida: false },
     ],
     teacherIdsConIA: new Set(['p1']),
   });

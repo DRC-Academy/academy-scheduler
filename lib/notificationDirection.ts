@@ -54,6 +54,9 @@ const SENT_TYPES: Record<string, NotificationTypeInfo> = {
   student_removed:                    { label: 'Alumno eliminado',               icon: '❌' },
   student_transferred:                { label: 'Alumno transferido',             icon: 'ℹ️' },
   transcript_rejected:                { label: 'Transcripción rechazada',        icon: '🚫' },
+  // Plazo de 24 h del transcript (cron diario / endpoint transcripts-vencidos).
+  transcript_deadline_6h:             { label: 'Transcript · quedan menos de 6 h', icon: '⏳' },
+  transcript_vencido:                 { label: 'Transcript vencido',             icon: '🔴' },
   level_test_completed:               { label: 'Test de nivel completado',       icon: '📝' },
   churn_risk:                         { label: 'Riesgo de baja',                 icon: '📉' },
   clase15:                            { label: 'Cerca de la clase 15',           icon: '🎬' },

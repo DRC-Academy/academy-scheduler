@@ -17,7 +17,7 @@
 // "¿esta clase ya pasó?": se decide con la hora de España que pase el llamador.
 
 import type { Assignment, AssignedSlot, ClassRecord, ClassRecordType, Grid } from '@/types';
-import type { ClassTranscriptRef } from '@/lib/finance';
+import { findTranscriptFor, type ClassTranscriptRef } from '@/lib/transcriptDeadline';
 import { baseStateOf, baseStudentOf } from '@/lib/cells';
 import { existsForStudent, type StudentPeriod } from '@/lib/studentPeriod';
 import {
@@ -745,23 +745,19 @@ export function cancellationLabel(type: ClassRecordType | null): string {
 // ── Transcript de una clase ───────────────────────────────────────────────────
 
 /**
- * Transcript ya guardado para esa clase concreta (mismo profesor, mismo alumno,
- * MISMA fecha). Se exige la fecha exacta a propósito: todos los flujos de subida
- * guardan `class_date` con la fecha de la clase, y una tolerancia de ±1 día
- * marcaría como "ya subido" al vecino de un alumno con clases en días seguidos
- * — el peor error posible acá, porque el profesor dejaría de subirlo y la clase
- * no le contaría para el pago.
+ * Transcript ya guardado para esa clase concreta. Delega en la REGLA ÚNICA de
+ * lib/transcriptDeadline.findTranscriptFor (vínculo por ingreso → fecha exacta
+ * → ±1 día solo para clases anteriores al plazo de 24 h), que es la misma que
+ * usan finanzas, la ficha del alumno y Asistencias. Antes esta función buscaba
+ * por su cuenta (solo fecha exacta, sin mirar el vínculo) y Mis clases podía
+ * decir "falta el transcript" de una clase que finanzas ya daba por cubierta.
+ *
+ * `joinLogIds`: los ingresos de esa clase, si la pantalla los conoce. Con ellos
+ * el transcript vinculado se encuentra aunque se haya subido con otra fecha.
  */
 export function transcriptForClass(
   analyses: ClassTranscriptRef[], teacherId: string, studentName: string, dateIso: string,
+  joinLogIds?: Array<string | null | undefined>,
 ): ClassTranscriptRef | undefined {
-  const name = nk(studentName);
-  return analyses.find(t =>
-    (!t.teacher_id || t.teacher_id === teacherId) &&
-    nk(t.student_name) === name &&
-    (t.class_date || (t.analyzed_at ?? '').slice(0, 10)) === dateIso &&
-    // `has_transcript` (columna generada) cuando viene; el texto solo como
-    // respaldo para bases sin supabase-has-transcript.sql.
-    (typeof t.has_transcript === 'boolean' ? t.has_transcript : !!t.transcript && t.transcript.trim().length > 0),
-  );
+  return findTranscriptFor(analyses, { teacherId, studentName, dateIso, joinLogIds });
 }

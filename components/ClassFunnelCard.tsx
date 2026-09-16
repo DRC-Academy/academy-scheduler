@@ -38,10 +38,11 @@ const RAIL: Record<string, string> = {
 /** Por qué está pendiente, en una frase. Solo si el desglose vino en los datos. */
 function pendingTitle(b: FunnelBranch): string | undefined {
   const s = b.pendingSplit;
-  if (!s || (s.transcript === 0 && s.limite === 0)) return b.hint;
+  if (!s || (s.transcript === 0 && s.limite === 0 && !s.vencidas)) return b.hint;
   const partes: string[] = [];
   if (s.transcript > 0) partes.push(`${s.transcript} esperan que subas el transcript`);
   if (s.limite > 0) partes.push(`${s.limite} están retenidas por el límite del plan del alumno (lo resuelve el equipo)`);
+  if (s.vencidas > 0) partes.push(`${s.vencidas} tienen el plazo del transcript vencido y ya no se pagan (salvo que el equipo lo reabra)`);
   return `De estas ${b.count}: ${partes.join(' · ')}.`;
 }
 
@@ -73,10 +74,12 @@ export function ClassFunnelCard({ funnel, claimAmount, showActions = false, onPi
     const mixta = !!s && s.pagables > 0 && s.pendientes > 0;
     const todoPendiente = !!s && s.pagables === 0 && s.pendientes === c.count && c.count > 0;
     const warn = mixta || todoPendiente;
+    // Vencidas sin transcript: en rojo, porque ya no dependen del profesor.
+    const expired = c.key === 'vencidas' && c.count > 0;
     return (
       <button
         type="button"
-        className={`fnl-child${zero ? ' is-zero' : ''}${mixta ? ' has-sub' : ''}`}
+        className={`fnl-child${zero ? ' is-zero' : ''}${mixta ? ' has-sub' : ''}${expired ? ' is-expired' : ''}`}
         onClick={zero ? undefined : pick(c.key)}
         disabled={zero || !onPick}
         title={warn && c.pendingSplit ? pendingTitle(c) : c.hint}
@@ -90,7 +93,7 @@ export function ClassFunnelCard({ funnel, claimAmount, showActions = false, onPi
           )}
         </span>
         {c.amount != null && (
-          <span className={`fnl-child-eur${zero ? ' is-zero' : warn ? ' is-warn' : ''}`}>{eur(c.amount)}</span>
+          <span className={`fnl-child-eur${zero ? ' is-zero' : expired ? ' is-expired' : warn ? ' is-warn' : ''}`}>{eur(c.amount)}</span>
         )}
         <span className="fnl-child-n">{c.count}</span>
       </button>
@@ -191,7 +194,7 @@ export function ClassFunnelCard({ funnel, claimAmount, showActions = false, onPi
                           es mandarlo a hacer algo que no cambia nada. */}
                       {s && (s.transcript > 0 || s.limite > 0) && (
                         <span className="fnl-act-sub" style={{ display: 'block' }}>
-                          {s.transcript > 0 && <>{s.transcript} esperan tu transcript</>}
+                          {s.transcript > 0 && <>{s.transcript} esperan tu transcript (24 h desde el final de la clase)</>}
                           {s.transcript > 0 && s.limite > 0 && ' · '}
                           {s.limite > 0 && <>{s.limite} retenidas por el límite del plan (lo resuelve el equipo)</>}
                         </span>

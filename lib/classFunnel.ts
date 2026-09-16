@@ -14,7 +14,8 @@
 //   Clases del mes
 //     ├── Con registro de clase           (clic en "Ingresar", o constancia)
 //     │     ├── Pagables                  → suman al total del mes
-//     │     └── Pendientes de cobro       → dadas, sin cobrar todavía
+//     │     ├── Pendientes de cobro       → dadas, sin cobrar todavía
+//     │     └── Vencidas sin transcript   → el plazo de 24 h pasó: no se pagan
 //     ├── Sin ingreso registrado          (el calendario dice que tocaba)
 //     │     ├── Reclamables               → hay transcript: se piden en Revisiones
 //     │     └── Sin transcript ni registro→ no hay nada que reclamar
@@ -78,20 +79,21 @@ export interface FunnelBranch {
    */
   payStatus?: { pagables: number; pendientes: number };
   /**
-   * Desglose de "Pendientes de cobro" en sus DOS causas, que no son lo mismo:
+   * Desglose de "Pendientes de cobro" en sus causas, que no son lo mismo:
    *
    *   · `transcript` → depende del profesor: sube el archivo y cobra.
    *   · `limite`     → no depende de nadie: la clase excede el cupo mensual del
    *                    alumno y la resuelve el equipo.
+   *   · `vencidas`   → el plazo de 24 h pasó sin transcript: ya no se cobran
+   *                    salvo que el admin reabra el plazo. En la rama agendada
+   *                    son una línea propia; en las de "fuera del calendario"
+   *                    (que se dividen por origen) viajan aquí.
    *
-   * La rama sigue siendo UNA (partirla cambiaría la forma del embudo), pero
-   * pedirle "subí el transcript" a alguien cuyas clases están retenidas por un
+   * Pedirle "subí el transcript" a alguien cuyas clases están retenidas por un
    * límite es mandarlo a hacer algo que no sirve. Con esto la pantalla puede
    * decir cuántas son de cada tipo sin inventar el dato.
-   *
-   * PENDIENTE (septiembre): separarlas en dos ramas de verdad.
    */
-  pendingSplit?: { transcript: number; limite: number };
+  pendingSplit?: { transcript: number; limite: number; vencidas: number };
 }
 
 export interface ClassFunnel {
@@ -196,12 +198,19 @@ export function buildClassFunnel(opts: {
   // Pendiente = todo lo que entró y todavía no se cobra: falta el transcript, o
   // está retenido por un límite. Se agrupa porque para el profesor es lo mismo
   // —dio la clase y no la cobró— y separarlo convertiría el embudo en una tabla.
+  // La excepción es la VENCIDA (plazo de 24 h pasado): esa ya no se cobra, así
+  // que tiene su línea propia y no se mezcla con lo pendiente.
   const pagablesDe   = (rs: Fila[]) => rs.filter(r => r.status === 'pagable');
-  const pendientesDe = (rs: Fila[]) => rs.filter(r => r.status !== 'pagable');
+  // VENCIDAS aparte de pendientes: una pendiente todavía puede cobrarse subiendo
+  // el transcript; una vencida no (salvo reapertura del admin). Mezclarlas le
+  // diría al profesor "sube el transcript" de clases que ya no cambian nada.
+  const vencidasDe   = (rs: Fila[]) => rs.filter(r => r.status === 'vencida');
+  const pendientesDe = (rs: Fila[]) => rs.filter(r => r.status !== 'pagable' && r.status !== 'vencida');
   /** Por qué está pendiente. Solo cuenta lo ya clasificado; no decide nada. */
   const splitDe = (rs: Fila[]) => ({
     transcript: unidadesFin(rs.filter(r => r.status === 'a_revisar')),
     limite:     unidadesFin(rs.filter(r => r.status === 'excede_limite' || r.status === 'excede_limite_tipo')),
+    vencidas:   unidadesFin(rs.filter(r => r.status === 'vencida')),
   });
   /** Reparto por estado de pago. De acá sale `funnelPayableTotal`. */
   const estado = (rs: Fila[]) => ({
@@ -231,6 +240,13 @@ export function buildClassFunnel(opts: {
           payStatus: estado(pendientesDe(conRegistro)),
           pendingSplit: splitDe(pendientesDe(conRegistro)),
           hint: 'Ya las diste y todavía no suman al total: falta el transcript, o están retenidas por el límite del plan.',
+        },
+        {
+          key: 'vencidas', label: 'Vencidas sin transcript',
+          count: unidadesFin(vencidasDe(conRegistro)), amount: importe(vencidasDe(conRegistro)),
+          rows: vencidasDe(conRegistro),
+          payStatus: { pagables: 0, pendientes: unidadesFin(vencidasDe(conRegistro)) },
+          hint: 'Pasaron las 24 h desde el final de la clase sin transcript: no se validan ni se pagan. Solo el equipo puede reabrir el plazo.',
         },
       ],
     },

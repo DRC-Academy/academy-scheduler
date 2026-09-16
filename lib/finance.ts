@@ -45,6 +45,20 @@ import { WOO_STATUS, isActiveWooStatus, wooStatusMeta } from '@/lib/subscription
 // y los `import type` se borran al compilar, así que no hay ciclo en runtime.
 import type { GridOccupancy } from '@/lib/teacherClasses';
 import { recoveryHoursOn, recoveryPartOfSession } from '@/lib/teacherClasses';
+// El estado del transcript y su PLAZO de 24 h viven en lib/transcriptDeadline
+// (fuente única para las cuatro vistas). Finance re-exporta lo que siempre
+// exportó para que nadie tenga que cambiar sus imports.
+import {
+  getTranscriptStatus, transcriptStateOf, transcriptHasText, analysisDateOf,
+  type ClassTranscriptRef, type TranscriptState, type TranscriptStatusResult,
+} from '@/lib/transcriptDeadline';
+import { isStudentAbsence, isStudentLostClass } from '@/lib/classTypes';
+
+export {
+  transcriptStateOf, transcriptNeedsTeacher, transcriptStateBadge,
+  type ClassTranscriptRef, type TranscriptState,
+} from '@/lib/transcriptDeadline';
+export { isStudentAbsence, isStudentLostClass } from '@/lib/classTypes';
 
 const DAY_NAMES_BY_JSDAY = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 
@@ -99,31 +113,8 @@ interface AbsenceRecordRef {
   createdAt?: string;
 }
 
-/** ¿Es una falta del alumno vigente? Las revertidas por el admin no cuentan. */
-export function isStudentAbsence(classType: ClassRecordType | undefined): boolean {
-  return classType === 'falta_sin_aviso';
-}
-
-/**
- * ¿Es una clase que el alumno PERDIÓ por su cuenta? Falta sin aviso o
- * cancelación sobre la hora.
- *
- * Las dos son lo mismo desde el plan del alumno: la hora se reservó, el profesor
- * estuvo, y esa clase ya no se da ni se recupera. Por eso GASTAN UNA CLASE DEL
- * MES — si no lo hicieran, cancelar sobre la hora saldría gratis y el alumno
- * acabaría el mes con más clases de las que incluye su plan.
- *
- * Desde septiembre de 2026 este predicado manda TAMBIÉN sobre el cobro: las dos
- * comparten un único tope de `LOST_CLASS_MONTHLY_CAP` por alumno y mes. Antes
- * cada tipo llevaba su propia cuenta y la de la cancelación era de por vida.
- *
- * `isStudentAbsence` sigue existiendo porque hay cosas que solo valen para la
- * falta: el botón "Marcar falta" del profesor, la reversión del admin y el texto
- * que explica la fila. Para preguntar por el cupo o por el tope, este.
- */
-export function isStudentLostClass(classType: ClassRecordType | undefined): boolean {
-  return isStudentAbsence(classType) || classType === 'cancelacion_hora';
-}
+// `isStudentAbsence` / `isStudentLostClass` viven en lib/classTypes.ts (los
+// necesita también el plazo del transcript) y se re-exportan arriba.
 
 /** Filas crudas de clase perdida en ese mes, de la más vieja a la más nueva. */
 function lostRowsInMonth<T extends AbsenceRecordRef>(
@@ -212,11 +203,16 @@ export const LOST_CLASS_CAP_MESSAGE =
  *                          en finance_manual_approvals.reason; se conserva para no
  *                          romper el histórico. La etiqueta que ve la gente sale
  *                          de `financeStatusBadge`.)
+ *   'vencida'            → clic SIN transcript válido y el PLAZO de 24 h ya pasó
+ *                          (ver lib/transcriptDeadline). No se valida ni se paga,
+ *                          pero SÍ consume cupo del alumno: la clase se dio. Solo
+ *                          sale de aquí si el admin reabre el plazo o la aprueba.
+ *                          Es una fila propia del embudo, separada de 'a_revisar'.
  *   'excede_limite'      → pasa el límite mensual del plan del alumno.
  *   'excede_limite_tipo' → falta/cancelación más allá de las 2 cobrables por tipo.
  * Las clases SIN clic no tienen estado: no llegan a existir (ver nivel 1).
  */
-export type ClassFinanceStatus = 'pagable' | 'a_revisar' | 'excede_limite' | 'excede_limite_tipo' | 'no_cobrable';
+export type ClassFinanceStatus = 'pagable' | 'a_revisar' | 'vencida' | 'excede_limite' | 'excede_limite_tipo' | 'no_cobrable';
 
 export interface ClassFinanceRow {
   date: string;            // 'YYYY-MM-DD'
@@ -272,6 +268,12 @@ export interface ClassFinanceRow {
    * volver a buscar la fila por alumno+fecha y podría deshacer la equivocada.
    */
   recordId?: string;
+  /**
+   * id del ingreso que ancló la fila (el último del día, si hubo dos). Lo
+   * necesita el admin para REABRIR el plazo del transcript: la reapertura se
+   * guarda en ese class_join_log.
+   */
+  joinLogId?: string;
   hasJoinLog: boolean;
   // Segundo factor de verificación. Desde el cambio de sistema es el TRANSCRIPT
   // (class_analyses.transcript no vacío), no la captura de pantalla.
@@ -282,6 +284,12 @@ export interface ClassFinanceRow {
    * que ya subió y está esperando validación.
    */
   transcriptState: TranscriptState;
+  /**
+   * Estado frente al PLAZO de 24 h (lib/transcriptDeadline): subido / pendiente
+   * / vencido / no_aplica, con la fecha límite y las horas que quedan. Es lo que
+   * pinta la cuenta regresiva y la etiqueta "Vencida — no validada".
+   */
+  deadline: TranscriptStatusResult;
   hasMeetLink: boolean;    // la assignment del alumno tiene meet_link definido
   punctuality?: 'on_time' | 'late' | 'very_late';
   manuallyApproved: boolean;
@@ -312,6 +320,8 @@ export interface TeacherFinanceResult {
   /** Nº de filas/sesiones del mes. Difiere de los anteriores si hay clases de 2h. */
   totalSesiones: number;
   totalARevisar: number;
+  /** Clases con el plazo del transcript VENCIDO. No se pagan; van aparte de 'a_revisar'. */
+  totalVencidas: number;
   totalExcedeLimite: number;
   totalExcedeLimiteTipo: number;
   totalNoCobrable: number;
@@ -320,6 +330,8 @@ export interface TeacherFinanceResult {
   payableSubStatuses: SubStatusNote[];
   montoPagable: number;
   montoARevisar: number;
+  /** Lo que valdrían las clases vencidas si se hubieran validado. Nunca entra al total. */
+  montoVencidas: number;
   montoRetenido: number;
   /**
    * Euros POSITIVOS de scoring_events del mes. Desde sep/2026 los bonos de
@@ -541,103 +553,20 @@ function sessionSpanFor(
   return { durationHours, startHour: hourText(start), source: 'calendario' };
 }
 
-/**
- * Fila de class_analyses tal como llega de Supabase (snake_case). Se declara
- * acá con los campos MÍNIMOS que usa el cálculo para no acoplar finance.ts al
- * módulo de IA: cualquier ClassAnalysisRow encaja estructuralmente.
- */
-export interface ClassTranscriptRef {
-  /**
-   * id de la fila. El cálculo no lo usa, pero sí la pantalla de solicitudes de
-   * revisión: cuando una clase ya tiene transcript, la solicitud se engancha a
-   * ESE análisis en vez de pedirle al profesor que lo vuelva a pegar.
-   */
-  id?: string | null;
-  teacher_id?: string | null;
-  student_name: string;
-  class_date?: string | null;
-  analyzed_at?: string | null;
-  /**
-   * ¿Hay transcripción? Columna GENERADA por Postgres desde el texto
-   * (supabase-has-transcript.sql). Es lo que piden los listados: el cálculo solo
-   * necesita saber si existe, y el texto pesa 30 KB de media por fila.
-   * `undefined` = la migración no se corrió y la consulta cayó al texto.
-   */
-  has_transcript?: boolean | null;
-  /**
-   * El TEXTO. Solo lo trae la lectura explícita del admin en Validación. En los
-   * listados llega siempre `undefined`: ver hasText().
-   */
-  transcript?: string | null;
-  /** Ingreso al que pertenece este transcript. Cuando viene, manda sobre la fecha. */
-  join_log_id?: string | null;
-  /** Validación (Bloque 1): 'review'/'rejected' NO valen como segundo factor. */
-  validation_status?: string | null;
-}
-
-/**
- * Estado de la transcripción de una clase. FUENTE ÚNICA: todo lo que quiera
- * hablar del transcript (finanzas, "Mis clases", los avisos al profesor) tiene
- * que preguntarle a esta función.
- *
- * Existe porque había DOS respuestas para la misma clase: la agenda miraba solo
- * si había texto y decía "Transcript subido" en verde, mientras finanzas exigía
- * además la validación y decía "Sin subir". El profesor veía las dos pantallas
- * contradecirse en 24 clases y, peor, el panel le pedía subir un transcript que
- * ya estaba guardado — con un botón que al pulsarlo no cambiaba nada.
- *
- *   'none'     → no hay texto: el profesor tiene que subirlo.
- *   'review'   → subido y guardado, esperando al equipo. NO es acción suya.
- *   'rejected' → el equipo lo rechazó: hay que subir el correcto.
- *   'ok'       → verifica la clase (segundo factor). Legacy sin columna → 'ok'.
- */
-export type TranscriptState = 'none' | 'review' | 'rejected' | 'ok';
-
-export function transcriptStateOf(t: ClassTranscriptRef | undefined | null): TranscriptState {
-  if (!t || !hasText(t)) return 'none';
-  if (t.validation_status === 'rejected') return 'rejected';
-  if (t.validation_status === 'review') return 'review';
-  return 'ok';
-}
-
-/** ¿El profesor tiene algo que hacer con este transcript? */
-export function transcriptNeedsTeacher(state: TranscriptState): boolean {
-  return state === 'none' || state === 'rejected';
-}
-
-/** Etiqueta y color del estado. Misma fuente para las dos pantallas. */
-export function transcriptStateBadge(state: TranscriptState):
-  { label: string; color: string; bg: string; dot: string } {
-  switch (state) {
-    case 'ok':       return { label: 'Transcript subido', color: '#1f7a3d', bg: '#eaf5ec', dot: '#16a34a' };
-    case 'review':   return { label: 'En revisión del equipo', color: '#3b5b9e', bg: '#eef1f8', dot: '#2563eb' };
-    case 'rejected': return { label: 'Transcript rechazado', color: '#b91c1c', bg: 'rgba(239,68,68,0.10)', dot: '#dc2626' };
-    default:         return { label: 'Falta el transcript', color: '#9a6516', bg: '#fdf3e7', dot: '#e0912f' };
-  }
-}
+// ── Transcript: estado y plazo ────────────────────────────────────────────────
+//
+// `ClassTranscriptRef`, `transcriptStateOf`, `transcriptNeedsTeacher` y
+// `transcriptStateBadge` viven ahora en lib/transcriptDeadline.ts (junto con el
+// plazo de 24 h) y se re-exportan arriba. Acá quedan solo los alias que usa el
+// cálculo.
 
 // Un transcript verifica la clase (segundo factor) SOLO si está validado.
 function transcriptCounts(t: ClassTranscriptRef | undefined): boolean {
   return transcriptStateOf(t) === 'ok';
 }
 
-/** Fecha efectiva de un análisis: class_date y, si falta, el día de analyzed_at. */
-function analysisDate(t: ClassTranscriptRef): string {
-  return (t.class_date || (t.analyzed_at ?? '').slice(0, 10) || '');
-}
-
-/**
- * ¿Esta clase tiene transcripción?
- *
- * Prefiere `has_transcript` (la columna generada) y solo mira el texto si esa
- * columna no vino — que es el caso mientras la migración no esté corrida. El
- * orden importa: `has_transcript` es la verdad calculada por Postgres desde el
- * propio texto, así que cuando está presente no hace falta nada más.
- */
-function hasText(t: ClassTranscriptRef): boolean {
-  if (typeof t.has_transcript === 'boolean') return t.has_transcript;
-  return !!t.transcript && t.transcript.trim().length > 0;
-}
+const analysisDate = analysisDateOf;
+const hasText = transcriptHasText;
 
 export interface CalcInput {
   teacherId: string;
@@ -683,6 +612,12 @@ export interface CalcInput {
    * se volvería a pagar por lo que dice una ficha vieja.
    */
   gridOccupancy: GridOccupancy;
+  /**
+   * Instante actual (epoch ms) con el que se decide si el plazo del transcript
+   * venció. Opcional: por defecto, ahora. Los tests lo fijan; una pantalla que
+   * refresca la cuenta regresiva lo pasa para no depender del momento del render.
+   */
+  now?: number;
 }
 
 // Calcula la liquidación de UN profesor para un mes.
@@ -692,6 +627,7 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     classAnalyses, rates, scoringEvents, students, manualApprovals, payment, gridOccupancy,
     teacherBonuses,
   } = input;
+  const now = input.now ?? Date.now();
 
   const myAssignments = assignments.filter(a => a.teacherId === teacherId);
   const myLogs = joinLogs.filter(l => l.teacherId === teacherId);
@@ -962,6 +898,15 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
 
     const approved = isApproved(c.studentName, c.date);
 
+    // Plazo de 24 h del transcript (fuente única: lib/transcriptDeadline). Corre
+    // desde el FIN de la sesión —por eso va después de resolver hora y duración—
+    // y respeta la reapertura del admin guardada en el ingreso. La falta del
+    // alumno sale como 'no_aplica' y no lleva plazo.
+    const deadline = getTranscriptStatus({
+      date: c.date, startHour: hour, durationHours, classType,
+      transcript: c.transcript, reopenedDeadlineAt: log?.transcriptDeadlineAt, now,
+    });
+
     let status: ClassFinanceStatus;
     if (isFaltaType) {
       // Clase perdida: cobrable a TARIFA NORMAL si entra en las 2 del mes (faltas
@@ -977,8 +922,11 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     } else {
       // NIVEL 2. Acá `join` ya es siempre true (sin ingreso la clase no habría
       // llegado a ser candidata), así que lo único que se decide es el transcript:
-      // con transcript validado se cobra, sin él queda pendiente de subirlo.
-      status = (join && isTranscript) ? 'pagable' : 'a_revisar';
+      // con transcript validado se cobra; sin él, o queda pendiente de subirlo o
+      // —si el plazo de 24 h ya pasó— queda VENCIDA y no se paga.
+      status = (join && isTranscript) ? 'pagable'
+        : deadline.status === 'vencido' ? 'vencida'
+        : 'a_revisar';
     }
 
     rows.push({
@@ -986,8 +934,8 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
       planCategory: planClass.type, planLabel: planClass.displayName,
       weeklyHours, antiquityDays, rate, durationHours, durationSource, billingUnits: durationHours,
       recoveryUnits, recoveryForDates, status,
-      classType, recordId: record?.id,
-      hasJoinLog: join, hasTranscript: isTranscript, transcriptState, hasMeetLink, punctuality, manuallyApproved: approved,
+      classType, recordId: record?.id, joinLogId: log?.id,
+      hasJoinLog: join, hasTranscript: isTranscript, transcriptState, deadline, hasMeetLink, punctuality, manuallyApproved: approved,
       subscriptionStatus, subAtJoin, subAtRecord,
     });
   }
@@ -1008,8 +956,12 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
   // del mes" no la contaba: Adrián Padilla (Victoria) canceló sobre la hora el
   // 01/09 y su barra seguía diciendo "0 de 9". El alumno terminaba el mes con más
   // clases de las que incluye su plan, que es justo lo que el cupo evita.
+  //
+  // La clase VENCIDA (sin transcript en las 24 h) también consume cupo: la clase
+  // se dio, el alumno estuvo. Que el profesor no la cobre es asunto suyo, no del
+  // plan del alumno. Decisión de negocio del 16/09/2026.
   const countable = rows
-    .filter(r => (r.status === 'pagable' || r.status === 'a_revisar')
+    .filter(r => (r.status === 'pagable' || r.status === 'a_revisar' || r.status === 'vencida')
       && (r.classType === 'normal' || r.classType === 'recuperacion' || isStudentLostClass(r.classType)))
     .sort((x, y) => x.date.localeCompare(y.date) || x.studentName.localeCompare(y.studentName));
   // El límite se descuenta en UNIDADES, no en filas: una sesión de 2h consume 2
@@ -1091,6 +1043,7 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
   // Agregados (punto 6).
   const pagables   = rows.filter(r => r.status === 'pagable');      // normal/recuperacion + faltas cobrables
   const revisar    = rows.filter(r => r.status === 'a_revisar');
+  const vencidas   = rows.filter(r => r.status === 'vencida');
   const excede     = rows.filter(r => r.status === 'excede_limite');
   const excedeTipo = rows.filter(r => r.status === 'excede_limite_tipo');
   const noCobrable = rows.filter(r => r.status === 'no_cobrable');
@@ -1102,6 +1055,7 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
 
   const montoPagable  = pagables.reduce((s, r) => s + amount(r), 0);
   const montoARevisar = revisar.reduce((s, r) => s + amount(r), 0);
+  const montoVencidas = vencidas.reduce((s, r) => s + amount(r), 0);
   const montoRetenido = excede.reduce((s, r) => s + amount(r), 0) + excedeTipo.reduce((s, r) => s + amount(r), 0);
 
   // Estado de suscripción de las clases PAGABLES, al momento de darse.
@@ -1178,13 +1132,14 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     // pagables (una sola fila con billingUnits = 2).
     totalPagable: units(pagables),
     totalARevisar: units(revisar),
+    totalVencidas: units(vencidas),
     totalExcedeLimite: units(excede),
     totalExcedeLimiteTipo: units(excedeTipo),
     totalNoCobrable: units(noCobrable),
     totalSesiones: rows.length,
     hasInactiveSubPayable,
     payableSubStatuses,
-    montoPagable, montoARevisar, montoRetenido,
+    montoPagable, montoARevisar, montoVencidas, montoRetenido,
     bonusFromScoring, bonusFromBonuses, bonusRows, penaltiesFromScoring, totalAPagar,
     paymentStatus, paidAt,
     studentQuota: quota,
@@ -1208,6 +1163,10 @@ export function financeStatusBadge(status: ClassFinanceStatus):
       return { label: 'Pagable', short: 'Pagable', color: '#1E9E3A', bg: 'rgba(30,158,58,0.12)', dot: '#1E9E3A' };
     case 'a_revisar':
       return { label: 'Pendiente de transcript', short: 'Pendiente', color: '#9a6516', bg: 'rgba(255,196,0,0.18)', dot: '#FFC400' };
+    case 'vencida':
+      // Rojo: el plazo de 24 h pasó sin transcript. Mismo texto que en las otras
+      // tres vistas (EXPIRED_LABEL en lib/transcriptDeadline).
+      return { label: 'Vencida — no validada', short: 'Vencida', color: '#b91c1c', bg: 'rgba(239,68,68,0.10)', dot: '#dc2626' };
     case 'excede_limite':
       return { label: 'Excede el límite del plan', short: 'Excede límite', color: '#ea580c', bg: 'rgba(249,115,22,0.12)', dot: '#ea580c' };
     case 'excede_limite_tipo':
@@ -1230,6 +1189,22 @@ export function pendingTranscriptSummary(result: Pick<TeacherFinanceResult, 'tot
     classes: result.totalARevisar,
     amount: result.montoARevisar,
     label: `Pendiente de transcript: €${result.montoARevisar.toFixed(2)} en ${clases}`,
+  };
+}
+
+/**
+ * Lo que el profesor NO va a cobrar por no haber subido el transcript a tiempo.
+ * Fila propia del embudo, separada de "pendiente": una pendiente todavía puede
+ * cobrarse subiendo el transcript; una vencida solo si el admin reabre el plazo.
+ */
+export function expiredTranscriptSummary(result: Pick<TeacherFinanceResult, 'totalVencidas' | 'montoVencidas'>):
+  { classes: number; amount: number; label: string } | null {
+  if (result.totalVencidas <= 0) return null;
+  const clases = `${result.totalVencidas} clase${result.totalVencidas === 1 ? '' : 's'}`;
+  return {
+    classes: result.totalVencidas,
+    amount: result.montoVencidas,
+    label: `Vencidas sin transcript: ${clases}, €${result.montoVencidas.toFixed(2)}`,
   };
 }
 

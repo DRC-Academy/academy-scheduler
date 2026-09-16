@@ -3087,6 +3087,51 @@ function calcPunctuality(scheduledDate: string, scheduledTime: string, clickedAt
   return 'very_late';
 }
 
+/**
+ * Ingreso YA registrado para esa misma clase, si lo hay. GUARDA DE DOBLE CLIC:
+ * mismo profesor + mismo alumno + misma fecha, con la hora dentro del tramo de
+ * la sesión (`durationHours` a partir de `scheduledTime`; una sesión de 2 h
+ * cubre sus dos horas). Sin esto cada clic creaba un class_join_log nuevo y la
+ * ficha del alumno mostraba una "clase pendiente de transcript" por clic: la
+ * auditoría de agosto de 2026 contó 148 clics repetidos.
+ *
+ * Ante un error de lectura devuelve null (se inserta como siempre): perder un
+ * ingreso es peor que duplicarlo.
+ */
+async function findExistingJoinLog(
+  teacherId: string, studentName: string, scheduledDate: string, scheduledTime: string, durationHours: number,
+): Promise<ClassJoinLog | null> {
+  const { data, error } = await supabase
+    .from('class_join_logs')
+    .select('*')
+    .eq('teacher_id', teacherId)
+    .eq('scheduled_date', scheduledDate);
+  if (error || !data) return null;
+
+  const name = studentName.trim().toLowerCase();
+  const start = parseInt(scheduledTime, 10);
+  const span = Math.max(1, durationHours || 1);
+  const dup = data.find(row => {
+    if ((row.student_name ?? '').trim().toLowerCase() !== name) return false;
+    const h = parseInt(row.scheduled_time ?? '', 10);
+    if (!Number.isFinite(start) || !Number.isFinite(h)) return row.scheduled_time === scheduledTime;
+    // Misma hora, u otra hora del mismo bloque (17:00 y 18:00 de una sesión de 2 h).
+    return Math.abs(h - start) < span;
+  });
+  if (!dup) return null;
+
+  return {
+    id: dup.id, teacherId: dup.teacher_id, teacherName: dup.teacher_name, studentName: dup.student_name,
+    scheduledDate: dup.scheduled_date, scheduledTime: dup.scheduled_time, clickedAt: dup.clicked_at,
+    punctuality: normalizePunctuality(dup.punctuality),
+    subscriptionStatus: dup.subscription_status ?? undefined,
+    enteredWithoutActive: dup.entered_without_active ?? false,
+    subscriptionDaysRemaining: dup.subscription_days_remaining ?? undefined,
+    source: dup.source === 'manual' ? 'manual' : 'click',
+    transcriptDeadlineAt: dup.transcript_deadline_at ?? undefined,
+  };
+}
+
 export async function dbLogClassJoin(
   teacherId: string,
   teacherName: string,
@@ -3096,7 +3141,14 @@ export async function dbLogClassJoin(
   subscriptionStatus?: string,
   enteredWithoutActive?: boolean,
   subscriptionDaysRemaining?: number | null,
+  /** Horas de la sesión que se está abriendo (2 en un bloque de dos celdas). Solo para la guarda de doble clic. */
+  durationHours = 1,
 ): Promise<ClassJoinLog> {
+  // Segundo clic sobre la misma clase → se devuelve el ingreso que ya existe y
+  // no se inserta nada. El Meet se abre igual (eso lo hace el botón).
+  const existing = await findExistingJoinLog(teacherId, studentName, scheduledDate, scheduledTime, durationHours);
+  if (existing) return existing;
+
   const clickedAt   = new Date();
   const punctuality = calcPunctuality(scheduledDate, scheduledTime, clickedAt);
   const id          = `cjl_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
@@ -3155,7 +3207,68 @@ export async function dbGetClassJoinLogs(): Promise<ClassJoinLog[]> {
     durationHours:  typeof row.duration_hours === 'number' ? row.duration_hours : undefined,
     durationSource: row.duration_source === 'admin' ? 'admin'
       : row.duration_source === 'solicitud' ? 'solicitud' : undefined,
+    // Plazo reabierto por el admin (supabase-plazo-24h-followups.sql). Sin la
+    // migración las columnas no vienen y queda undefined: manda el plazo derivado.
+    transcriptDeadlineAt:     row.transcript_deadline_at     ?? undefined,
+    transcriptDeadlineReason: row.transcript_deadline_reason ?? undefined,
+    transcriptDeadlineBy:     row.transcript_deadline_by     ?? undefined,
+    transcriptDeadlineSetAt:  row.transcript_deadline_set_at ?? undefined,
   }));
+}
+
+/**
+ * El admin REABRE el plazo del transcript de una clase vencida: 24 h más desde
+ * ahora, con motivo obligatorio. Se escribe en el ingreso (que es lo que lee el
+ * cálculo) y deja una fila de historial en transcript_deadline_reopenings.
+ *
+ * Requiere haber corrido supabase-plazo-24h-followups.sql: sin las columnas el
+ * update falla y se avisa con el nombre del script, en vez de un error opaco.
+ */
+export async function dbReopenTranscriptDeadline(args: {
+  joinLogId: string;
+  teacherId: string;
+  studentName: string;
+  classDate: string;
+  previousDeadlineAt: string | null;
+  newDeadlineAt: string;
+  reason: string;
+  adminName: string;
+}): Promise<void> {
+  const reason = args.reason.trim();
+  if (!reason) throw new Error('El motivo de la reapertura es obligatorio.');
+  const now = new Date().toISOString();
+
+  const { error } = await supabase
+    .from('class_join_logs')
+    .update({
+      transcript_deadline_at:     args.newDeadlineAt,
+      transcript_deadline_reason: reason,
+      transcript_deadline_by:     args.adminName,
+      transcript_deadline_set_at: now,
+    })
+    .eq('id', args.joinLogId);
+  if (error) {
+    const faltaColumna = error.code === 'PGRST204' || error.code === '42703';
+    console.error('[dbReopenTranscriptDeadline] No se pudo reabrir el plazo:', error);
+    throw new Error(faltaColumna
+      ? 'Falta correr supabase-plazo-24h-followups.sql en Supabase: sin esas columnas no se puede reabrir el plazo.'
+      : 'No se pudo reabrir el plazo.');
+  }
+
+  // Historial: best-effort. La reapertura ya está hecha; si el historial falla se
+  // avisa por consola, no se deshace lo importante.
+  const { error: histErr } = await supabase.from('transcript_deadline_reopenings').insert({
+    join_log_id:          args.joinLogId,
+    teacher_id:           args.teacherId,
+    student_name:         args.studentName,
+    class_date:           args.classDate,
+    previous_deadline_at: args.previousDeadlineAt,
+    new_deadline_at:      args.newDeadlineAt,
+    reason,
+    admin_name:           args.adminName,
+    created_at:           now,
+  });
+  if (histErr) console.error('[dbReopenTranscriptDeadline] No se pudo guardar el historial de la reapertura:', histErr);
 }
 
 /**

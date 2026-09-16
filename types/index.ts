@@ -253,6 +253,16 @@ export interface ClassJoinLog {
    */
   durationSource?: 'solicitud' | 'admin';
   createdBy?: string;                   // quién lo creó, en los 'manual'
+  /**
+   * PLAZO REABIERTO por el admin para subir el transcript (ISO). `undefined` =
+   * el plazo se deriva: fin de la clase + 24 h (lib/transcriptDeadline). Cuando
+   * viene, manda sobre el derivado. Es lo único del plazo que se guarda: el
+   * estado "vencida" se calcula al vuelo.
+   */
+  transcriptDeadlineAt?: string;
+  transcriptDeadlineReason?: string;
+  transcriptDeadlineBy?: string;
+  transcriptDeadlineSetAt?: string;
 }
 
 // ── Solicitudes de revisión de clases sin ingreso registrado ─────────────────

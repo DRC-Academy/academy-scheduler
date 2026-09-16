@@ -11,6 +11,14 @@ import type { GridOccupancy } from '@/lib/teacherClasses';
 import { existsForStudent, type StudentPeriod } from '@/lib/studentPeriod';
 // Mismo badge de suscripción que finanzas y que el panel de alumnos.
 import { subscriptionBadge } from '@/lib/finance';
+// Estado del transcript frente al plazo de 24 h: la MISMA fuente que Mis clases,
+// la ficha y Finanzas (lib/transcriptDeadline).
+import {
+  findTranscriptFor, getTranscriptStatus, reopenedDeadlineFor,
+  type ClassTranscriptRef, type TranscriptStatusResult, type TranscriptExclusions,
+} from '@/lib/transcriptDeadline';
+import { isStudentLostClass } from '@/lib/classTypes';
+import type { ClassRecord } from '@/types';
 
 export type AttendanceStatus =
   | 'on_time' | 'late' | 'very_late'   // ingresó (según puntualidad del log)
@@ -36,6 +44,12 @@ export interface LogRow {
   subscriptionStatus?: string;
   enteredWithoutActive?: boolean;
   subscriptionDaysRemaining?: number;
+  /**
+   * Estado del transcript frente al plazo de 24 h. Solo en las filas CON ingreso
+   * (una clase a la que no se entró no existe para finanzas y no lleva plazo).
+   * Lo rellena `attachTranscriptStatus`; sin llamarla queda undefined.
+   */
+  transcript?: TranscriptStatusResult;
 }
 
 export const PUNCT_STYLE: Record<AttendanceStatus, { label: string; color: string; bg: string }> = {
@@ -272,5 +286,47 @@ export function buildAttendanceRows(opts: {
     }
   }
 
+  return rows;
+}
+
+/**
+ * Completa `transcript` en las filas con ingreso, con la regla única de
+ * lib/transcriptDeadline: el transcript vinculado a alguno de los ingresos de la
+ * sesión o el de la fecha exacta, y su estado frente al plazo (subido /
+ * pendiente con horas restantes / vencido). Una falta sin aviso o cancelación
+ * sobre la hora registrada ese día sale como 'no_aplica'.
+ *
+ * Devuelve las mismas filas (mutadas) para poder encadenarla.
+ */
+export function attachTranscriptStatus(rows: LogRow[], opts: {
+  joinLogs: ClassJoinLog[];
+  analyses: ClassTranscriptRef[];
+  classRecords?: ClassRecord[];
+  now: number;
+}): LogRow[] {
+  const { joinLogs, analyses, classRecords = [], now } = opts;
+  const used: TranscriptExclusions = new Set();
+  // Del más antiguo al más nuevo, para que el respaldo ±1 día (solo clases
+  // anteriores al plazo) consuma los transcripts sueltos en orden.
+  const ordered = [...rows].sort((a, b) => a.date.localeCompare(b.date) || hourNum(a.hour) - hourNum(b.hour));
+  for (const r of ordered) {
+    if (!r.joinedAt) continue;
+    const start = hourNum(r.hour);
+    const logs = joinLogs.filter(l =>
+      l.teacherId === r.teacherId && nkName(l.studentName) === nkName(r.studentName) && l.scheduledDate === r.date
+      && (() => { const h = hourNum(l.scheduledTime); return !Number.isFinite(h) || !Number.isFinite(start) || (h >= start && h < start + r.durationHours); })());
+    const lost = classRecords.find(c =>
+      c.teacherId === r.teacherId && nkName(c.studentName) === nkName(r.studentName) && c.classDate === r.date
+      && isStudentLostClass(c.classType));
+    const transcript = lost ? undefined : findTranscriptFor(analyses, {
+      teacherId: r.teacherId, studentName: r.studentName, dateIso: r.date,
+      joinLogIds: logs.map(l => l.id), exclude: used,
+    });
+    r.transcript = getTranscriptStatus({
+      date: r.date, startHour: r.hour, durationHours: r.durationHours,
+      classType: lost?.classType, transcript,
+      reopenedDeadlineAt: reopenedDeadlineFor(logs), now,
+    });
+  }
   return rows;
 }

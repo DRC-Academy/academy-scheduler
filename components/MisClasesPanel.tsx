@@ -17,9 +17,16 @@ import { Fragment, useState, useEffect, useMemo, useRef, type CSSProperties } fr
 import { cellKey, getSpainParts, spainWallClockToEpoch } from '@/components/VisualCalendar';
 import { calcRegisteredClassNumber, dbDeleteClassRecordsByIds } from '@/lib/db';
 import {
-  classCategoryBadge, transcriptStateOf, transcriptStateBadge, transcriptNeedsTeacher,
+  classCategoryBadge, transcriptStateOf, transcriptNeedsTeacher,
   type ClassTranscriptRef,
 } from '@/lib/finance';
+// Plazo de 24 h del transcript: fuente única para esta vista, la ficha,
+// Asistencias y Finanzas. Acá se pinta la cuenta regresiva y la vencida.
+import {
+  getTranscriptStatus, reopenedDeadlineFor, transcriptDeadlineBadge, uploadedAtLabel, hoursLeftLabel,
+  TRANSCRIPT_WARN_HOURS, type TranscriptStatusResult,
+} from '@/lib/transcriptDeadline';
+import { TranscriptDeadlineBanner } from '@/components/TranscriptDeadlineBanner';
 import { planFieldsOf } from '@/lib/productUtils';
 import { baseCellOf } from '@/lib/cells';
 import { checkSubscription, subBadge, type SubscriptionInfo } from '@/lib/useSubscriptionStatus';
@@ -623,9 +630,27 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     return cancellationFor(classRecords, teacher.id, c.studentName, date, spanOf(c));
   }
 
-  /** Transcript ya guardado de esa clase (mismo alumno, misma fecha). */
+  /**
+   * Transcript ya guardado de esa clase. Regla única (lib/transcriptDeadline):
+   * primero el vinculado a alguno de sus ingresos, después el de la fecha exacta.
+   */
   function transcriptOf(c: TodayClass, date: string) {
-    return transcriptForClass(classAnalyses, teacher.id, c.studentName, date);
+    return transcriptForClass(classAnalyses, teacher.id, c.studentName, date, joinLogsOf(c, date).map(l => l.id));
+  }
+
+  /**
+   * Estado de la clase frente al PLAZO de 24 h: subido / pendiente (con la
+   * cuenta regresiva) / vencido. Corre desde el fin de la sesión y respeta la
+   * reapertura del admin guardada en el ingreso.
+   */
+  function deadlineOf(c: TodayClass, date: string): TranscriptStatusResult {
+    return getTranscriptStatus({
+      date, startHour: c.startHourNum, durationHours: c.durationHours,
+      classType: c.isRecovery ? 'recuperacion' : 'normal',
+      transcript: transcriptOf(c, date),
+      reopenedDeadlineAt: reopenedDeadlineFor(joinLogsOf(c, date)),
+      now: refDate.getTime(),
+    });
   }
 
   /**
@@ -644,16 +669,21 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
    * finanzas empareja por id en vez de adivinar por proximidad de fechas.
    */
   function joinLogOf(c: TodayClass, date: string) {
-    const name = c.studentName.trim().toLowerCase();
-    const mine = classJoinLogs.filter(l =>
-      l.teacherId === teacher.id && l.studentName.trim().toLowerCase() === name && l.scheduledDate === date,
-    );
+    const mine = joinLogsOf(c, date);
     // Con varios ingresos el mismo día gana el que cae DENTRO de la sesión: en una
     // clase de 2h el acceso puede estar registrado a cualquiera de sus dos horas.
     return mine.find(l => {
       const h = hourNum(l.scheduledTime);
       return h >= c.startHourNum && h < c.endHourNum;
     }) ?? mine[0];
+  }
+
+  /** TODOS los ingresos del alumno ese día (una sesión de 2 h puede tener dos). */
+  function joinLogsOf(c: TodayClass, date: string) {
+    const name = c.studentName.trim().toLowerCase();
+    return classJoinLogs.filter(l =>
+      l.teacherId === teacher.id && l.studentName.trim().toLowerCase() === name && l.scheduledDate === date,
+    );
   }
 
   /** ¿Esta clase se dio de verdad? (no reprogramada ni cancelada) */
@@ -673,14 +703,16 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
 
   // ── Días con sus clases, ya filtrados ────────────────────────────────────────
   // Sin useMemo a propósito: son unos pocos filtros sobre decenas de elementos.
+  // Las dos fuentes (slots recurrentes + celdas de recuperación del grid) pasan
+  // por la MISMA agrupación: dos celdas contiguas del mismo alumno salen como
+  // una sola card de 2h, con un botón de transcript y un solo "Ingresar".
+  const sessionsOn = (iso: string) => groupContiguousClasses([
+    ...classesForDate(myAssignments, iso, periodos),
+    ...recoveriesForDate(grid, iso, myAssignments),
+  ], teacher.id, gridOccupancy);
+
   const dayGroups = visibleDays.map(iso => {
-    // Las dos fuentes (slots recurrentes + celdas de recuperación del grid) pasan
-    // por la MISMA agrupación: dos celdas contiguas del mismo alumno salen como
-    // una sola card de 2h, con un botón de transcript y un solo "Ingresar".
-    const all = groupContiguousClasses([
-      ...classesForDate(myAssignments, iso, periodos),
-      ...recoveriesForDate(grid, iso, myAssignments),
-    ], teacher.id, gridOccupancy);
+    const all = sessionsOn(iso);
 
     const shown = all.filter(c => {
       if (filter === 'todas') return true;
@@ -714,6 +746,41 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
   const missingTranscripts = allVisible.filter(
     x => statusOf(x.c, x.iso) === 'passed' && isRealClass(x.c, x.iso) && needsTranscriptFor(x.c, x.iso),
   );
+
+  // Clases con el plazo del transcript a punto de vencer (< 6 h) o ya vencido,
+  // mirando los ÚLTIMOS 10 DÍAS y no solo el rango a la vista: el profesor puede
+  // estar mirando la semana que viene y tener una clase de ayer a punto de
+  // vencer. Alimenta el banner (que no se puede ocultar mientras haya alguna) y
+  // el pop-up de una vez por sesión.
+  const nowMs = refDate.getTime();
+  const urgentClasses = useMemo(() => {
+    if (!relojListo) return [] as Array<{ c: TodayClass; iso: string; deadline: TranscriptStatusResult }>;
+    const out: Array<{ c: TodayClass; iso: string; deadline: TranscriptStatusResult }> = [];
+    for (let back = 10; back >= 0; back--) {
+      const iso = addDaysIso(todayIso, -back);
+      for (const c of sessionsOn(iso)) {
+        if (statusOf(c, iso) !== 'passed' || !isRealClass(c, iso) || !needsTranscriptFor(c, iso)) continue;
+        const deadline = deadlineOf(c, iso);
+        if (deadline.status === 'vencido' || deadline.urgent) out.push({ c, iso, deadline });
+      }
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [relojListo, todayIso, myAssignments, grid, classRecords, classAnalyses, classJoinLogs, nowMs]);
+
+  // Pop-up de una vez por sesión con esas clases y el botón directo "Subir
+  // transcript". No depende del cron: se decide al entrar a esta pantalla. La
+  // marca de "ya visto" se escribe al cerrarlo (sessionStorage, por pestaña);
+  // se lee en el render, que ya es posterior a la hidratación porque
+  // `relojListo` solo es cierto en el cliente.
+  const popupKey = `drc_transcript_deadline_popup_${teacher.id}`;
+  const [popupClosed, setPopupClosed] = useState(false);
+  const popupSeen = relojListo && (() => { try { return sessionStorage.getItem(popupKey) === '1'; } catch { return false; } })();
+  const deadlinePopup = relojListo && !popupClosed && !popupSeen && urgentClasses.length > 0;
+  function closeDeadlinePopup() {
+    try { sessionStorage.setItem(popupKey, '1'); } catch { /* sin storage: no vuelve a salir en este montaje */ }
+    setPopupClosed(true);
+  }
 
   // ── Puente con el tutorial guiado ───────────────────────────────────────────
   //
@@ -1113,8 +1180,13 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     // con que existiera texto y se pintaba "Transcript subido" en verde, mientras
     // finanzas —que además exige la validación— decía "Sin subir" de la MISMA
     // clase. El profesor veía las dos pantallas contradecirse.
-    const tState = transcriptStateOf(transcriptOf(c, date));
-    const tBadge = transcriptStateBadge(tState);
+    const transcript = transcriptOf(c, date);
+    const tState = transcriptStateOf(transcript);
+    // Estado frente al PLAZO de 24 h (cuenta regresiva / vencida), de la misma
+    // fuente que Finanzas, la ficha y Asistencias.
+    const dl = passed && !inactive ? deadlineOf(c, date) : null;
+    const dBadge = dl ? transcriptDeadlineBadge(dl) : null;
+    const uploaded = dl?.status === 'subido' ? uploadedAtLabel(transcript?.analyzed_at) : '';
     // Solo es tarea suya si falta o se lo rechazaron: "en revisión" no lo es.
     const needsTranscript = transcriptNeedsTeacher(tState);
     const hoursBadge = durationBadgeLabel(c.durationHours);
@@ -1157,6 +1229,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
       passed && ' is-passed',
       inactive && ' is-inactive',
       passed && !inactive && (needsTranscript ? ' needs-transcript' : ' is-done'),
+      dl?.status === 'vencido' && ' is-expired',
     ].filter(Boolean).join('');
 
     return (
@@ -1214,15 +1287,20 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
                 <span className="mc-dot" style={{ background: '#a4a7a1' }} />
                 {rescheduled ? 'Reprogramada' : cancelLabel}
               </span>
-            ) : passed ? (
-              // Cuatro estados: subido / en revisión / rechazado / falta.
+            ) : passed && dBadge ? (
+              // La CASILLA del transcript, junto al estado del enlace de la clase:
+              // subido (check verde + fecha y hora de subida), en revisión,
+              // rechazado, pendiente con la cuenta regresiva ("Quedan 14 h", en
+              // amarillo por debajo de 6 h) o VENCIDA en rojo.
               // SIN ancla del tutorial: figuraba como respaldo del paso de cierre,
               // pero ese paso vive en /mis-clases (donde se ve con importes si la
               // clase ya cuenta) y el motor nunca lo resuelve estando aquí. Un
               // `data-onboarding` que ningún paso usa es el que acaba pudriéndose.
-              <span className="mc-status" style={{ background: tBadge.bg, color: tBadge.color }}>
-                <span className="mc-dot" style={{ background: tBadge.dot }} />
-                {tBadge.label}
+              <span className={`mc-status${dBadge.tone === 'expired' ? ' is-expired' : dBadge.tone === 'warn' ? ' is-warn' : ''}`}
+                style={{ background: dBadge.bg, color: dBadge.color }}
+                title={dl?.status === 'subido' ? 'Transcript guardado' : dl?.status === 'vencido' ? 'El plazo de 24 h pasó sin transcript: la clase no se valida para el pago' : undefined}>
+                <span className="mc-dot" style={{ background: dBadge.dot }} />
+                {dBadge.tone === 'ok' ? '✓ ' : ''}{dBadge.label}{uploaded ? ` · ${uploaded}` : ''}
               </span>
             ) : (
               <span className={`mc-status ${hasLink ? 'is-ready' : 'is-missing'}`}>
@@ -1244,9 +1322,12 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
                 // `data-onboarding` solo cuando el transcript es tarea suya: con la
                 // clase ya cerrada el botón dice "Reemplazar" y resaltarlo mandaría
                 // a rehacer algo que está hecho.
+                // Con el plazo VENCIDO el botón sigue (el alumno necesita su
+                // práctica), pero deja de ser la acción principal: la clase no se
+                // valida para el pago salvo que el admin reabra el plazo.
                 <button
-                  data-onboarding={relojListo && needsTranscript ? 'add-transcript' : undefined}
-                  className={`mc-btn ${needsTranscript ? 'mc-btn-primary' : 'mc-btn-ghost'}`}
+                  data-onboarding={relojListo && needsTranscript && dl?.status !== 'vencido' ? 'add-transcript' : undefined}
+                  className={`mc-btn ${needsTranscript && dl?.status !== 'vencido' ? 'mc-btn-primary' : 'mc-btn-ghost'}`}
                   onClick={() => setTranscriptFor({ c, date })}>
                   {tState === 'none' ? '📝 Añadir transcript'
                     : tState === 'rejected' ? '📝 Subir el correcto'
@@ -1386,6 +1467,11 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
           <button className="mc-today-btn" onClick={() => setDayOffset(0)} disabled={atToday}>Hoy</button>
         </div>
       </div>
+
+      {/* Plazo de 24 h del transcript: banner fijo. Se puede ocultar con
+          "Entendido", pero vuelve mientras haya una clase con menos de 6 h de
+          plazo o vencida. */}
+      <TranscriptDeadlineBanner urgent={urgentClasses.length > 0} />
 
       {/* Rango (día / semana) y filtro. La semana es lunes → sábado: el grid del
           calendario no tiene domingo, así que un séptimo día saldría vacío. */}
@@ -1547,9 +1633,52 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
             )
           }
           durationHours={transcriptFor.c.durationHours}
+          deadline={deadlineOf(transcriptFor.c, transcriptFor.date)}
+          deadlineUrgent={urgentClasses.length > 0}
           onClose={() => setTranscriptFor(null)}
           onSaved={handleSaveTranscript}
         />
+      )}
+
+      {/* Pop-up de una vez por sesión: clases con menos de 6 h de plazo o ya
+          vencidas, con el botón directo para subir el transcript. */}
+      {deadlinePopup && urgentClasses.length > 0 && (
+        <div
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+          onClick={e => { if (e.target === e.currentTarget) closeDeadlinePopup(); }}
+          role="dialog" aria-modal="true" aria-label="Transcripts con el plazo a punto de vencer"
+        >
+          <div style={{ background: '#fff', borderRadius: 16, padding: 22, width: '100%', maxWidth: 480, maxHeight: '88vh', overflowY: 'auto' }}>
+            <div style={{ fontWeight: 700, fontSize: 17, color: 'var(--text-primary)', marginBottom: 6 }}>
+              ⏱️ Transcripts con el plazo a punto de vencer
+            </div>
+            <p style={{ fontSize: 13.5, color: 'var(--text-secondary)', lineHeight: 1.55, margin: '0 0 14px' }}>
+              Tienes {urgentClasses.length} clase{urgentClasses.length !== 1 ? 's' : ''} con menos de {TRANSCRIPT_WARN_HOURS} horas
+              de plazo o ya vencidas. Sin transcript, el alumno no puede generar su práctica y la clase no se valida para el pago.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {urgentClasses.map(({ c, iso, deadline }) => (
+                <div key={`${c.key}_${iso}`} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 10, border: '1px solid var(--border)', background: deadline.status === 'vencido' ? 'rgba(239,68,68,0.06)' : '#FFF9E0' }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: 14 }}>{c.studentName}</div>
+                    <div style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>
+                      {fmtDateDMY(iso)} · {sessionHoursLabel(c)} ·{' '}
+                      <span style={{ color: deadline.status === 'vencido' ? '#b91c1c' : '#8a6d00', fontWeight: 600 }}>
+                        {deadline.status === 'vencido' ? 'Vencida — no validada' : hoursLeftLabel(deadline.hoursLeft)}
+                      </span>
+                    </div>
+                  </div>
+                  <button className="mc-btn mc-btn-primary" onClick={() => { closeDeadlinePopup(); setTranscriptFor({ c, date: iso }); }}>
+                    Subir transcript
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}>
+              <button className="mc-btn mc-btn-ghost" onClick={closeDeadlinePopup}>Cerrar</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Presentation email modal */}

@@ -996,6 +996,11 @@ body.driver-active .drc-modal-backdrop * { pointer-events: auto; }
 .mc-status.is-ready   { background: #eaf5ec; color: #1f7a3d; }
 .mc-status.is-missing { background: #fdf3e7; color: #9a6516; }
 .mc-status.is-muted   { background: #f0f1ee; color: var(--mc-t2); }
+/* Plazo del transcript: amarillo por debajo de 6 h, rojo cuando ya venció. */
+.mc-status.is-warn    { font-weight: 700; }
+.mc-status.is-expired { font-weight: 700; }
+.mc-card.is-expired { border-color: rgba(239,68,68,0.45); }
+.mc-card.is-expired .mc-right { opacity: 1; }
 .mc-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 
 .mc-actions { display: flex; align-items: center; gap: 8px; }
@@ -3362,6 +3367,8 @@ body.driver-active .drc-modal-backdrop * { pointer-events: auto; }
 .fnl-child.has-sub { padding-top: 11px; padding-bottom: 11px; }
 .fnl-child-eur  { font-size: var(--fs-sm); font-weight: var(--fw-semibold); color: var(--accent); white-space: nowrap; }
 .fnl-child-eur.is-warn { color: var(--warn); }
+.fnl-child-eur.is-expired { color: #b91c1c; }
+.fnl-child.is-expired .fnl-child-name { color: #b91c1c; }
 .fnl-child-eur.is-zero { color: var(--text-muted); font-weight: var(--fw-regular); }
 .fnl-child-n { font-size: 15px; font-weight: var(--fw-semibold); min-width: 40px; text-align: right; }
 

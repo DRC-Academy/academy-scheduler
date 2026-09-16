@@ -12,7 +12,8 @@ import { PullToRefresh } from '@/components/PullToRefresh';
 import { getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
-import { buildAttendanceRows, isoDate, type LogRow } from '@/lib/attendance';
+import { buildAttendanceRows, attachTranscriptStatus, isoDate, type LogRow } from '@/lib/attendance';
+import { transcriptDeadlineBadge, type TranscriptStatusResult } from '@/lib/transcriptDeadline';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { getTeacherAssignments } from '@/lib/db';
 import { periodIndex, dbGetStudentDropouts, type StudentDropout } from '@/lib/studentPeriod';
@@ -26,6 +27,8 @@ type Estado = 'no' | 'proxima' | 'ingreso';
 interface ClassRow {
   id: string; date: string; time: string; alumno: string;
   sinEnlace: boolean; estado: Estado; horaIngreso: string;
+  /** Transcript frente al plazo de 24 h (solo con ingreso). Fuente única: lib/transcriptDeadline. */
+  transcript?: TranscriptStatusResult;
 }
 
 const nkName = (s: string) => (s ?? '').trim().toLowerCase();
@@ -93,6 +96,18 @@ function SubBadgePill({ info }: { info?: SubscriptionInfo }) {
     </span>
   );
 }
+// Pill del transcript: subido (con fecha), pendiente con la cuenta regresiva,
+// vencida en rojo. La misma etiqueta que Mis clases, la ficha y Finanzas.
+function TranscriptPill({ t }: { t?: TranscriptStatusResult }) {
+  if (!t) return <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>—</span>;
+  const b = transcriptDeadlineBadge(t);
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 9px', borderRadius: 7, background: b.bg, color: b.color, fontSize: 12, fontWeight: b.tone === 'expired' || b.tone === 'warn' ? 700 : 600, whiteSpace: 'nowrap' }}>
+      <span style={{ width: 6, height: 6, borderRadius: 999, background: b.dot }} />
+      {b.tone === 'ok' ? '✓ ' : ''}{b.label}
+    </span>
+  );
+}
 const SinEnlaceTag = () => (
   <span style={{ fontSize: 11, fontWeight: 600, color: '#b54708', background: '#fffaeb', border: '1px solid #fedf89', borderRadius: 6, padding: '2px 7px', whiteSpace: 'nowrap' }}>sin enlace</span>
 );
@@ -100,7 +115,7 @@ const SinEnlaceTag = () => (
 // ── Página ────────────────────────────────────────────────────────────────────
 function AsistenciasContent() {
   const { user } = useAuth();
-  const { teachers, students, classJoinLogs, loadClassJoinLogs, reloadAll } = useTeachers();
+  const { teachers, students, classJoinLogs, classRecords, classAnalyses, loadClassJoinLogs, reloadAll } = useTeachers();
 
   const teacher = teachers.find(t => t.id === user?.teacherId) ?? teachers[0];
 
@@ -163,13 +178,24 @@ function AsistenciasContent() {
     }).sort((x, y) => x.date.localeCompare(y.date) || (parseInt(x.hour) - parseInt(y.hour)));
   }, [teacher, myAssignments, dropouts, classJoinLogs, fromDate, toDate, todayIso, nowMinutes]);
 
-  const allClasses = useMemo<ClassRow[]>(() => rows.map(r => ({
+  // Estado del transcript de cada clase CON ingreso, con la misma regla que Mis
+  // clases, la ficha y Finanzas (lib/transcriptDeadline). Antes esta pantalla no
+  // decía nada del transcript.
+  // El reloj se fija al montar (como `nowSpain`): la cuenta regresiva de esta
+  // pantalla no necesita refrescarse sola, se recarga al navegar.
+  const [nowMs] = useState(() => Date.now());
+  const rowsConTranscript = useMemo<LogRow[]>(() => attachTranscriptStatus(rows, {
+    joinLogs: classJoinLogs, analyses: classAnalyses, classRecords, now: nowMs,
+  }), [rows, classJoinLogs, classAnalyses, classRecords, nowMs]);
+
+  const allClasses = useMemo<ClassRow[]>(() => rowsConTranscript.map(r => ({
     // hoursLabel ya trae el rango de la sesión ("12:00 - 14:00" en una clase de
     // 2h); fmtHour cubre las filas sueltas de logs viejos con la hora a secas.
     id: r.id, date: r.date, time: fmtHour(r.hoursLabel || r.hour), alumno: r.studentName,
     sinEnlace: !r.hasLink, estado: toEstado(r.status),
     horaIngreso: r.joinedAt ? new Date(r.joinedAt).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }) : '',
-  })), [rows]);
+    transcript: r.transcript,
+  })), [rowsConTranscript]);
 
   // ── Suscripción por alumno (estado REAL, fuente única useSubscriptionStatus) ──
   // Se consulta por alumno (no por join log), así el estado se muestra SIEMPRE,
@@ -326,9 +352,10 @@ function AsistenciasContent() {
                             { h: 'Hora' }, { h: 'Alumno' },
                             { h: 'Hora ingreso', help: 'asistencias.horaIngreso' },
                             { h: 'Estado', help: 'asistencias.estado' },
+                            { h: 'Transcript' },
                             { h: 'Suscripción', help: 'finanzas.suscripcion' },
                           ] as Array<{ h: string; help?: HelpTooltipKey }>).map((col, i) => (
-                            <th key={col.h} style={i === 0 ? { width: 110 } : i === 2 ? { width: 140 } : i === 3 ? { width: 150 } : i === 4 ? { width: 130 } : undefined}>
+                            <th key={col.h} style={i === 0 ? { width: 110 } : i === 2 ? { width: 140 } : i === 3 ? { width: 150 } : i === 5 ? { width: 130 } : undefined}>
                               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                                 {col.h}
                                 {col.help && <HelpTooltip tooltipKey={col.help} />}
@@ -364,6 +391,7 @@ function AsistenciasContent() {
                             <div className="asis-mcard-bot">
                               <span>Ingreso: {c.horaIngreso || '—'}</span>
                               {c.sinEnlace && <SinEnlaceTag />}
+                              {c.transcript && <TranscriptPill t={c.transcript} />}
                               <SubBadgePill info={subFor(c.alumno)} />
                             </div>
                           </div>
@@ -393,7 +421,7 @@ function DayGroupRows({ day, subFor }: {
   return (
     <>
       <tr className="asis-daystrip">
-        <td colSpan={5}>
+        <td colSpan={6}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 9 }}>
             <span className="asis-day-name">{day.label}</span>
             {day.today && <span className="asis-hoy">Hoy</span>}
@@ -412,6 +440,7 @@ function DayGroupRows({ day, subFor }: {
           </td>
           <td style={{ color: c.horaIngreso ? 'var(--text-secondary)' : 'var(--text-muted)', whiteSpace: 'nowrap' }}>{c.horaIngreso || '—'}</td>
           <td><EstadoPill e={c.estado} /></td>
+          <td><TranscriptPill t={c.transcript} /></td>
           <td><SubBadgePill info={subFor(c.alumno)} /></td>
         </tr>
       ))}
