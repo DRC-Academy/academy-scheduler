@@ -270,9 +270,12 @@ pedírsela al padre por `postMessage` (`{ type: 'drc:ampliar-plan' }`), y este s
 que la calcula y navega. Fuera del iframe (la ficha abierta a pelo, o `/progreso/{token}`)
 el botón es un enlace normal a la lista de suscripciones.
 
-**Red de seguridad:** el snippet contesta `drc:ampliar-plan-ok` justo antes de navegar. Si
-la ficha no recibe esa respuesta en 1,2 s (snippet sin instalar, o desactivado), lleva la
-ventana principal a `/mi-cuenta/subscriptions/` por su cuenta: el botón nunca queda muerto.
+**Sin red de seguridad, a propósito.** Antes la ficha esperaba 1,2 s la respuesta
+`drc:ampliar-plan-ok` del snippet y, si no llegaba, llevaba la ventana principal a
+`/mi-cuenta/subscriptions/` por su cuenta. Esa navegación ganaba a la del snippet y el alumno
+nunca llegaba al cambio de plan. Ahora, dentro del iframe, el botón manda el mensaje y no
+navega nada más: si el snippet no está activo, el botón no hace nada. El `drc:ampliar-plan-ok`
+que el snippet sigue contestando no hace daño: la ficha lo ignora.
 
 ### El snippet
 
@@ -379,10 +382,10 @@ Con un alumno de prueba logueado en drcacademy.com:
    cambiar de un día a otro: es normal.
 4. El modal `#drc-switch-confirmar` **no** debe aparecer: no se ha hecho clic en
    `a.wcs-switch-link`.
-5. Si en vez de eso acabás en `/mi-cuenta/subscriptions/`: o el snippet no está activo
-   (la ficha usó su reserva al no recibir respuesta), o el alumno no tiene ninguna
-   suscripción activa/en espera con un item cambiable (el snippet usó la suya). Para
-   distinguirlo, en la consola de `/mi-cuenta/` ejecutá
+5. Si acabás en `/mi-cuenta/subscriptions/`, el alumno no tiene ninguna suscripción
+   activa/en espera con un item cambiable y el snippet usó su destino de reserva. Si no
+   pasa **nada**, el snippet no está activo (la ficha ya no navega por su cuenta). Para
+   comprobarlo, en la consola de `/mi-cuenta/` ejecutá
    `window.postMessage({type:'drc:ampliar-plan'}, location.origin)`: no debe pasar nada
    (el origen no es el de la ficha), y `document.documentElement.innerHTML.includes('drc:ampliar-plan')`
    tiene que dar `true` si el snippet está impreso.

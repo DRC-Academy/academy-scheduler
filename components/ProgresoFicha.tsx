@@ -502,9 +502,9 @@ const PROGRESO_CSS = `
 .pg-cta-block { margin-top: 22px; display: flex; justify-content: center; }
 .pg-cta {
   display: inline-flex; align-items: center; justify-content: center; gap: 9px;
-  min-height: 44px; padding: 12px 28px; border-radius: 999px;
-  background: var(--pg-green); color: #fff; font-size: 15px; font-weight: 700;
-  text-decoration: none; box-shadow: 0 6px 16px rgba(30, 158, 58, 0.26);
+  min-height: 44px; margin: 0; padding: 12px 28px; border: 0; border-radius: 999px;
+  background: var(--pg-green); color: #fff; font: inherit; font-size: 15px; font-weight: 700;
+  text-decoration: none; cursor: pointer; box-shadow: 0 6px 16px rgba(30, 158, 58, 0.26);
 }
 .pg-cta:focus-visible { outline: 3px solid var(--pg-green-dark); outline-offset: 3px; }
 

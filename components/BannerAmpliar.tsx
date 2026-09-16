@@ -26,7 +26,6 @@
 // de altura respecto a los otros. La etiqueta amarilla del ahorro sigue siendo
 // lo que más salta; el distintivo es secundario.
 
-import { useEffect, useRef } from 'react';
 import {
   etiquetaMeses, type Estimacion, type EstadoBanner,
 } from '@/lib/estimacion';
@@ -151,69 +150,50 @@ export function BannerAmpliar({ estimacion }: { estimacion: Estimacion | null })
 //
 // Así que el botón tiene dos comportamientos según dónde viva la ficha:
 //
-//   · DENTRO DEL IFRAME DE MI CUENTA (lo normal): no navega. Le manda al padre
+//   · DENTRO DEL IFRAME DE MI CUENTA (lo normal): NO NAVEGA. Le manda al padre
 //     un mensaje `drc:ampliar-plan` y es WordPress —con el snippet de
 //     docs/progreso-wordpress.md— quien lleva la VENTANA PRINCIPAL a la URL del
 //     cambio de plan. Al padre solo se le habla en los orígenes de la academia,
-//     como hace ProgresoAltura con la altura.
+//     como hace ProgresoAltura con la altura. Y después del mensaje, nada más.
 //
 //   · COMO PÁGINA SUELTA (/progreso/[token], o si alguien abre /progreso-cuenta
-//     a pelo): es un enlace normal a la lista de suscripciones de Mi cuenta.
+//     a pelo): lleva a la lista de suscripciones de Mi cuenta.
 //
-// RED DE SEGURIDAD. Si el padre no tiene el snippet (o todavía no lo tiene), el
-// mensaje cae en el vacío y el botón parecería muerto. Por eso el padre contesta
-// `drc:ampliar-plan-ok` ANTES de navegar; si en 1,2 s no ha llegado ni la
-// respuesta ni la descarga del iframe, el botón lleva la ventana principal a la
-// lista de suscripciones, que es el destino de reserva. Con el snippet puesto
-// ese temporizador nunca llega a saltar.
+// SIN RED DE SEGURIDAD, A PROPÓSITO. La hubo: el padre contestaba
+// `drc:ampliar-plan-ok` y, si en 1,2 s no llegaba, el botón llevaba la ventana
+// principal a la lista de suscripciones por su cuenta. En producción esa
+// navegación GANABA a la del snippet: la ventana acababa en
+// /mi-cuenta/subscriptions/ y el alumno nunca llegaba al cambio de plan. Ya no
+// hay temporizador, ni respuesta que esperar, ni `target="_top"`: dentro del
+// iframe el botón manda el mensaje y se queda quieto. Si el snippet no está,
+// el botón no hace nada, y eso se ve en la consola de /mi-cuenta/ (docs,
+// sección 6).
+//
+// ES UN <button>, NO UN <a>. Un enlace con href tiene navegación propia (el
+// clic antes de hidratar, el botón central, "abrir en pestaña nueva") y aquí
+// no tiene que haber ninguna que no decida este onClick.
 
-/** A dónde lleva "Amplía tu plan" fuera del iframe, y de reserva dentro. Configurable sin tocar código. */
+/** A dónde lleva "Amplía tu plan" fuera del iframe. Configurable sin tocar código. */
 const UPSELL_URL = process.env.NEXT_PUBLIC_UPSELL_URL || 'https://drcacademy.com/mi-cuenta/subscriptions/';
-/** Lo que se le pide al padre, y lo que contesta él cuando se hace cargo. */
+/** Lo que se le pide al padre. */
 export const AMPLIAR_MESSAGE_TYPE = 'drc:ampliar-plan';
-export const AMPLIAR_OK_MESSAGE_TYPE = 'drc:ampliar-plan-ok';
-const ESPERA_RESPUESTA_MS = 1200;
 
 function CtaAmpliar({ texto }: { texto: string }) {
-  const reserva = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    if (window.self === window.top) return;   // no está dentro de un iframe
-    function alContestar(e: MessageEvent) {
-      if (!ORIGENES_PADRE.includes(e.origin)) return;
-      if (!e.data || e.data.type !== AMPLIAR_OK_MESSAGE_TYPE) return;
-      // El padre se hace cargo: la reserva ya no hace falta.
-      if (reserva.current) { clearTimeout(reserva.current); reserva.current = null; }
-    }
-    window.addEventListener('message', alContestar);
-    return () => {
-      window.removeEventListener('message', alContestar);
-      if (reserva.current) clearTimeout(reserva.current);
-    };
-  }, []);
-
-  function alPulsar(e: React.MouseEvent<HTMLAnchorElement>) {
-    if (window.self === window.top) return;   // página suelta: el enlace hace lo suyo
+  function alPulsar(e: React.MouseEvent<HTMLButtonElement>) {
     e.preventDefault();
-    for (const origen of ORIGENES_PADRE) {
-      try { window.parent.postMessage({ type: AMPLIAR_MESSAGE_TYPE }, origen); } catch { /* origen no permitido: se ignora */ }
+    if (window.self !== window.top) {
+      for (const origen of ORIGENES_PADRE) {
+        try { window.parent.postMessage({ type: AMPLIAR_MESSAGE_TYPE }, origen); } catch { /* origen no permitido: se ignora */ }
+      }
+      return;   // no navegar nada más: WordPress se encarga
     }
-    if (reserva.current) clearTimeout(reserva.current);
-    reserva.current = setTimeout(() => {
-      reserva.current = null;
-      // La ventana principal, no el recuadro: la tienda dentro de un marco de
-      // 900 px es justo lo que se quiere evitar. La activación del clic sigue
-      // vigente, así que el navegador lo permite.
-      try { window.top!.location.href = UPSELL_URL; } catch { window.location.href = UPSELL_URL; }
-    }, ESPERA_RESPUESTA_MS);
+    window.location.href = UPSELL_URL;
   }
 
-  // `target="_top"` y no `_blank`: fuera del iframe da igual, y dentro es lo que
-  // haría el enlace sin JavaScript: sacar la tienda a la ventana principal.
   return (
-    <a className="pg-cta" href={UPSELL_URL} target="_top" rel="noopener noreferrer" onClick={alPulsar}>
+    <button type="button" className="pg-cta" onClick={alPulsar}>
       {texto}
       <span className="pg-cta-arrow" aria-hidden>→</span>
-    </a>
+    </button>
   );
 }
