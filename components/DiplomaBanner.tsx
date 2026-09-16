@@ -236,9 +236,10 @@ function Esqueleto() {
 // 16 en móvil) y el borde, la tarjeta mide lo mismo en los tres estados y
 // mientras carga: nada de lo de abajo se mueve.
 //
-// EL RÓTULO copia el `.pg-kicker` de la ficha ("TU NIVEL", "TU OBJETIVO":
-// 11 px, negrita, mayúsculas, espaciado) pero en verde oscuro, que a ese cuerpo
-// es el verde que pasa el contraste.
+// EL RÓTULO es el de los rótulos de la ficha ("TU NIVEL", "TU OBJETIVO") pero
+// en verde oscuro, que a ese cuerpo es el verde que pasa el contraste, y con los
+// números del rótulo de la ficha del LMS (11,5 px, espaciado 0.14em) para que
+// las dos pantallas sean idénticas.
 //
 // EL CIERRE: se animan a cero la altura, el padding, el borde y, con un margen
 // negativo, el `gap` que `.pg-main` deja después de la tarjeta (18 px, 14 en
@@ -277,7 +278,7 @@ export const DIPLOMA_CSS = `
 /* Renglón 1: el rótulo. */
 .pg-diploma-titulo {
   height: 14px; line-height: 14px; margin: 0 0 8px;
-  font-size: 11px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
+  font-size: 11.5px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
   color: var(--pg-green-dark);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
@@ -298,6 +299,15 @@ export const DIPLOMA_CSS = `
   font-size: 15px; line-height: 1.25; color: var(--pg-muted);
 }
 .pg-diploma-cuenta { flex-shrink: 0; white-space: nowrap; font-size: 12.5px; line-height: 1; color: var(--pg-faint); }
+/* Teléfonos estrechos (360 px): "176 lecciones para tu diploma · 15 de 191" no
+   entra en los 294 px de contenido y el texto se cortaba con puntos suspensivos.
+   Un cuerpo un punto menor lo hace caber; las alturas fijas no cambian. */
+@media (max-width: 380px) {
+  .pg-diploma-fila { gap: 10px; }
+  .pg-diploma-texto { gap: 6px; }
+  .pg-diploma-cifra { font-size: 23px; }
+  .pg-diploma-desc { font-size: 13.5px; }
+}
 
 /* Renglón 3: el carril. */
 .pg-diploma-barra { position: relative; height: 12px; border-radius: 6px; background: #E8EEE9; }
