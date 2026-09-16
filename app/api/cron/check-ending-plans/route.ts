@@ -20,7 +20,9 @@
 // no habría segunda oportunidad: es justo el caso que no se puede recuperar.
 // Marcando después, un fallo hace que se reintente mañana.
 
-import { supabase } from '@/lib/supabase';
+import type { SupabaseClient } from '@supabase/supabase-js';
+// Secreto en tiempo constante + cliente ADMIN de Supabase (sin él, 500).
+import { requireCronSecret, requireAdminClient } from '@/lib/cronAuth';
 import {
   buildEndingPlans, plansNeedingNotice, ENDING_NOTICE_DAYS,
   type EndingPlan, type EndingStudentRow, type EndingProfileRow,
@@ -58,16 +60,12 @@ const STUDENT_COLS_BASE =
   'id, name, email, phone, product_type, product_name, plan, manual_active_until';
 
 export async function GET(request: Request): Promise<Response> {
-  // Mismo guardián que el resto de los crons: sin CRON_SECRET configurado no se
-  // ejecuta (mejor no hacer nada que quedar abierto a cualquiera).
-  const secret = process.env.CRON_SECRET;
-  if (!secret) {
-    console.error('[cron ending-plans] Falta CRON_SECRET en el entorno.');
-    return Response.json({ error: 'CRON_SECRET no configurado' }, { status: 500 });
-  }
-  if (request.headers.get('authorization') !== `Bearer ${secret}`) {
-    return Response.json({ error: 'No autorizado' }, { status: 401 });
-  }
+  // Mismo guardián que el resto de los crons (lib/cronAuth): sin CRON_SECRET no
+  // se ejecuta, y sin SUPABASE_SERVICE_ROLE_KEY tampoco.
+  const denied = requireCronSecret(request, 'cron ending-plans');
+  if (denied) return denied;
+  const { admin: supabase, error: sinAdmin } = requireAdminClient('cron ending-plans');
+  if (!supabase) return sinAdmin;
 
   const today = madridToday();
   // MODO PRUEBA (?test=1). Dispara SOLO el webhook a Zapier y devuelve el JSON
@@ -109,7 +107,7 @@ export async function GET(request: Request): Promise<Response> {
   //   supabase-ending-plans.sql y el cron dejaría de avisar de TODOS. Sin estas
   //   columnas el aviso sale igual; lo único que se pierde es que Slack diga que
   //   ventas ya llamó a ese alumno.
-  const sales = await readSalesContacts(today);
+  const sales = await readSalesContacts(supabase, today);
 
   const rows = (res.data ?? []) as unknown as StudentDbRow[];
   const students: EndingStudentRow[] = rows.map(r => ({
@@ -128,7 +126,7 @@ export async function GET(request: Request): Promise<Response> {
 
   // 2) Fichas, solo para el semáforo del email. Best-effort: sin ficha el aviso
   //    sale igual y dice "sin datos", que es la verdad.
-  const profiles = await readProfiles();
+  const profiles = await readProfiles(supabase);
 
   // 3) Quién entra en la ventana de aviso y todavía no fue avisado.
   const plans = buildEndingPlans({ students, profiles, today, windowDays: ENDING_NOTICE_DAYS });
@@ -179,7 +177,7 @@ export async function GET(request: Request): Promise<Response> {
     );
   }
 
-  const marcados = await markNotified(pendientes);
+  const marcados = await markNotified(supabase, pendientes);
 
   // 5) Webhook a Zapier → Slack. Va AL FINAL y es aditivo: el email interno ya
   //    salió y el ciclo ya está marcado, así que nada de lo que pase acá puede
@@ -213,7 +211,7 @@ type SalesFields = Pick<EndingStudentRow,
  * (supabase-sales-contact.sql sin correr) devuelve un mapa vacío y el aviso sale
  * igual. Este dato es una comodidad, el email es lo crítico.
  */
-async function readSalesContacts(today: string): Promise<Map<string, SalesFields>> {
+async function readSalesContacts(supabase: SupabaseClient, today: string): Promise<Map<string, SalesFields>> {
   const { data, error } = await supabase
     .from('students')
     .select('id, sales_contacted_at, sales_contact_result, sales_contacted_by, sales_contact_for_date')
@@ -248,7 +246,7 @@ async function readSalesContacts(today: string): Promise<Map<string, SalesFields
  * casan por nombre, que son las que ese respaldo existe para recuperar. Son 90
  * filas de cuatro columnas. Nunca rompe el cron.
  */
-async function readProfiles(): Promise<EndingProfileRow[]> {
+async function readProfiles(supabase: SupabaseClient): Promise<EndingProfileRow[]> {
   const { data, error } = await supabase
     .from('student_profiles')
     .select('student_id, student_name, progress_score, risk_signal');
@@ -264,7 +262,7 @@ async function readProfiles(): Promise<EndingProfileRow[]> {
  * cada alumno lleva su propia `ending_notice_for_date`, que es la que hace que
  * el aviso se reactive al renovar.
  */
-async function markNotified(plans: EndingPlan[]): Promise<number> {
+async function markNotified(supabase: SupabaseClient, plans: EndingPlan[]): Promise<number> {
   const now = new Date().toISOString();
   let ok = 0;
   for (const p of plans) {

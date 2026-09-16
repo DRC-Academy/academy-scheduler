@@ -22,13 +22,26 @@
 // fila ya existía, ese profesor ya recibió su email hoy y se salta. Si el envío
 // falla, la reserva se borra para que la próxima corrida lo reintente.
 // Requiere haber corrido supabase-daily-reminder-log.sql.
+//
+// SEGUNDA TAREA (desde el 22/09/2026, plazo de 24 h): después de los correos se
+// repasan las clases con el plazo del transcript a punto de vencer (< 6 h) o
+// recién vencido y se deja una notificación de campanita por clase
+// (lib/transcriptDeadlineNotifications, id determinista → idempotente). Es la
+// misma rutina que expone /api/cron/transcripts-vencidos para que Zapier la
+// dispare cada hora: el plan Hobby de Vercel solo permite crons diarios.
+//
+// SEGURIDAD: secreto comparado en tiempo constante y cliente ADMIN de Supabase
+// para todo lo que escribe (lib/cronAuth). Las lecturas masivas van por los
+// helpers de lib/db, que hoy usan la anon key sin RLS.
 
 import {
   dbGetTeachers, dbGetStudents, dbGetAssignments, dbGetClassJoinLogs, dbGetClassRecords,
   dbGetClassTranscripts, dbGetFinanceRates, dbGetFinancePayments, dbGetManualApprovals,
   dbGetScoringEvents,
 } from '@/lib/db';
-import { supabase } from '@/lib/supabase';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { requireCronSecret, requireAdminClient } from '@/lib/cronAuth';
+import { notifyTranscriptDeadlines } from '@/lib/transcriptDeadlineNotifications';
 import { calculateTeacherFinance, rowHoursLabel, transcriptNeedsTeacher } from '@/lib/finance';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { fetchTeacher, sendDailyTranscriptReminder, type PendingTranscriptClass } from '@/lib/emailNotifications';
@@ -109,14 +122,10 @@ export async function GET(request: Request): Promise<Response> {
   // El endpoint manda correos, así que la protección no es opcional: sin
   // CRON_SECRET configurado no se ejecuta (mejor no hacer nada que quedar
   // abierto a que cualquiera dispare emails a todos los profesores).
-  const secret = process.env.CRON_SECRET;
-  if (!secret) {
-    console.error('[cron transcript-reminder] Falta CRON_SECRET en el entorno.');
-    return Response.json({ error: 'CRON_SECRET no configurado' }, { status: 500 });
-  }
-  if (request.headers.get('authorization') !== `Bearer ${secret}`) {
-    return Response.json({ error: 'No autorizado' }, { status: 401 });
-  }
+  const denied = requireCronSecret(request, 'cron transcript-reminder');
+  if (denied) return denied;
+  const { admin, error: sinAdmin } = requireAdminClient('cron transcript-reminder');
+  if (!admin) return sinAdmin;
 
   const url = new URL(request.url);
   // `date` (YYYY-MM-DD) para repasar un día concreto y `dry=1` para ver a quién
@@ -135,19 +144,22 @@ export async function GET(request: Request): Promise<Response> {
   }
 
   if (dryRun) {
+    // También lo que avisaría la campanita del plazo, sin crear nada.
+    const plazo = await notifyTranscriptDeadlines({ admin, dry: true }).catch(() => null);
     return Response.json({
       ok: true, dryRun: true, date: targetDate,
       teachers: pendientes.map(t => ({
         teacherName: t.teacherName,
         classes: t.classes.map(c => `${c.studentName}${c.hours ? ` ${c.hours}` : ''}`),
       })),
+      deadlines: plazo?.candidates.map(c => `${c.teacherName} · ${c.studentName} · ${c.date} ${c.hours} · ${c.kind}`) ?? 'error',
     });
   }
 
   let sent = 0, skipped = 0, failed = 0;
   for (const t of pendientes) {
     try {
-      const reserved = await claimToday(t, targetDate);
+      const reserved = await claimToday(admin, t, targetDate);
       if (!reserved) { skipped++; continue; }   // ya se le escribió hoy
 
       const teacher = await fetchTeacher(t.teacherId);
@@ -159,17 +171,30 @@ export async function GET(request: Request): Promise<Response> {
         failed++;
         // Se libera el día: el correo no salió, así que la próxima corrida (o un
         // disparo manual) tiene que poder intentarlo otra vez.
-        await releaseToday(t.teacherId, targetDate);
+        await releaseToday(admin, t.teacherId, targetDate);
       }
     } catch (err) {
       failed++;
       console.error(`[cron transcript-reminder] Fallo con ${t.teacherName}:`, err);
-      await releaseToday(t.teacherId, targetDate);
+      await releaseToday(admin, t.teacherId, targetDate);
     }
   }
 
   console.log(`[cron transcript-reminder] ${targetDate}: ${sent} enviado(s), ${skipped} ya avisado(s), ${failed} fallido(s).`);
-  return Response.json({ ok: true, date: targetDate, candidates: pendientes.length, sent, skipped, failed });
+
+  // Segunda tarea: campanita del plazo de 24 h (< 6 h y recién vencidas). Un
+  // fallo acá no invalida los correos ya enviados: se informa y se sigue.
+  let deadlines: { candidates: number; created: number; skipped: number; error?: string };
+  try {
+    const r = await notifyTranscriptDeadlines({ admin });
+    deadlines = { candidates: r.candidates.length, created: r.created, skipped: r.skipped };
+    console.log(`[cron transcript-reminder] plazo 24 h: ${r.candidates.length} clase(s), ${r.created} aviso(s) nuevo(s).`);
+  } catch (err) {
+    console.error('[cron transcript-reminder] Error en los avisos del plazo:', err);
+    deadlines = { candidates: 0, created: 0, skipped: 0, error: err instanceof Error ? err.message : String(err) };
+  }
+
+  return Response.json({ ok: true, date: targetDate, candidates: pendientes.length, sent, skipped, failed, deadlines });
 }
 
 /**
@@ -229,8 +254,8 @@ async function findPending(targetDate: string, monthYear: string, nowMs: number)
  * `false` = ya existía (ese profesor ya recibió el email hoy) o no se pudo
  * reservar, y en ese caso NO se envía: ante la duda, mejor callado que duplicado.
  */
-async function claimToday(t: TeacherPending, date: string): Promise<boolean> {
-  const { data, error } = await supabase
+async function claimToday(admin: SupabaseClient, t: TeacherPending, date: string): Promise<boolean> {
+  const { data, error } = await admin
     .from('daily_reminder_log')
     .upsert({
       id:            claimId(t.teacherId, date),
@@ -254,7 +279,7 @@ async function claimToday(t: TeacherPending, date: string): Promise<boolean> {
   return (data?.length ?? 0) > 0;
 }
 
-async function releaseToday(teacherId: string, date: string): Promise<void> {
-  const { error } = await supabase.from('daily_reminder_log').delete().eq('id', claimId(teacherId, date));
+async function releaseToday(admin: SupabaseClient, teacherId: string, date: string): Promise<void> {
+  const { error } = await admin.from('daily_reminder_log').delete().eq('id', claimId(teacherId, date));
   if (error) console.error('[cron transcript-reminder] No se pudo liberar la reserva:', error);
 }
