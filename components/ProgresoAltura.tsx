@@ -18,7 +18,7 @@
 
 import { useEffect, useRef } from 'react';
 
-const ORIGENES_PADRE = ['https://drcacademy.com', 'https://www.drcacademy.com'];
+export const ORIGENES_PADRE = ['https://drcacademy.com', 'https://www.drcacademy.com'];
 export const ALTURA_MESSAGE_TYPE = 'drc-progreso-height';
 
 export function ProgresoAltura() {

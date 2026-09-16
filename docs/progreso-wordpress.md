@@ -253,3 +253,136 @@ funciona:
 - comprobá que `DRC_PROGRESO_URL` **no** lleva barra al final ni `http://` en vez de
   `https://`: el origen tiene que coincidir exactamente con el del `iframe`;
 - comprobá en la consola del navegador que llegan mensajes `drc-progreso-height`.
+
+
+---
+
+## 6. El botón «Amplía tu plan» lleva al cambio de plan de WooCommerce
+
+Dentro de la ficha hay un botón **«Amplía tu plan →»**. Tiene que llevar al alumno a la
+**misma URL** que el botón nativo «Aumentar o Disminuir Plan» de la pestaña *Suscripción*
+(`/producto/…/?switch-subscription={id}&item={item}&_wcsnonce={nonce}`), y en la **ventana
+principal**, no dentro del recuadro.
+
+Esa URL lleva un *nonce* que **solo WordPress puede generar** para el usuario logueado, así
+que el software de gestión no la construye. Lo que hace el botón, dentro del iframe, es
+pedírsela al padre por `postMessage` (`{ type: 'drc:ampliar-plan' }`), y este snippet es el
+que la calcula y navega. Fuera del iframe (la ficha abierta a pelo, o `/progreso/{token}`)
+el botón es un enlace normal a la lista de suscripciones.
+
+**Red de seguridad:** el snippet contesta `drc:ampliar-plan-ok` justo antes de navegar. Si
+la ficha no recibe esa respuesta en 1,2 s (snippet sin instalar, o desactivado), lleva la
+ventana principal a `/mi-cuenta/subscriptions/` por su cuenta: el botón nunca queda muerto.
+
+### El snippet
+
+Plugin **Code Snippets** → *Add New* → pegar esto → *Run snippet everywhere* → *Save and
+Activate*. Es **independiente** del snippet de la ficha (sección 3): no toca su `<iframe>` ni
+su listener de altura; añade un segundo listener de `message` en el pie de la página.
+
+```php
+<?php
+/**
+ * «Amplía tu plan» (dentro de la ficha de progreso) → cambio de plan de WooCommerce
+ * Subscriptions, en la ventana principal.
+ *
+ * Reutiliza DRC_PROGRESO_URL de wp-config.php (sección 2) como origen permitido.
+ */
+add_action( 'wp_footer', 'drc_ampliar_plan_listener', 20 );
+
+function drc_ampliar_plan_listener() {
+
+	// Solo en Mi cuenta y con usuario logueado. En el resto de la web no se imprime nada.
+	if ( ! is_user_logged_in() || ! function_exists( 'is_account_page' ) || ! is_account_page() ) {
+		return;
+	}
+
+	// Destino de reserva: la lista de suscripciones. Vale aunque falte el plugin.
+	$destino = function_exists( 'wc_get_account_endpoint_url' )
+		? wc_get_account_endpoint_url( 'subscriptions' )
+		: home_url( '/mi-cuenta/subscriptions/' );
+
+	// La primera suscripción activa (o en espera, si no hay activa) con un item que el
+	// usuario pueda cambiar: la misma comprobación y la misma URL que usa el botón
+	// «Aumentar o Disminuir Plan» de la pestaña Suscripción.
+	if ( class_exists( 'WC_Subscriptions_Switcher' ) && function_exists( 'wcs_get_users_subscriptions' ) ) {
+		$suscripciones = wcs_get_users_subscriptions( get_current_user_id() );
+
+		foreach ( array( 'active', 'on-hold' ) as $estado ) {
+			foreach ( $suscripciones as $suscripcion ) {
+				if ( ! $suscripcion->has_status( $estado ) ) {
+					continue;
+				}
+				foreach ( $suscripcion->get_items() as $item_id => $item ) {
+					if ( WC_Subscriptions_Switcher::can_item_be_switched_by_user( $item, $suscripcion ) ) {
+						$destino = WC_Subscriptions_Switcher::get_switch_url( $item_id, $item, $suscripcion );
+						break 3;
+					}
+				}
+			}
+		}
+	}
+
+	// De aquí, y solo de aquí, aceptamos el mensaje. Mismo origen que el iframe.
+	$origen = defined( 'DRC_PROGRESO_URL' )
+		? rtrim( DRC_PROGRESO_URL, '/' )
+		: 'https://academy-scheduler-aqpt.vercel.app';
+	?>
+	<script>
+	( function () {
+		var SWITCH_URL = <?php echo wp_json_encode( $destino ); ?>;
+		var origenPermitido = <?php echo wp_json_encode( $origen ); ?>;
+
+		window.addEventListener( 'message', function ( event ) {
+			// Solo mensajes de la ficha de progreso. Sin esta comprobación, cualquier
+			// otra web abierta podría mandar al usuario a donde quisiera.
+			if ( event.origin !== origenPermitido ) { return; }
+
+			var data = event.data;
+			if ( ! data || data.type !== 'drc:ampliar-plan' ) { return; }
+
+			// Avisar a la ficha de que nos hacemos cargo (así no usa su reserva) y
+			// llevar la VENTANA PRINCIPAL al cambio de plan. Es una navegación
+			// directa, no un clic en a.wcs-switch-link: el modal de advertencia
+			// (#drc-switch-confirmar) que intercepta ese enlace no se dispara.
+			if ( event.source && typeof event.source.postMessage === 'function' ) {
+				try { event.source.postMessage( { type: 'drc:ampliar-plan-ok' }, event.origin ); } catch ( e ) {}
+			}
+			window.location.href = SWITCH_URL;
+		}, false );
+	} )();
+	</script>
+	<?php
+}
+```
+
+### Qué hace, en orden
+
+1. Fuera de Mi cuenta, o sin usuario logueado, no imprime nada.
+2. Calcula el destino de reserva (`/mi-cuenta/subscriptions/`).
+3. Recorre las suscripciones del usuario —primero las activas, luego las en espera— y se
+   queda con el primer item que `can_item_be_switched_by_user` deje cambiar; su URL sale
+   de `get_switch_url`, que es exactamente la del botón «Aumentar o Disminuir Plan».
+4. Imprime un `<script>` que escucha `message`, comprueba el origen, y ante
+   `drc:ampliar-plan` contesta `drc:ampliar-plan-ok` y navega a esa URL.
+
+### Cómo probarlo
+
+Con un alumno de prueba logueado en drcacademy.com:
+
+1. Abrí `/mi-cuenta/view-subscription/{id}/` y copiá el `href` del botón «Aumentar o
+   Disminuir Plan» (`a.wcs-switch-link`). Apuntá `switch-subscription` e `item`.
+2. Volvé a `/mi-cuenta/`, abrí la consola del navegador y pulsá «Amplía tu plan →» dentro
+   de la ficha.
+3. La **ventana principal** (no el recuadro) tiene que cargar `/producto/…/?switch-subscription=…&item=…&_wcsnonce=…`
+   con el **mismo** `switch-subscription` y el mismo `item` del paso 1. El nonce puede
+   cambiar de un día a otro: es normal.
+4. El modal `#drc-switch-confirmar` **no** debe aparecer: no se ha hecho clic en
+   `a.wcs-switch-link`.
+5. Si en vez de eso acabás en `/mi-cuenta/subscriptions/`: o el snippet no está activo
+   (la ficha usó su reserva al no recibir respuesta), o el alumno no tiene ninguna
+   suscripción activa/en espera con un item cambiable (el snippet usó la suya). Para
+   distinguirlo, en la consola de `/mi-cuenta/` ejecutá
+   `window.postMessage({type:'drc:ampliar-plan'}, location.origin)`: no debe pasar nada
+   (el origen no es el de la ficha), y `document.documentElement.innerHTML.includes('drc:ampliar-plan')`
+   tiene que dar `true` si el snippet está impreso.
