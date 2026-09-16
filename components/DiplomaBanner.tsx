@@ -1,42 +1,58 @@
 'use client';
 
-// ── La barra del diploma en la ficha de progreso ─────────────────────────────
+// ── El banner del diploma en la ficha de progreso ────────────────────────────
 //
-// Es el banner del diploma del LMS (components/BannerDiploma.tsx allí), portado
-// al sistema de estilos de la ficha (clases pg-*, hoja inline, sin Tailwind).
-// Mismo dibujo: una línea con la cifra y el recuento, y debajo un carril de
-// 12 px con el relleno en verde de marca y la punta clara.
+// Es el diploma del LMS (components/BannerDiploma.tsx allí) contado en la ficha,
+// portado al sistema de estilos de aquí (clases pg-*, hoja inline, sin Tailwind).
+// Ya no es una barra suelta: es un banner compacto de tres renglones, con un
+// rótulo verde arriba al estilo de los de la ficha, la cifra de protagonista y
+// el carril fino debajo.
 //
-// ES UNA TARJETA MÁS (`pg-card`), entre la escalera de niveles y el banner de
-// ritmo: mismo fondo, borde, radio y padding que sus vecinas, y la separación la
-// pone el `gap` de `.pg-main` (por eso no lleva margen propio). Un poco más ancha
-// que las otras donde hay margen lateral para ello, para que resalte.
+// ES UNA TARJETA MÁS (`pg-card`), entre la caja "Tu nivel" y el banner de ritmo:
+// mismo fondo, borde y radio que sus vecinas, y la separación la pone el `gap`
+// de `.pg-main` (por eso no lleva margen propio). Un poco más ancha que las
+// otras donde hay margen lateral para ello, para que resalte; y con menos aire
+// arriba y abajo que ellas, que es un bloque de tres renglones y no una sección.
 //
 // LLEGA TARDE Y NO PUEDE MOVER NADA DE LO DE ABAJO. El dato lo da el LMS
 // (lib/lmsDiploma.ts), que tarda hasta 5-6 s en frío, así que la ficha se pinta
 // entera sin él y esta tarjeta se rellena después. Para que el banner de ritmo
 // no se desplace, el hueco queda reservado desde el primer render con la MISMA
-// altura que tendrá la tarjeta (`min-height` del contenido, igual en los
-// cuatro estados), con un esqueleto tenue dentro. Si no hay nada que enseñar
-// —sin curso, o el LMS no contestó— la tarjeta entera se cierra con una
-// transición (altura, padding, borde y el hueco del gap) y desaparece: no queda
-// una caja blanca vacía.
+// altura que tendrá la tarjeta (`min-height` del contenido = la altura del
+// estado más alto; los tres estados están medidos para dar exactamente esa
+// altura), con un esqueleto tenue dentro. Si no hay nada que enseñar —sin
+// curso, o el LMS no contestó— la tarjeta entera se cierra con una transición
+// (altura, padding, borde y el hueco del gap) y desaparece: no queda una caja
+// blanca vacía.
 //
 // Va DENTRO de `.pg-page` (es hijo de `.pg-main`): así la medición de altura
 // para el iframe de Mi cuenta (components/ProgresoAltura.tsx) lo incluye, y
 // su ResizeObserver avisa al padre cuando el bloque cambia.
 //
-// UN ESTADO DISTINTO AL LMS: "en curso con cero lecciones". El LMS enseña la
-// barra vacía y "0 de 187"; aquí eso no invita a nada, así que se cambia por
-// una frase y un enlace al LMS en pestaña nueva (la ficha vive embebida en Mi
-// cuenta y no hay que sacar al alumno del iframe).
+// LOS TRES ESTADOS QUE SE PINTAN:
+//   · en curso  → "TU CAMINO AL DIPLOMA", la cifra de lecciones restantes en
+//                 grande, "N de M" a la derecha, y el carril con el relleno;
+//   · sin empezar (en curso con cero lecciones; el LMS enseña la barra vacía y
+//                 "0 de 187", que no invita a nada) → "TU CURSO TE ESPERA", una
+//                 frase y un enlace al LMS en PESTAÑA NUEVA: la ficha vive
+//                 embebida en Mi cuenta y no hay que sacar al alumno del iframe.
+//                 Sin carril y sin contador. El enlace es un botón secundario a
+//                 propósito: el CTA principal de la página sigue siendo el
+//                 "Amplía tu plan" del banner de abajo, y no compiten;
+//   · conseguido → "DIPLOMA CONSEGUIDO", el carril lleno con el sello ✓ y
+//                 "M de M" a la derecha. Sin cifra de restantes.
+//
+// SIEMPRE "LECCIONES", NUNCA "CLASES". La caja de "Tu nivel" cuenta CLASES con
+// el profesor ("18 clases hechas", "Clase 30, próximo hito"); esto cuenta
+// lecciones del LMS, que son otra cosa. La palabra es la única pista que tiene
+// el alumno para no mezclar los dos números.
 //
 // Textos en español de España con tuteo, como el resto de la ficha.
 
 import { use, useEffect, useState } from 'react';
 import type { Diploma } from '@/lib/diplomaTypes';
 
-/** A dónde lleva "Empieza ahora": el inicio del LMS, que resuelve la sesión. */
+/** A dónde lleva "Ir a la plataforma": el inicio del LMS, que resuelve la sesión. */
 export const LMS_PUBLIC_URL = 'https://drc-lms.vercel.app';
 
 /** 'cargando' mientras se espera al LMS; null cuando no hay nada que enseñar. */
@@ -45,16 +61,20 @@ export type DiplomaEstadoSlot = Diploma | null | 'cargando';
 // ─── Textos ──────────────────────────────────────────────────────────────────
 
 const T = {
-  tuDiploma: 'Tu diploma',
+  // En curso
+  caminoAlDiploma: 'Tu camino al diploma',
   leccionesParaTuDiploma: (n: number) => (n === 1 ? 'lección para tu diploma' : 'lecciones para tu diploma'),
   progreso: (hechas: number, total: number) => `${hechas} de ${total}`,
   faltan: (restantes: number, total: number) =>
     `Te ${restantes === 1 ? 'falta' : 'faltan'} ${restantes} de ${total} lecciones para tu diploma`,
-  cursoCompletado: 'Curso completado',
+  // Sin empezar
+  teEspera: 'Tu curso te espera',
+  comienza: 'Comienza ahora el camino hacia tu diploma.',
+  irALaPlataforma: 'Ir a la plataforma →',
+  // Conseguido
   diplomaConseguido: 'Diploma conseguido',
-  teEspera: 'Tu curso te espera:',
-  lecciones: (n: number) => `${n} ${n === 1 ? 'lección' : 'lecciones'}`,
-  empieza: 'Empieza ahora →',
+  todasCompletadas: 'Todas las lecciones completadas.',
+  cursoCompletado: 'Curso completado',
 };
 
 // ─── El hueco: reservado, con contenido, o cerrándose ────────────────────────
@@ -83,7 +103,7 @@ export function DiplomaSlot({ diploma }: { diploma: DiplomaEstadoSlot }) {
   if (vacio) return <div className={clase} aria-hidden><div className="pg-diploma-in" /></div>;
   if (diploma === 'cargando') return <div className={clase} aria-hidden><div className="pg-diploma-in"><Esqueleto /></div></div>;
   return (
-    <section className={clase} aria-label={T.tuDiploma}>
+    <section className={clase} aria-label={tituloDe(diploma)}>
       <div className="pg-diploma-in pg-diploma-llega"><DiplomaBanner diploma={diploma} /></div>
     </section>
   );
@@ -127,11 +147,9 @@ export function DiplomaBanner({ diploma }: { diploma: Diploma }) {
   if (diploma.estado === 'conseguido') {
     return (
       <>
-        <div className="pg-diploma-linea">
-          <p className="pg-diploma-texto">
-            <IconoDiploma conseguido />
-            <span className="pg-diploma-hecho">{T.diplomaConseguido}</span>
-          </p>
+        <p className="pg-diploma-titulo">{T.diplomaConseguido}</p>
+        <div className="pg-diploma-fila pg-diploma-fila-centrada">
+          <p className="pg-diploma-texto"><span className="pg-diploma-desc">{T.todasCompletadas}</span></p>
           <span className="pg-diploma-cuenta">{T.progreso(diploma.total, diploma.total)}</span>
         </div>
         <Barra relleno={100} descripcion={T.cursoCompletado} conseguido />
@@ -139,17 +157,13 @@ export function DiplomaBanner({ diploma }: { diploma: Diploma }) {
     );
   }
 
-  // En curso sin empezar: una invitación breve en vez de una barra vacía.
+  // En curso sin empezar: una invitación y el enlace, en vez de una barra vacía.
   if (diploma.completadas === 0) {
     return (
       <>
-        <div className="pg-diploma-linea pg-diploma-linea-cero">
-          <p className="pg-diploma-texto">
-            <IconoDiploma />
-            <span>{T.teEspera} <span className="pg-diploma-cifra">{T.lecciones(diploma.total)}</span></span>
-          </p>
-        </div>
-        <a className="pg-diploma-cta" href={LMS_PUBLIC_URL} target="_blank" rel="noopener">{T.empieza}</a>
+        <p className="pg-diploma-titulo">{T.teEspera}</p>
+        <p className="pg-diploma-frase">{T.comienza}</p>
+        <a className="pg-diploma-cta" href={LMS_PUBLIC_URL} target="_blank" rel="noopener">{T.irALaPlataforma}</a>
       </>
     );
   }
@@ -158,16 +172,23 @@ export function DiplomaBanner({ diploma }: { diploma: Diploma }) {
   const relleno = diploma.total > 0 ? Math.round((hechas / diploma.total) * 100) : 0;
   return (
     <>
-      <div className="pg-diploma-linea">
+      <p className="pg-diploma-titulo">{T.caminoAlDiploma}</p>
+      <div className="pg-diploma-fila">
         <p className="pg-diploma-texto">
-          <IconoDiploma />
-          <span><span className="pg-diploma-cifra">{diploma.restantes}</span> {T.leccionesParaTuDiploma(diploma.restantes)}</span>
+          <span className="pg-diploma-cifra">{diploma.restantes}</span>
+          <span className="pg-diploma-desc">{T.leccionesParaTuDiploma(diploma.restantes)}</span>
         </p>
         <span className="pg-diploma-cuenta">{T.progreso(hechas, diploma.total)}</span>
       </div>
       <Barra relleno={relleno} descripcion={T.faltan(diploma.restantes, diploma.total)} conseguido={false} />
     </>
   );
+}
+
+/** El rótulo que lleva la tarjeta en cada estado; es lo que anuncia el lector de pantalla. */
+function tituloDe(diploma: Diploma): string {
+  if (diploma.estado === 'conseguido') return T.diplomaConseguido;
+  return diploma.completadas === 0 ? T.teEspera : T.caminoAlDiploma;
 }
 
 /** El carril. El porcentaje solo se ve; el recuento de arriba es su escala. */
@@ -188,24 +209,14 @@ function Barra({ relleno, descripcion, conseguido }: { relleno: number; descripc
   );
 }
 
-/** Lo que se ve mientras se espera al LMS: la silueta del bloque, en tenue. */
+/** Lo que se ve mientras se espera al LMS: la silueta de los tres renglones, en tenue. */
 function Esqueleto() {
   return (
     <div className="pg-diploma-skel">
-      <div className="pg-diploma-skel-linea" />
+      <div className="pg-diploma-skel-titulo" />
+      <div className="pg-diploma-skel-cifra" />
       <div className="pg-diploma-skel-barra" />
     </div>
-  );
-}
-
-/** El pergamino del LMS: la hoja con su rollo a la izquierda. */
-function IconoDiploma({ conseguido = false }: { conseguido?: boolean }) {
-  return (
-    <svg aria-hidden viewBox="0 0 20 20" className="pg-diploma-icono" fill="none" stroke="#14722A" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M5.6 4.2h8.6a1.9 1.9 0 0 1 1.9 1.9v7.8a1.9 1.9 0 0 1-1.9 1.9H5.6" />
-      <ellipse cx="5.6" cy="10" rx="1.8" ry="5.8" />
-      {conseguido ? <path d="M8.9 10.2l1.7 1.7 3.2-3.4" /> : <path d="M8.9 8.2h4.6M8.9 11.4h3" />}
-    </svg>
   );
 }
 
@@ -216,11 +227,18 @@ function IconoDiploma({ conseguido = false }: { conseguido?: boolean }) {
 // oscuro #14722A, tinta, gris medio, gris tenue); el carril (#E8EEE9) y la punta
 // (#6FD98A) van literales, como allí.
 //
-// LA ALTURA RESERVADA: línea de 18 px + 11 px + carril 12 px = 41 px de contenido.
-// El estado "sin empezar" son dos líneas de 18 px con 5 px entre ellas: los
-// mismos 41 px. El esqueleto mide igual. Con el padding de `pg-card` (24/20 px)
-// y el borde, la tarjeta mide lo mismo en los cuatro estados: nada de lo de
-// abajo se mueve.
+// LA ALTURA RESERVADA: 78 px de contenido, y los tres estados dan EXACTAMENTE
+// esos 78 px con alturas fijas por renglón (un renglón con dos cuerpos distintos
+// y align-items baseline crecía medio píxel y desbarataba la cuenta):
+//   · en curso / conseguido: rótulo 14 + 8 · fila de la cifra 32 + 12 · carril 12
+//   · sin empezar:           rótulo 14 + 8 · frase 22 + 6 · enlace 28
+// El esqueleto mide igual. Con el padding de la tarjeta (20 px arriba y abajo,
+// 16 en móvil) y el borde, la tarjeta mide lo mismo en los tres estados y
+// mientras carga: nada de lo de abajo se mueve.
+//
+// EL RÓTULO copia el `.pg-kicker` de la ficha ("TU NIVEL", "TU OBJETIVO":
+// 11 px, negrita, mayúsculas, espaciado) pero en verde oscuro, que a ese cuerpo
+// es el verde que pasa el contraste.
 //
 // EL CIERRE: se animan a cero la altura, el padding, el borde y, con un margen
 // negativo, el `gap` que `.pg-main` deja después de la tarjeta (18 px, 14 en
@@ -229,13 +247,15 @@ function IconoDiploma({ conseguido = false }: { conseguido?: boolean }) {
 export const DIPLOMA_CSS = `
 .pg-diploma {
   box-sizing: border-box;
-  max-height: 200px;
+  /* Menos aire vertical que las otras tarjetas (24 px): son tres renglones. */
+  padding: 20px 26px;
+  max-height: 220px;
   opacity: 1;
   overflow: hidden;
   transition: max-height 300ms ease, padding 300ms ease, border-width 300ms ease, margin 300ms ease, opacity 200ms ease;
 }
-.pg-diploma-in { min-height: 41px; }
-.pg-diploma-cerrando {
+.pg-diploma-in { min-height: 78px; }
+.pg-diploma.pg-diploma-cerrando {
   max-height: 0; opacity: 0;
   padding-top: 0; padding-bottom: 0; border-top-width: 0; border-bottom-width: 0;
   margin-bottom: -18px;
@@ -245,26 +265,41 @@ export const DIPLOMA_CSS = `
    dentro de Mi cuenta (.pg-embed) es cero, y ahí una tarjeta más ancha que la
    página se recorta. */
 @media (min-width: 721px) { .pg-diploma { margin-left: -12px; margin-right: -12px; } }
-@media (max-width: 720px) { .pg-diploma-cerrando { margin-bottom: -14px; } }
+@media (max-width: 720px) {
+  .pg-diploma { padding: 16px 18px; }
+  .pg-diploma.pg-diploma-cerrando { margin-bottom: -14px; }
+}
 .pg-embed .pg-diploma { margin-left: 0; margin-right: 0; }
 /* El contenido entra con un fundido; la tarjeta no se mueve. */
 .pg-diploma-llega { animation: pg-diploma-llega 220ms ease-out both; }
 @keyframes pg-diploma-llega { from { opacity: 0; } to { opacity: 1; } }
 
-/* Altura FIJA de 18 px: con align-items baseline y dos cuerpos distintos la línea crecía
-   medio píxel y el bloque dejaba de medir lo reservado. */
-.pg-diploma-linea { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; height: 18px; margin-bottom: 11px; }
-.pg-diploma-linea-cero { margin-bottom: 5px; }
-.pg-diploma-texto {
-  display: flex; align-items: center; gap: 10px; min-width: 0; margin: 0;
-  font-size: 14.5px; line-height: 1.25; color: var(--pg-muted);
+/* Renglón 1: el rótulo. */
+.pg-diploma-titulo {
+  height: 14px; line-height: 14px; margin: 0 0 8px;
+  font-size: 11px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--pg-green-dark);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.pg-diploma-texto > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pg-diploma-icono { width: 16px; height: 16px; flex-shrink: 0; }
-.pg-diploma-cifra { font-weight: 700; color: var(--pg-ink); }
-.pg-diploma-hecho { font-weight: 700; color: var(--pg-green-dark); }
+
+/* Renglón 2 (en curso y conseguido): la cifra a la izquierda, el recuento al
+   extremo derecho. Altura FIJA. */
+.pg-diploma-fila { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; height: 32px; margin-bottom: 12px; }
+/* Conseguido: sin cifra grande, la frase se centra en el renglón para no quedar
+   pegada al rótulo con aire debajo. */
+.pg-diploma-fila-centrada { align-items: center; }
+.pg-diploma-texto { display: flex; align-items: baseline; gap: 7px; min-width: 0; margin: 0; }
+.pg-diploma-cifra {
+  flex-shrink: 0; font-size: 26px; font-weight: 700; letter-spacing: -0.03em; line-height: 1.1;
+  color: var(--pg-ink);
+}
+.pg-diploma-desc {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 15px; line-height: 1.25; color: var(--pg-muted);
+}
 .pg-diploma-cuenta { flex-shrink: 0; white-space: nowrap; font-size: 12.5px; line-height: 1; color: var(--pg-faint); }
 
+/* Renglón 3: el carril. */
 .pg-diploma-barra { position: relative; height: 12px; border-radius: 6px; background: #E8EEE9; }
 .pg-diploma-relleno { height: 100%; border-radius: 6px; background: linear-gradient(90deg, var(--pg-green) 0%, #37C25A 100%); }
 .pg-diploma-punta {
@@ -277,26 +312,41 @@ export const DIPLOMA_CSS = `
   display: grid; place-items: center; transform: translateY(-50%);
 }
 
-/* Sin empezar: la frase y, debajo, el enlace. 18 + 5 + 18 = los mismos 41 px.
-   En bloque, no inline: un inline-block arrastraba el line box del padre. */
-.pg-diploma-cta {
-  /* Sangría = icono (16) + hueco (10): el enlace arranca donde arranca la frase. */
-  display: block; width: fit-content; height: 18px; margin-left: 26px; font-size: 13.5px; line-height: 18px; font-weight: 600;
-  color: var(--pg-green-dark); text-decoration: none;
+/* Sin empezar: la frase y, debajo, el enlace. 22 + 6 + 28 = los mismos 56 px
+   que ocupan la fila de la cifra y el carril. */
+.pg-diploma-frase {
+  height: 22px; line-height: 22px; margin: 0 0 6px;
+  font-size: 15px; color: var(--pg-ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.pg-diploma-cta:hover { text-decoration: underline; }
+/* Botón secundario: píldora con borde, sin relleno ni sombra. Discreto a
+   propósito: el "Amplía tu plan" verde macizo de abajo es el CTA de la página
+   y este no le compite. En bloque, no inline: un inline-block arrastraba el
+   line box del padre. */
+.pg-diploma-cta {
+  display: flex; align-items: center; width: fit-content; box-sizing: border-box;
+  height: 28px; padding: 0 13px; border-radius: 999px;
+  border: 1.5px solid #B7DCC0; background: transparent;
+  font-size: 13px; line-height: 1; font-weight: 600; color: var(--pg-green-dark);
+  text-decoration: none; white-space: nowrap;
+  transition: background 0.16s ease, border-color 0.16s ease;
+}
+.pg-diploma-cta:hover { background: var(--pg-green-tint); border-color: #8FC99E; }
+.pg-diploma-cta:focus-visible { outline: 2px solid var(--pg-green); outline-offset: 2px; }
 
-/* El esqueleto: la silueta de la línea y del carril, en tenue. */
-/* 4 + 10 + 15 + 12 = 41 px. Padding y no margen arriba: un margen se escapaba
-   del esqueleto y el hueco medía 45. */
-.pg-diploma-skel { height: 41px; padding-top: 4px; box-sizing: border-box; }
-.pg-diploma-skel-linea { width: 46%; max-width: 240px; height: 10px; border-radius: 5px; margin: 0 0 15px; background: var(--pg-grey-tint); }
+/* El esqueleto: la silueta de los tres renglones, en tenue.
+   2 + 10 + 14 + 24 + 16 + 12 = 78 px. Padding y no margen arriba: un margen se
+   escapaba del esqueleto y el hueco medía de más. */
+.pg-diploma-skel { height: 78px; padding-top: 2px; box-sizing: border-box; }
+.pg-diploma-skel-titulo { width: 130px; height: 10px; border-radius: 5px; margin: 0 0 14px; background: var(--pg-grey-tint); }
+.pg-diploma-skel-cifra { width: 52%; max-width: 260px; height: 24px; border-radius: 6px; margin: 0 0 16px; background: var(--pg-grey-tint); }
 .pg-diploma-skel-barra { height: 12px; border-radius: 6px; background: var(--pg-grey-tint); }
-.pg-diploma-skel-linea, .pg-diploma-skel-barra { animation: pg-diploma-pulso 1.6s ease-in-out infinite; }
+.pg-diploma-skel-titulo, .pg-diploma-skel-cifra, .pg-diploma-skel-barra { animation: pg-diploma-pulso 1.6s ease-in-out infinite; }
 @keyframes pg-diploma-pulso { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
 
 @media (prefers-reduced-motion: reduce) {
   .pg-diploma { transition: none; }
-  .pg-diploma-llega, .pg-diploma-skel-linea, .pg-diploma-skel-barra { animation: none; }
+  .pg-diploma-cta { transition: none; }
+  .pg-diploma-llega, .pg-diploma-skel-titulo, .pg-diploma-skel-cifra, .pg-diploma-skel-barra { animation: none; }
 }
 `;
