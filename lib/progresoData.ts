@@ -29,13 +29,18 @@ export interface StudentLite {
 /** Solo esas dos. Ningún dato personal más del que la ficha ya muestra. */
 export const STUDENT_COLS = 'plan, product_name';
 
-/** Lo poco que hace falta de `assignments`: horas del plan y textos del objetivo. */
+/**
+ * Lo poco que hace falta de `assignments`: horas del plan, textos del objetivo y
+ * el día en que empezó con el profesor (de ahí sale la fecha del diploma).
+ */
 export interface AssignmentLite {
   weekly_hours: number | null;
   plan: string | null;
   objetivo: string | null;
   student_level: string | null;
   slots: Array<{ day: string; hour: string }> | null;
+  /** `YYYY-MM-DD` (la columna fue `text`: puede traer cualquier cosa, lib/diplomaPlazo la valida). */
+  start_date: string | null;
 }
 
 /**
@@ -64,7 +69,7 @@ export const ANALYSIS_COLS =
  * `status` NO se pide: la columna puede no estar migrada (ver
  * supabase-assignment-status.sql) y pedirla rompería la consulta con un 42703.
  */
-export const ASSIGNMENT_COLS = 'weekly_hours, plan, objetivo, student_level, slots';
+export const ASSIGNMENT_COLS = 'weekly_hours, plan, objetivo, student_level, slots, start_date';
 
 /** ¿El error es "esa columna no existe"? Entonces se reintenta sin ella. */
 export function isMissingColumnError(error: { code?: string } | null | undefined): boolean {
@@ -80,6 +85,21 @@ export function pickAssignment(rows: AssignmentLite[]): AssignmentLite | null {
   if (rows.length === 0) return null;
   const score = (a: AssignmentLite) => Math.max(a.slots?.length ?? 0, a.weekly_hours ?? 0);
   return rows.reduce((best, r) => (score(r) > score(best) ? r : best), rows[0]);
+}
+
+/**
+ * El día en que el alumno empezó: la MENOR `start_date` de todas sus assignments,
+ * no la de la que gana en `pickAssignment`. Un cambio de profesor crea otra fila
+ * con otra fecha, y el diploma se cuenta desde que empezó el curso, no desde el
+ * último profesor. Es además la misma regla que usa el LMS para el drip
+ * (`vista_perfil_alumno.fecha_inicio`), así los dos relojes coinciden.
+ */
+export function earliestStartDate(rows: AssignmentLite[]): string | null {
+  const fechas = rows
+    .map(r => (typeof r.start_date === 'string' ? r.start_date.trim() : ''))
+    .filter(f => /^\d{4}-\d{2}-\d{2}/.test(f))
+    .sort();
+  return fechas[0] ?? null;
 }
 
 /** Horas semanales del plan. Las celdas del calendario mandan sobre el número guardado. */

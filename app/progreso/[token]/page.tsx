@@ -18,7 +18,7 @@ import { ProgresoFicha, ProgresoStyles } from '@/components/ProgresoFicha';
 import { DiplomaFromToken } from '@/components/DiplomaBanner';
 import {
   PROFILE_COLS, PROFILE_COLS_EXTRA, ANALYSIS_COLS, ASSIGNMENT_COLS, STUDENT_COLS,
-  isMissingColumnError, pickAssignment, type AssignmentLite, type StudentLite,
+  isMissingColumnError, pickAssignment, earliestStartDate, type AssignmentLite, type StudentLite,
 } from '@/lib/progresoData';
 import type { ClassAnalysisRow, StudentProfileRow } from '@/lib/aiTypes';
 
@@ -33,7 +33,7 @@ type LoadState =
   | { kind: 'loading' }
   | { kind: 'invalid' }
   | { kind: 'expired' }
-  | { kind: 'ready'; row: TokenRow; profile: StudentProfileRow | null; analyses: ClassAnalysisRow[]; assignment: AssignmentLite | null; student: StudentLite | null };
+  | { kind: 'ready'; row: TokenRow; profile: StudentProfileRow | null; analyses: ClassAnalysisRow[]; assignment: AssignmentLite | null; startDate: string | null; student: StudentLite | null };
 
 export default function ProgresoPage() {
   const params = useParams<{ token: string }>();
@@ -83,12 +83,14 @@ export default function ProgresoPage() {
       // sin esa columna: el alumno ve su progreso igual, con el nivel de antes.
       const pRes = isMissingColumnError(firstP.error) ? await profileQ(PROFILE_COLS) : firstP;
       if (cancelled) return;
+      const assignments = (asgRes.data ?? []) as unknown as AssignmentLite[];
       setState({
         kind: 'ready',
         row,
         profile: (pRes.data?.[0] ?? null) as unknown as StudentProfileRow | null,
         analyses: (aRes.data ?? []) as unknown as ClassAnalysisRow[],
-        assignment: pickAssignment((asgRes.data ?? []) as unknown as AssignmentLite[]),
+        assignment: pickAssignment(assignments),
+        startDate: earliestStartDate(assignments),
         student: ((stRes as { data: unknown[] | null }).data?.[0] ?? null) as StudentLite | null,
       });
     })();
@@ -137,7 +139,7 @@ export default function ProgresoPage() {
             // este mismo token (el secreto del LMS se queda en el servidor) y llega
             // después, sin frenar la ficha. Los tokens viejos que solo guardaron el
             // nombre no tienen cruce posible con el LMS: sin barra ni hueco.
-            diplomaSlot={state.row.student_id ? <DiplomaFromToken token={token} /> : undefined}
+            diplomaSlot={state.row.student_id ? <DiplomaFromToken token={token} startDate={state.startDate} /> : undefined}
           />
         )}
       </main>

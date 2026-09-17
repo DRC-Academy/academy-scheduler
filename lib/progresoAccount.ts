@@ -26,7 +26,7 @@
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import {
   PROFILE_COLS, PROFILE_COLS_EXTRA, ANALYSIS_COLS, ASSIGNMENT_COLS,
-  STUDENT_COLS, isMissingColumnError, pickAssignment,
+  STUDENT_COLS, isMissingColumnError, pickAssignment, earliestStartDate,
   type AssignmentLite, type StudentLite,
 } from '@/lib/progresoData';
 import { normalizeProgresoEmail } from '@/lib/progresoSignature';
@@ -44,6 +44,8 @@ export interface ProgresoPayload {
   profile: StudentProfileRow | null;
   analyses: ClassAnalysisRow[];
   assignment: AssignmentLite | null;
+  /** El día en que empezó (la menor `start_date` de sus assignments): la cuenta atrás del diploma. */
+  startDate: string | null;
   /** `plan` y `product_name`: de ahí sale la meta cuando prepara un examen. */
   studentLite: StudentLite | null;
 }
@@ -133,11 +135,13 @@ export async function loadProgresoFor(student: ProgresoStudent): Promise<Progres
   // reintenta sin esa columna en vez de dejar la ficha vacía.
   const pRes = isMissingColumnError(firstP.error) ? await profileQ(PROFILE_COLS) : firstP;
 
+  const assignments = (asgRes.data ?? []) as unknown as AssignmentLite[];
   return {
     student,
     profile: (pRes.data?.[0] ?? null) as unknown as StudentProfileRow | null,
     analyses: (aRes.data ?? []) as unknown as ClassAnalysisRow[],
-    assignment: pickAssignment((asgRes.data ?? []) as unknown as AssignmentLite[]),
+    assignment: pickAssignment(assignments),
+    startDate: earliestStartDate(assignments),
     studentLite: (stRes.data?.[0] ?? null) as unknown as StudentLite | null,
   };
 }

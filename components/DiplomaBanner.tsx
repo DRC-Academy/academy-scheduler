@@ -2,11 +2,18 @@
 
 // ── El banner del diploma en la ficha de progreso ────────────────────────────
 //
-// Es el diploma del LMS (components/BannerDiploma.tsx allí) contado en la ficha,
-// portado al sistema de estilos de aquí (clases pg-*, hoja inline, sin Tailwind).
-// Ya no es una barra suelta: es un banner compacto de tres renglones, con un
-// rótulo verde arriba al estilo de los de la ficha, la cifra de protagonista y
-// el carril fino debajo.
+// Es el diploma del LMS contado en la ficha, portado al sistema de estilos de
+// aquí (clases pg-*, hoja inline, sin Tailwind): un banner compacto de tres
+// renglones, con un rótulo verde arriba al estilo de los de la ficha y un
+// titular de protagonista.
+//
+// DESDE SEPTIEMBRE DE 2026 ES UNA CUENTA ATRÁS, NO UNA BARRA. El curso dura
+// seis meses desde el día en que el alumno empezó con su profesor
+// (`assignments.start_date`), y lo que se le enseña es cuánto le queda hasta
+// la fecha de su diploma. El cálculo entero vive en lib/diplomaPlazo (puro y
+// con tests): aquí solo se pinta lo que devuelve. Las lecciones que da el LMS
+// (lib/lmsDiploma) siguen contando: deciden si el diploma está conseguido, y
+// el "15 de 191 lecciones" queda en pequeño debajo del titular.
 //
 // ES UNA TARJETA MÁS (`pg-card`), entre la caja "Tu nivel" y el banner de ritmo:
 // mismo fondo, borde y radio que sus vecinas, y la separación la pone el `gap`
@@ -19,7 +26,7 @@
 // entera sin él y esta tarjeta se rellena después. Para que el banner de ritmo
 // no se desplace, el hueco queda reservado desde el primer render con la MISMA
 // altura que tendrá la tarjeta (`min-height` del contenido = la altura del
-// estado más alto; los tres estados están medidos para dar exactamente esa
+// estado más alto; todos los estados están medidos para dar exactamente esa
 // altura), con un esqueleto tenue dentro. Si no hay nada que enseñar —sin
 // curso, o el LMS no contestó— la tarjeta entera se cierra con una transición
 // (altura, padding, borde y el hueco del gap) y desaparece: no queda una caja
@@ -29,18 +36,30 @@
 // para el iframe de Mi cuenta (components/ProgresoAltura.tsx) lo incluye, y
 // su ResizeObserver avisa al padre cuando el bloque cambia.
 //
-// LOS TRES ESTADOS QUE SE PINTAN:
-//   · en curso  → "TU CAMINO AL DIPLOMA", la cifra de lecciones restantes en
-//                 grande, "N de M" a la derecha, y el carril con el relleno;
-//   · sin empezar (en curso con cero lecciones; el LMS enseña la barra vacía y
-//                 "0 de 187", que no invita a nada) → "TU CURSO TE ESPERA", una
-//                 frase y un enlace al LMS en PESTAÑA NUEVA: la ficha vive
-//                 embebida en Mi cuenta y no hay que sacar al alumno del iframe.
-//                 Sin carril y sin contador. El enlace es un botón secundario a
-//                 propósito: el CTA principal de la página sigue siendo el
-//                 "Amplía tu plan" del banner de abajo, y no compiten;
-//   · conseguido → "DIPLOMA CONSEGUIDO", el carril lleno con el sello ✓ y
-//                 "M de M" a la derecha. Sin cifra de restantes.
+// LOS ESTADOS QUE SE PINTAN, en este orden de precedencia:
+//   · conseguido (el LMS dice que están todas) → "DIPLOMA CONSEGUIDO", el
+//                 carril lleno con el sello ✓ y "M de M" a la derecha. Este es
+//                 el único sitio donde queda un carril: es un sello, no una
+//                 barra de progreso;
+//   · sin fecha de inicio (o una que no es una fecha) → el dibujo de lecciones
+//                 de siempre, para no dejar a nadie sin banner: "N lecciones
+//                 para tu diploma · h de M" con el carril, o, con cero
+//                 lecciones, "TU CURSO TE ESPERA" con la frase y el enlace;
+//   · plazo vencido (la fecha pasó y el curso no está completo) →
+//                 "TU DIPLOMA TE ESPERA", "Retoma tu curso y consigue tu
+//                 diploma." y el botón "Continuar mi curso →". SIN fecha ni
+//                 cuenta: es una invitación, no un reproche;
+//   · en plazo → "TU CAMINO AL DIPLOMA", el titular de la cuenta atrás ("Te
+//                 quedan 4 meses y 12 días" · "Te quedan 23 días" · "¡Última
+//                 semana! Te quedan 3 días" · "Tu diploma es hoy") y, en
+//                 pequeño debajo, "h de M lecciones". Quien tiene fecha pero
+//                 cero lecciones ve lo mismo, con "0 de M lecciones" y el
+//                 botón "Empezar mi curso →" a la derecha de ese renglón.
+//
+// LOS ENLACES ABREN EN PESTAÑA NUEVA: la ficha vive embebida en Mi cuenta y no
+// hay que sacar al alumno del iframe. Son botones secundarios a propósito: el
+// CTA principal de la página sigue siendo el "Amplía tu plan" del banner de
+// abajo, y no compiten.
 //
 // SIEMPRE "LECCIONES", NUNCA "CLASES". La caja de "Tu nivel" cuenta CLASES con
 // el profesor ("18 clases hechas", "Clase 30, próximo hito"); esto cuenta
@@ -51,8 +70,10 @@
 
 import { use, useEffect, useState } from 'react';
 import type { Diploma } from '@/lib/diplomaTypes';
+import { calcularPlazo, titularPlazo, type Plazo } from '@/lib/diplomaPlazo';
+import { madridToday } from '@/lib/subscriptionAccess';
 
-/** A dónde lleva "Ir a la plataforma": el inicio del LMS, que resuelve la sesión. */
+/** A dónde llevan los botones: el inicio del LMS, que resuelve la sesión. */
 export const LMS_PUBLIC_URL = 'https://drc-lms.vercel.app';
 
 /** 'cargando' mientras se espera al LMS; null cuando no hay nada que enseñar. */
@@ -61,13 +82,20 @@ export type DiplomaEstadoSlot = Diploma | null | 'cargando';
 // ─── Textos ──────────────────────────────────────────────────────────────────
 
 const T = {
-  // En curso
+  // En plazo (cuenta atrás). El titular lo redacta lib/diplomaPlazo.titularPlazo.
   caminoAlDiploma: 'Tu camino al diploma',
+  lecciones: (hechas: number, total: number) => `${hechas} de ${total} lecciones`,
+  empezarMiCurso: 'Empezar mi curso →',
+  // Plazo vencido
+  diplomaTeEspera: 'Tu diploma te espera',
+  retoma: 'Retoma tu curso y consigue tu diploma.',
+  continuarMiCurso: 'Continuar mi curso →',
+  // Sin fecha: el dibujo de lecciones
   leccionesParaTuDiploma: (n: number) => (n === 1 ? 'lección para tu diploma' : 'lecciones para tu diploma'),
   progreso: (hechas: number, total: number) => `${hechas} de ${total}`,
   faltan: (restantes: number, total: number) =>
     `Te ${restantes === 1 ? 'falta' : 'faltan'} ${restantes} de ${total} lecciones para tu diploma`,
-  // Sin empezar
+  // Sin fecha y sin empezar
   teEspera: 'Tu curso te espera',
   comienza: 'Comienza ahora el camino hacia tu diploma.',
   irALaPlataforma: 'Ir a la plataforma →',
@@ -79,12 +107,18 @@ const T = {
 
 // ─── El hueco: reservado, con contenido, o cerrándose ────────────────────────
 
+interface SlotProps {
+  diploma: DiplomaEstadoSlot;
+  /** `assignments.start_date` del alumno (la menor si tiene varias). Sin ella, el dibujo de lecciones. */
+  startDate?: string | null;
+}
+
 /**
  * El bloque con su hueco. Recibe el estado resuelto (o 'cargando') y decide
  * qué pintar. Cuando no hay nada que enseñar, se cierra solo: primero la
  * transición (`pg-diploma-cerrando`) y al terminar deja de existir.
  */
-export function DiplomaSlot({ diploma }: { diploma: DiplomaEstadoSlot }) {
+export function DiplomaSlot({ diploma, startDate = null }: SlotProps) {
   const vacio = diploma === null || (diploma !== 'cargando' && diploma.estado === 'sin-curso');
   const [fase, setFase] = useState<'abierto' | 'cerrando' | 'cerrado'>('abierto');
 
@@ -102,21 +136,23 @@ export function DiplomaSlot({ diploma }: { diploma: DiplomaEstadoSlot }) {
   const clase = `pg-card pg-diploma${fase === 'cerrando' ? ' pg-diploma-cerrando' : ''}`;
   if (vacio) return <div className={clase} aria-hidden><div className="pg-diploma-in" /></div>;
   if (diploma === 'cargando') return <div className={clase} aria-hidden><div className="pg-diploma-in"><Esqueleto /></div></div>;
+
+  const plazo = plazoDe(diploma, startDate);
   return (
-    <section className={clase} aria-label={tituloDe(diploma)}>
-      <div className="pg-diploma-in pg-diploma-llega"><DiplomaBanner diploma={diploma} /></div>
+    <section className={clase} aria-label={tituloDe(diploma, plazo)}>
+      <div className="pg-diploma-in pg-diploma-llega"><DiplomaBanner diploma={diploma} plazo={plazo} /></div>
     </section>
   );
 }
 
 /** Ficha embebida (/progreso-cuenta): el servidor pasa la promesa sin esperarla. */
-export function DiplomaFromPromise({ promise }: { promise: Promise<Diploma | null> }) {
+export function DiplomaFromPromise({ promise, startDate = null }: { promise: Promise<Diploma | null>; startDate?: string | null }) {
   const diploma = use(promise);
-  return <DiplomaSlot diploma={diploma} />;
+  return <DiplomaSlot diploma={diploma} startDate={startDate} />;
 }
 
 /** Ficha pública (/progreso/[token]): se pide a /api/progreso/diploma desde el navegador. */
-export function DiplomaFromToken({ token }: { token: string }) {
+export function DiplomaFromToken({ token, startDate = null }: { token: string; startDate?: string | null }) {
   const [diploma, setDiploma] = useState<DiplomaEstadoSlot>('cargando');
 
   useEffect(() => {
@@ -137,13 +173,24 @@ export function DiplomaFromToken({ token }: { token: string }) {
     return () => { cancelado = true; ctrl.abort(); clearTimeout(timer); };
   }, [token]);
 
-  return <DiplomaSlot diploma={diploma} />;
+  return <DiplomaSlot diploma={diploma} startDate={startDate} />;
 }
 
 // ─── El dibujo ───────────────────────────────────────────────────────────────
 
+/**
+ * El plazo que le toca a este diploma, o null cuando no hay cuenta atrás que
+ * pintar: sin fecha de inicio válida, o con el diploma ya conseguido (ahí la
+ * fecha no cambia nada). El "hoy" es el de Madrid, como todos los plazos de
+ * la academia: el mismo alumno ve el mismo número desde cualquier país.
+ */
+function plazoDe(diploma: Diploma, startDate: string | null): Plazo | null {
+  if (diploma.estado !== 'en-curso') return null;
+  return calcularPlazo(startDate, madridToday());
+}
+
 /** El banner en sí, ya con datos. `sin-curso` no llega aquí: lo filtra el slot. */
-export function DiplomaBanner({ diploma }: { diploma: Diploma }) {
+export function DiplomaBanner({ diploma, plazo }: { diploma: Diploma; plazo: Plazo | null }) {
   if (diploma.estado === 'conseguido') {
     return (
       <>
@@ -157,41 +204,69 @@ export function DiplomaBanner({ diploma }: { diploma: Diploma }) {
     );
   }
 
-  // En curso sin empezar: una invitación y el enlace, en vez de una barra vacía.
-  if (diploma.completadas === 0) {
+  const hechas = Math.min(diploma.completadas, diploma.total);
+
+  // Sin fecha de inicio no hay plazo: el dibujo de lecciones de siempre.
+  if (!plazo) {
+    if (hechas === 0) {
+      return (
+        <>
+          <p className="pg-diploma-titulo">{T.teEspera}</p>
+          <p className="pg-diploma-frase">{T.comienza}</p>
+          <a className="pg-diploma-cta" href={LMS_PUBLIC_URL} target="_blank" rel="noopener">{T.irALaPlataforma}</a>
+        </>
+      );
+    }
+    const relleno = diploma.total > 0 ? Math.round((hechas / diploma.total) * 100) : 0;
     return (
       <>
-        <p className="pg-diploma-titulo">{T.teEspera}</p>
-        <p className="pg-diploma-frase">{T.comienza}</p>
-        <a className="pg-diploma-cta" href={LMS_PUBLIC_URL} target="_blank" rel="noopener">{T.irALaPlataforma}</a>
+        <p className="pg-diploma-titulo">{T.caminoAlDiploma}</p>
+        <div className="pg-diploma-fila">
+          <p className="pg-diploma-texto">
+            <span className="pg-diploma-cifra">{diploma.restantes}</span>
+            <span className="pg-diploma-desc">{T.leccionesParaTuDiploma(diploma.restantes)}</span>
+          </p>
+          <span className="pg-diploma-cuenta">{T.progreso(hechas, diploma.total)}</span>
+        </div>
+        <Barra relleno={relleno} descripcion={T.faltan(diploma.restantes, diploma.total)} conseguido={false} />
       </>
     );
   }
 
-  const hechas = Math.min(diploma.completadas, diploma.total);
-  const relleno = diploma.total > 0 ? Math.round((hechas / diploma.total) * 100) : 0;
+  // La fecha pasó y el curso sigue abierto: una invitación, sin fecha ni cuenta.
+  if (plazo.fase === 'vencido') {
+    return (
+      <>
+        <p className="pg-diploma-titulo">{T.diplomaTeEspera}</p>
+        <p className="pg-diploma-frase">{T.retoma}</p>
+        <a className="pg-diploma-cta" href={LMS_PUBLIC_URL} target="_blank" rel="noopener">{T.continuarMiCurso}</a>
+      </>
+    );
+  }
+
+  // En plazo: la cuenta atrás y, debajo, las lecciones en pequeño.
   return (
     <>
       <p className="pg-diploma-titulo">{T.caminoAlDiploma}</p>
-      <div className="pg-diploma-fila">
-        <p className="pg-diploma-texto">
-          <span className="pg-diploma-cifra">{diploma.restantes}</span>
-          <span className="pg-diploma-desc">{T.leccionesParaTuDiploma(diploma.restantes)}</span>
-        </p>
-        <span className="pg-diploma-cuenta">{T.progreso(hechas, diploma.total)}</span>
+      <p className="pg-diploma-titular">{titularPlazo(plazo)}</p>
+      <div className="pg-diploma-pie">
+        <p className="pg-diploma-lecciones">{T.lecciones(hechas, diploma.total)}</p>
+        {hechas === 0 && (
+          <a className="pg-diploma-cta pg-diploma-cta-pie" href={LMS_PUBLIC_URL} target="_blank" rel="noopener">{T.empezarMiCurso}</a>
+        )}
       </div>
-      <Barra relleno={relleno} descripcion={T.faltan(diploma.restantes, diploma.total)} conseguido={false} />
     </>
   );
 }
 
 /** El rótulo que lleva la tarjeta en cada estado; es lo que anuncia el lector de pantalla. */
-function tituloDe(diploma: Diploma): string {
+function tituloDe(diploma: Diploma, plazo: Plazo | null): string {
   if (diploma.estado === 'conseguido') return T.diplomaConseguido;
-  return diploma.completadas === 0 ? T.teEspera : T.caminoAlDiploma;
+  if (!plazo) return diploma.completadas === 0 ? T.teEspera : T.caminoAlDiploma;
+  return plazo.fase === 'vencido' ? T.diplomaTeEspera : T.caminoAlDiploma;
 }
 
-/** El carril. El porcentaje solo se ve; el recuento de arriba es su escala. */
+/** El carril. Solo queda en "conseguido" (el sello) y en el dibujo sin fecha. */
 function Barra({ relleno, descripcion, conseguido }: { relleno: number; descripcion: string; conseguido: boolean }) {
   return (
     <div className="pg-diploma-barra" role="progressbar" aria-valuenow={relleno} aria-valuemin={0} aria-valuemax={100} aria-label={descripcion}>
@@ -227,19 +302,25 @@ function Esqueleto() {
 // oscuro #14722A, tinta, gris medio, gris tenue); el carril (#E8EEE9) y la punta
 // (#6FD98A) van literales, como allí.
 //
-// LA ALTURA RESERVADA: 78 px de contenido, y los tres estados dan EXACTAMENTE
+// LA ALTURA RESERVADA: 78 px de contenido, y TODOS los estados dan EXACTAMENTE
 // esos 78 px con alturas fijas por renglón (un renglón con dos cuerpos distintos
 // y align-items baseline crecía medio píxel y desbarataba la cuenta):
-//   · en curso / conseguido: rótulo 14 + 8 · fila de la cifra 32 + 12 · carril 12
-//   · sin empezar:           rótulo 14 + 8 · frase 22 + 6 · enlace 28
+//   · cuenta atrás:            rótulo 14 + 8 · titular 30 · pie 26
+//   · vencido / sin empezar:   rótulo 14 + 8 · frase 22 + 6 · botón 28
+//   · conseguido / sin fecha:  rótulo 14 + 8 · fila de la cifra 32 + 12 · carril 12
 // El esqueleto mide igual. Con el padding de la tarjeta (20 px arriba y abajo,
-// 16 en móvil) y el borde, la tarjeta mide lo mismo en los tres estados y
+// 16 en móvil) y el borde, la tarjeta mide lo mismo en todos los estados y
 // mientras carga: nada de lo de abajo se mueve.
 //
 // EL RÓTULO es el de los rótulos de la ficha ("TU NIVEL", "TU OBJETIVO") pero
 // en verde oscuro, que a ese cuerpo es el verde que pasa el contraste, y con los
 // números del rótulo de la ficha del LMS (11,5 px, espaciado 0.14em) para que
 // las dos pantallas sean idénticas.
+//
+// EL TITULAR de la cuenta atrás es una frase, no una cifra suelta, así que va
+// a un cuerpo menor que la cifra de antes (26 px): 22 px, y 19 en teléfonos
+// estrechos para que "¡Última semana! Te quedan 7 días", el más largo, quepa en
+// los 294 px de contenido de un móvil de 360 sin recortarse.
 //
 // EL CIERRE: se animan a cero la altura, el padding, el borde y, con un margen
 // negativo, el `gap` que `.pg-main` deja después de la tarjeta (18 px, 14 en
@@ -283,7 +364,26 @@ export const DIPLOMA_CSS = `
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
-/* Renglón 2 (en curso y conseguido): la cifra a la izquierda, el recuento al
+/* Renglón 2 (cuenta atrás): el titular. Altura FIJA. */
+.pg-diploma-titular {
+  height: 30px; line-height: 30px; margin: 0;
+  font-size: 22px; font-weight: 700; letter-spacing: -0.02em; color: var(--pg-ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* Renglón 3 (cuenta atrás): las lecciones en pequeño y, para quien no ha
+   empezado, el botón a la derecha. 30 + 26 = los mismos 56 px que ocupan la
+   fila de la cifra y el carril del dibujo sin fecha. */
+.pg-diploma-pie { display: flex; align-items: center; justify-content: space-between; gap: 12px; height: 26px; }
+.pg-diploma-lecciones {
+  min-width: 0; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: 12.5px; line-height: 1; color: var(--pg-faint);
+}
+/* El botón del pie, dos puntos más bajo que el de los otros estados para caber en
+   los 26 px del renglón. Selector compuesto: gana a .pg-diploma-cta esté donde esté. */
+.pg-diploma-cta.pg-diploma-cta-pie { height: 26px; padding: 0 12px; font-size: 12.5px; }
+@media (max-width: 380px) { .pg-diploma-titular { font-size: 19px; } }
+
+/* Renglón 2 (conseguido y sin fecha): la cifra a la izquierda, el recuento al
    extremo derecho. Altura FIJA. */
 .pg-diploma-fila { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; height: 32px; margin-bottom: 12px; }
 /* Conseguido: sin cifra grande, la frase se centra en el renglón para no quedar
@@ -309,7 +409,7 @@ export const DIPLOMA_CSS = `
   .pg-diploma-desc { font-size: 13.5px; }
 }
 
-/* Renglón 3: el carril. */
+/* Renglón 3 (conseguido y sin fecha): el carril. */
 .pg-diploma-barra { position: relative; height: 12px; border-radius: 6px; background: #E8EEE9; }
 .pg-diploma-relleno { height: 100%; border-radius: 6px; background: linear-gradient(90deg, var(--pg-green) 0%, #37C25A 100%); }
 .pg-diploma-punta {
@@ -322,8 +422,8 @@ export const DIPLOMA_CSS = `
   display: grid; place-items: center; transform: translateY(-50%);
 }
 
-/* Sin empezar: la frase y, debajo, el enlace. 22 + 6 + 28 = los mismos 56 px
-   que ocupan la fila de la cifra y el carril. */
+/* Vencido y sin empezar: la frase y, debajo, el botón. 22 + 6 + 28 = los mismos
+   56 px que ocupan la fila de la cifra y el carril. */
 .pg-diploma-frase {
   height: 22px; line-height: 22px; margin: 0 0 6px;
   font-size: 15px; color: var(--pg-ink);
@@ -334,7 +434,7 @@ export const DIPLOMA_CSS = `
    y este no le compite. En bloque, no inline: un inline-block arrastraba el
    line box del padre. */
 .pg-diploma-cta {
-  display: flex; align-items: center; width: fit-content; box-sizing: border-box;
+  display: flex; align-items: center; flex-shrink: 0; width: fit-content; box-sizing: border-box;
   height: 28px; padding: 0 13px; border-radius: 999px;
   border: 1.5px solid #B7DCC0; background: transparent;
   font-size: 13px; line-height: 1; font-weight: 600; color: var(--pg-green-dark);

@@ -199,7 +199,7 @@ export default async function ProgresoCuentaPage({ searchParams }: {
         student={payload.studentLite}
         diplomaSlot={
           <Suspense fallback={<DiplomaSlot diploma="cargando" />}>
-            <DiplomaFromPromise promise={diploma} />
+            <DiplomaFromPromise promise={diploma} startDate={payload.startDate} />
           </Suspense>
         }
       />
