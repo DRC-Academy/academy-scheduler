@@ -6,7 +6,7 @@
 // son las 17:00Z.
 import { describe, it, expect } from 'vitest';
 import {
-  getTranscriptStatus, findTranscriptFor, classEndEpoch, hoursLeftLabel, subjectToDeadline,
+  getTranscriptStatus, findTranscriptFor, classEndEpoch, hoursLeftLabel, countdownLabel, subjectToDeadline,
   transcriptDeadlineBadge, TRANSCRIPT_DEADLINE_START_DATE, TRANSCRIPT_WARN_HOURS,
   type ClassTranscriptRef, type TranscriptExclusions,
 } from '@/lib/transcriptDeadline';
@@ -206,5 +206,22 @@ describe('calculateTeacherFinance con el plazo', () => {
   it('las clases anteriores al 22/09/2026 nunca vencen', () => {
     const r = calc([log({ scheduledDate: '2026-09-10' })], [], madrid('2026-12-01', 12));
     expect(r.rows[0].status).toBe('a_revisar');
+  });
+});
+
+describe('countdownLabel (botón)', () => {
+  it('horas y minutos, redondeando hacia arriba el minuto', () => {
+    expect(countdownLabel(13.7)).toBe('13 h 42 min');
+    expect(countdownLabel(2)).toBe('2 h');
+    expect(countdownLabel(0.5)).toBe('30 min');
+    expect(countdownLabel(0.001)).toBe('1 min');
+    expect(countdownLabel(-1)).toBe('Vencido');
+    expect(countdownLabel(null)).toBe('');
+  });
+
+  it('el badge puede ir sin la cuenta atrás cuando el botón ya la lleva', () => {
+    const r = getTranscriptStatus({ date: '2026-09-23', startHour: '18:00', durationHours: 1, now: madrid('2026-09-23', 20) });
+    expect(transcriptDeadlineBadge(r).label).toBe('Falta el transcript · Quedan 23 h');
+    expect(transcriptDeadlineBadge(r, { countdown: false }).label).toBe('Falta el transcript');
   });
 });

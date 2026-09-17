@@ -1015,6 +1015,21 @@ body.driver-active .drc-modal-backdrop * { pointer-events: auto; }
 .mc-btn-ghost { border: 1px solid var(--mc-border); background: var(--mc-card); color: #3f423f; }
 .mc-btn-ghost:hover { background: var(--mc-page); }
 .mc-btn-ghost:disabled { color: var(--mc-t3); cursor: not-allowed; }
+/* Cuenta atrás del plazo dentro del botón "Añadir transcript": una pastilla
+   con los números tabulares para que no baile al cambiar el minuto. Por
+   debajo de 6 h el botón entero pasa a amarillo DRC. */
+.mc-btn-count {
+  display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 999px;
+  font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: 0.01em;
+  background: rgba(255,255,255,0.22); color: inherit;
+}
+.mc-btn-ghost .mc-btn-count { background: #f0f1ee; color: #3f423f; }
+.mc-btn.is-urgent.mc-btn-primary { background: #FFC400; color: #1a1c1a; }
+.mc-btn.is-urgent.mc-btn-primary:hover { background: #f0b800; }
+.mc-btn.is-urgent .mc-btn-count { background: rgba(0,0,0,0.10); color: #1a1c1a; }
+.mc-card.is-passed.needs-transcript .mc-btn.is-urgent.mc-btn-primary {
+  box-shadow: 0 0 0 3px rgba(255,196,0,0.28), 0 1px 2px rgba(16,24,16,0.10);
+}
 
 /* Badge de recuperación (amarillo DRC) junto al nombre del alumno */
 .mc-badge-recovery {

@@ -365,6 +365,20 @@ export function hoursLeftLabel(hoursLeft: number | null): string {
   return `${h === 1 ? 'Queda' : 'Quedan'} ${h} h`;
 }
 
+/**
+ * Cuenta atrás compacta para un BOTÓN: "13 h 42 min" · "45 min" · "Vencido".
+ * Sin verbo, porque va detrás de la acción ("Añadir transcript · 13 h 42 min").
+ */
+export function countdownLabel(hoursLeft: number | null): string {
+  if (hoursLeft == null) return '';
+  if (hoursLeft <= 0) return 'Vencido';
+  const totalMin = Math.max(1, Math.ceil(hoursLeft * 60));
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  if (h === 0) return `${m} min`;
+  return m === 0 ? `${h} h` : `${h} h ${m} min`;
+}
+
 /** "hasta el 23/09 a las 19:00" (hora de España). */
 export function deadlineLabel(deadlineAt: number | null): string {
   if (deadlineAt == null) return '';
@@ -397,8 +411,11 @@ export const EXPIRED_LABEL = 'Vencida — no validada';
  * transcriptStateBadge (que solo mira el texto) porque incluye la cuenta
  * regresiva y el vencido.
  */
-export function transcriptDeadlineBadge(r: TranscriptStatusResult):
-  { label: string; color: string; bg: string; dot: string; tone: 'ok' | 'review' | 'pending' | 'warn' | 'expired' | 'muted' } {
+export function transcriptDeadlineBadge(
+  r: TranscriptStatusResult,
+  /** `countdown: false` deja el texto sin las horas (cuando el botón de al lado ya las lleva). */
+  opts: { countdown?: boolean } = {},
+): { label: string; color: string; bg: string; dot: string; tone: 'ok' | 'review' | 'pending' | 'warn' | 'expired' | 'muted' } {
   switch (r.status) {
     case 'subido': {
       const b = transcriptStateBadge(r.transcriptState);
@@ -411,10 +428,10 @@ export function transcriptDeadlineBadge(r: TranscriptStatusResult):
     default: {
       const base = transcriptStateBadge(r.transcriptState);   // 'Falta el transcript' / 'Transcript rechazado'
       if (r.hoursLeft == null) return { ...base, tone: 'pending' };
-      const left = hoursLeftLabel(r.hoursLeft);
+      const label = opts.countdown === false ? base.label : `${base.label} · ${hoursLeftLabel(r.hoursLeft)}`;
       return r.urgent
-        ? { label: `${base.label} · ${left}`, color: '#8a6d00', bg: '#FFF4BF', dot: '#FFC400', tone: 'warn' }
-        : { label: `${base.label} · ${left}`, color: base.color, bg: base.bg, dot: base.dot, tone: 'pending' };
+        ? { label, color: '#8a6d00', bg: '#FFF4BF', dot: '#FFC400', tone: 'warn' }
+        : { label, color: base.color, bg: base.bg, dot: base.dot, tone: 'pending' };
     }
   }
 }

@@ -23,7 +23,7 @@ import { HelpTooltip } from '@/components/ui';
 import type { HelpTooltipKey } from '@/lib/help-tooltips';
 // Plazo de 24 h del transcript: cuenta regresiva en las pendientes y aviso de
 // vencida. La misma fuente que Mis clases, la ficha y Asistencias.
-import { hoursLeftLabel, deadlineLabel } from '@/lib/transcriptDeadline';
+import { hoursLeftLabel, deadlineLabel, countdownLabel } from '@/lib/transcriptDeadline';
 
 // Las etiquetas de ingresoBadge / classTypeBadge / subscriptionBadge vienen con
 // emoji desde lib/finance (fuente compartida con el panel de admin). Acá solo se
@@ -949,10 +949,18 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
                                     ) : canPaste ? (
                                       <button
                                         onClick={e => { e.stopPropagation(); openAddClass({ studentName: g.name, date: r.date, classType: r.classType }); }}
-                                        title="Pegá el transcript de esta clase para verificarla"
-                                        style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '7px 13px', borderRadius: 8, border: '1px solid rgba(224,145,47,0.45)', background: '#fdf3e7', color: '#9a6516', cursor: 'pointer', fontSize: 12.5, fontWeight: 700, fontFamily: 'inherit' }}
+                                        title={r.status === 'a_revisar' && r.deadline.hoursLeft != null ? `Te quedan ${countdownLabel(r.deadline.hoursLeft)} para subirlo` : 'Pegá el transcript de esta clase para verificarla'}
+                                        style={r.deadline.urgent
+                                          ? { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 13px', borderRadius: 8, border: '1px solid #FFC400', background: '#FFF4BF', color: '#8a6d00', cursor: 'pointer', fontSize: 12.5, fontWeight: 700, fontFamily: 'inherit' }
+                                          : { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 13px', borderRadius: 8, border: '1px solid rgba(224,145,47,0.45)', background: '#fdf3e7', color: '#9a6516', cursor: 'pointer', fontSize: 12.5, fontWeight: 700, fontFamily: 'inherit' }}
                                       >
                                         {r.transcriptState === 'rejected' ? '+ Subir el correcto' : '+ Añadir transcript'}
+                                        {/* Cuenta atrás del plazo (misma fuente que Mis clases). */}
+                                        {r.status === 'a_revisar' && r.deadline.hoursLeft != null && (
+                                          <span style={{ padding: '1px 7px', borderRadius: 999, background: r.deadline.urgent ? 'rgba(0,0,0,0.08)' : 'rgba(224,145,47,0.16)', fontSize: 11.5, fontVariantNumeric: 'tabular-nums' }}>
+                                            ⏱ {countdownLabel(r.deadline.hoursLeft)}
+                                          </span>
+                                        )}
                                       </button>
                                     ) : complete ? (
                                       <span style={{ color: '#1f7a3d', fontWeight: 600, fontSize: 12.5 }}>

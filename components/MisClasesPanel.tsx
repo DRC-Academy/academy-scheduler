@@ -23,7 +23,7 @@ import {
 // Plazo de 24 h del transcript: fuente única para esta vista, la ficha,
 // Asistencias y Finanzas. Acá se pinta la cuenta regresiva y la vencida.
 import {
-  getTranscriptStatus, reopenedDeadlineFor, transcriptDeadlineBadge, uploadedAtLabel, hoursLeftLabel,
+  getTranscriptStatus, reopenedDeadlineFor, transcriptDeadlineBadge, uploadedAtLabel, hoursLeftLabel, countdownLabel,
   TRANSCRIPT_WARN_HOURS, type TranscriptStatusResult,
 } from '@/lib/transcriptDeadline';
 import { TranscriptDeadlineBanner } from '@/components/TranscriptDeadlineBanner';
@@ -1185,7 +1185,11 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     // Estado frente al PLAZO de 24 h (cuenta regresiva / vencida), de la misma
     // fuente que Finanzas, la ficha y Asistencias.
     const dl = passed && !inactive ? deadlineOf(c, date) : null;
-    const dBadge = dl ? transcriptDeadlineBadge(dl) : null;
+    // El badge va sin las horas: la cuenta atrás vive en el botón de al lado.
+    const dBadge = dl ? transcriptDeadlineBadge(dl, { countdown: false }) : null;
+    // Cuenta atrás del botón "Añadir transcript" ("13 h 42 min"). Se refresca sola
+    // con el reloj de la pantalla, que avanza cada minuto.
+    const countdown = dl?.status === 'pendiente' && dl.hoursLeft != null ? countdownLabel(dl.hoursLeft) : '';
     const uploaded = dl?.status === 'subido' ? uploadedAtLabel(transcript?.analyzed_at) : '';
     // Solo es tarea suya si falta o se lo rechazaron: "en revisión" no lo es.
     const needsTranscript = transcriptNeedsTeacher(tState);
@@ -1327,11 +1331,13 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
                 // valida para el pago salvo que el admin reabra el plazo.
                 <button
                   data-onboarding={relojListo && needsTranscript && dl?.status !== 'vencido' ? 'add-transcript' : undefined}
-                  className={`mc-btn ${needsTranscript && dl?.status !== 'vencido' ? 'mc-btn-primary' : 'mc-btn-ghost'}`}
+                  className={`mc-btn ${needsTranscript && dl?.status !== 'vencido' ? 'mc-btn-primary' : 'mc-btn-ghost'}${dl?.urgent ? ' is-urgent' : ''}`}
+                  title={countdown ? `Te quedan ${countdown} para subirlo` : undefined}
                   onClick={() => setTranscriptFor({ c, date })}>
                   {tState === 'none' ? '📝 Añadir transcript'
                     : tState === 'rejected' ? '📝 Subir el correcto'
                     : 'Reemplazar transcript'}
+                  {countdown && needsTranscript && <span className="mc-btn-count">⏱ {countdown}</span>}
                 </button>
               ) : hasLink ? (
                 <button data-onboarding={relojListo ? 'join-class' : undefined} className="mc-btn mc-btn-primary" onClick={() => join.join(c)} disabled={join.checkingKey === c.key}>
