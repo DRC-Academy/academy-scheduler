@@ -23,6 +23,7 @@
 
 import { createHmac } from 'node:crypto';
 import { secretsMatch } from '@/lib/externalAuth';
+import { normEmail } from '@/lib/email';
 
 /** Antigüedad máxima del enlace. Pasado esto, caducado. */
 export const MAX_AGE_SECONDS = 10 * 60;
@@ -34,13 +35,11 @@ export const MAX_AGE_SECONDS = 10 * 60;
 export const MAX_SKEW_SECONDS = 2 * 60;
 
 /**
- * Email normalizado para firmar y para buscar. Misma regla que `normEmail` en
- * lib/useSubscriptionStatus: minúsculas y sin espacios alrededor. Está duplicada a
- * propósito en una línea en vez de importada, porque ese módulo es de cliente
- * ('use client' arriba) y esto corre en el servidor.
+ * Email normalizado para firmar y para buscar. Es `normEmail` de lib/email (la
+ * misma regla que usa el resto del proyecto): minúsculas y sin espacios.
  */
 export function normalizeProgresoEmail(email: string | null | undefined): string {
-  return (email ?? '').trim().toLowerCase();
+  return normEmail(email);
 }
 
 /** La cadena exacta que se firma. Una sola definición, para los dos lados. */

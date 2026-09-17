@@ -32,14 +32,15 @@ import {
 } from '@/lib/levelTestClient';
 import { buildFormUrl } from '@/lib/formClient';
 import {
-  norm, tokenStateOf, MAX_REMINDERS,
-  type FormTokenRow, type StudentRow, type DropoutRow,
+  norm, tokenStateOf, MAX_FOLLOWUPS, FOLLOWUP_DAYS,
+  type FormTokenRow, type StudentRow, type DropoutRow, type FollowupRow,
 } from '@/lib/formReminders';
 import {
-  construirSeguimiento, pasaFiltro, buscaEn, etiquetaDe, filtroDe, resumenSeguimiento,
+  construirSeguimiento, pasaFiltro, buscaEn, etiquetaDe, filtroDe, resumenSeguimiento, ultimoFollowupLabel,
   DIAS_PARADO, MOTIVO_MANUAL,
   type Seguimiento, type Filtro, type Tono, type ResultadoManual,
 } from '@/lib/levelTestSeguimiento';
+import { useAuth } from '@/lib/AuthContext';
 import type { WritingEvaluation } from '@/lib/levelTest/types';
 import { CEFR_COLOR, GRAND_TOTAL, scoreToCefr } from '@/lib/levelTest/constants';
 import { INVALID_REASON_LABEL } from '@/lib/levelTest/attemptValidity';
@@ -108,6 +109,17 @@ async function pedirRecordatorios(tokenIds: string[]): Promise<ResultadoManual[]
   return (data.resultados ?? []) as ResultadoManual[];
 }
 
+/** Toggle "No enviar más" (students.followup_opt_out) vía /api/forms/optout. */
+async function marcarNoEnviar(studentId: string, optOut: boolean, by: string): Promise<void> {
+  const res = await fetch('/api/forms/optout', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ studentId, optOut, by }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || 'No se pudo guardar la marca.');
+}
+
 function resumenEnvio(rs: ResultadoManual[]): { ok: boolean; texto: string } {
   const ok = rs.filter(r => r.ok);
   const mal = rs.filter(r => !r.ok);
@@ -123,6 +135,8 @@ function resumenEnvio(rs: ResultadoManual[]): { ok: boolean; texto: string } {
 
 // ═════════════════════════════════════════════════════════════════════════════
 export default function LevelTestsTab() {
+  const { user } = useAuth();
+  const adminName = user?.displayName || user?.username || 'admin';
   const [filas, setFilas] = useState<Seguimiento[]>([]);
   const [loading, setLoading] = useState(true);
   const [faltaSql, setFaltaSql] = useState(false);
@@ -145,14 +159,23 @@ export default function LevelTestsTab() {
     if (!silencioso) setLoading(true);
     const now = Date.now();
     setAhora(now);
-    const [idx, stRes, tkRes, drRes, spRes] = await Promise.all([
+    // students con el opt-out del follow-up; sin la columna (migración sin
+    // correr) se reintenta sin ella.
+    let stRes = await supabase.from('students').select('id, name, email, followup_opt_out');
+    if (stRes.error && (stRes.error.code === '42703' || stRes.error.code === 'PGRST204')) {
+      stRes = await supabase.from('students').select('id, name, email');
+    }
+    const [idx, tkRes, drRes, spRes, fuRes, agRes] = await Promise.all([
       fetchLevelTestIndex(),
-      supabase.from('students').select('id, name, email'),
       supabase.from('form_tokens').select('id, token, student_id, student_name, student_email, teacher_id, teacher_name, assignment_id, plan, level, status, created_at, completed_at, expires_at, form_reminder_count, form_reminder_last_sent, test_reminder_count, test_reminder_last_sent, reminder_variant'),
       supabase.from('student_dropouts').select('student_id, student_name'),
       // Si supabase-teacher-level.sql no se corrió, esta consulta falla con
       // 42703 y el nivel del profesor queda vacío. La pestaña sigue funcionando.
       supabase.from('student_profiles').select('student_id, student_name, teacher_confirmed_level, teacher_confirmed_at, teacher_confirmed_by'),
+      // Registro de envíos del follow-up. Sin la tabla (42P01) la columna
+      // "Último follow-up" queda vacía y se avisa arriba.
+      supabase.from('level_test_followups').select('student_id, numero_envio, sent_at, status'),
+      supabase.from('assignments').select('student_id, student_name, student_email'),
     ]);
 
     const confMap = new Map<string, ConfirmedLevel>();
@@ -164,14 +187,16 @@ export default function LevelTestsTab() {
     }
     setConfirmados(confMap);
 
-    // Sin las columnas del follow-up (migración sin correr) se listan solo las
-    // pruebas, sin formulario ni recordatorios, y se avisa arriba.
-    setFaltaSql(!!tkRes.error);
+    // Sin las columnas del follow-up o sin la tabla de envíos (migración sin
+    // correr) se listan solo las pruebas, sin recordatorios, y se avisa arriba.
+    setFaltaSql(!!tkRes.error || !!fuRes.error);
     setFilas(construirSeguimiento({
       tokens:   tkRes.error ? [] : ((tkRes.data ?? []) as unknown as FormTokenRow[]),
       sessions: idx.all as LevelTestInfo[],
       students: (stRes.data ?? []) as unknown as StudentRow[],
       dropouts: (drRes.data ?? []) as unknown as DropoutRow[],
+      followups: fuRes.error ? undefined : ((fuRes.data ?? []) as unknown as FollowupRow[]),
+      assignments: agRes.error ? undefined : ((agRes.data ?? []) as unknown as Array<{ student_id: string | null; student_name: string | null; student_email: string | null }>),
       now,
     }));
     setLoading(false);
@@ -211,6 +236,23 @@ export default function LevelTestsTab() {
     }
   }
 
+  /** "No enviar más": marca o desmarca y recarga la lista en silencio. */
+  const [marcando, setMarcando] = useState(false);
+  async function alternarNoEnviar(e: Seguimiento) {
+    if (!e.studentId || marcando) return;
+    setMarcando(true);
+    setAviso(null);
+    try {
+      await marcarNoEnviar(e.studentId, !e.noEnviar, adminName);
+      setAviso({ ok: true, texto: e.noEnviar ? `${e.nombre} vuelve a recibir el follow-up.` : `${e.nombre} ya no recibirá más correos del follow-up.` });
+      await load(true);
+    } catch (err) {
+      setAviso({ ok: false, texto: err instanceof Error ? err.message : 'No se pudo guardar la marca.' });
+    } finally {
+      setMarcando(false);
+    }
+  }
+
   function copiar(url: string) {
     navigator.clipboard?.writeText(url)
       .then(() => setAviso({ ok: true, texto: 'Enlace copiado.' }))
@@ -240,7 +282,7 @@ export default function LevelTestsTab() {
 
       {faltaSql && (
         <div className="tn-aviso mal" role="status">
-          El follow-up automático todavía no está activo: falta ejecutar <b>supabase-form-reminders.sql</b> en Supabase. Mientras tanto solo se listan las pruebas, sin formulario ni recordatorios.
+          El follow-up automático todavía no está activo: falta ejecutar <b>supabase-plazo-24h-followups.sql</b> en Supabase (crea la tabla de envíos y las columnas del follow-up). Mientras tanto solo se listan las pruebas, sin recordatorios.
         </div>
       )}
       {aviso && (
@@ -304,7 +346,7 @@ export default function LevelTestsTab() {
           ) : (
             <>
               <div className="tn-row head" aria-hidden>
-                <span /><span>Alumno</span><span>Enviado</span><span>Formulario</span><span>Prueba</span><span>Nivel</span><span>Estado</span>
+                <span /><span>Alumno</span><span>Enviado</span><span>Formulario</span><span>Prueba</span><span>Último follow-up</span><span>Nivel</span><span>Estado</span>
               </div>
               {visibles.map(e => (
                 <Fila key={e.clave} e={e} ahora={ahora}
@@ -337,9 +379,10 @@ export default function LevelTestsTab() {
             <button type="button" className="tn-back" onClick={() => setAbierta(null)}>
               <ChevronLeft size={20} strokeWidth={2.25} aria-hidden /> Lista de alumnos
             </button>
-            <Detalle e={actual} ahora={ahora} profe={nivelProfesorOf(actual)} enviando={enviando}
+            <Detalle e={actual} ahora={ahora} profe={nivelProfesorOf(actual)} enviando={enviando} marcando={marcando}
               onCerrar={() => setAbierta(null)}
               onRecordar={() => recordar([actual])}
+              onNoEnviar={() => alternarNoEnviar(actual)}
               onCopiar={copiar} />
           </div>
         ) : (
@@ -375,6 +418,14 @@ function Fila({ e, ahora, profe, actual, marcada, enviando, onAbrir, onMarcar, o
         <Fecha label="Formulario" iso={e.formulario} ahora={ahora} />
         <Fecha label="Prueba" iso={e.prueba} ahora={ahora} />
       </div>
+      {/* Último follow-up: "12/9 · 4º envío". Con "No enviar más", la marca. */}
+      <div className="tn-fu">
+        {e.noEnviar
+          ? <span className="tn-tag gris" title="El equipo marcó que no se le escriba más">No enviar</span>
+          : e.ultimoFollowup
+            ? <span className="tn-f" title={`${e.enviosHechos} de ${MAX_FOLLOWUPS} envíos · ${fmtDate(e.ultimoFollowup.sentAt)}`}><b>Follow-up</b><span>{ultimoFollowupLabel(e)}</span></span>
+            : <span className="tn-f vacia" title="Sin follow-up enviado"><b>Follow-up</b><span>—</span></span>}
+      </div>
       <div className="tn-nivel">
         {e.cefr ? <Cefr nivel={e.cefr} /> : <span className="tn-profe" style={{ color: '#a4a7a1' }}>—</span>}
         {e.cefr && profe && <span className="tn-tag ok tn-profe" title={`Nivel confirmado por el profesor${profe.at ? ` el ${fmtDate(profe.at)}` : ''}`}>Profe {profe.level}</span>}
@@ -406,9 +457,9 @@ function Cefr({ nivel }: { nivel: string }) {
 }
 
 // ── Detalle de un alumno ─────────────────────────────────────────────────────
-function Detalle({ e, ahora, profe, enviando, onCerrar, onRecordar, onCopiar }: {
-  e: Seguimiento; ahora: number; profe?: ConfirmedLevel; enviando: boolean;
-  onCerrar: () => void; onRecordar: () => void; onCopiar: (url: string) => void;
+function Detalle({ e, ahora, profe, enviando, marcando, onCerrar, onRecordar, onNoEnviar, onCopiar }: {
+  e: Seguimiento; ahora: number; profe?: ConfirmedLevel; enviando: boolean; marcando: boolean;
+  onCerrar: () => void; onRecordar: () => void; onNoEnviar: () => void; onCopiar: (url: string) => void;
 }) {
   const tag = TONO_TAG[e.tono];
   const enlace = enlaceDe(e, ahora);
@@ -491,19 +542,26 @@ function Detalle({ e, ahora, profe, enviando, onCerrar, onRecordar, onCopiar }: 
         <ResultadoSesion key={e.sesion.id} id={e.sesion.id} />
       ) : (
         <div className="adm-card tn-filas">
-          <p className="tn-sec" style={{ margin: '10px 0 2px' }}>Recordatorios</p>
+          <p className="tn-sec" style={{ margin: '10px 0 2px' }}>Follow-up</p>
           {e.tono === 'baja' ? (
             <p className="tn-nota">Ya no es alumno: el follow-up no le escribe.</p>
           ) : e.tono === 'caducado' ? (
             <p className="tn-nota">El enlace caducó sin abrirse. El follow-up automático le genera uno nuevo y le escribe en su próxima corrida.</p>
           ) : p ? (
             <>
-              <div className="tn-fila"><span className="tn-fila-l">Secuencia</span><span className="tn-fila-v">{p.sequence === 'formulario' ? 'Formulario' : 'Prueba de nivel'}</span></div>
-              <div className="tn-fila"><span className="tn-fila-l">Enviados</span><span className="tn-fila-v">{p.count} de {MAX_REMINDERS}</span></div>
-              <div className="tn-fila"><span className="tn-fila-l">Último</span><span className="tn-fila-v" title={p.lastSent ? fmtDate(p.lastSent) : undefined}>{p.lastSent ? cap(fmtCorta(p.lastSent, ahora)) : <span style={{ color: '#a4a7a1', fontWeight: 500 }}>—</span>}</span></div>
-              {p.count >= MAX_REMINDERS
-                ? <span className="tn-tag rojo" style={{ margin: '4px 0 10px' }}>Agotó los tres. Toca llamar.</span>
-                : <p className="tn-nota">Salen solos a los 2, 5 y 10 días{p.step ? '; hoy le toca el siguiente' : ''}.</p>}
+              <div className="tn-fila"><span className="tn-fila-l">Le falta</span><span className="tn-fila-v">{p.sequence === 'formulario' ? 'Formulario y prueba' : 'La prueba de nivel'}</span></div>
+              <div className="tn-fila"><span className="tn-fila-l">Enviados</span><span className="tn-fila-v">{p.count} de {MAX_FOLLOWUPS}</span></div>
+              <div className="tn-fila"><span className="tn-fila-l">Último follow-up</span><span className="tn-fila-v" title={e.ultimoFollowup ? fmtDate(e.ultimoFollowup.sentAt) : undefined}>{e.ultimoFollowup ? ultimoFollowupLabel(e) : <span style={{ color: '#a4a7a1', fontWeight: 500 }}>—</span>}</span></div>
+              {e.noEnviar
+                ? <p className="tn-nota">Marcado como <b>No enviar más</b>: ni el cron ni «Recordar» le escriben.</p>
+                : p.count >= MAX_FOLLOWUPS
+                  ? <span className="tn-tag rojo" style={{ margin: '4px 0 10px' }}>Agotó los {MAX_FOLLOWUPS} envíos. Toca llamar.</span>
+                  : <p className="tn-nota">Salen solos los días {FOLLOWUP_DAYS.slice(0, 5).join(', ')} y después cada semana hasta el día {FOLLOWUP_DAYS[FOLLOWUP_DAYS.length - 1]}{p.step ? '; hoy le toca el siguiente' : ''}.</p>}
+              {e.studentId && (
+                <button type="button" className={`adm-btn ${e.noEnviar ? 'adm-btn-primary' : 'adm-btn-ghost'}`} style={{ alignSelf: 'flex-start', margin: '4px 0 10px' }} disabled={marcando} onClick={onNoEnviar}>
+                  {marcando ? 'Guardando…' : e.noEnviar ? 'Volver a enviar' : 'No enviar más'}
+                </button>
+              )}
             </>
           ) : e.token ? (
             <p className="tn-nota">Fuera del follow-up automático{e.email ? '' : ': no tiene email al que escribir'}.</p>
@@ -727,7 +785,7 @@ const ESTILOS = `
 .tn-chip .n { font-size: 12px; font-weight: 700; color: #6E6E66; }
 .tn-chip[aria-pressed="true"] .n { color: #1E9E3A; }
 .tn-chip .n.rojo { color: #C81E1E; }
-.tn-row { display: grid; grid-template-columns: 24px minmax(0, 1fr) 80px 80px 80px 104px 128px; align-items: center; gap: 10px; min-height: 52px; padding: 6px 14px; border-top: 1px solid #ECECE8; font-size: 13.5px; cursor: pointer; background: #fff; }
+.tn-row { display: grid; grid-template-columns: 24px minmax(0, 1fr) 80px 80px 80px 118px 104px 128px; align-items: center; gap: 10px; min-height: 52px; padding: 6px 14px; border-top: 1px solid #ECECE8; font-size: 13.5px; cursor: pointer; background: #fff; }
 .tn-row:focus-visible { outline: 2px solid #1E9E3A; outline-offset: -2px; }
 .tn-row.head { min-height: 36px; font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: #6E6E66; background: #FAFAF8; cursor: default; }
 .tn-row:not(.head):hover { background: #FAFAF8; }
@@ -740,6 +798,7 @@ const ESTILOS = `
 .tn-cb:disabled { opacity: 0.3; cursor: default; }
 .tn-name { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .tn-fechas { display: contents; }
+.tn-fu { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tn-f { white-space: nowrap; }
 .tn-f b { display: none; }
 .tn-f.vacia span { color: #a4a7a1; }
@@ -795,7 +854,7 @@ const ESTILOS = `
   .tn-search { max-width: none; }
   .tn-search input { height: 44px; font-size: 14px; }
   .tn-row.head { display: none; }
-  .tn-row { grid-template-columns: minmax(0, 1fr) auto auto auto; grid-template-areas: "name cefr estado chev" "fechas fechas fechas fechas" "act act act act"; gap: 8px; padding: 12px 14px; min-height: 0; background: #fff; border: 1px solid #e6e7e2; border-radius: 14px; box-shadow: 0 1px 2px rgba(16,24,16,0.04); margin-bottom: 8px; }
+  .tn-row { grid-template-columns: minmax(0, 1fr) auto auto auto; grid-template-areas: "name cefr estado chev" "fechas fechas fechas fechas" "fu fu fu fu" "act act act act"; gap: 8px; padding: 12px 14px; min-height: 0; background: #fff; border: 1px solid #e6e7e2; border-radius: 14px; box-shadow: 0 1px 2px rgba(16,24,16,0.04); margin-bottom: 8px; }
   .tn-row:not(.head):hover { background: #fff; }
   .tn-row.rojo, .tn-row.rojo:not(.head):hover { border-color: rgba(220,74,56,0.35); background: #FFFBFA; }
   .tn-row.is-cur { box-shadow: 0 1px 2px rgba(16,24,16,0.04); }
@@ -803,6 +862,7 @@ const ESTILOS = `
   .tn-cb { display: none; }
   .tn-name { grid-area: name; font-size: 15px; font-weight: 700; }
   .tn-fechas { display: flex; flex-wrap: wrap; gap: 4px 14px; grid-area: fechas; font-size: 13px; color: #4A4A4A; }
+  .tn-fu { grid-area: fu; font-size: 13px; color: #4A4A4A; white-space: normal; }
   .tn-f b { display: inline; font-weight: 600; color: #6E6E66; margin-right: 4px; }
   .tn-nivel { grid-area: cefr; }
   .tn-profe { display: none; }

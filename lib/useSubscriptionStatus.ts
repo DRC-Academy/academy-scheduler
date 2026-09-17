@@ -17,6 +17,8 @@
 // que usan el endpoint, finanzas y las asistencias. Ver lib/subscriptionAccess.
 import { WOO_STATUS, isScheduledWooStatus } from '@/lib/subscriptionAccess';
 import { addCalendarMonths } from '@/lib/productUtils';
+// Una sola regla de normalización de emails para todo el proyecto (lib/email).
+import { normEmail } from '@/lib/email';
 
 export interface SubscriptionInfo {
   active: boolean | null;                            // true=activa · false=inactiva · null=sin verificar
@@ -58,10 +60,6 @@ export type SubCategory = 'active' | 'inactive' | 'pending' | 'scheduled' | 'unv
 // ya verificó a María, "Próximas clases" reutiliza el mismo resultado.
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutos
 const subscriptionCache = new Map<string, SubscriptionInfo>();
-
-function normEmail(email?: string | null): string {
-  return email?.trim().toLowerCase() ?? '';
-}
 
 const NO_EMAIL: SubscriptionInfo = {
   active: null, status: 'no_email', daysRemaining: null, endDate: null,

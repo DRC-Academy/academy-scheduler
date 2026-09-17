@@ -14,7 +14,7 @@
 
 import { resend } from '@/lib/resend';
 import { esc } from '@/lib/emailNotifications';
-import { STEP_LABEL, type Sequence, type CopyVariant } from '@/lib/formReminders';
+import { etapaDe, stepLabel, type Sequence, type CopyVariant } from '@/lib/formReminders';
 
 const FROM = 'DRC Academy <notificaciones@drcacademy.com>';
 
@@ -97,178 +97,122 @@ export function primerNombre(nombre: string): string {
     : primera;
 }
 
-// ── Secuencia 1: el formulario sigue sin completarse ─────────────────────────
-function formularioCopy(step: 1 | 2 | 3, input: FollowupEmailInput): Copy {
-  const nombre = esc(primerNombre(input.studentName));
-  const profe = input.teacherName?.trim() ? esc(input.teacherName.trim()) : null;
-
-  if (step === 1) {
-    return {
-      subject: `${primerNombre(input.studentName)}, te falta un paso para empezar`,
-      html: studentEmailTemplate(
-        p(`¡Hola ${nombre}!`) +
-        p('Hemos visto que empezaste tu registro pero todavía no has completado tu formulario y tu prueba de nivel.') +
-        p(`Solo te llevará unos minutos y así podemos asignarte el profesor y el nivel que mejor te encajan${profe ? `. ${profe} ya te está esperando` : ''}.`) +
-        boton('Completar mi formulario', input.url) +
-        enlaceDeRespaldo(input.url),
-        'Te falta completar tu formulario y tu prueba de nivel.',
-      ),
-    };
-  }
-
-  if (step === 2) {
-    return {
-      subject: 'Así preparamos tus clases a tu medida',
-      html: studentEmailTemplate(
-        p(`¡Hola de nuevo, ${nombre}!`) +
-        p('Tu formulario y tu prueba de nivel siguen pendientes, y son justo lo que nos permite preparar tus clases a tu medida.') +
-        p('Con tus respuestas sabemos en qué punto estás, qué quieres conseguir y cómo aprendes mejor. Con la prueba de nivel confirmamos tu nivel real, así no pierdes tiempo repasando lo que ya dominas ni empiezas por encima de donde estás.') +
-        p(`Son unos minutos y podrás empezar tus clases cuanto antes${profe ? `, con ${profe}` : ''}.`) +
-        boton('Completar ahora', input.url) +
-        enlaceDeRespaldo(input.url),
-        'Tus respuestas son las que nos permiten preparar tus clases a tu medida.',
-      ),
-    };
-  }
-
-  return {
-    subject: 'Último recordatorio de tu prueba de nivel',
-    html: studentEmailTemplate(
-      p(`Hola ${nombre},`) +
-      p('Este es nuestro último recordatorio.') +
-      p('Completa tu formulario y tu prueba de nivel para no retrasar el inicio de tus clases. Es lo único que nos falta por tu parte.') +
-      boton('Completar mi prueba de nivel', input.url) +
-      p('Si tienes cualquier duda, responde a este email y te echamos una mano.') +
-      enlaceDeRespaldo(input.url),
-      'Último recordatorio: completa tu prueba de nivel para no retrasar tus clases.',
-    ),
-  };
-}
-
-// ── Secuencia 2: hizo el formulario pero le falta la prueba de nivel ─────────
-function testCopy(step: 1 | 2 | 3, input: FollowupEmailInput): Copy {
-  const nombre = esc(primerNombre(input.studentName));
-  const profe = input.teacherName?.trim() ? esc(input.teacherName.trim()) : null;
-
-  if (step === 1) {
-    return {
-      subject: `${primerNombre(input.studentName)}, te queda la prueba de nivel`,
-      html: studentEmailTemplate(
-        p(`¡Hola ${nombre}!`) +
-        p('Gracias por completar tu formulario. Te queda un último paso: la prueba de nivel.') +
-        p('Son unos minutos y al terminar sabrás al instante en qué nivel de inglés estás.') +
-        boton('Hacer mi prueba de nivel', input.url) +
-        enlaceDeRespaldo(input.url),
-        'Solo te queda la prueba de nivel.',
-      ),
-    };
-  }
-
-  if (step === 2) {
-    return {
-      subject: 'Tu nivel exacto en unos minutos',
-      html: studentEmailTemplate(
-        p(`¡Hola ${nombre}!`) +
-        p('Tu prueba de nivel sigue pendiente y es la que marca por dónde empiezan tus clases.') +
-        p(`Con tu nivel confirmado${profe ? `, ${profe}` : ''} prepara la primera clase en tu punto exacto: ni repasando lo que ya sabes ni con material que todavía se te hace cuesta arriba.`) +
-        boton('Hacer la prueba ahora', input.url) +
-        enlaceDeRespaldo(input.url),
-        'Tu prueba de nivel marca por dónde empiezan tus clases.',
-      ),
-    };
-  }
-
-  return {
-    subject: 'Último recordatorio de tu prueba de nivel',
-    html: studentEmailTemplate(
-      p(`Hola ${nombre},`) +
-      p('Este es nuestro último recordatorio.') +
-      p('Completa tu prueba de nivel para no retrasar el inicio de tus clases. Es lo único que nos falta por tu parte.') +
-      boton('Hacer mi prueba de nivel', input.url) +
-      p('Si tienes cualquier duda, responde a este email y te echamos una mano.') +
-      enlaceDeRespaldo(input.url),
-      'Último recordatorio: completa tu prueba de nivel para no retrasar tus clases.',
-    ),
-  };
-}
-
-// ── Variante veterano: lleva semanas de clase y nunca recibió el formulario ──
+// ── Los tres textos, por etapa ────────────────────────────────────────────────
 //
-// Son los alumnos anteriores al 10/07/2026, cuando se estrenó el formulario. A
-// alguien que lleva siete semanas dando clase no se le puede escribir "hemos
-// visto que empezaste tu registro": suena a que no sabemos quién es. Aquí el
-// enfoque es el contrario, se da por hecho que ya está dentro y se le pide algo
-// que mejora lo que ya tiene.
-function veteranoCopy(step: 1 | 2 | 3, input: FollowupEmailInput): Copy {
+// Un solo template y tres tonos según la etapa de la cadencia (lib/formReminders):
+//   · 'recordatorio' (días 1, 2 y 3): recordatorio amable, asunto distinto por día.
+//   · 'espera'       (días 6 y 9):   "te estamos esperando": sin el nivel el
+//                                    profesor no puede preparar la primera clase.
+//   · 'semanal'      (día 16 en adelante): breve, "cuando quieras, aquí tienes tu enlace".
+//
+// Lo que le FALTA al alumno (`sequence`) solo cambia una frase: "tu formulario y
+// tu prueba de nivel" o "tu prueba de nivel". El botón lleva siempre a la URL
+// pública (lib/appUrl), nunca a la de deployment de Vercel.
+//
+// Textos aprobados por Facundo el 16/09/2026. Español de España, tuteo.
+
+/** Qué le falta, en palabras, para meterlo en la frase. */
+function pendienteDe(sequence: Sequence): { min: string; may: string } {
+  return sequence === 'formulario'
+    ? { min: 'tu formulario y tu prueba de nivel', may: 'Tu formulario y tu prueba de nivel siguen pendientes' }
+    : { min: 'tu prueba de nivel', may: 'Tu prueba de nivel sigue pendiente' };
+}
+
+function recordatorioCopy(step: number, sequence: Sequence, input: FollowupEmailInput, variant: CopyVariant): Copy {
   const nombre = esc(primerNombre(input.studentName));
+  const nombreAsunto = primerNombre(input.studentName);
   const profe = input.teacherName?.trim() ? esc(input.teacherName.trim()) : null;
+  const { min } = pendienteDe(sequence);
 
-  if (step === 1) {
-    return {
-      subject: `${primerNombre(input.studentName)}, queremos afinar aún más tus clases`,
-      html: studentEmailTemplate(
-        p(`¡Hola ${nombre}!`) +
-        p('Llevas ya unas semanas de clase con nosotros y hay algo que todavía no te hemos pedido: tu ficha de alumno y tu prueba de nivel.') +
-        p(`Son unos minutos y nos sirven para ajustar aún mejor lo que trabajáis${profe ? ` ${profe} y tú` : ''} en cada clase.`) +
-        boton('Completar mi ficha', input.url) +
-        enlaceDeRespaldo(input.url),
-        'Nos faltan tu ficha y tu prueba de nivel para afinar aún más tus clases.',
-      ),
-    };
-  }
+  // Asunto distinto por día (1, 2 y 3). A partir del 3º, el del tercer día.
+  const subject = step === 1 ? `${nombreAsunto}, te falta un paso para empezar tus clases`
+    : step === 2 ? `Tu prueba de nivel sigue pendiente, ${nombreAsunto}`
+    : `Unos minutos y empezamos, ${nombreAsunto}`;
 
-  if (step === 2) {
-    return {
-      subject: 'Lo que tus respuestas cambian en tus clases',
-      html: studentEmailTemplate(
-        p(`¡Hola de nuevo, ${nombre}!`) +
-        p('Tu ficha y tu prueba de nivel siguen pendientes, y son las dos cosas que más nos ayudan a personalizar tus clases.') +
-        p(`Con tus respuestas sabemos qué quieres conseguir y cómo aprendes mejor, así que${profe ? ` ${profe}` : ''} puede preparar cada clase alrededor de lo que de verdad te interesa. Con la prueba de nivel confirmamos tu nivel exacto de ahora, que seguramente ya no es el del primer día.`) +
-        boton('Completar ahora', input.url) +
-        enlaceDeRespaldo(input.url),
-        'Tus respuestas son las que nos permiten personalizar tus clases.',
-      ),
-    };
-  }
+  // Veterano: lleva semanas de clase y nunca recibió el enlace. "Hemos visto que
+  // todavía no has completado" sonaría a que no sabemos quién es.
+  const apertura = variant === 'veterano'
+    ? p('Llevas ya unas semanas de clase con nosotros y hay algo que todavía no te hemos pedido: tu ficha de alumno y tu prueba de nivel.')
+    : p(`Hemos visto que todavía no has completado ${min}.`);
 
   return {
-    subject: 'Último recordatorio de tu ficha y tu prueba de nivel',
+    subject,
+    html: studentEmailTemplate(
+      p(`¡Hola ${nombre}!`) +
+      apertura +
+      p(`Solo te llevará unos minutos y es lo que nos permite saber en qué punto estás para preparar tus clases a tu medida${profe ? `, con ${profe}` : ''}.`) +
+      boton('Completar mi prueba de nivel', input.url) +
+      enlaceDeRespaldo(input.url),
+      `Te falta completar ${min}.`,
+    ),
+  };
+}
+
+function esperaCopy(sequence: Sequence, input: FollowupEmailInput, variant: CopyVariant): Copy {
+  const nombre = esc(primerNombre(input.studentName));
+  const profe = input.teacherName?.trim() ? esc(input.teacherName.trim()) : null;
+  const { may } = pendienteDe(sequence);
+  const quien = profe ?? 'tu profesor';
+  // Veterano: ya está en clase, así que no hay "primera clase" que preparar.
+  const consecuencia = variant === 'veterano'
+    ? `sin tu nivel ${quien} no puede ajustar tus clases a tu nivel real: no sabemos en qué punto estás ni por dónde seguir.`
+    : `sin tu nivel ${quien} no puede prepararte la primera clase: no sabemos en qué punto estás ni por dónde empezar.`;
+
+  return {
+    subject: `Te estamos esperando, ${primerNombre(input.studentName)}`,
+    html: studentEmailTemplate(
+      p(`¡Hola de nuevo, ${nombre}!`) +
+      p(`${may}, y ${consecuencia}`) +
+      p('Son unos minutos. En cuanto la termines, tu profesor recibe el resultado y se pone con tu primera clase.') +
+      boton('Hacer mi prueba de nivel ahora', input.url) +
+      enlaceDeRespaldo(input.url),
+      'Sin tu nivel, tu profesor no puede prepararte la primera clase.',
+    ),
+  };
+}
+
+function semanalCopy(input: FollowupEmailInput): Copy {
+  const nombre = esc(primerNombre(input.studentName));
+  return {
+    subject: 'Tu enlace a la prueba de nivel',
     html: studentEmailTemplate(
       p(`Hola ${nombre},`) +
-      p('Este es nuestro último recordatorio.') +
-      p('Si nos dedicas unos minutos para completar tu ficha y tu prueba de nivel, tus próximas clases se ajustarán mucho mejor a ti.') +
-      boton('Completar mi ficha', input.url) +
-      p('Si tienes cualquier duda, responde a este email y te echamos una mano.') +
+      p('Cuando quieras, aquí tienes tu enlace a la prueba de nivel. Son unos minutos y en cuanto la completes empezamos con tus clases.') +
+      boton('Hacer mi prueba de nivel', input.url) +
+      // Si contesta pidiendo que paremos, el equipo marca "No enviar más" en el
+      // admin (pestaña Tests de nivel). Ver README, sección de crons.
+      p('Si prefieres que no te escribamos más, responde a este correo y lo dejamos aquí.') +
       enlaceDeRespaldo(input.url),
-      'Último recordatorio de tu ficha y tu prueba de nivel.',
+      'Cuando quieras, aquí tienes tu enlace a la prueba de nivel.',
     ),
   };
 }
 
 /**
- * El texto que le toca a esta secuencia y este paso.
- *
- * La variante 'veterano' solo aplica a la secuencia del formulario: en cuanto lo
- * completa, el alumno pasa a la del test, donde el "gracias por completar tu
- * formulario" es cierto para todos.
+ * El texto que le toca a este envío. La etapa la decide el número de envío
+ * (lib/formReminders.etapaDe); `sequence` solo cambia qué le falta.
  */
 export function followupCopy(
-  sequence: Sequence, step: 1 | 2 | 3, input: FollowupEmailInput, variant: CopyVariant = 'estandar',
+  sequence: Sequence, step: number, input: FollowupEmailInput, variant: CopyVariant = 'estandar',
 ): Copy {
-  if (sequence === 'test') return testCopy(step, input);
-  return variant === 'veterano' ? veteranoCopy(step, input) : formularioCopy(step, input);
+  switch (etapaDe(step)) {
+    case 'recordatorio': return recordatorioCopy(step, sequence, input, variant);
+    case 'espera':       return esperaCopy(sequence, input, variant);
+    default:             return semanalCopy(input);
+  }
 }
 
 /**
- * Envía el recordatorio. true si Resend lo aceptó.
+ * Envía el follow-up. `{ ok: true, id }` si Resend lo aceptó (el id se guarda en
+ * level_test_followups.resend_id).
  *
  * Ojo: el SDK de Resend NO lanza cuando la API falla (clave inválida, dominio sin
  * verificar, rate limit): lo devuelve en `error`. Por eso se comprueba explícito.
  */
 export async function sendFollowupEmail(
-  sequence: Sequence, step: 1 | 2 | 3, input: FollowupEmailInput, to: string,
+  sequence: Sequence, step: number, input: FollowupEmailInput, to: string,
   variant: CopyVariant = 'estandar',
-): Promise<boolean> {
+): Promise<{ ok: boolean; id: string | null }> {
   const { subject, html } = followupCopy(sequence, step, input, variant);
   const label = `followup_${sequence}_${variant}_${step}`;
 
@@ -278,12 +222,12 @@ export async function sendFollowupEmail(
     });
     if (error) {
       console.error(`[EMAIL] ${label}: Resend devolvió error:`, { name: error.name, message: error.message, to });
-      return false;
+      return { ok: false, id: null };
     }
-    console.log(`[EMAIL] ${label} (${STEP_LABEL[step]}) enviado:`, { id: data?.id, to });
-    return true;
+    console.log(`[EMAIL] ${label} (${stepLabel(step)}) enviado:`, { id: data?.id, to });
+    return { ok: true, id: data?.id ?? null };
   } catch (err) {
     console.error(`[EMAIL] ${label}: excepción al enviar:`, err);
-    return false;
+    return { ok: false, id: null };
   }
 }

@@ -1,20 +1,25 @@
 // Follow-up del formulario inicial + prueba de nivel: QUIÉN está pendiente y QUÉ
-// recordatorio le toca hoy.
+// envío le toca hoy.
 //
 // Todo lo que hay acá son funciones puras sobre filas ya leídas. Las usan los dos
-// lados por igual: el cron (app/api/cron/form-reminders) para decidir a quién
+// lados por igual: el cron (app/api/cron/followups-nivel) para decidir a quién
 // escribe, y el panel admin para mostrar los mismos números. Si el criterio
 // cambia, cambia en un solo sitio y las dos vistas se mueven juntas.
 //
-// ── LAS DOS SECUENCIAS ───────────────────────────────────────────────────────
+// ── UN SOLO RELOJ, DOS ESTADOS ───────────────────────────────────────────────
 // El alumno recibe UN enlace, el del formulario; la prueba de nivel se le ofrece
-// al terminarlo (ver app/api/forms/submit). Pero por debajo son dos tokens, así
-// que hay dos secuencias encadenadas y un alumno está como mucho en una:
+// al terminarlo (ver app/api/forms/submit). Desde septiembre de 2026 el reloj es
+// ÚNICO: el día 0 es form_tokens.created_at del enlace vigente, y la secuencia
+// sigue hasta que COMPLETA LA PRUEBA, haya hecho el formulario o no. Lo que sí
+// cambia por el camino es el TEXTO, que depende de qué le falta:
 //
-//   · 'formulario' → su último form_token sigue 'pending'.
-//     Reloj: form_tokens.created_at, la fecha en que RECIBIÓ el enlace.
+//   · 'formulario' → su último form_token sigue 'pending' (le falta el
+//     formulario y la prueba).
 //   · 'test'       → completó el formulario pero no tiene ninguna sesión de test
-//     terminada. Reloj: form_tokens.completed_at.
+//     terminada (solo le falta la prueba).
+//
+// (Antes eran dos secuencias con reloj propio, de 3 envíos cada una. El
+// contador de cada una sigue en form_tokens como espejo, pero ya no decide.)
 //
 // Hay además alumnos vivos que NO tienen ningún enlace vigente y por tanto no
 // pueden estar en ninguna secuencia: los que nunca recibieron uno (son
@@ -28,12 +33,27 @@
 // ese email hay una mediana de 12 días (máximo medido: 53). Contar desde el alta
 // haría nacer a casi todos "pasados de plazo" el primer día.
 //
-// ── LA CADENCIA ──────────────────────────────────────────────────────────────
-// Tres recordatorios y se acabó. Para un alumno nuevo caen exactamente en los
-// días 2, 5 y 10. Para uno que ya llevaba semanas esperando cuando encendimos
-// esto, la secuencia NO se da por quemada: empieza hoy por el primero y respeta
-// el mismo espaciado (3 y 5 días). Recibe los tres repartidos en 8 días en vez
-// de un único email de despedida.
+// ── LA CADENCIA (FOLLOWUP_DAYS) ──────────────────────────────────────────────
+// Días 1, 2 y 3 (un correo por día) · 6 y 9 (cada tres días) · 16, 23, 30, 37,
+// 44, 51, 58 y 65 (semanal). Trece envíos y se acabó. Se corta antes si completa
+// la prueba, si se da de baja, si se elimina al alumno o si el equipo marca
+// "No enviar más" (students.followup_opt_out).
+//
+// Los días se cuentan por FECHA DE CALENDARIO en hora de España, no por bloques
+// de 24 h: el cron corre a las 10:00 y un correo del día 1 a las 10:05 no puede
+// hacer que el del día 2 se retrase al día 3 por cinco minutos.
+//
+// Para un alumno que ya llevaba semanas esperando cuando se encendió esto, la
+// secuencia NO se da por quemada: empieza por el primer correo y respeta el
+// mismo espaciado entre envíos (1, 1, 3, 3, 7, 7…) contado desde el anterior.
+// Recibe la misma serie, solo que desplazada.
+//
+// El REGISTRO de cada envío es la tabla level_test_followups (una fila por
+// alumno y número de envío, con índice único): ahí se cuenta cuántos lleva y
+// cuándo fue el último, y es lo que hace idempotente al cron.
+
+import { getSpainParts } from '@/lib/spainTime';
+import { resolveStudentEmails } from '@/lib/email';
 
 // ── Tipos de fila (solo lo que se lee de cada tabla) ─────────────────────────
 export interface FormTokenRow {
@@ -63,6 +83,16 @@ export interface StudentRow {
   id: string;
   name: string;
   email: string | null;
+  /** "No enviar más" marcado por el equipo (students.followup_opt_out). */
+  followup_opt_out?: boolean | null;
+}
+
+/** Un envío registrado en level_test_followups. */
+export interface FollowupRow {
+  student_id: string;
+  numero_envio: number;
+  sent_at: string;
+  status?: string | null;
 }
 
 export interface TestSessionRow {
@@ -85,6 +115,8 @@ export interface AssignmentRow {
   id?: string | null;
   plan?: string | null;
   student_level?: string | null;
+  /** Para el email alternativo del follow-up (ver lib/email). */
+  student_email?: string | null;
 }
 
 export type Sequence = 'formulario' | 'test';
@@ -109,28 +141,57 @@ export function primerAvisoInmediato(token: Pick<FormTokenRow, 'reminder_variant
   return token.reminder_variant === 'veterano' || token.reminder_variant === 'reactivado';
 }
 
-/** Un alumno pendiente, con el paso que le toca hoy (o null si todavía no). */
+/** Un alumno pendiente, con el envío que le toca hoy (o null si todavía no). */
 export interface PendingEntry {
+  /** Qué le falta: formulario + prueba, o solo la prueba. Decide el texto. */
   sequence: Sequence;
   variant: CopyVariant;
   token: FormTokenRow;
   student: StudentRow;
+  /** A dónde se escribe (students.email normalizado; ver lib/email). */
   email: string;
-  /** Fecha desde la que se cuentan los días (ISO). */
+  /** assignments.student_email si es distinto del principal. Se registra, no se usa. */
+  emailAlt: string | null;
+  /** Día 0: created_at del enlace vigente (ISO). */
   baseDate: string;
-  /** Días enteros transcurridos desde baseDate. */
+  /** Días de calendario (hora de España) transcurridos desde baseDate. */
   days: number;
-  /** Recordatorios ya enviados en esta secuencia (0 – 3). */
+  /** Envíos ya hechos (level_test_followups). */
   count: number;
   lastSent: string | null;
-  /** 1, 2 o 3 si hoy le toca uno; null si todavía no, o si ya se agotaron. */
-  step: 1 | 2 | 3 | null;
+  /** Número del envío que toca hoy (1..13); null si todavía no, o si ya se agotaron. */
+  step: number | null;
   /** Por qué no le toca hoy (para el modo dry y el panel). */
-  skipReason?: 'tope_alcanzado' | 'esperando_dias' | 'esperando_espaciado';
+  skipReason?: 'tope_alcanzado' | 'esperando_dias' | 'esperando_espaciado' | 'no_enviar';
 }
 
 // ── La cadencia ──────────────────────────────────────────────────────────────
-export const MAX_REMINDERS = 3;
+
+/** Día (desde el día 0) en que sale cada envío. El índice + 1 es el número de envío. */
+export const FOLLOWUP_DAYS: readonly number[] = [1, 2, 3, 6, 9, 16, 23, 30, 37, 44, 51, 58, 65];
+/** Tope de envíos automáticos. */
+export const MAX_FOLLOWUPS = FOLLOWUP_DAYS.length;
+/** Alias del nombre anterior, por los sitios que todavía lo importan. */
+export const MAX_REMINDERS = MAX_FOLLOWUPS;
+
+/** Etapa del texto: recordatorio amable (días 1-3), "te estamos esperando" (6-9), semanal (16+). */
+export type Etapa = 'recordatorio' | 'espera' | 'semanal';
+
+export function etapaDe(step: number): Etapa {
+  if (step <= 3) return 'recordatorio';
+  if (step <= 5) return 'espera';
+  return 'semanal';
+}
+
+/** Día de la cadencia de un envío (65 a partir del 13º, si se manda a mano). */
+export function diaRelativoDe(step: number): number {
+  return FOLLOWUP_DAYS[Math.min(Math.max(1, step), MAX_FOLLOWUPS) - 1];
+}
+
+/** "4º envío". */
+export function stepLabel(step: number): string {
+  return `${step}º envío`;
+}
 
 /**
  * `minDays`   → días mínimos desde la fecha base para mandar este recordatorio.
@@ -138,27 +199,34 @@ export const MAX_REMINDERS = 3;
  *               un alumno rezagado reciba los tres seguidos: aunque lleve 25
  *               días esperando, el 2º no sale hasta 3 días después del 1º.
  */
-export const REMINDER_PLAN = [
-  { step: 1 as const, minDays: 2,  minGapDays: 0 },
-  { step: 2 as const, minDays: 5,  minGapDays: 3 },
-  { step: 3 as const, minDays: 10, minGapDays: 5 },
-];
-
-export const STEP_LABEL: Record<number, string> = {
-  1: '1º recordatorio',
-  2: '2º recordatorio',
-  3: '3º (último)',
-};
+/** Etiqueta por número de envío. Fuera del tope sigue diciendo "14º envío". */
+export const STEP_LABEL: Record<number, string> = new Proxy({} as Record<number, string>, {
+  get: (_t, k) => stepLabel(Number(k)),
+});
 
 // ── Utilidades ───────────────────────────────────────────────────────────────
 export const norm = (s: string | null | undefined): string => (s ?? '').trim().toLowerCase();
 
-/** Días enteros entre dos instantes. Devuelve -1 si la fecha no es válida. */
+/** Días enteros (bloques de 24 h) entre dos instantes. Devuelve -1 si la fecha no es válida. */
 export function daysSince(iso: string | null | undefined, now: number): number {
   if (!iso) return -1;
   const t = new Date(iso).getTime();
   if (isNaN(t)) return -1;
   return Math.floor((now - t) / 86_400_000);
+}
+
+/**
+ * Días de CALENDARIO en hora de España entre un instante y ahora (0 = mismo
+ * día). Es la cuenta de la cadencia: "día 1" es el día siguiente al del
+ * enlace, salga el cron a la hora que salga. -1 si la fecha no es válida.
+ */
+export function calendarDaysSince(iso: string | null | undefined, now: number): number {
+  if (!iso) return -1;
+  const t = new Date(iso).getTime();
+  if (isNaN(t)) return -1;
+  const a = getSpainParts(new Date(t)).dateStr;
+  const b = getSpainParts(new Date(now)).dateStr;
+  return Math.round((Date.UTC(+b.slice(0, 4), +b.slice(5, 7) - 1, +b.slice(8, 10)) - Date.UTC(+a.slice(0, 4), +a.slice(5, 7) - 1, +a.slice(8, 10))) / 86_400_000);
 }
 
 /** Clave con la que se agrupa a un alumno: id si lo hay, si no el nombre. */
@@ -193,39 +261,45 @@ export function latestTokenPerStudent(tokens: FormTokenRow[]): Map<string, FormT
 
 // ── El cálculo del paso ──────────────────────────────────────────────────────
 /**
- * Qué recordatorio toca hoy. Devuelve el paso o el motivo por el que no toca.
+ * Qué envío toca hoy. Devuelve el número o el motivo por el que no toca.
  *
- * El siguiente paso es siempre `count + 1`: nunca se saltan pasos, ni siquiera
- * para un alumno que lleva 30 días esperando. Así el primero que recibe es
- * siempre el amable, no el de urgencia.
+ * El siguiente es siempre `count + 1`: nunca se saltan pasos, ni siquiera para
+ * un alumno que lleva 30 días esperando. Así el primero que recibe es siempre
+ * el amable, no el de urgencia. Dos condiciones, las dos en días de calendario
+ * (hora de España):
+ *   · han pasado al menos FOLLOWUP_DAYS[count] días desde el día 0;
+ *   · desde el envío anterior ha pasado al menos el hueco que la cadencia deja
+ *     entre ese envío y éste (1, 1, 3, 3, 7…). Es lo que reparte la serie a un
+ *     alumno rezagado en vez de mandarle trece correos en trece días seguidos.
  */
 export function nextReminderStep(args: {
   count: number;
   lastSent: string | null;
   baseDate: string;
   now: number;
-  /** El enlace lo creó el follow-up: el primer correo sale ya, sin esperar 2 días. */
+  /** El enlace lo creó el follow-up: el primer correo sale ya, sin esperar al día 1. */
   primeroInmediato?: boolean;
-}): { step: 1 | 2 | 3 | null; days: number; skipReason?: PendingEntry['skipReason'] } {
-  const days = daysSince(args.baseDate, args.now);
+  /** "No enviar más" del equipo. */
+  optOut?: boolean | null;
+}): { step: number | null; days: number; skipReason?: PendingEntry['skipReason'] } {
+  const days = calendarDaysSince(args.baseDate, args.now);
   const count = Math.max(0, args.count ?? 0);
 
-  if (count >= MAX_REMINDERS) return { step: null, days, skipReason: 'tope_alcanzado' };
+  if (args.optOut) return { step: null, days, skipReason: 'no_enviar' };
+  if (count >= MAX_FOLLOWUPS) return { step: null, days, skipReason: 'tope_alcanzado' };
 
-  const plan = REMINDER_PLAN[count];          // count 0 → paso 1, count 1 → paso 2…
-  if (!plan) return { step: null, days, skipReason: 'tope_alcanzado' };
-
-  const minDays = count === 0 && args.primeroInmediato ? 0 : plan.minDays;
+  const minDays = count === 0 && args.primeroInmediato ? 0 : FOLLOWUP_DAYS[count];
   if (days < minDays) return { step: null, days, skipReason: 'esperando_dias' };
 
   if (count > 0) {
-    const gap = daysSince(args.lastSent, args.now);
+    const gap = calendarDaysSince(args.lastSent, args.now);
     // Sin fecha del último envío (dato viejo o corrupto) se espera un día antes
     // de seguir, en vez de disparar el siguiente de inmediato.
-    if (gap < plan.minGapDays) return { step: null, days, skipReason: 'esperando_espaciado' };
+    const minGap = Math.max(1, FOLLOWUP_DAYS[count] - FOLLOWUP_DAYS[count - 1]);
+    if (gap < minGap) return { step: null, days, skipReason: 'esperando_espaciado' };
   }
 
-  return { step: plan.step, days };
+  return { step: count + 1, days };
 }
 
 // ── Quién está pendiente ─────────────────────────────────────────────────────
@@ -235,6 +309,13 @@ export interface BuildPendingInput {
   sessions: TestSessionRow[];
   dropouts: DropoutRow[];
   now: number;
+  /**
+   * Envíos registrados (level_test_followups). Si no viene —llamadores antiguos
+   * o base sin la tabla— se cuenta con los contadores espejo de form_tokens.
+   */
+  followups?: FollowupRow[];
+  /** Para el email alternativo (assignments.student_email). Opcional. */
+  assignments?: Array<{ student_id?: string | null; student_name?: string | null; student_email?: string | null }>;
 }
 
 /**
@@ -247,7 +328,25 @@ export interface BuildPendingInput {
  *   · Los alumnos sin ninguna dirección de correo a la que escribir.
  */
 export function buildPendingList(input: BuildPendingInput): PendingEntry[] {
-  const { tokens, students, sessions, dropouts, now } = input;
+  const { tokens, students, sessions, dropouts, now, followups, assignments } = input;
+
+  // Envíos hechos por alumno (level_test_followups): cuántos y el último.
+  const enviadosPor = new Map<string, { count: number; lastSent: string | null }>();
+  for (const f of followups ?? []) {
+    if (!f.student_id || f.status === 'failed') continue;
+    const cur = enviadosPor.get(f.student_id) ?? { count: 0, lastSent: null };
+    cur.count = Math.max(cur.count, f.numero_envio);
+    if (!cur.lastSent || new Date(f.sent_at).getTime() > new Date(cur.lastSent).getTime()) cur.lastSent = f.sent_at;
+    enviadosPor.set(f.student_id, cur);
+  }
+  const asgEmailById = new Map<string, string>();
+  const asgEmailByName = new Map<string, string>();
+  for (const a of assignments ?? []) {
+    if (!a.student_email) continue;
+    if (a.student_id && !asgEmailById.has(a.student_id)) asgEmailById.set(a.student_id, a.student_email);
+    const n = norm(a.student_name);
+    if (n && !asgEmailByName.has(n)) asgEmailByName.set(n, a.student_email);
+  }
 
   const stById = new Map(students.map(s => [s.id, s]));
   const stByName = new Map(students.map(s => [norm(s.name), s]));
@@ -303,41 +402,46 @@ export function buildPendingList(input: BuildPendingInput): PendingEntry[] {
       (token.student_id && bajaIds.has(token.student_id)) || bajaNames.has(norm(token.student_name));
     if (esBaja) continue;
 
-    const email = (token.student_email?.trim() || student.email?.trim() || '');
+    // A dónde se escribe: students.email manda; el de la assignment queda como
+    // alternativo si es distinto (se registra con el envío). Ver lib/email.
+    const { to: email, alt: emailAlt } = resolveStudentEmails({
+      studentEmail: student.email,
+      assignmentEmail: asgEmailById.get(student.id) ?? asgEmailByName.get(norm(student.name)) ?? null,
+      tokenEmail: token.student_email,
+    });
     if (!email) continue;
 
-    let sequence: Sequence;
-    let baseDate: string;
-    let count: number;
-    let lastSent: string | null;
+    // La secuencia termina cuando COMPLETA LA PRUEBA, haya hecho el formulario
+    // o no (hay alumnos que la hacen por un enlace directo del admin).
+    const hecho =
+      (token.student_id && testHechoIds.has(token.student_id)) ||
+      testHechoNames.has(norm(token.student_name)) ||
+      testHechoNames.has(norm(student.name));
+    if (hecho) continue;
 
-    if (estado === 'pending') {
-      sequence = 'formulario';
-      baseDate = token.created_at;
-      count = token.form_reminder_count ?? 0;
-      lastSent = token.form_reminder_last_sent;
-    } else {
-      // Formulario completado → solo sigue pendiente si le falta la prueba.
-      const hecho =
-        (token.student_id && testHechoIds.has(token.student_id)) ||
-        testHechoNames.has(norm(token.student_name)) ||
-        testHechoNames.has(norm(student.name));
-      if (hecho) continue;
-      if (!token.completed_at) continue;                      // sin reloj fiable
-      sequence = 'test';
-      baseDate = token.completed_at;
-      count = token.test_reminder_count ?? 0;
-      lastSent = token.test_reminder_last_sent;
-    }
+    // Qué le falta (decide el texto). Un solo reloj para las dos situaciones.
+    const sequence: Sequence = estado === 'pending' ? 'formulario' : 'test';
+    const baseDate = token.created_at;
+
+    // Envíos hechos: la tabla de registro manda; sin ella, los contadores espejo
+    // del token (suma de las dos secuencias antiguas).
+    const registrado = enviadosPor.get(student.id);
+    const count = followups
+      ? (registrado?.count ?? 0)
+      : (token.form_reminder_count ?? 0) + (token.test_reminder_count ?? 0);
+    const lastSent = followups
+      ? (registrado?.lastSent ?? null)
+      : [token.form_reminder_last_sent, token.test_reminder_last_sent].filter(Boolean).sort().pop() ?? null;
 
     const { step, days, skipReason } = nextReminderStep({
       count, lastSent, baseDate, now,
-      // Solo la secuencia del formulario entrega el enlace por correo; la del
-      // test siempre parte de un formulario que el alumno ya rellenó.
+      // El enlace lo creó el propio follow-up: ese correo ES la entrega del
+      // enlace y sale en la misma corrida, sin esperar al día 1.
       primeroInmediato: sequence === 'formulario' && primerAvisoInmediato(token),
+      optOut: student.followup_opt_out,
     });
     out.push({
-      sequence, variant: variantOf(token), token, student, email,
+      sequence, variant: variantOf(token), token, student, email, emailAlt,
       baseDate, days, count, lastSent, step, skipReason,
     });
   }
@@ -454,9 +558,10 @@ export interface FollowupSummary {
   pendientesFormulario: number;
   pendientesTest: number;
   sinEnlace: number;         // alumnos vivos a los que hay que generarles el link
-  sinRespuesta: number;      // agotaron los 3 recordatorios y siguen sin completar
+  sinRespuesta: number;      // agotaron los 13 envíos y siguen sin completar
   nuncaContactados: number;
   hoyTocan: number;
+  noEnviar: number;          // "No enviar más" marcado por el equipo
 }
 
 export function summarize(entries: PendingEntry[], sinEnlace = 0): FollowupSummary {
@@ -464,8 +569,9 @@ export function summarize(entries: PendingEntry[], sinEnlace = 0): FollowupSumma
     pendientesFormulario: entries.filter(e => e.sequence === 'formulario').length,
     pendientesTest:       entries.filter(e => e.sequence === 'test').length,
     sinEnlace,
-    sinRespuesta:         entries.filter(e => e.count >= MAX_REMINDERS).length,
+    sinRespuesta:         entries.filter(e => e.count >= MAX_FOLLOWUPS).length,
     nuncaContactados:     entries.filter(e => e.count === 0).length,
     hoyTocan:             entries.filter(e => e.step !== null).length,
+    noEnviar:             entries.filter(e => e.skipReason === 'no_enviar').length,
   };
 }

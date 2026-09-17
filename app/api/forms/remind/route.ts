@@ -1,12 +1,16 @@
-// Recordatorio A MANO del formulario inicial / prueba de nivel: el botón
+// Follow-up A MANO del formulario inicial / prueba de nivel: el botón
 // "Recordar" de la pestaña Tests de nivel del admin (uno o varios alumnos).
 //
 // Mismo criterio que el cron diario (lib/formReminders.buildPendingList) para
-// saber en qué secuencia está cada alumno y con qué texto le toca, y el mismo
-// envío (lib/formReminderSend). Lo único que se salta es la CADENCIA: el cron
-// espera 2, 5 y 10 días; aquí sale ya. Dos topes propios:
-//   · el texto nunca pasa del 3º (si ya agotó los tres, se repite el último);
-//   · como mucho uno cada 24 h por alumno, para que un doble clic no mande dos.
+// saber qué le falta a cada alumno y con qué texto le toca, y el mismo envío
+// (lib/formReminderSend). Lo único que se salta es la CADENCIA: el cron espera
+// los días 1, 2, 3, 6, 9, 16…; aquí sale ya. Dos reglas propias:
+//   · el número de envío es el siguiente al último registrado, sin tope: si ya
+//     agotó los 13 automáticos, el 14º va con el texto semanal;
+//   · como mucho uno por día de calendario y alumno, para que un doble clic no
+//     mande dos.
+// "No enviar más" (students.followup_opt_out) también corta el envío manual:
+// si el equipo quiere escribirle igual, primero quita la marca.
 //
 // Lo llama el admin ya logueado (auth client-side, igual que el resto de rutas
 // del panel). Body: { tokenIds: string[] } con los ids de form_tokens.
@@ -14,8 +18,8 @@
 import { supabase } from '@/lib/supabase';
 import { enviarRecordatorio, PAUSA_MS, sleep } from '@/lib/formReminderSend';
 import {
-  buildPendingList, daysSince, MAX_REMINDERS, STEP_LABEL,
-  type FormTokenRow, type StudentRow, type TestSessionRow, type DropoutRow,
+  buildPendingList, calendarDaysSince, stepLabel,
+  type FormTokenRow, type StudentRow, type TestSessionRow, type DropoutRow, type FollowupRow,
 } from '@/lib/formReminders';
 import { publicBase } from '@/lib/appUrl';
 import type { ResultadoManual } from '@/lib/levelTestSeguimiento';
@@ -45,25 +49,41 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ error: `Como mucho ${MAX_POR_PETICION} alumnos por envío.` }, { status: 400 });
   }
 
-  const [tk, st, ls, dr] = await Promise.all([
+  // students con el opt-out; sin la columna (migración sin correr) se reintenta sin ella.
+  let st = await supabase.from('students').select('id, name, email, followup_opt_out');
+  if (st.error && (st.error.code === '42703' || st.error.code === 'PGRST204')) {
+    st = await supabase.from('students').select('id, name, email');
+  }
+  const [tk, ls, dr, ag, fu] = await Promise.all([
     supabase.from('form_tokens').select(TOKEN_COLS),
-    supabase.from('students').select('id, name, email'),
     supabase.from('level_test_sessions').select('student_id, student_name, candidate_name, status'),
     supabase.from('student_dropouts').select('student_id, student_name'),
+    supabase.from('assignments').select('student_id, student_name, student_email'),
+    supabase.from('level_test_followups').select('student_id, numero_envio, sent_at, status'),
   ]);
   if (tk.error || st.error || ls.error) {
     console.error('[forms/remind] Error al leer:', tk.error ?? st.error ?? ls.error);
     return Response.json({ error: 'Error del servidor' }, { status: 500 });
   }
+  if (fu.error) {
+    console.error('[forms/remind] Error al leer level_test_followups:', fu.error);
+    return Response.json(
+      { error: 'Falta la tabla level_test_followups. Ejecutá supabase-plazo-24h-followups.sql en Supabase.' },
+      { status: 500 },
+    );
+  }
   if (dr.error) console.error('[forms/remind] Error al leer student_dropouts (se sigue sin ese filtro):', dr.error);
+  if (ag.error) console.error('[forms/remind] Error al leer assignments (sin email alternativo):', ag.error);
 
   const now = Date.now();
   const base = publicBase(request);
   const pendientes = buildPendingList({
-    tokens:   (tk.data ?? []) as unknown as FormTokenRow[],
-    students: (st.data ?? []) as unknown as StudentRow[],
-    sessions: (ls.data ?? []) as unknown as TestSessionRow[],
-    dropouts: (dr.data ?? []) as unknown as DropoutRow[],
+    tokens:      (tk.data ?? []) as unknown as FormTokenRow[],
+    students:    (st.data ?? []) as unknown as StudentRow[],
+    sessions:    (ls.data ?? []) as unknown as TestSessionRow[],
+    dropouts:    (dr.data ?? []) as unknown as DropoutRow[],
+    followups:   (fu.data ?? []) as unknown as FollowupRow[],
+    assignments: (ag.data ?? []) as unknown as Array<{ student_id: string | null; student_name: string | null; student_email: string | null }>,
     now,
   });
   const porToken = new Map(pendientes.map(e => [e.token.id, e]));
@@ -76,15 +96,19 @@ export async function POST(request: Request): Promise<Response> {
     // Completó, el enlace caducó, es baja o no tiene email: no hay a quién ni
     // qué recordar. El panel no ofrece el botón en esos casos; esto es la red.
     if (!e) { resultados.push({ tokenId: id, alumno: nombreDe.get(id) ?? null, ok: false, motivo: 'no_pendiente' }); continue; }
-    if (e.lastSent && daysSince(e.lastSent, now) < 1) {
+    if (e.skipReason === 'no_enviar') {
+      resultados.push({ tokenId: id, alumno: e.student.name, ok: false, motivo: 'no_enviar' });
+      continue;
+    }
+    if (e.lastSent && calendarDaysSince(e.lastSent, now) < 1) {
       resultados.push({ tokenId: id, alumno: e.student.name, ok: false, motivo: 'ya_hoy' });
       continue;
     }
 
-    const step = Math.min(e.count + 1, MAX_REMINDERS) as 1 | 2 | 3;
+    const step = e.count + 1;
     const r = await enviarRecordatorio(e, step, base, now);
     resultados.push(r.ok
-      ? { tokenId: id, alumno: e.student.name, ok: true, paso: STEP_LABEL[step] }
+      ? { tokenId: id, alumno: e.student.name, ok: true, paso: stepLabel(step) }
       : { tokenId: id, alumno: e.student.name, ok: false, motivo: r.motivo });
 
     if (i < ids.length - 1) await sleep(PAUSA_MS);

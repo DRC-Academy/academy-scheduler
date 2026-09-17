@@ -9,8 +9,8 @@
       "schedule": "0 12 * * *"
     },
     {
-      "path": "/api/cron/form-reminders",
-      "schedule": "0 13 * * *"
+      "path": "/api/cron/followups-nivel",
+      "schedule": "0 8 * * *"
     }
   ]
 }

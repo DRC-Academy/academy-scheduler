@@ -11,8 +11,8 @@
 // Funciones puras sobre filas ya leídas; la pestaña solo pinta.
 
 import {
-  buildPendingList, latestTokenPerStudent, studentKeyOf, tokenStateOf, daysSince, norm,
-  type FormTokenRow, type StudentRow, type TestSessionRow, type DropoutRow, type PendingEntry,
+  buildPendingList, latestTokenPerStudent, studentKeyOf, tokenStateOf, daysSince, norm, stepLabel,
+  type FormTokenRow, type StudentRow, type TestSessionRow, type DropoutRow, type PendingEntry, type FollowupRow,
 } from '@/lib/formReminders';
 import { testStateOf, type LevelTestInfo } from '@/lib/levelTestClient';
 
@@ -57,6 +57,12 @@ export interface Seguimiento {
   pendiente: PendingEntry | null;
   /** "Recordar" aplica: está en una secuencia y tiene enlace y email. */
   recordable: boolean;
+  /** Último follow-up registrado (level_test_followups): cuándo y qué número. */
+  ultimoFollowup: { sentAt: string; numero: number } | null;
+  /** Envíos hechos en total. */
+  enviosHechos: number;
+  /** "No enviar más" marcado por el equipo. */
+  noEnviar: boolean;
 }
 
 export interface SeguimientoInput {
@@ -65,6 +71,10 @@ export interface SeguimientoInput {
   students: StudentRow[];
   dropouts: DropoutRow[];
   now: number;
+  /** Registro de envíos (level_test_followups). Opcional: sin él, sin columna de follow-up. */
+  followups?: FollowupRow[];
+  /** Para el email alternativo. Opcional. */
+  assignments?: Array<{ student_id?: string | null; student_name?: string | null; student_email?: string | null }>;
 }
 
 const claveSesion = (s: LevelTestInfo) => s.student_id?.trim() || `n:${norm(s.student_name || s.candidate_name)}`;
@@ -92,7 +102,17 @@ function tonoPendiente(dias: number, enviado: string, formulario: string | null,
  * entrar; los trabados de hace meses ya los cuenta el filtro "Parados".
  */
 export function construirSeguimiento(input: SeguimientoInput): Seguimiento[] {
-  const { tokens, sessions, students, dropouts, now } = input;
+  const { tokens, sessions, students, dropouts, now, followups, assignments } = input;
+
+  // Último envío y total por alumno (level_test_followups).
+  const followupPor = new Map<string, { sentAt: string; numero: number; total: number }>();
+  for (const f of followups ?? []) {
+    if (!f.student_id || f.status === 'failed') continue;
+    const cur = followupPor.get(f.student_id);
+    if (!cur) { followupPor.set(f.student_id, { sentAt: f.sent_at, numero: f.numero_envio, total: 1 }); continue; }
+    cur.total++;
+    if (new Date(f.sent_at).getTime() >= new Date(cur.sentAt).getTime()) { cur.sentAt = f.sent_at; cur.numero = Math.max(cur.numero, f.numero_envio); }
+  }
 
   const stById = new Map(students.map(s => [s.id, s]));
   const stByName = new Map(students.map(s => [norm(s.name), s]));
@@ -104,7 +124,7 @@ export function construirSeguimiento(input: SeguimientoInput): Seguimiento[] {
   // se indexa por la clave del alumno y no por el id del token.
   const pendientes = new Map<string, PendingEntry>();
   for (const e of buildPendingList({
-    tokens, students, dropouts, now,
+    tokens, students, dropouts, now, followups, assignments,
     sessions: sessions as unknown as TestSessionRow[],
   })) pendientes.set(studentKeyOf(e.token), e);
 
@@ -170,7 +190,10 @@ export function construirSeguimiento(input: SeguimientoInput): Seguimiento[] {
     if (completada) {
       tono = 'ok';
     } else if (pendiente) {
-      dias = Math.max(0, pendiente.days);
+      // Días SIN AVANZAR (desde el último hito: el formulario si lo hizo, si no
+      // el enlace). No es el reloj de la cadencia, que desde septiembre de 2026
+      // cuenta siempre desde el enlace (pendiente.days).
+      dias = Math.max(0, daysSince(formulario ?? ref.created_at, now));
       tono = tonoPendiente(dias, ref.created_at, formulario, now);
     } else if (esBaja) {
       tono = 'baja';
@@ -199,7 +222,12 @@ export function construirSeguimiento(input: SeguimientoInput): Seguimiento[] {
       cefr: completada?.cefr_level ?? null,
       overall: completada?.overall_score ?? null,
       tono, dias, pendiente,
-      recordable: !!pendiente,
+      // Con "No enviar más" el botón se apaga: si el equipo quiere escribirle
+      // igual, primero quita la marca.
+      recordable: !!pendiente && pendiente.skipReason !== 'no_enviar',
+      ultimoFollowup: (() => { const f = student ? followupPor.get(student.id) : undefined; return f ? { sentAt: f.sentAt, numero: f.numero } : null; })(),
+      enviosHechos: (student ? followupPor.get(student.id)?.total : 0) ?? 0,
+      noEnviar: !!student?.followup_opt_out,
     });
   }
 
@@ -231,10 +259,24 @@ export function construirSeguimiento(input: SeguimientoInput): Seguimiento[] {
       tono, dias,
       pendiente: null,
       recordable: false,
+      ultimoFollowup: null,
+      enviosHechos: 0,
+      noEnviar: false,
     });
   }
 
   return out.sort((a, b) => new Date(b.enviado).getTime() - new Date(a.enviado).getTime());
+}
+
+/** "12/9 · 4º envío" para la columna "Último follow-up"; '' si no hubo ninguno. */
+export function ultimoFollowupLabel(e: Pick<Seguimiento, 'ultimoFollowup'>): string {
+  const f = e.ultimoFollowup;
+  if (!f) return '';
+  const d = new Date(f.sentAt);
+  if (isNaN(d.getTime())) return stepLabel(f.numero);
+  // Fecha corta en hora de España, sin ceros a la izquierda: "12/9".
+  const fmt = new Intl.DateTimeFormat('es-ES', { timeZone: 'Europe/Madrid', day: 'numeric', month: 'numeric' });
+  return `${fmt.format(d)} · ${stepLabel(f.numero)}`;
 }
 
 // ── Filtros y etiquetas ──────────────────────────────────────────────────────
@@ -288,7 +330,7 @@ export function resumenSeguimiento(filas: Seguimiento[], now: number): ResumenSe
 }
 
 // ── Respuesta de /api/forms/remind ───────────────────────────────────────────
-export type MotivoManual = 'no_pendiente' | 'ya_hoy' | 'reserva' | 'ya_tomado' | 'sin enlace' | 'envío';
+export type MotivoManual = 'no_pendiente' | 'ya_hoy' | 'no_enviar' | 'reserva' | 'ya_tomado' | 'sin enlace' | 'envío';
 
 export interface ResultadoManual {
   tokenId: string;
@@ -301,7 +343,8 @@ export interface ResultadoManual {
 
 export const MOTIVO_MANUAL: Record<MotivoManual, string> = {
   no_pendiente: 'ya no está pendiente',
-  ya_hoy:       'ya recibió uno en las últimas 24 h',
+  ya_hoy:       'ya recibió uno hoy',
+  no_enviar:    'tiene marcado "No enviar más"',
   reserva:      'no se pudo reservar el envío',
   ya_tomado:    'otro envío se adelantó',
   'sin enlace': 'no se pudo preparar el enlace',
