@@ -25,16 +25,16 @@
 // transcripciones, senal de riesgo, puntuacion de progreso (1-10). Un 5/10
 // delante del alumno desmotiva y no le dice que hacer.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { toBullets } from '@/components/alumnos/studentPageUi';
 import { keepForStudent, forStudentOrNull } from '@/lib/studentFacing';
 import { CEFR_LADDER } from '@/lib/studentViz';
 import { effectiveLevelOf } from '@/lib/effectiveLevel';
-import { getNextMilestone, isMilestone } from '@/lib/milestones';
+import { isMilestone } from '@/lib/milestones';
 import { construirEstimacion, type Estimacion } from '@/lib/estimacion';
 import { resolveWeeklyHours, type AssignmentLite, type StudentLite } from '@/lib/progresoData';
 import { BannerAmpliar } from '@/components/BannerAmpliar';
-import { DIPLOMA_CSS } from '@/components/DiplomaBanner';
+import { CALENDARIO_CSS } from '@/components/DiplomaCalendario';
 import type { ClassAnalysisRow, StudentProfileRow } from '@/lib/aiTypes';
 
 // `studentName` ya no se muestra (el saludo con el nombre se quitó en
@@ -50,10 +50,10 @@ export function ProgresoFicha({ profile, analyses, assignment, student, diplomaS
    *  mejor dice si el alumno prepara un examen. Opcional: sin ella la detección
    *  cae a los textos de la assignment, como antes. */
   student?: StudentLite | null;
-  /** La tarjeta del diploma del LMS (components/DiplomaBanner), ya envuelta por la
-   *  ruta en lo que difiere su carga. Va entre la escalera y el banner de ritmo,
-   *  como una tercera caja de la misma familia. Sin ella la ficha es exactamente
-   *  la de antes. */
+  /** El calendario de cuenta atrás del diploma (components/DiplomaCalendario),
+   *  ya envuelto por la ruta en lo que difiere la consulta al LMS. Va DENTRO de
+   *  la tarjeta "Tu nivel", debajo de la tira de niveles, donde hasta el
+   *  18/09/2026 iba la fila de cifras. Sin él la tarjeta acaba en la tira. */
   diplomaSlot?: React.ReactNode;
 }) {
   // Todo lo que sale de la ficha pasa por el cortafuegos: está escrita para el
@@ -70,15 +70,11 @@ export function ProgresoFicha({ profile, analyses, assignment, student, diplomaS
   const eff = effectiveLevelOf(profile, assignment?.student_level);
   const rawLevel = eff.raw;
   const level = eff.level;
+  // `eff.decided` (si el nivel lo midió alguien o es el del alta) ya no se
+  // enseña: la nota "Estimado · confírmalo con tu profesor" iba en la fila de
+  // cifras, que se quitó el 18/09/2026.
 
   const weeklyHours = resolveWeeklyHours(assignment);
-
-  const classCount = useMemo(() => {
-    const fromNumbers = analyses.reduce((max, a) => Math.max(max, a.class_number ?? 0), 0);
-    return Math.max(fromNumbers, analyses.length);
-  }, [analyses]);
-
-  const nextMilestone = getNextMilestone(classCount);
 
   // Las fuentes van EN ORDEN y gana la primera con un examen reconocible. El
   // producto de WooCommerce va primero porque es lo que el alumno compró y lo más
@@ -98,48 +94,17 @@ export function ProgresoFicha({ profile, analyses, assignment, student, diplomaS
 
   return (
     <>
-      {/* Sin encabezado: lo primero que ve el alumno es la escalera de niveles. */}
+      {/* Sin encabezado: lo primero que ve el alumno es la escalera de niveles.
+          Debajo de la tira, en la misma tarjeta, el calendario de cuenta atrás
+          del diploma: se pinta desde el primer render con la fecha de inicio y
+          el LMS solo lo cambia a "conseguido" si llega, sin mover nada. */}
       <section className="pg-card pg-hero pg-rise" style={{ animationDelay: '0ms' }}>
         <LevelLadder level={level} target={estimacion?.meta.nivel ?? null} />
-
-        <div className="pg-stats">
-          <div className="pg-stat">
-            <span className="pg-stat-num">{classCount}</span>
-            <span className="pg-stat-label">{classCount === 1 ? 'Clase hecha' : 'Clases hechas'}</span>
-          </div>
-          <div className="pg-stat">
-            <span className="pg-stat-num">{level ?? '—'}</span>
-            <span className="pg-stat-label">Nivel actual</span>
-            {/*
-              `decided` es false cuando el nivel NO lo fijó ni el profesor ni la
-              prueba: lo que se enseña es el curso que contrató o un texto viejo
-              de la ficha. Enseñarlo sin más lo haría pasar por una medición.
-              El dato ya lo calculaba `effectiveLevelOf`; hasta ahora se tiraba.
-            */}
-            {level && !eff.decided && (
-              <span className="pg-stat-nota">Estimado · confírmalo con tu profesor</span>
-            )}
-          </div>
-          <div className="pg-stat">
-            <span className="pg-stat-num">
-              {weeklyHours != null ? weeklyHours : '—'}
-              {weeklyHours != null && <span className="pg-stat-unit">h</span>}
-            </span>
-            <span className="pg-stat-label">Cada semana</span>
-          </div>
-          <div className="pg-stat">
-            <span className="pg-stat-num">
-              {nextMilestone ? <><span className="pg-stat-pre">Clase</span>{nextMilestone}</> : '✓'}
-            </span>
-            <span className="pg-stat-label">{nextMilestone ? 'Próximo hito' : 'Hitos completos'}</span>
-          </div>
-        </div>
+        {diplomaSlot}
       </section>
 
-      {/* El diploma del LMS, entre la escalera y el ritmo. Llega tarde y con el
-          hueco ya reservado: nada de lo de abajo se mueve cuando aparece. */}
-      {diplomaSlot}
-
+      {/* El banner de ampliación sube: ocupa el sitio que dejaron la fila de
+          cifras y la tarjeta ancha del diploma. */}
       <BannerAmpliar estimacion={estimacion} />
 
       {/* La caja de objetivo va DEBAJO del banner (antes iba encima): así el
@@ -296,7 +261,7 @@ function Timeline({ analyses }: { analyses: ClassAnalysisRow[] }) {
 }
 
 export function ProgresoStyles() {
-  return <style dangerouslySetInnerHTML={{ __html: PROGRESO_CSS + DIPLOMA_CSS }} />;
+  return <style dangerouslySetInnerHTML={{ __html: PROGRESO_CSS + CALENDARIO_CSS }} />;
 }
 
 const PROGRESO_CSS = `
@@ -358,7 +323,8 @@ const PROGRESO_CSS = `
 }
 
 /* ── Escalera MCER ──────────────────────────────────────────────────────── */
-.pg-hero { display: flex; flex-direction: column; gap: 24px; }
+/* La tira arriba y, debajo, el calendario del diploma (components/DiplomaCalendario). */
+.pg-hero { display: flex; flex-direction: column; gap: 22px; }
 .pg-ladder-wrap { min-width: 0; }
 .pg-ladder {
   display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px;
@@ -381,31 +347,6 @@ const PROGRESO_CSS = `
   letter-spacing: 0.06em; text-transform: uppercase; color: var(--pg-green);
 }
 .pg-rung-note-target { color: #A87A00; }
-
-/* ── Cifras del hero ────────────────────────────────────────────────────── */
-.pg-stats {
-  display: grid; grid-template-columns: repeat(4, 1fr);
-  border-top: 1px solid var(--pg-line); padding-top: 20px;
-}
-.pg-stat { padding: 0 14px; border-left: 1px solid var(--pg-line); min-width: 0; }
-.pg-stat:first-child { padding-left: 0; border-left: none; }
-.pg-stat-num {
-  display: block; font-size: 26px; font-weight: 700; letter-spacing: -0.03em;
-  line-height: 1.1; color: var(--pg-green-dark);
-}
-.pg-stat-unit { font-size: 16px; font-weight: 300; margin-left: 1px; }
-.pg-stat-pre { font-size: 15px; font-weight: 400; margin-right: 5px; color: var(--pg-muted); }
-.pg-stat-label {
-  display: block; margin-top: 5px; font-size: 11px; font-weight: 600;
-  letter-spacing: 0.06em; text-transform: uppercase; color: var(--pg-faint);
-}
-/* La nota bajo el nivel cuando nadie lo ha medido todavía. En minúsculas y sin
-   negrita a propósito, para matizar la cifra sin competir con ella. */
-.pg-stat-nota {
-  display: block; margin-top: 4px; font-size: 10.5px; line-height: 1.35;
-  color: var(--pg-faint); text-transform: none; letter-spacing: 0;
-  text-wrap: balance;
-}
 
 /* ── Objetivo (las palabras del propio alumno, en cursiva) ──────────────── */
 .pg-goal { border-left: 4px solid var(--pg-green); }
@@ -573,10 +514,6 @@ const PROGRESO_CSS = `
   .pg-ladder { gap: 4px; }
   .pg-rung { padding: 10px 1px 9px; font-size: 12.5px; border-radius: 9px; }
   .pg-rung-note { font-size: 8px; letter-spacing: 0.03em; margin-top: 4px; }
-  .pg-stats { grid-template-columns: 1fr 1fr; gap: 16px 0; padding-top: 18px; }
-  .pg-stat { padding: 0 12px; }
-  .pg-stat:nth-child(odd) { padding-left: 0; border-left: none; }
-  .pg-stat-num { font-size: 23px; }
   .pg-split { grid-template-columns: 1fr; gap: 14px; }
   .pg-goal-text { font-size: 16px; }
   /* Tres columnas no entran: las tarjetas se apilan en versión compacta. Los

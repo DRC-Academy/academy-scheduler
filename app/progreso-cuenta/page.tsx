@@ -23,7 +23,7 @@
 import type { Metadata } from 'next';
 import { Suspense } from 'react';
 import { ProgresoFicha, ProgresoStyles } from '@/components/ProgresoFicha';
-import { DiplomaFromPromise, DiplomaSlot } from '@/components/DiplomaBanner';
+import { DiplomaFromPromise, DiplomaCalendario } from '@/components/DiplomaCalendario';
 import { getLmsDiploma } from '@/lib/lmsDiploma';
 import { ProgresoAltura } from '@/components/ProgresoAltura';
 import { verifyProgresoLink } from '@/lib/progresoSignature';
@@ -180,10 +180,10 @@ export default async function ProgresoCuentaPage({ searchParams }: {
   if (!payload) return <Marco><Caducado /></Marco>;
 
   // 4) EL DIPLOMA, SIN ESPERARLO. El LMS tarda hasta 5-6 s en frío y la ficha no
-  // puede quedarse en blanco por una barra: la promesa se pasa tal cual y la
-  // lee un componente cliente con `use()` dentro de un Suspense. El HTML de la
-  // ficha sale entero de inmediato con el hueco reservado; el bloque llega por
-  // el mismo stream cuando el LMS contesta (o el hueco se cierra si no lo hace).
+  // puede quedarse en blanco por él: la promesa se pasa tal cual y la lee un
+  // componente cliente con `use()` dentro de un Suspense. Mientras tanto el
+  // fallback pinta el mismo calendario con la fecha de inicio (que ya se tiene),
+  // y cuando el LMS contesta solo cambia la hoja si el diploma está conseguido.
   // Se hace aquí y no en el cliente porque la identidad ya está verificada y el
   // secreto del LMS no tiene que salir del servidor. Nunca rechaza: ver
   // lib/lmsDiploma.
@@ -198,7 +198,7 @@ export default async function ProgresoCuentaPage({ searchParams }: {
         assignment={payload.assignment}
         student={payload.studentLite}
         diplomaSlot={
-          <Suspense fallback={<DiplomaSlot diploma="cargando" />}>
+          <Suspense fallback={<DiplomaCalendario diploma="cargando" startDate={payload.startDate} />}>
             <DiplomaFromPromise promise={diploma} startDate={payload.startDate} />
           </Suspense>
         }

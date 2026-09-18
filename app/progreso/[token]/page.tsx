@@ -15,7 +15,7 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { ProgresoFicha, ProgresoStyles } from '@/components/ProgresoFicha';
-import { DiplomaFromToken } from '@/components/DiplomaBanner';
+import { DiplomaFromToken } from '@/components/DiplomaCalendario';
 import {
   PROFILE_COLS, PROFILE_COLS_EXTRA, ANALYSIS_COLS, ASSIGNMENT_COLS, STUDENT_COLS,
   isMissingColumnError, pickAssignment, earliestStartDate, type AssignmentLite, type StudentLite,
@@ -135,11 +135,12 @@ export default function ProgresoPage() {
             analyses={state.analyses}
             assignment={state.assignment}
             student={state.student}
-            // La barra del diploma la pide el navegador a /api/progreso/diploma con
+            // El calendario del diploma se pinta ya con la fecha de inicio; si el
+            // LMS dice "conseguido" lo pide el navegador a /api/progreso/diploma con
             // este mismo token (el secreto del LMS se queda en el servidor) y llega
             // después, sin frenar la ficha. Los tokens viejos que solo guardaron el
-            // nombre no tienen cruce posible con el LMS: sin barra ni hueco.
-            diplomaSlot={state.row.student_id ? <DiplomaFromToken token={token} startDate={state.startDate} /> : undefined}
+            // nombre no tienen cruce posible con el LMS: cuenta por fecha y ya.
+            diplomaSlot={<DiplomaFromToken token={state.row.student_id ? token : null} startDate={state.startDate} />}
           />
         )}
       </main>
