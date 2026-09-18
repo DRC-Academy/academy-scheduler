@@ -2,9 +2,10 @@
 //
 // La parte PURA de components/DiplomaCalendario: entra lo que dijo el LMS (o
 // que aún no dijo nada), la fecha de inicio del alumno y el día de hoy, y sale
-// qué hojas de calendario se pintan ("5 / MESES", "21 / DÍAS"), la leyenda de
-// al lado ("para tu diploma"), el texto del enlace y la frase completa para el
-// lector de pantalla. El componente no decide nada: pinta lo que sale de aquí.
+// qué hojas de calendario se pintan ("1 / MES", "9 / DÍAS"), la leyenda de al
+// lado ("para tu diploma"), la línea de lecciones debajo ("38 de 168
+// lecciones"), el texto del enlace y la frase completa para el lector de
+// pantalla. El componente no decide nada: pinta lo que sale de aquí.
 //
 // Vive aparte para poder probarse con fechas fijas (lib/diplomaCalendario.test.ts):
 // el estado "hoy" y los singulares ("1 MES", "1 DÍA") no tienen alumno real que
@@ -14,7 +15,7 @@
 // LOS ESTADOS, en orden de precedencia:
 //   · conseguido (el LMS dice que están todas las lecciones) → una hoja con el
 //     sello ✓ y el rótulo DIPLOMA. Manda sobre la fecha;
-//   · sin fecha de inicio válida → sin hojas: solo el enlace;
+//   · sin fecha de inicio válida → sin hojas: la línea de lecciones y el enlace;
 //   · vencido (la fecha pasó y el curso sigue abierto) → una hoja con "¡Retoma!"
 //     en lugar del número y el rótulo TU CURSO, y el enlace pasa a "Continuar
 //     mi curso →". Sin fecha ni cuenta: una invitación, no un reproche;
@@ -22,6 +23,19 @@
 //   · menos de 31 días → una sola hoja con los días;
 //   · más → meses y días (y solo la de los meses cuando los días sueltos son 0).
 // Singular y plural concuerdan: 1 MES, 1 DÍA.
+//
+// EL ENLACE: "Ir a la plataforma →" de normal; "Empezar mi curso →" para quien
+// tiene el curso y cero lecciones hechas; "Continuar mi curso →" en vencido
+// (aunque lleve cero: la hoja ya le dice "¡Retoma!", y "Empezar" la
+// contradiría). Conseguido vuelve a "Ir a la plataforma →".
+//
+// LAS LECCIONES vienen del LMS ("38 de 168 lecciones"): null mientras carga, si
+// no contestó o si el alumno no tiene curso. Es la única línea que puede llegar
+// tarde; el componente le reserva el sitio para que nada salte.
+//
+// SIEMPRE "LECCIONES", NUNCA "CLASES": las clases son las del profesor y se
+// cuentan en otro sitio. La palabra es la única pista que tiene el alumno para
+// no mezclar los dos números.
 //
 // 'cargando' (el LMS aún no contestó) y null (no contestó, o el alumno no tiene
 // curso en el LMS) se tratan igual: cuenta por fecha. El plazo es una regla de
@@ -37,7 +51,9 @@ export type DiplomaEstadoSlot = Diploma | null | 'cargando';
 
 export const T = {
   paraTuDiploma: 'para tu diploma',
+  lecciones: (hechas: number, total: number) => `${hechas} de ${total} lecciones`,
   irALaPlataforma: 'Ir a la plataforma →',
+  empezarMiCurso: 'Empezar mi curso →',
   // Vencido
   retoma: '¡Retoma!',
   tuCurso: 'Tu curso',
@@ -72,40 +88,59 @@ export interface Hoja {
 
 export interface Dibujo {
   hojas: Hoja[];
+  /** La línea de al lado de las hojas ("para tu diploma"). Null sin hojas. */
   leyenda: string | null;
+  /** "38 de 168 lecciones", o null si el LMS no lo dijo (todavía, o nunca). */
+  lecciones: string | null;
   enlace: string;
-  /** La frase completa para el lector de pantalla: las hojas y la leyenda leídas de corrido. */
+  /** La frase completa para el lector de pantalla: hojas, leyenda y lecciones de corrido. */
   frase: string | null;
 }
 
-/** Qué hojas, qué leyenda y qué enlace le tocan a este alumno. */
+/** "38 de 168 lecciones" si el LMS contestó con un curso; null en cualquier otro caso. */
+function leccionesDe(diploma: DiplomaEstadoSlot): string | null {
+  if (diploma === 'cargando' || !diploma || diploma.estado === 'sin-curso' || !(diploma.total > 0)) return null;
+  return T.lecciones(Math.min(diploma.completadas, diploma.total), diploma.total);
+}
+
+/** ¿Tiene curso en el LMS y no ha hecho ninguna lección? */
+function sinEmpezar(diploma: DiplomaEstadoSlot): boolean {
+  return diploma !== 'cargando' && !!diploma && diploma.estado === 'en-curso' && diploma.completadas === 0;
+}
+
+/** Qué hojas, qué leyenda, qué lecciones y qué enlace le tocan a este alumno. */
 export function dibujoDe(diploma: DiplomaEstadoSlot, startDate: string | null, hoy: string): Dibujo {
+  const lecciones = leccionesDe(diploma);
+  const conLecciones = (frase: string | null) => (frase && lecciones ? `${frase}. ${lecciones}.` : frase ?? lecciones);
+  const enlaceNormal = sinEmpezar(diploma) ? T.empezarMiCurso : T.irALaPlataforma;
+
   if (diploma !== 'cargando' && diploma?.estado === 'conseguido') {
     return {
       hojas: [{ valor: '', rotulo: T.diploma, sello: true }],
-      leyenda: T.cursoCompletado, enlace: T.irALaPlataforma, frase: T.diplomaConseguido,
+      leyenda: T.cursoCompletado, lecciones, enlace: T.irALaPlataforma, frase: conLecciones(T.diplomaConseguido),
     };
   }
 
   const plazo: Plazo | null = calcularPlazo(startDate, hoy);
-  if (!plazo) return { hojas: [], leyenda: null, enlace: T.irALaPlataforma, frase: null };
+  if (!plazo) return { hojas: [], leyenda: null, lecciones, enlace: enlaceNormal, frase: conLecciones(null) };
 
   switch (plazo.fase) {
     case 'vencido':
       return {
         hojas: [{ valor: T.retoma, rotulo: T.tuCurso, palabra: true }],
-        leyenda: T.yConsigueTuDiploma, enlace: T.continuarMiCurso, frase: T.diplomaTeEspera,
+        leyenda: T.yConsigueTuDiploma, lecciones, enlace: T.continuarMiCurso, frase: conLecciones(T.diplomaTeEspera),
       };
     case 'hoy':
       return {
         hojas: [{ valor: T.hoy, rotulo: T.diploma, corta: true }],
-        leyenda: T.tuDiplomaEsHoy, enlace: T.irALaPlataforma, frase: titularPlazo(plazo),
+        leyenda: T.tuDiplomaEsHoy, lecciones, enlace: enlaceNormal, frase: conLecciones(titularPlazo(plazo)),
       };
     case 'dias':
     case 'ultima-semana':
       return {
         hojas: [{ valor: plazo.dias, rotulo: T.dia(plazo.dias) }],
-        leyenda: T.paraTuDiploma, enlace: T.irALaPlataforma, frase: `${titularPlazo(plazo)} ${T.paraTuDiploma}`,
+        leyenda: T.paraTuDiploma, lecciones, enlace: enlaceNormal,
+        frase: conLecciones(`${titularPlazo(plazo)} ${T.paraTuDiploma}`),
       };
     case 'meses': {
       // Con más de 30 días siempre cabe al menos un mes; el respaldo en días
@@ -116,7 +151,10 @@ export function dibujoDe(diploma: DiplomaEstadoSlot, startDate: string | null, h
             { valor: plazo.meses, rotulo: T.mes(plazo.meses) },
             ...(plazo.diasSueltos > 0 ? [{ valor: plazo.diasSueltos, rotulo: T.dia(plazo.diasSueltos) }] : []),
           ];
-      return { hojas, leyenda: T.paraTuDiploma, enlace: T.irALaPlataforma, frase: `${titularPlazo(plazo)} ${T.paraTuDiploma}` };
+      return {
+        hojas, leyenda: T.paraTuDiploma, lecciones, enlace: enlaceNormal,
+        frase: conLecciones(`${titularPlazo(plazo)} ${T.paraTuDiploma}`),
+      };
     }
   }
 }

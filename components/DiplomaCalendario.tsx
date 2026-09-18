@@ -9,10 +9,13 @@
 // tarjeta de la escalera, debajo de la tira de niveles, donde antes iba la fila
 // de cifras (clases hechas, nivel, horas, próximo hito), que se quitó entera.
 //
-// EL DIBUJO: dos hojas de calendario de sobremesa, una al lado de la otra —
-// número grande arriba, rótulo en mayúsculas pequeñas debajo—, "5 / MESES" y
-// "21 / DÍAS". Al lado, en pequeño y en gris, "para tu diploma", y a la derecha
-// del todo el enlace "Ir a la plataforma →" (el mismo destino que tenía el
+// EL DIBUJO: una fila baja. A la izquierda, dos hojas de calendario de
+// sobremesa, una al lado de la otra —número grande arriba, rótulo en
+// mayúsculas pequeñas debajo, una franja verde fina arriba que las hace
+// parecer calendario—, "1 / MES" y "9 / DÍAS". Al lado, en gris, dos líneas:
+// "para tu diploma" y debajo, más pequeño, "38 de 168 lecciones". A la derecha
+// del todo el enlace ("Ir a la plataforma →", "Empezar mi curso →" con cero
+// lecciones, "Continuar mi curso →" en vencido; el mismo destino que tenía el
 // banner), como enlace pequeño con flecha y no como botón: el CTA de la página
 // sigue siendo el "Amplía tu plan" verde de abajo.
 //
@@ -23,13 +26,14 @@
 //
 // YA NO HAY HUECO RESERVADO NI CIERRE ANIMADO. La cuenta atrás sale de
 // `assignments.start_date`, que la ficha tiene desde el primer render, así que
-// se pinta de inmediato. Lo único que aporta el LMS (lib/lmsDiploma, hasta
-// 5-6 s en frío) es saber si el diploma ya está CONSEGUIDO; mientras no
-// contesta —o si no contesta— se enseña la cuenta por fecha, y si contesta
-// "conseguido" la hoja cambia sin que cambie la altura de la fila: las hojas
-// miden lo mismo en todos los estados, y lo de abajo no se mueve. Con el LMS
-// en "sin curso" también se enseña la cuenta: el plazo es una regla de la
-// academia (seis meses desde que empezó con su profesor), no del LMS.
+// se pinta de inmediato. Lo que aporta el LMS (lib/lmsDiploma, hasta 5-6 s en
+// frío) llega después: la línea de lecciones, el enlace de "Empezar" y saber si
+// el diploma ya está CONSEGUIDO. Mientras no contesta —o si no contesta— se
+// enseña la cuenta por fecha con la línea de lecciones vacía (su sitio queda
+// reservado), y cuando contesta nada cambia de altura: las hojas miden lo
+// mismo en todos los estados y lo de abajo no se mueve. Con el LMS en "sin
+// curso" también se enseña la cuenta: el plazo es una regla de la academia
+// (seis meses desde que empezó con su profesor), no del LMS.
 //
 // Va DENTRO de la tarjeta `.pg-hero` de components/ProgresoFicha (la ruta se lo
 // pasa por `diplomaSlot`), así que la medición de altura para el iframe de Mi
@@ -87,33 +91,41 @@ export function DiplomaFromToken({ token, startDate = null }: { token: string | 
 
 // ─── El dibujo ───────────────────────────────────────────────────────────────
 
-/** El calendario con su leyenda y su enlace. Se pinta desde el primer render. */
+/** El calendario con su leyenda, sus lecciones y su enlace. Se pinta desde el primer render. */
 export function DiplomaCalendario({ diploma, startDate = null }: { diploma: DiplomaEstadoSlot; startDate?: string | null }) {
   // El "hoy" es el de Madrid, como todos los plazos de la academia: el mismo
   // alumno ve el mismo número desde cualquier país.
-  const { hojas, leyenda, enlace, frase } = dibujoDe(diploma, startDate, madridToday());
+  const { hojas, leyenda, lecciones, enlace, frase } = dibujoDe(diploma, startDate, madridToday());
+  const conHojas = hojas.length > 0;
 
   return (
     <div className="pg-cal">
-      {hojas.length > 0 && (
+      {(conHojas || lecciones) && (
         <div className="pg-cal-cuenta" role="img" aria-label={frase ?? undefined}>
-          <div className="pg-cal-hojas">
-            {hojas.map(h => (
-              <div key={h.rotulo} className={`pg-cal-hoja${h.palabra ? ' is-ancha' : ''}`}>
-                {h.sello ? (
-                  <span className="pg-cal-sello">
-                    <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M5 12.5l4.5 4.5L19 7.5" />
-                    </svg>
-                  </span>
-                ) : (
-                  <span className={`pg-cal-num${h.palabra ? ' is-palabra' : h.corta ? ' is-corta' : ''}`}>{h.valor}</span>
-                )}
-                <span className="pg-cal-rotulo">{h.rotulo}</span>
-              </div>
-            ))}
+          {conHojas && (
+            <div className="pg-cal-hojas">
+              {hojas.map(h => (
+                <div key={h.rotulo} className={`pg-cal-hoja${h.palabra ? ' is-ancha' : ''}`}>
+                  {h.sello ? (
+                    <span className="pg-cal-sello">
+                      <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M5 12.5l4.5 4.5L19 7.5" />
+                      </svg>
+                    </span>
+                  ) : (
+                    <span className={`pg-cal-num${h.palabra ? ' is-palabra' : h.corta ? ' is-corta' : ''}`}>{h.valor}</span>
+                  )}
+                  <span className="pg-cal-rotulo">{h.rotulo}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {/* Sin hojas (sin fecha de inicio) la línea de lecciones sube a la
+              primera línea, al cuerpo de la leyenda: es lo único que hay. */}
+          <div className="pg-cal-texto">
+            {leyenda && <p className="pg-cal-leyenda">{leyenda}</p>}
+            <p className={leyenda ? 'pg-cal-lecciones' : 'pg-cal-leyenda'}>{lecciones}</p>
           </div>
-          {leyenda && <p className="pg-cal-leyenda">{leyenda}</p>}
         </div>
       )}
       <a className="pg-cal-link" href={LMS_PUBLIC_URL} target="_blank" rel="noopener">{enlace}</a>
@@ -125,87 +137,74 @@ export function DiplomaCalendario({ diploma, startDate = null }: { diploma: Dipl
 //
 // Se concatenan a PROGRESO_CSS en ProgresoStyles. Colores: las variables de la
 // ficha. La franja de arriba de cada hoja (el "lomo" del calendario de
-// sobremesa) es el mismo tinte verde de los peldaños superados de la escalera.
+// sobremesa) es el verde de marca, fino.
 //
-// MEDIDAS FIJAS: cada hoja mide 72 × 76 px en escritorio y 64 × 68 en el móvil,
-// pase lo que pase dentro (un número de dos cifras, "Hoy" o el sello). La única
-// que se ensancha es la de "¡Retoma!" (`is-ancha`: ancho al contenido, nunca
-// menos de 72), porque a un cuerpo legible la palabra no cabe en 72 px; la
-// ALTURA es la misma en todas. Así la fila mide lo mismo en todos los estados,
-// y cuando el LMS contesta "conseguido" y la hoja cambia, nada de lo de abajo
-// se mueve.
+// MEDIDAS FIJAS: cada hoja mide 60 × 56 px pase lo que pase dentro (un número
+// de dos cifras, "Hoy" o el sello). La única que se ensancha es la de
+// "¡Retoma!" (`is-ancha`: ancho al contenido, nunca menos de 60), porque a un
+// cuerpo legible la palabra no cabe en 60 px; la ALTURA es la misma en todas.
+// La fila mide lo que las hojas (56 px) en todos los estados, así que cuando
+// el LMS contesta y cambia la hoja, la línea de lecciones o el enlace, nada de
+// lo de abajo se mueve. La línea de lecciones tiene su altura reservada aunque
+// esté vacía, por lo mismo.
 //
 // El rótulo lleva line-height holgado a propósito: con line-height 1 y el
 // overflow oculto, el acento de "DÍAS" se recortaba por arriba.
 //
-// LA FILA ENVUELVE. En escritorio caben las hojas, la leyenda y el enlace en
-// una línea; en un móvil de 360 px el enlace no entra y pasa solo a la línea
-// siguiente, pegado a la derecha (`margin-left: auto`), que es donde está
-// también cuando cabe. Sin calendario (sin fecha de inicio) queda solo el
-// enlace, en el mismo sitio.
+// LA FILA ENVUELVE. En escritorio caben las hojas, el texto y el enlace en una
+// línea; en el móvil el enlace va SIEMPRE en la segunda línea, pegado a la
+// derecha (`margin-left: auto`), que es donde está también cuando cabe. Sin
+// calendario ni lecciones queda solo el enlace, en el mismo sitio.
 //
 // OJO al escribir comentarios aquí dentro: es un template literal, un acento
 // grave rompe el build.
 
 export const CALENDARIO_CSS = `
-.pg-cal {
-  display: flex; align-items: center; flex-wrap: wrap; gap: 12px 14px;
-  border-top: 1px solid var(--pg-line); padding-top: 18px;
-}
-.pg-cal-cuenta { display: flex; align-items: center; gap: 14px; min-width: 0; }
-.pg-cal-hojas { display: flex; gap: 8px; flex-shrink: 0; }
+.pg-cal { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; min-height: 56px; }
+.pg-cal-cuenta { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.pg-cal-hojas { display: flex; gap: 6px; flex-shrink: 0; }
 .pg-cal-hoja {
   position: relative; box-sizing: border-box; overflow: hidden;
-  width: 72px; height: 76px; padding-top: 8px;
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
-  border: 1.5px solid #DCE7DE; border-radius: 12px; background: var(--pg-surface);
+  width: 60px; height: 56px; padding-top: 5px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  border: 1px solid #D9E4DC; border-radius: 10px; background: var(--pg-surface);
 }
-/* El lomo del calendario: una franja fina arriba. */
+/* El lomo del calendario: una franja fina verde arriba. */
 .pg-cal-hoja::before {
-  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 8px;
-  background: var(--pg-green-tint); border-bottom: 1px solid #DCE7DE;
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 5px;
+  background: var(--pg-green);
 }
+.pg-cal-hoja.is-ancha { width: auto; min-width: 60px; padding-left: 10px; padding-right: 10px; }
 .pg-cal-num {
-  display: block; max-width: 100%; padding: 0 4px; box-sizing: border-box;
-  font-size: 28px; font-weight: 700; letter-spacing: -0.03em; line-height: 1;
+  display: block; max-width: 100%; padding: 0 3px; box-sizing: border-box;
+  font-size: 26px; font-weight: 700; letter-spacing: -0.03em; line-height: 26px;
   color: var(--pg-green); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-/* Una palabra en vez de un número ("Hoy", "¡Retoma!"): cuerpo menor, misma altura de línea. */
-.pg-cal-num.is-palabra { font-size: 14px; letter-spacing: -0.01em; line-height: 28px; }
-.pg-cal-num.is-corta { font-size: 21px; letter-spacing: -0.02em; line-height: 28px; }
-.pg-cal-hoja.is-ancha { width: auto; min-width: 72px; padding-left: 12px; padding-right: 12px; }
-.pg-cal-sello { display: flex; align-items: center; justify-content: center; height: 28px; color: var(--pg-green); }
+/* Una palabra en vez de un número ("¡Retoma!"): cuerpo menor, misma altura de línea. */
+.pg-cal-num.is-palabra { font-size: 13px; letter-spacing: -0.01em; }
+/* "Hoy": una palabra corta que cabe en la hoja de siempre. */
+.pg-cal-num.is-corta { font-size: 19px; letter-spacing: -0.02em; }
+.pg-cal-sello { display: flex; align-items: center; justify-content: center; height: 26px; color: var(--pg-green); }
 .pg-cal-rotulo {
-  display: block; max-width: 100%; padding: 0 3px; box-sizing: border-box;
-  font-size: 9.5px; font-weight: 700; letter-spacing: 0.08em; line-height: 1.3; text-transform: uppercase;
+  display: block; max-width: 100%; padding: 0 2px; box-sizing: border-box;
+  font-size: 9px; font-weight: 700; letter-spacing: 0.07em; line-height: 12px; text-transform: uppercase;
   color: var(--pg-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.pg-cal-leyenda { margin: 0; font-size: 13.5px; line-height: 1.3; color: var(--pg-muted); }
+/* El texto de al lado: dos líneas de altura fija. La segunda existe aunque
+   esté vacía (el LMS aún no dijo cuántas lecciones). */
+.pg-cal-texto { display: flex; flex-direction: column; justify-content: center; gap: 3px; min-width: 0; }
+.pg-cal-leyenda { margin: 0; font-size: 13px; line-height: 17px; color: var(--pg-muted); white-space: nowrap; }
+.pg-cal-lecciones { margin: 0; font-size: 11px; line-height: 14px; color: var(--pg-faint); white-space: nowrap; min-height: 14px; }
 .pg-cal-link {
   margin-left: auto; flex-shrink: 0; white-space: nowrap;
-  font-size: 13.5px; font-weight: 600; color: var(--pg-green-dark); text-decoration: none;
-  transition: color 0.16s ease;
+  font-size: 13px; font-weight: 600; color: var(--pg-green-dark); text-decoration: none;
 }
 .pg-cal-link:hover { text-decoration: underline; }
 .pg-cal-link:focus-visible { outline: 2px solid var(--pg-green); outline-offset: 3px; border-radius: 4px; }
 
 @media (max-width: 720px) {
-  .pg-cal { padding-top: 16px; gap: 10px 12px; }
-  .pg-cal-cuenta { gap: 12px; }
-  .pg-cal-hoja { width: 64px; height: 68px; border-radius: 10px; padding-top: 7px; }
-  .pg-cal-hoja::before { height: 7px; }
-  .pg-cal-num { font-size: 25px; }
-  .pg-cal-num.is-palabra { font-size: 13px; line-height: 25px; }
-  .pg-cal-num.is-corta { font-size: 19px; line-height: 25px; }
-  .pg-cal-hoja.is-ancha { min-width: 64px; padding-left: 10px; padding-right: 10px; }
-  .pg-cal-sello { height: 25px; }
-  .pg-cal-sello svg { width: 23px; height: 23px; }
-  .pg-cal-rotulo { font-size: 9px; letter-spacing: 0.07em; }
-  .pg-cal-leyenda { font-size: 13px; }
-  .pg-cal-link { font-size: 13px; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .pg-cal-link { transition: none; }
+  /* Dos líneas siempre: hojas y texto arriba, el enlace debajo a la derecha. */
+  .pg-cal { gap: 8px 12px; min-height: 0; }
+  .pg-cal-link { flex-basis: 100%; text-align: right; }
 }
 `;

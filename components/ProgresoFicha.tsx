@@ -94,10 +94,11 @@ export function ProgresoFicha({ profile, analyses, assignment, student, diplomaS
 
   return (
     <>
-      {/* Sin encabezado: lo primero que ve el alumno es la escalera de niveles.
-          Debajo de la tira, en la misma tarjeta, el calendario de cuenta atrás
-          del diploma: se pinta desde el primer render con la fecha de inicio y
-          el LMS solo lo cambia a "conseguido" si llega, sin mover nada. */}
+      {/* Sin encabezado: lo primero que ve el alumno es la escalera de niveles,
+          en una tarjeta fina (18/09/2026): tira compacta y, debajo, el
+          calendario de cuenta atrás del diploma, que se pinta desde el primer
+          render con la fecha de inicio; lo que llega del LMS después (lecciones,
+          "conseguido") cambia texto, nunca altura. */}
       <section className="pg-card pg-hero pg-rise" style={{ animationDelay: '0ms' }}>
         <LevelLadder level={level} target={estimacion?.meta.nivel ?? null} />
         {diplomaSlot}
@@ -323,28 +324,36 @@ const PROGRESO_CSS = `
 }
 
 /* ── Escalera MCER ──────────────────────────────────────────────────────── */
-/* La tira arriba y, debajo, el calendario del diploma (components/DiplomaCalendario). */
-.pg-hero { display: flex; flex-direction: column; gap: 22px; }
+/* TARJETA FINA (18/09/2026): la tira arriba y, debajo, el calendario del diploma
+   (components/DiplomaCalendario). Menos aire que las otras tarjetas (16 px
+   arriba y abajo) y el rótulo más pegado a la tira: todo lo que ahorra aquí
+   sube el banner de "Amplía tu plan". */
+.pg-hero { display: flex; flex-direction: column; gap: 14px; padding-top: 16px; padding-bottom: 16px; }
+.pg-hero .pg-kicker { margin-bottom: 9px; }
 .pg-ladder-wrap { min-width: 0; }
 .pg-ladder {
   display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px;
   list-style: none; margin: 0; padding: 0;
 }
+/* Peldaños a la mitad de alto que antes (~36 px con la nota): la letra arriba
+   y, solo en el actual y en la meta, la nota de 9 px justo debajo. Todos los
+   peldaños de la fila miden lo mismo (la rejilla los estira). */
 .pg-rung {
-  position: relative; text-align: center; padding: 13px 2px 11px;
-  border-radius: 11px; background: #F1F2ED; border: 1.5px solid transparent;
-  color: var(--pg-faint); font-size: 14px; font-weight: 600;
+  position: relative; text-align: center; padding: 4px 2px 3px;
+  border-radius: 9px; background: #F1F2ED; border: 1.5px solid transparent;
+  color: var(--pg-faint); font-size: 13.5px; font-weight: 600;
 }
 .pg-rung.is-done { background: #E9F4EB; color: #2F7A42; }
 .pg-rung.is-current {
   background: var(--pg-surface); border-color: var(--pg-green); color: var(--pg-green-dark);
-  font-weight: 700; box-shadow: 0 4px 14px rgba(30, 158, 58, 0.18);
+  font-weight: 700; box-shadow: 0 3px 10px rgba(30, 158, 58, 0.16);
 }
 .pg-rung.is-target { background: #FFFBEE; border-color: var(--pg-yellow); border-style: dashed; color: #7A5B00; }
-.pg-rung-label { display: block; line-height: 1; }
+.pg-rung-label { display: block; line-height: 15px; }
 .pg-rung-note {
-  display: block; margin-top: 6px; font-size: 9.5px; font-weight: 700;
-  letter-spacing: 0.06em; text-transform: uppercase; color: var(--pg-green);
+  display: block; margin-top: 1px; font-size: 9px; line-height: 10px; font-weight: 700;
+  letter-spacing: 0.05em; text-transform: uppercase; color: var(--pg-green);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .pg-rung-note-target { color: #A87A00; }
 
@@ -510,10 +519,10 @@ const PROGRESO_CSS = `
 @media (max-width: 720px) {
   .pg-main { padding: 20px 14px 56px; gap: 14px; }
   .pg-card { padding: 20px 18px; border-radius: 16px; }
+  .pg-hero { padding-top: 14px; padding-bottom: 14px; gap: 12px; }
   .pg-pace { padding: 24px 18px 20px; }
   .pg-ladder { gap: 4px; }
-  .pg-rung { padding: 10px 1px 9px; font-size: 12.5px; border-radius: 9px; }
-  .pg-rung-note { font-size: 8px; letter-spacing: 0.03em; margin-top: 4px; }
+  .pg-rung { padding: 4px 1px 3px; font-size: 13px; border-radius: 8px; }
   .pg-split { grid-template-columns: 1fr; gap: 14px; }
   .pg-goal-text { font-size: 16px; }
   /* Tres columnas no entran: las tarjetas se apilan en versión compacta. Los
@@ -540,6 +549,12 @@ const PROGRESO_CSS = `
   .pg-timeline { padding-left: 22px; }
   .pg-tl-node { left: -22px; top: 19px; }
   .pg-tl-card { padding: 16px 16px; }
+}
+
+/* Teléfonos: seis peldaños en una fila no dejan sitio a "ESTÁS AQUÍ" en 9 px
+   sin partirla en dos líneas, así que la tira va en dos filas de tres. */
+@media (max-width: 480px) {
+  .pg-ladder { grid-template-columns: repeat(3, 1fr); gap: 5px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
