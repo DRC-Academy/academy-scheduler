@@ -2083,7 +2083,10 @@ async function runDeleteCascade(ids: string[], studentName: string, dryRun: bool
  *   4. RPC `delete_student_cascade`: la cadena entera en una transacción —
  *      form_tokens/level_test_sessions (assignment_id) → class_analyses/
  *      form_tokens/level_test_sessions (student_id) → student_profiles →
- *      assignments → re-verificación → students. Todo o nada.
+ *      assignments → re-verificación → students. Todo o nada. La lista de
+ *      eslabones la descubre la RPC del catálogo de Postgres; lo único escrito
+ *      a mano es qué se PURGA (progress_tokens, level_test_followups) en vez de
+ *      nulificarse. Ver supabase-delete-student-cascade.sql y student_fk_map().
  *   5. Solo si la RPC confirmó: baja (student_dropouts), avisos y grid.
  *
  * FINANZAS INTACTAS: class_records, class_join_logs, scoring_events y

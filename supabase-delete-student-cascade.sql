@@ -44,6 +44,19 @@
 -- ficha y las clases de un alumno ya eliminado, durante los 30 días de vigencia
 -- del link y a quien tenga la URL. Nulificar acá no es conservador: es una fuga.
 --
+-- POR QUÉ level_test_followups SE BORRA (18/09/2026)
+-- Son los recordatorios del formulario y la prueba de nivel que ya se le
+-- mandaron al alumno (supabase-plazo-24h-followups.sql). Sin el alumno no
+-- significan nada: no son finanzas ni clases, y el cron de followups los lee
+-- solo a través de la ficha, que ya no existe. La columna es NOT NULL, así que
+-- nulificar ni siquiera es una opción: o se borran o bloquean. Se borran.
+--
+-- OJO: el BLOQUEO salta por la EXISTENCIA de la foreign key, no por las filas.
+-- Alejandro Barrés Gozálvez no tenía ni un followup y el borrado falló igual, y
+-- con él TODOS los alumnos desde que la tabla se creó el 17/09. Es a propósito:
+-- una tabla sin decidir falla para todos y de inmediato, en vez de fallar solo
+-- para los alumnos que casualmente tengan filas, semanas después y de a uno.
+--
 -- NO son eslabones: churn_snapshots, student_dropouts e intervention_audits
 -- guardan `student_id` como TEXTO PLANO, sin foreign key. Nunca bloquean el
 -- borrado y NO se tocan (son la retención y el dataset de churn).
@@ -89,12 +102,19 @@
 -- la lista copiada en cada una, la primera vez que alguien añadiera una tabla al
 -- borrado, el mapa habría empezado a mentir — que es exactamente el fallo que
 -- este archivo lleva dos rondas arrastrando, pero en el catálogo.
+--
+-- Cada tabla que se añade acá tiene su "POR QUÉ" en la cabecera. Es una lista
+-- de decisiones, no de descubrimientos: lo que cuelga del alumno lo sabe el
+-- catálogo; lo que se hace con ello lo decide una persona.
 create or replace function student_cascade_purge_tables()
 returns text[]
 language sql
 immutable
 as $$
-  select array['progress_tokens']::text[];
+  select array[
+    'progress_tokens',        -- un token nulificado sigue sirviendo la ficha por nombre
+    'level_test_followups'    -- recordatorios ya enviados; NOT NULL, sin el alumno no valen
+  ]::text[];
 $$;
 
 grant execute on function student_cascade_purge_tables() to anon, authenticated, service_role;
@@ -429,6 +449,12 @@ grant execute on function delete_student_cascade(text[], text, boolean) to anon,
 --                 Hay que decidir a mano si va a la purga o se nulifica, y
 --                 añadirla arriba. NO se adivina.
 --
+-- `on_delete_declarado` es lo que la tabla dijo al crearse (cascade, set null,
+-- no action…). Es INFORMATIVO: la cadena no lo obedece, porque hay tablas que se
+-- crearon a mano en Supabase sin que el repo sepa qué acción declararon
+-- (teacher_bonuses, que es finanzas), y un `cascade` heredado borraría filas que
+-- hoy se nulifican. Sirve para decidir con más datos, no para decidir solo.
+--
 -- Las tablas que guardan `student_id` como TEXTO PLANO (churn_snapshots,
 -- student_dropouts, intervention_audits) NO salen acá, y es correcto: sin
 -- foreign key nunca bloquean el borrado y son la retención y el dataset de
@@ -454,7 +480,14 @@ begin
            tgt.relname::text as padre,
            c.conname::text   as cons,
            att.attnotnull    as not_null,
-           array_length(c.conkey, 1) as ncols
+           array_length(c.conkey, 1) as ncols,
+           case c.confdeltype
+             when 'c' then 'cascade'
+             when 'n' then 'set null'
+             when 'd' then 'set default'
+             when 'r' then 'restrict'
+             else          'no action'
+           end as on_delete
       from pg_constraint c
       join pg_class     src on src.oid = c.conrelid
       join pg_class     tgt on tgt.oid = c.confrelid
@@ -486,6 +519,7 @@ begin
       'tabla_padre',   f.padre,
       'constraint',    f.cons,
       'not_null',      f.not_null,
+      'on_delete_declarado', f.on_delete,
       'columnas_fk',   f.ncols,
       'filas_totales', v_n,
       'trato',         v_trato);
