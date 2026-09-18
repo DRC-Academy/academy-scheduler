@@ -12,9 +12,14 @@
 // cuántas horas hace el alumno a la semana, que es justo lo que el banner ofrece
 // cambiar.
 //
-// NULL NO ES CERO: si falta el nivel o las horas del plan, `construirEstimacion`
-// devuelve null y el banner no se pinta. Preferimos no decir nada a darle a un
-// alumno un número inventado sobre su propio aprendizaje.
+// EL BANNER SALE A TODOS (decisión de Facundo, 18/09/2026). Lo único que lo
+// calla es no saber cuántas horas hace a la semana, porque sin eso no hay nada
+// que estimar: `construirEstimacion` devuelve null y el banner no se pinta. El
+// nivel NO hace falta: el horizonte es fijo, así que sin nivel se estima igual
+// y solo se pierde la bandera de la meta en la escalera. Hasta esa fecha
+// también se callaba para quien ya estaba EN el nivel del examen que preparaba
+// (45 de 201 activos, casi todos porque el nivel del alta es el del producto,
+// o sea la meta y no una medición) y para quien ya estaba en C2.
 
 import { CEFR_LADDER, parseCefr } from '@/lib/studentViz';
 
@@ -176,55 +181,64 @@ const ORDEN_FUENTES: Array<[OrigenFuente, keyof FuentesMeta]> = [
   ['objetivo_personal', 'objetivoPersonal'],
 ];
 
-export type OrigenMeta = 'examen' | 'siguiente_nivel';
+export type OrigenMeta =
+  /** Prepara un examen concreto (en su nivel o por encima). */
+  | 'examen'
+  /** El siguiente peldaño de la escalera. */
+  | 'siguiente_nivel'
+  /** Ya está en C2 y no prepara ningún examen: su meta es su propio nivel. */
+  | 'nivel_actual'
+  /** No se sabe en qué nivel está y no prepara ningún examen: meta sin nombre. */
+  | 'sin_nivel';
 
 export interface Meta {
-  nivel: NivelCefr;
+  /** Null solo con `origen: 'sin_nivel'`. */
+  nivel: NivelCefr | null;
   origen: OrigenMeta;
   /** Solo con `origen: 'examen'`: en qué campo se leyó. */
   fuente?: OrigenFuente;
 }
 
 /**
- * A qué nivel apunta el alumno.
+ * A qué nivel apunta el alumno. SIEMPRE hay meta (el banner sale a todos):
  *
- *   1. Si prepara un examen POR ENCIMA de su nivel, el nivel de ese examen.
+ *   1. Si prepara un examen en su nivel o POR ENCIMA, el nivel de ese examen.
+ *      Un "B1" preparando el PET apunta al B1: su meta es aprobarlo, y el
+ *      banner le cuenta cuánto tardaría en llegar preparado. (Hasta el
+ *      18/09/2026 este caso se quedaba sin banner: casi siempre el "B1" era el
+ *      del alta, copiado del producto, o sea la meta y no una medición.)
  *   2. Si no, el siguiente peldaño de la escalera. Modesto y honesto.
- *
- * Devuelve null en dos casos, y los dos significan lo mismo para la página (no
- * hay banner):
- *
- *   · Ya está en C2: no hay escalón por encima que prometer.
- *   · Ya está EN el nivel del examen que prepara (un "B1" preparando el PET). Su
- *     meta es aprobar ese examen, no subir al B2, y ofrecerle el B2 contesta una
- *     pregunta que no ha hecho. Recupera el banner en cuanto el profesor o la
- *     prueba le fijan su nivel real, que estará por debajo del examen.
+ *   3. En C2 sin examen no hay peldaño por encima: la meta es su propio nivel
+ *      (`nivel_actual`), y el banner habla de "tu objetivo" sin nombrarlo.
+ *   4. Sin nivel conocido: el examen si lo hay (cualquiera), y si no una meta
+ *      sin nombre (`sin_nivel`). El horizonte de horas no depende del nivel,
+ *      así que la estimación vale igual; solo falta la bandera en la escalera.
  *
  * Un examen POR DEBAJO del nivel actual (un C1 apuntado al First) es un dato
  * incoherente: se ignora y se sigue por la escalera.
  */
-export function detectarMeta(fuentes: FuentesMeta, nivelActual: NivelCefr): Meta | null {
-  const actual = CEFR_LADDER.indexOf(nivelActual);
+export function detectarMeta(fuentes: FuentesMeta, nivelActual: NivelCefr | null): Meta {
+  const actual = nivelActual ? CEFR_LADDER.indexOf(nivelActual) : -1;
 
   for (const [origen, clave] of ORDEN_FUENTES) {
     const examen = examenEnTexto(fuentes[clave]);
     if (!examen) continue;
     const idx = CEFR_LADDER.indexOf(examen);
-    if (idx > actual) return { nivel: examen, origen: 'examen', fuente: origen };
-    if (idx === actual) return null;
+    if (idx >= actual) return { nivel: examen, origen: 'examen', fuente: origen };
     // Por debajo: dato incoherente. Se deja de buscar y manda la escalera.
     break;
   }
 
+  if (!nivelActual) return { nivel: null, origen: 'sin_nivel' };
   const siguiente = CEFR_LADDER[actual + 1];
-  return siguiente ? { nivel: siguiente, origen: 'siguiente_nivel' } : null;
+  return siguiente ? { nivel: siguiente, origen: 'siguiente_nivel' } : { nivel: nivelActual, origen: 'nivel_actual' };
 }
 
 // ── Los cuatro estados del banner ────────────────────────────────────────────
 
 /**
- * · `sin_datos`  No hay nivel, ni horas, ni meta: el banner NO se pinta y el
- *                resto de la ficha sí.
+ * · `sin_datos`  No se sabe cuántas horas hace a la semana: el banner NO se
+ *                pinta y el resto de la ficha sí. Es el ÚNICO caso sin banner.
  * · `tope`       Ya está en el plan más alto: no hay nada que ofrecerle.
  * · `examen`     Su meta es un examen concreto: el texto lo nombra.
  * · `ahorro`     El caso normal: ampliando llega antes.
@@ -250,7 +264,8 @@ export interface OpcionPlan {
 
 export interface Estimacion {
   estado: Exclude<EstadoBanner, 'sin_datos'>;
-  nivelActual: NivelCefr;
+  /** Null cuando ninguna fuente tiene un nivel: la estimación vale igual. */
+  nivelActual: NivelCefr | null;
   meta: Meta;
   horasObjetivo: number;
   horasSemanalesActuales: number;
@@ -278,17 +293,14 @@ export function estadoDeBanner(entrada: EntradaEstimacion): EstadoBanner {
 }
 
 /**
- * La estimación completa, o null si no hay datos suficientes (`sin_datos`).
+ * La estimación completa, o null solo si no se saben las horas (`sin_datos`).
  */
 export function construirEstimacion(entrada: EntradaEstimacion): Estimacion | null {
-  const nivelActual = parseCefr(entrada.nivelActual) as NivelCefr | null;
-  if (!nivelActual) return null;
-
   const semanales = Math.round(Number(entrada.horasSemanales ?? 0));
   if (!Number.isFinite(semanales) || semanales < 1) return null;
 
+  const nivelActual = parseCefr(entrada.nivelActual) as NivelCefr | null;
   const meta = detectarMeta(entrada.fuentes, nivelActual);
-  if (!meta) return null;
 
   const ahora = entrada.ahora ?? new Date();
   const planes = [

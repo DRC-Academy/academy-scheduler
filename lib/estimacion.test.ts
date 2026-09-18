@@ -132,9 +132,11 @@ describe('detectarMeta — orden de las fuentes', () => {
       .toEqual({ nivel: 'B2', origen: 'siguiente_nivel' });
   });
 
-  it('ya está EN el nivel del examen: no hay meta (ni banner)', () => {
-    // Un "B1" preparando el PET. Su meta es aprobarlo, no subir al B2.
-    expect(detectarMeta({ productoWoo: 'intensivo PET' }, 'B1')).toBeNull();
+  it('ya está EN el nivel del examen: la meta es ese examen (el banner sale igual)', () => {
+    // Un "B1" preparando el PET. Su meta es aprobarlo, no subir al B2. Hasta el
+    // 18/09/2026 este caso se quedaba sin banner.
+    expect(detectarMeta({ productoWoo: 'intensivo PET' }, 'B1'))
+      .toEqual({ nivel: 'B1', origen: 'examen', fuente: 'producto' });
   });
 
   it('un examen POR DEBAJO de su nivel es incoherente: manda la escalera', () => {
@@ -143,8 +145,17 @@ describe('detectarMeta — orden de las fuentes', () => {
       .toEqual({ nivel: 'C2', origen: 'siguiente_nivel' });
   });
 
-  it('en C2 no hay nada por encima', () => {
-    expect(detectarMeta({}, 'C2')).toBeNull();
+  it('en C2 sin examen la meta es su propio nivel; con examen, el examen', () => {
+    expect(detectarMeta({}, 'C2')).toEqual({ nivel: 'C2', origen: 'nivel_actual' });
+    expect(detectarMeta({ productoWoo: 'Preparación C2 Proficiency' }, 'C2'))
+      .toMatchObject({ nivel: 'C2', origen: 'examen' });
+  });
+
+  it('sin nivel conocido: el examen si lo hay, y si no una meta sin nombre', () => {
+    expect(detectarMeta({ productoWoo: 'Preparación B2 First Certificate' }, null))
+      .toMatchObject({ nivel: 'B2', origen: 'examen' });
+    expect(detectarMeta({ productoWoo: 'Inglés general' }, null))
+      .toEqual({ nivel: null, origen: 'sin_nivel' });
   });
 });
 
@@ -194,10 +205,14 @@ describe('los cuatro estados del banner', () => {
     expect(e?.estado).toBe('tope');
   });
 
-  it('SIN DATOS: sin nivel reconocible', () => {
-    expect(construirEstimacion(entrada({ nivelActual: 'Inglés general' }))).toBeNull();
-    expect(construirEstimacion(entrada({ nivelActual: null }))).toBeNull();
-    expect(estadoDeBanner(entrada({ nivelActual: null }))).toBe('sin_datos');
+  it('sin nivel reconocible el banner sale igual: el horizonte no depende del nivel', () => {
+    for (const nivelActual of ['Inglés general', null]) {
+      const e = construirEstimacion(entrada({ nivelActual }));
+      expect(e?.estado).toBe('ahorro');
+      expect(e?.nivelActual).toBeNull();
+      expect(e?.meta).toEqual({ nivel: null, origen: 'sin_nivel' });
+      expect(e?.opciones.map(o => o.horasSemanales)).toEqual([2, 3, 4]);
+    }
   });
 
   it('SIN DATOS: sin horas del plan', () => {
@@ -206,9 +221,10 @@ describe('los cuatro estados del banner', () => {
     expect(estadoDeBanner(entrada({ horasSemanales: null }))).toBe('sin_datos');
   });
 
-  it('SIN DATOS: ya está en C2, o ya está en el nivel de su examen', () => {
-    expect(estadoDeBanner(entrada({ nivelActual: 'C2' }))).toBe('sin_datos');
-    expect(estadoDeBanner(entrada({ fuentes: { productoWoo: 'intensivo PET' } }))).toBe('sin_datos');
+  it('el banner sale a todos: también en C2 y en el nivel de su examen (desde el 18/09/2026)', () => {
+    expect(estadoDeBanner(entrada({ nivelActual: 'C2' }))).toBe('ahorro');
+    expect(estadoDeBanner(entrada({ fuentes: { productoWoo: 'intensivo PET' } }))).toBe('examen');
+    expect(construirEstimacion(entrada({ fuentes: { productoWoo: 'intensivo PET' } }))?.meta.nivel).toBe('B1');
   });
 });
 

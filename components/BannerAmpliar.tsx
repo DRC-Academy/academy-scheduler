@@ -73,9 +73,10 @@ export const TEXTOS: Record<EstadoVisible, Textos> = {
 };
 
 /**
- * El banner. `estimacion` es null en el estado `sin_datos` (no hay nivel, no hay
- * horas, o no hay meta por encima): entonces no se pinta nada y el resto de la
- * ficha sigue igual.
+ * El banner. `estimacion` es null solo en el estado `sin_datos` (no se sabe
+ * cuántas horas hace a la semana): entonces no se pinta nada y el resto de la
+ * ficha sigue igual. Desde el 18/09/2026 sale a todos los demás: también a
+ * quien ya está en el nivel de su examen, en C2 o sin nivel conocido.
  */
 export function BannerAmpliar({ estimacion }: { estimacion: Estimacion | null }) {
   if (!estimacion) return null;

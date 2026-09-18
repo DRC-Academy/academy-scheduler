@@ -176,7 +176,9 @@ function LevelLadder({ level, target }: { level: string | null; target: string |
         {CEFR_LADDER.map((label, i) => {
           const done = at >= 0 && i < at;
           const current = at >= 0 && i === at;
-          const isTarget = targetAt >= 0 && i === targetAt;
+          // La meta puede ser el propio peldaño (un B1 preparando el PET, o un
+          // C2 sin examen): entonces manda "Estás aquí" y no se pinta bandera.
+          const isTarget = targetAt >= 0 && i === targetAt && !current;
           const cls = ['pg-rung', done && 'is-done', current && 'is-current', isTarget && 'is-target']
             .filter(Boolean).join(' ');
           return (
