@@ -135,7 +135,7 @@ export default function ProgresoPage() {
             analyses={state.analyses}
             assignment={state.assignment}
             student={state.student}
-            // El calendario del diploma se pinta ya con la fecha de inicio; si el
+            // El banner del diploma se pinta ya con la fecha de inicio; si el
             // LMS dice "conseguido" lo pide el navegador a /api/progreso/diploma con
             // este mismo token (el secreto del LMS se queda en el servidor) y llega
             // después, sin frenar la ficha. Los tokens viejos que solo guardaron el

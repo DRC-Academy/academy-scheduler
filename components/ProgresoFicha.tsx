@@ -50,11 +50,12 @@ export function ProgresoFicha({ profile, analyses, assignment, student, diplomaS
    *  mejor dice si el alumno prepara un examen. Opcional: sin ella la detección
    *  cae a los textos de la assignment, como antes. */
   student?: StudentLite | null;
-  /** El calendario de cuenta atrás del diploma (components/DiplomaCalendario),
-   *  ya envuelto por la ruta en lo que difiere la consulta al LMS. Va DENTRO de
-   *  la tarjeta "Tu nivel" y es lo PRIMERO de la tarjeta (desde el 21/09/2026;
-   *  del 18 al 21 iba debajo de la tira), separado de la tira por una raya
-   *  fina. Sin él la tarjeta empieza en el rótulo "Tu nivel", sin raya. */
+  /** El banner de cuenta atrás del diploma (components/DiplomaCalendario), ya
+   *  envuelto por la ruta en lo que difiere la consulta al LMS. Es la PRIMERA
+   *  pieza de la página, antes de la tarjeta "Tu nivel" (desde el 21/09/2026;
+   *  del 18 al 21 fueron hojas de calendario dentro de esa tarjeta). Puede
+   *  pintar nada (sin fecha de inicio): entonces la página empieza en la
+   *  tarjeta. */
   diplomaSlot?: React.ReactNode;
 }) {
   // Todo lo que sale de la ficha pasa por el cortafuegos: está escrita para el
@@ -95,15 +96,13 @@ export function ProgresoFicha({ profile, analyses, assignment, student, diplomaS
 
   return (
     <>
-      {/* Sin encabezado: una tarjeta fina con, ARRIBA, el calendario de cuenta
-          atrás del diploma (desde el 21/09/2026: lo primero que ve el alumno es
-          cuánto le queda) y, debajo de una raya fina, la escalera de niveles.
-          El calendario se pinta desde el primer render con la fecha de inicio;
-          lo que llega del LMS después (lecciones, "conseguido") cambia texto,
-          nunca altura. */}
+      {/* Sin encabezado: lo primero es el banner de cuenta atrás del diploma
+          (desde el 21/09/2026: lo primero que ve el alumno es cuánto le queda),
+          que se pinta desde el primer render con la fecha de inicio; lo que
+          llega del LMS después (lecciones, "conseguido") cambia texto, nunca
+          altura. Debajo, la escalera de niveles en una tarjeta fina. */}
+      {diplomaSlot}
       <section className="pg-card pg-hero pg-rise" style={{ animationDelay: '0ms' }}>
-        {diplomaSlot}
-        {diplomaSlot ? <hr className="pg-hero-sep" /> : null}
         <LevelLadder level={level} target={estimacion?.meta.nivel ?? null} />
       </section>
 
@@ -329,20 +328,20 @@ const PROGRESO_CSS = `
 }
 
 /* ── Escalera MCER ──────────────────────────────────────────────────────── */
-/* TARJETA FINA (18/09/2026; reordenada el 21/09/2026): arriba el calendario del
-   diploma (components/DiplomaCalendario), debajo una raya fina y la tira con su
-   rótulo. Aire medido a mano: 14 px arriba y abajo y 20 a los lados (18 en
-   móvil, como las demás tarjetas); 6 px del calendario a la raya, 6 de la raya
-   al rótulo y 4 del rótulo a la tira. Sin gap: cada hueco es un margen con
-   nombre. En escritorio la tarjeta mide 154,5 px en todos los estados (las
-   hojas miden siempre lo mismo): todo lo que ahorra aquí sube el banner de
-   "Amplía tu plan". */
-.pg-hero { display: flex; flex-direction: column; padding: 14px 20px; }
-.pg-hero-sep { flex-shrink: 0; height: 0; border: 0; border-top: 1px solid var(--pg-line); margin: 6px 0 0; }
-.pg-hero .pg-kicker { margin: 6px 0 4px; }
-/* Doce píxeles hasta el banner de ritmo, que va justo debajo: el hueco general
-   de .pg-main (18 px; 14 en móvil) se descuenta con un margen negativo porque
-   con gap no hay forma de acortar un solo hueco. */
+/* TARJETA FINA (desde el 21/09/2026 solo el rótulo y la tira: el banner del
+   diploma, components/DiplomaCalendario, va fuera, encima). Aire medido a
+   mano: 12 px arriba y abajo, 20 a los lados (18 en móvil, como las demás
+   tarjetas) y 4 del rótulo a la tira. En escritorio mide 81,5 px: todo lo que
+   ahorra aquí sube el banner de "Amplía tu plan". */
+.pg-hero { padding: 12px 20px; }
+.pg-hero .pg-kicker { margin: 0 0 4px; }
+/* Huecos a medida: 10 px del banner del diploma a esta tarjeta y 12 de la
+   tarjeta al banner de ritmo. El hueco general de .pg-main (18 px; 14 en
+   móvil) se descuenta con márgenes negativos porque con gap no hay forma de
+   acortar un solo hueco. El del banner va en el propio banner y no en la
+   tarjeta: si el banner no se pinta (sin fecha de inicio) no hay nada que
+   descontar. */
+.pg-dip { margin-bottom: -8px; }
 .pg-hero + .pg-pace { margin-top: -6px; }
 .pg-ladder-wrap { min-width: 0; }
 .pg-ladder {
@@ -533,9 +532,10 @@ const PROGRESO_CSS = `
 @media (max-width: 720px) {
   .pg-main { padding: 20px 14px 56px; gap: 14px; }
   .pg-card { padding: 20px 18px; border-radius: 16px; }
-  /* Laterales a 18 como las demás tarjetas del móvil; arriba y abajo 14. Va
+  /* Laterales a 18 como las demás tarjetas del móvil; arriba y abajo 12. Va
      después de .pg-card a propósito: si no, la regla de arriba lo pisaría. */
-  .pg-hero { padding: 14px 18px; }
+  .pg-hero { padding: 12px 18px; }
+  .pg-dip { margin-bottom: -4px; }
   .pg-hero + .pg-pace { margin-top: -2px; }
   .pg-pace { padding: 24px 18px 20px; }
   .pg-ladder { gap: 4px; }

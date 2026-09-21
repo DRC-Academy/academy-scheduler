@@ -71,14 +71,14 @@ function Marco({ children }: { children: React.ReactNode }) {
       */}
       <style>{`
         .pg-embed { min-height: 0; }
-        /* 8 px arriba (21/09/2026; antes 20): dentro del iframe la tarjeta va
-           pegada al borde, el aire lo pone Mi cuenta. */
-        .pg-embed .pg-main { max-width: none; margin: 0; padding: 8px 0 28px; }
+        /* Sin aire arriba (21/09/2026): el banner del diploma arranca en el
+           borde del iframe; el margen lo pone Mi cuenta. */
+        .pg-embed .pg-main { max-width: none; margin: 0; padding: 0 0 28px; }
         /* La TARJETA va a ancho completo; el texto largo, no. Una línea de resumen
            de 180 caracteres es incómoda de leer, así que el cuerpo de la línea de
            tiempo conserva su medida aunque su tarjeta se estire. */
         .pg-embed .pg-tl-card .pg-body { max-width: 70ch; }
-        @media (max-width: 720px) { .pg-embed .pg-main { padding: 8px 0 20px; } }
+        @media (max-width: 720px) { .pg-embed .pg-main { padding: 0 0 20px; } }
       `}</style>
       <main className="pg-main">{children}</main>
       <ProgresoAltura />
@@ -184,8 +184,9 @@ export default async function ProgresoCuentaPage({ searchParams }: {
   // 4) EL DIPLOMA, SIN ESPERARLO. El LMS tarda hasta 5-6 s en frío y la ficha no
   // puede quedarse en blanco por él: la promesa se pasa tal cual y la lee un
   // componente cliente con `use()` dentro de un Suspense. Mientras tanto el
-  // fallback pinta el mismo calendario con la fecha de inicio (que ya se tiene),
-  // y cuando el LMS contesta solo cambia la hoja si el diploma está conseguido.
+  // fallback pinta el mismo banner con la fecha de inicio (que ya se tiene), y
+  // cuando el LMS contesta solo cambian las lecciones, el botón o, si el
+  // diploma está conseguido, el titular.
   // Se hace aquí y no en el cliente porque la identidad ya está verificada y el
   // secreto del LMS no tiene que salir del servidor. Nunca rechaza: ver
   // lib/lmsDiploma.
@@ -201,7 +202,7 @@ export default async function ProgresoCuentaPage({ searchParams }: {
         student={payload.studentLite}
         diplomaSlot={
           // El `key` no es por un map: ProgresoFicha (cliente) pinta este
-          // elemento entre otros hijos de su tarjeta, y en desarrollo llega
+          // elemento junto a las demás piezas de la ficha, y en desarrollo llega
           // del servidor como referencia perezosa; si aún no se resolvió
           // cuando corre su JSX, React no lo marca como validado y al
           // resolverse avisa "Each child in a list should have a unique key".
