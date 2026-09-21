@@ -19,13 +19,14 @@
 // Vencido: en vez de cifras, un titular ("¡Retoma tu curso y consigue tu
 // diploma!") y el botón "Continuar mi curso →". Conseguido: "Diploma conseguido
 // ✓" y "Ver mi curso →". Sin fecha de inicio: el banner no se pinta.
-// En el móvil ancho (481-720 px) las cifras y el texto van en una línea y el
-// botón debajo, a la derecha. En el TELÉFONO (≤ 480 px) el banner es UNA SOLA
-// LÍNEA de 48 px: "5 MESES · 21 DÍAS" (o el titular en corto: "¡Retoma tu
-// curso!") y el botón a la derecha; "para tu diploma" y las lecciones no se
-// pintan. Las dos versiones del titular van en el HTML y las alterna el CSS
-// (.pg-solo-ancho / .pg-solo-movil, de la hoja de la ficha): la que no toca
-// va con display none, así que el lector de pantalla oye una sola.
+// En el MÓVIL (≤ 720 px, que es lo que ve el iframe de Mi cuenta en un
+// teléfono aunque la pantalla mida 360) el banner es UNA SOLA LÍNEA de 48 px:
+// "5 MESES · 21 DÍAS" (o el titular; en ≤ 480 en corto: "¡Retoma tu curso!")
+// y el botón a la derecha, que se reduce a una flecha en círculo si no entra;
+// "para tu diploma" y las lecciones no se pintan. Las dos versiones del
+// titular van en el HTML y las alterna el CSS (.pg-solo-ancho /
+// .pg-solo-movil, de la hoja de la ficha): la que no toca va con display none,
+// así que el lector de pantalla oye una sola.
 //
 // QUÉ SE PINTA EN CADA ESTADO lo decide lib/diplomaCalendario.bannerDe, que es
 // puro y tiene tests; el cálculo del plazo, lib/diplomaPlazo. Aquí solo se
@@ -100,14 +101,14 @@ export function DiplomaFromToken({ token, startDate = null }: { token: string | 
 
 // ─── El dibujo ───────────────────────────────────────────────────────────────
 
-/** El teléfono, para el botón compacto: el mismo corte que el CSS de la ficha. */
-const TELEFONO = '(max-width: 480px)';
+/** El móvil, para el botón compacto: el mismo corte que la hoja de abajo (≤ 720). */
+const MOVIL = '(max-width: 720px)';
 
 /**
  * El banner con sus cifras (o su titular), sus lecciones y su botón. Null si
  * no toca enseñarlo.
  *
- * EL BOTÓN COMPACTO DEL TELÉFONO. En ≤ 480 px el banner es una sola línea de
+ * EL BOTÓN COMPACTO DEL MÓVIL. En ≤ 720 px el banner es una sola línea de
  * 48 px y el botón de texto va al lado de las cifras. Si NO ENTRA (cifras +
  * hueco + botón más anchos que el banner), el botón se reduce a una flecha en
  * un círculo blanco de 32 px y las cifras se quedan solas a la izquierda; el
@@ -132,7 +133,7 @@ export function DiplomaCalendario({ diploma, startDate = null }: { diploma: Dipl
     const el = ref.current;
     if (!el || !firma) return;
     const medir = () => {
-      if (!window.matchMedia(TELEFONO).matches) { setCompacto(false); return; }
+      if (!window.matchMedia(MOVIL).matches) { setCompacto(false); return; }
       const izq = el.querySelector<HTMLElement>('.pg-dip-izq');
       const boton = el.querySelector<HTMLElement>('.pg-dip-btn');
       if (!izq || !boton) return;
@@ -255,31 +256,32 @@ export const CALENDARIO_CSS = `
 .pg-dip.is-compacto .pg-dip-ico:hover { background: #F0FAF2; }
 .pg-dip.is-compacto .pg-dip-ico:focus-visible { outline: 2px solid #FFFFFF; outline-offset: 3px; }
 
-@media (max-width: 720px) {
-  /* Cifras y texto en una línea; el botón en la siguiente, a la derecha. */
-  .pg-dip { flex-wrap: wrap; min-height: 72px; padding: 12px 20px; gap: 10px 16px; }
-  .pg-dip-accion { flex-basis: 100%; display: flex; justify-content: flex-end; }
-}
+/* MÓVIL (todo lo que no es escritorio, ≤ 720 px): UNA SOLA LÍNEA de 48 px.
+   Fila flex sin salto posible: cifras "5 MESES · 21 DÍAS" (dígitos 20,
+   unidades 10, un punto entre grupos) o el titular a 14 a la izquierda, y el
+   botón a la derecha en la misma línea (12 px, padding 6 10, nowrap). Sin
+   "para tu diploma" ni lecciones; en el estado "hoy" se deja "es el día de tu
+   diploma", que sin él HOY no se entiende. Padding 0 14.
 
-/* TELÉFONO: una sola línea de 48 px. Cifras "5 MESES · 21 DÍAS" (dígitos 22,
-   unidades 10, un punto entre grupos) o el titular corto a 14, y el botón a la
-   derecha en la misma línea (12 px, padding 6 10). Sin "para tu diploma" ni
-   lecciones; en el estado "hoy" se deja "es el día de tu diploma", que sin él
-   HOY no se entiende. Padding 0 14. */
-@media (max-width: 480px) {
+   Vale desde 720 y no desde 480 a propósito: dentro del iframe de Mi cuenta el
+   ancho que ve la ficha es el del contenedor de WordPress, no el de la
+   pantalla, y en un teléfono puede pasar de 480. Hasta el 21/09/2026 el tramo
+   481-720 bajaba el botón a una segunda línea (banner de 100 px): era lo que
+   se veía en el teléfono. Ahora ningún ancho móvil tiene segunda línea. */
+@media (max-width: 720px) {
   /* Altura FIJA de 48 y overflow oculto: ni una segunda línea ni un botón que
      asome antes de que el navegador mida si entra. */
-  .pg-dip { flex-wrap: nowrap; height: 48px; min-height: 0; padding: 0 14px; gap: 10px; overflow: hidden; }
-  .pg-dip-izq { gap: 10px; }
-  .pg-dip-cifras { gap: 6px; }
+  .pg-dip { flex-wrap: nowrap; align-items: center; height: 48px; min-height: 0; padding: 0 14px; gap: 10px; overflow: hidden; }
+  .pg-dip-izq { gap: 10px; flex-shrink: 1; }
+  .pg-dip-cifras { gap: 6px; white-space: nowrap; }
   .pg-dip-cifra { gap: 4px; }
   .pg-dip-cifra + .pg-dip-cifra::before { content: "·"; font-size: 14px; font-weight: 700; margin-right: 6px; opacity: 0.75; }
-  .pg-dip-num { font-size: 22px; line-height: 24px; letter-spacing: -0.02em; }
+  .pg-dip-num { font-size: 20px; line-height: 24px; letter-spacing: -0.02em; }
   .pg-dip-unidad { font-size: 10px; letter-spacing: 0.06em; }
   .pg-dip-leyenda, .pg-dip-lecciones { display: none; }
-  .pg-dip.is-hoy .pg-dip-leyenda { display: block; font-size: 12px; line-height: 16px; }
+  .pg-dip.is-hoy .pg-dip-leyenda { display: block; font-size: 12px; line-height: 16px; white-space: nowrap; }
   .pg-dip-titular { font-size: 14px; line-height: 18px; white-space: nowrap; }
-  .pg-dip-accion { flex-basis: auto; margin-left: auto; }
-  .pg-dip-btn { font-size: 12px; line-height: 14px; padding: 6px 10px; border-radius: 7px; }
+  .pg-dip-accion { margin-left: auto; flex-shrink: 0; }
+  .pg-dip-btn { font-size: 12px; line-height: 14px; padding: 6px 10px; border-radius: 7px; white-space: nowrap; }
 }
 `;
