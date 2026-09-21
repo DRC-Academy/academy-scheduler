@@ -73,6 +73,7 @@ describe('bannerDe — los otros estados', () => {
     expect(b.tipo).toBe('vencido');
     expect(b.cifras).toEqual([]);
     expect(b.titular).toBe(T.retomaTuCurso);
+    expect(b.titularCorto).toBe(T.retomaTuCursoCorto);
     expect(b.leyenda).toBeNull();
     expect(b.lecciones).toBe('38 de 168 lecciones');
     expect(b.enlace).toBe(T.continuarMiCurso);
@@ -86,6 +87,7 @@ describe('bannerDe — los otros estados', () => {
       const b = bannerDe(conseguido, inicio, '2026-09-18')!;
       expect(b.tipo).toBe('conseguido');
       expect(b.titular).toBe(T.diplomaConseguido);
+      expect(b.titularCorto).toBeNull();
       expect(b.leyenda).toBeNull();
       expect(b.lecciones).toBe('187 de 187 lecciones');
       expect(b.enlace).toBe(T.verMiCurso);

@@ -25,7 +25,7 @@
 // transcripciones, senal de riesgo, puntuacion de progreso (1-10). Un 5/10
 // delante del alumno desmotiva y no le dice que hacer.
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { toBullets } from '@/components/alumnos/studentPageUi';
 import { keepForStudent, forStudentOrNull } from '@/lib/studentFacing';
 import { CEFR_LADDER } from '@/lib/studentViz';
@@ -109,12 +109,7 @@ export function ProgresoFicha({ profile, analyses, assignment, student, diplomaS
       {/* La caja de objetivo va justo debajo de "Tu nivel" (desde el
           21/09/2026; del 18 al 21 fue debajo del banner de ampliación). Sin
           objetivo no se pinta y el banner de ampliación sube a su sitio. */}
-      {objective && (
-        <section className="pg-card pg-goal pg-rise" style={{ animationDelay: '120ms' }}>
-          <p className="pg-kicker">Tu objetivo</p>
-          <blockquote className="pg-goal-text">{objective}</blockquote>
-        </section>
-      )}
+      {objective && <Objetivo texto={objective} />}
 
       {/* El banner de ampliación, con el CTA "Amplía tu plan", en tercera
           posición (segunda sin objetivo). */}
@@ -161,6 +156,48 @@ export function ProgresoFicha({ profile, analyses, assignment, student, diplomaS
         Este informe es privado y sólo para ti. Si te surge cualquier duda, coméntasela a tu profesor.
       </p>
     </>
+  );
+}
+
+/**
+ * La caja "Tu objetivo": las palabras del propio alumno, en cursiva. En el
+ * teléfono (≤ 480 px) el texto se recorta a dos líneas y, solo si de verdad
+ * quedó algo fuera, aparece "Ver más" a la derecha del rótulo, que lo despliega
+ * ("Ver menos" lo vuelve a plegar). Si cabe entero, no hay botón. En anchos
+ * mayores el recorte no existe (lo decide el CSS) y el botón tampoco.
+ *
+ * "¿Quedó algo fuera?" se mide en el navegador (scrollHeight > clientHeight)
+ * al montar y al cambiar el ancho: es lo único que sabe si el recorte actuó.
+ */
+function Objetivo({ texto }: { texto: string }) {
+  const [abierto, setAbierto] = useState(false);
+  const [recortado, setRecortado] = useState(false);
+  const ref = useRef<HTMLQuoteElement>(null);
+
+  useEffect(() => {
+    const medir = () => {
+      const el = ref.current;
+      // Plegado, el recorte se nota en el scrollHeight; abierto, no hay nada que
+      // medir y el botón se queda para poder volver a plegar.
+      if (el && !abierto) setRecortado(el.scrollHeight > el.clientHeight + 1);
+    };
+    medir();
+    window.addEventListener('resize', medir);
+    return () => window.removeEventListener('resize', medir);
+  }, [texto, abierto]);
+
+  return (
+    <section className={`pg-card pg-goal pg-rise${abierto ? ' is-abierto' : ''}`} style={{ animationDelay: '120ms' }}>
+      <div className="pg-goal-head">
+        <p className="pg-kicker">Tu objetivo</p>
+        {(recortado || abierto) && (
+          <button type="button" className="pg-goal-more" onClick={() => setAbierto(a => !a)} aria-expanded={abierto}>
+            {abierto ? 'Ver menos' : 'Ver más'}
+          </button>
+        )}
+      </div>
+      <blockquote ref={ref} className="pg-goal-text">{texto}</blockquote>
+    </section>
   );
 }
 
@@ -373,10 +410,21 @@ const PROGRESO_CSS = `
 
 /* ── Objetivo (las palabras del propio alumno, en cursiva) ──────────────── */
 .pg-goal { border-left: 4px solid var(--pg-green); }
+/* Rótulo y, solo en el teléfono, el "Ver más" a su derecha. Fuera del teléfono
+   el texto no se recorta y el botón no existe. */
+.pg-goal-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.pg-goal-more { display: none; }
 .pg-goal-text {
   margin: 0; font-size: 17px; font-style: italic; font-weight: 400;
   line-height: 1.62; color: #24271F; white-space: pre-wrap;
 }
+
+/* ── Textos que cambian con el ancho ────────────────────────────────────── */
+/* Dos versiones de un mismo texto en el HTML ("h a la semana" / "h/semana",
+   el titular largo y el corto del banner del diploma): el teléfono enseña la
+   corta y el resto la larga. La que no toca va con display none, así que el
+   lector de pantalla oye una sola. */
+.pg-solo-movil { display: none; }
 
 /* ── Banner de ampliacion de plan ───────────────────────────────────────── */
 /*
@@ -569,10 +617,95 @@ const PROGRESO_CSS = `
   .pg-tl-card { padding: 16px 16px; }
 }
 
-/* Teléfonos: seis peldaños en una fila no dejan sitio a "ESTÁS AQUÍ" en 9 px
-   sin partirla en dos líneas, así que la tira va en dos filas de tres. */
+/* ── Teléfono (≤ 480 px): la ficha compacta ─────────────────────────────── */
+/* OBJETIVO MEDIBLE (21/09/2026): en un viewport de 360×740, con los ~170 px
+   de cabecera de WordPress encima del iframe, el botón "Amplía tu plan" tiene
+   que verse entero sin hacer scroll: del borde superior del iframe al borde
+   inferior del botón, 560 px como máximo. Antes medía 806 (sin objetivo) y
+   970 (con objetivo). Cada regla de aquí abajo recorta algo de ese camino;
+   el escritorio y el móvil ancho (481-720) no cambian. Los textos que se
+   acortan (.pg-solo-movil) y el banner del diploma están en sus componentes. */
 @media (max-width: 480px) {
-  .pg-ladder { grid-template-columns: repeat(3, 1fr); gap: 5px; }
+  .pg-solo-ancho { display: none; }
+  .pg-solo-movil { display: inline; }
+
+  /* 8 px entre tarjetas, sin los descuentos de los anchos mayores. (El
+     padding de .pg-main del embed lo pone app/progreso-cuenta: 0 arriba.) */
+  .pg-main { gap: 8px; }
+  .pg-dip { margin-bottom: 0; }
+  .pg-hero + .pg-goal, .pg-hero + .pg-pace, .pg-goal + .pg-pace { margin-top: 0; }
+
+  /* TU NIVEL: rótulo de 10 px y la tira en UNA fila de seis peldaños de 30 px
+     (letra 12). La nota "ESTÁS AQUÍ" / "TU META" no cabe en ~50 px ni a 7 px
+     sin recortarse, así que pasa a ser un punto de su color debajo de la letra;
+     el texto sigue en el HTML (text-indent) para el lector de pantalla. */
+  .pg-hero { padding: 10px 14px; }
+  .pg-hero .pg-kicker { font-size: 10px; line-height: 10px; margin: 0 0 4px; }
+  .pg-ladder { grid-template-columns: repeat(6, 1fr); gap: 4px; }
+  .pg-rung {
+    box-sizing: border-box; height: 30px; padding: 0 1px; border-radius: 7px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    font-size: 12px;
+  }
+  .pg-rung-label { line-height: 13px; }
+  .pg-rung-note {
+    width: 4px; height: 4px; margin: 2px auto 0; border-radius: 50%;
+    background: currentColor; text-indent: -999px; font-size: 1px; line-height: 4px;
+  }
+
+  /* TU OBJETIVO: 13 px, dos líneas con puntos suspensivos y "Ver más" a la
+     derecha del rótulo (components/ProgresoFicha, Objetivo). */
+  .pg-goal { padding: 10px 14px; border-left-width: 3px; }
+  .pg-goal-head { margin-bottom: 4px; }
+  .pg-goal .pg-kicker { font-size: 10px; line-height: 12px; margin: 0; }
+  /* El global button { min-height: 44px } del móvil lo haría de 44 px de alto y
+     separaría el rótulo del texto: se anula, y la zona de toque se amplía con
+     padding y margen negativo, sin ocupar sitio. */
+  .pg-goal-more {
+    display: inline; flex-shrink: 0; min-height: 0; height: auto; line-height: 12px;
+    margin: -6px 0; padding: 6px 0 6px 10px; border: 0; background: none;
+    font: inherit; font-size: 11px; line-height: 12px; font-weight: 700; color: var(--pg-green-dark); cursor: pointer;
+  }
+  .pg-goal-text {
+    font-size: 13px; line-height: 1.4;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .pg-goal.is-abierto .pg-goal-text { display: block; -webkit-line-clamp: unset; overflow: visible; }
+
+  /* RITMO: título 15, entrada 12, y los planes en tres FILAS de 40 px: a la
+     izquierda "2 h/semana · Tu plan" (o el sello "Recomendado" y la píldora
+     del ahorro), a la derecha los meses; sin barra ni "Llegarías en…". El
+     botón justo debajo, a 10 px. */
+  .pg-pace { padding: 12px 14px; }
+  .pg-pace-title { font-size: 15px; line-height: 1.25; margin: 0 0 3px; }
+  .pg-pace-lede { font-size: 12px; line-height: 1.4; margin: 0 0 8px; }
+  .pg-bars { gap: 6px; }
+  .pg-bar-row {
+    display: flex; align-items: center; gap: 6px;
+    box-sizing: border-box; height: 40px; padding: 0 10px; border-radius: 10px;
+  }
+  .pg-bar-row.is-best { background: var(--pg-green-tint); }
+  .pg-bar-head { flex: 0 1 auto; min-width: 0; gap: 5px; flex-wrap: nowrap; align-items: baseline; align-self: center; overflow: hidden; }
+  .pg-bar-plan { font-size: 12px; white-space: nowrap; }
+  .pg-chip { font-size: 10px; }
+  .pg-chip::before { content: "· "; }
+  .pg-badge-best { position: static; font-size: 9px; padding: 3px 6px; }
+  .pg-save-slot { grid-area: auto; margin: 0; min-height: 0; flex-shrink: 0; }
+  .pg-save { margin: 0; font-size: 9px; padding: 3px 7px; }
+  .pg-bar-months { grid-area: auto; margin: 0 0 0 auto; flex-shrink: 0; font-size: 13px; }
+  .pg-track, .pg-bar-date { display: none; }
+  .pg-cta-block { margin-top: 10px; }
+}
+
+/* Teléfonos estrechos (320 px): en /progreso/[token], con sus 14 px de margen a
+   cada lado, la fila recomendada ("4 h/semana · Recomendado · 3 meses antes ·
+   4 meses") no entra en 242 px y el sello se recortaba. Un punto menos en todo. */
+@media (max-width: 340px) {
+  .pg-bar-row { padding: 0 8px; gap: 5px; }
+  .pg-bar-plan { font-size: 11px; }
+  .pg-badge-best { font-size: 8px; padding: 3px 5px; }
+  .pg-save { font-size: 8px; padding: 3px 6px; }
+  .pg-bar-months { font-size: 12px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

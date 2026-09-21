@@ -58,8 +58,9 @@ export const T = {
   lecciones: (hechas: number, total: number) => `${hechas} de ${total} lecciones`,
   irALaPlataforma: 'Ir a la plataforma →',
   empezarMiCurso: 'Empezar mi curso →',
-  // Vencido
+  // Vencido (la versión corta es para el móvil, donde el banner es una sola línea)
   retomaTuCurso: '¡Retoma tu curso y consigue tu diploma!',
+  retomaTuCursoCorto: '¡Retoma tu curso!',
   continuarMiCurso: 'Continuar mi curso →',
   // Hoy
   hoy: 'Hoy',
@@ -88,6 +89,8 @@ export interface Banner {
   cifras: Cifra[];
   /** El texto grande cuando no hay cifras: "Hoy", "¡Retoma tu curso…", "Diploma conseguido ✓". */
   titular: string | null;
+  /** El mismo titular en corto para el móvil (una sola línea); null si vale el largo. */
+  titularCorto: string | null;
   /** La línea de al lado de las cifras ("para tu diploma"). Null con titular de vencido o conseguido. */
   leyenda: string | null;
   /** "38 de 168 lecciones", o null si el LMS no lo dijo (todavía, o nunca). */
@@ -115,7 +118,7 @@ export function bannerDe(diploma: DiplomaEstadoSlot, startDate: string | null, h
   const enlaceNormal = sinEmpezar(diploma) ? T.empezarMiCurso : T.irALaPlataforma;
 
   if (diploma !== 'cargando' && diploma?.estado === 'conseguido') {
-    return { tipo: 'conseguido', cifras: [], titular: T.diplomaConseguido, leyenda: null, lecciones, enlace: T.verMiCurso, frase: null };
+    return { tipo: 'conseguido', cifras: [], titular: T.diplomaConseguido, titularCorto: null, leyenda: null, lecciones, enlace: T.verMiCurso, frase: null };
   }
 
   const plazo: Plazo | null = calcularPlazo(startDate, hoy);
@@ -123,14 +126,14 @@ export function bannerDe(diploma: DiplomaEstadoSlot, startDate: string | null, h
 
   switch (plazo.fase) {
     case 'vencido':
-      return { tipo: 'vencido', cifras: [], titular: T.retomaTuCurso, leyenda: null, lecciones, enlace: T.continuarMiCurso, frase: null };
+      return { tipo: 'vencido', cifras: [], titular: T.retomaTuCurso, titularCorto: T.retomaTuCursoCorto, leyenda: null, lecciones, enlace: T.continuarMiCurso, frase: null };
     case 'hoy':
-      return { tipo: 'hoy', cifras: [], titular: T.hoy, leyenda: T.esElDiaDeTuDiploma, lecciones, enlace: enlaceNormal, frase: T.tuDiplomaEsHoy };
+      return { tipo: 'hoy', cifras: [], titular: T.hoy, titularCorto: null, leyenda: T.esElDiaDeTuDiploma, lecciones, enlace: enlaceNormal, frase: T.tuDiplomaEsHoy };
     case 'dias':
     case 'ultima-semana':
       return {
         tipo: 'cuenta', cifras: [{ valor: plazo.dias, unidad: T.dia(plazo.dias) }],
-        titular: null, leyenda: T.paraTuDiploma, lecciones, enlace: enlaceNormal,
+        titular: null, titularCorto: null, leyenda: T.paraTuDiploma, lecciones, enlace: enlaceNormal,
         frase: `${titularPlazo(plazo)} ${T.paraTuDiploma}`,
       };
     case 'meses': {
@@ -143,7 +146,7 @@ export function bannerDe(diploma: DiplomaEstadoSlot, startDate: string | null, h
             ...(plazo.diasSueltos > 0 ? [{ valor: plazo.diasSueltos, unidad: T.dia(plazo.diasSueltos) }] : []),
           ];
       return {
-        tipo: 'cuenta', cifras, titular: null, leyenda: T.paraTuDiploma, lecciones, enlace: enlaceNormal,
+        tipo: 'cuenta', cifras, titular: null, titularCorto: null, leyenda: T.paraTuDiploma, lecciones, enlace: enlaceNormal,
         frase: `${titularPlazo(plazo)} ${T.paraTuDiploma}`,
       };
     }

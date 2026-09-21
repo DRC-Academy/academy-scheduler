@@ -19,8 +19,13 @@
 // Vencido: en vez de cifras, un titular ("¡Retoma tu curso y consigue tu
 // diploma!") y el botón "Continuar mi curso →". Conseguido: "Diploma conseguido
 // ✓" y "Ver mi curso →". Sin fecha de inicio: el banner no se pinta.
-// En el móvil las cifras y el texto van en una línea y el botón debajo, a la
-// derecha; la altura es la que pida el contenido.
+// En el móvil ancho (481-720 px) las cifras y el texto van en una línea y el
+// botón debajo, a la derecha. En el TELÉFONO (≤ 480 px) el banner es UNA SOLA
+// LÍNEA de 48 px: "5 MESES · 21 DÍAS" (o el titular en corto: "¡Retoma tu
+// curso!") y el botón a la derecha; "para tu diploma" y las lecciones no se
+// pintan. Las dos versiones del titular van en el HTML y las alterna el CSS
+// (.pg-solo-ancho / .pg-solo-movil, de la hoja de la ficha): la que no toca
+// va con display none, así que el lector de pantalla oye una sola.
 //
 // QUÉ SE PINTA EN CADA ESTADO lo decide lib/diplomaCalendario.bannerDe, que es
 // puro y tiene tests; el cálculo del plazo, lib/diplomaPlazo. Aquí solo se
@@ -124,7 +129,9 @@ export function DiplomaCalendario({ diploma, startDate = null }: { diploma: Dipl
       <div className="pg-dip-texto">
         {conCifras
           ? <p className="pg-dip-leyenda">{b.leyenda}</p>
-          : <p className="pg-dip-titular">{b.titular}</p>}
+          : b.titularCorto
+            ? <p className="pg-dip-titular"><span className="pg-solo-ancho">{b.titular}</span><span className="pg-solo-movil">{b.titularCorto}</span></p>
+            : <p className="pg-dip-titular">{b.titular}</p>}
         {/* Existe aunque esté vacía (el LMS aún no dijo cuántas lecciones):
             así nada se mueve cuando contesta. */}
         <p className="pg-dip-lecciones">{b.lecciones}</p>
@@ -186,5 +193,24 @@ export const CALENDARIO_CSS = `
   /* Cifras y texto en una línea; el botón en la siguiente, a la derecha. */
   .pg-dip { flex-wrap: wrap; min-height: 72px; padding: 12px 20px; gap: 10px 16px; }
   .pg-dip-accion { flex-basis: 100%; display: flex; justify-content: flex-end; }
+}
+
+/* TELÉFONO: una sola línea de 48 px. Cifras "5 MESES · 21 DÍAS" (dígitos 22,
+   unidades 10, un punto entre grupos) o el titular corto a 14, y el botón a la
+   derecha en la misma línea (12 px, padding 6 10). Sin "para tu diploma" ni
+   lecciones; en el estado "hoy" se deja "es el día de tu diploma", que sin él
+   HOY no se entiende. Padding 0 14. */
+@media (max-width: 480px) {
+  .pg-dip { flex-wrap: nowrap; min-height: 48px; padding: 0 14px; gap: 10px; }
+  .pg-dip-cifras { gap: 6px; }
+  .pg-dip-cifra { gap: 4px; }
+  .pg-dip-cifra + .pg-dip-cifra::before { content: "·"; font-size: 14px; font-weight: 700; margin-right: 6px; opacity: 0.75; }
+  .pg-dip-num { font-size: 22px; line-height: 24px; letter-spacing: -0.02em; }
+  .pg-dip-unidad { font-size: 10px; letter-spacing: 0.06em; }
+  .pg-dip-leyenda, .pg-dip-lecciones { display: none; }
+  .pg-dip.is-hoy .pg-dip-leyenda { display: block; font-size: 12px; line-height: 16px; }
+  .pg-dip-titular { font-size: 14px; line-height: 18px; white-space: nowrap; }
+  .pg-dip-accion { flex-basis: auto; margin-left: auto; }
+  .pg-dip-btn { font-size: 12px; line-height: 14px; padding: 6px 10px; border-radius: 7px; }
 }
 `;

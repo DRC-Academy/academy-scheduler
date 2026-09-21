@@ -98,14 +98,21 @@ export function BannerAmpliar({ estimacion }: { estimacion: Estimacion | null })
               tres van en columnas y comparten las filas de la rejilla (subgrid),
               así el hueco del ahorro de la primera —que no lo tiene— mide lo mismo
               que la etiqueta amarilla de las otras y las barras arrancan a la misma
-              altura. En móvil se apilan en versión compacta: los meses suben a la
-              línea del plan y la barra ocupa todo el ancho.
+              altura. En móvil (481-720) se apilan en versión compacta: los meses
+              suben a la línea del plan y la barra ocupa todo el ancho. En el
+              teléfono (≤ 480) cada plan es UNA FILA de 40 px: plan · distintivo
+              · ahorro a la izquierda y los meses a la derecha, sin barra ni
+              fecha (el CSS de la ficha las oculta; el HTML es el mismo).
 
               El distintivo dice una de dos cosas y nunca las dos: en el plan que ya
               tiene, "Tu plan"; en los de arriba, lo que se ahorraría, en amarillo.
             */}
             <div className="pg-bar-head">
-              <span className="pg-bar-plan">{o.horasSemanales} h a la semana</span>
+              {/* En el teléfono (≤ 480 px) la fila es una sola línea de 40 px y
+                  "a la semana" no cabe: el CSS de la ficha enseña una u otra. */}
+              <span className="pg-bar-plan">
+                {o.horasSemanales} h<span className="pg-solo-ancho"> a la semana</span><span className="pg-solo-movil">/semana</span>
+              </span>
               {o.esActual && <span className="pg-chip">Tu plan</span>}
               {/* Dentro de la cabecera (no en posición absoluta) para que en 360 px
                   nunca se monte sobre "4 h a la semana": si no cabe, baja de línea. */}
