@@ -10,6 +10,10 @@
 //       ← ENSAYO: resuelve los emails y muestra la tabla de los envíos. No manda nada.
 //   node --env-file=.env.local --import tsx scripts/recordatorio-grabacion-clase-15.mts --enviar
 //       ← manda de verdad, con una pausa entre envíos, y resume OK / fallos.
+//   ... --seguimiento [--enviar]
+//       ← SEGUNDO aviso (21/09/2026): mismo listado, texto de seguimiento. El
+//         primero salió el viernes 18/09 y al lunes 21 ninguno de los 17 había
+//         subido el enlace a la planilla.
 //
 // El email de cada profesor sale de la tabla `teachers`, cruzando por el nombre
 // tal como aparece en `assignments.teacher_name` ("Daiana" y "Daiana.M" son dos
@@ -27,6 +31,7 @@ import { supabase } from '@/lib/supabase';
 import { resend, hasResendKey } from '@/lib/resend';
 
 const ENVIAR = process.argv.includes('--enviar');
+const SEGUIMIENTO = process.argv.includes('--seguimiento');
 const PAUSA_MS = 700;   // Resend admite 2 req/s; con 0,7 s entre envíos sobra margen.
 
 const FROM = 'DRC Academy <notificaciones@drcacademy.com>';
@@ -81,6 +86,40 @@ const cuerpoHtml = (profesor: string, alumno: string) => `<!doctype html>
   <p>¡Muchas gracias por tu trabajo!<br>Equipo DRC Academy</p>
 </body></html>`;
 
+// ── Textos del SEGUNDO aviso (--seguimiento) ────────────────────────────────
+const asuntoSeg = (alumno: string) => `Seguimiento: grabación de la clase 15 de ${alumno}`;
+
+const cuerpoTextoSeg = (profesor: string, alumno: string) => `¡Hola, ${profesor}!
+
+Te escribimos de nuevo por la grabación de la clase 15 de ${alumno}: el viernes te mandamos un recordatorio y en la planilla todavía no aparece el enlace.
+
+Si ya la has grabado, solo falta subir el enlace a la planilla de grabaciones, en la columna "Grabación clase #15":
+${PLANILLA}
+
+Si aún no la has grabado, hazlo en la próxima clase con la presentación de la clase 15 (en la diapositiva "This is where you began" se reproduce el vídeo de la clase 1, que está en esa misma planilla) y sube el enlace en cuanto lo tengas.
+
+¿Has tenido algún problema con la grabación o con la planilla? Responde a este correo y lo solucionamos juntos.
+
+¡Muchas gracias!
+Equipo DRC Academy`;
+
+const cuerpoHtmlSeg = (profesor: string, alumno: string) => `<!doctype html>
+<html lang="es"><body style="margin:0;padding:24px;background:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;font-size:15px;line-height:1.6;color:#191A17;">
+  <h2 style="margin:0 0 16px;font-size:20px;color:#1E9E3A;">Seguimiento: grabación de la clase 15 de ${esc(alumno)}</h2>
+  <p>¡Hola, ${esc(profesor)}!</p>
+  <p>Te escribimos de nuevo por la grabación de la clase 15 de ${esc(alumno)}: el viernes te mandamos un recordatorio y en la planilla todavía no aparece el enlace.</p>
+  <p>Si ya la has grabado, solo falta subir el enlace a la planilla de grabaciones, en la columna "Grabación clase #15":<br>
+  <a href="${PLANILLA}" style="color:#1E9E3A;">${PLANILLA}</a></p>
+  <p>Si aún no la has grabado, hazlo en la próxima clase con la presentación de la clase 15 (en la diapositiva "This is where you began" se reproduce el vídeo de la clase 1, que está en esa misma planilla) y sube el enlace en cuanto lo tengas.</p>
+  <p>¿Has tenido algún problema con la grabación o con la planilla? Responde a este correo y lo solucionamos juntos.</p>
+  <p>¡Muchas gracias!<br>Equipo DRC Academy</p>
+</body></html>`;
+
+// Qué textos salen según el modo.
+const textos = SEGUIMIENTO
+  ? { asunto: asuntoSeg, texto: cuerpoTextoSeg, html: cuerpoHtmlSeg }
+  : { asunto, texto: cuerpoTexto, html: cuerpoHtml };
+
 // ── Resolver los emails ─────────────────────────────────────────────────────
 interface Envio {
   profesor: string; alumno: string; email: string | null; asunto: string;
@@ -110,7 +149,7 @@ const teacherById = new Map((teachers ?? []).map(t => [t.id, t]));
 const teacherByName = new Map((teachers ?? []).map(t => [(t.name ?? '').trim(), t]));
 
 const envios: Envio[] = LISTA.map(([profesor, alumno]) => {
-  const base: Envio = { profesor, alumno, email: null, asunto: asunto(alumno), problema: '' };
+  const base: Envio = { profesor, alumno, email: null, asunto: textos.asunto(alumno), problema: '' };
 
   // 1) Por assignments.teacher_name → teacher_id → teachers. 2) Respaldo: teachers.name exacto.
   const ids = [...(idsPorNombre.get(profesor) ?? [])];
@@ -134,7 +173,8 @@ const envios: Envio[] = LISTA.map(([profesor, alumno]) => {
 });
 
 // ── Tabla ───────────────────────────────────────────────────────────────────
-console.log(ENVIAR ? '\n=== ENVIANDO ===' : '\n=== ENSAYO (no se manda nada) ===');
+const modo = SEGUIMIENTO ? 'SEGUNDO AVISO (seguimiento)' : 'PRIMER AVISO';
+console.log(ENVIAR ? `\n=== ENVIANDO · ${modo} ===` : `\n=== ENSAYO · ${modo} (no se manda nada) ===`);
 console.table(envios.map(e => ({
   profesor: e.profesor, email: e.email ?? '—', alumno: e.alumno, asunto: e.asunto,
   estado: e.problema ? `NO SE MANDA: ${e.problema}` : 'listo',
@@ -166,7 +206,7 @@ for (const e of listos) {
   try {
     const { data, error } = await resend.emails.send({
       from: FROM, to: e.email!, subject: e.asunto,
-      html: cuerpoHtml(e.profesor, e.alumno), text: cuerpoTexto(e.profesor, e.alumno),
+      html: textos.html(e.profesor, e.alumno), text: textos.texto(e.profesor, e.alumno),
     });
     if (error) {
       fallos.push(`${e.profesor} · ${e.alumno} → ${e.email}: ${error.name} ${error.message}`);
