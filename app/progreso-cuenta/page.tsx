@@ -71,12 +71,14 @@ function Marco({ children }: { children: React.ReactNode }) {
       */}
       <style>{`
         .pg-embed { min-height: 0; }
-        .pg-embed .pg-main { max-width: none; margin: 0; padding: 20px 0 28px; }
+        /* 8 px arriba (21/09/2026; antes 20): dentro del iframe la tarjeta va
+           pegada al borde, el aire lo pone Mi cuenta. */
+        .pg-embed .pg-main { max-width: none; margin: 0; padding: 8px 0 28px; }
         /* La TARJETA va a ancho completo; el texto largo, no. Una línea de resumen
            de 180 caracteres es incómoda de leer, así que el cuerpo de la línea de
            tiempo conserva su medida aunque su tarjeta se estire. */
         .pg-embed .pg-tl-card .pg-body { max-width: 70ch; }
-        @media (max-width: 720px) { .pg-embed .pg-main { padding: 14px 0 20px; } }
+        @media (max-width: 720px) { .pg-embed .pg-main { padding: 8px 0 20px; } }
       `}</style>
       <main className="pg-main">{children}</main>
       <ProgresoAltura />
@@ -198,7 +200,13 @@ export default async function ProgresoCuentaPage({ searchParams }: {
         assignment={payload.assignment}
         student={payload.studentLite}
         diplomaSlot={
-          <Suspense fallback={<DiplomaCalendario diploma="cargando" startDate={payload.startDate} />}>
+          // El `key` no es por un map: ProgresoFicha (cliente) pinta este
+          // elemento entre otros hijos de su tarjeta, y en desarrollo llega
+          // del servidor como referencia perezosa; si aún no se resolvió
+          // cuando corre su JSX, React no lo marca como validado y al
+          // resolverse avisa "Each child in a list should have a unique key".
+          // Con `key` la comprobación no aplica. Sin efecto en producción.
+          <Suspense key="diploma" fallback={<DiplomaCalendario diploma="cargando" startDate={payload.startDate} />}>
             <DiplomaFromPromise promise={diploma} startDate={payload.startDate} />
           </Suspense>
         }

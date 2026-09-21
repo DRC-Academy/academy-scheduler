@@ -6,8 +6,10 @@
 // tarjeta ("TU CAMINO AL DIPLOMA / Te quedan 5 meses y 21 días"). Facundo lo
 // veía demasiado ancho y ocupando demasiado; el sitio se le da ahora al banner
 // de "Amplía tu plan", que sube. La cuenta atrás no desaparece: se queda en la
-// tarjeta de la escalera, debajo de la tira de niveles, donde antes iba la fila
-// de cifras (clases hechas, nivel, horas, próximo hito), que se quitó entera.
+// tarjeta de la escalera. Del 18 al 21/09/2026 fue debajo de la tira de
+// niveles, donde antes iba la fila de cifras (clases hechas, nivel, horas,
+// próximo hito), que se quitó entera; desde el 21/09/2026 es lo PRIMERO de la
+// tarjeta, y la tira va debajo, tras una raya fina (components/ProgresoFicha).
 //
 // EL DIBUJO: una fila baja. A la izquierda, dos hojas de calendario de
 // sobremesa, una al lado de la otra —número grande arriba, rótulo en
