@@ -50,7 +50,7 @@
 //
 // Textos en español de España con tuteo, como el resto de la ficha.
 
-import { use, useEffect, useState } from 'react';
+import { use, useEffect, useRef, useState } from 'react';
 import type { Diploma } from '@/lib/diplomaTypes';
 import { bannerDe, type DiplomaEstadoSlot } from '@/lib/diplomaCalendario';
 import { madridToday } from '@/lib/subscriptionAccess';
@@ -100,44 +100,94 @@ export function DiplomaFromToken({ token, startDate = null }: { token: string | 
 
 // ─── El dibujo ───────────────────────────────────────────────────────────────
 
-/** El banner con sus cifras (o su titular), sus lecciones y su botón. Null si no toca enseñarlo. */
+/** El teléfono, para el botón compacto: el mismo corte que el CSS de la ficha. */
+const TELEFONO = '(max-width: 480px)';
+
+/**
+ * El banner con sus cifras (o su titular), sus lecciones y su botón. Null si
+ * no toca enseñarlo.
+ *
+ * EL BOTÓN COMPACTO DEL TELÉFONO. En ≤ 480 px el banner es una sola línea de
+ * 48 px y el botón de texto va al lado de las cifras. Si NO ENTRA (cifras +
+ * hueco + botón más anchos que el banner), el botón se reduce a una flecha en
+ * un círculo blanco de 32 px y las cifras se quedan solas a la izquierda; el
+ * banner nunca baja el botón a una segunda línea ni pasa de 48 px. "¿Entra?"
+ * solo lo sabe el navegador (los textos cambian por estado y por alumno), así
+ * que se mide con un ResizeObserver y se marca con la clase `is-compacto`;
+ * el botón de texto sigue en el HTML, invisible y fuera de flujo, para poder
+ * medirlo también cuando ya se cambió por la flecha. Antes de la primera
+ * medida (servidor, hidratación) va el botón de texto: en 360 px o más es lo
+ * que toca casi siempre, y el overflow oculto del banner tapa el resto.
+ */
 export function DiplomaCalendario({ diploma, startDate = null }: { diploma: DiplomaEstadoSlot; startDate?: string | null }) {
   // El "hoy" es el de Madrid, como todos los plazos de la academia: el mismo
   // alumno ve el mismo número desde cualquier país.
   const b = bannerDe(diploma, startDate, madridToday());
+  const ref = useRef<HTMLElement>(null);
+  const [compacto, setCompacto] = useState(false);
+  // Lo que cambia el ancho del botón o de la izquierda: se vuelve a medir.
+  const firma = b ? `${b.tipo}|${b.enlace}|${b.cifras.map(c => c.valor + c.unidad).join(',')}` : null;
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !firma) return;
+    const medir = () => {
+      if (!window.matchMedia(TELEFONO).matches) { setCompacto(false); return; }
+      const izq = el.querySelector<HTMLElement>('.pg-dip-izq');
+      const boton = el.querySelector<HTMLElement>('.pg-dip-btn');
+      if (!izq || !boton) return;
+      const cs = getComputedStyle(el);
+      const disponible = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+      // scrollWidth y no offsetWidth: la izquierda puede estar encogida por el
+      // flex y lo que importa es lo que NECESITA.
+      const necesario = izq.scrollWidth + (parseFloat(cs.columnGap) || 0) + boton.offsetWidth;
+      setCompacto(necesario > disponible);
+    };
+    medir();
+    const ro = new ResizeObserver(medir);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [firma]);
+
   if (!b) return null;
   const conCifras = b.tipo === 'cuenta' || b.tipo === 'hoy';
 
   return (
-    <section className={`pg-dip is-${b.tipo}`} aria-label="Tu diploma">
-      {conCifras && (
-        // Las cifras sueltas ("4 MESES 6 DÍAS") se leen mal: el lector de
-        // pantalla recibe la frase entera en su lugar.
-        <div className="pg-dip-cifras" role="img" aria-label={b.frase ?? undefined}>
-          {b.tipo === 'hoy' ? (
-            <span className="pg-dip-num">{b.titular}</span>
-          ) : (
-            b.cifras.map(c => (
-              <span key={c.unidad} className="pg-dip-cifra">
-                <span className="pg-dip-num">{c.valor}</span>
-                <span className="pg-dip-unidad">{c.unidad}</span>
-              </span>
-            ))
-          )}
+    <section ref={ref} className={`pg-dip is-${b.tipo}${compacto ? ' is-compacto' : ''}`} aria-label="Tu diploma">
+      {/* La izquierda, agrupada: es lo que se mide contra el botón en el teléfono. */}
+      <div className="pg-dip-izq">
+        {conCifras && (
+          // Las cifras sueltas ("4 MESES 6 DÍAS") se leen mal: el lector de
+          // pantalla recibe la frase entera en su lugar.
+          <div className="pg-dip-cifras" role="img" aria-label={b.frase ?? undefined}>
+            {b.tipo === 'hoy' ? (
+              <span className="pg-dip-num">{b.titular}</span>
+            ) : (
+              b.cifras.map(c => (
+                <span key={c.unidad} className="pg-dip-cifra">
+                  <span className="pg-dip-num">{c.valor}</span>
+                  <span className="pg-dip-unidad">{c.unidad}</span>
+                </span>
+              ))
+            )}
+          </div>
+        )}
+        <div className="pg-dip-texto">
+          {conCifras
+            ? <p className="pg-dip-leyenda">{b.leyenda}</p>
+            : b.titularCorto
+              ? <p className="pg-dip-titular"><span className="pg-solo-ancho">{b.titular}</span><span className="pg-solo-movil">{b.titularCorto}</span></p>
+              : <p className="pg-dip-titular">{b.titular}</p>}
+          {/* Existe aunque esté vacía (el LMS aún no dijo cuántas lecciones):
+              así nada se mueve cuando contesta. */}
+          <p className="pg-dip-lecciones">{b.lecciones}</p>
         </div>
-      )}
-      <div className="pg-dip-texto">
-        {conCifras
-          ? <p className="pg-dip-leyenda">{b.leyenda}</p>
-          : b.titularCorto
-            ? <p className="pg-dip-titular"><span className="pg-solo-ancho">{b.titular}</span><span className="pg-solo-movil">{b.titularCorto}</span></p>
-            : <p className="pg-dip-titular">{b.titular}</p>}
-        {/* Existe aunque esté vacía (el LMS aún no dijo cuántas lecciones):
-            así nada se mueve cuando contesta. */}
-        <p className="pg-dip-lecciones">{b.lecciones}</p>
       </div>
       <div className="pg-dip-accion">
-        <a className="pg-dip-btn" href={LMS_PUBLIC_URL} target="_blank" rel="noopener">{b.enlace}</a>
+        <a className="pg-dip-btn" href={LMS_PUBLIC_URL} target="_blank" rel="noopener" tabIndex={compacto ? -1 : undefined}>{b.enlace}</a>
+        {/* La flecha sola: mismo destino, y el texto del botón (sin la flecha)
+            como nombre accesible. Solo se pinta en compacto (CSS). */}
+        <a className="pg-dip-ico" href={LMS_PUBLIC_URL} target="_blank" rel="noopener" aria-label={b.enlace.replace(/\s*→\s*$/, '')}>→</a>
       </div>
     </section>
   );
@@ -172,6 +222,9 @@ export const CALENDARIO_CSS = `
   border-radius: 12px; color: #FFFFFF;
   background: linear-gradient(90deg, var(--pg-green) 0%, #167A2C 100%);
 }
+/* La izquierda (cifras + texto) va agrupada para poder medirla de una vez en
+   el teléfono; en el dibujo no se nota: mismo hueco que entre los demás. */
+.pg-dip-izq { display: flex; align-items: center; gap: 16px; min-width: 0; }
 .pg-dip-cifras { display: flex; align-items: baseline; gap: 16px; flex-shrink: 0; }
 .pg-dip-cifra { display: inline-flex; align-items: baseline; gap: 5px; white-space: nowrap; }
 .pg-dip-num { font-size: 32px; font-weight: 700; line-height: 32px; letter-spacing: -0.03em; text-transform: uppercase; }
@@ -188,6 +241,19 @@ export const CALENDARIO_CSS = `
 }
 .pg-dip-btn:hover { background: #F0FAF2; }
 .pg-dip-btn:focus-visible { outline: 2px solid #FFFFFF; outline-offset: 3px; }
+/* La flecha en círculo del modo compacto: fuera de él no existe. */
+.pg-dip-ico { display: none; }
+.pg-dip.is-compacto .pg-dip-accion { position: relative; }
+/* El botón de texto se queda en el HTML, invisible y fuera de flujo (hacia la
+   izquierda, dentro del banner), solo para poder medirlo. */
+.pg-dip.is-compacto .pg-dip-btn { position: absolute; top: 0; right: 0; visibility: hidden; pointer-events: none; }
+.pg-dip.is-compacto .pg-dip-ico {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; border-radius: 50%; background: #FFFFFF; color: var(--pg-green-dark);
+  font-size: 17px; font-weight: 700; line-height: 1; text-decoration: none;
+}
+.pg-dip.is-compacto .pg-dip-ico:hover { background: #F0FAF2; }
+.pg-dip.is-compacto .pg-dip-ico:focus-visible { outline: 2px solid #FFFFFF; outline-offset: 3px; }
 
 @media (max-width: 720px) {
   /* Cifras y texto en una línea; el botón en la siguiente, a la derecha. */
@@ -201,7 +267,10 @@ export const CALENDARIO_CSS = `
    lecciones; en el estado "hoy" se deja "es el día de tu diploma", que sin él
    HOY no se entiende. Padding 0 14. */
 @media (max-width: 480px) {
-  .pg-dip { flex-wrap: nowrap; min-height: 48px; padding: 0 14px; gap: 10px; }
+  /* Altura FIJA de 48 y overflow oculto: ni una segunda línea ni un botón que
+     asome antes de que el navegador mida si entra. */
+  .pg-dip { flex-wrap: nowrap; height: 48px; min-height: 0; padding: 0 14px; gap: 10px; overflow: hidden; }
+  .pg-dip-izq { gap: 10px; }
   .pg-dip-cifras { gap: 6px; }
   .pg-dip-cifra { gap: 4px; }
   .pg-dip-cifra + .pg-dip-cifra::before { content: "·"; font-size: 14px; font-weight: 700; margin-right: 6px; opacity: 0.75; }
