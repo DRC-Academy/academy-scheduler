@@ -106,18 +106,19 @@ export function ProgresoFicha({ profile, analyses, assignment, student, diplomaS
         <LevelLadder level={level} target={estimacion?.meta.nivel ?? null} />
       </section>
 
-      {/* El banner de ampliación sube: ocupa el sitio que dejaron la fila de
-          cifras y la tarjeta ancha del diploma. */}
-      <BannerAmpliar estimacion={estimacion} />
-
-      {/* La caja de objetivo va DEBAJO del banner (antes iba encima): así el
-          botón "Amplía tu plan" queda más arriba. Misma caja, mismo estilo. */}
+      {/* La caja de objetivo va justo debajo de "Tu nivel" (desde el
+          21/09/2026; del 18 al 21 fue debajo del banner de ampliación). Sin
+          objetivo no se pinta y el banner de ampliación sube a su sitio. */}
       {objective && (
         <section className="pg-card pg-goal pg-rise" style={{ animationDelay: '120ms' }}>
           <p className="pg-kicker">Tu objetivo</p>
           <blockquote className="pg-goal-text">{objective}</blockquote>
         </section>
       )}
+
+      {/* El banner de ampliación, con el CTA "Amplía tu plan", en tercera
+          posición (segunda sin objetivo). */}
+      <BannerAmpliar estimacion={estimacion} />
 
       {(strong.length > 0 || weak.length > 0) && (
         <section className="pg-split pg-rise" style={{ animationDelay: '240ms' }}>
@@ -335,14 +336,14 @@ const PROGRESO_CSS = `
    ahorra aquí sube el banner de "Amplía tu plan". */
 .pg-hero { padding: 12px 20px; }
 .pg-hero .pg-kicker { margin: 0 0 4px; }
-/* Huecos a medida: 10 px del banner del diploma a esta tarjeta y 12 de la
-   tarjeta al banner de ritmo. El hueco general de .pg-main (18 px; 14 en
-   móvil) se descuenta con márgenes negativos porque con gap no hay forma de
-   acortar un solo hueco. El del banner va en el propio banner y no en la
-   tarjeta: si el banner no se pinta (sin fecha de inicio) no hay nada que
-   descontar. */
+/* Huecos a medida: 10 px del banner del diploma a esta tarjeta y 12 entre
+   esta tarjeta, "Tu objetivo" (si existe) y el banner de ritmo. El hueco
+   general de .pg-main (18 px; 14 en móvil) se descuenta con márgenes negativos
+   porque con gap no hay forma de acortar un solo hueco. El del banner va en el
+   propio banner y no en la tarjeta: si el banner no se pinta (sin fecha de
+   inicio) no hay nada que descontar. */
 .pg-dip { margin-bottom: -8px; }
-.pg-hero + .pg-pace { margin-top: -6px; }
+.pg-hero + .pg-goal, .pg-hero + .pg-pace, .pg-goal + .pg-pace { margin-top: -6px; }
 .pg-ladder-wrap { min-width: 0; }
 .pg-ladder {
   display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px;
@@ -536,7 +537,7 @@ const PROGRESO_CSS = `
      después de .pg-card a propósito: si no, la regla de arriba lo pisaría. */
   .pg-hero { padding: 12px 18px; }
   .pg-dip { margin-bottom: -4px; }
-  .pg-hero + .pg-pace { margin-top: -2px; }
+  .pg-hero + .pg-goal, .pg-hero + .pg-pace, .pg-goal + .pg-pace { margin-top: -2px; }
   .pg-pace { padding: 24px 18px 20px; }
   .pg-ladder { gap: 4px; }
   .pg-rung { padding: 4px 1px 3px; font-size: 13px; border-radius: 8px; }
