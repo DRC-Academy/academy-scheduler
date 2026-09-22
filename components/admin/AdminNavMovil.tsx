@@ -35,8 +35,8 @@ const OTRAS_PANTALLAS = [
 ];
 
 export type AdminTabId =
-  | 'teachers' | 'emails' | 'scoring' | 'bonos' | 'tracking' | 'classlog' | 'leveltests'
-  | 'validacion' | 'ai' | 'aiusage' | 'bajas' | 'notifications';
+  | 'teachers' | 'emails' | 'scoring' | 'bonos' | 'tracking' | 'classlog' | 'transcripts'
+  | 'leveltests' | 'validacion' | 'ai' | 'aiusage' | 'bajas' | 'notifications';
 
 /**
  * Secciones que existen (código, datos y cron siguen ahí) pero NO se muestran,
@@ -77,6 +77,7 @@ const GRUPOS: Array<{ nombre: string; secciones: Seccion[] }> = [
   ] },
   { nombre: 'Clases', secciones: [
     { id: 'classlog', label: 'Registro de clases' },
+    { id: 'transcripts', label: 'Transcripts' },
     { id: 'validacion', label: 'Validación' },
   ] },
   { nombre: 'Avisos', secciones: [
@@ -126,7 +127,7 @@ export function AdminNavMovil({ activeTab, contadores, onSelect, onVolver, child
     ai: <AlertTriangle size={22} strokeWidth={1.75} aria-hidden />,
     teachers: <Users size={22} strokeWidth={1.75} aria-hidden />,
     emails: <Mail size={22} strokeWidth={1.75} aria-hidden />,
-    scoring: null, bonos: null, tracking: null, classlog: null, leveltests: null, aiusage: null, bajas: null, notifications: null,
+    scoring: null, bonos: null, tracking: null, classlog: null, transcripts: null, leveltests: null, aiusage: null, bajas: null, notifications: null,
   };
 
   return (

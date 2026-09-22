@@ -25,6 +25,7 @@ import AiRiskTab from '@/components/ai/AiRiskTab';
 import AiUsageTab from '@/components/admin/AiUsageTab';
 import LevelTestsTab from '@/components/admin/LevelTestsTab';
 import ClassLogTab from '@/components/admin/ClassLogTab';
+import TranscriptsTab from '@/components/admin/TranscriptsTab';
 import TranscriptValidationTab from '@/components/admin/TranscriptValidationTab';
 import ChurnTab from '@/components/admin/ChurnTab';
 import { triggerEmail } from '@/lib/emailClient';
@@ -2419,7 +2420,7 @@ function DuplicatesBanner() {
 }
 
 // ─── Admin Content ────────────────────────────────────────────────────────────
-const ADMIN_TABS = ['teachers', 'emails', 'scoring', 'bonos', 'tracking', 'classlog', 'leveltests', 'validacion', 'ai', 'aiusage', 'bajas', 'notifications'] as const;
+const ADMIN_TABS = ['teachers', 'emails', 'scoring', 'bonos', 'tracking', 'classlog', 'transcripts', 'leveltests', 'validacion', 'ai', 'aiusage', 'bajas', 'notifications'] as const;
 type AdminTab = typeof ADMIN_TABS[number];
 
 /**
@@ -2526,6 +2527,7 @@ function AdminContent() {
     { id: 'bonos',          label: 'Bonos' },
     { id: 'tracking',       label: 'Seguimiento' },
     { id: 'classlog',       label: 'Registro de clases' },
+    { id: 'transcripts',    label: 'Transcripts' },
     { id: 'leveltests',     label: 'Tests de nivel' },
     { id: 'validacion',     label: 'Validación' },
     { id: 'ai',             label: 'Riesgo' },
@@ -3074,6 +3076,7 @@ function AdminContent() {
 
         {/* CLASS LOG TAB */}
         {activeTab === 'classlog' && <ClassLogTab />}
+        {activeTab === 'transcripts' && <TranscriptsTab />}
 
         {activeTab === 'leveltests' && <LevelTestsTab />}
 

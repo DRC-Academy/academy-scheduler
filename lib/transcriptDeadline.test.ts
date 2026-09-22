@@ -7,7 +7,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   getTranscriptStatus, findTranscriptFor, classEndEpoch, hoursLeftLabel, countdownLabel, subjectToDeadline,
-  transcriptDeadlineBadge, TRANSCRIPT_DEADLINE_START_DATE, TRANSCRIPT_WARN_HOURS,
+  transcriptDeadlineBadge, transcriptCell, uploadDelayLabel,
+  TRANSCRIPT_DEADLINE_START_DATE, TRANSCRIPT_WARN_HOURS,
   type ClassTranscriptRef, type TranscriptExclusions,
 } from '@/lib/transcriptDeadline';
 import { calculateTeacherFinance } from '@/lib/finance';
@@ -94,6 +95,139 @@ describe('getTranscriptStatus', () => {
     expect(subjectToDeadline(TRANSCRIPT_DEADLINE_START_DATE)).toBe(true);
     expect(subjectToDeadline('2026-09-21')).toBe(false);
     expect(subjectToDeadline('')).toBe(false);
+  });
+});
+
+// ── La subida: cuándo llegó y si entró en las 24 h ───────────────────────────
+// Es lo que mira el admin en la columna "Transcript" y en la pestaña Transcripts.
+describe('getTranscriptStatus · la subida', () => {
+  const base = { date: '2026-09-23', startHour: '18:00', durationHours: 1 };
+  const ahora = madrid('2026-09-30', 12);
+  // Clase 18:00–19:00 del 23/09 → vence el 24/09 a las 19:00 (hora de Madrid).
+  const subidoA = (iso: string): ClassTranscriptRef => ({ ...ok, analyzed_at: iso });
+
+  it('a tiempo: dentro de las 24 h, con su id y su fecha de subida', () => {
+    const r = getTranscriptStatus({ ...base, transcript: subidoA(new Date(madrid('2026-09-23', 22)).toISOString()), now: ahora });
+    expect(r.status).toBe('subido');
+    expect(r.uploadedWithinDeadline).toBe(true);
+    expect(r.analysisId).toBe('ca1');
+    expect(r.deadlineAt).toBe(madrid('2026-09-24', 19));
+    // El fin de la clase también viaja: de ahí sale la demora.
+    expect(r.endsAt).toBe(madrid('2026-09-23', 19));
+  });
+
+  it('tarde: fuera de las 24 h', () => {
+    const r = getTranscriptStatus({ ...base, transcript: subidoA(new Date(madrid('2026-09-25', 10)).toISOString()), now: ahora });
+    expect(r.status).toBe('subido');
+    expect(r.uploadedWithinDeadline).toBe(false);
+  });
+
+  it('justo en el límite cuenta como dentro', () => {
+    const r = getTranscriptStatus({ ...base, transcript: subidoA(new Date(madrid('2026-09-24', 19)).toISOString()), now: ahora });
+    expect(r.uploadedWithinDeadline).toBe(true);
+  });
+
+  it('sesión de 2 h: el plazo corre desde el final de la segunda hora', () => {
+    // 18:00–20:00 → vence el 24/09 a las 20:00. Subir a las 19:30 del 24 es DENTRO.
+    const r = getTranscriptStatus({
+      ...base, durationHours: 2,
+      transcript: subidoA(new Date(madrid('2026-09-24', 19, 30)).toISOString()), now: ahora,
+    });
+    expect(r.endsAt).toBe(madrid('2026-09-23', 20));
+    expect(r.uploadedWithinDeadline).toBe(true);
+  });
+
+  it('clase anterior al 22/09: no se juzga hacia atrás (null, que no es "fuera")', () => {
+    const r = getTranscriptStatus({
+      ...base, date: '2026-09-15',
+      transcript: subidoA(new Date(madrid('2026-09-20', 10)).toISOString()), now: ahora,
+    });
+    expect(r.status).toBe('subido');
+    expect(r.subjectToDeadline).toBe(false);
+    expect(r.deadlineAt).toBeNull();
+    expect(r.uploadedWithinDeadline).toBeNull();
+  });
+
+  it('el plazo reabierto por el admin manda sobre las 24 h', () => {
+    const reabierto = new Date(madrid('2026-09-27', 12)).toISOString();
+    const r = getTranscriptStatus({
+      ...base, reopenedDeadlineAt: reabierto,
+      transcript: subidoA(new Date(madrid('2026-09-26', 9)).toISOString()), now: ahora,
+    });
+    expect(r.reopened).toBe(true);
+    expect(r.uploadedWithinDeadline).toBe(true);   // tarde para las 24 h, a tiempo para el plazo reabierto
+  });
+
+  it('sin fecha de subida (fila vieja sin analyzed_at) no se inventa un veredicto', () => {
+    const r = getTranscriptStatus({ ...base, transcript: ok, now: ahora });
+    expect(r.status).toBe('subido');
+    expect(r.uploadedAt).toBeNull();
+    expect(r.uploadedWithinDeadline).toBeNull();
+  });
+
+  it('pendiente, vencido y no_aplica no traen subida', () => {
+    for (const input of [
+      { ...base, now: ahora },                                            // vencido
+      { ...base, date: '2026-09-29', now: madrid('2026-09-29', 20) },     // pendiente
+      { ...base, classType: 'falta_sin_aviso', now: ahora },              // no aplica
+    ]) {
+      const r = getTranscriptStatus(input);
+      expect(r.uploadedAt).toBeNull();
+      expect(r.uploadedWithinDeadline).toBeNull();
+      expect(r.analysisId).toBeNull();
+    }
+  });
+});
+
+describe('uploadDelayLabel', () => {
+  const fin = madrid('2026-09-23', 19);
+  const mas = (ms: number) => new Date(fin + ms).toISOString();
+
+  it('minutos, horas y días', () => {
+    expect(uploadDelayLabel(fin, mas(40 * 60_000))).toBe('40 min');
+    expect(uploadDelayLabel(fin, mas(3 * H + 20 * 60_000))).toBe('3 h 20 min');
+    expect(uploadDelayLabel(fin, mas(2 * H))).toBe('2 h');
+    expect(uploadDelayLabel(fin, mas(52 * H))).toBe('2 d 4 h');
+    expect(uploadDelayLabel(fin, mas(48 * H))).toBe('2 d');
+  });
+
+  it('subido antes de que la clase terminara, o en el mismo minuto, no es "0 min"', () => {
+    expect(uploadDelayLabel(fin, mas(-30 * 60_000))).toBe('En el momento');
+    expect(uploadDelayLabel(fin, mas(20_000))).toBe('En el momento');
+  });
+
+  it('sin alguno de los dos extremos, vacío', () => {
+    expect(uploadDelayLabel(null, mas(H))).toBe('');
+    expect(uploadDelayLabel(fin, null)).toBe('');
+  });
+});
+
+describe('transcriptCell', () => {
+  const base = { date: '2026-09-23', startHour: '18:00', durationHours: 1 };
+  const ahora = madrid('2026-09-30', 12);
+
+  it('sin ingreso (undefined) → guion gris, no un reclamo', () => {
+    const c = transcriptCell(undefined);
+    expect(c.icon).toBe('—');
+    expect(c.tone).toBe('muted');
+  });
+
+  it('validado verde, en revisión azul: subido no es lo mismo que pagable', () => {
+    const subido = { ...ok, analyzed_at: new Date(madrid('2026-09-23', 22)).toISOString() };
+    const v = transcriptCell(getTranscriptStatus({ ...base, transcript: subido, now: ahora }));
+    expect(v.icon).toBe('✓');
+    expect(v.color).toBe('#1E9E3A');
+    expect(v.title).toContain('dentro de las 24 h');
+
+    const rev = transcriptCell(getTranscriptStatus({ ...base, transcript: { ...subido, validation_status: 'review' }, now: ahora }));
+    expect(rev.icon).toBe('✓');
+    expect(rev.color).toBe('#2563eb');
+    expect(rev.title).toContain('no es pagable');
+  });
+
+  it('vencido en rojo y falta sin aviso en gris', () => {
+    expect(transcriptCell(getTranscriptStatus({ ...base, now: ahora })).icon).toBe('✗');
+    expect(transcriptCell(getTranscriptStatus({ ...base, classType: 'falta_sin_aviso', now: ahora })).tone).toBe('muted');
   });
 });
 

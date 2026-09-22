@@ -265,6 +265,24 @@ export interface TranscriptStatusResult {
   reopened: boolean;
   /** Menos de TRANSCRIPT_WARN_HOURS para vencer (y todavía pendiente). */
   urgent: boolean;
+  /**
+   * id del análisis que cubre la clase (class_analyses.id). Solo en 'subido'.
+   * Es lo que le permite al admin pedir el TEXTO de esa clase concreta
+   * (dbGetTranscriptForReview) sin que el listado lo haya traído nunca.
+   */
+  analysisId: string | null;
+  /**
+   * Fecha/hora de SUBIDA del transcript (`analyzed_at`, ISO). Solo en 'subido':
+   * una clase pendiente no tiene subida, y la de un transcript RECHAZADO no se
+   * muestra porque esa subida no cubre la clase.
+   */
+  uploadedAt: string | null;
+  /**
+   * ¿La subida entró dentro del plazo? `null` cuando no se puede juzgar: clase
+   * anterior al 22/09 (no tiene plazo), sin subida, o fecha ilegible. null NO
+   * es "fuera": es "no aplica", y así se pinta ("—").
+   */
+  uploadedWithinDeadline: boolean | null;
 }
 
 /** ¿La fecha de clase cae dentro de la regla de 24 h? */
@@ -294,6 +312,7 @@ export function getTranscriptStatus(input: TranscriptStatusInput): TranscriptSta
   const base = {
     transcriptState, subjectToDeadline: false, endsAt: null, deadlineAt: null,
     hoursLeft: null, reopened: false, urgent: false,
+    analysisId: null, uploadedAt: null, uploadedWithinDeadline: null,
   };
 
   // La falta del alumno no lleva transcript: no hay plazo que correr.
@@ -304,8 +323,31 @@ export function getTranscriptStatus(input: TranscriptStatusInput): TranscriptSta
   // Subido y guardado (validado o en revisión): el profesor ya hizo su parte.
   // Un transcript RECHAZADO no cuenta: hay que subir el correcto, y el plazo
   // sigue corriendo (si venció, el admin puede reabrirlo al rechazar).
+  //
+  // El plazo se calcula IGUAL que en las pendientes, aunque acá ya no sirva para
+  // vencer nada: es lo que permite decir si la subida llegó dentro de las 24 h.
+  // `hoursLeft` se queda en null a propósito — no hay cuenta regresiva que
+  // mostrar y las pantallas la usan como señal de "esto todavía corre".
   if (transcriptState === 'ok' || transcriptState === 'review') {
-    return { ...base, status: 'subido' };
+    const sujeta = subjectToDeadline(input.date);
+    const endsAt = finiteOrNull(classEndEpoch(input.date, input.startHour, input.durationHours));
+    const { deadlineAt, reopened } = deadlineFrom(endsAt, input.reopenedDeadlineAt);
+    const uploadedAt = input.transcript?.analyzed_at ?? null;
+    const subida = uploadedAt ? new Date(uploadedAt).getTime() : NaN;
+    return {
+      ...base, status: 'subido',
+      subjectToDeadline: sujeta,
+      endsAt,
+      // Una clase anterior al 22/09 no tiene plazo: no se le inventa uno para
+      // juzgar hacia atrás una subida que en su momento no llegaba tarde.
+      deadlineAt: sujeta ? deadlineAt : null,
+      reopened: sujeta && reopened,
+      analysisId: input.transcript?.id ?? null,
+      uploadedAt,
+      uploadedWithinDeadline: sujeta && deadlineAt != null && Number.isFinite(subida)
+        ? subida <= deadlineAt
+        : null,
+    };
   }
 
   // Sin plazo: clase anterior a la fecha de corte. Pendiente para siempre.
@@ -313,14 +355,8 @@ export function getTranscriptStatus(input: TranscriptStatusInput): TranscriptSta
     return { ...base, status: 'pendiente' };
   }
 
-  const endsAtRaw = classEndEpoch(input.date, input.startHour, input.durationHours);
-  const endsAt = Number.isFinite(endsAtRaw) ? endsAtRaw : null;
-
-  const reopenedMs = input.reopenedDeadlineAt ? new Date(input.reopenedDeadlineAt).getTime() : NaN;
-  const reopened = Number.isFinite(reopenedMs);
-  const deadlineAt = reopened
-    ? reopenedMs
-    : endsAt != null ? endsAt + TRANSCRIPT_DEADLINE_HOURS * HOUR_MS : null;
+  const endsAt = finiteOrNull(classEndEpoch(input.date, input.startHour, input.durationHours));
+  const { deadlineAt, reopened } = deadlineFrom(endsAt, input.reopenedDeadlineAt);
 
   // Fecha ilegible y sin reapertura: no se puede vencer lo que no se puede medir.
   if (deadlineAt == null) {
@@ -330,8 +366,27 @@ export function getTranscriptStatus(input: TranscriptStatusInput): TranscriptSta
   const hoursLeft = (deadlineAt - input.now) / HOUR_MS;
   const status: TranscriptStatus = hoursLeft <= 0 ? 'vencido' : 'pendiente';
   return {
-    status, transcriptState, subjectToDeadline: true, endsAt, deadlineAt, hoursLeft, reopened,
+    ...base,
+    status, subjectToDeadline: true, endsAt, deadlineAt, hoursLeft, reopened,
     urgent: status === 'pendiente' && hoursLeft < TRANSCRIPT_WARN_HOURS,
+  };
+}
+
+const finiteOrNull = (n: number): number | null => (Number.isFinite(n) ? n : null);
+
+/**
+ * Fecha límite de una clase: la reapertura del admin si la hay, y si no el fin
+ * de la clase + 24 h. Una sola regla para las tres ramas (subido, pendiente,
+ * vencido) — antes vivía suelta dentro de la rama de las pendientes y la de los
+ * subidos habría tenido que repetirla.
+ */
+function deadlineFrom(endsAt: number | null, reopenedDeadlineAt: string | null | undefined):
+  { deadlineAt: number | null; reopened: boolean } {
+  const reopenedMs = reopenedDeadlineAt ? new Date(reopenedDeadlineAt).getTime() : NaN;
+  if (Number.isFinite(reopenedMs)) return { deadlineAt: reopenedMs, reopened: true };
+  return {
+    deadlineAt: endsAt != null ? endsAt + TRANSCRIPT_DEADLINE_HOURS * HOUR_MS : null,
+    reopened: false,
   };
 }
 
@@ -379,6 +434,21 @@ export function countdownLabel(hoursLeft: number | null): string {
   return m === 0 ? `${h} h` : `${h} h ${m} min`;
 }
 
+/**
+ * "23/09 a las 19:00" (hora de España), sin preposición: la pone quien lo use.
+ * Un instante SIEMPRE se escribe en hora de España, que es donde están las
+ * clases; el profesor mira desde Argentina y el admin desde donde sea.
+ */
+export function spainStampLabel(ms: number | null | undefined): string {
+  if (ms == null || !Number.isFinite(ms)) return '';
+  const fmt = new Intl.DateTimeFormat('es-ES', {
+    timeZone: 'Europe/Madrid', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+  });
+  const parts = fmt.formatToParts(new Date(ms));
+  const get = (t: string) => parts.find(p => p.type === t)?.value ?? '';
+  return `${get('day')}/${get('month')} a las ${get('hour')}:${get('minute')}`;
+}
+
 /** "hasta el 23/09 a las 19:00" (hora de España). */
 export function deadlineLabel(deadlineAt: number | null): string {
   if (deadlineAt == null) return '';
@@ -401,6 +471,91 @@ export function uploadedAtLabel(iso: string | null | undefined): string {
   const parts = fmt.formatToParts(new Date(t));
   const get = (x: string) => parts.find(p => p.type === x)?.value ?? '';
   return `${get('day')}/${get('month')} ${get('hour')}:${get('minute')}`;
+}
+
+/**
+ * DEMORA entre el fin de la clase y la subida: "3 h 20 min" · "2 d 4 h".
+ * Vacío si falta alguno de los dos extremos.
+ */
+export function uploadDelayLabel(endsAt: number | null, uploadedAt: string | null | undefined): string {
+  if (endsAt == null || !uploadedAt) return '';
+  const ms = new Date(uploadedAt).getTime() - endsAt;
+  if (!Number.isFinite(ms)) return '';
+  // Subido ANTES de que la clase terminara (pasa en las de 2 h, donde el plazo
+  // corre desde el final de la segunda hora) o en el mismo minuto: no es una
+  // demora negativa, y "0 min" se lee como un error.
+  if (ms < 60_000) return 'En el momento';
+  const min = Math.round(ms / 60_000);
+  const h = Math.floor(min / 60);
+  const d = Math.floor(h / 24);
+  if (d > 0) return h % 24 > 0 ? `${d} d ${h % 24} h` : `${d} d`;
+  if (h > 0) return min % 60 > 0 ? `${h} h ${min % 60} min` : `${h} h`;
+  return `${min} min`;
+}
+
+/**
+ * CELDA del listado: un solo glifo con su tooltip ya escrito. La usan la columna
+ * "Transcript" del Registro de clases y la pestaña "Transcripts" del admin, para
+ * que las dos digan exactamente lo mismo con los mismos colores.
+ *
+ *   ✓ verde (#1E9E3A)  subido y validado
+ *   ✓ azul  (#2563eb)  subido, esperando al equipo — el mismo matiz que
+ *                      transcriptDeadlineBadge: subido no es lo mismo que pagable
+ *   ⏳ ámbar (#FFC400)  pendiente, dentro del plazo (o clase anterior al 22/09)
+ *   ✗ roja  (#dc2626)  vencido
+ *   — gris  (#a4a7a1)  falta sin aviso (no lleva transcript) o clase sin ingreso
+ *
+ * `undefined` = la clase no tiene ingreso: para el sistema no existe, así que no
+ * se le puede reclamar ningún transcript.
+ */
+export function transcriptCell(r: TranscriptStatusResult | undefined | null): {
+  icon: '✓' | '⏳' | '✗' | '—';
+  /** Color del glifo (y del texto en el teléfono). */
+  color: string;
+  /** Fondo de la píldora. El ámbar de marca no se lee sobre blanco a 13 px. */
+  bg: string;
+  /** Texto corto para el teléfono, donde no hay tooltip que valga. */
+  label: string;
+  title: string;
+  tone: 'ok' | 'review' | 'pending' | 'expired' | 'muted';
+} {
+  if (!r) {
+    return {
+      icon: '—', color: '#a4a7a1', bg: 'transparent', label: 'Sin ingreso', tone: 'muted',
+      title: 'Sin ingreso a la clase: para el sistema esta clase no existe, así que no lleva transcript.',
+    };
+  }
+  switch (r.status) {
+    case 'subido': {
+      const cuando = uploadedAtLabel(r.uploadedAt);
+      const plazo = r.uploadedWithinDeadline === true ? ', dentro de las 24 h'
+        : r.uploadedWithinDeadline === false ? ', FUERA de las 24 h'
+        : '';   // clase anterior al plazo: no se juzga
+      const cabecera = cuando ? `Subido el ${cuando} (hora de España)${plazo}` : 'Transcript subido';
+      return r.transcriptState === 'review'
+        ? { icon: '✓', color: '#2563eb', bg: 'rgba(37,99,235,0.10)', label: 'En revisión', tone: 'review',
+            title: `${cabecera}. En revisión del equipo: la clase todavía no es pagable.` }
+        : { icon: '✓', color: '#1E9E3A', bg: 'rgba(30,158,58,0.10)', label: 'Subido', tone: 'ok',
+            title: cabecera };
+    }
+    case 'pendiente':
+      return {
+        icon: '⏳', color: '#8a6d00', bg: '#FFF4BF', label: 'Pendiente', tone: 'pending',
+        title: r.deadlineAt != null
+          ? `Vence el ${spainStampLabel(r.deadlineAt)} (hora de España)${r.reopened ? ' · plazo reabierto por el admin' : ''}`
+          : 'Pendiente. Clase anterior al 22/09/2026: no tiene plazo de 24 h.',
+      };
+    case 'vencido':
+      return {
+        icon: '✗', color: '#dc2626', bg: 'rgba(239,68,68,0.10)', label: 'Vencido', tone: 'expired',
+        title: `Venció el ${spainStampLabel(r.deadlineAt)} (hora de España). No se valida ni se paga, pero la clase consumió cupo del alumno.`,
+      };
+    default:
+      return {
+        icon: '—', color: '#a4a7a1', bg: 'transparent', label: 'No aplica', tone: 'muted',
+        title: 'Falta sin aviso del alumno: no hubo clase que grabar, no lleva transcript.',
+      };
+  }
 }
 
 /** Etiqueta roja de la clase vencida. El mismo texto en las cuatro vistas. */

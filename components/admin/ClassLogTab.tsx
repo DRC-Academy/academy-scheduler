@@ -29,14 +29,17 @@ import { useEffect, useMemo, useState } from 'react';
 import { CalendarDays, CheckCircle2, Link2, Search, X } from 'lucide-react';
 import { useTeachers } from '@/lib/TeachersContext';
 import { getSpainParts } from '@/lib/spainTime';
-import { buildAttendanceRows, attendanceSubBadge, minutesLate, isoDate, type LogRow, type AttendanceStatus } from '@/lib/attendance';
+import { buildAttendanceRows, attachTranscriptStatus, attendanceSubBadge, minutesLate, isoDate, type LogRow, type AttendanceStatus } from '@/lib/attendance';
 import { periodIndex, dbGetStudentDropouts, type StudentDropout } from '@/lib/studentPeriod';
 import { gridOccupancyOfTeacher, applyGridSlots } from '@/lib/teacherClasses';
+import { transcriptCell } from '@/lib/transcriptDeadline';
 import { HelpTooltip } from '@/components/ui';
 import type { HelpTooltipKey } from '@/lib/help-tooltips';
 
 type Periodo = 'hoy' | '7' | '30' | 'otro';
 type Filtro = 'all' | 'missed' | 'late' | 'on_time' | 'no_link' | 'no_sub';
+/** Filtro de la columna "Transcript". Los mismos estados de lib/transcriptDeadline. */
+type FiltroTr = 'all' | 'subido' | 'pendiente' | 'vencido';
 
 const PERIODOS: Array<{ id: Periodo; label: string }> = [
   { id: 'hoy', label: 'Hoy' }, { id: '7', label: '7 días' }, { id: '30', label: '30 días' }, { id: 'otro', label: 'Otro período' },
@@ -51,6 +54,13 @@ const FILTROS: Array<{ id: Filtro; label: string; tono?: 'rojo' | 'naranja' }> =
   { id: 'no_sub',  label: 'Sin suscripción', tono: 'naranja' },
 ];
 
+const FILTROS_TR: Array<{ id: FiltroTr; label: string }> = [
+  { id: 'all',       label: 'Todos' },
+  { id: 'subido',    label: 'Subido' },
+  { id: 'pendiente', label: 'Pendiente' },
+  { id: 'vencido',   label: 'Vencido' },
+];
+
 /** Cuántas filas se pintan de entrada y cuántas suma cada "Mostrar más". */
 const PAGINA = 50;
 
@@ -63,6 +73,14 @@ function pasaFiltro(r: LogRow, f: Filtro): boolean {
     case 'no_link': return !r.hasLink;
     case 'no_sub':  return r.enteredWithoutActive === true;
   }
+}
+
+/**
+ * Filtro de transcript. Una clase SIN ingreso (o una falta sin aviso) no tiene
+ * estado que filtrar: solo aparece en "Todos".
+ */
+function pasaTranscript(r: LogRow, f: FiltroTr): boolean {
+  return f === 'all' || r.transcript?.status === f;
 }
 
 /** Hora de entrada en hora de España (HH:MM), la misma en la que está la clase. */
@@ -95,7 +113,11 @@ function Etiqueta({ r }: { r: LogRow }) {
 
 // ═════════════════════════════════════════════════════════════════════════════
 export default function ClassLogTab() {
-  const { teachers, assignments, classJoinLogs, loadClassJoinLogs } = useTeachers();
+  // `classRecords` y `classAnalyses` ya están cargados (loadFinanceData corre al
+  // arrancar la app): la columna "Transcript" no cuesta ninguna consulta nueva, y
+  // `classAnalyses` no trae el TEXTO de ninguna transcripción — solo su
+  // existencia y su fecha de subida (ver dbGetClassTranscripts).
+  const { teachers, assignments, classJoinLogs, classRecords, classAnalyses, loadClassJoinLogs } = useTeachers();
 
   // "Ahora" se calcula SIEMPRE en hora de España (Europe/Madrid), igual que el
   // indicador de hora actual del calendario, no importa dónde esté el admin.
@@ -112,8 +134,12 @@ export default function ClassLogTab() {
   const [toDate, setToDate] = useState(todayIso);
   const [teacherFilter, setTeacherFilter] = useState('');
   const [filtro, setFiltro] = useState<Filtro>('all');
+  const [filtroTr, setFiltroTr] = useState<FiltroTr>('all');
   const [query, setQuery] = useState('');
   const [limite, setLimite] = useState(PAGINA);
+  // El reloj con el que se decide si un plazo venció se fija al montar: la
+  // pantalla no necesita una cuenta regresiva viva, se recarga al navegar.
+  const [nowMs] = useState(() => Date.now());
 
   useEffect(() => {
     loadClassJoinLogs();
@@ -144,8 +170,8 @@ export default function ClassLogTab() {
 
   // Filas de asistencia (fuente única: lib/attendance). Todos los profes (o el
   // filtrado), sin clases futuras, de la más reciente a la más antigua.
-  const baseRows = useMemo<LogRow[]>(() =>
-    buildAttendanceRows({
+  const baseRows = useMemo<LogRow[]>(() => {
+    const filas = buildAttendanceRows({
       // Horarios del CALENDARIO: un alumno sacado del calendario deja de generar
       // filas de asistencia.
       assignments: applyGridSlots(assignments, occupancyByTeacher),
@@ -157,8 +183,16 @@ export default function ClassLogTab() {
       // Su PERÍODO decide desde cuándo existen: sin esto un alumno que empieza
       // el mes que viene ya acumula "no ingresó" hacia atrás.
       periodsByTeacher,
-    }).sort((x, y) => y.date.localeCompare(x.date) || (parseInt(y.hour) - parseInt(x.hour))),
-  [assignments, classJoinLogs, teacherFilter, rango.desde, rango.hasta, todayIso, nowMinutes, occupancyByTeacher, periodsByTeacher]);
+    }).sort((x, y) => y.date.localeCompare(x.date) || (parseInt(y.hour) - parseInt(x.hour)));
+    // Estado del transcript de cada clase CON ingreso, con la MISMA regla que
+    // Mis clases, la ficha del alumno, Asistencias y el plazo de Finanzas
+    // (lib/transcriptDeadline). Una sesión de 2 h es una sola fila y lleva un
+    // solo transcript, así que se resuelve una sola vez.
+    return attachTranscriptStatus(filas, {
+      joinLogs: classJoinLogs, analyses: classAnalyses, classRecords, now: nowMs,
+    });
+  },
+  [assignments, classJoinLogs, classAnalyses, classRecords, nowMs, teacherFilter, rango.desde, rango.hasta, todayIso, nowMinutes, occupancyByTeacher, periodsByTeacher]);
 
   // Cifras. Las "Pendiente" (hoy, aún sin pasar) no cuentan como registradas ni
   // como perdidas.
@@ -175,14 +209,19 @@ export default function ClassLogTab() {
     return logs.length ? Math.round(logs.reduce((s, l) => s + Math.max(0, minutesLate(l.scheduledDate, l.scheduledTime, l.clickedAt)), 0) / logs.length) : 0;
   }, [classJoinLogs, teacherFilter, rango.desde, rango.hasta]);
 
+  // Los contadores de los chips se cuentan YA filtrados por transcript: si el
+  // admin pidió "solo vencidos", el número del chip tiene que hablar de lo que
+  // va a ver, no del total.
   const conteo = useMemo(() => {
     const c = {} as Record<Filtro, number>;
-    for (const f of FILTROS) c[f.id] = baseRows.filter(r => pasaFiltro(r, f.id)).length;
+    const conTr = baseRows.filter(r => pasaTranscript(r, filtroTr));
+    for (const f of FILTROS) c[f.id] = conTr.filter(r => pasaFiltro(r, f.id)).length;
     return c;
-  }, [baseRows]);
+  }, [baseRows, filtroTr]);
 
   const q = query.trim().toLowerCase();
-  const visibles = baseRows.filter(r => pasaFiltro(r, filtro) && (!q || r.studentName.toLowerCase().includes(q) || r.teacherName.toLowerCase().includes(q)));
+  const visibles = baseRows.filter(r => pasaFiltro(r, filtro) && pasaTranscript(r, filtroTr)
+    && (!q || r.studentName.toLowerCase().includes(q) || r.teacherName.toLowerCase().includes(q)));
   const mostradas = visibles.slice(0, limite);
   const porDia: Array<{ date: string; filas: LogRow[] }> = [];
   for (const r of mostradas) {
@@ -226,6 +265,15 @@ export default function ClassLogTab() {
             </select>
             {teacherFilter && (
               <button type="button" className="rc-sel-x" onClick={() => cambiar(setTeacherFilter)('')} aria-label="Quitar el profesor"><X size={14} strokeWidth={2.5} /></button>
+            )}
+          </label>
+          <label className="rc-sel corto">
+            <span className="rc-sel-l">Transcript</span>
+            <select value={filtroTr} onChange={e => cambiar(setFiltroTr)(e.target.value as FiltroTr)}>
+              {FILTROS_TR.map(f => <option key={f.id} value={f.id}>{f.label}</option>)}
+            </select>
+            {filtroTr !== 'all' && (
+              <button type="button" className="rc-sel-x" onClick={() => cambiar(setFiltroTr)('all')} aria-label="Quitar el filtro de transcript"><X size={14} strokeWidth={2.5} /></button>
             )}
           </label>
           <label className="rc-search">
@@ -277,7 +325,7 @@ export default function ClassLogTab() {
         ) : (
           <>
             <div className="rc-row head" aria-hidden>
-              <span>Hora</span><span>Alumno</span><span>Profesor</span><span>Entró</span><span>Puntualidad</span><span>Suscripción</span>
+              <span>Hora</span><span>Alumno</span><span>Profesor</span><span>Entró</span><span>Transcript</span><span>Puntualidad</span><span>Suscripción</span>
             </div>
             {porDia.map(d => {
               const { nombre, hoy } = fechaDia(d.date, todayIso);
@@ -325,6 +373,9 @@ function Kpi({ label, value, color, sub, help, soloEscritorio }: { label: string
 function Fila({ r, sinProfe, onProfe }: { r: LogRow; sinProfe: boolean; onProfe: () => void }) {
   const sub = attendanceSubBadge(r);
   const problema = r.enteredWithoutActive === true;
+  // Sin ingreso no hay clase para el sistema: `r.transcript` viene undefined y
+  // transcriptCell devuelve el guion gris.
+  const tr = transcriptCell(r.transcript);
   return (
     <div className={`rc-row${r.status === 'missed' ? ' no' : ''}`}>
       <span className="rc-hora">
@@ -339,6 +390,11 @@ function Fila({ r, sinProfe, onProfe }: { r: LogRow; sinProfe: boolean; onProfe:
         <button type="button" className={`rc-prof${sinProfe ? ' sin' : ''}`} onClick={onProfe} title={`Ver solo las clases de ${r.teacherName}`}>{r.teacherName}</button>
         {r.durationHours > 1 && <span className="rc-dur">{r.durationHours} h</span>}
         <span className={`rc-ing${r.joinedAt ? '' : ' vacio'}`}>{r.joinedAt ? <><span className="rc-ing-l">entró</span>{horaEntrada(r.joinedAt)}</> : <span className="rc-ing-no">—</span>}</span>
+        <span className={`rc-tr is-${tr.tone}`} title={tr.title}>
+          <span className="rc-tr-i" style={{ color: tr.color, background: tr.bg }} aria-hidden>{tr.icon}</span>
+          <span className="rc-sr">Transcript: {tr.label}</span>
+          <span className="rc-tr-l" style={{ color: tr.color }} aria-hidden>{tr.label}</span>
+        </span>
         {!r.hasLink && <span className="rc-tag warn rc-link-m"><Link2 size={12} aria-hidden /> Sin enlace</span>}
         <span className={`rc-sub${problema ? ' problema' : ''}`}>
           {sub
@@ -365,6 +421,7 @@ const ESTILOS = `
 .rc-fechas { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-muted); }
 .rc-fechas input { height: 38px; padding: 0 10px; border-radius: 10px; border: 1px solid #e6e7e2; background: #fff; font-family: inherit; font-size: 13px; color: var(--text-primary); }
 .rc-sel { position: relative; display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 10px 0 12px; border: 1px solid #e6e7e2; border-radius: 10px; background: #fff; min-width: 200px; }
+.rc-sel.corto { min-width: 168px; }
 .rc-sel-l { font-size: 13px; font-weight: 600; color: var(--text-muted); white-space: nowrap; }
 .rc-sel select { flex: 1; min-width: 0; height: 100%; border: 0; background: transparent; font-family: inherit; font-size: 13.5px; font-weight: 600; color: var(--text-primary); padding: 0; cursor: pointer; }
 .rc-sel select:focus { outline: none; }
@@ -387,10 +444,16 @@ const ESTILOS = `
 .rc-chip[aria-pressed="true"] .n { color: #1E9E3A; }
 .rc-chip .n.rojo { color: #C81E1E; }
 .rc-chip .n.naranja { color: #ea580c; }
-.rc-row { display: grid; grid-template-columns: 118px minmax(0, 1fr) 120px 76px 150px 190px; grid-template-areas: "hora nom prof ing est sub"; align-items: center; gap: 12px; min-height: 46px; padding: 4px 16px; border-top: 1px solid #ECECE8; font-size: 13.5px; }
+.rc-row { display: grid; grid-template-columns: 118px minmax(0, 1fr) 120px 76px 92px 150px 190px; grid-template-areas: "hora nom prof ing tr est sub"; align-items: center; gap: 12px; min-height: 46px; padding: 4px 16px; border-top: 1px solid #ECECE8; font-size: 13.5px; }
 .rc-row.head { min-height: 36px; font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #6E6E66; background: #FAFAF8; border-top: 0; }
 .rc-row.head span:nth-child(1) { grid-area: hora; } .rc-row.head span:nth-child(2) { grid-area: nom; } .rc-row.head span:nth-child(3) { grid-area: prof; }
-.rc-row.head span:nth-child(4) { grid-area: ing; } .rc-row.head span:nth-child(5) { grid-area: est; } .rc-row.head span:nth-child(6) { grid-area: sub; }
+.rc-row.head span:nth-child(4) { grid-area: ing; } .rc-row.head span:nth-child(5) { grid-area: tr; } .rc-row.head span:nth-child(6) { grid-area: est; } .rc-row.head span:nth-child(7) { grid-area: sub; }
+/* Transcript: en escritorio solo el glifo (el detalle va en el tooltip del
+   title); en el teléfono el glifo con su palabra, porque ahí no hay tooltip. */
+.rc-tr { grid-area: tr; display: inline-flex; align-items: center; gap: 6px; cursor: help; }
+.rc-tr-i { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 999px; font-size: 13px; font-weight: 700; line-height: 1; }
+.rc-tr-l { display: none; font-size: 12.5px; font-weight: 600; }
+.rc-sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .rc-row.no { background: #FFFBFA; }
 .rc-hora { grid-area: hora; font-weight: 700; color: #157347; white-space: nowrap; }
 .rc-2h { font-size: 10.5px; font-weight: 700; padding: 1px 6px; border-radius: 999px; background: rgba(30,158,58,0.12); color: #1E9E3A; margin-left: 2px; }
@@ -423,7 +486,7 @@ const ESTILOS = `
 .rc-vacio-s { font-size: 14px; color: #6E6E66; max-width: 340px; line-height: 1.5; }
 
 @media (max-width: 1100px) {
-  .rc-row { grid-template-columns: 110px minmax(0, 1fr) 100px 70px 140px 150px; gap: 10px; }
+  .rc-row { grid-template-columns: 110px minmax(0, 1fr) 100px 70px 44px 140px 150px; gap: 10px; }
 }
 
 /* Teléfono: el título lo pone la barra de Admin; la fila se vuelve tarjeta. */
@@ -455,6 +518,11 @@ const ESTILOS = `
   .rc-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; grid-area: meta; font-size: 13px; color: #6E6E66; }
   .rc-prof { font-size: 13px; }
   .rc-prof.sin, .rc-link-d, .rc-ing.vacio, .rc-sub { display: none; }
+  /* En la tarjeta el transcript va en la línea de datos, con su palabra. Sin
+     ingreso (o falta sin aviso) no se pinta nada: no hay nada que reclamar. */
+  .rc-tr-l { display: inline; }
+  .rc-tr.is-muted { display: none; }
+  .rc-tr-i { width: 20px; height: 20px; font-size: 12px; }
   /* El global "button { min-height: 44px }" del teléfono estiraría el nombre
      del profesor y el "?" de ayuda: el profesor se elige con el selector de
      arriba y la ayuda es cosa de escritorio. */
