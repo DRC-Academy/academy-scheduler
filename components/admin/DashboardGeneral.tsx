@@ -10,17 +10,19 @@
 // Se MOVIÓ, no se copió: en app/admin/page.tsx ya no queda nada de esto. Con ello
 // vinieron los paneles de mantenimiento, que solo vivían para esta pantalla:
 // SyncPanel, PlanSyncPanel, StartDateSyncPanel, CompanyPlanSyncPanel,
-// CleanDashesPanel, AuditPanel, y los dos auxiliares AdminTool y
-// ConflictDetailModal.
+// CleanDashesPanel, AuditPanel y el auxiliar AdminTool. (ConflictDetailModal y
+// el contador de Conflictos se fueron con "Requiere acción hoy", 23/09/2026.)
 //
 // DE DÓNDE SALEN LOS DATOS. Los gruesos (profesores, alumnos, asignaciones) los
 // da el contexto `useTeachers`, que ya está cargado desde que arranca la app: esta
-// página no dispara ninguna consulta por ellos. Lo único propio es la auditoría de
-// vínculos, que alimenta el contador de Conflictos y la lista de Alertas.
+// página no dispara ninguna consulta por ellos. Lo único propio son las lecturas
+// ligeras de lib/dashboardExtras (riesgo, bajas, uso de la IA).
 //
-// Tres secciones, en este orden: los indicadores del día, los emails de
-// presentación pendientes y —al final y plegadas— las herramientas de
-// mantenimiento, que son acciones puntuales y no información de consulta.
+// Los indicadores del día y —al final y plegadas— las herramientas de
+// mantenimiento, que son acciones puntuales y no información de consulta. Las
+// secciones "Requiere acción hoy" y "Emails de presentación" se quitaron del
+// escritorio el 23/09/2026 a pedido de Facundo; cada cola sigue en su pestaña
+// (Validación, Emails, Riesgo, Finanzas).
 //
 // DOS VISTAS, UNOS NÚMEROS. Por debajo de 768 px se muestra DashboardMovil
 // (secciones plegables, una columna, navegación inferior) y por encima esta
@@ -35,7 +37,6 @@ import { useRouter } from 'next/navigation';
 import { useTeachers } from '@/lib/TeachersContext';
 import type { AssignedSlot } from '@/types';
 import { CrearVinculoModal } from '@/components/CrearVinculoModal';
-import { getPresentationEmailStatus } from '@/lib/presentationEmailUtils';
 import { calculateTeacherFinance } from '@/lib/finance';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 // Los números del dashboard: funciones puras sobre lo que el contexto ya trajo.
@@ -54,6 +55,7 @@ import {
 } from '@/lib/dashboardExtras';
 // La misma pantalla en el teléfono: recibe los números de acá, no calcula nada.
 import { DashboardMovil, type DashboardDatos } from './DashboardMovil';
+import TeacherUsageDashboard from './TeacherUsageDashboard';
 import {
   dbAuditStudentAssignments, dbRelinkAssignment, dbSyncAssignmentName, dbMergeDuplicateStudents,
   dbSyncStudentAssignments, dbDiagnoseAllCalendars, dbSyncAllCalendarsToAssignments, dbCreateFullLink,
@@ -1125,102 +1127,7 @@ function AdminTool({ title, desc, children, openSignal }: {
   );
 }
 
-/**
- * Un tipo de conflicto del dashboard, con sus casos concretos. El detalle vive
- * acá y no solo en el contador porque un número suelto ("6 conflictos") no le
- * dice al admin ni qué pasa ni a quién le pasa.
- */
-interface ConflictGroup {
-  label: string;
-  help: string;
-  items: Array<{ main: string; detail: string }>;
-}
-
-/**
- * Detalle de los conflictos: QUÉ pasa, a QUÉ alumno y con QUÉ profesor. El
- * contador del dashboard abre todos los grupos; cada alerta abre el suyo.
- * Solo informa — las acciones de reparación viven en la Auditoría de vínculos,
- * a la que se llega con el botón del pie.
- */
-function ConflictDetailModal({ groups, onClose, onOpenAudit }: {
-  groups: ConflictGroup[];
-  onClose: () => void;
-  onOpenAudit: () => void;
-}) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
-  const total = groups.reduce((s, g) => s + g.items.length, 0);
-
-  return (
-    <div
-      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(4px)', zIndex: 95, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
-      onClick={e => { if (e.target === e.currentTarget) onClose(); }}
-      role="dialog" aria-modal="true" aria-label="Detalle de conflictos"
-    >
-      <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 16, width: '100%', maxWidth: 620, maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '18px 22px 14px', borderBottom: '1px solid var(--border)' }}>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary)' }}>
-              {groups.length === 1 ? groups[0].label : 'Conflictos detectados'}
-            </div>
-            <div style={{ fontSize: 12.5, color: 'var(--text-muted)', marginTop: 2 }}>
-              {total} caso{total !== 1 ? 's' : ''} que requieren revisión
-            </div>
-          </div>
-          <button onClick={onClose} aria-label="Cerrar"
-            style={{ marginLeft: 'auto', background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: 'var(--text-muted)', lineHeight: 1 }}>
-            ✕
-          </button>
-        </div>
-
-        <div style={{ overflowY: 'auto', padding: '6px 22px 18px' }}>
-          {groups.map(g => (
-            <div key={g.label} style={{ marginTop: 16 }}>
-              {groups.length > 1 && (
-                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>
-                  {g.label} <span style={{ color: 'var(--text-muted)', fontWeight: 500 }}>· {g.items.length}</span>
-                </div>
-              )}
-              <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.55, margin: '4px 0 10px' }}>{g.help}</div>
-              <div style={{ display: 'flex', flexDirection: 'column' }}>
-                {g.items.map((it, i) => (
-                  <div key={i} style={{ padding: '10px 0', borderTop: '1px solid var(--border)' }}>
-                    <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text-primary)' }}>{it.main}</div>
-                    <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2, lineHeight: 1.5 }}>{it.detail}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <div style={{ display: 'flex', gap: 10, padding: '14px 22px', borderTop: '1px solid var(--border)' }}>
-          <button onClick={onClose}
-            style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
-            Cerrar
-          </button>
-          <button onClick={onOpenAudit}
-            style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: '#1E9E3A', color: '#fff', cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
-            Abrir la auditoría para repararlos
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ─── Piezas visuales ─────────────────────────────────────────────────────────
-
-const TONO = {
-  rojo:     { fg: '#B42318', bg: 'rgba(220,74,56,0.08)', bd: 'rgba(220,74,56,0.30)' },
-  aviso:    { fg: '#8a6d00', bg: 'rgba(255,196,0,0.12)', bd: 'rgba(255,196,0,0.45)' },
-  ok:       { fg: '#167A2D', bg: 'var(--bg-surface)',    bd: 'var(--border)' },
-} as const;
-type Tono = keyof typeof TONO;
 
 const eur = (n: number) => `${Math.round(n).toLocaleString('es-ES')} €`;
 
@@ -1239,40 +1146,6 @@ function SecHead({ title, sub, href, cta = 'Ver detalle' }: {
   );
 }
 
-/**
- * Una cola que espera a alguien.
- *
- * A cero se apaga —fondo blanco y guion en vez del número— en lugar de
- * desaparecer: que la tarjeta esté siempre en el mismo sitio es lo que permite
- * mirar la fila entera de un vistazo y ver que no hay nada pendiente. Si
- * apareciera y desapareciera, habría que leerlas todas cada vez.
- */
-function Accion({ n, label, detalle, tono, href, onClick, cargando }: {
-  n: number | null; label: string; detalle: string; tono: Tono;
-  href?: string; onClick?: () => void; cargando?: boolean;
-}) {
-  const vacio = n === 0;
-  const t = vacio ? TONO.ok : TONO[tono];
-  const inner = (
-    <>
-      <div className="dsh-accion-n" style={{ color: vacio || n == null ? 'var(--text-muted)' : t.fg }}>
-        {cargando ? '·' : vacio ? '—' : n}
-      </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div className="dsh-accion-l">{label}</div>
-        <div className="dsh-accion-d">{cargando ? 'Cargando…' : vacio ? 'Nada pendiente' : detalle}</div>
-      </div>
-      <span aria-hidden className="dsh-chev">›</span>
-    </>
-  );
-  const style = { background: vacio ? 'var(--bg-surface)' : t.bg, borderColor: vacio ? 'var(--border)' : t.bd };
-
-  if (onClick) {
-    return <button type="button" className="dsh-accion" style={style} onClick={onClick}>{inner}</button>;
-  }
-  return <Link href={href ?? '#'} className="dsh-accion" style={style}>{inner}</Link>;
-}
-
 function Barra({ pct, color = '#1E9E3A' }: { pct: number; color?: string }) {
   return (
     <div className="dsh-track" aria-hidden>
@@ -1289,7 +1162,6 @@ export default function DashboardGeneral() {
     classRecords, classJoinLogs, classAnalyses,
     financeRates, financePayments, scoringEvents, manualApprovals, teacherBonuses,
   } = useTeachers();
-  const router = useRouter();
 
   // ── Lo que no está en memoria ──────────────────────────────────────────────
   // Cinco lecturas ligeras, una sola vez. El resto de la pantalla se pinta sin
@@ -1307,73 +1179,6 @@ export default function DashboardGeneral() {
   const mes = monthKey(ahora);
   const semana = weekRange(ahora);
   const hoyIso = madridDateString(ahora);
-
-  // ── Conflictos REALES ──────────────────────────────────────────────────────
-  // Hasta ahora este contador salía de `mockAlerts`, un array fijo de lib/mock-data:
-  // decía "2" pasara lo que pasara en la academia. Ahora sale de la auditoría de
-  // vínculos, que es la que sabe de verdad qué está descuadrado.
-  //
-  // Se carga en segundo plano (lee todos los calendarios) y hasta que llega se
-  // muestra "·" en vez de 0: un cero mientras carga sería otra forma de mentir.
-  const [audit, setAudit] = useState<AuditResult | null>(null);
-  useEffect(() => { dbAuditStudentAssignments().then(setAudit).catch(() => {}); }, []);
-
-  /**
-   * Qué cuenta como conflicto. Se EXCLUYE `multipleAssignments`: un alumno con
-   * dos profesores es válido en la academia (la propia auditoría lo dice y ofrece
-   * marcarlo como revisado), así que contarlo daría un número siempre alto que
-   * nadie miraría.
-   */
-  const conflictGroups: ConflictGroup[] = audit ? [
-    {
-      label: 'Alumnos sin asignación',
-      help: 'Están en la tabla de alumnos pero no tienen ninguna asignación con un profesor, así que no aparecen en ninguna agenda.',
-      items: audit.studentsWithoutAssignment.map(s => ({ main: s.name, detail: s.email || 'sin email' })),
-    },
-    {
-      label: 'Asignaciones huérfanas',
-      help: 'La asignación apunta a un alumno que ya no existe en la tabla de alumnos.',
-      items: audit.orphanAssignments.map(a => ({ main: a.studentName, detail: `profe ${a.teacherName} · alumno inexistente (${a.studentId})` })),
-    },
-    {
-      label: 'Nombres desincronizados',
-      help: 'El nombre del alumno en su ficha y en la asignación no coinciden. El cruce por nombre (transcripts, calendario) puede fallar.',
-      items: audit.nameMismatches.map(m => ({ main: m.nameStudents, detail: `en la asignación figura como "${m.nameAssignments}" · profe ${m.teacherName}` })),
-    },
-    {
-      label: 'Alumnos duplicados',
-      help: 'Dos o más fichas de alumno con el mismo email: las clases se reparten entre ellas y ninguna refleja el total.',
-      items: audit.duplicateEmails.map(d => ({ main: d.email, detail: `${d.total} fichas: ${d.names}` })),
-    },
-    {
-      label: 'Cambios de profesor a medias',
-      help: 'La ficha del alumno dice un profesor y el calendario dice otro: una transferencia que quedó sin terminar.',
-      items: audit.misplacedStudents.map(m => ({
-        main: m.studentName,
-        detail: `ficha: ${m.assignedTeacherName} · calendario: ${m.gridTeacherName} (${m.gridSlots.map(s => `${s.day} ${s.hour}`).join(', ')})`,
-      })),
-    },
-    {
-      label: 'Fichas desactualizadas respecto al calendario',
-      help: 'El calendario manda: es la prueba real del horario. Estas fichas se quedaron con uno viejo, y de la ficha salen la agenda y la duración de la clase (dos horas seguidas se pagan como 2). Se arreglan desde la auditoría, copiando el horario del calendario a la ficha.',
-      items: audit.contiguityMismatches.map(m => ({
-        main: `${m.studentName} · ${m.teacherName} · ${m.day}`,
-        detail: `calendario ${m.gridHours.join(' + ')} (${m.gridDuration}h) · ficha ${m.slotHours.join(' + ')} (${m.slotDuration}h)` +
-          ` → hoy se paga como ${m.slotDuration}; según el calendario debería ser ${m.gridDuration}`,
-      })),
-    },
-  ].filter(g => g.items.length > 0) : [];
-  const conflicts = audit ? conflictGroups.reduce((s, g) => s + g.items.length, 0) : null;
-
-  /**
-   * Grupos cuyo detalle se está mirando (null = modal cerrado). Es una lista y no
-   * un grupo suelto porque el contador de Conflictos abre TODOS y cada alerta
-   * abre el suyo, con el mismo modal.
-   */
-  const [conflictDetail, setConflictDetail] = useState<ConflictGroup[] | null>(null);
-
-  // Abre la Auditoría de vínculos y la trae a la vista (contador "Conflictos").
-  const [auditSignal, setAuditSignal] = useState(0);
 
   // ── Los números ────────────────────────────────────────────────────────────
   // Todo esto sale de lo que el contexto ya tiene cargado. Ni una consulta.
@@ -1432,13 +1237,6 @@ export default function DashboardGeneral() {
     return { total, pagable, aRevisar, retenido, pagados };
   })();
 
-  // ── Emails de presentación ─────────────────────────────────────────────────
-  const nowMs = ahora.getTime();
-  const presStatuses = assignments.filter(a => !a.presentationEmailSent).map(a => getPresentationEmailStatus(a, nowMs));
-  const presOnTime  = presStatuses.filter(s => s.status === 'on_time' || s.status === 'warning').length;
-  const presAtRisk  = presStatuses.filter(s => s.status === 'at_risk').length;
-  const presOverdue = presStatuses.filter(s => s.status === 'overdue').length;
-
   const cargandoExtras = extras == null;
   const pctSemana = programadas > 0 ? Math.round((clasesSemana / programadas) * 100) : 0;
   const tonoOc = tonoOcupacion(ocup.pct);
@@ -1487,47 +1285,6 @@ export default function DashboardGeneral() {
           </div>
         ))}
       </div>
-
-      {/* ── Requiere acción ── */}
-      <section className="dsh-sec">
-        <SecHead title="Requiere acción hoy" sub="Las colas que esperan a alguien. A cero se apagan, pero no se mueven de sitio." />
-        <div className="dsh-acciones">
-          <Accion n={extras?.validaciones.total ?? null} cargando={cargandoExtras}
-            label="Validaciones pendientes" tono="rojo"
-            detalle={extras && extras.validaciones.oldestDays > 0 ? `la más antigua, ${extras.validaciones.oldestDays} días` : 'esperando revisión'}
-            href="/admin?tab=validacion" />
-
-          <Accion n={presOverdue} label="Emails de presentación tarde" tono="rojo"
-            detalle="más de 24 h sin enviar" href="/admin?tab=emails&filter=overdue" />
-
-          <Accion n={riesgo.sinAtender} cargando={cargandoExtras}
-            label="Alumnos en riesgo" tono="rojo"
-            detalle="sin intervención registrada" href="/admin?tab=ai" />
-
-          {/* A Finanzas y no a Seguimiento: esa pestaña es de hitos (clase 15, 30),
-              no de transcripts. Donde se ven clase a clase es en el embudo de
-              cada profesor, que además explica por qué no suman todavía. */}
-          <Accion n={pendientes.length} label="Transcripts sin subir" tono="aviso"
-            detalle={pendientes.length > 0 ? `el más viejo, hace ${pendientes[0].dias} días` : ''}
-            href="/finanzas" />
-
-          <Accion n={extras?.solicitudesRevision ?? null} cargando={cargandoExtras}
-            label="Solicitudes de revisión" tono="aviso"
-            detalle="clases que el profe no cobra" href="/finanzas" />
-
-          <Accion n={presAtRisk} label="Emails en riesgo" tono="aviso"
-            detalle="más de 12 h sin enviar" href="/admin?tab=emails&filter=at_risk" />
-
-          <Accion n={conflicts} cargando={audit == null}
-            label="Conflictos de datos" tono="aviso"
-            detalle={conflictGroups.length > 0 ? `${conflictGroups.length} tipos distintos` : ''}
-            onClick={() => conflicts ? setConflictDetail(conflictGroups) : setAuditSignal(n => n + 1)} />
-
-          <Accion n={extras?.analisisFallidos ?? null} cargando={cargandoExtras}
-            label="Análisis de IA fallidos" tono="aviso"
-            detalle="sin reintentar" href="/admin?tab=validacion" />
-        </div>
-      </section>
 
       {/* ── Riesgo ── */}
       <section className="dsh-sec">
@@ -1708,26 +1465,6 @@ export default function DashboardGeneral() {
         </div>
       </section>
 
-      {/* ── Emails de presentación ── */}
-      <section className="dsh-sec">
-        <SecHead title="Emails de presentación"
-          sub={`${presStatuses.length} pendiente${presStatuses.length !== 1 ? 's' : ''} de enviar.`}
-          href="/admin?tab=emails" />
-        <div className="adm-tiles">
-          {[
-            { label: 'Pendientes a tiempo',    value: presOnTime,  tone: 'is-ok',    dot: '#16a34a', filter: 'pending' },
-            { label: 'En riesgo (>12h)',       value: presAtRisk,  tone: 'is-warn',  dot: '#e0912f', filter: 'at_risk' },
-            { label: 'Fuera de tiempo (>24h)', value: presOverdue, tone: 'is-alert', dot: '#dc4a38', filter: 'overdue' },
-          ].map(c => (
-            <button key={c.label} type="button" className={`adm-tile ${c.tone} is-clickable`}
-              onClick={() => router.push(`/admin?tab=emails&filter=${c.filter}`, { scroll: true })}
-              title={`Ver ${c.label.toLowerCase()} en la pestaña Emails`}>
-              <div className="adm-tile-value"><span className="adm-dot" style={{ background: c.dot }} />{c.value}</div>
-              <div className="adm-tile-label">{c.label}<span aria-hidden className="adm-kpi-arrow">›</span></div>
-            </button>
-          ))}
-        </div>
-      </section>
 
       </div>
 
@@ -1736,14 +1473,20 @@ export default function DashboardGeneral() {
         <DashboardMovil datos={datos} />
       </div>
 
+      {/* ── Uso de la plataforma por los profesores ── Seis métricas semana a
+          semana, calculadas en el servidor (/api/admin/teacher-usage). Se monta
+          UNA vez, fuera de la división escritorio/teléfono, porque se adapta sola
+          y pide sus datos al abrirse: montarla en las dos vistas los pediría dos
+          veces. */}
+      <TeacherUsageDashboard />
+
       {/* ── Herramientas ── Se montan una vez; en el teléfono no se muestran. */}
       <section className="dsh-sec dsh-tools" id="herramientas">
         <SecHead title="Herramientas de mantenimiento"
           sub="Auditorías y sincronizaciones que se lanzan a mano. Abrí solo la que necesites." />
         <div className="adm-tools">
           <AdminTool title="Auditoría de vínculos"
-            desc="Revisa la coherencia entre alumnos, asignaciones y fichas."
-            openSignal={auditSignal}>
+            desc="Revisa la coherencia entre alumnos, asignaciones y fichas.">
             <AuditPanel />
           </AdminTool>
 
@@ -1766,14 +1509,6 @@ export default function DashboardGeneral() {
           </AdminTool>
         </div>
       </section>
-
-      {conflictDetail && (
-        <ConflictDetailModal
-          groups={conflictDetail}
-          onClose={() => setConflictDetail(null)}
-          onOpenAudit={() => { setConflictDetail(null); setAuditSignal(n => n + 1); }}
-        />
-      )}
 
       <style>{ESTILOS}</style>
     </>
@@ -1821,13 +1556,6 @@ const ESTILOS = `
 .dsh-note { margin: 10px 0 0; font-size: 11.5px; color: var(--text-muted); line-height: 1.5; }
 .dsh-vacio { padding: 18px 0; text-align: center; font-size: 13px; color: var(--text-muted); }
 
-.dsh-acciones { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
-.dsh-accion { display: flex; align-items: center; gap: 12px; border: 1px solid; border-radius: 12px; padding: 13px 14px; text-decoration: none; color: inherit; text-align: left; font-family: inherit; cursor: pointer; transition: transform 0.12s ease; }
-.dsh-accion:hover { transform: translateY(-1px); }
-.dsh-accion-n { font-size: 26px; font-weight: 700; line-height: 1; min-width: 34px; }
-.dsh-accion-l { font-size: 13px; font-weight: 600; color: var(--text-primary); line-height: 1.3; }
-.dsh-accion-d { font-size: 11.5px; color: var(--text-muted); margin-top: 2px; }
-.dsh-chev { color: var(--text-muted); font-size: 17px; }
 
 .dsh-g3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
 .dsh-g-risk { display: grid; grid-template-columns: 1fr 1.6fr; gap: 14px; }
@@ -1868,7 +1596,6 @@ const ESTILOS = `
 
 @media (max-width: 1100px) {
   .dsh-kpis { grid-template-columns: repeat(3, 1fr); }
-  .dsh-acciones { grid-template-columns: repeat(2, 1fr); }
   .dsh-g3 { grid-template-columns: 1fr 1fr; }
   .dsh-g-risk, .dsh-g-prof { grid-template-columns: 1fr; }
 }

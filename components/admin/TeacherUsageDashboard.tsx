@@ -1,6 +1,6 @@
 'use client';
 
-// USO DE LA PLATAFORMA — cabecera de la pestaña Profesores del admin.
+// USO DE LA PLATAFORMA — sección del dashboard de gestión (/dashboard).
 //
 // Seis métricas semana a semana (lunes a domingo, hora de España), al estilo del
 // dashboard de gestión (/dashboard): una tarjeta por métrica con la cifra de la
@@ -194,7 +194,8 @@ function Tarjeta({ informe, metrica, sel, onSel }: {
       {sinRegistro ? (
         <div className="tu-vacio">
           {metrica === 'riesgo'
-            ? 'Se empieza a medir en cuanto se corra supabase-usage-events.sql y los profesores abran su primera alerta.'
+            // Si faltara el SQL, el aviso amarillo de arriba ya lo dice.
+            ? 'Todavía sin datos: se empieza a medir cuando los profesores abran su primera alerta.'
             : 'Todavía no hay datos registrados.'}
         </div>
       ) : (

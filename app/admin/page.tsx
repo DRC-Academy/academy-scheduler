@@ -18,7 +18,6 @@ import { EVENT_POINTS, EVENT_EUROS, calcRegisteredClassNumber, dbUpdateAssignmen
 import { CambiarProfesorModal } from '@/components/CambiarProfesorModal';
 import { getPresentationEmailStatus, hoursSinceAssigned, type PresentationEmailStatusKind } from '@/lib/presentationEmailUtils';
 import { ALL_SPECIALTIES } from '@/lib/specialties';
-import TeacherUsageDashboard from '@/components/admin/TeacherUsageDashboard';
 import { SpecialtyChip, ToggleChip, Badge, Dot, Button, Card, TableWrap, THead, TD, CardList, T, NAV_STICKY_TOP } from '@/components/ui';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { AppNotification } from '@/types';
@@ -2608,12 +2607,6 @@ function AdminContent() {
         {/* TEACHERS TAB */}
         {activeTab === 'teachers' && (
           <div>
-            {/* Lo principal de la pestaña: cuánto usan la plataforma los profesores,
-                semana a semana. Calculado en el servidor (/api/admin/teacher-usage). */}
-            <TeacherUsageDashboard />
-
-            <h2 style={{ fontSize: 17, fontWeight: 700, margin: '0 0 10px', color: 'var(--text-primary)' }}>Plantilla</h2>
-
             {/* Specialty filter */}
             <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
               <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)' }}>Filtrar por especialidad:</span>
