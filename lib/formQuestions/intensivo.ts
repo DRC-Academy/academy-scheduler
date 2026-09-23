@@ -100,6 +100,8 @@ export const FORM_INTENSIVO: FormQuestion[] = [
     rows: ['Hablar', 'Escuchar', 'Leer', 'Escribir'],
     cols: ['Muy bajo', 'Básico', 'Intermedio', 'Bueno', 'Muy bueno'],
     required: true,
+    // Ya no se pregunta (23/09/2026): se conserva para mostrar las respuestas antiguas.
+    retired: true,
   },
   {
     id: 'q_int_foco_destreza',
@@ -131,6 +133,8 @@ export const FORM_INTENSIVO: FormQuestion[] = [
       'Más de 12 horas (dedicación casi completa)',
     ],
     required: true,
+    // Ya no se pregunta (23/09/2026): se conserva para mostrar las respuestas antiguas.
+    retired: true,
   },
 
   // ── ✨ Una última cosa ──────────────────────────────────

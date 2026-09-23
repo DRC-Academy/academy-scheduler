@@ -102,6 +102,9 @@ function FormFlow({ token }: { token: TokenRow }) {
       return;
     }
     setError(null);
+    // Desde el 23/09/2026 no hay pantalla de "revisión final": la última
+    // pregunta envía directamente y el alumno pasa a la pantalla de gracias.
+    if (step === total - 1) { submit(); return; }
     setStep(s => s + 1);
   }
   function prev() { setError(null); setStep(s => s - 1); }
@@ -136,11 +139,10 @@ function FormFlow({ token }: { token: TokenRow }) {
     }
   }
 
-  if (sent) return <ThankYouScreen studentName={token.student_name} teacherName={token.teacher_name} testUrl={testUrl} />;
+  if (sent) return <ThankYouScreen studentName={token.student_name} testUrl={testUrl} />;
 
   const progress =
     step < 0 ? null
-    : step >= total ? { label: 'Revisión final', pct: 100 }
     : { label: `Pregunta ${step + 1} de ${total}`, pct: Math.round(((step + 1) / total) * 100) };
 
   const isLast = step === total - 1;
@@ -152,9 +154,7 @@ function FormFlow({ token }: { token: TokenRow }) {
       <div className="drc-f-content">
         <div key={step} className="drc-f-anim">
           {step === -1 ? (
-            <WelcomeInner token={token} />
-          ) : step >= total ? (
-            <ReviewInner teacherName={token.teacher_name} />
+            <WelcomeInner token={token} total={total} />
           ) : q ? (
             <QuestionInner
               question={q}
@@ -171,20 +171,11 @@ function FormFlow({ token }: { token: TokenRow }) {
         <div className="drc-f-nav start">
           <button className="drc-f-btn drc-f-btn-primary" onClick={() => setStep(0)}>Empezar →</button>
         </div>
-      ) : step >= total ? (
-        <div className="drc-f-nav">
-          <button className="drc-f-btn drc-f-btn-ghost" disabled={submitting} onClick={() => setStep(total - 1)}>
-            ← Volver a revisar
-          </button>
-          <button className="drc-f-btn drc-f-btn-primary" disabled={submitting} onClick={submit}>
-            {submitting ? 'Enviando…' : 'Enviar respuestas ✨'}
-          </button>
-        </div>
       ) : (
         <div className="drc-f-nav">
-          <button className="drc-f-btn drc-f-btn-ghost" onClick={prev}>← Anterior</button>
-          <button className="drc-f-btn drc-f-btn-primary" onClick={next}>
-            {isLast ? 'Revisar ✓' : 'Siguiente →'}
+          <button className="drc-f-btn drc-f-btn-ghost" disabled={submitting} onClick={prev}>← Anterior</button>
+          <button className="drc-f-btn drc-f-btn-primary" disabled={submitting} onClick={next}>
+            {isLast ? (submitting ? 'Enviando…' : 'Enviar respuestas ✨') : 'Siguiente →'}
           </button>
         </div>
       )}
@@ -195,7 +186,12 @@ function FormFlow({ token }: { token: TokenRow }) {
 // ── Contenido de pantallas ──────────────────────────────────────────────────────
 // Bienvenida: dos columnas en desktop (texto 55% / foto 45%), apiladas en mobile
 // con la foto arriba. El botón "Empezar" sigue viviendo en la nav del card.
-function WelcomeInner({ token }: { token: TokenRow }) {
+/** "ocho preguntas": en letra hasta veinte, como estaba escrito. */
+const NUMEROS = ['cero', 'una', 'dos', 'tres', 'cuatro', 'cinco', 'seis', 'siete', 'ocho', 'nueve', 'diez',
+  'once', 'doce', 'trece', 'catorce', 'quince', 'dieciséis', 'diecisiete', 'dieciocho', 'diecinueve', 'veinte'];
+const preguntasEnLetra = (n: number) => `${NUMEROS[n] ?? n} pregunta${n !== 1 ? 's' : ''}`;
+
+function WelcomeInner({ token, total }: { token: TokenRow; total: number }) {
   return (
     <div className="drc-f-welcome">
       <div className="drc-f-screen">
@@ -203,7 +199,7 @@ function WelcomeInner({ token }: { token: TokenRow }) {
         <h1>Hola, {token.student_name}. 👋</h1>
         <p>Soy Diego, el director de DRC Academy. Antes de tu primera clase con <b>{token.teacher_name}</b> me gustaría conocerte un poco.</p>
         <p>Con esto prepararemos una clase pensada para ti desde el primer minuto.</p>
-        <p className="drc-f-muted">Son once preguntas y solo te llevará cinco minutos. Responde con sinceridad, para que podamos personalizar tu clase.</p>
+        <p className="drc-f-muted">Son {preguntasEnLetra(total)} y solo te llevará cinco minutos. Responde con sinceridad, para que podamos personalizar tu clase.</p>
       </div>
       <WelcomeMedia />
     </div>
@@ -228,16 +224,6 @@ function WelcomeMedia() {
           onError={() => setFailed(true)}
         />
       )}
-    </div>
-  );
-}
-
-function ReviewInner({ teacherName }: { teacherName: string }) {
-  return (
-    <div className="drc-f-screen center">
-      <div className="drc-f-big">🎉</div>
-      <h1>Ya está.</h1>
-      <p>Has llegado al final. Cuando quieras, envíame tus respuestas y se las paso a {teacherName} para que prepare tu primera clase.</p>
     </div>
   );
 }
@@ -428,34 +414,38 @@ function LevelRow({ row, cols, selected, onSelect }: {
 }
 
 // ── Pantallas de estado (gracias / error / ya completado / cargando) ────────────
-function ThankYouScreen({ studentName, teacherName, testUrl }: { studentName: string; teacherName: string; testUrl: string | null }) {
+/**
+ * Nombre de pila para el saludo: la PRIMERA palabra del nombre completo, que es
+ * el único campo que hay (lo escribe el setter en la asignación). Decisión de
+ * Facundo (23/09/2026): mismo criterio que la prueba de nivel, aunque en un
+ * nombre compuesto ("María José") salude solo con "María".
+ */
+function firstName(fullName: string): string {
+  return (fullName || '').trim().split(/\s+/)[0] || '';
+}
+
+/**
+ * Pantalla final: una frase y un botón a la prueba de nivel. `testUrl` lo arma el
+ * servidor con la URL PÚBLICA (lib/appUrl), nunca la del deployment de Vercel.
+ * Si no se pudo preparar el enlace (raro), solo la frase: el recordatorio
+ * automático de la prueba se lo manda por email igualmente.
+ */
+function ThankYouScreen({ studentName, testUrl }: { studentName: string; testUrl: string | null }) {
+  const nombre = firstName(studentName);
   return (
     <Shell>
       <CardHeader progress={null} />
       <div className="drc-f-content">
-        <div className="drc-f-screen center drc-f-anim">
-          <div className="drc-f-big">🎉</div>
-          <h1>Gracias, {studentName}.</h1>
-          <p>Ya tengo todo lo que necesitaba. Se lo hago llegar a {teacherName} para que prepare tu primera clase y empieces con buen pie.</p>
-
-          {testUrl ? (
-            <div className="drc-f-cta">
-              <div className="drc-f-cta-badge">🎯 Último paso recomendado</div>
-              <div className="drc-f-cta-title">Descubre tu nivel de inglés</div>
-              <p className="drc-f-cta-text">
-                Haz ahora un breve <b>test de nivel</b>: en unos minutos sabrás al instante en qué nivel te
-                encuentras y nos ayudará a preparar tu primera clase a tu medida.
-              </p>
-              <a className="drc-f-btn drc-f-btn-primary drc-f-cta-btn" href={testUrl}>
-                Hacer el test de nivel →
-              </a>
-              <div className="drc-f-cta-note">Tarda unos 20 minutos · Puedes hacerlo también más tarde desde este enlace.</div>
-            </div>
-          ) : (
-            <p>Nos vemos muy pronto.</p>
+        <div className="drc-f-screen center drc-f-anim drc-f-final">
+          <h1>
+            Genial, gracias{nombre ? ` ${nombre}` : ''}.
+            {testUrl && <> Vamos ahora con tu prueba de nivel.</>}
+          </h1>
+          {testUrl && (
+            <a className="drc-f-btn drc-f-btn-primary drc-f-final-btn" href={testUrl}>
+              Empezar test de nivel
+            </a>
           )}
-
-          <p className="drc-f-sig">Diego Ruiz. Director de DRC Academy.</p>
         </div>
       </div>
     </Shell>
@@ -522,11 +512,9 @@ function CardHeader({ progress }: { progress: { label: string; pct: number } | n
     <div className="drc-f-head">
       <div className="drc-f-head-top">
         <div className="drc-f-brand">
-          <div className="drc-f-logo">DRC</div>
-          <div>
-            <div className="drc-f-bname">DRC Academy</div>
-            <div className="drc-f-bsub">Formulario inicial</div>
-          </div>
+          {/* eslint-disable-next-line @next/next/no-img-element -- página pública, logo estático */}
+          <img className="drc-f-logo" src="/drc-logo.png" alt="DRC Academy" width={918} height={240} />
+          <div className="drc-f-bsub">Formulario inicial</div>
         </div>
         {progress && (
           <div className="drc-f-meta">
@@ -578,14 +566,10 @@ const FORM_CSS = `
   background: linear-gradient(90deg, #1E9E3A, #1E9E3A 60%, #FFC400);
 }
 .drc-f-head-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.drc-f-brand { display: flex; align-items: center; gap: 11px; }
-.drc-f-logo {
-  width: 40px; height: 40px; border-radius: 11px; background: #1E9E3A; color: #fff;
-  display: grid; place-items: center; font-weight: 800; font-size: 14px; letter-spacing: -0.5px;
-  box-shadow: 0 3px 8px rgba(30, 158, 58, 0.3);
-}
-.drc-f-bname { font-size: 15.5px; font-weight: 800; line-height: 1.15; }
-.drc-f-bsub { font-size: 12px; color: #83847A; }
+.drc-f-brand { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; min-width: 0; }
+/* Logo real (public/drc-logo.png, 918x240): manda el alto, el ancho sale solo. */
+.drc-f-logo { height: 38px; width: auto; max-width: 100%; display: block; }
+.drc-f-bsub { font-size: 12px; color: #83847A; padding-left: 2px; }
 .drc-f-meta { display: flex; align-items: baseline; gap: 10px; white-space: nowrap; }
 .drc-f-step { font-size: 13px; font-weight: 700; color: #46473F; }
 .drc-f-pct { font-size: 17px; font-weight: 800; color: #1E9E3A; font-variant-numeric: tabular-nums; }
@@ -712,7 +696,6 @@ const FORM_CSS = `
 .drc-f-screen h1 { margin: 0 0 12px; font-size: clamp(25px, 3vw, 34px); font-weight: 800; letter-spacing: -0.5px; }
 .drc-f-screen p { margin: 0 0 12px; font-size: 16.5px; color: #46473F; max-width: 54ch; line-height: 1.6; }
 .drc-f-screen p.drc-f-muted { color: #83847A; }
-.drc-f-sig { color: #167a2d; font-weight: 700; margin-top: 4px; }
 
 /* Bienvenida: texto + foto en dos columnas (SOLO la primera pantalla).
    Los fr con minmax(0, …) reparten lo que sobra DESPUÉS del gap, así que
@@ -742,21 +725,10 @@ const FORM_CSS = `
   }
 }
 
-/* CTA del test de nivel (pantalla final del formulario) */
-.drc-f-cta {
-  width: 100%; max-width: 520px; margin: 22px auto 8px; text-align: center;
-  background: linear-gradient(180deg, rgba(30, 158, 58, 0.07), rgba(255, 196, 0, 0.05));
-  border: 1.5px solid rgba(30, 158, 58, 0.28); border-radius: 18px; padding: 26px 24px;
-}
-.drc-f-cta-badge {
-  display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 800;
-  text-transform: uppercase; letter-spacing: 0.07em; color: #167a2d;
-  background: rgba(30, 158, 58, 0.12); padding: 6px 13px; border-radius: 999px; margin-bottom: 12px;
-}
-.drc-f-cta-title { font-size: 21px; font-weight: 800; color: #191A17; letter-spacing: -0.4px; margin-bottom: 8px; }
-.drc-f-cta-text { font-size: 15px; color: #46473F; line-height: 1.6; margin: 0 auto 20px; max-width: 44ch; }
-.drc-f-cta-btn { width: 100%; max-width: 340px; text-decoration: none; }
-.drc-f-cta-note { font-size: 12.5px; color: #83847A; margin-top: 12px; line-height: 1.5; }
+/* Pantalla final: una frase y el botón a la prueba de nivel. */
+.drc-f-final { padding: 28px 0 12px; }
+.drc-f-final h1 { max-width: 22ch; line-height: 1.25; }
+.drc-f-final-btn { width: 100%; max-width: 340px; margin-top: 14px; text-decoration: none; }
 .drc-f-chip {
   display: inline-flex; align-items: center; gap: 7px; background: rgba(30, 158, 58, 0.08);
   color: #167a2d; font-size: 13px; font-weight: 700; padding: 7px 14px; border-radius: 999px;
@@ -789,7 +761,7 @@ const FORM_CSS = `
   .drc-f-stage { max-width: none; }
   .drc-f-card { border-radius: 0; border: 0; box-shadow: none; min-height: 100dvh; }
   .drc-f-head { padding: 15px 18px 14px; gap: 11px; padding-top: max(15px, env(safe-area-inset-top)); }
-  .drc-f-logo { width: 34px; height: 34px; font-size: 12.5px; }
+  .drc-f-logo { height: 30px; }
   .drc-f-bsub { display: none; }
   .drc-f-pct { font-size: 15px; }
   .drc-f-content { padding: 22px 18px; flex: 1; }

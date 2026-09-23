@@ -77,6 +77,8 @@ export const FORM_GENERAL: FormQuestion[] = [
     rows: ['Hablar', 'Escuchar', 'Leer', 'Escribir'],
     cols: [...SKILL_LEVELS],
     required: true,
+    // Ya no se pregunta (23/09/2026): se conserva para mostrar las respuestas antiguas.
+    retired: true,
   },
   {
     id: 'q7_cuesta',
@@ -85,6 +87,8 @@ export const FORM_GENERAL: FormQuestion[] = [
     hint: 'Eso que notas que se te atasca una y otra vez. Cuanto más concreto seas, mejor podremos ayudarte.',
     type: 'long',
     required: true,
+    // Ya no se pregunta (23/09/2026): se conserva para mostrar las respuestas antiguas.
+    retired: true,
   },
   {
     id: 'q9_errores',
@@ -131,6 +135,8 @@ export const FORM_GENERAL: FormQuestion[] = [
       'Más de 4 horas',
     ],
     required: true,
+    // Ya no se pregunta (23/09/2026): se conserva para mostrar las respuestas antiguas.
+    retired: true,
   },
 
   // ── ✨ Una última cosa ───────────────────────────────────

@@ -610,7 +610,18 @@ function LevelTestCard({ profile }: {
   );
 }
 
+/**
+ * ¿Se pinta la autoevaluación? Sí si hay datos, o si el alumno todavía no hizo el
+ * formulario (se avisa "sin datos"). NO si lo hizo y no hay datos: desde el
+ * 23/09/2026 el formulario ya no pregunta la autoevaluación, y a los alumnos
+ * nuevos no les tiene que quedar un recuadro vacío.
+ */
+function showSkillGauges(skills: SkillGauge[] | null, formDate: string | null): boolean {
+  return !!skills || !formDate;
+}
+
 function SkillGauges({ skills, formDate }: { skills: SkillGauge[] | null; formDate: string | null }) {
+  if (!showSkillGauges(skills, formDate)) return null;
   return (
     <div>
       <div className="sp-card-title">
@@ -1210,9 +1221,11 @@ function SeguimientoTab({ analyses, risk, intervention, progressScore, classNumb
         </div>
       )}
 
-      <div className="sp-card" style={{ marginBottom: 16 }}>
-        <SkillGauges skills={skills} formDate={formDate} />
-      </div>
+      {showSkillGauges(skills, formDate) && (
+        <div className="sp-card" style={{ marginBottom: 16 }}>
+          <SkillGauges skills={skills} formDate={formDate} />
+        </div>
+      )}
 
       <div className="sp-timeline">
         {analyses.map(r => {

@@ -101,9 +101,27 @@ export const FORM_VARIANTS: VariantDef[] = [
 
 const byId = new Map<FormVariant, VariantDef>(FORM_VARIANTS.map(v => [v.id, v]));
 
-/** Preguntas de una variante. Cae al general si el id no existe. */
+/**
+ * Preguntas que SE LE HACEN al alumno en una variante: sin las retiradas. Es lo
+ * que pinta la página pública y lo que valida el envío, así que una pregunta
+ * retirada deja de preguntarse y de exigirse a la vez. Cae al general si el id
+ * no existe.
+ */
 export function questionsOf(variant: FormVariant | null | undefined): FormQuestion[] {
+  return allQuestionsOf(variant).filter(q => !q.retired);
+}
+
+/** Todas las preguntas de una variante, retiradas incluidas. */
+function allQuestionsOf(variant: FormVariant | null | undefined): FormQuestion[] {
   return (variant && byId.get(variant)?.questions) || FORM_GENERAL;
+}
+
+/** ¿Hay respuesta guardada para esta pregunta? (una matriz vacía no cuenta) */
+function hasAnswer(value: unknown): boolean {
+  if (value == null) return false;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === 'object') return Object.values(value as Record<string, unknown>).some(v => String(v ?? '').trim() !== '');
+  return String(value).trim() !== '';
 }
 
 export function labelOf(variant: FormVariant | null | undefined): string {
@@ -187,7 +205,12 @@ export function questionsForResponses(
       best = v; bestHits = hits;
     }
   }
-  return bestHits > 0 ? best!.questions : questionsOf(hint);
+  // Las retiradas solo si el alumno las contestó (formulario antiguo): así la
+  // ficha, el gráfico de destrezas y la IA siguen viendo esas respuestas, y a
+  // los alumnos nuevos no les aparece un hueco "—" por algo que nunca se les
+  // preguntó.
+  const lista = bestHits > 0 ? best!.questions : allQuestionsOf(hint);
+  return lista.filter(q => !q.retired || hasAnswer(responses?.[q.id]));
 }
 
 /**

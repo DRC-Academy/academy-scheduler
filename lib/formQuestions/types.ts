@@ -13,6 +13,14 @@ export interface FormQuestion {
   rows?: string[];        // matrix (una pregunta radio por fila)
   cols?: string[];        // matrix (opciones compartidas)
   required: boolean;
+  /**
+   * Pregunta RETIRADA: ya no se le hace al alumno, pero sigue en la lista para
+   * que las respuestas guardadas de los alumnos antiguos se sigan mostrando (en
+   * la ficha, en el gráfico de destrezas y en lo que se le pasa a la IA). Nunca
+   * se borra una pregunta con respuestas en la base: su `id` es lo que permite
+   * leerlas. Ver questionsOf / questionsForResponses en ./index.ts.
+   */
+  retired?: boolean;
 }
 
 // Escala compartida de la matriz de autoevaluación por destreza. La usan todas

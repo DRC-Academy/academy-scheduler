@@ -111,6 +111,8 @@ export const FORM_IELTS: FormQuestion[] = [
     rows: ['Hablar (Speaking)', 'Escuchar (Listening)', 'Leer (Reading)', 'Escribir (Writing)'],
     cols: ['Muy bajo', 'Básico', 'Intermedio', 'Bueno', 'Muy bueno'],
     required: true,
+    // Ya no se pregunta (23/09/2026): se conserva para mostrar las respuestas antiguas.
+    retired: true,
   },
   {
     id: 'q_ielts_partes_preocupan',
@@ -144,6 +146,8 @@ export const FORM_IELTS: FormQuestion[] = [
       'Más de 4 horas',
     ],
     required: true,
+    // Ya no se pregunta (23/09/2026): se conserva para mostrar las respuestas antiguas.
+    retired: true,
   },
   {
     id: 'q_ielts_exposicion',

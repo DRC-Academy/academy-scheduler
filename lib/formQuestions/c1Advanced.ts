@@ -81,6 +81,8 @@ export const FORM_C1_ADVANCED: FormQuestion[] = [
     rows: ['Hablar', 'Escuchar', 'Leer', 'Escribir'],
     cols: ['Muy bajo', 'Básico', 'Intermedio', 'Bueno', 'Muy bueno'],
     required: true,
+    // Ya no se pregunta (23/09/2026): se conserva para mostrar las respuestas antiguas.
+    retired: true,
   },
   {
     id: 'q_c1_partes_preocupan',
@@ -105,6 +107,8 @@ export const FORM_C1_ADVANCED: FormQuestion[] = [
     hint: 'En niveles altos es normal. Identificarlo nos ayuda a romper ese techo.',
     type: 'long',
     required: true,
+    // Ya no se pregunta (23/09/2026): se conserva para mostrar las respuestas antiguas.
+    retired: true,
   },
 
   // ── 📖 Tu preparación ───────────────────────────────────
@@ -121,6 +125,8 @@ export const FORM_C1_ADVANCED: FormQuestion[] = [
       'Más de 6 horas',
     ],
     required: true,
+    // Ya no se pregunta (23/09/2026): se conserva para mostrar las respuestas antiguas.
+    retired: true,
   },
 
   // ── ✨ Una última cosa ──────────────────────────────────

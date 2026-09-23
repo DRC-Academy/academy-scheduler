@@ -80,6 +80,8 @@ export const FORM_B1_PRELIMINARY: FormQuestion[] = [
     rows: ['Hablar', 'Escuchar', 'Leer', 'Escribir'],
     cols: ['Muy bajo', 'Básico', 'Intermedio', 'Bueno', 'Muy bueno'],
     required: true,
+    // Ya no se pregunta (23/09/2026): se conserva para mostrar las respuestas antiguas.
+    retired: true,
   },
   {
     id: 'q_b1_partes_preocupan',
@@ -124,6 +126,8 @@ export const FORM_B1_PRELIMINARY: FormQuestion[] = [
       'Más de 4 horas',
     ],
     required: true,
+    // Ya no se pregunta (23/09/2026): se conserva para mostrar las respuestas antiguas.
+    retired: true,
   },
   {
     id: 'q_b1_exposicion',
