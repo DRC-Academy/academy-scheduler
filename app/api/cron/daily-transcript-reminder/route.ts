@@ -46,6 +46,8 @@ import { calculateTeacherFinance, rowHoursLabel, transcriptNeedsTeacher } from '
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { fetchTeacher, sendDailyTranscriptReminder, type PendingTranscriptClass } from '@/lib/emailNotifications';
 import { spainWallClockToEpoch } from '@/lib/spainTime';
+import { clasesProgramadasDe } from '@/lib/teacherUsageLoad';
+import { nkName } from '@/lib/sessions';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -194,7 +196,37 @@ export async function GET(request: Request): Promise<Response> {
     deadlines = { candidates: 0, created: 0, skipped: 0, error: err instanceof Error ? err.message : String(err) };
   }
 
-  return Response.json({ ok: true, date: targetDate, candidates: pendientes.length, sent, skipped, failed, deadlines });
+  // Tercera tarea: FOTO del calendario del día que termina, para el dashboard de
+  // uso ("entró con el link"). El calendario solo guarda el horario actual, así
+  // que sin esta foto las semanas pasadas se estiman proyectando el de hoy.
+  // Va dentro de este cron a propósito: el plan Hobby solo admite tres.
+  const snapshot = await guardarFotoCalendario(admin, targetDate);
+
+  return Response.json({ ok: true, date: targetDate, candidates: pendientes.length, sent, skipped, failed, deadlines, snapshot });
+}
+
+/**
+ * Guarda las clases programadas de `date` (scheduled_class_snapshots). Idempotente:
+ * el id es profesor|alumno|fecha|hora, así que un reintento reescribe lo mismo.
+ * Best-effort: si falla (p. ej. falta supabase-usage-events.sql) se informa y
+ * los correos y avisos de arriba ya salieron igual.
+ */
+async function guardarFotoCalendario(admin: SupabaseClient, date: string): Promise<{ classes: number; error?: string }> {
+  try {
+    const clases = await clasesProgramadasDe(date);
+    if (clases.length === 0) return { classes: 0 };
+    const { error } = await admin.from('scheduled_class_snapshots').upsert(clases.map(c => ({
+      id: `${c.teacherId}|${nkName(c.studentName)}|${c.date}|${c.startHour}`,
+      teacher_id: c.teacherId, teacher_name: c.teacherName, student_name: c.studentName,
+      class_date: c.date, start_hour: c.startHour, duration_hours: c.durationHours, is_recovery: c.isRecovery,
+    })));
+    if (error) throw new Error(error.message);
+    console.log(`[cron transcript-reminder] foto del calendario ${date}: ${clases.length} clase(s).`);
+    return { classes: clases.length };
+  } catch (err) {
+    console.error('[cron transcript-reminder] No se pudo guardar la foto del calendario:', err);
+    return { classes: 0, error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 /**

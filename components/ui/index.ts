@@ -7,6 +7,6 @@ export { SpecialtyChip } from './SpecialtyChip';
 export { ToggleChip } from './ToggleChip';
 export { Card } from './Card';
 export { SectionHeader } from './SectionHeader';
-export { TableWrap, THead, TR, TD, CardList } from './Table';
+export { TableWrap, THead, TR, TD, CardList, NAV_STICKY_TOP } from './Table';
 export { EmptyState } from './EmptyState';
 export { HelpTooltip } from './HelpTooltip';

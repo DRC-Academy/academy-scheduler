@@ -12,6 +12,7 @@ import { computeTranscriptVerdict } from '@/lib/transcriptVerdict';
 import {
   persistTranscript, notifyAdminTranscript, verdictPayload,
 } from '@/lib/transcriptStore';
+import { logUsageEvent } from '@/lib/usageEvents';
 
 export const runtime = 'nodejs';
 // Sin IA de por medio esto son 2-3 consultas a Supabase; 30 s es margen de sobra.
@@ -91,6 +92,18 @@ export async function POST(request: Request): Promise<Response> {
   if (saved.error || !saved.id) {
     console.error('[save-transcript] No se pudo guardar el transcript:', saved.error);
     return Response.json({ error: saved.error ?? 'No se pudo guardar la transcripción.' }, { status: 500 });
+  }
+
+  // Hora de la PRIMERA subida, para el dashboard de uso: `analyzed_at` se
+  // reescribe al reemplazar el transcript y la tabla no tiene created_at, así que
+  // sin esto una subida a tiempo reemplazada después parecería tardía.
+  if (!body.replaceId) {
+    await logUsageEvent({
+      event: 'transcript_first_upload',
+      teacherId: body.teacherId, teacherName: body.teacherName?.trim() || null,
+      studentId: body.studentId, studentName,
+      refId: saved.id, meta: { classDate },
+    });
   }
 
   if (verdict && verdict.decision !== 'ok') {

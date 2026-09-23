@@ -1169,7 +1169,13 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     const rescheduled   = !!rescheduledTo;
     // Cancelada: constancia sin `rescheduledTo`. Se pinta igual que una
     // reprogramada (apagada y sin botón de ingreso), con su propia etiqueta.
-    const cancelledType = c.isRecovery ? null : cancelledFor(c, date);
+    //
+    // Vale también para las RECUPERACIONES: si el alumno cancela sobre la hora o
+    // falta a la recuperación, esa clase no lleva transcript. Antes se saltaba la
+    // consulta y la tarjeta pintaba "Vencida — no validada" una recuperación que
+    // finanzas ya daba como cancelación (Maribel · Héctor Guerra, 22/09/2026).
+    // `isRealClass` (banner y pop-up del plazo) ya la miraba así.
+    const cancelledType = cancelledFor(c, date);
     const cancelled     = !!cancelledType;
     const cancelLabel   = cancellationLabel(cancelledType);
     // Estado inactivo = la clase no se va a dar. Agrupa reprogramada y cancelada.

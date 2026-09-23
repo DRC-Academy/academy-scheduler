@@ -12,6 +12,7 @@
 
 import { ensureProfileId } from '@/lib/transcriptStore';
 import { supabase } from '@/lib/supabase';
+import { logUsageEvent } from '@/lib/usageEvents';
 
 export const runtime = 'nodejs';
 
@@ -104,6 +105,17 @@ export async function POST(request: Request): Promise<Response> {
         ? 'Falta correr supabase-teacher-level.sql en Supabase: la base todavía no tiene dónde guardar el nivel.'
         : `No se pudo guardar el nivel: ${error.message}`,
     }, { status: missing ? 503 : 500 });
+  }
+
+  // Cada confirmación queda registrada: teacher_confirmed_at guarda solo la
+  // última, y el dashboard de uso cuenta cuándo se validó cada prueba.
+  if (level) {
+    await logUsageEvent({
+      event: 'level_confirmed',
+      teacherId: body.teacherId ?? null, teacherName: body.teacherName?.trim() || null,
+      studentId: body.studentId ?? null, studentName,
+      refId: profileId, meta: { level, against: againstOk },
+    });
   }
 
   return Response.json({

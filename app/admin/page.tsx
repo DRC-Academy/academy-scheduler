@@ -18,7 +18,8 @@ import { EVENT_POINTS, EVENT_EUROS, calcRegisteredClassNumber, dbUpdateAssignmen
 import { CambiarProfesorModal } from '@/components/CambiarProfesorModal';
 import { getPresentationEmailStatus, hoursSinceAssigned, type PresentationEmailStatusKind } from '@/lib/presentationEmailUtils';
 import { ALL_SPECIALTIES } from '@/lib/specialties';
-import { SpecialtyChip, ToggleChip, Badge, Dot, Button, Card, TableWrap, THead, TD, CardList, T } from '@/components/ui';
+import TeacherUsageDashboard from '@/components/admin/TeacherUsageDashboard';
+import { SpecialtyChip, ToggleChip, Badge, Dot, Button, Card, TableWrap, THead, TD, CardList, T, NAV_STICKY_TOP } from '@/components/ui';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { AppNotification } from '@/types';
 import AiRiskTab from '@/components/ai/AiRiskTab';
@@ -2607,6 +2608,12 @@ function AdminContent() {
         {/* TEACHERS TAB */}
         {activeTab === 'teachers' && (
           <div>
+            {/* Lo principal de la pestaña: cuánto usan la plataforma los profesores,
+                semana a semana. Calculado en el servidor (/api/admin/teacher-usage). */}
+            <TeacherUsageDashboard />
+
+            <h2 style={{ fontSize: 17, fontWeight: 700, margin: '0 0 10px', color: 'var(--text-primary)' }}>Plantilla</h2>
+
             {/* Specialty filter */}
             <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
               <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)' }}>Filtrar por especialidad:</span>
@@ -2625,9 +2632,10 @@ function AdminContent() {
                 vía TableWrap `fixed`). El ancho lo mandan las columnas, no el
                 contenido: con el algoritmo automático `width:100%` era un mínimo
                 y una celda larga desbordaba la card.
-                Sin `maxHeight` → scrollea la PÁGINA, no la card, y por eso el
-                <thead> ya no es sticky. */}
-            <TableWrap className="adm-tt-desk" fixed style={{ borderRadius: 14, marginBottom: T.space(4) }}>
+                Sin `maxHeight` → scrollea la PÁGINA, no la card; la cabecera
+                queda fija debajo de la barra de navegación (`stickyHeader` +
+                `top={NAV_STICKY_TOP}`, ver components/ui/Table.tsx). */}
+            <TableWrap className="adm-tt-desk" fixed stickyHeader style={{ borderRadius: 14, marginBottom: T.space(4) }}>
               <colgroup>
                 <col style={{ width: '17%' }} />{/* Nombre */}
                 <col style={{ width: '15%' }} />{/* Especialidades */}
@@ -2639,7 +2647,7 @@ function AdminContent() {
                 <col style={{ width: '13%' }} />{/* Acciones */}
               </colgroup>
               <THead
-                sticky={false}
+                top={NAV_STICKY_TOP}
                 align={[undefined, undefined, undefined, undefined, undefined, undefined, undefined, 'right']}
                 columns={['Nombre', 'Especialidades', 'Estado', 'Nivel', 'Carga', 'Emails', 'Faltas mes', '']}
               />

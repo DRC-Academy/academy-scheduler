@@ -23,6 +23,7 @@ import { getProgressLink } from '@/lib/progressClient';
 import { registerClassWithTranscript, retryAnalysis } from '@/lib/aiClient';
 import { checkTranscriptDuplicates, transcriptHash, type DupeCheck } from '@/lib/transcriptDupes';
 import { pendingClassesFor, type PendingClass } from '@/lib/pendingClasses';
+import { logUsageEvent } from '@/lib/usageEvents';
 import { hoursLeftLabel, deadlineLabel, EXPIRED_LABEL } from '@/lib/transcriptDeadline';
 import { TranscriptDeadlineBanner } from '@/components/TranscriptDeadlineBanner';
 import type { Assignment } from '@/types';
@@ -387,7 +388,19 @@ function StudentPageContent() {
         {/* `data-onboarding`: último paso del bloque de fichas del tutorial, que
             explica para qué sirve cada pestaña. */}
         <div data-onboarding="ficha-tabs">
-          <Tabs tabs={TABS} active={tab} onChange={setTab} />
+          <Tabs tabs={TABS} active={tab} onChange={id => {
+            // Abrir la pestaña Seguimiento de un alumno con alerta de riesgo
+            // abierta cuenta como "abrió la alerta" en el dashboard de uso.
+            if (id === 'seguimiento' && profile?.active_intervention && user?.role === 'teacher') {
+              logUsageEvent({
+                event: 'risk_alert_opened',
+                teacherId: teacher.id, teacherName: teacher.name,
+                studentId: a.studentId || profile?.student_id || null, studentName: a.studentName,
+                refId: profile?.id ?? null, meta: { from: 'ficha' },
+              }, { dedupeKey: `risk_ficha_${profile?.id ?? a.studentName}` });
+            }
+            setTab(id);
+          }} />
         </div>
 
       {tab === 'perfil' && (

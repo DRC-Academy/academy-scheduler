@@ -11,6 +11,7 @@ import {
   dbUpsertTeacherAlerts,
 } from '@/lib/db';
 import { AppNotification } from '@/types';
+import { logUsageEvent } from '@/lib/usageEvents';
 import { Bell } from 'lucide-react';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -170,8 +171,17 @@ export function NotificationBell({ compact = false }: { compact?: boolean } = {}
   }
 
   // Click en un aviso: marcarlo leído y llevar a la sección de avisos.
-  function openNotification(notifId: string, isRead: boolean) {
-    if (!isRead) markOne(notifId);
+  function openNotification(n: AppNotification, isRead: boolean) {
+    if (!isRead) markOne(n.id);
+    // Abrir una alerta de riesgo es una de las métricas del dashboard de uso
+    // (lib/usageEvents). Solo cuenta si la abre el profesor al que va dirigida.
+    if (n.type === 'risk_alert' && user?.role === 'teacher') {
+      logUsageEvent({
+        event: 'risk_alert_opened',
+        teacherId: user.teacherId ?? null, teacherName: user.displayName,
+        refId: n.id, meta: { from: 'campanita' },
+      }, { dedupeKey: `risk_${n.id}` });
+    }
     goToNotifications();
   }
 
@@ -316,7 +326,7 @@ export function NotificationBell({ compact = false }: { compact?: boolean } = {}
                   return (
                     <button
                       key={n.id}
-                      onClick={() => openNotification(n.id, isRead)}
+                      onClick={() => openNotification(n, isRead)}
                       style={{
                         width: '100%', textAlign: 'left',
                         padding: '11px 16px',
