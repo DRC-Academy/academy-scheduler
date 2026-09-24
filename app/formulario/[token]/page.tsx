@@ -514,7 +514,6 @@ function CardHeader({ progress }: { progress: { label: string; pct: number } | n
         <div className="drc-f-brand">
           {/* eslint-disable-next-line @next/next/no-img-element -- página pública, logo estático */}
           <img className="drc-f-logo" src="/drc-logo.png" alt="DRC Academy" width={918} height={240} />
-          <div className="drc-f-bsub">Formulario inicial</div>
         </div>
         {progress && (
           <div className="drc-f-meta">
@@ -569,7 +568,6 @@ const FORM_CSS = `
 .drc-f-brand { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; min-width: 0; }
 /* Logo real (public/drc-logo.png, 918x240): manda el alto, el ancho sale solo. */
 .drc-f-logo { height: 38px; width: auto; max-width: 100%; display: block; }
-.drc-f-bsub { font-size: 12px; color: #83847A; padding-left: 2px; }
 .drc-f-meta { display: flex; align-items: baseline; gap: 10px; white-space: nowrap; }
 .drc-f-step { font-size: 13px; font-weight: 700; color: #46473F; }
 .drc-f-pct { font-size: 17px; font-weight: 800; color: #1E9E3A; font-variant-numeric: tabular-nums; }
@@ -762,7 +760,6 @@ const FORM_CSS = `
   .drc-f-card { border-radius: 0; border: 0; box-shadow: none; min-height: 100dvh; }
   .drc-f-head { padding: 15px 18px 14px; gap: 11px; padding-top: max(15px, env(safe-area-inset-top)); }
   .drc-f-logo { height: 30px; }
-  .drc-f-bsub { display: none; }
   .drc-f-pct { font-size: 15px; }
   .drc-f-content { padding: 22px 18px; flex: 1; }
   .drc-f-title { font-size: 21px; max-width: none; }
