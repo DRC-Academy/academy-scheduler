@@ -8,7 +8,7 @@
 import { useState, useEffect, type CSSProperties } from 'react';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
-import { getPresentationEmailStatus } from '@/lib/presentationEmailUtils';
+import { getMeetLinkStatus } from '@/lib/meetLinkStatus';
 import type { Assignment } from '@/types';
 
 export function stripProtocol(url: string): string {
@@ -28,42 +28,19 @@ export function stripProtocol(url: string): string {
 // es lo que decide si la clase cuenta para el pago, así que no puede estar
 // implementado dos veces. La vista semanal /clases usa el mismo hook.
 
-// ─── Email de presentación (nuevo alumno) ─────────────────────────────────────
-// El modal y el armado del cuerpo del email viven en components/PresentationModal
-// (fuente única, reutilizada por el popup recordatorio del NavBar).
+// ─── Enlace de la clase (nuevo alumno) ────────────────────────────────────────
+// El modal vive en components/DefineLinkModal (fuente única, reutilizada por el
+// pop-up recordatorio del NavBar y por "Ingresar a clase"). El estado sale SOLO
+// de la base (meet_link_set_at, lib/meetLinkStatus): hasta sep/2026 había además
+// una marca de "presentación enviada" en localStorage que no coincidía con ella.
 
-// Marca en localStorage qué presentaciones ya se enviaron (por alumno) para el
-// badge "Presentación enviada" y el estado del botón (Enviar / Reenviar).
-export function usePresentationSent(teacherId: string) {
-  const [sent, setSent] = useState<Set<string>>(new Set());
-  // localStorage no está disponible en SSR: se lee tras montar (sync desde un
-  // sistema externo, patrón usado en el resto del archivo).
-  useEffect(() => {
-    try {
-      const prefix = `presentation_sent_${teacherId}_`;
-      const found = new Set<string>();
-      for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i);
-        if (k && k.startsWith(prefix) && localStorage.getItem(k) === '1') found.add(k.slice(prefix.length));
-      }
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setSent(found);
-    } catch {}
-  }, [teacherId]);
-  const markSent = (studentName: string) => {
-    try { localStorage.setItem(`presentation_sent_${teacherId}_${studentName}`, '1'); } catch {}
-    setSent(prev => new Set(prev).add(studentName));
-  };
-  return { isSent: (name: string) => sent.has(name), markSent };
-}
-
-// Estilo del botón "Enviar/Reenviar presentación" (verde si nuevo, gris si ya se envió).
-export function presentationBtnStyle(sent: boolean): CSSProperties {
+// Estilo del botón "Definir enlace" (verde si falta, gris si ya está definido).
+export function linkBtnStyle(defined: boolean): CSSProperties {
   const base: CSSProperties = {
     display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 8,
     padding: '8px 14px', borderRadius: 8, cursor: 'pointer', fontSize: 12.5, fontFamily: 'inherit',
   };
-  return sent
+  return defined
     ? { ...base, border: '1px solid var(--border)', background: 'var(--bg-surface-3)', color: 'var(--text-muted)', fontWeight: 600 }
     : { ...base, border: 'none', background: '#1E9E3A', color: 'white', fontWeight: 700 };
 }
@@ -77,10 +54,10 @@ export function hexToRgba(hex: string, alpha: number): string {
   return `rgba(${r}, ${g2}, ${b}, ${alpha})`;
 }
 
-// Badge dinámico del seguimiento del email de presentación. Se actualiza solo
-// cada minuto (reloj propio) y toma TODO el estado visual de la fuente única
-// lib/presentationEmailUtils.getPresentationEmailStatus.
-export function PresentationEmailBadge({ assignment }: { assignment: Assignment }) {
+// Badge dinámico del enlace de la clase. Se actualiza solo cada minuto (reloj
+// propio) y toma TODO el estado visual de la fuente única
+// lib/meetLinkStatus.getMeetLinkStatus.
+export function MeetLinkBadge({ assignment }: { assignment: Assignment }) {
   const [now, setNow] = useState<number | null>(null);
   useEffect(() => {
     setNow(Date.now());
@@ -90,7 +67,7 @@ export function PresentationEmailBadge({ assignment }: { assignment: Assignment 
 
   // Antes del montaje usamos createdAt como referencia estable (evita el desajuste
   // de hidratación de usar Date.now() en el render del servidor).
-  const st = getPresentationEmailStatus(assignment, now ?? new Date(assignment.createdAt).getTime());
+  const st = getMeetLinkStatus(assignment, now ?? new Date(assignment.createdAt).getTime());
   const animClass = st.pulse ? 'pres-email-badge-pulse' : st.blink ? 'pres-email-badge-blink' : '';
   const textColor = st.badgeColor === '#FFC400' ? '#8a6d00' : st.badgeColor;
 

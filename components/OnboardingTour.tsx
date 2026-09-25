@@ -8,7 +8,7 @@
 //
 // Por eso driver.js recibe `highlight()` y nunca `drive()`: sin lista de pasos no
 // tiene índice propio que desincronizar. Ese desfase era la causa de que
-// "Siguiente" no hiciera nada en el bloque del email.
+// "Siguiente" no hiciera nada en el antiguo bloque del email.
 //
 // Se monta una sola vez, en components/Providers (layout raíz), así que sobrevive
 // a cualquier router.push. El motor lo apaga solo al salir del área del profesor.
@@ -25,7 +25,7 @@ import {
 import { scrollAnchorIntoView, anchorSigueValida } from '@/lib/tourEngine';
 import {
   ONBOARDING_FINISHED_TITLE, ONBOARDING_FINISHED_BODY, formationLabel,
-  ANCLA_MODAL_PRESENTACION,
+  ANCLA_MODAL_ENLACE,
 } from '@/lib/onboarding';
 
 /**
@@ -174,8 +174,8 @@ export function OnboardingTour() {
 
   // ── Liberación del atrapa-foco de driver.js dentro del modal ────────────────
   // driver.js secuestra el Tab (`preventDefault()` incondicional) y lo reparte
-  // solo entre su globo y el elemento resaltado. Dentro del modal del email eso
-  // deja el formulario entero fuera del alcance del teclado. Se corta el evento
+  // solo entre su globo y el elemento resaltado. Dentro del modal "Definir
+  // enlace" eso deja el campo fuera del alcance del teclado. Se corta el evento
   // en fase de captura ANTES de que llegue a su listener de window, pero solo
   // cuando el foco está dentro del modal: fuera, el atrapa-foco sigue siendo el
   // comportamiento correcto.
@@ -183,7 +183,7 @@ export function OnboardingTour() {
     if (!activo || mode === 'off') return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Tab') return;
-      const dentro = (e.target as HTMLElement | null)?.closest?.(`[data-onboarding="${ANCLA_MODAL_PRESENTACION}"]`);
+      const dentro = (e.target as HTMLElement | null)?.closest?.(`[data-onboarding="${ANCLA_MODAL_ENLACE}"]`);
       if (dentro) e.stopPropagation();
     };
     document.addEventListener('keydown', onKeyDown, true);

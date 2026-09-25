@@ -35,7 +35,6 @@ export const helpTexts = {
   // ── Calendario / Próximas clases (/teacher) ──────────────────────────────────
   calendario: {
     ingresarClase:     'Registra tu acceso a la clase y verifica la suscripción del alumno. Es obligatorio para que la clase cuente para el pago.',
-    emailPresentacion: 'Email de bienvenida al alumno nuevo. Enviarlo dentro de las primeras 24 h evita el descuento de scoring.',
     estadoCelda:       'Estado del horario: libre, ocupado (alumno asignado) o bloqueado (no disponible).',
     hito:              'Clases clave (1, 15, 30 y 50). En la 15 hay que grabar la sesión con Fathom y pedir una reseña.',
   },
@@ -72,7 +71,6 @@ export const helpTexts = {
   // ── Scoring / bonos ──────────────────────────────────────────────────────────
   scoring: {
     bono6meses:  'Bono de retención que se habilita cuando el alumno cumple 6 meses de clases con vos (si cambia de profesor, el contador arranca de cero). Se reclama desde Mi Scoring.',
-    emailTardio: 'Penalización de −5 puntos si el email de presentación se envía pasadas las 24 h de la asignación.',
   },
 } as const;
 

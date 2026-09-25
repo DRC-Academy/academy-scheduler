@@ -204,8 +204,14 @@ export interface Assignment {
   createdAt: string;
   manualClassAdjustment?: number;
   meetLink?: string;
-  presentationEmailSent?: boolean;    // email de bienvenida enviado al alumno
-  presentationEmailSentAt?: string;   // ISO en que se marcó como enviado
+  /** Cuándo se definió el enlace de la clase. null/ausente = sin definir (lib/meetLinkStatus). */
+  meetLinkSetAt?: string;
+  /** Histórico: email de presentación que enviaba el profesor hasta la Fase 2 (sep/2026). */
+  presentationEmailSent?: boolean;
+  presentationEmailSentAt?: string;
+  /** Bienvenida automática al alumno (lib/welcomeEmailSend): cuándo y a quién. */
+  welcomeEmailSentAt?: string;
+  welcomeEmailTo?: string;
   /**
    * 'active' | 'inactive'. Se marca 'inactive' al liberarse la ÚLTIMA celda del
    * alumno en el grid del profesor; nunca se borra la fila, para conservar el

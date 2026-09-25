@@ -86,7 +86,6 @@ interface TeachersContextType {
   markNotificationRead: (notifId: string, userId: string) => Promise<void>;
   markAllNotificationsRead: (userId: string, role: string) => Promise<void>;
   updateMeetLink: (assignmentId: string, link: string) => Promise<void>;
-  markPresentationSent: (assignmentId: string) => Promise<{ hoursElapsed: number; sentOnTime: boolean }>;
   logClassJoin: (teacherId: string, teacherName: string, studentName: string, scheduledDate: string, scheduledTime: string, subscriptionStatus?: string, enteredWithoutActive?: boolean, subscriptionDaysRemaining?: number | null, durationHours?: number) => Promise<void>;
   loadClassJoinLogs: () => Promise<void>;
   loadClassRecords: () => Promise<void>;
@@ -152,7 +151,6 @@ const TeachersContext = createContext<TeachersContextType>({
   markNotificationRead:       async () => {},
   markAllNotificationsRead:   async () => {},
   updateMeetLink:             async () => {},
-  markPresentationSent:       async () => ({ hoursElapsed: 0, sentOnTime: true }),
   logClassJoin:               async () => {},
   loadClassJoinLogs:          async () => {},
   loadClassRecords:           async () => {},
@@ -538,21 +536,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   // pudo guardar: quien llama lo muestra.
   async function updateMeetLink(assignmentId: string, link: string) {
     const saved = await dbUpdateMeetLink(assignmentId, link);
-    setAssignments(prev => prev.map(a => a.id === assignmentId ? { ...a, meetLink: saved } : a));
-  }
-
-  // Marca el email de presentaciÃ³n como enviado (persiste vÃ­a API que ademÃ¡s
-  // penaliza el scoring si pasaron mÃ¡s de 24 h) y refleja el estado localmente
-  // para que los badges cambien a "enviado" sin recargar.
-  async function markPresentationSent(assignmentId: string) {
-    const res = await fetch(`/api/assignments/${assignmentId}/presentation-sent`, { method: 'PATCH' });
-    if (!res.ok) throw new Error('No se pudo marcar el email de presentaciÃ³n como enviado');
-    const data = await res.json().catch(() => ({} as { hoursElapsed?: number; sentOnTime?: boolean }));
-    const nowIso = new Date().toISOString();
-    setAssignments(prev => prev.map(a => a.id === assignmentId
-      ? { ...a, presentationEmailSent: true, presentationEmailSentAt: a.presentationEmailSentAt ?? nowIso }
-      : a));
-    return { hoursElapsed: data.hoursElapsed ?? 0, sentOnTime: data.sentOnTime !== false };
+    setAssignments(prev => prev.map(a => a.id === assignmentId ? { ...a, meetLink: saved.meetLink, meetLinkSetAt: saved.meetLinkSetAt } : a));
   }
 
   async function logClassJoin(
@@ -838,7 +822,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
       reloadAll, loadClassCounts, incrementClassCount,
       updateAssignmentAdjustment, updateAssignmentStartDate, updateAssignmentSlots,
       sendNotification, loadNotifications, markNotificationRead, markAllNotificationsRead,
-      updateMeetLink, markPresentationSent, logClassJoin, loadClassJoinLogs,
+      updateMeetLink, logClassJoin, loadClassJoinLogs,
       loadClassRecords, loadFinanceData, registerClassRecord, attachScreenshotToClass,
       markPaymentAsPaid, markPaymentAsPending, markStudentAbsence, revertStudentAbsence, approveReviewClass, approveExceedLimitClass,
       loadTeacherBonuses, claimRetentionBonus, markBonusPaid, addUpsellBonuses, updateAssignmentTeacherSince,

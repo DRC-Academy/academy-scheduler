@@ -47,9 +47,9 @@ const SENT_TYPES: Record<string, NotificationTypeInfo> = {
   new_student:                        { label: 'Nuevo alumno asignado',          icon: '📚', email: true },
   form_completed:                     { label: 'Formulario completado',          icon: '📝', email: true },
   risk_alert:                         { label: 'Intervención recomendada',       icon: '🧭', email: true },
-  presentation_email_reminder:        { label: 'Recordatorio presentación · 4h', icon: '📧', email: true },
-  presentation_email_warning_teacher: { label: 'Aviso presentación · 12h',       icon: '⚠️', email: true },
-  presentation_email_overdue_teacher: { label: 'Presentación fuera de plazo',    icon: '🔴', email: true },
+  presentation_email_reminder:        { label: 'Recordatorio enlace · 4h', icon: '🔗', email: true },
+  presentation_email_warning_teacher: { label: 'Aviso enlace · 12h',       icon: '⚠️', email: true },
+  presentation_email_overdue_teacher: { label: 'Enlace fuera de plazo',    icon: '🔴', email: true },
   one_time_access:                    { label: 'Acceso activado',                icon: '📅' },
   student_removed:                    { label: 'Alumno eliminado',               icon: '❌' },
   student_transferred:                { label: 'Alumno transferido',             icon: 'ℹ️' },
@@ -77,8 +77,9 @@ const RECEIVED_TYPES: Record<string, NotificationTypeInfo> = {
   clase_cancelada_preaviso:    { label: 'Clase cancelada · con preaviso', icon: '📆', alsoEmailedToStudent: true },
   limite_faltas_admin:         { label: 'Límite de faltas',              icon: '🚫' },
   faltas_con_aviso_alerta:     { label: 'Faltas con aviso acumuladas',   icon: '📋' },
-  presentation_email_warning:  { label: 'Presentación en riesgo · 12h',  icon: '⚠️', email: true },
-  presentation_email_overdue:  { label: 'Presentación fuera de plazo',   icon: '🔴', email: true },
+  presentation_email_warning:  { label: 'Enlace en riesgo · 12h',  icon: '⚠️', email: true },
+  presentation_email_overdue:  { label: 'Enlace fuera de plazo',   icon: '🔴', email: true },
+  welcome_email_failed:        { label: 'Bienvenida sin enviar',   icon: '⚠️' },
 };
 
 const FALLBACK: NotificationTypeInfo = { label: 'Aviso', icon: '📢' };

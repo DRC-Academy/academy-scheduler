@@ -17,8 +17,12 @@
 
 import { getSpainParts, spainWallClockToEpoch } from '@/lib/spainTime';
 
-/** Interruptor general. Apagado: la ruta responde { skipped: 'disabled' }. */
-export const WELCOME_EMAIL_ENABLED = false;
+/**
+ * Interruptor general. Apagado: la ruta responde { skipped: 'disabled' }.
+ * Encendido con la Fase 2 (sep/2026), cuando el profesor dejó de enviar el
+ * email de presentación.
+ */
+export const WELCOME_EMAIL_ENABLED = true;
 
 /** Fecha de corte (hora de España). Ninguna asignación anterior recibe el email. */
 export const WELCOME_EMAIL_START_DATE = '2026-09-25';

@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { resolveFormVariant, questionsOf, firstUnansweredRequired, type FormResponses, type FormQuestion } from '@/lib/formQuestions';
+import GeckoAnimado, { useMandoGecko } from '@/components/mascota/MascotaFormulario';
 
 // ── Emojis por habilidad (detalle visual de la matriz — no se toca formQuestions) ──
 const SKILL_EMOJI: Record<string, string> = {
@@ -81,6 +82,23 @@ function FormFlow({ token }: { token: TokenRow }) {
 
   const q = step >= 0 && step < total ? questions[step] : null;
 
+  // La mascota (la del LMS, animada) acompaña todo el formulario desde la barra
+  // de abajo: saluda en la bienvenida, guiña al avanzar, levanta el pulgar a
+  // mitad de camino, pone cara de duda si falta una respuesta obligatoria y se
+  // pone las gafas mientras se envía. La pantalla final lleva la suya, con salto.
+  const gecko = useMandoGecko();
+  const mitad = Math.ceil(total / 2);
+  useEffect(() => {
+    // Un saludo al llegar, cuando la bienvenida ya se ha pintado.
+    const t = setTimeout(() => gecko.gesto('saludo'), 700);
+    return () => clearTimeout(t);
+  }, [gecko.gesto]);
+  function avanzarA(nuevo: number) {
+    setStep(nuevo);
+    if (nuevo === mitad && total > 3) gecko.dispara('animo');
+    else gecko.gesto('guino');
+  }
+
   function setAnswer(id: string, value: unknown) {
     setResponses(prev => ({ ...prev, [id]: value }));
     setError(null);
@@ -99,13 +117,14 @@ function FormFlow({ token }: { token: TokenRow }) {
   function next() {
     if (q && q.required && !isAnswered(q)) {
       setError('Esta pregunta es obligatoria 🙂');
+      gecko.dispara('duda');
       return;
     }
     setError(null);
     // Desde el 23/09/2026 no hay pantalla de "revisión final": la última
     // pregunta envía directamente y el alumno pasa a la pantalla de gracias.
     if (step === total - 1) { submit(); return; }
-    setStep(s => s + 1);
+    avanzarA(step + 1);
   }
   function prev() { setError(null); setStep(s => s - 1); }
 
@@ -113,12 +132,14 @@ function FormFlow({ token }: { token: TokenRow }) {
     const missing = firstUnansweredRequired(responses, questions);
     if (missing) {
       setError(`Falta responder: ${missing.title}`);
+      gecko.dispara('duda');
       const idx = questions.findIndex(x => x.id === missing.id);
       if (idx >= 0) setStep(idx);
       return;
     }
     setSubmitting(true);
     setError(null);
+    gecko.dispara('estudiando');
     try {
       const res = await fetch('/api/forms/submit', {
         method: 'POST',
@@ -129,6 +150,7 @@ function FormFlow({ token }: { token: TokenRow }) {
       if (!res.ok) {
         setError(data?.error || 'No se pudieron enviar tus respuestas. Inténtalo de nuevo.');
         setSubmitting(false);
+        gecko.dispara('duda');
         return;
       }
       setTestUrl(typeof data?.testUrl === 'string' ? data.testUrl : null);
@@ -136,6 +158,7 @@ function FormFlow({ token }: { token: TokenRow }) {
     } catch {
       setError('No hay conexión. Revisa tu internet e inténtalo de nuevo.');
       setSubmitting(false);
+      gecko.dispara('duda');
     }
   }
 
@@ -169,15 +192,15 @@ function FormFlow({ token }: { token: TokenRow }) {
 
       {step === -1 ? (
         <div className="drc-f-nav start">
-          {/* La mascota acompaña al botón de empezar (a su lado también en el
-              teléfono: cabe, y así la barra fija de abajo no crece). */}
-          {/* eslint-disable-next-line @next/next/no-img-element -- página pública, imagen estática de 19 KB */}
-          <img className="drc-f-mascota" src="/mascota-drc.png" alt="" width={233} height={300} />
-          <button className="drc-f-btn drc-f-btn-primary" onClick={() => setStep(0)}>Empezar →</button>
+          {/* La mascota acompaña al botón (a su lado también en el teléfono:
+              cabe, y así la barra fija de abajo no crece). */}
+          <span className="drc-f-mascota"><GeckoAnimado mando={gecko} alto={72} altoMovil={54} /></span>
+          <button className="drc-f-btn drc-f-btn-primary" onClick={() => avanzarA(0)}>Empezar →</button>
         </div>
       ) : (
         <div className="drc-f-nav">
-          <button className="drc-f-btn drc-f-btn-ghost" disabled={submitting} onClick={prev}>← Anterior</button>
+          <span className="drc-f-mascota"><GeckoAnimado mando={gecko} alto={72} altoMovil={54} /></span>
+          <button className="drc-f-btn drc-f-btn-ghost drc-f-prev" disabled={submitting} onClick={prev}>← Anterior</button>
           <button className="drc-f-btn drc-f-btn-primary" disabled={submitting} onClick={next}>
             {isLast ? (submitting ? 'Enviando…' : 'Enviar respuestas ✨') : 'Siguiente →'}
           </button>
@@ -436,11 +459,18 @@ function firstName(fullName: string): string {
  */
 function ThankYouScreen({ studentName, testUrl }: { studentName: string; testUrl: string | null }) {
   const nombre = firstName(studentName);
+  // Llega con el salto y las estrellas de «éxito», y se queda en reposo.
+  const gecko = useMandoGecko();
+  useEffect(() => {
+    const t = setTimeout(() => gecko.dispara('exito'), 350);
+    return () => clearTimeout(t);
+  }, [gecko.dispara]);
   return (
     <Shell>
       <CardHeader progress={null} />
       <div className="drc-f-content">
         <div className="drc-f-screen center drc-f-anim drc-f-final">
+          <div className="drc-f-gecko-final"><GeckoAnimado mando={gecko} alto={150} altoMovil={120} /></div>
           <h1>
             Genial, gracias{nombre ? ` ${nombre}` : ''}.
             {testUrl && <> Vamos ahora con tu prueba de nivel.</>}
@@ -457,12 +487,17 @@ function ThankYouScreen({ studentName, testUrl }: { studentName: string; testUrl
 }
 
 function ErrorScreen() {
+  const gecko = useMandoGecko();
+  useEffect(() => {
+    const t = setTimeout(() => gecko.dispara('duda'), 350);
+    return () => clearTimeout(t);
+  }, [gecko.dispara]);
   return (
     <Shell>
       <CardHeader progress={null} />
       <div className="drc-f-content">
         <div className="drc-f-screen center drc-f-anim">
-          <div className="drc-f-big">🔒</div>
+          <div className="drc-f-gecko-final"><GeckoAnimado mando={gecko} alto={130} altoMovil={110} /></div>
           <h1>Este enlace ya no está disponible</h1>
           <p className="drc-f-muted">Contacta con tu profesor para obtener uno nuevo.</p>
         </div>
@@ -472,12 +507,17 @@ function ErrorScreen() {
 }
 
 function AlreadyDoneScreen() {
+  const gecko = useMandoGecko();
+  useEffect(() => {
+    const t = setTimeout(() => gecko.gesto('saludo'), 500);
+    return () => clearTimeout(t);
+  }, [gecko.gesto]);
   return (
     <Shell>
       <CardHeader progress={null} />
       <div className="drc-f-content">
         <div className="drc-f-screen center drc-f-anim">
-          <div className="drc-f-big">✅</div>
+          <div className="drc-f-gecko-final"><GeckoAnimado mando={gecko} alto={130} altoMovil={110} /></div>
           <h1>Ya has completado el formulario.</h1>
           <p className="drc-f-muted">Gracias por tus respuestas. Ya las tengo y se las he pasado a tu profe. Nos vemos en clase.</p>
         </div>
@@ -686,7 +726,12 @@ const FORM_CSS = `
   padding: 18px 40px; border-top: 1px solid #E4E4DD; background: #fff;
 }
 .drc-f-nav.start { justify-content: flex-start; }
-.drc-f-mascota { height: 64px; width: auto; display: block; flex-shrink: 0; margin: -6px 0; }
+/* La mascota en la barra de abajo: no recorta (el salto y las estrellas
+   sobresalen) y come margen para no hacer crecer la barra. */
+.drc-f-mascota { display: block; flex-shrink: 0; margin: -12px 0 -10px; line-height: 0; }
+/* En los pasos, la mascota a la izquierda y "Siguiente" empujado a la derecha. */
+.drc-f-nav .drc-f-prev { margin-right: auto; }
+.drc-f-gecko-final { display: flex; justify-content: center; margin: 4px 0 10px; padding-top: 30px; }
 .drc-f-btn {
   appearance: none; font-family: inherit; font-weight: 700; border-radius: 12px; cursor: pointer;
   padding: 13px 26px; font-size: 15px; min-height: 50px;
@@ -777,7 +822,9 @@ const FORM_CSS = `
   .drc-f-brand { gap: 10px; }
   .drc-f-btitle { font-size: 13.5px; padding-left: 10px; }
   .drc-f-step { display: none; }
-  .drc-f-mascota { height: 50px; margin: -4px 0; }
+  .drc-f-mascota { margin: -8px 0 -6px; }
+  .drc-f-nav .drc-f-prev { margin-right: 0; }
+  .drc-f-gecko-final { padding-top: 24px; }
   .drc-f-pct { font-size: 15px; }
   .drc-f-content { padding: 22px 18px; flex: 1; }
   .drc-f-title { font-size: 21px; max-width: none; }

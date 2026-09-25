@@ -51,10 +51,10 @@ import { registerTourBridge } from '@/lib/tourBridge';
 import { fetchRiskBriefings, briefingFor, type RiskBriefingIndex } from '@/lib/interventionsClient';
 import { AddClassModal, saveTeacherClass, ANALYSIS_FAILED_NOTICE } from '@/components/AddClassModal';
 import { periodIndex, dbGetStudentDropouts, type StudentDropout } from '@/lib/studentPeriod';
-import { PresentationModal } from '@/components/PresentationModal';
 import FormStatusBadge from '@/components/FormStatusBadge';
 import { lookupToken, formStateOf, type FormTokenInfo } from '@/lib/formClient';
-import { stripProtocol, usePresentationSent, PresentationEmailBadge } from '@/components/teacherPanelUi';
+import { stripProtocol, MeetLinkBadge } from '@/components/teacherPanelUi';
+import { isMeetLinkDefined } from '@/lib/meetLinkStatus';
 import type { Grid, Teacher, Assignment, Student, ClassRecord, ClassRecordType, ClassJoinLog } from '@/types';
 
 export type FormIndex = { byId: Map<string, FormTokenInfo>; byName: Map<string, FormTokenInfo> };
@@ -76,8 +76,6 @@ const FILTER_TABS: Array<{ id: ClassFilter; label: string }> = [
   { id: 'dadas',          label: 'Ya dadas' },
   { id: 'sin_transcript', label: 'Sin transcript' },
 ];
-
-// El modal "Email de presentación" se importa desde components/PresentationModal.
 
 // ─── Materiales de clase (diapositivas por hito) ──────────────────────────────
 // Desplegable discreto dentro de "Próximas clases". Cerrado por defecto; su
@@ -454,8 +452,6 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
   const [savingReschedule, setSavingReschedule] = useState(false);
   const [cancelModal, setCancelModal] = useState<{ c: TodayClass; date: string } | null>(null);
   const [savingCancel, setSavingCancel] = useState(false);
-  const [presentationModal, setPresentationModal] = useState<Assignment | null>(null);
-  const { isSent, markSent } = usePresentationSent(teacher.id);
   const [toast, setToast] = useState<string | null>(null);
   // Navegador de fechas: desplazamiento en días respecto de hoy (0 = hoy). En
   // modo semana las flechas lo mueven de 7 en 7, así que la fecha ancla siempre
@@ -563,6 +559,8 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
   // así el botón no vuelve a pedir lo que acaba de verificar.
   const join = useClassJoin({
     teacher, students, classRecords, todayIso, logClassJoin, updateMeetLink,
+    // Guardar el enlace es el paso "Define el enlace de tu clase" del tutorial.
+    onLinkSaved: () => onboarding.reportAction('define-link'),
     onToast: (msg, ms) => showToast(msg, ms),
     getCachedSub: email => subInfo[email],
     onSubResolved: (email, info) => setSubInfo(prev => ({ ...prev, [email]: info })),
@@ -784,18 +782,13 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
 
   // ── Puente con el tutorial guiado ───────────────────────────────────────────
   //
-  // El recorrido necesita ABRIR el modal del email por su cuenta: los pasos 2 y 3
-  // resaltan botones que solo existen dentro de él. Antes lo daba por abierto, así
-  // que si el profesor no había pulsado el botón del paso 1 esos dos pasos
-  // describían botones ausentes y el globo se quedaba flotando en el centro.
-  //
-  // La condición es la MISMA que decide pintar el botón "Enviar presentación" en
-  // cada tarjeta (`showPresentationBtn`, más abajo): si fueran dos, el tutorial
-  // podría creer que hay algo pendiente cuando la pantalla no muestra nada.
-  const presentacionPendiente = allVisible.find(
+  // La condición es la MISMA que decide si a una tarjeta le falta el enlace
+  // (`linkDefined`, más abajo): si fueran dos, el tutorial podría creer que hay
+  // algo pendiente cuando la pantalla no muestra nada.
+  const enlacePendiente = allVisible.some(
     x => statusOf(x.c, x.iso) !== 'passed' && isRealClass(x.c, x.iso)
-      && !x.c.isRecovery && !x.c.assignment.presentationEmailSent,
-  )?.c.assignment ?? null;
+      && !x.c.isRecovery && !isMeetLinkDefined(x.c.assignment),
+  );
 
   // Las otras dos preguntas del tutorial, con la misma disciplina: la condición
   // es la que decide pintar cada botón, no una aproximación parecida.
@@ -809,30 +802,19 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
   // Refs y no dependencias del efecto: el puente se registra UNA vez y lee el
   // valor de ahora cuando el motor pregunta. Con dependencias se daría de alta y
   // de baja en cada render de la lista.
-  const pendienteRef = useRef(presentacionPendiente);
-  const modalAbiertoRef = useRef(presentationModal);
+  const pendienteRef = useRef(enlacePendiente);
   const clasePorDelanteRef = useRef(hayClasePorDelante);
   const faltaTranscriptRef = useRef(faltaAlgunTranscript);
   useEffect(() => {
-    pendienteRef.current = presentacionPendiente;
-    modalAbiertoRef.current = presentationModal;
+    pendienteRef.current = enlacePendiente;
     clasePorDelanteRef.current = hayClasePorDelante;
     faltaTranscriptRef.current = faltaAlgunTranscript;
   });
 
   useEffect(() => registerTourBridge({
-    hasPresentationPending: () => !!pendienteRef.current,
+    hasLinkPending: () => pendienteRef.current,
     hasUpcomingClass: () => clasePorDelanteRef.current,
     hasClassNeedingTranscript: () => faltaTranscriptRef.current,
-    isPresentationModalOpen: () => !!modalAbiertoRef.current,
-    openPresentationModal: () => {
-      if (modalAbiertoRef.current) return true;
-      const a = pendienteRef.current;
-      if (!a) return false;
-      setPresentationModal(a);
-      return true;
-    },
-    closePresentationModal: () => setPresentationModal(null),
   }), []);
 
   // Emails de todos los alumnos a la vista (los días que se están mostrando, más
@@ -1202,7 +1184,6 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     const hoursBadge = durationBadgeLabel(c.durationHours);
     const menuId  = `${c.key}_${date}`;
     const menuOpen = openMenu === menuId;
-    const sent    = isSent(c.studentName);
 
     // Tag de tipo de clase: la etiqueta la sigue decidiendo classCategoryBadge
     // (fuente única); acá solo se le aplica la paleta sobria de esta vista.
@@ -1215,10 +1196,15 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     const sb = subBadgeFor(subEmailForAssignment(c.assignment));
     const formInfo = lookupToken(formIndex, { id: c.assignment.studentId, name: c.studentName });
     const hasForm  = formStateOf(formInfo) !== 'none';
-    const presentationSent = !!c.assignment.presentationEmailSent;
-    // Botón "Enviar presentación": solo para clases normales sin presentación enviada.
-    const showPresentationBtn = !passed && !inactive && !c.isRecovery && !presentationSent;
-    const showPresentationSent = !passed && !inactive && !c.isRecovery && presentationSent;
+    // Enlace de la clase (lib/meetLinkStatus): "hecho" = meet_link_set_at. Solo
+    // se sigue en clases normales que aún se van a dar.
+    const linkDefined = isMeetLinkDefined(c.assignment);
+    const tracksLink = !passed && !inactive && !c.isRecovery;
+    const linkPending = tracksLink && !linkDefined;
+    // El botón principal ya es "Definir enlace" cuando no hay enlace: el
+    // secundario solo aparece si el principal es otro (enlace antiguo sin fecha).
+    const showDefineLinkBtn = linkPending && hasLink;
+    const showLinkDefined = tracksLink && linkDefined;
 
     const nextClassNum = calcRegisteredClassNumber(c.assignment, classRecords) + 1;
     const slides = !passed && isMilestone(nextClassNum) ? getMilestoneSlides(nextClassNum) : null;
@@ -1352,10 +1338,11 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
                     : 'Ingresar a clase'}
                 </button>
               ) : (
-                // Mismo paso del tutorial que "Ingresar a clase": es el hueco que
-                // ocupa cuando al alumno todavía le falta el enlace de Meet.
-                <button data-onboarding={relojListo ? 'set-link' : undefined} className="mc-btn mc-btn-primary" onClick={() => join.openLinkModal(c.assignment, '')}>
-                  Definir enlace
+                // Ancla de dos pasos del tutorial: "Define el enlace de tu clase"
+                // y, como respaldo, "Ingresar a clase" (es el hueco que ocupa
+                // cuando al alumno todavía le falta el enlace de Meet).
+                <button data-onboarding={relojListo ? 'set-link' : undefined} className="mc-btn mc-btn-primary" onClick={() => join.openLinkModal(c.assignment)}>
+                  🔗 Definir enlace
                 </button>
               )}
 
@@ -1380,10 +1367,6 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
                       onClick={() => { setOpenMenu(null); join.openLinkModal(c.assignment); }}>
                       {hasLink ? 'Cambiar enlace' : 'Definir enlace'}
                     </button>
-                    <button className="mc-menu-item" role="menuitem"
-                      onClick={() => { setOpenMenu(null); setPresentationModal(c.assignment); }}>
-                      {sent ? 'Reenviar presentación' : 'Enviar presentación'}
-                    </button>
                     {slides && (
                       <button className="mc-menu-item" role="menuitem"
                         onClick={() => { setOpenMenu(null); window.open(slides, '_blank', 'noopener,noreferrer'); }}>
@@ -1403,21 +1386,21 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
               </div>
             </div>
 
-            {/* Acción secundaria: enviar la presentación si aún no se envió. */}
-            {showPresentationBtn && (
-              <button data-onboarding={relojListo ? 'presentation-email' : undefined} className="mc-pres-btn"
-                onClick={() => { setPresentationModal(c.assignment); onboarding.reportAction('presentation-email'); }}>
-                ✉️ Enviar presentación
+            {/* Acción secundaria: definir el enlace si el principal no lo hace. */}
+            {showDefineLinkBtn && (
+              <button data-onboarding={relojListo ? 'define-link' : undefined} className="mc-pres-btn"
+                onClick={() => join.openLinkModal(c.assignment)}>
+                🔗 Definir enlace
               </button>
             )}
-            {showPresentationSent && (
-              <span className="mc-pres-sent">Presentación enviada ✓</span>
+            {showLinkDefined && (
+              <span className="mc-pres-sent">Enlace definido ✓</span>
             )}
           </div>
         </div>
 
         {/* Zona secundaria: avisos que no compiten con la acción principal. */}
-        {(sb || hasForm || (showPresentationBtn)) && (
+        {(sb || hasForm || linkPending) && (
           <div className="mc-foot">
             {sb && (
               <span className="mc-status" style={{ background: sb.bg, color: sb.color }}>
@@ -1433,7 +1416,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
               onRefresh={refreshFormIndex}
               compact
             />
-            {showPresentationBtn && <PresentationEmailBadge assignment={c.assignment} />}
+            {linkPending && <MeetLinkBadge assignment={c.assignment} />}
           </div>
         )}
       </div>
@@ -1550,7 +1533,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
           <div style={{ flex: 1 }}>
             {missingLinks.length} alumno{missingLinks.length !== 1 ? 's' : ''} sin enlace definido: {missingNames.join(', ')}
           </div>
-          <button className="mc-btn mc-btn-ghost" onClick={() => join.openLinkModal(missingLinks[0].assignment, '')}>
+          <button className="mc-btn mc-btn-ghost" onClick={() => join.openLinkModal(missingLinks[0].assignment)}>
             Definir enlaces
           </button>
         </div>
@@ -1691,19 +1674,6 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
             </div>
           </div>
         </div>
-      )}
-
-      {/* Presentation email modal */}
-      {presentationModal && (
-        <PresentationModal
-          assignment={presentationModal}
-          teacher={teacher}
-          students={students}
-          updateMeetLink={updateMeetLink}
-          onClose={() => setPresentationModal(null)}
-          onSent={name => { markSent(name); onboarding.reportAction('pres-mark-sent'); }}
-          onFormTokenReady={refreshFormIndex}
-        />
       )}
 
       {/* Reschedule modal (punto 2) */}

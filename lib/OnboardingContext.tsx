@@ -45,14 +45,13 @@ import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
 import {
   ONBOARDING_STEPS, ONBOARDING_TARGET_CLASSES, ONBOARDING_SIGNATURE,
-  ANCLA_MODAL_PRESENTACION, isAutoOnboarding, selectorsOf, indexAfterBlock,
+  ANCLA_MODAL_ENLACE, isAutoOnboarding, selectorsOf,
   exitBetween, esRutaDeProfesor, type TourStep, type OnboardingStepId,
 } from '@/lib/onboarding';
 import { enRutaDelPaso, destinoDelPaso } from '@/lib/tourConfig';
 import {
   waitFor, waitForElement, waitForElementOrGiveUp, waitForElementGone, ROUTE_TIMEOUT_MS,
 } from '@/lib/tourEngine';
-import { onPresentationModalClosed } from '@/lib/tourBridge';
 import { dbStartOnboarding, dbSkipOnboarding, dbCompleteOnboardingClass } from '@/lib/onboardingStore';
 
 export type OnboardingMode = 'off' | 'auto' | 'manual';
@@ -78,7 +77,7 @@ export interface OnboardingState {
 
 /**
  * Lo que NO cambia nunca. Es el contexto que consumen las pantallas de la app
- * (MisClasesPanel, StudentCard, PresentationModal, NavBar): así el tutorial puede
+ * (MisClasesPanel, StudentCard, NavBar): así el tutorial puede
  * avanzar sin provocar un solo render en la pantalla que está señalando.
  */
 export interface OnboardingActions {
@@ -305,7 +304,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       const salida = exitBetween(saliendo, destinoPaso);
       if (salida) {
         await salida();
-        await waitForElementGone([ANCLA_MODAL_PRESENTACION], { signal: ac.signal });
+        await waitForElementGone([ANCLA_MODAL_ENLACE], { signal: ac.signal });
       }
 
       /**
@@ -335,12 +334,12 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
          *
          * En automático se salta: al profesor nuevo se le está pidiendo que HAGA
          * cosas, y no se le puede pedir que pulse un botón que hoy no existe (la
-         * presentación ya enviada, ninguna clase por delante).
+         * enlace ya definido, ninguna clase por delante).
          *
          * En manual NUNCA se salta. El botón "Tutorial" es un repaso del
-         * procedimiento completo, y saltarse en silencio los tres pasos del email
-         * porque justo hoy no hay ninguna presentación pendiente hacía que el
-         * recorrido abriera en "Paso 4 de 12": el profesor ve que le faltan pasos
+         * procedimiento completo, y saltarse en silencio los pasos (entonces, los
+         * tres del email de presentación) porque justo hoy no había nada pendiente
+         * hacía que el recorrido abriera en "Paso 4 de 12": el profesor ve que le faltan pasos
          * y parece que el tutorial está roto. Se muestran centrados, con la nota
          * "Dónde está" explicando en qué pantalla vive ese botón cuando aparece,
          * que es exactamente lo que un repaso tiene que enseñar.
@@ -611,19 +610,6 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     if (destino === -1) { cerrarRef.current(); return; }
     void irAlPaso(destino, destino > indexRef.current ? 1 : -1);
   }, [mode, pathname, irAlPaso]);
-
-  // ── El modal se cerró a mitad del bloque ────────────────────────────────────
-  // Sin esto driver seguía resaltando un nodo ya desconectado, cuyo
-  // getBoundingClientRect() devuelve ceros: el recorte del overlay colapsaba a un
-  // punto en la esquina superior izquierda.
-  useEffect(() => {
-    return onPresentationModalClosed(() => {
-      if (modeRef.current === 'off' || busyRef.current) return;
-      const actual = ONBOARDING_STEPS[indexRef.current];
-      if (actual?.block !== 'presentacion') return;
-      void irAlPaso(indexAfterBlock(indexRef.current), 1);
-    });
-  }, [irAlPaso]);
 
   // ── Acciones reales del profesor ────────────────────────────────────────────
 

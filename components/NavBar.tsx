@@ -6,7 +6,7 @@ import { useAuth } from '@/lib/AuthContext';
 import { NotificationBell } from '@/components/NotificationBell';
 import { Search, Users, Calendar, CalendarDays, Wallet, Settings, Menu, X, GraduationCap, CalendarCheck, CalendarClock, ClipboardCheck, LifeBuoy, LayoutDashboard } from 'lucide-react';
 import { Button } from '@/components/ui';
-import { PresentationEmailReminder } from '@/components/PresentationEmailReminder';
+import { MeetLinkReminder } from '@/components/MeetLinkReminder';
 // Barra inferior del admin en el teléfono, en todas las pantallas menos /admin
 // (que tiene la suya de secciones). Va acá porque el NavBar está en todas.
 import { AdminBottomNav } from '@/components/AdminBottomNav';
@@ -226,9 +226,9 @@ export function NavBar() {
         {user.role === 'admin' && !path.startsWith('/admin') && (
           <AdminBottomNav badgeFinanzas={pendingReviews} onLogout={handleLogout} />
         )}
-        {/* Popup recordatorio de emails de presentación pendientes (solo rol teacher).
+        {/* Popup recordatorio de enlaces de clase sin definir (solo rol teacher).
             Se monta acá para que aparezca en toda la app del profesor sin duplicar. */}
-        <PresentationEmailReminder />
+        <MeetLinkReminder />
       </nav>
     );
   }

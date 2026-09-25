@@ -1,20 +1,23 @@
 'use client';
-// ── Popup recordatorio de emails de presentación pendientes ────────────────────
-// Se muestra al iniciar sesión (o recargar) el profesor cuando tiene alumnos con
-// el email de bienvenida sin enviar. Toma TODO el estado visual (color, horas,
-// umbrales) de la fuente única lib/presentationEmailUtils.getPresentationEmailStatus,
-// igual que el badge de Avisos y Próximas clases, para no divergir.
+// ── Pop-up de enlaces de clase pendientes de definir ──────────────────────────
+// Se muestra al profesor (desde el NavBar, components/MeetLinkReminder) cuando
+// tiene alumnos sin el enlace de Meet definido. Toma TODO el estado visual
+// (color, horas, umbrales) de la fuente única lib/meetLinkStatus, igual que el
+// badge de Mis clases y de Avisos, para no divergir.
 //
-// El modal NO se cierra al hacer clic fuera: solo con sus botones. El recordatorio
-// persiste hasta que se envíen todos los emails (no hay "no volver a mostrar").
-import { useState, useEffect, type CSSProperties } from 'react';
+// Hasta sep/2026 era el recordatorio del email de presentación: desde la Fase 2
+// ese email lo manda la plataforma y al profesor solo le queda el enlace.
+//
+// El modal NO se cierra al hacer clic fuera: solo con sus botones.
+import { useState, useEffect } from 'react';
 import type { Assignment } from '@/types';
 import {
-  getPresentationEmailStatus,
-  formatTime,
-  PRESENTATION_DEADLINE_HOURS,
-  type PresentationEmailStatus,
-} from '@/lib/presentationEmailUtils';
+  getMeetLinkStatus,
+  formatElapsed,
+  isMeetLinkDefined,
+  LINK_DEADLINE_HOURS,
+  type MeetLinkStatus,
+} from '@/lib/meetLinkStatus';
 
 function hexToRgba(hex: string, alpha: number): string {
   const h = hex.replace('#', '');
@@ -30,17 +33,17 @@ function formatAgo(hours: number, minutes: number): string {
     const days = Math.floor(hours / 24);
     return `Asignado hace ${days} día${days === 1 ? '' : 's'}`;
   }
-  return `Asignado hace ${formatTime(hours, minutes)}`;
+  return `Asignado hace ${formatElapsed(hours, minutes)}`;
 }
 
 // Etiqueta corta del badge del popup según la urgencia (derivada del status de la
 // fuente única). Verde/amarillo/naranja/rojo se mantienen fieles al branding DRC.
-function shortBadge(st: PresentationEmailStatus): { text: string; color: string } {
+function shortBadge(st: MeetLinkStatus): { text: string; color: string } {
   switch (st.status) {
     case 'on_time': return { text: 'Reciente', color: '#1E9E3A' };
     case 'warning': return { text: 'Pendiente', color: '#FFC400' };
     case 'at_risk': {
-      const remaining = Math.max(1, PRESENTATION_DEADLINE_HOURS - st.hoursElapsed);
+      const remaining = Math.max(1, LINK_DEADLINE_HOURS - st.hoursElapsed);
       return { text: `Urgente — quedan ${remaining}h`, color: '#f97316' };
     }
     case 'overdue': return { text: 'Fuera de plazo', color: '#ef4444' };
@@ -48,9 +51,9 @@ function shortBadge(st: PresentationEmailStatus): { text: string; color: string 
   }
 }
 
-export function PresentationEmailPopup({ assignments, onSend, onRemindLater }: {
-  assignments: Assignment[];             // asignaciones con email pendiente
-  onSend: (assignment: Assignment) => void;
+export function MeetLinkPendingPopup({ assignments, onDefine, onRemindLater }: {
+  assignments: Assignment[];             // asignaciones sin enlace definido
+  onDefine: (assignment: Assignment) => void;
   onRemindLater: () => void;
 }) {
   // Reloj propio (cada minuto) para que las horas/badges se recalculen en vivo.
@@ -63,12 +66,12 @@ export function PresentationEmailPopup({ assignments, onSend, onRemindLater }: {
     return () => clearInterval(id);
   }, []);
 
-  const pending = assignments.filter(a => !a.presentationEmailSent);
+  const pending = assignments.filter(a => !isMeetLinkDefined(a));
   if (pending.length === 0) return null;
 
   // Ordenados por urgencia: los más antiguos (más horas transcurridas) primero.
   const rows = pending
-    .map(a => ({ a, st: getPresentationEmailStatus(a, now ?? new Date(a.createdAt).getTime()) }))
+    .map(a => ({ a, st: getMeetLinkStatus(a, now ?? new Date(a.createdAt).getTime()) }))
     .sort((x, y) => new Date(x.a.createdAt).getTime() - new Date(y.a.createdAt).getTime());
 
   return (
@@ -81,16 +84,16 @@ export function PresentationEmailPopup({ assignments, onSend, onRemindLater }: {
       style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
       role="dialog"
       aria-modal="true"
-      aria-label="Emails de presentación pendientes"
+      aria-label="Enlaces pendientes de definir"
     >
       <div className="drc-modal" style={{ background: '#F7F7F5', border: '2px solid #1E9E3A', borderRadius: 16, padding: 24, width: '90%', maxWidth: 540, maxHeight: '90vh', display: 'flex', flexDirection: 'column', boxSizing: 'border-box' }}>
         {/* Encabezado */}
         <div style={{ fontWeight: 800, fontSize: 18, color: '#1E9E3A', marginBottom: 6 }}>
-          📧 Emails de presentación pendientes
+          🔗 Enlaces pendientes de definir
         </div>
         <div style={{ height: 3, width: 48, background: '#FFC400', borderRadius: 2, marginBottom: 14 }} />
         <div style={{ fontSize: 13, color: '#4b5563', lineHeight: 1.5, marginBottom: 18 }}>
-          Recuerda enviar el email de bienvenida a tus nuevos alumnos. Cuanto antes lo reciban, mejor será su experiencia.
+          Define el enlace de Meet de tus nuevos alumnos. Ellos reciben automáticamente las instrucciones para acceder a la plataforma; con tu enlace tendrán el botón para unirse a la clase.
         </div>
 
         {/* Lista de alumnos pendientes (scroll interno si hay muchos) */}
@@ -126,14 +129,14 @@ export function PresentationEmailPopup({ assignments, onSend, onRemindLater }: {
                   </span>
                 </div>
                 <button
-                  onClick={() => onSend(a)}
+                  onClick={() => onDefine(a)}
                   style={{
                     flex: '0 0 auto', minHeight: 44, padding: '10px 16px', borderRadius: 8,
                     border: 'none', background: '#1E9E3A', color: 'white', cursor: 'pointer',
                     fontSize: 13, fontWeight: 700, fontFamily: 'inherit', whiteSpace: 'nowrap',
                   }}
                 >
-                  Enviar ahora
+                  Definir ahora
                 </button>
               </div>
             );

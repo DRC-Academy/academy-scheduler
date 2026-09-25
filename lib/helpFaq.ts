@@ -40,8 +40,8 @@ export const HELP_ITEMS: HelpItem[] = [
   },
   {
     id: 'q4', category: 'alumnos',
-    question: '¿Cómo envío el formulario inicial al alumno?',
-    answer: 'Cuando recibes un nuevo alumno, en la sección «Avisos» aparece una notificación con el botón «Enviar formulario inicial». Al hacer clic se genera un enlace único y se abre tu gestor de correo con el mensaje ya redactado. El alumno completa el formulario desde ese enlace y tú recibes una notificación cuando termina.',
+    question: '¿Qué tengo que hacer cuando me asignan un alumno nuevo?',
+    answer: 'Solo definir el enlace de Meet de sus clases: en «Mis clases» pulsa «🔗 Definir enlace» en su tarjeta y pega el enlace de tu sala (también vale la invitación entera, nos quedamos solo con el enlace). No tienes que enviarle ningún email: el alumno recibe automáticamente las instrucciones para acceder a la plataforma y el enlace de su formulario inicial y su prueba de nivel. Tú recibes un aviso cuando termina el formulario.',
   },
   {
     id: 'q5', category: 'alumnos',

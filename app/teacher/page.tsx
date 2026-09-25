@@ -22,7 +22,8 @@ import { isoDateLocal, classesForDate, groupContiguousClasses, sessionHoursLabel
 import { periodIndex, dbGetStudentDropouts, type StudentDropout } from '@/lib/studentPeriod';
 import { StudentAutofillCard } from '@/components/StudentAutofillCard';
 import { useStudentAutofill } from '@/lib/useStudentAutofill';
-import { usePresentationSent, presentationBtnStyle, PresentationEmailBadge, PendingTasksCard, useNivelesSinValidar } from '@/components/teacherPanelUi';
+import { linkBtnStyle, MeetLinkBadge, PendingTasksCard, useNivelesSinValidar } from '@/components/teacherPanelUi';
+import { isMeetLinkDefined } from '@/lib/meetLinkStatus';
 import { transcriptsPendientes } from '@/lib/dashboardMetrics';
 import { bonusClaimEnabledFor, RETENTION_BONUS_DAYS, retentionDaysActive, retentionStartIso, retentionBonusFor } from '@/lib/retention';
 import { buildBonusRows, bonusesForMonth, sumBonusEuros, type BonusRow } from '@/lib/bonuses';
@@ -32,7 +33,7 @@ import FormStatusBadge from '@/components/FormStatusBadge';
 import { maybeSendBonusEmail } from '@/lib/milestoneEmails';
 import { fetchFormTokensIndex, lookupToken, type FormTokenInfo } from '@/lib/formClient';
 import { AVOID_ITEMS, AVOID_TITLE } from '@/lib/interventions';
-import { PresentationModal } from '@/components/PresentationModal';
+import { DefineLinkModal } from '@/components/DefineLinkModal';
 import { ALL_SPECIALTIES } from '@/lib/specialties';
 import { isValidOptionalEmail } from '@/lib/validation';
 import { SpecialtyChip, ToggleChip } from '@/components/ui';
@@ -827,8 +828,7 @@ function TeacherNotificationsTab({ teacher, myAssignments, bonusRows, students, 
   refreshFormIndex: () => void;
   updateMeetLink: (assignmentId: string, link: string) => Promise<void>;
 }) {
-  const [presentationModal, setPresentationModal] = useState<Assignment | null>(null);
-  const { isSent, markSent } = usePresentationSent(teacher.id);
+  const [linkModal, setLinkModal] = useState<Assignment | null>(null);
 
   useEffect(() => {
     loadNotifications(teacher.id, 'teacher');
@@ -974,12 +974,12 @@ function TeacherNotificationsTab({ teacher, myAssignments, bonusRows, students, 
 
         const n = av.data;
         const isRead = n.readBy.includes(teacher.id);
-        // Solo en la notificación de nuevo alumno mostramos "Enviar presentación".
+        // Solo en la notificación de nuevo alumno mostramos "Define el enlace".
         // La assignment se resuelve con match tolerante (acentos/mayúsculas).
         const asgn = n.type === 'new_assignment'
           ? resolveAssignmentForNotif(n.body, myAssignments)
           : undefined;
-        const sent = asgn ? isSent(asgn.studentName) : false;
+        const linkDefined = asgn ? isMeetLinkDefined(asgn) : false;
         // Sugerencia de intervención: el cuerpo lleva saltos de línea y se
         // acompaña del recordatorio plegado de "qué evitar".
         const isRiskAlert = n.type === 'risk_alert';
@@ -991,7 +991,7 @@ function TeacherNotificationsTab({ teacher, myAssignments, bonusRows, students, 
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
                   <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)' }}>{n.title}</div>
                   {!isRead && <span style={{ fontSize: 10, padding: '1px 7px', borderRadius: 10, background: 'rgba(30,158,58,0.15)', border: '1px solid rgba(30,158,58,0.3)', color: '#1E9E3A', fontWeight: 700 }}>NUEVO</span>}
-                  {asgn && sent && <span style={{ fontSize: 10, padding: '1px 7px', borderRadius: 10, background: 'rgba(30,158,58,0.12)', border: '1px solid rgba(30,158,58,0.3)', color: '#1E9E3A', fontWeight: 700 }}>📧 Presentación enviada</span>}
+                  {asgn && linkDefined && <span style={{ fontSize: 10, padding: '1px 7px', borderRadius: 10, background: 'rgba(30,158,58,0.12)', border: '1px solid rgba(30,158,58,0.3)', color: '#1E9E3A', fontWeight: 700 }}>🔗 Enlace definido</span>}
                 </div>
                 <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: 6, whiteSpace: isRiskAlert ? 'pre-wrap' : undefined }}>{n.body}</div>
                 {isRiskAlert && (
@@ -1006,11 +1006,11 @@ function TeacherNotificationsTab({ teacher, myAssignments, bonusRows, students, 
                   {new Date(n.createdAt).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
                 </div>
                 {asgn && (
-                  <button onClick={() => setPresentationModal(asgn)} style={presentationBtnStyle(sent)}>
-                    {sent ? '📧 Reenviar presentación' : '📧 Enviar presentación al alumno'}
+                  <button onClick={() => setLinkModal(asgn)} style={linkBtnStyle(linkDefined)}>
+                    {linkDefined ? '🔗 Cambiar enlace de clase' : `🔗 Define el enlace de clase de ${asgn.studentName}`}
                   </button>
                 )}
-                {asgn && <PresentationEmailBadge assignment={asgn} />}
+                {asgn && !linkDefined && <MeetLinkBadge assignment={asgn} />}
                 {asgn && (
                   <div style={{ marginTop: 8 }}>
                     <FormStatusBadge
@@ -1028,15 +1028,11 @@ function TeacherNotificationsTab({ teacher, myAssignments, bonusRows, students, 
         );
       })}
 
-      {presentationModal && (
-        <PresentationModal
-          assignment={presentationModal}
-          teacher={teacher}
-          students={students}
+      {linkModal && (
+        <DefineLinkModal
+          assignment={linkModal}
           updateMeetLink={updateMeetLink}
-          onClose={() => setPresentationModal(null)}
-          onSent={markSent}
-          onFormTokenReady={refreshFormIndex}
+          onClose={() => setLinkModal(null)}
         />
       )}
     </div>
@@ -1260,8 +1256,8 @@ function TeacherContent() {
 
   const teacher = teachers.find(t => t.id === user?.teacherId) ?? teachers[0];
 
-  // El popup recordatorio de emails de presentación se monta en el NavBar
-  // (components/PresentationEmailReminder), así aparece en toda la app del profesor.
+  // El popup recordatorio de enlaces sin definir se monta en el NavBar
+  // (components/MeetLinkReminder), así aparece en toda la app del profesor.
 
   useEffect(() => {
     if (!teacher) return;
@@ -2055,7 +2051,7 @@ function TeacherContent() {
       )}
 
       {/* El popup recordatorio y su modal se montan en el NavBar
-          (components/PresentationEmailReminder), común a toda la app del profesor. */}
+          (components/MeetLinkReminder), común a toda la app del profesor. */}
 
       </PullToRefresh>
     </div>

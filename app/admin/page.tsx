@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useMemo, useRef, Fragment, Suspense } from 'react';
+import { useState, useEffect, useMemo, useRef, Fragment, Suspense, type CSSProperties } from 'react';
 import { NavBar } from '@/components/NavBar';
 import { StatusBadge } from '@/components/StatusBadge';
 import { AuthGuard } from '@/components/AuthGuard';
@@ -16,7 +16,7 @@ import { EVENT_POINTS, EVENT_EUROS, calcRegisteredClassNumber, dbUpdateAssignmen
   dbCountPendingValidations, type PendingValidationSummary,
   findDuplicateTeacherAssignments, type DuplicateAssignmentGroup, type ArchiveTeacherResult } from '@/lib/db';
 import { CambiarProfesorModal } from '@/components/CambiarProfesorModal';
-import { getPresentationEmailStatus, hoursSinceAssigned, type PresentationEmailStatusKind } from '@/lib/presentationEmailUtils';
+import { getMeetLinkStatus, hoursSinceAssignment, LINK_DEADLINE_HOURS, type MeetLinkStatusKind } from '@/lib/meetLinkStatus';
 import { ALL_SPECIALTIES } from '@/lib/specialties';
 import { SpecialtyChip, ToggleChip, Badge, Dot, Button, Card, TableWrap, THead, TD, CardList, T, NAV_STICKY_TOP } from '@/components/ui';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -628,58 +628,51 @@ const EVENT_ICONS: Record<string, string> = {
   alerta_no_atendida:  '🔕',
 };
 
-// ─── Seguimiento del email de presentación (resumen para el admin) ────────────
-interface PresentationPending {
+// ─── Enlace de la clase (resumen para el admin) ───────────────────────────────
+// Desde la Fase 2 (sep/2026) el profesor no envía email de presentación: lo que
+// se sigue es si DEFINIÓ EL ENLACE de Meet (meet_link_set_at, lib/meetLinkStatus),
+// solo en asignaciones activas.
+interface LinkPending {
   studentName: string;
   hours: number;
   statusKind: 'on_time' | 'warning' | 'at_risk' | 'overdue';
   statusLabel: string;
 }
-interface TeacherPresentationSummary {
-  pending: PresentationPending[];
+interface TeacherLinkSummary {
+  pending: LinkPending[];
   overdueCount: number;
-  badge: { text: string; color: string; bg: string; border: string };
 }
 
-const PRES_STATUS_LABEL: Record<string, string> = {
-  sent:    '✅ Enviado',
+const LINK_STATUS_LABEL: Record<MeetLinkStatusKind, string> = {
+  defined: '✅ Definido',
   on_time: '🟢 A tiempo',
   warning: '🟡 A tiempo',
   at_risk: '⏰ En riesgo',
-  overdue: '🔴 Fuera de tiempo',
+  overdue: '🔴 Fuera de plazo',
 };
 
 // Paleta por estado, en el mismo formato que SPECIALTY_STYLE.
-const PRES_STATUS_STYLE: Record<string, { color: string; bg: string; border: string }> = {
-  sent:    { color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)',  border: 'rgba(30,158,58,0.3)' },
+const LINK_STATUS_STYLE: Record<MeetLinkStatusKind, { color: string; bg: string; border: string }> = {
+  defined: { color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)',  border: 'rgba(30,158,58,0.3)' },
   on_time: { color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)',  border: 'rgba(30,158,58,0.3)' },
   warning: { color: '#b8860b', bg: 'rgba(255,196,0,0.14)', border: 'rgba(255,196,0,0.5)' },
   at_risk: { color: '#f97316', bg: 'rgba(249,115,22,0.1)', border: 'rgba(249,115,22,0.4)' },
   overdue: { color: '#ef4444', bg: 'rgba(239,68,68,0.1)',  border: 'rgba(239,68,68,0.4)' },
 };
 
-// Resume el estado del email de presentación de las asignaciones de un profesor.
-// Usa la fuente única lib/presentationEmailUtils para clasificar cada pendiente.
-function teacherPresentationSummary(teacherAssignments: Assignment[], now: number): TeacherPresentationSummary {
-  const pending: PresentationPending[] = [];
+const isActiveAssignment = (a: Assignment) => (a.status ?? 'active') === 'active';
+
+// Enlaces sin definir de las asignaciones ACTIVAS de un profesor.
+function teacherLinkSummary(teacherAssignments: Assignment[], now: number): TeacherLinkSummary {
+  const pending: LinkPending[] = [];
   for (const a of teacherAssignments) {
-    if (a.presentationEmailSent) continue;
-    const st = getPresentationEmailStatus(a, now);
-    if (st.status === 'sent') continue;
-    pending.push({ studentName: a.studentName, hours: st.hoursElapsed, statusKind: st.status, statusLabel: PRES_STATUS_LABEL[st.status] ?? '' });
+    if (!isActiveAssignment(a)) continue;
+    const st = getMeetLinkStatus(a, now);
+    if (st.status === 'defined') continue;
+    pending.push({ studentName: a.studentName, hours: st.hoursElapsed, statusKind: st.status, statusLabel: LINK_STATUS_LABEL[st.status] });
   }
   pending.sort((x, y) => y.hours - x.hours);
-  const overdueCount = pending.filter(p => p.statusKind === 'overdue').length;
-
-  let badge: TeacherPresentationSummary['badge'];
-  if (pending.length === 0) {
-    badge = { text: '✅ Al día', color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)', border: 'rgba(30,158,58,0.3)' };
-  } else if (overdueCount > 0) {
-    badge = { text: `🔴 ${overdueCount} pendiente${overdueCount !== 1 ? 's' : ''} (+24h)`, color: '#ef4444', bg: 'rgba(239,68,68,0.1)', border: 'rgba(239,68,68,0.4)' };
-  } else {
-    badge = { text: `⚠️ ${pending.length} pendiente${pending.length !== 1 ? 's' : ''} (<24h)`, color: '#b8860b', bg: 'rgba(255,196,0,0.14)', border: 'rgba(255,196,0,0.5)' };
-  }
-  return { pending, overdueCount, badge };
+  return { pending, overdueCount: pending.filter(p => p.statusKind === 'overdue').length };
 }
 
 // ─── Stars display ────────────────────────────────────────────────────────────
@@ -771,10 +764,12 @@ function NewTeacherModal({ onClose, onSave }: { onClose: () => void; onSave: (t:
   );
 }
 
-// ─── Emails de presentación (pestaña) ─────────────────────────────────────────
-// Sustituye a la antigua grilla de cobertura semanal. Lista las asignaciones con
-// el estado del email de bienvenida; los pendientes van arriba ordenados por
-// mayor retraso, que son los que hay que perseguir.
+// ─── Enlaces (pestaña) ────────────────────────────────────────────────────────
+// Asignaciones ACTIVAS con el estado del enlace de la clase (lib/meetLinkStatus)
+// y el de la bienvenida automática al alumno (lib/welcomeEmailSend). Las que no
+// tienen enlace van arriba ordenadas por mayor retraso, que son las que hay que
+// perseguir. Hasta sep/2026 era la pestaña "Emails" del email de presentación:
+// el id de la pestaña sigue siendo 'emails' para no romper enlaces guardados.
 
 // "5h" / "3 días": pasadas 48 h el retraso en horas deja de leerse.
 function formatDelay(hours: number): string {
@@ -782,79 +777,100 @@ function formatDelay(hours: number): string {
   return h < 48 ? `${h}h` : `${Math.floor(h / 24)} días`;
 }
 
-interface EmailRow {
+interface LinkRow {
   id: string;
   studentName: string;
   teacherName: string;
-  sent: boolean;
-  statusKind: PresentationEmailStatusKind;
+  defined: boolean;
+  statusKind: MeetLinkStatusKind;
   statusLabel: string;
   delayHours: number;
   createdAt: string;
+  welcomeSentAt: string | null;
+  welcomeTo: string | null;
 }
 
-/** Filtros de la pestaña Emails. Los dos de estado son a los que llevan los
- *  contadores del dashboard, así que sus ids viajan en la URL (?filter=…). */
+/** Filtros de la pestaña. Viajan en la URL (?filter=…); 'sent' = definidos. */
 export type EmailFilter = 'pending' | 'at_risk' | 'overdue' | 'sent' | 'all';
 export const EMAIL_FILTERS: readonly EmailFilter[] = ['pending', 'at_risk', 'overdue', 'sent', 'all'];
 
-function PresentationEmailsTab({ assignments, nowMs, initialFilter }: {
+function fmtWelcome(iso: string): string {
+  return new Date(iso).toLocaleString('es-ES', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Madrid' });
+}
+
+/** Columna "Bienvenida": cuándo y a quién salió. Vacío = no se envió. */
+function WelcomeCell({ r }: { r: LinkRow }) {
+  if (!r.welcomeSentAt) {
+    return <span style={{ color: 'var(--text-muted)' }} title="La bienvenida no se envió">—</span>;
+  }
+  return (
+    <span title={r.welcomeTo ?? undefined}>
+      <span style={{ color: 'var(--text-secondary)' }}>{fmtWelcome(r.welcomeSentAt)}</span>
+      {r.welcomeTo && <span style={{ color: 'var(--text-muted)' }}> · {r.welcomeTo}</span>}
+    </span>
+  );
+}
+
+function MeetLinksTab({ assignments, nowMs, initialFilter }: {
   assignments: Assignment[];
   nowMs: number;
-  /** Filtro con el que se aterriza al llegar desde un contador del dashboard. */
+  /** Filtro con el que se aterriza al llegar con ?filter= en la URL. */
   initialFilter?: EmailFilter;
 }) {
   const [filter, setFilter] = useState<EmailFilter>(initialFilter ?? 'pending');
 
-  // Al llegar desde un contador (o al cambiarlo en la URL) se respeta ese filtro:
-  // el admin hizo clic en "En riesgo" y tiene que ver exactamente esos.
+  // Al llegar con otro filtro en la URL se respeta ese filtro.
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { if (initialFilter) setFilter(initialFilter); }, [initialFilter]);
 
-  const rows = useMemo<EmailRow[]>(() => {
-    const mapped = assignments.map(a => {
-      const st = getPresentationEmailStatus(a, nowMs);
+  const rows = useMemo<LinkRow[]>(() => {
+    const mapped = assignments.filter(isActiveAssignment).map(a => {
+      const st = getMeetLinkStatus(a, nowMs);
       return {
         id: a.id,
         studentName: a.studentName,
         teacherName: a.teacherName,
-        sent: st.status === 'sent',
+        defined: st.defined,
         statusKind: st.status,
-        statusLabel: PRES_STATUS_LABEL[st.status] ?? '',
-        delayHours: hoursSinceAssigned(a.createdAt, nowMs),
+        statusLabel: LINK_STATUS_LABEL[st.status],
+        delayHours: hoursSinceAssignment(a.createdAt, nowMs),
         createdAt: a.createdAt,
+        welcomeSentAt: a.welcomeEmailSentAt ?? null,
+        welcomeTo: a.welcomeEmailTo ?? null,
       };
     });
-    // Pendientes primero (mayor retraso arriba); los enviados, por recencia.
+    // Sin enlace primero (mayor retraso arriba); los definidos, por recencia.
     mapped.sort((x, y) => {
-      if (x.sent !== y.sent) return x.sent ? 1 : -1;
-      if (!x.sent) return y.delayHours - x.delayHours;
+      if (x.defined !== y.defined) return x.defined ? 1 : -1;
+      if (!x.defined) return y.delayHours - x.delayHours;
       return new Date(y.createdAt).getTime() - new Date(x.createdAt).getTime();
     });
     return mapped;
   }, [assignments, nowMs]);
 
-  const pendingCount = rows.filter(r => !r.sent).length;
+  const pendingCount = rows.filter(r => !r.defined).length;
   const atRiskCount  = rows.filter(r => r.statusKind === 'at_risk').length;
   const overdueCount = rows.filter(r => r.statusKind === 'overdue').length;
 
   const visible = rows.filter(r => {
     switch (filter) {
       case 'all':     return true;
-      case 'sent':    return r.sent;
+      case 'sent':    return r.defined;
       case 'at_risk': return r.statusKind === 'at_risk';
       case 'overdue': return r.statusKind === 'overdue';
-      default:        return !r.sent;
+      default:        return !r.defined;
     }
   });
 
   const filters: Array<{ id: EmailFilter; label: string; tone?: string }> = [
-    { id: 'pending', label: `Pendientes${pendingCount > 0 ? ` (${pendingCount})` : ''}` },
+    { id: 'pending', label: `Sin enlace${pendingCount > 0 ? ` (${pendingCount})` : ''}` },
     { id: 'at_risk', label: `En riesgo${atRiskCount > 0 ? ` (${atRiskCount})` : ''}`, tone: '#e0912f' },
-    { id: 'overdue', label: `Fuera de tiempo${overdueCount > 0 ? ` (${overdueCount})` : ''}`, tone: '#dc4a38' },
-    { id: 'sent',    label: 'Enviados' },
+    { id: 'overdue', label: `Fuera de plazo${overdueCount > 0 ? ` (${overdueCount})` : ''}`, tone: '#dc4a38' },
+    { id: 'sent',    label: 'Definidos' },
     { id: 'all',     label: 'Todos' },
   ];
+
+  const th: CSSProperties = { padding: '0 16px 10px', textAlign: 'left', fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap' };
 
   return (
     <div>
@@ -875,32 +891,27 @@ function PresentationEmailsTab({ assignments, nowMs, initialFilter }: {
 
       {visible.length === 0 ? (
         <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '32px 14px', textAlign: 'center', fontSize: 13, color: 'var(--text-muted)' }}>
-          {filter === 'pending' ? '✅ No hay emails de presentación pendientes.'
-            : filter === 'at_risk' ? '✅ Ninguno en riesgo: no hay presentaciones pendientes de más de 12 h.'
-            : filter === 'overdue' ? '✅ Ninguno fuera de tiempo: no hay presentaciones pendientes de más de 24 h.'
+          {filter === 'pending' ? '✅ Todas las asignaciones activas tienen el enlace definido.'
+            : filter === 'at_risk' ? '✅ Ninguna en riesgo: no hay enlaces pendientes de más de 12 h.'
+            : filter === 'overdue' ? `✅ Ninguna fuera de plazo: no hay enlaces pendientes de más de ${LINK_DEADLINE_HOURS} h.`
             : 'No hay asignaciones que mostrar.'}
         </div>
       ) : (
         <>
-          {/* Desktop: tabla. SIN caja: la lista fluye con la página y usa el
-              scroll del navegador. Antes vivía dentro de un contenedor de
-              `maxHeight: 500` con su propio `overflowY`, así que con más de una
-              docena de asignaciones el admin tenía que hacer scroll DENTRO de un
-              recuadro para ver el resto — y el recuadro no crecía nunca.
-              Solo se conserva el scroll HORIZONTAL, que es del ancho de la tabla
-              y evita que la página entera se desplace de lado. */}
+          {/* Desktop: tabla sin caja, con el scroll del navegador. Solo se
+              conserva el scroll HORIZONTAL, que es del ancho de la tabla. */}
           <div className="desk-only" style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 620 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                  {['Alumno', 'Profesor', 'Estado', 'Retraso', 'Asignada'].map(h => (
-                    <th key={h} style={{ padding: '0 16px 10px', textAlign: 'left', fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>{h}</th>
+                  {['Alumno', 'Profesor', 'Enlace', 'Desde asignación', 'Asignada', 'Bienvenida'].map(h => (
+                    <th key={h} style={th}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {visible.map((r, i) => {
-                  const st = PRES_STATUS_STYLE[r.statusKind];
+                  const st = LINK_STATUS_STYLE[r.statusKind];
                   return (
                     // Separador de 1px entre filas en vez de bordes de caja.
                     <tr key={r.id} style={{ borderBottom: i === visible.length - 1 ? 'none' : '1px solid var(--border)' }}>
@@ -911,11 +922,14 @@ function PresentationEmailsTab({ assignments, nowMs, initialFilter }: {
                           {r.statusLabel}
                         </span>
                       </td>
-                      <td style={{ padding: '14px 16px', fontSize: 13, fontWeight: r.sent ? 400 : 700, color: r.sent ? 'var(--text-muted)' : st.color, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
-                        {r.sent ? '—' : formatDelay(r.delayHours)}
+                      <td style={{ padding: '14px 16px', fontSize: 13, fontWeight: r.defined ? 400 : 700, color: r.defined ? 'var(--text-muted)' : st.color, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+                        {r.defined ? '—' : formatDelay(r.delayHours)}
                       </td>
                       <td style={{ padding: '14px 16px', fontSize: 12, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
                         {new Date(r.createdAt).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' })}
+                      </td>
+                      <td style={{ padding: '14px 16px', fontSize: 12, maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <WelcomeCell r={r} />
                       </td>
                     </tr>
                   );
@@ -924,18 +938,16 @@ function PresentationEmailsTab({ assignments, nowMs, initialFilter }: {
             </table>
           </div>
 
-          {/* Mobile: lista separada por líneas, no tarjetas apiladas: mismo
-              contenido, sin el peso visual de un borde por cada email. */}
-          {/* Sin `flexDirection` inline: .mob-only fuerza `display: block`, así
-              que el flex/gap que había acá nunca llegó a aplicarse. */}
+          {/* Mobile: lista separada por líneas, no tarjetas apiladas. Sin
+              `flexDirection` inline: .mob-only fuerza `display: block`. */}
           <div className="mob-only">
             {visible.map((r, i) => {
-              const st = PRES_STATUS_STYLE[r.statusKind];
+              const st = LINK_STATUS_STYLE[r.statusKind];
               return (
                 <div key={r.id} style={{ padding: '13px 2px', borderBottom: i === visible.length - 1 ? 'none' : '1px solid var(--border)' }}>
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 3 }}>
                     <div style={{ flex: 1, minWidth: 0, fontWeight: 700, fontSize: 14, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.studentName}</div>
-                    {!r.sent && <span style={{ fontSize: 13, fontWeight: 700, color: st.color, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>{formatDelay(r.delayHours)}</span>}
+                    {!r.defined && <span style={{ fontSize: 13, fontWeight: 700, color: st.color, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>{formatDelay(r.delayHours)}</span>}
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 20, background: st.bg, border: `1px solid ${st.border}`, color: st.color, fontSize: 11, fontWeight: 700 }}>
@@ -944,6 +956,9 @@ function PresentationEmailsTab({ assignments, nowMs, initialFilter }: {
                     <span style={{ fontSize: 11.5, color: 'var(--text-muted)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {r.teacherName} · {new Date(r.createdAt).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}
                     </span>
+                  </div>
+                  <div style={{ fontSize: 11.5, marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <span style={{ color: 'var(--text-muted)' }}>Bienvenida: </span><WelcomeCell r={r} />
                   </div>
                 </div>
               );
@@ -2450,7 +2465,7 @@ function AdminContent() {
     if (t && (ADMIN_TABS as readonly string[]).includes(t) && !SECCIONES_OCULTAS.has(t as AdminTab)) setActiveTab(t as AdminTab);
   }, [searchParams, router]);
 
-  // Filtro de la pestaña Emails, también en la URL: así el enlace se puede
+  // Filtro de la pestaña Enlaces (id 'emails'), también en la URL: así el enlace se puede
   // compartir o recargar y sigue mostrando lo mismo.
   const emailFilterParam = searchParams.get('filter');
   const emailsFilter = (EMAIL_FILTERS as readonly string[]).includes(emailFilterParam ?? '')
@@ -2523,7 +2538,7 @@ function AdminContent() {
 
   const tabs = [
     { id: 'teachers',       label: 'Profesores' },
-    { id: 'emails',         label: 'Emails' },
+    { id: 'emails',         label: 'Enlaces' },
     { id: 'scoring',        label: 'Scoring' },
     { id: 'bonos',          label: 'Bonos' },
     { id: 'tracking',       label: 'Seguimiento' },
@@ -2595,7 +2610,8 @@ function AdminContent() {
             validacion: pendingValidations.total,
             validacionUrgente: pendingValidations.oldestDays >= 3,
             riesgo: riesgoRojo,
-            emails: assignments.filter(a => !a.presentationEmailSent && getPresentationEmailStatus(a, nowMs).status === 'overdue').length,
+            // Asignaciones activas sin enlace de clase con más de 24 h (lib/meetLinkStatus).
+            emails: assignments.filter(a => isActiveAssignment(a) && getMeetLinkStatus(a, nowMs).status === 'overdue').length,
             proximosACancelar: proximosSinContactar(students, madridToday()),
           }}>
           {activeTab === 'teachers' && (
@@ -2636,14 +2652,14 @@ function AdminContent() {
                 <col style={{ width: '11%' }} />{/* Estado */}
                 <col style={{ width: '10%' }} />{/* Nivel */}
                 <col style={{ width: '15%' }} />{/* Carga (barra + horas + cupos) */}
-                <col style={{ width: '11%' }} />{/* Emails */}
+                <col style={{ width: '11%' }} />{/* Enlaces */}
                 <col style={{ width:  '8%' }} />{/* Faltas mes */}
                 <col style={{ width: '13%' }} />{/* Acciones */}
               </colgroup>
               <THead
                 top={NAV_STICKY_TOP}
                 align={[undefined, undefined, undefined, undefined, undefined, undefined, undefined, 'right']}
-                columns={['Nombre', 'Especialidades', 'Estado', 'Nivel', 'Carga', 'Emails', 'Faltas mes', '']}
+                columns={['Nombre', 'Especialidades', 'Estado', 'Nivel', 'Carga', 'Enlaces', 'Faltas mes', '']}
               />
               <tbody>
                 {teachers
@@ -2652,7 +2668,7 @@ function AdminContent() {
                   const loadPct = t.maxWeeklyLoad > 0 ? Math.round((t.weeklyLoad / t.maxWeeklyLoad) * 100) : 0;
                   const loadColor = loadPct >= 90 ? '#ef4444' : loadPct >= 70 ? '#f59e0b' : '#1E9E3A';
                   const isBlocked = t.isBlocked ?? false;
-                  const presSum = teacherPresentationSummary(assignments.filter(a => a.teacherId === t.id), nowMs);
+                  const presSum = teacherLinkSummary(assignments.filter(a => a.teacherId === t.id), nowMs);
                   const emailOpen = emailDetail === t.id;
                   const faltasList = faltasOfTeacher(t.id);
                   const faltas = faltasList.length;
@@ -2660,7 +2676,6 @@ function AdminContent() {
                   const pendN = presSum.pending.length;
                   const overN = presSum.overdueCount;
                   const shownN = overN > 0 ? overN : pendN;
-                  const pendPlural = shownN !== 1 ? 's' : '';
                   return (
                     <Fragment key={t.id}>
                     <tr style={{
@@ -2739,7 +2754,7 @@ function AdminContent() {
                         </div>
                       </TD>
 
-                      {/* Emails — es <button> porque despliega la fila de detalle,
+                      {/* Enlaces — es <button> porque despliega la fila de detalle,
                           pero el aspecto lo pone el Badge de adentro (ver
                           .adm-tt-badgebtn en globals.css). */}
                       <TD style={{ overflow: 'hidden' }}>
@@ -2753,9 +2768,9 @@ function AdminContent() {
                             tone={pendN === 0 ? 'ok' : overN > 0 ? 'danger' : 'warn'}
                             dot
                             title={pendN === 0
-                              ? 'Todos los emails de presentación enviados'
-                              : `${shownN} pendiente${pendPlural} ${overN > 0 ? '(+24h)' : '(<24h)'} · clic para ver el detalle`}>
-                            {pendN === 0 ? 'Al día' : `${shownN} pendiente${pendPlural}`}
+                              ? 'Todos sus alumnos activos tienen el enlace definido'
+                              : `${shownN} sin enlace ${overN > 0 ? '(+24h)' : '(<24h)'} · clic para ver el detalle`}>
+                            {pendN === 0 ? 'Al día' : `${shownN} sin enlace`}
                           </Badge>
                         </button>
                       </TD>
@@ -2794,7 +2809,7 @@ function AdminContent() {
                       <tr style={{ background: T.bg.surface2 }}>
                         <td colSpan={8} style={{ padding: `${T.space(3)} ${T.space(4)}`, borderBottom: `1px solid ${T.border.base}` }}>
                           <div style={{ fontSize: T.fs.caption, fontWeight: T.fw.semibold, color: T.text.primary, marginBottom: T.space(2) }}>
-                            {t.name} — Email pendiente:
+                            {t.name} — Enlace sin definir:
                           </div>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: T.space(1) }}>
                             {presSum.pending.map((p, i) => (
@@ -2845,12 +2860,11 @@ function AdminContent() {
                 const loadColor = loadPct >= 90 ? '#ef4444' : loadPct >= 70 ? '#f59e0b' : '#1E9E3A';
                 const isBlocked = t.isBlocked ?? false;
                 const teacherAssignments = assignments.filter(a => a.teacherId === t.id);
-                const presSum = teacherPresentationSummary(teacherAssignments, nowMs);
+                const presSum = teacherLinkSummary(teacherAssignments, nowMs);
                 const faltas = faltasOfTeacher(t.id).length;
                 const pendN = presSum.pending.length;
                 const overN = presSum.overdueCount;
                 const shownN = overN > 0 ? overN : pendN;
-                const pendPlural = shownN !== 1 ? 's' : '';
                 return (
                   <Card key={t.id} padding="md" style={{
                     borderRadius: 14,
@@ -2883,7 +2897,7 @@ function AdminContent() {
                       <StatusBadge status={t.status} />
                       <LevelBadge level={t.currentLevel ?? 1} blocked={isBlocked} />
                       <Badge tone={pendN === 0 ? 'ok' : overN > 0 ? 'danger' : 'warn'} dot>
-                        {pendN === 0 ? 'Al día' : `${shownN} pendiente${pendPlural} ${overN > 0 ? '(+24h)' : '(<24h)'}`}
+                        {pendN === 0 ? 'Enlaces al día' : `${shownN} sin enlace ${overN > 0 ? '(+24h)' : '(<24h)'}`}
                       </Badge>
                       {faltas > 0 && (
                         <Badge tone={faltas >= 4 ? 'danger' : 'warn'}>
@@ -3056,15 +3070,15 @@ function AdminContent() {
           </div>
         )}
 
-        {/* WEEKLY VIEW TAB */}
+        {/* ENLACES (id 'emails'): enlace de clase + bienvenida automática */}
         {activeTab === 'emails' && (
           <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '20px' }}>
             <WelcomeEmailTestPanel assignments={assignments} />
             <div style={{ marginBottom: 16 }}>
-              <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)' }}>Emails de presentación</div>
-              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3 }}>Estado del email de bienvenida por alumno. Los pendientes con más retraso, arriba.</div>
+              <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)' }}>Enlaces de clase</div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3 }}>Asignaciones activas: si el profesor definió el enlace de Meet y cuándo salió la bienvenida al alumno. Las que no tienen enlace, con más retraso, arriba.</div>
             </div>
-            <PresentationEmailsTab assignments={assignments} nowMs={nowMs} initialFilter={emailsFilter} />
+            <MeetLinksTab assignments={assignments} nowMs={nowMs} initialFilter={emailsFilter} />
           </div>
         )}
 

@@ -1,8 +1,8 @@
 'use client';
 
 // Indicador de estado del formulario inicial, junto al nombre del alumno.
-// El ENVÍO del formulario ya no vive acá: el link viaja dentro del correo de
-// presentación del profesor. Este componente solo muestra el estado y, cuando
+// El ENVÍO del formulario ya no vive acá: el link viaja dentro de la bienvenida
+// automática al alumno (lib/welcomeEmailSend). Este componente solo muestra el estado y, cuando
 // está completado, permite ver la ficha.
 //
 //   · sin token    → no muestra nada

@@ -234,8 +234,10 @@ export async function sendNewStudentEmail(teacher: TeacherLike, info: NewStudent
       ['Email de contacto', info.studentEmail],
       ['Fecha de inicio', fmtDate(info.startDate)],
     ]) +
-    p('Recuerda enviarle el email de presentación lo antes posible.') +
-    p('Accede a DRC Gestión para ver todos los detalles y enviar el formulario inicial.') +
+    // Texto neutro a propósito: vale tanto si la bienvenida automática salió como
+    // si no (alumno sin email en su ficha). Los fallos le llegan al admin por la
+    // campanita (lib/welcomeEmailSend).
+    p('El alumno recibe automáticamente las instrucciones para acceder a la plataforma. Lo único que tienes que hacer es definir el enlace de Meet de sus clases en DRC Gestión.') +
     ctaButton('Ver en DRC Gestión', `${APP_URL}/mis-alumnos`),
     `${info.studentName} · ${info.plan ?? ''}`,
   );
@@ -336,36 +338,6 @@ export async function sendFormCompletedEmail(teacher: TeacherLike, studentName: 
     `Ficha de ${studentName} lista`,
   );
   return send('sendFormCompletedEmail', teacher, subject, html);
-}
-
-// ═══ C) Email de presentación pendiente (12 h) ════════════════════════════════
-export async function sendPresentationEmailReminder(
-  teacher: TeacherLike, studentName: string, hoursElapsed: number,
-): Promise<boolean> {
-  const subject = `Recordatorio: email de presentación pendiente · ${studentName}`;
-  const html = baseEmailTemplate(
-    p(`Hola ${esc(teacher.name)},`) +
-    p(`Han pasado <strong>${Math.round(hoursElapsed)} horas</strong> desde que se te asignó <strong>${esc(studentName)}</strong> y aún no has enviado el email de presentación.`) +
-    p('Los alumnos que reciben una bienvenida rápida tienen mayor retención. Te recomendamos enviarlo cuanto antes.') +
-    p('Recuerda que tienes hasta 24 horas para enviarlo sin que afecte a tu scoring.') +
-    ctaButton('Ir a DRC Gestión', APP_URL),
-    `${studentName} lleva ${Math.round(hoursElapsed)} h sin bienvenida`,
-  );
-  return send('sendPresentationEmailReminder', teacher, subject, html);
-}
-
-// ═══ D) Email de presentación fuera de tiempo (24 h) ══════════════════════════
-export async function sendPresentationEmailOverdue(teacher: TeacherLike, studentName: string): Promise<boolean> {
-  const subject = `Email de presentación no enviado · ${studentName}`;
-  const html = baseEmailTemplate(
-    p(`Hola ${esc(teacher.name)},`) +
-    p(`Han pasado más de <strong>24 horas</strong> desde que se te asignó <strong>${esc(studentName)}</strong> y aún no has enviado el email de presentación.`) +
-    p('Cuando lo envíes se registrarán <strong>-5 puntos</strong> en tu scoring.') +
-    p('Te recomendamos enviarlo lo antes posible.') +
-    ctaButton('Enviar ahora', APP_URL),
-    `${studentName} sin bienvenida (+24 h)`,
-  );
-  return send('sendPresentationEmailOverdue', teacher, subject, html);
 }
 
 // ═══ E) Recordatorios escalonados del email de presentación ═══════════════════

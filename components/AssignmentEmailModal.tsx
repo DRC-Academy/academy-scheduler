@@ -77,7 +77,7 @@ export function buildAssignmentEmail(assignment: Assignment): { subject: string;
 
 A continuación te envío la información de ${assignment.studentName} para comenzar sus clases.
 
-Recuerda enviarle el correo de presentación y el correo con los datos de la sesión.
+Recuerda definir el enlace de Meet de sus clases en DRC Gestión.
 
 📅 Fecha de inicio: ${startDateLong}
 

@@ -38,21 +38,51 @@ export function isAllowedMeetHost(hostname: string): boolean {
   return DOMINIOS_CON_SUBDOMINIOS.some(d => h.endsWith(`.${d}`));
 }
 
-/**
- * Normaliza y valida. Devuelve la URL lista para guardar, o el mensaje de error
- * en español para enseñarle al profesor.
- */
-export function validateMeetLink(raw: string): { ok: true; url: string } | { ok: false; error: string } {
+/** Valida UN enlace suelto (sin espacios). null si no es de videollamada. */
+function checkSingle(raw: string): string | null {
   const url = normalizeMeetUrl(raw);
-  if (!url) return { ok: false, error: 'Escribe el enlace de la clase.' };
-  if (/\s/.test(url)) return { ok: false, error: MEET_LINK_ERROR };
+  if (!url || /\s/.test(url)) return null;
   let parsed: URL;
   try {
     parsed = new URL(url);
   } catch {
-    return { ok: false, error: MEET_LINK_ERROR };
+    return null;
   }
-  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return { ok: false, error: MEET_LINK_ERROR };
-  if (!isAllowedMeetHost(parsed.hostname)) return { ok: false, error: MEET_LINK_ERROR };
-  return { ok: true, url };
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return null;
+  if (!isAllowedMeetHost(parsed.hostname)) return null;
+  return url;
+}
+
+// Algo con forma de enlace dentro de un texto: con o sin esquema, un dominio y
+// opcionalmente una ruta. Los signos de cierre de frase se recortan después.
+const CANDIDATO = /(?:https?:\/\/)?(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d+)?(?:\/[^\s<>"'`]*)?/gi;
+
+/**
+ * El primer enlace de videollamada válido dentro de un texto, o null. Sirve
+ * para cuando el profesor pega la invitación ENTERA de Zoom o de Meet ("Unirse
+ * a la reunión: https://…", con ID, código y teléfonos): se queda solo con el
+ * enlace y descarta el resto (calendar.google.com, números de teléfono…).
+ */
+export function extractMeetLink(text: string): string | null {
+  for (const m of (text ?? '').matchAll(CANDIDATO)) {
+    const limpio = m[0].replace(/[.,;:!?)\]}>»"']+$/, '');
+    const ok = checkSingle(limpio);
+    if (ok) return ok;
+  }
+  return null;
+}
+
+/**
+ * Normaliza y valida. Devuelve la URL lista para guardar, o el mensaje de error
+ * en español para enseñarle al profesor.
+ *
+ * Un enlace suelto se valida tal cual (un `ftp://meet.google.com/…` se rechaza).
+ * Si lo pegado es un TEXTO (lleva espacios o saltos de línea), se extrae el
+ * primer enlace de videollamada que contenga.
+ */
+export function validateMeetLink(raw: string): { ok: true; url: string } | { ok: false; error: string } {
+  const t = (raw ?? '').trim();
+  if (!t) return { ok: false, error: 'Escribe el enlace de la clase.' };
+  const url = /\s/.test(t) ? extractMeetLink(t) : checkSingle(t);
+  return url ? { ok: true, url } : { ok: false, error: MEET_LINK_ERROR };
 }

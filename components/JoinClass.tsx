@@ -33,6 +33,7 @@ import { AVOID_ITEMS, AVOID_TITLE, ESCALATED_GUARDRAIL, NATURAL_REMINDER, type R
 import { RISK_CAUSE_META } from '@/lib/aiTypes';
 import { fmtDateDMY } from '@/lib/teacherClasses';
 import type { Teacher, Student, Assignment, ClassRecord } from '@/types';
+import { DefineLinkModal } from '@/components/DefineLinkModal';
 
 /** Lo mínimo que el flujo necesita de una clase. `TeacherClass` lo cumple. */
 export interface JoinableClass {
@@ -61,6 +62,8 @@ export interface UseClassJoinArgs {
   todayIso: string;
   logClassJoin: LogClassJoinFn;
   updateMeetLink: (assignmentId: string, link: string) => Promise<void>;
+  /** Se avisa tras guardar un enlace (el tutorial lo cuenta como paso cumplido). */
+  onLinkSaved?: () => void;
   /** Mensajes efímeros (toast del panel, aviso de la vista semanal). */
   onToast?: (msg: string, ms?: number) => void;
   /** Estado de suscripción ya verificado por la pantalla, para no repedirlo. */
@@ -78,7 +81,7 @@ export interface ClassJoinApi {
   /** Punto de entrada del botón "Ingresar a clase". */
   join: (c: JoinableClass) => void;
   /** Abre el modal de enlace de Meet (botón "Definir/Cambiar enlace"). */
-  openLinkModal: (assignment: Assignment, value?: string) => void;
+  openLinkModal: (assignment: Assignment) => void;
   /** Key de la clase cuya suscripción se está verificando (spinner del botón). */
   checkingKey: string | null;
   /** Clases a las que ya se ingresó en esta sesión. */
@@ -94,7 +97,7 @@ export interface ClassJoinApi {
 export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
   const {
     teacher, students, classRecords, todayIso,
-    logClassJoin, updateMeetLink, onToast, getCachedSub, onSubResolved, riskFor,
+    logClassJoin, updateMeetLink, onLinkSaved, onToast, getCachedSub, onSubResolved, riskFor,
   } = args;
 
   const [joinedKeys, setJoined] = useState<Set<string>>(new Set());
@@ -105,9 +108,8 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
   // abre: lo único que falta es abrir el Meet, y lo hace el botón del modal.
   const [riskModal, setRiskModal] = useState<{ c: JoinableClass; briefing: RiskBriefing } | null>(null);
   const [avoidOpen, setAvoidOpen] = useState(false);
-  const [linkModal, setLinkModal] = useState<{ assignment: Assignment; value: string } | null>(null);
-  const [savingLink, setSavingLink] = useState(false);
-  const [linkError, setLinkError] = useState<string | null>(null);
+  // Modal "Definir enlace" (components/DefineLinkModal, el mismo de Mis clases).
+  const [linkModal, setLinkModal] = useState<Assignment | null>(null);
 
   const toast = (msg: string, ms?: number) => onToast?.(msg, ms);
 
@@ -173,7 +175,7 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
   // disclaimer; al confirmar sigue el flujo normal.
   function join(c: JoinableClass) {
     if (checkingKey || !teacher) return;
-    if (!c.meetLink) { setLinkModal({ assignment: c.assignment, value: '' }); return; }
+    if (!c.meetLink) { setLinkModal(c.assignment); return; }
     const nextClass = calcRegisteredClassNumber(c.assignment, classRecords) + 1;
     if (isMilestone(nextClass)) {
       setMilestoneModal({ c, classNumber: nextClass });
@@ -229,28 +231,6 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
     doJoin(subModal.c, subModal.status, true, subModal.daysRemaining);
     setSubModal(null);
     toast('✅ Ingreso registrado');
-  }
-
-  // Si no se guarda (enlace que no es de videollamada, fallo del servidor), el
-  // modal sigue abierto con el motivo: antes el error se tragaba y el profesor
-  // creía que el enlace estaba guardado.
-  async function saveLink() {
-    if (!linkModal) return;
-    setSavingLink(true);
-    setLinkError(null);
-    try {
-      await updateMeetLink(linkModal.assignment.id, linkModal.value);
-      setLinkModal(null);
-    } catch (err) {
-      setLinkError(err instanceof Error ? err.message : 'No se pudo guardar el enlace. Inténtalo de nuevo.');
-    } finally {
-      setSavingLink(false);
-    }
-  }
-
-  function closeLinkModal() {
-    setLinkModal(null);
-    setLinkError(null);
   }
 
   const dialogs = (
@@ -372,40 +352,14 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
         );
       })()}
 
-      {/* Enlace de Meet del alumno */}
+      {/* Enlace de Meet del alumno: se abre al pulsar "Ingresar a clase" sin enlace. */}
       {linkModal && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
-          onClick={e => { if (e.target === e.currentTarget) closeLinkModal(); }}>
-          <div style={{ background: 'var(--bg-surface)', border: '1px solid #35405a', borderRadius: 14, padding: 24, width: '100%', maxWidth: 420 }}>
-            <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)', marginBottom: 6 }}>
-              {linkModal.assignment.meetLink ? 'Cambiar enlace' : 'Definir enlace'}
-            </div>
-            <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 14, lineHeight: 1.5 }}>
-              Este enlace se usará siempre para <b style={{ color: 'var(--text-primary)' }}>{linkModal.assignment.studentName}</b>, no hace falta volver a definirlo.
-            </div>
-            <input
-              value={linkModal.value}
-              onChange={e => { setLinkError(null); setLinkModal(prev => prev ? { ...prev, value: e.target.value } : null); }}
-              placeholder="https://meet.google.com/abc-xyz"
-              autoFocus
-              style={{ width: '100%', marginBottom: linkError ? 8 : 16 }}
-            />
-            {linkError && (
-              <div role="alert" style={{ fontSize: 12.5, color: '#f87171', marginBottom: 14, lineHeight: 1.45 }}>
-                {linkError}
-              </div>
-            )}
-            <div style={{ display: 'flex', gap: 10 }}>
-              <button onClick={closeLinkModal} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
-                Cancelar
-              </button>
-              <button onClick={saveLink} disabled={savingLink || !linkModal.value.trim()}
-                style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: savingLink || !linkModal.value.trim() ? 'var(--bg-surface-3)' : '#1E9E3A', color: savingLink || !linkModal.value.trim() ? 'var(--text-muted)' : 'white', cursor: savingLink || !linkModal.value.trim() ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
-                {savingLink ? 'Guardando...' : 'Guardar enlace'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <DefineLinkModal
+          assignment={linkModal}
+          updateMeetLink={updateMeetLink}
+          onClose={() => setLinkModal(null)}
+          onSaved={onLinkSaved}
+        />
       )}
 
       {/* Disclaimer de clase hito (1/15/30/50) */}
@@ -483,7 +437,7 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
 
   return {
     join,
-    openLinkModal: (assignment, value) => setLinkModal({ assignment, value: value ?? assignment.meetLink ?? '' }),
+    openLinkModal: (assignment) => setLinkModal(assignment),
     checkingKey,
     joinedKeys,
     emailFor,

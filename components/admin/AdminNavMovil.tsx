@@ -11,7 +11,7 @@
 //   · Arriba: "‹ Volver" (44 px) a la izquierda, "Admin · Tema" a la derecha y
 //     el nombre de la sección con su contador. Siempre se sabe dónde se está.
 //   · Abajo, fija: las cuatro secciones más usadas (Validación, Riesgo,
-//     Profesores, Emails) con sus contadores, y "Más", que abre las otras ocho
+//     Profesores, Enlaces) con sus contadores, y "Más", que abre las otras ocho
 //     agrupadas por tema. Los contadores se ven sin abrir nada.
 //   · Cero deslizamiento horizontal; zonas táctiles de 44 px; zona segura del
 //     iPhone respetada.
@@ -22,7 +22,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { ClipboardCheck, AlertTriangle, Users, Mail, MoreHorizontal, ChevronLeft, ChevronRight, X } from 'lucide-react';
+import { ClipboardCheck, AlertTriangle, Users, Link2, MoreHorizontal, ChevronLeft, ChevronRight, X } from 'lucide-react';
 
 /** Las otras pantallas del admin, al final de "Más": acá la barra global no se
  *  pinta (dos barras apiladas no caben), así que este es el atajo. */
@@ -53,6 +53,7 @@ export interface AdminContadores {
   /** Ámbar cuando la cola lleva días; gris si es reciente. */
   validacionUrgente: boolean;
   riesgo: number | null;
+  /** Asignaciones activas sin enlace de clase con más de 24 h (lib/meetLinkStatus). */
   emails: number;
   proximosACancelar: number;
 }
@@ -81,7 +82,7 @@ const GRUPOS: Array<{ nombre: string; secciones: Seccion[] }> = [
     { id: 'validacion', label: 'Validación' },
   ] },
   { nombre: 'Avisos', secciones: [
-    { id: 'emails', label: 'Emails' },
+    { id: 'emails', label: 'Enlaces' },
     { id: 'notifications', label: 'Notificaciones' },
   ] },
 ];
@@ -126,7 +127,7 @@ export function AdminNavMovil({ activeTab, contadores, onSelect, onVolver, child
     validacion: <ClipboardCheck size={22} strokeWidth={1.75} aria-hidden />,
     ai: <AlertTriangle size={22} strokeWidth={1.75} aria-hidden />,
     teachers: <Users size={22} strokeWidth={1.75} aria-hidden />,
-    emails: <Mail size={22} strokeWidth={1.75} aria-hidden />,
+    emails: <Link2 size={22} strokeWidth={1.75} aria-hidden />,
     scoring: null, bonos: null, tracking: null, classlog: null, transcripts: null, leveltests: null, aiusage: null, bajas: null, notifications: null,
   };
 

@@ -862,8 +862,11 @@ export async function dbGetAssignments(): Promise<Assignment[]> {
     createdAt:             row.created_at,
     manualClassAdjustment: row.manual_class_adjustment ?? 0,
     meetLink:              row.meet_link ?? undefined,
+    meetLinkSetAt:         row.meet_link_set_at ?? undefined,
     presentationEmailSent:   row.presentation_email_sent ?? false,
     presentationEmailSentAt: row.presentation_email_sent_at ?? undefined,
+    welcomeEmailSentAt:      row.welcome_email_sent_at ?? undefined,
+    welcomeEmailTo:          row.welcome_email_to ?? undefined,
     status:                  row.status ?? undefined,
   }));
 }
@@ -1822,8 +1825,11 @@ export async function dbGetAssignmentsByTeacher(teacherId: string): Promise<Assi
     createdAt:             row.created_at,
     manualClassAdjustment: row.manual_class_adjustment ?? 0,
     meetLink:              row.meet_link ?? undefined,
+    meetLinkSetAt:         row.meet_link_set_at ?? undefined,
     presentationEmailSent:   row.presentation_email_sent ?? false,
     presentationEmailSentAt: row.presentation_email_sent_at ?? undefined,
+    welcomeEmailSentAt:      row.welcome_email_sent_at ?? undefined,
+    welcomeEmailTo:          row.welcome_email_to ?? undefined,
     status:                  row.status ?? undefined,
   }));
 }
@@ -3053,18 +3059,18 @@ export async function dbUpdateTeacherEmailPreferences(
 /**
  * Guarda el enlace de la clase vía PUT /api/assignments/[id]/meet-link, que lo
  * normaliza, valida que sea de una videollamada y registra meet_link_set_at.
- * Devuelve el enlace tal como quedó guardado. LANZA con el mensaje para el
+ * Devuelve el enlace tal como quedó guardado y su fecha. LANZA con el mensaje para el
  * profesor si no se pudo guardar (antes el error se tragaba en silencio).
  */
-export async function dbUpdateMeetLink(assignmentId: string, link: string): Promise<string> {
+export async function dbUpdateMeetLink(assignmentId: string, link: string): Promise<{ meetLink: string; meetLinkSetAt: string }> {
   const res = await fetch(`/api/assignments/${encodeURIComponent(assignmentId)}/meet-link`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ link }),
   });
-  const data = await res.json().catch(() => ({})) as { meetLink?: string; error?: string };
+  const data = await res.json().catch(() => ({})) as { meetLink?: string; meetLinkSetAt?: string; error?: string };
   if (!res.ok || !data.meetLink) throw new Error(data.error || 'No se pudo guardar el enlace. Inténtalo de nuevo.');
-  return data.meetLink;
+  return { meetLink: data.meetLink, meetLinkSetAt: data.meetLinkSetAt ?? new Date().toISOString() };
 }
 
 // ── CLASS JOIN LOGS ───────────────────────────────────────────────────────────

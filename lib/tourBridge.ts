@@ -1,9 +1,10 @@
 // ── Puente entre el tutorial y las pantallas ─────────────────────────────────
 //
-// El motor del tour necesita hacer dos cosas que solo saben hacer las pantallas:
-// PREGUNTAR por datos ("¿este profesor tiene alumnos?") y ACCIONAR ("abrí el
-// modal del email"). Este módulo es el registro donde cada pantalla deja esas
-// capacidades mientras está montada.
+// El motor del tour necesita PREGUNTAR por datos que solo saben las pantallas
+// ("¿este profesor tiene alumnos?"). Este módulo es el registro donde cada
+// pantalla deja esas capacidades mientras está montada. (Hasta sep/2026 también
+// ACCIONABA: abría y cerraba el modal del email de presentación para su bloque
+// de tres pasos. Se retiró con el email.)
 //
 // Es un singleton de módulo y NO un contexto de React a propósito: el motor lo
 // consulta dentro de una función asíncrona, fuera del ciclo de render, y pasarlo
@@ -20,28 +21,19 @@
 export interface TourBridge {
   /** ¿El profesor tiene algún alumno? (lo sabe /mis-alumnos) */
   hasStudents: () => boolean;
-  /** ¿Hay alguna clase con la presentación pendiente? (lo sabe /clases) */
-  hasPresentationPending: () => boolean;
+  /** ¿Hay alguna clase cuyo alumno aún no tiene el enlace definido? (lo sabe /clases) */
+  hasLinkPending: () => boolean;
   /** ¿Hay alguna clase por delante en los días a la vista? (lo sabe /clases) */
   hasUpcomingClass: () => boolean;
   /** ¿Hay alguna clase ya dada esperando transcript? (lo sabe /clases) */
   hasClassNeedingTranscript: () => boolean;
-  /** Abre el modal del email de presentación. false = no había ninguno que abrir. */
-  openPresentationModal: () => boolean;
-  /** Cierra el modal si está abierto. */
-  closePresentationModal: () => void;
-  /** ¿El modal está abierto ahora mismo? */
-  isPresentationModalOpen: () => boolean;
 }
 
 const DEFAULTS: TourBridge = {
   hasStudents: () => true,
-  hasPresentationPending: () => true,
+  hasLinkPending: () => true,
   hasUpcomingClass: () => true,
   hasClassNeedingTranscript: () => true,
-  openPresentationModal: () => false,
-  closePresentationModal: () => {},
-  isPresentationModalOpen: () => false,
 };
 
 let current: TourBridge = { ...DEFAULTS };
@@ -77,26 +69,4 @@ function restaurarEn<K extends keyof TourBridge>(dest: Partial<TourBridge>, k: K
 
 export function tourBridge(): TourBridge {
   return current;
-}
-
-// ── Aviso de "el modal se cerró" ─────────────────────────────────────────────
-//
-// Si el profesor cierra el modal a mitad del bloque de tres pasos, el tour tiene
-// que enterarse en ese instante. Sin esto driver.js seguiría resaltando un nodo
-// ya desconectado del documento, cuyo `getBoundingClientRect()` devuelve todo
-// ceros: el recorte del overlay colapsaba a un punto en la esquina superior
-// izquierda y el globo lo seguía hasta allí.
-
-type Listener = () => void;
-const modalClosedListeners = new Set<Listener>();
-
-export function onPresentationModalClosed(fn: Listener): () => void {
-  modalClosedListeners.add(fn);
-  return () => { modalClosedListeners.delete(fn); };
-}
-
-export function emitPresentationModalClosed(): void {
-  for (const fn of [...modalClosedListeners]) {
-    try { fn(); } catch { /* un oyente roto no puede tumbar el cierre del modal */ }
-  }
 }

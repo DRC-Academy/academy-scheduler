@@ -28,10 +28,12 @@
 // devuelve a quién hay que generarle uno; el cron lo crea y a partir de ahí
 // entran por la puerta normal.
 //
-// Por qué created_at del token y no la fecha de alta del alumno: el enlace lo
-// genera el profesor cuando le manda el email de presentación, y entre el alta y
-// ese email hay una mediana de 12 días (máximo medido: 53). Contar desde el alta
-// haría nacer a casi todos "pasados de plazo" el primer día.
+// Por qué created_at del token y no la fecha de alta del alumno: hasta sep/2026
+// el enlace lo generaba el profesor al mandar el email de presentación, y entre
+// el alta y ese email había una mediana de 12 días (máximo medido: 53). Contar
+// desde el alta haría nacer a casi todos "pasados de plazo" el primer día. Desde
+// la Fase 2 lo genera la bienvenida automática al asignar (lib/welcomeEmailSend),
+// así que token y alta casi coinciden, y la regla sigue valiendo.
 //
 // ── LA CADENCIA (FOLLOWUP_DAYS) ──────────────────────────────────────────────
 // Días 1, 2 y 3 (un correo por día) · 6 y 9 (cada tres días) · 16, 23, 30, 37,

@@ -11,7 +11,7 @@
 //
 //   1. `requires()`          ¿tiene sentido este paso con los datos de hoy?
 //   2. ruta                  navegar y ESPERAR a que la ruta sea la pedida
-//   3. `onEnter()`           abrir lo que haga falta (p. ej. el modal del email)
+//   3. `onEnter()`           abrir lo que haga falta (p. ej. un modal)
 //   4. esperar el elemento   por MutationObserver, con tope de 3 s
 //   5. si no aparece         aplicar `onMissing` y DEJAR CONSTANCIA (warn)
 //   6. resaltar
@@ -32,7 +32,7 @@ import { cleanAiText } from '@/lib/textCleanup';
 export const ONBOARDING_TARGET_CLASSES = 5;
 
 export type OnboardingStepId =
-  | 'presentation-email' | 'pres-copy' | 'pres-mark-sent'
+  | 'define-link'
   | 'calendar-grid'
   | 'students-list' | 'ficha-generate' | 'student-open' | 'ficha-tabs'
   | 'join-class' | 'give-class' | 'add-transcript'
@@ -51,7 +51,7 @@ export type StepAlign = 'start' | 'center' | 'end';
  * elemento dependa de los datos del profesor. 'skip' se reserva para pasos cuya
  * explicación no se sostiene sin el elemento delante. Un paso saltado es un paso
  * que el profesor nunca aprende, y la vía automática es precisamente la del
- * profesor nuevo: ahí saltarse el email de presentación porque hoy no hay ninguno
+ * profesor nuevo: ahí saltarse el enlace de la clase porque hoy no hay ninguno
  * pendiente era dejar sin enseñar lo más urgente que tiene encima.
  *
  * Nunca es silencioso: el motor deja un warn con el id del paso.
@@ -59,8 +59,8 @@ export type StepAlign = 'start' | 'center' | 'end';
  * OJO — esto solo gobierna la vía AUTOMÁTICA. El botón "Tutorial" del header es
  * un repaso del procedimiento completo, así que ahí NADA se salta: todo lo que no
  * se pueda anclar se muestra centrado. Saltárselo hacía que el recorrido manual
- * abriera en "Paso 4 de 12" cuando el profesor no tenía presentaciones
- * pendientes, y eso se lee como que el tutorial está roto. Ver `irAlPaso`.
+ * abriera en "Paso 4 de 12" cuando el profesor no tenía nada pendiente, y eso
+ * se lee como que el tutorial está roto. Ver `irAlPaso`.
  */
 export type OnMissing = 'skip' | 'center';
 
@@ -119,11 +119,12 @@ export interface TourStep {
   /** Dónde encontrarlo. Se muestra cuando el paso queda centrado. */
   where: string;
   /**
-   * Pasos que forman una unidad. Si el bloque se rompe a mitad (el profesor
-   * cierra el modal), el tour salta al primer paso POSTERIOR al bloque entero en
-   * vez de quedarse resaltando un nodo que ya no está en el documento.
+   * Pasos que forman una unidad (lo que abre uno lo cierra el bloque, ver
+   * `exitBetween`). Hoy ningún paso lo usa: el último bloque fueron los tres
+   * pasos del email de presentación, retirados en sep/2026 junto con el salto
+   * automático al cerrarse su modal. El motor lo sigue soportando.
    */
-  block?: 'presentacion';
+  block?: string;
   /**
    * El ancla se repite por fila (una por tarjeta de clase o de alumno). Se resalta
    * la PRIMERA visible, que es la que el profesor tiene delante. Sirve para que la
@@ -154,92 +155,49 @@ export function esRutaDeProfesor(pathname: string): boolean {
   return RUTAS_PROFESOR.some(r => pathname === r || pathname.startsWith(r + '/'));
 }
 
-/** Ancla del contenedor del modal: sirve para saber si su contenido ya montó. */
-export const ANCLA_MODAL_PRESENTACION = 'pres-modal';
+/** Ancla del contenedor del modal "Definir enlace" (components/DefineLinkModal). */
+export const ANCLA_MODAL_ENLACE = 'link-modal';
 
 const PASOS: TourStep[] = [
-  // ── 1-3. El email de presentación ───────────────────────────────────────────
+  // ── 1. El enlace de la clase ────────────────────────────────────────────────
   // ABRE el recorrido por decisión expresa: es lo más urgente que tiene encima un
-  // profesor nuevo (la ventana son 24 horas desde que le asignan al alumno) y lo
-  // que más se hace a medias.
+  // profesor nuevo (24 horas desde que le asignan al alumno).
   //
-  // Son tres pasos para lo que en la app es un solo botón, también a propósito: el
-  // envío NO ocurre dentro de la plataforma (se copia y se manda desde el Gmail
-  // del profesor), y ese salto es donde la gente da por enviado un correo que solo
-  // copió.
+  // Hasta sep/2026 aquí iban tres pasos para el email de presentación, que el
+  // profesor copiaba y mandaba desde su Gmail. Desde la Fase 2 ese email lo envía
+  // la plataforma (lib/welcomeEmailSend) y al profesor solo le queda DEFINIR EL
+  // ENLACE: un paso.
   //
-  // `onMissing: 'center'` (antes 'skip'). El botón solo existe mientras haya una
-  // presentación pendiente, así que al profesor que ya las había enviado todas el
-  // tour le saltaba los tres pasos en silencio. Y pasaba justo en la vía
-  // automática, con el profesor nuevo, que es el único que nunca ha visto ese
-  // botón. Ahora el paso se muestra SIEMPRE: con foco si el botón está, y centrado
-  // con `bodyWhenMissing` más la maqueta del botón si no está.
-  //
-  // `requires()` SE MANTIENE. Con 'center' ya no descarta el paso: lo único que
-  // hace es ahorrarse la espera de 3 s por un elemento que ya sabemos que no está
-  // y mandar directo al globo centrado (paso 1 de `irAlPaso`).
+  // Se muestra SIEMPRE (`onMissing: 'center'`): con foco si el botón está, y
+  // centrado con `bodyWhenMissing` más la maqueta del botón si no lo está.
+  // `requires()` solo ahorra la espera de 3 s por un elemento que ya se sabe
+  // ausente. El ancla principal es el botón verde de la tarjeta ("🔗 Definir
+  // enlace", el mismo hueco que "Ingresar a clase"); el respaldo, el botón
+  // secundario que sale cuando hay un enlace antiguo sin fecha.
+  // Se da por cumplido al GUARDAR el enlace, no al abrir el modal (ver
+  // onLinkSaved en MisClasesPanel): si avanzara al pulsar, el tour navegaría a
+  // otra pantalla con el modal todavía abierto.
   {
-    id: 'presentation-email',
+    id: 'define-link',
     multiple: true,
     route: RUTA_AGENDA,
     routeLabel: 'Mis clases',
-    selector: 'presentation-email',
-    title: 'Abre el email de presentación',
-    body: 'Es tu primer contacto con el alumno y solo se manda una vez. Tienes 24 horas desde que te lo asignan. Si se pasa, cuenta como retraso en tu seguimiento. Este botón te deja el correo listo: texto, enlace de Meet y formulario inicial.',
-    bodyWhenMissing: 'Ahora mismo no tienes ninguna presentación pendiente, así que el botón no está en pantalla. Cuando te asignen un alumno nuevo aparecerá aquí. Sirve para mandarle el email de bienvenida con su test de nivel, y se envía una sola vez por alumno, antes de la primera clase.',
-    mockButton: { label: '✉️ Enviar presentación' },
-    where: 'En "Mis clases", justo debajo del botón principal de la tarjeta. Aparece solo la primera vez con cada alumno.',
-    requires: () => tourBridge().hasPresentationPending(),
+    selector: 'set-link',
+    fallbackSelectors: ['define-link'],
+    title: 'Define el enlace de tu clase',
+    body: 'Pega aquí el enlace de tu sala de Meet. Nosotros ya le hemos enviado al alumno todo lo necesario para empezar.',
+    bodyWhenMissing: 'Ahora mismo todos tus alumnos tienen su enlace, así que el botón no está en pantalla. Cuando te asignen uno nuevo aparecerá en su tarjeta: púlsalo y pega el enlace de tu sala de Meet. Nosotros ya le hemos enviado al alumno todo lo necesario para empezar.',
+    mockButton: { label: '🔗 Definir enlace' },
+    where: 'En "Mis clases", el botón verde de la tarjeta del alumno. Aparece mientras le falte el enlace.',
+    requires: () => tourBridge().hasLinkPending(),
     onMissing: 'center',
     side: 'left',
     align: 'center',
     actionable: true,
   },
-  {
-    id: 'pres-copy',
-    route: RUTA_AGENDA,
-    routeLabel: 'Mis clases',
-    selector: 'pres-copy',
-    title: 'Pega tu Meet y copia el email',
-    body: 'Pega arriba tu enlace de Meet. Queda guardado para ese alumno y es el que abrirá "Ingresar a clase" de aquí en adelante. Luego pulsa "Copiar email": se lleva destinatario, asunto y cuerpo de una vez. Si quieres cambiar algo del texto, hazlo antes de copiar.',
-    bodyWhenMissing: 'Este paso ocurre dentro de la ventana del email, que solo se abre cuando hay una presentación pendiente. Cuando la tengas: pega arriba tu enlace de Meet, que queda guardado para ese alumno, y pulsa "Copiar email" para llevarte destinatario, asunto y cuerpo de una vez.',
-    mockButton: { label: '📋 Copiar email' },
-    where: 'Dentro de la ventana "Email de presentación", el botón verde "📋 Copiar email".',
-    block: 'presentacion',
-    // El tour ABRE el modal: antes lo daba por abierto y, si el profesor no había
-    // pulsado el botón del paso anterior, estos dos pasos describían botones que
-    // no estaban en la pantalla.
-    requires: () => tourBridge().hasPresentationPending(),
-    onEnter: async () => { tourBridge().openPresentationModal(); },
-    onMissing: 'center',
-    side: 'top',
-    align: 'center',
-    actionable: true,
-  },
-  {
-    id: 'pres-mark-sent',
-    route: RUTA_AGENDA,
-    routeLabel: 'Mis clases',
-    selector: 'pres-mark-sent',
-    title: 'Envíalo desde tu Gmail y márcalo',
-    body: 'La plataforma no envía el correo, solo te lo escribe. Abre tu Gmail, crea un mensaje nuevo, pega con Ctrl+V y mándalo desde tu cuenta. El alumno tiene que ver tu nombre como remitente. Cuando lo hayas enviado de verdad, vuelve aquí y pulsa "Marcar como enviado". Copiarlo no lo marca, y hasta que no lo marques el aviso te sigue corriendo.',
-    bodyWhenMissing: 'El último paso del email, para cuando tengas uno pendiente. La plataforma no lo envía, solo te lo escribe: lo mandas tú desde tu Gmail, porque el alumno tiene que ver tu nombre como remitente. Después vuelves aquí y pulsas "Marcar como enviado". Copiarlo no lo marca, y hasta que no lo marques el aviso te sigue corriendo.',
-    mockButton: { label: '✅ Marcar como enviado' },
-    where: 'Dentro de la ventana "Email de presentación", el botón verde grande "✅ Marcar como enviado".',
-    block: 'presentacion',
-    requires: () => tourBridge().hasPresentationPending(),
-    onEnter: async () => { tourBridge().openPresentationModal(); },
-    // Cierra el modal al pasar de largo: el paso siguiente vive en la pantalla de
-    // abajo y el modal la taparía entera.
-    onExit: async () => { tourBridge().closePresentationModal(); },
-    onMissing: 'center',
-    side: 'top',
-    align: 'center',
-    actionable: true,
-  },
 
   // ── 4. Disponibilidad ───────────────────────────────────────────────────────
-  // Después del email, no antes: es la condición para que te SIGAN llegando
+  // Después del enlace, no antes: es la condición para que te SIGAN llegando
   // alumnos, pero el que ya tiene asignado no espera a que ordene su calendario.
   {
     id: 'calendar-grid',
@@ -440,12 +398,11 @@ export const ONBOARDING_SIGNATURE = `${ONBOARDING_STEPS.length}:${ONBOARDING_STE
  * Qué hay que deshacer al pasar de `desde` a `hacia`. `null` = nada.
  *
  * La clave está en que, con `block`, lo que se monta es del BLOQUE y no del paso:
- * el modal del email lo abren LOS DOS pasos de dentro, con el mismo `onEnter`. El
- * desmontaje tiene que ser igual de del bloque, y antes no lo era: `onExit` solo
- * lo declaraba el ÚLTIMO paso, así que retroceder desde el PRIMERO de dentro
- * ("Pega tu Meet y copia el email") hacia el de fuera ("Abre el email de
- * presentación") no cerraba nada. El modal se quedaba abierto tapando justo el
- * botón que ese paso señala.
+ * si varios pasos de dentro abren el mismo modal con el mismo `onEnter`, el
+ * desmontaje tiene que ser igual de del bloque. Cuando existía el bloque del
+ * email (retirado en sep/2026) `onExit` solo lo declaraba el ÚLTIMO paso, y
+ * retroceder desde el PRIMERO de dentro hacia el de fuera no cerraba nada: el
+ * modal se quedaba abierto tapando justo el botón que ese paso señala.
  *
  * Por eso al salir del bloque vale el `onExit` de cualquiera de sus pasos: así un
  * paso nuevo dentro del bloque no puede reintroducir el fallo por olvidarse de

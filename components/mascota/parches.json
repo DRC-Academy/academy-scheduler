@@ -1,0 +1,261 @@
+{
+  "lienzo": {
+    "ancho": 356,
+    "alto": 458,
+    "proporcion": 0.7773
+  },
+  "cola": {
+    "archivo": "cola.png",
+    "x": 0.5983,
+    "y": 0.4389,
+    "ancho": 0.368,
+    "alto": 0.4956,
+    "pivote": {
+      "x": 0.084,
+      "y": 0.7577
+    },
+    "pivote_lienzo": {
+      "x": 0.6292,
+      "y": 0.8144
+    }
+  },
+  "parches": [
+    {
+      "estado": "exito",
+      "archivo": "exito_1.png",
+      "x": -0.1489,
+      "y": -0.0087,
+      "ancho": 1.1292,
+      "alto": 0.821,
+      "etiqueta": "cara"
+    },
+    {
+      "estado": "duda",
+      "archivo": "duda_1.png",
+      "x": 0.1124,
+      "y": -0.0087,
+      "ancho": 0.7556,
+      "alto": 0.8297,
+      "etiqueta": "cara"
+    },
+    {
+      "estado": "animo",
+      "archivo": "animo_1.png",
+      "x": 0.1208,
+      "y": -0.0044,
+      "ancho": 0.2921,
+      "alto": 0.214,
+      "etiqueta": "cabeza"
+    },
+    {
+      "estado": "animo",
+      "archivo": "animo_2.png",
+      "x": 0.3764,
+      "y": -0.0066,
+      "ancho": 0.4073,
+      "alto": 0.3886,
+      "etiqueta": "cara"
+    },
+    {
+      "estado": "animo",
+      "archivo": "animo_3.png",
+      "x": -0.0309,
+      "y": 0.3122,
+      "ancho": 0.4326,
+      "alto": 0.4891,
+      "etiqueta": "brazo_izq"
+    },
+    {
+      "estado": "racha_perdida",
+      "archivo": "racha_perdida_1.png",
+      "x": 0.0674,
+      "y": -0.0066,
+      "ancho": 0.7107,
+      "alto": 0.5153,
+      "etiqueta": "cara"
+    },
+    {
+      "estado": "nivel_superado",
+      "archivo": "nivel_superado_1.png",
+      "x": -0.1601,
+      "y": -0.0087,
+      "ancho": 0.8764,
+      "alto": 0.8013,
+      "etiqueta": "cara"
+    },
+    {
+      "estado": "estudiando",
+      "archivo": "estudiando_1.png",
+      "x": 0.0562,
+      "y": 0.0393,
+      "ancho": 0.7163,
+      "alto": 0.2969,
+      "etiqueta": "cara"
+    },
+    {
+      "estado": "parpadeo",
+      "archivo": "parpadeo_1.png",
+      "x": 0.4522,
+      "y": 0.0524,
+      "ancho": 0.2809,
+      "alto": 0.2314,
+      "etiqueta": "cara"
+    },
+    {
+      "estado": "parpadeo",
+      "archivo": "parpadeo_2.png",
+      "x": 0.1039,
+      "y": 0.0546,
+      "ancho": 0.2837,
+      "alto": 0.2336,
+      "etiqueta": "cara"
+    }
+  ],
+  "huecos": {
+    "exito": "hueco_exito.png",
+    "duda": "hueco_duda.png",
+    "animo": "hueco_animo.png",
+    "racha_perdida": "hueco_racha_perdida.png",
+    "nivel_superado": "hueco_nivel_superado.png",
+    "saludo": "hueco_saludo.png",
+    "senala": "hueco_senala.png",
+    "dormido": "hueco_dormido.png",
+    "estira": "hueco_estira.png",
+    "piensa": "hueco_piensa.png",
+    "asombro": "hueco_asombro.png"
+  },
+  "restos": {
+    "exito": "resto_exito.png",
+    "duda": "resto_duda.png",
+    "animo": "resto_animo.png",
+    "racha_perdida": "resto_racha_perdida.png",
+    "nivel_superado": "resto_nivel_superado.png",
+    "saludo": "resto_saludo.png",
+    "senala": "resto_senala.png",
+    "dormido": "resto_dormido.png",
+    "estira": "resto_estira.png",
+    "piensa": "resto_piensa.png",
+    "asombro": "resto_asombro.png"
+  },
+  "gestos": [
+    {
+      "gesto": "saludo",
+      "archivo": "saludo_1.png",
+      "x": -0.2022,
+      "y": -0.0131,
+      "ancho": 1.0562,
+      "alto": 0.821,
+      "etiqueta": "cara"
+    },
+    {
+      "gesto": "senala",
+      "archivo": "senala_1.png",
+      "x": 0.1096,
+      "y": -0.0153,
+      "ancho": 0.632,
+      "alto": 0.3996,
+      "etiqueta": "cara"
+    },
+    {
+      "gesto": "senala",
+      "archivo": "senala_2.png",
+      "x": -0.2107,
+      "y": 0.3428,
+      "ancho": 0.5787,
+      "alto": 0.4585,
+      "etiqueta": "brazo_izq"
+    },
+    {
+      "gesto": "salto",
+      "archivo": "salto_completo.png",
+      "x": -0.0309,
+      "y": 0.0,
+      "ancho": 1.0421,
+      "alto": 1.0,
+      "etiqueta": "entero",
+      "completo": true
+    },
+    {
+      "gesto": "dormido",
+      "archivo": "dormido_1.png",
+      "x": -0.0225,
+      "y": -0.0131,
+      "ancho": 0.882,
+      "alto": 0.8188,
+      "etiqueta": "cara"
+    },
+    {
+      "gesto": "estira",
+      "archivo": "estira_1.png",
+      "x": -0.1404,
+      "y": -0.0066,
+      "ancho": 1.1124,
+      "alto": 0.8188,
+      "etiqueta": "cara"
+    },
+    {
+      "gesto": "piensa",
+      "archivo": "piensa_1.png",
+      "x": -0.0169,
+      "y": -0.0066,
+      "ancho": 0.8708,
+      "alto": 0.821,
+      "etiqueta": "cara"
+    },
+    {
+      "gesto": "asombro",
+      "archivo": "asombro_1.png",
+      "x": -0.0028,
+      "y": -0.0175,
+      "ancho": 0.7865,
+      "alto": 0.5524,
+      "etiqueta": "cara"
+    },
+    {
+      "gesto": "mira_izq",
+      "archivo": "mira_izq_1.png",
+      "x": 0.1096,
+      "y": 0.0655,
+      "ancho": 0.2697,
+      "alto": 0.2118,
+      "etiqueta": "cara"
+    },
+    {
+      "gesto": "mira_izq",
+      "archivo": "mira_izq_2.png",
+      "x": 0.4522,
+      "y": 0.0677,
+      "ancho": 0.2612,
+      "alto": 0.2052,
+      "etiqueta": "cara"
+    },
+    {
+      "gesto": "mira_der",
+      "archivo": "mira_der_1.png",
+      "x": 0.1461,
+      "y": 0.0895,
+      "ancho": 0.236,
+      "alto": 0.1834,
+      "etiqueta": "cara"
+    },
+    {
+      "gesto": "mira_der",
+      "archivo": "mira_der_2.png",
+      "x": 0.4522,
+      "y": 0.0895,
+      "ancho": 0.2725,
+      "alto": 0.1878,
+      "etiqueta": "cara"
+    },
+    {
+      "gesto": "sentado",
+      "archivo": "sentado_completo.png",
+      "x": -0.0084,
+      "y": 0.0,
+      "ancho": 1.014,
+      "alto": 1.0,
+      "etiqueta": "entero",
+      "completo": true
+    }
+  ]
+}

@@ -11,6 +11,7 @@ import { useParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import type { LTQuestionPublic, LTProgress, WritingEvaluation, Cefr } from '@/lib/levelTest/types';
 import { SECTION_LABEL, CEFR_DESC, CEFR_COLOR, scoreToCefr } from '@/lib/levelTest/constants';
+import GeckoAnimado, { useMandoGecko } from '@/components/mascota/MascotaFormulario';
 
 interface Result {
   reading_score: number | null;
@@ -328,15 +329,16 @@ function CardHeader({ progress }: { progress: LTProgress | null }) {
   );
 }
 
-// Capa de espera con la mascota (versión "estudio", con gafas). Tapa la
+// Capa de espera con la mascota del LMS, animada y con las gafas de «estudiando»
+// puestas mientras dure (volverAIdle=false). Tapa la
 // pregunta anterior para que nadie vuelva a pulsar sobre ella mientras llega la
 // siguiente. aria-live para que un lector de pantalla anuncie el texto.
 function EsperaMascota({ texto }: { texto: string }) {
+  const gecko = useMandoGecko('estudiando');
   return (
     <div className="drc-t-wait" role="status" aria-live="polite">
       <div className="drc-t-wait-in">
-        {/* eslint-disable-next-line @next/next/no-img-element -- página pública, imagen estática de 19 KB */}
-        <img src="/mascota-drc-estudio.png" alt="" width={233} height={300} className="drc-t-wait-img" />
+        <div className="drc-t-wait-img"><GeckoAnimado mando={gecko} alto={140} altoMovil={112} volverAIdle={false} /></div>
         <div className="drc-t-wait-txt">{texto}</div>
         <div className="drc-t-wait-dots" aria-hidden><span /><span /><span /></div>
       </div>
@@ -697,14 +699,14 @@ const TEST_CSS = `
   display: flex; flex-direction: column; align-items: center; gap: 14px;
   padding: 40px 0;
 }
-.drc-t-wait-img { width: auto; height: 140px; animation: drc-t-bob 1.6s ease-in-out infinite; }
+/* Sin animación propia: la mascota ya respira, mueve la cola y parpadea. */
+.drc-t-wait-img { line-height: 0; }
 .drc-t-wait-txt { font-size: 16.5px; font-weight: 700; color: #11241a; max-width: 30ch; line-height: 1.45; }
 .drc-t-wait-dots { display: flex; gap: 6px; }
 .drc-t-wait-dots span { width: 7px; height: 7px; border-radius: 50%; background: #1E9E3A; animation: drc-t-dot 1.2s ease-in-out infinite; }
 .drc-t-wait-dots span:nth-child(2) { animation-delay: 0.15s; }
 .drc-t-wait-dots span:nth-child(3) { animation-delay: 0.3s; background: #FFC400; }
 @keyframes drc-t-fade { from { opacity: 0; } to { opacity: 1; } }
-@keyframes drc-t-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
 @keyframes drc-t-dot { 0%, 80%, 100% { opacity: 0.25; transform: scale(0.8); } 40% { opacity: 1; transform: scale(1); } }
 
 /* Spinner */
@@ -714,7 +716,7 @@ const TEST_CSS = `
 @keyframes drc-t-rot { to { transform: rotate(360deg); } }
 
 @media (prefers-reduced-motion: reduce) {
-  .drc-t-anim, .drc-t-spin .ring, .drc-t-wait, .drc-t-wait-img, .drc-t-wait-dots span { animation: none; }
+  .drc-t-anim, .drc-t-spin .ring, .drc-t-wait, .drc-t-wait-dots span { animation: none; }
   .drc-t-fill, .drc-t-gauge circle { transition: none; }
 }
 
@@ -730,7 +732,6 @@ const TEST_CSS = `
   /* Sin sitio para todo en una fila: la sección ya sale en la etiqueta de la
      pregunta y en la línea de progreso; arriba se queda el porcentaje. */
   .drc-t-step { display: none; }
-  .drc-t-wait-img { height: 112px; }
   .drc-t-content { padding: 24px 18px; flex: 1; }
   .drc-t-question { font-size: 16.5px; }
   .drc-t-tiles { grid-template-columns: 1fr; }
