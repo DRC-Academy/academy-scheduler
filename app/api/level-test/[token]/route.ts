@@ -3,17 +3,15 @@
 // recargar retoma la misma pregunta (current_question_id).
 
 import { supabase } from '@/lib/supabase';
-import { computeNext } from '@/lib/levelTest/server';
+import { computeNext, loadSessionWithAnswers } from '@/lib/levelTest/server';
 import { GRAND_TOTAL } from '@/lib/levelTest/constants';
 
 export const dynamic = 'force-dynamic';
 
-// Respuestas DISTINTAS de la sesión. Solo se consulta cuando hace falta decidir
-// entre 'expired' y 'abandoned'.
-async function countAnswers(sessionId: string): Promise<number> {
-  const { data } = await supabase
-    .from('level_test_answers').select('question_id').eq('session_id', sessionId);
-  return new Set((data ?? []).map(r => (r as { question_id: string }).question_id)).size;
+// Respuestas DISTINTAS de la sesión. Solo hace falta para decidir entre
+// 'expired' y 'abandoned'.
+function countAnswers(answers: Array<{ question_id: string }>): number {
+  return new Set(answers.map(r => r.question_id)).size;
 }
 
 export async function GET(
@@ -23,11 +21,8 @@ export async function GET(
   const { token } = await params;
   if (!token) return Response.json({ error: 'Falta el token.' }, { status: 400 });
 
-  const { data: s, error } = await supabase
-    .from('level_test_sessions')
-    .select('*')
-    .eq('token', token)
-    .maybeSingle();
+  // Sesión y respuestas en una sola consulta (ver lib/levelTest/server).
+  const { session: s, answers, error } = await loadSessionWithAnswers(token);
 
   if (error) {
     console.error('[level-test GET] Error al leer la sesión:', error);
@@ -60,7 +55,7 @@ export async function GET(
   // el alumno la pantalla es la misma; para el admin no son lo mismo.
   const expired = s.expires_at && new Date(s.expires_at).getTime() < Date.now();
   if (s.status === 'expired' || expired) {
-    const answered = await countAnswers(s.id);
+    const answered = countAnswers(answers);
     const nuevoEstado = answered > 0 && answered < GRAND_TOTAL ? 'abandoned' : 'expired';
     if (s.status !== nuevoEstado) {
       await supabase.from('level_test_sessions').update({ status: nuevoEstado }).eq('id', s.id);
@@ -76,7 +71,7 @@ export async function GET(
     s.status = 'in_progress';
   }
 
-  const next = await computeNext(s);
+  const next = await computeNext(s, answers);
 
   // Fijar la pregunta actual si cambió (resumibilidad).
   if (next.currentQuestionId !== s.current_question_id) {

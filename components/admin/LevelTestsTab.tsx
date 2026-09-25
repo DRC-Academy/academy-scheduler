@@ -44,6 +44,7 @@ import { useAuth } from '@/lib/AuthContext';
 import type { WritingEvaluation } from '@/lib/levelTest/types';
 import { CEFR_COLOR, GRAND_TOTAL, scoreToCefr } from '@/lib/levelTest/constants';
 import { INVALID_REASON_LABEL } from '@/lib/levelTest/attemptValidity';
+import ReevaluarRedacciones from '@/components/admin/ReevaluarRedacciones';
 
 // ── Fechas ───────────────────────────────────────────────────────────────────
 function fmtDate(iso: string | null): string {
@@ -291,6 +292,9 @@ export default function LevelTestsTab() {
           <button type="button" className="tn-btn-ic" onClick={() => setAviso(null)} aria-label="Cerrar aviso"><X size={16} /></button>
         </div>
       )}
+
+      {/* Solo aparece si la IA dejó alguna redacción sin evaluar. */}
+      <ReevaluarRedacciones onTerminado={() => load(true)} />
 
       {/* ── Cifras (solo escritorio) ── */}
       {!loading && filas.length > 0 && (
@@ -581,6 +585,8 @@ interface AnswerRow {
   // De supabase-level-test-v2.sql: pueden no existir todavía.
   invalid_reason?: string | null;
   target_difficulty?: number | null;
+  // De supabase-level-test-ai-error.sql: el motivo REAL cuando la IA no evaluó.
+  ai_error?: string | null;
 }
 
 const ANSWER_COLS = 'id, section, difficulty, is_correct, written_response, ai_score, ai_feedback';
@@ -591,6 +597,8 @@ async function loadAnswers(sessionId: string): Promise<AnswerRow[]> {
   const q = (cols: string) => supabase
     .from('level_test_answers').select(cols).eq('session_id', sessionId)
     .order('answered_at', { ascending: true });
+  const full = await q(`${ANSWER_COLS}, invalid_reason, target_difficulty, ai_error`);
+  if (!full.error) return (full.data ?? []) as unknown as AnswerRow[];
   const first = await q(`${ANSWER_COLS}, invalid_reason, target_difficulty`);
   if (!first.error) return (first.data ?? []) as unknown as AnswerRow[];
   const base = await q(ANSWER_COLS);
@@ -651,6 +659,11 @@ function ResultadoSesion({ id }: { id: string }) {
           <b>Nivel provisional.</b> Salió solo de la comprensión lectora: la expresión escrita
           no se pudo puntuar.{motivoTexto ? ` Motivo: ${motivoTexto.toLowerCase()}.` : ''}
           {' '}El alumno solo ve un aviso neutro, sin el motivo.
+          {writing?.ai_error && (
+            <div style={{ marginTop: 6, fontFamily: 'monospace', fontSize: 11.5, color: '#7A2E0E', wordBreak: 'break-word' }}>
+              Error de la IA: {writing.ai_error}
+            </div>
+          )}
         </div>
       )}
 

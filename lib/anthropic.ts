@@ -14,6 +14,7 @@ import 'server-only';
 
 import Anthropic from '@anthropic-ai/sdk';
 import { NO_DASH_RULES, cleanAiDeep } from '@/lib/textCleanup';
+import { isCreditExhaustedError, notifyAiCreditExhausted } from '@/lib/aiCreditAlert';
 
 // El constructor no lanza si falta la clave (deja apiKey en null): solo fallan
 // las requests. Por eso es seguro construirlo a nivel de módulo.
@@ -217,6 +218,8 @@ export async function askClaudeJson<T>(opts: AskClaudeJsonOptions): Promise<AiRe
   } catch (err: unknown) {
     const msg = describeError(err);
     console.error(`[ai:${opts.label}] Falló la llamada a Claude: ${msg}`);
+    // Sin saldo falla TODA la IA a la vez: se avisa al admin (una vez al día).
+    if (isCreditExhaustedError(msg)) await notifyAiCreditExhausted({ label: opts.label, error: msg });
     return { data: null, status: 'error', error: msg };
   }
 }

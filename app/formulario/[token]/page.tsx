@@ -169,6 +169,10 @@ function FormFlow({ token }: { token: TokenRow }) {
 
       {step === -1 ? (
         <div className="drc-f-nav start">
+          {/* La mascota acompaña al botón de empezar (a su lado también en el
+              teléfono: cabe, y así la barra fija de abajo no crece). */}
+          {/* eslint-disable-next-line @next/next/no-img-element -- página pública, imagen estática de 9 KB */}
+          <img className="drc-f-mascota" src="/mascota-drc.png" alt="" width={296} height={400} />
           <button className="drc-f-btn drc-f-btn-primary" onClick={() => setStep(0)}>Empezar →</button>
         </div>
       ) : (
@@ -514,6 +518,8 @@ function CardHeader({ progress }: { progress: { label: string; pct: number } | n
         <div className="drc-f-brand">
           {/* eslint-disable-next-line @next/next/no-img-element -- página pública, logo estático */}
           <img className="drc-f-logo" src="/drc-logo.png" alt="DRC Academy" width={918} height={240} />
+          {/* Mismas medidas que la prueba de nivel (.drc-t-btitle). */}
+          <span className="drc-f-btitle">Formulario inicial</span>
         </div>
         {progress && (
           <div className="drc-f-meta">
@@ -565,9 +571,16 @@ const FORM_CSS = `
   background: linear-gradient(90deg, #1E9E3A, #1E9E3A 60%, #FFC400);
 }
 .drc-f-head-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.drc-f-brand { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; min-width: 0; }
+/* Marca: logo + nombre de la pantalla, centrados en vertical. MISMAS medidas
+   que la prueba de nivel (.drc-t-brand / .drc-t-btitle): si se cambia una, se
+   cambia la otra. */
+.drc-f-brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
 /* Logo real (public/drc-logo.png, 918x240): manda el alto, el ancho sale solo. */
-.drc-f-logo { height: 38px; width: auto; max-width: 100%; display: block; }
+.drc-f-logo { height: 36px; width: auto; max-width: 100%; display: block; flex-shrink: 0; }
+.drc-f-btitle {
+  font-size: 15px; font-weight: 700; color: #46473F; line-height: 1.2; white-space: nowrap;
+  padding-left: 12px; border-left: 1.5px solid #E4E4DD;
+}
 .drc-f-meta { display: flex; align-items: baseline; gap: 10px; white-space: nowrap; }
 .drc-f-step { font-size: 13px; font-weight: 700; color: #46473F; }
 .drc-f-pct { font-size: 17px; font-weight: 800; color: #1E9E3A; font-variant-numeric: tabular-nums; }
@@ -673,6 +686,7 @@ const FORM_CSS = `
   padding: 18px 40px; border-top: 1px solid #E4E4DD; background: #fff;
 }
 .drc-f-nav.start { justify-content: flex-start; }
+.drc-f-mascota { height: 64px; width: auto; display: block; flex-shrink: 0; margin: -6px 0; }
 .drc-f-btn {
   appearance: none; font-family: inherit; font-weight: 700; border-radius: 12px; cursor: pointer;
   padding: 13px 26px; font-size: 15px; min-height: 50px;
@@ -760,6 +774,10 @@ const FORM_CSS = `
   .drc-f-card { border-radius: 0; border: 0; box-shadow: none; min-height: 100dvh; }
   .drc-f-head { padding: 15px 18px 14px; gap: 11px; padding-top: max(15px, env(safe-area-inset-top)); }
   .drc-f-logo { height: 30px; }
+  .drc-f-brand { gap: 10px; }
+  .drc-f-btitle { font-size: 13.5px; padding-left: 10px; }
+  .drc-f-step { display: none; }
+  .drc-f-mascota { height: 50px; margin: -4px 0; }
   .drc-f-pct { font-size: 15px; }
   .drc-f-content { padding: 22px 18px; flex: 1; }
   .drc-f-title { font-size: 21px; max-width: none; }

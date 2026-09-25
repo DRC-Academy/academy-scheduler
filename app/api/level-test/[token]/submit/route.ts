@@ -23,9 +23,9 @@
 import { supabase } from '@/lib/supabase';
 import { fetchTeacher, sendLevelValidationRequest } from '@/lib/emailNotifications';
 import { markLevelValidationPending } from '@/lib/levelValidationPending';
-import { assessReading, calculateWritingScore, calculateOverall, autoCefrLevel, CAP_REASON_LABEL } from '@/lib/levelTest/scoring';
+import { CAP_REASON_LABEL } from '@/lib/levelTest/scoring';
+import { computeFinalResult } from '@/lib/levelTest/finalResult';
 import { GRAND_TOTAL } from '@/lib/levelTest/constants';
-import type { LTAnswerLite, LTSection, Cefr } from '@/lib/levelTest/types';
 
 export const dynamic = 'force-dynamic';
 
@@ -138,47 +138,17 @@ export async function POST(
   }
 
   // ── Cálculo ────────────────────────────────────────────────────────────────
-  const lite: LTAnswerLite[] = rows.map(a => ({
-    section: a.section as LTSection, difficulty: a.difficulty, is_correct: a.is_correct, ai_score: a.ai_score,
-  }));
-
-  // `lite` viene en orden cronológico (loadAnswers ordena por answered_at), que es
-  // lo que `assessReading` necesita para quedarse con la ventana final.
-  const reading = assessReading(lite);
-  const readingScore = reading?.score ?? null;
-  const writingScore = calculateWritingScore(lite);
-  const overall = calculateOverall(readingScore, writingScore);
-
-  // Provisional = la escritura no aportó. Da igual por qué: el 40% del criterio
-  // no está y el nivel no es definitivo.
-  const writingRow = rows.find(a => a.section === 'writing');
-  const provisional = writingScore == null;
-  const provisionalReason = provisional
-    ? (writingRow?.invalid_reason ?? (writingRow ? 'ai_unavailable' : null))
-    : null;
-
-  // ── El nivel ───────────────────────────────────────────────────────────────
-  // El puntaje decide la banda, y encima va la compuerta de C1/C2: sin escritura
-  // que los respalde no se certifican (ver lib/levelTest/scoring). El nivel de
-  // un test provisional queda topado en B2 por el primer motivo de la compuerta,
-  // que es exactamente lo que se busca: media prueba no da un C1.
-  //
-  // `overall_score` se guarda SIN tocar. Un 95,83 con un B2 al lado se lee raro,
-  // pero maquillar el puntaje para que cuadre sería perder el dato que explica
-  // la decisión: lectura excelente, escritura que no acompaña.
-  const writingEval = (writingRow?.ai_feedback ?? null) as { cefr_level?: string } | null;
-  const writingLevel = !provisional && writingEval?.cefr_level
-    ? (writingEval.cefr_level as Cefr)
-    : null;
-  const auto = autoCefrLevel(overall, writingLevel);
-  const cefr = auto.level;
+  // Compartido con la reevaluación de redacciones (lib/levelTest/reevaluate): los
+  // dos tienen que dar el mismo nivel con las mismas respuestas. `rows` viene en
+  // orden cronológico (loadAnswers ordena por answered_at), que es lo que la
+  // ventana final de la lectura necesita.
+  const {
+    readingScore, writingScore, overall, cefr, auto, provisional, provisionalReason, aiEvaluation,
+  } = computeFinalResult(rows);
   if (auto.capped) {
     console.info(`[level-test/submit] ${s.candidate_name}: ${auto.scoreLevel} → ${cefr} (${CAP_REASON_LABEL[auto.capped]}).`);
   }
 
-  // El feedback solo se muestra si la escritura se puntuó de verdad. Con un
-  // intento descartado, enseñárselo al alumno sería enseñarle qué esquivar.
-  const aiEvaluation = !provisional ? (writingRow?.ai_feedback ?? null) : null;
   const now = new Date().toISOString();
 
   const { error: updErr } = await updateSession(s.id, {

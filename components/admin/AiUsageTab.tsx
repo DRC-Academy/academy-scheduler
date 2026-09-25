@@ -16,6 +16,7 @@ import {
   type AiGenerationRow, type TeacherUsage, type UsageSort, type GenerationOrigin,
 } from '@/lib/aiUsage';
 import type { Teacher } from '@/types';
+import AiCreditTestButton from '@/components/admin/AiCreditTestButton';
 
 const VERDE = '#1E9E3A';
 const AMARILLO = '#FFC400';
@@ -182,6 +183,8 @@ export default function AiUsageTab({ teachers }: { teachers: Teacher[] }) {
           query={query} setQuery={setQuery}
         />
       )}
+
+      <AiCreditTestButton />
     </div>
   );
 }

@@ -116,7 +116,7 @@ export async function evaluateWriting(args: {
   cefrLevel: Cefr;          // nivel de la consigna: SOLO contexto para task_completion
   writingPrompt: string;
   writtenResponse: string;
-}): Promise<{ data: WritingEvaluation | null; status: 'ready' | 'skipped' | 'error' }> {
+}): Promise<{ data: WritingEvaluation | null; status: 'ready' | 'skipped' | 'error'; error?: string }> {
   const prompt = `TASK PROMPT the student was given (context for task_completion ONLY — it must not influence the CEFR level you assign):
 "${args.writingPrompt}"
 
@@ -136,7 +136,9 @@ What CEFR level does this text demonstrate?`;
     label: 'level-test-writing',
   });
 
-  if (!res.data) return { data: null, status: res.status };
+  // El error REAL viaja hasta la fila de la respuesta (level_test_answers.ai_error):
+  // sin él, una caída como la del saldo agotado solo dejaba 'ai_unavailable'.
+  if (!res.data) return { data: null, status: res.status, error: res.error ?? 'La IA no devolvió datos.' };
 
   // El puntaje global lo fija el código, no la IA: mismo eje 0–100 que el reading.
   const level = res.data.cefr_level;

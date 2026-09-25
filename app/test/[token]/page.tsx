@@ -33,6 +33,32 @@ const AVISO_ESCRITURA = 'No hemos podido evaluar tu redacción, así que este ni
 // dejaría al alumno esperando delante de un bucle de peticiones.
 const MAX_INTENTOS_FINALIZAR = 3;
 
+// Pantalla de espera: solo si la espera pasa de ESPERA_VISIBLE_MS (una respuesta
+// rápida no enseña nada, ni un cambio de texto: nada parpadea). Una vez
+// visible, se queda al menos ESPERA_MINIMA_MS para no ser un destello.
+const ESPERA_VISIBLE_MS = 1000;
+const ESPERA_MINIMA_MS = 600;
+
+/**
+ * true cuando `busy` lleva más de ESPERA_VISIBLE_MS encendido. Al apagarse,
+ * se mantiene hasta cumplir ESPERA_MINIMA_MS en pantalla.
+ */
+function useEsperaLenta(busy: boolean): boolean {
+  const [visible, setVisible] = useState(false);
+  const desde = useRef(0);
+  useEffect(() => {
+    if (busy) {
+      const t = setTimeout(() => { desde.current = Date.now(); setVisible(true); }, ESPERA_VISIBLE_MS);
+      return () => clearTimeout(t);
+    }
+    if (!visible) return;
+    const resta = Math.max(0, ESPERA_MINIMA_MS - (Date.now() - desde.current));
+    const t = setTimeout(() => setVisible(false), resta);
+    return () => clearTimeout(t);
+  }, [busy, visible]);
+  return visible;
+}
+
 export default function TestPage() {
   const params = useParams<{ token: string }>();
   const token = Array.isArray(params.token) ? params.token[0] : params.token;
@@ -52,6 +78,7 @@ export default function TestPage() {
   // Se pone a cero en cuanto llega una pregunta: solo cuenta los intentos
   // seguidos sin avanzar.
   const intentosFinalizar = useRef(0);
+  const esperaLenta = useEsperaLenta(busy);
 
   // Carga inicial: lee la sesión SIN iniciar el test (como la página del form).
   useEffect(() => {
@@ -201,7 +228,8 @@ export default function TestPage() {
     return (
       <Shell>
         <CardHeader progress={progress} />
-        <div className="drc-t-content">
+        <div className="drc-t-content drc-t-rel">
+          {esperaLenta && <EsperaMascota texto={isWriting ? 'Evaluando tu redacción…' : 'Preparando tu siguiente pregunta según tu nivel…'} />}
           <div key={question.id} className="drc-t-anim">
             <span className="drc-t-eyebrow">{SECTION_LABEL[question.section]}</span>
 
@@ -239,7 +267,9 @@ export default function TestPage() {
         </div>
         <div className="drc-t-nav">
           <button className="drc-t-btn drc-t-btn-primary" onClick={submitAnswer} disabled={!canSubmit}>
-            {busy ? (isWriting ? 'Evaluando…' : 'Guardando…') : 'Siguiente →'}
+            {/* Sin cambio de texto: en una espera corta, el botón solo se desactiva;
+                en una larga, la pantalla de espera ya explica qué pasa. */}
+            Siguiente →
           </button>
         </div>
       </Shell>
@@ -272,11 +302,10 @@ function CardHeader({ progress }: { progress: LTProgress | null }) {
       <div className="drc-t-head-top">
         <div className="drc-t-brand">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/drc-logo.png" alt="DRC Academy" className="drc-t-logo" />
-          <div>
-            <div className="drc-t-bname">DRC Academy</div>
-            <div className="drc-t-bsub">Test de nivel</div>
-          </div>
+          <img src="/drc-logo.png" alt="DRC Academy" className="drc-t-logo" width={918} height={240} />
+          {/* El logo ya dice "DRC Academy": al lado solo el nombre de la pantalla.
+              Mismas medidas que el formulario inicial (drc-f-brand). */}
+          <span className="drc-t-btitle">Test de nivel</span>
         </div>
         {progress && (
           <div className="drc-t-meta">
@@ -295,6 +324,22 @@ function CardHeader({ progress }: { progress: LTProgress | null }) {
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+// Capa de espera con la mascota (versión "estudio", con gafas). Tapa la
+// pregunta anterior para que nadie vuelva a pulsar sobre ella mientras llega la
+// siguiente. aria-live para que un lector de pantalla anuncie el texto.
+function EsperaMascota({ texto }: { texto: string }) {
+  return (
+    <div className="drc-t-wait" role="status" aria-live="polite">
+      <div className="drc-t-wait-in">
+        {/* eslint-disable-next-line @next/next/no-img-element -- página pública, imagen estática de 10 KB */}
+        <img src="/mascota-drc-estudio.png" alt="" width={296} height={400} className="drc-t-wait-img" />
+        <div className="drc-t-wait-txt">{texto}</div>
+        <div className="drc-t-wait-dots" aria-hidden><span /><span /><span /></div>
+      </div>
     </div>
   );
 }
@@ -488,10 +533,15 @@ const TEST_CSS = `
   background: linear-gradient(90deg, #1E9E3A, #1E9E3A 60%, #FFC400);
 }
 .drc-t-head-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.drc-t-brand { display: flex; align-items: center; gap: 11px; }
-.drc-t-logo { height: 36px; width: auto; display: block; }
-.drc-t-bname { font-size: 15.5px; font-weight: 800; line-height: 1.15; }
-.drc-t-bsub { font-size: 12px; color: #83847A; }
+/* Marca: logo + nombre de la pantalla, centrados en vertical. MISMAS medidas
+   que el formulario inicial (.drc-f-brand / .drc-f-btitle): si se cambia una,
+   se cambia la otra. */
+.drc-t-brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.drc-t-logo { height: 36px; width: auto; display: block; flex-shrink: 0; }
+.drc-t-btitle {
+  font-size: 15px; font-weight: 700; color: #46473F; line-height: 1.2; white-space: nowrap;
+  padding-left: 12px; border-left: 1.5px solid #E4E4DD;
+}
 .drc-t-meta { display: flex; align-items: baseline; gap: 10px; white-space: nowrap; }
 .drc-t-step { font-size: 12.5px; font-weight: 700; color: #46473F; }
 .drc-t-pct { font-size: 17px; font-weight: 800; color: #1E9E3A; font-variant-numeric: tabular-nums; }
@@ -632,6 +682,31 @@ const TEST_CSS = `
 .drc-t-feed ul { margin: 0; padding-left: 18px; font-size: 13.5px; color: #46473F; line-height: 1.65; }
 .drc-t-close { font-size: 14.5px; color: #46473F; line-height: 1.65; margin-top: 20px; max-width: 52ch; }
 
+/* Espera con la mascota */
+.drc-t-rel { position: relative; }
+.drc-t-wait {
+  position: absolute; inset: 0; z-index: 2;
+  padding: 0 24px; text-align: center;
+  background: rgba(255, 255, 255, 0.94);
+  animation: drc-t-fade 0.25s ease-out;
+}
+/* Pegado a la vista: con un texto de lectura largo, la mascota no se queda
+   centrada fuera de la pantalla. */
+.drc-t-wait-in {
+  position: sticky; top: 14vh;
+  display: flex; flex-direction: column; align-items: center; gap: 14px;
+  padding: 40px 0;
+}
+.drc-t-wait-img { width: auto; height: 140px; animation: drc-t-bob 1.6s ease-in-out infinite; }
+.drc-t-wait-txt { font-size: 16.5px; font-weight: 700; color: #11241a; max-width: 30ch; line-height: 1.45; }
+.drc-t-wait-dots { display: flex; gap: 6px; }
+.drc-t-wait-dots span { width: 7px; height: 7px; border-radius: 50%; background: #1E9E3A; animation: drc-t-dot 1.2s ease-in-out infinite; }
+.drc-t-wait-dots span:nth-child(2) { animation-delay: 0.15s; }
+.drc-t-wait-dots span:nth-child(3) { animation-delay: 0.3s; background: #FFC400; }
+@keyframes drc-t-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes drc-t-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+@keyframes drc-t-dot { 0%, 80%, 100% { opacity: 0.25; transform: scale(0.8); } 40% { opacity: 1; transform: scale(1); } }
+
 /* Spinner */
 .drc-t-spin { display: flex; flex-direction: column; align-items: center; gap: 14px; }
 .drc-t-spin .ring { width: 34px; height: 34px; border: 3px solid #E4E4DD; border-top-color: #1E9E3A; border-radius: 50%; animation: drc-t-rot 0.8s linear infinite; }
@@ -639,7 +714,7 @@ const TEST_CSS = `
 @keyframes drc-t-rot { to { transform: rotate(360deg); } }
 
 @media (prefers-reduced-motion: reduce) {
-  .drc-t-anim, .drc-t-spin .ring { animation: none; }
+  .drc-t-anim, .drc-t-spin .ring, .drc-t-wait, .drc-t-wait-img, .drc-t-wait-dots span { animation: none; }
   .drc-t-fill, .drc-t-gauge circle { transition: none; }
 }
 
@@ -649,7 +724,13 @@ const TEST_CSS = `
   .drc-t-stage { max-width: none; }
   .drc-t-card { border-radius: 0; border: 0; box-shadow: none; min-height: 100dvh; }
   .drc-t-head { padding: 15px 18px 14px; padding-top: max(15px, env(safe-area-inset-top)); }
-  .drc-t-bsub { display: none; }
+  .drc-t-logo { height: 30px; }
+  .drc-t-brand { gap: 10px; }
+  .drc-t-btitle { font-size: 13.5px; padding-left: 10px; }
+  /* Sin sitio para todo en una fila: la sección ya sale en la etiqueta de la
+     pregunta y en la línea de progreso; arriba se queda el porcentaje. */
+  .drc-t-step { display: none; }
+  .drc-t-wait-img { height: 112px; }
   .drc-t-content { padding: 24px 18px; flex: 1; }
   .drc-t-question { font-size: 16.5px; }
   .drc-t-tiles { grid-template-columns: 1fr; }
