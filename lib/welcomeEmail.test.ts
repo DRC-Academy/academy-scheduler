@@ -74,45 +74,54 @@ describe('firstClassFromSlots — hora de España', () => {
   });
 });
 
-describe('buildWelcomeEmail', () => {
+describe('buildWelcomeEmail — el email de presentación del profesor', () => {
   const base = {
-    studentName: 'JOSÉ García', teacherName: 'Ana <Pérez>', lmsEmail: 'jose@ejemplo.com',
+    studentName: 'José García', studentGender: 'male' as const,
+    teacherName: 'Ana <Pérez>', teacherGender: 'female' as const,
+    planDescription: 'nuestro programa intensivo',
+    lmsEmail: 'jose@ejemplo.com',
     lmsUrl: 'https://drc-lms.vercel.app/acceso',
     pending: { kind: 'formulario' as const, url: 'https://app/formulario/t1' },
     firstClass: { label: 'lunes 28 de septiembre', hour: '19:00' },
   };
 
-  it('bienvenida: asunto, nombre de pila, dos pasos, email del LMS y HTML escapado', () => {
+  it('bienvenida: el profesor se presenta, con primera clase, área de alumno y formulario', () => {
     const { subject, html } = buildWelcomeEmail({ ...base, variant: 'bienvenida' });
-    expect(subject).toBe('Ya tienes profesor en DRC Academy: estos son tus próximos pasos');
-    expect(html).toContain('Hola, José:');
-    expect(html).toContain('Solo te quedan dos pasos');
-    expect(html).toContain('Completar formulario');
+    expect(subject).toBe('¡Bienvenido a DRC Academy, José García!');
+    expect(html).toContain('¡Buenos días, José García!');
+    expect(html).toContain('Mi nombre es Ana &lt;Pérez&gt; y he sido elegida como tu profesora en DRC Academy.');
+    expect(html).toContain('nuestra primera clase el lunes 28 de septiembre de 19:00 a 20:00h.');
+    expect(html).toContain('¡Juntos continuaremos con nuestro programa intensivo y nos divertiremos en el proceso!');
     expect(html).toContain('Entrar en mi área');
     expect(html).toContain('jose@ejemplo.com');
-    expect(html).toContain('Ana &lt;Pérez&gt;');
-    expect(html).toContain('lunes 28 de septiembre a las 19:00');
-    // "responde a este correo" solo una vez: en el cuerpo, no en el pie.
-    expect(html.match(/responde a este correo/g)).toHaveLength(1);
+    expect(html).toContain('Completar formulario');
+    expect(html).toContain('pequeño test de nivel');
+    expect(html).toContain('Si pudieras confirmar que has recibido este email');
+    expect(html).toContain('¡Un saludo!<br />Ana &lt;Pérez&gt;');
   });
 
-  it('bienvenida sin nada pendiente: un solo paso y sin formulario', () => {
+  it('género desconocido: formas neutras', () => {
+    const { subject, html } = buildWelcomeEmail({ ...base, variant: 'bienvenida', studentGender: 'neutral', teacherGender: 'neutral' });
+    expect(subject).toBe('¡Bienvenido/a a DRC Academy, José García!');
+    expect(html).toContain('he sido elegido/a como tu profesor/a');
+  });
+
+  it('sin nada pendiente ni horario: sin formulario y sin fecha', () => {
     const { html } = buildWelcomeEmail({ ...base, variant: 'bienvenida', pending: null, firstClass: null });
-    expect(html).toContain('Solo te queda un paso');
     expect(html).not.toContain('Completar formulario');
-    expect(html).not.toContain('hora peninsular');
+    expect(html).toContain('Será un gusto conocerte en nuestra primera clase.');
   });
 
-  it('solo falta la prueba: el botón lleva a la prueba', () => {
-    const { html } = buildWelcomeEmail({ ...base, variant: 'cambio', pending: { kind: 'prueba', url: 'https://app/test/x' } });
-    expect(html).toContain('Hacer la prueba de nivel');
+  it('solo falta la prueba: el botón lleva al test', () => {
+    const { html } = buildWelcomeEmail({ ...base, variant: 'bienvenida', pending: { kind: 'prueba', url: 'https://app/test/x' } });
+    expect(html).toContain('Hacer el test de nivel');
     expect(html).toContain('https://app/test/x');
+    expect(html).not.toContain('Completar formulario');
   });
 
-  it('cambio de profesor: asunto, texto y línea de primera clase', () => {
+  it('cambio de profesor: asunto y presentación propios', () => {
     const c = buildWelcomeEmail({ ...base, variant: 'cambio' });
-    expect(c.subject).toBe('Tienes nuevo profesor en DRC Academy');
-    expect(c.html).toContain('a partir de ahora, tus clases serán con');
-    expect(c.html).toContain('Tu primera clase es el');
+    expect(c.subject).toBe('Tu nueva profesora en DRC Academy, José García');
+    expect(c.html).toContain('y, a partir de ahora, seré tu profesora en DRC Academy.');
   });
 });

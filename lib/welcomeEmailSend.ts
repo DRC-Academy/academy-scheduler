@@ -32,6 +32,8 @@ import {
 } from '@/lib/welcomeEmail';
 import { createFormToken, findLatestFormToken, formTokenState, hasCompletedFormToken } from '@/lib/formTokenServer';
 import { getOrCreateTestSession } from '@/lib/levelTest/createSession';
+import { classifyFor } from '@/lib/productUtils';
+import { resolveGender, type Gender } from '@/lib/gender';
 
 // ── Datos ────────────────────────────────────────────────────────────────────
 
@@ -44,6 +46,7 @@ export interface AssignmentForWelcome {
   student_email: string | null;
   student_level: string | null;
   plan: string | null;
+  objetivo: string | null;
   slots: Array<{ day: string; hour: string }> | null;
   start_date: string | null;
   created_at: string;
@@ -54,7 +57,7 @@ export interface AssignmentForWelcome {
 }
 
 const ASSIGNMENT_COLS =
-  'id, teacher_id, teacher_name, student_id, student_name, student_email, student_level, plan, slots, start_date, created_at, status, welcome_email_sent_at, welcome_email_teacher, welcome_email_to';
+  'id, teacher_id, teacher_name, student_id, student_name, student_email, student_level, plan, objetivo, slots, start_date, created_at, status, welcome_email_sent_at, welcome_email_teacher, welcome_email_to';
 
 export async function loadAssignmentForWelcome(admin: SupabaseClient, id: string): Promise<AssignmentForWelcome | null> {
   const { data, error } = await admin.from('assignments').select(ASSIGNMENT_COLS).eq('id', id).maybeSingle();
@@ -67,6 +70,33 @@ async function studentEmailOf(admin: SupabaseClient, studentId: string | null): 
   if (!studentId) return '';
   const { data } = await admin.from('students').select('email').eq('id', studentId).maybeSingle();
   return normEmail((data as { email?: string | null } | null)?.email);
+}
+
+/**
+ * Lo que personaliza el texto, como en el antiguo email de presentación del
+ * profesor: su género ("elegido/a", "profesor/a"), el del alumno ("Bienvenido/a")
+ * y la descripción del plan. Si falta un dato, cae en la forma neutra.
+ */
+async function personalization(admin: SupabaseClient, a: AssignmentForWelcome): Promise<{
+  teacherGender: Gender; studentGender: Gender; planDescription: string;
+}> {
+  const [{ data: t }, { data: st }] = await Promise.all([
+    admin.from('teachers').select('gender').eq('id', a.teacher_id).maybeSingle(),
+    a.student_id
+      ? admin.from('students').select('gender, plan, product_name').eq('id', a.student_id).maybeSingle()
+      : Promise.resolve({ data: null }),
+  ]);
+  const teacher = t as { gender?: string | null } | null;
+  const student = st as { gender?: string | null; plan?: string | null; product_name?: string | null } | null;
+  const c = classifyFor(a, { plan: student?.plan ?? null, productName: student?.product_name ?? null });
+  const planDescription = c.financeType === 'examenes' ? 'nuestra preparación para el examen'
+    : c.type === 'intensivo' ? 'nuestro programa intensivo'
+    : 'el aprendizaje del inglés';
+  return {
+    teacherGender: resolveGender(teacher?.gender, a.teacher_name),
+    studentGender: resolveGender(student?.gender, a.student_name),
+    planDescription,
+  };
 }
 
 /** Destinatario (el email del LMS) y copia (el de la asignación si es otro). */
@@ -268,9 +298,12 @@ export async function sendWelcomeForAssignment(
 
   try {
     const variant = await decideWelcomeVariant(admin, a, reason);
-    const pending = await resolvePending(admin, a, base, to);
+    const [pending, perso] = await Promise.all([
+      resolvePending(admin, a, base, to),
+      personalization(admin, a),
+    ]);
     const { subject, html } = buildWelcomeEmail({
-      variant, studentName: a.student_name, teacherName: a.teacher_name,
+      variant, studentName: a.student_name, teacherName: a.teacher_name, ...perso,
       lmsEmail: to, lmsUrl: lmsAccesoUrl(), pending,
       firstClass: firstClassFromSlots(a.slots, a.start_date),
     });
