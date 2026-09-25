@@ -30,13 +30,8 @@ export const WELCOME_EMAIL_START_DATE = '2026-09-25';
 /** Antigüedad máxima de la asignación (desde created_at) para enviarlo. */
 export const WELCOME_MAX_AGE_HOURS = 72;
 
-export type WelcomeVariant = 'bienvenida' | 'cambio' | 'adicional';
-
-export const WELCOME_VARIANT_LABEL: Record<WelcomeVariant, string> = {
-  bienvenida: 'Bienvenida (alumno nuevo)',
-  cambio:     'Cambio de profesor',
-  adicional:  'Profesor adicional',
-};
+/** Un alumno tiene un solo profesor: o es nuevo, o cambió de profesor. */
+export type WelcomeVariant = 'bienvenida' | 'cambio';
 
 /** Por qué se dispara: un alta normal o el asistente "Cambiar de profesor". */
 export type WelcomeReason = 'alta' | 'cambio_profesor';
@@ -59,20 +54,15 @@ export function isInWelcomeWindow(createdAt: string | null | undefined, now: num
 }
 
 /**
- * Qué variante le toca, en este orden:
- *   1. tiene OTRA asignación activa con otro profesor → 'adicional';
- *   2. viene del cambio de profesor, ya tuvo clases o tuvo antes otra
- *      asignación con otro profesor → 'cambio' (cubre el "Mover", que borra la
- *      fila vieja y crea una nueva);
- *   3. si no → 'bienvenida'.
+ * Qué variante le toca: 'cambio' si viene del cambio de profesor, ya tuvo
+ * clases o tuvo antes otra asignación con otro profesor (cubre el "Mover", que
+ * borra la fila vieja y crea una nueva); si no, 'bienvenida'.
  */
 export function pickWelcomeVariant(x: {
   reason: WelcomeReason;
-  hasOtherActiveWithOtherTeacher: boolean;
   hasPreviousClasses: boolean;
   hasPreviousAssignmentWithOtherTeacher: boolean;
 }): WelcomeVariant {
-  if (x.hasOtherActiveWithOtherTeacher) return 'adicional';
   if (x.reason === 'cambio_profesor' || x.hasPreviousClasses || x.hasPreviousAssignmentWithOtherTeacher) return 'cambio';
   return 'bienvenida';
 }

@@ -1,10 +1,7 @@
 // Envío del email de bienvenida al alumno. SOLO SERVIDOR (service role + Resend).
 //
-// Lo usan dos rutas:
-//   · POST /api/assignments/[assignmentId]/welcome-email → el envío real, con
-//     todas las barreras (interruptor, ventana, reclamo atómico, vista del LMS);
-//   · /api/admin/welcome-email-test → la prueba del admin: mismo email, a otro
-//     destino, sin escribir NADA en la base.
+// Lo usa la ruta POST /api/assignments/[assignmentId]/welcome-email, con todas
+// las barreras (interruptor, ventana, reclamo atómico, vista del LMS).
 //
 // EL EMAIL DEL ALUMNO ES EL DEL LMS. vista_perfil_alumno expone
 // lower(trim(students.email)) y el LMS busca al alumno por ese email para
@@ -94,20 +91,16 @@ export async function isInLmsView(admin: SupabaseClient, studentId: string | nul
 export async function decideWelcomeVariant(
   admin: SupabaseClient, a: AssignmentForWelcome, reason: WelcomeReason,
 ): Promise<WelcomeVariant> {
-  let hasOtherActiveWithOtherTeacher = false;
   let hasPreviousAssignmentWithOtherTeacher = false;
   if (a.student_id) {
-    const { data } = await admin.from('assignments').select('id, teacher_id, status')
-      .eq('student_id', a.student_id).neq('id', a.id).neq('teacher_id', a.teacher_id);
-    const otras = (data ?? []) as Array<{ status: string | null }>;
-    hasPreviousAssignmentWithOtherTeacher = otras.length > 0;
-    hasOtherActiveWithOtherTeacher = otras.some(o => (o.status ?? 'active') === 'active');
+    const { data } = await admin.from('assignments').select('id')
+      .eq('student_id', a.student_id).neq('id', a.id).neq('teacher_id', a.teacher_id).limit(1);
+    hasPreviousAssignmentWithOtherTeacher = Boolean(data?.length);
   }
   const { data: logs } = await admin.from('class_join_logs').select('id')
     .ilike('student_name', a.student_name.trim()).limit(1);
   return pickWelcomeVariant({
     reason,
-    hasOtherActiveWithOtherTeacher,
     hasPreviousClasses: Boolean(logs?.length),
     hasPreviousAssignmentWithOtherTeacher,
   });
@@ -127,16 +120,13 @@ async function levelTestDone(admin: SupabaseClient, a: AssignmentForWelcome): Pr
 }
 
 /**
- * Qué le falta de la prueba de nivel y con qué enlace.
- *   · `create: true`  (envío real): reutiliza el token vigente o crea uno, igual
- *     que el modal de presentación; si solo falta la prueba, prepara la sesión
- *     como los follow-ups.
- *   · `create: false` (prueba del admin): no escribe nada; si no hay enlace
- *     vigente, usa uno de ejemplo.
+ * Qué le falta de la prueba de nivel y con qué enlace. Reutiliza el token
+ * vigente del formulario o crea uno (lib/formTokenServer, el mismo INSERT que
+ * /api/forms/generate-token); si solo falta la prueba, prepara la sesión como
+ * los follow-ups.
  */
 export async function resolvePending(
   admin: SupabaseClient, a: AssignmentForWelcome, base: string, lmsEmail: string,
-  opts: { create: boolean },
 ): Promise<{ kind: 'formulario' | 'prueba'; url: string } | null> {
   const student = { id: a.student_id, name: a.student_name };
   const [formDone, testDone] = await Promise.all([
@@ -150,7 +140,6 @@ export async function resolvePending(
     if (latest && formTokenState(latest) === 'pending') {
       return { kind: 'formulario', url: `${base}/formulario/${latest.token}` };
     }
-    if (!opts.create) return { kind: 'formulario', url: `${base}/formulario/ejemplo-de-prueba` };
     const created = await createFormToken(admin, {
       studentId: a.student_id, studentName: a.student_name, studentEmail: lmsEmail || a.student_email,
       teacherId: a.teacher_id, teacherName: a.teacher_name, assignmentId: a.id,
@@ -161,15 +150,6 @@ export async function resolvePending(
   }
 
   // Formulario hecho, falta la prueba.
-  if (!opts.create) {
-    let q = admin.from('level_test_sessions').select('token, status, expires_at')
-      .order('created_at', { ascending: false }).limit(1);
-    q = a.student_id ? q.eq('student_id', a.student_id) : q.ilike('student_name', a.student_name.trim());
-    const { data } = await q;
-    const s = data?.[0] as { token: string; status: string; expires_at: string | null } | undefined;
-    const vigente = s && s.status !== 'expired' && !(s.expires_at && new Date(s.expires_at).getTime() < Date.now());
-    return { kind: 'prueba', url: vigente ? `${base}/test/${s!.token}` : `${base}/test/ejemplo-de-prueba` };
-  }
   const { token, error } = await getOrCreateTestSession({
     studentId: a.student_id || undefined, studentName: a.student_name,
     studentEmail: lmsEmail || undefined, candidateEmail: lmsEmail || undefined,
@@ -288,7 +268,7 @@ export async function sendWelcomeForAssignment(
 
   try {
     const variant = await decideWelcomeVariant(admin, a, reason);
-    const pending = await resolvePending(admin, a, base, to, { create: true });
+    const pending = await resolvePending(admin, a, base, to);
     const { subject, html } = buildWelcomeEmail({
       variant, studentName: a.student_name, teacherName: a.teacher_name,
       lmsEmail: to, lmsUrl: lmsAccesoUrl(), pending,
@@ -306,39 +286,4 @@ export async function sendWelcomeForAssignment(
     await release(msg);
     return { error: msg };
   }
-}
-
-// ── Prueba del admin ─────────────────────────────────────────────────────────
-
-/** Avisos para el panel de prueba: lo que haría fallar el envío real. */
-export async function welcomeTestWarnings(admin: SupabaseClient, a: AssignmentForWelcome): Promise<string[]> {
-  const warnings: string[] = [];
-  const { to } = await resolveWelcomeRecipients(admin, a);
-  if (!a.student_id) warnings.push('La asignación no está vinculada a ningún alumno (student_id vacío).');
-  else if (!to) warnings.push('El alumno no tiene email en su ficha (students.email): en real NO se enviaría.');
-  if (to && !(await isInLmsView(admin, a.student_id, to))) {
-    warnings.push('El alumno no aparece en vista_perfil_alumno con ese email: en real NO se enviaría.');
-  }
-  return warnings;
-}
-
-/**
- * Envía el email de ESA asignación solo a `destino`, con "[PRUEBA]" en el
- * asunto. No escribe nada en la base ni crea tokens. Funciona con el
- * interruptor apagado.
- */
-export async function sendWelcomeTest(
-  admin: SupabaseClient, a: AssignmentForWelcome, variant: WelcomeVariant, destino: string, base: string,
-): Promise<{ ok: true; resendId: string | null } | { ok: false; error: string }> {
-  const { to } = await resolveWelcomeRecipients(admin, a);
-  const lmsEmail = to || normEmail(a.student_email) || 'email-del-alumno@ejemplo.com';
-  const pending = await resolvePending(admin, a, base, lmsEmail, { create: false });
-  const { subject, html } = buildWelcomeEmail({
-    variant, studentName: a.student_name, teacherName: a.teacher_name,
-    lmsEmail, lmsUrl: lmsAccesoUrl(), pending,
-    firstClass: firstClassFromSlots(a.slots, a.start_date),
-    test: true,
-  });
-  const res = await sendViaResend({ to: destino, cc: null, subject, html, label: `bienvenida_prueba_${variant}_${a.id}` });
-  return res.ok ? { ok: true, resendId: res.id } : { ok: false, error: res.error };
 }

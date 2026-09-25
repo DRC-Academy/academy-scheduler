@@ -39,7 +39,6 @@ import { madridToday } from '@/lib/subscriptionAccess';
 import { RETENTION_BONUS_DAYS, RETENTION_UPCOMING_DAYS, retentionDaysLeft, retentionBonusFor } from '@/lib/retention';
 import { BONUS_STATE_LABEL } from '@/lib/bonuses';
 import BonusesTab from '@/components/admin/BonusesTab';
-import WelcomeEmailTestPanel from '@/components/admin/WelcomeEmailTestPanel';
 
 // ─── Edit Teacher Modal ───────────────────────────────────────────────────────
 function EditTeacherModal({ teacher, onClose, onSave, onArchive }: {
@@ -3075,7 +3074,6 @@ function AdminContent() {
         {/* ENLACES (id 'emails'): enlace de clase + bienvenida automática */}
         {activeTab === 'emails' && (
           <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '20px' }}>
-            <WelcomeEmailTestPanel assignments={assignments} />
             <div style={{ marginBottom: 16 }}>
               <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)' }}>Enlaces de clase</div>
               <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3 }}>Asignaciones activas: si el profesor definió el enlace de Meet y cuándo salió la bienvenida al alumno. Las que no tienen enlace, con más retraso, arriba.</div>

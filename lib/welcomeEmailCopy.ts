@@ -1,4 +1,5 @@
-// Textos del email de bienvenida al alumno: tres variantes (lib/welcomeEmail).
+// Textos del email de bienvenida al alumno: dos variantes (lib/welcomeEmail),
+// bienvenida y cambio de profesor. Un alumno tiene un solo profesor.
 //
 // Español de España, tuteo. Mismo sobre y mismo botón verde que los follow-ups
 // del alumno (lib/studentFollowupEmails), sin el "responde a este correo" del
@@ -27,8 +28,6 @@ export interface WelcomeCopyInput {
   pending: { kind: 'formulario' | 'prueba'; url: string } | null;
   /** Primera clase con este profesor, si el calendario ya la tiene. */
   firstClass: { label: string; hour: string } | null;
-  /** Envío de prueba desde el admin: "[PRUEBA]" en el asunto. */
-  test?: boolean;
 }
 
 const h2 = (text: string) =>
@@ -60,8 +59,7 @@ function bloquePendiente(pending: NonNullable<WelcomeCopyInput['pending']>, nume
 
 function lineaPrimeraClase(i: WelcomeCopyInput): string {
   if (!i.firstClass) return '';
-  const con = i.variant === 'adicional' ? ` con ${esc(i.teacherName)}` : '';
-  return p(`Tu primera clase${con} es el <strong>${esc(i.firstClass.label)} a las ${esc(i.firstClass.hour)}</strong> (hora peninsular española).`);
+  return p(`Tu primera clase es el <strong>${esc(i.firstClass.label)} a las ${esc(i.firstClass.hour)}</strong> (hora peninsular española).`);
 }
 
 const DUDAS = p('Si tienes cualquier duda, responde a este correo y te ayudamos.');
@@ -92,7 +90,7 @@ export function buildWelcomeEmail(i: WelcomeCopyInput): { subject: string; html:
       DUDAS,
       p('¡Nos vemos en clase!<br />El equipo de DRC Academy'),
     ].join('\n');
-  } else if (i.variant === 'cambio') {
+  } else {
     subject = 'Tienes nuevo profesor en DRC Academy';
     body = [
       p(`Hola, ${nombre}:`),
@@ -103,20 +101,8 @@ export function buildWelcomeEmail(i: WelcomeCopyInput): { subject: string; html:
       DUDAS,
       p('El equipo de DRC Academy'),
     ].join('\n');
-  } else {
-    subject = 'Tienes un nuevo profesor en DRC Academy';
-    body = [
-      p(`Hola, ${nombre}:`),
-      p(`Te escribimos para contarte que, además de tus clases actuales, ahora también tendrás clases con <strong>${profesor}</strong>.`),
-      bloqueAcceso(i, null, 'En tu área de alumno verás todas tus clases y el botón para unirte a cada una.'),
-      i.pending ? bloquePendiente(i.pending, '') : '',
-      lineaPrimeraClase(i),
-      DUDAS,
-      p('El equipo de DRC Academy'),
-    ].join('\n');
   }
 
-  if (i.test) subject = `[PRUEBA] ${subject}`;
   const preview = i.variant === 'bienvenida'
     ? `Tu profesor es ${i.teacherName}. Te contamos cómo empezar.`
     : `Tus clases con ${i.teacherName}: cómo entrar en tu área de alumno.`;

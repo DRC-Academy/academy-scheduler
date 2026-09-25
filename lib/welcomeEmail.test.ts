@@ -37,13 +37,10 @@ describe('isInWelcomeWindow — nadie anterior al corte, nadie con más de 72 h'
 });
 
 describe('pickWelcomeVariant', () => {
-  const base = { reason: 'alta' as const, hasOtherActiveWithOtherTeacher: false, hasPreviousClasses: false, hasPreviousAssignmentWithOtherTeacher: false };
+  const base = { reason: 'alta' as const, hasPreviousClasses: false, hasPreviousAssignmentWithOtherTeacher: false };
 
   it('alumno nuevo → bienvenida', () => {
     expect(pickWelcomeVariant(base)).toBe('bienvenida');
-  });
-  it('otra asignación activa con otro profesor → adicional, gana a todo', () => {
-    expect(pickWelcomeVariant({ ...base, reason: 'cambio_profesor', hasOtherActiveWithOtherTeacher: true, hasPreviousClasses: true })).toBe('adicional');
   });
   it('cambio de profesor, clases previas o asignación previa → cambio', () => {
     expect(pickWelcomeVariant({ ...base, reason: 'cambio_profesor' })).toBe('cambio');
@@ -112,15 +109,10 @@ describe('buildWelcomeEmail', () => {
     expect(html).toContain('https://app/test/x');
   });
 
-  it('cambio y adicional: asuntos y línea de primera clase', () => {
-    expect(buildWelcomeEmail({ ...base, variant: 'cambio' }).subject).toBe('Tienes nuevo profesor en DRC Academy');
-    const ad = buildWelcomeEmail({ ...base, variant: 'adicional' });
-    expect(ad.subject).toBe('Tienes un nuevo profesor en DRC Academy');
-    expect(ad.html).toContain('además de tus clases actuales');
-    expect(ad.html).toContain('Tu primera clase con Ana &lt;Pérez&gt; es el');
-  });
-
-  it('prueba: [PRUEBA] en el asunto', () => {
-    expect(buildWelcomeEmail({ ...base, variant: 'cambio', test: true }).subject).toBe('[PRUEBA] Tienes nuevo profesor en DRC Academy');
+  it('cambio de profesor: asunto, texto y línea de primera clase', () => {
+    const c = buildWelcomeEmail({ ...base, variant: 'cambio' });
+    expect(c.subject).toBe('Tienes nuevo profesor en DRC Academy');
+    expect(c.html).toContain('a partir de ahora, tus clases serán con');
+    expect(c.html).toContain('Tu primera clase es el');
   });
 });
