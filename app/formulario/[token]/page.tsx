@@ -171,8 +171,8 @@ function FormFlow({ token }: { token: TokenRow }) {
         <div className="drc-f-nav start">
           {/* La mascota acompaña al botón de empezar (a su lado también en el
               teléfono: cabe, y así la barra fija de abajo no crece). */}
-          {/* eslint-disable-next-line @next/next/no-img-element -- página pública, imagen estática de 9 KB */}
-          <img className="drc-f-mascota" src="/mascota-drc.png" alt="" width={296} height={400} />
+          {/* eslint-disable-next-line @next/next/no-img-element -- página pública, imagen estática de 19 KB */}
+          <img className="drc-f-mascota" src="/mascota-drc.png" alt="" width={233} height={300} />
           <button className="drc-f-btn drc-f-btn-primary" onClick={() => setStep(0)}>Empezar →</button>
         </div>
       ) : (

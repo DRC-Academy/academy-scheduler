@@ -335,8 +335,8 @@ function EsperaMascota({ texto }: { texto: string }) {
   return (
     <div className="drc-t-wait" role="status" aria-live="polite">
       <div className="drc-t-wait-in">
-        {/* eslint-disable-next-line @next/next/no-img-element -- página pública, imagen estática de 10 KB */}
-        <img src="/mascota-drc-estudio.png" alt="" width={296} height={400} className="drc-t-wait-img" />
+        {/* eslint-disable-next-line @next/next/no-img-element -- página pública, imagen estática de 19 KB */}
+        <img src="/mascota-drc-estudio.png" alt="" width={233} height={300} className="drc-t-wait-img" />
         <div className="drc-t-wait-txt">{texto}</div>
         <div className="drc-t-wait-dots" aria-hidden><span /><span /><span /></div>
       </div>
