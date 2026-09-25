@@ -107,6 +107,7 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
   const [avoidOpen, setAvoidOpen] = useState(false);
   const [linkModal, setLinkModal] = useState<{ assignment: Assignment; value: string } | null>(null);
   const [savingLink, setSavingLink] = useState(false);
+  const [linkError, setLinkError] = useState<string | null>(null);
 
   const toast = (msg: string, ms?: number) => onToast?.(msg, ms);
 
@@ -230,12 +231,26 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
     toast('✅ Ingreso registrado');
   }
 
+  // Si no se guarda (enlace que no es de videollamada, fallo del servidor), el
+  // modal sigue abierto con el motivo: antes el error se tragaba y el profesor
+  // creía que el enlace estaba guardado.
   async function saveLink() {
     if (!linkModal) return;
     setSavingLink(true);
-    await updateMeetLink(linkModal.assignment.id, linkModal.value);
-    setSavingLink(false);
+    setLinkError(null);
+    try {
+      await updateMeetLink(linkModal.assignment.id, linkModal.value);
+      setLinkModal(null);
+    } catch (err) {
+      setLinkError(err instanceof Error ? err.message : 'No se pudo guardar el enlace. Inténtalo de nuevo.');
+    } finally {
+      setSavingLink(false);
+    }
+  }
+
+  function closeLinkModal() {
     setLinkModal(null);
+    setLinkError(null);
   }
 
   const dialogs = (
@@ -360,7 +375,7 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
       {/* Enlace de Meet del alumno */}
       {linkModal && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
-          onClick={e => { if (e.target === e.currentTarget) setLinkModal(null); }}>
+          onClick={e => { if (e.target === e.currentTarget) closeLinkModal(); }}>
           <div style={{ background: 'var(--bg-surface)', border: '1px solid #35405a', borderRadius: 14, padding: 24, width: '100%', maxWidth: 420 }}>
             <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)', marginBottom: 6 }}>
               {linkModal.assignment.meetLink ? 'Cambiar enlace' : 'Definir enlace'}
@@ -370,13 +385,18 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
             </div>
             <input
               value={linkModal.value}
-              onChange={e => setLinkModal(prev => prev ? { ...prev, value: e.target.value } : null)}
+              onChange={e => { setLinkError(null); setLinkModal(prev => prev ? { ...prev, value: e.target.value } : null); }}
               placeholder="https://meet.google.com/abc-xyz"
               autoFocus
-              style={{ width: '100%', marginBottom: 16 }}
+              style={{ width: '100%', marginBottom: linkError ? 8 : 16 }}
             />
+            {linkError && (
+              <div role="alert" style={{ fontSize: 12.5, color: '#f87171', marginBottom: 14, lineHeight: 1.45 }}>
+                {linkError}
+              </div>
+            )}
             <div style={{ display: 'flex', gap: 10 }}>
-              <button onClick={() => setLinkModal(null)} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
+              <button onClick={closeLinkModal} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
                 Cancelar
               </button>
               <button onClick={saveLink} disabled={savingLink || !linkModal.value.trim()}

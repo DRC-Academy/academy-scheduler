@@ -16,19 +16,30 @@ import { resend } from '@/lib/resend';
 import { esc } from '@/lib/emailNotifications';
 import { etapaDe, stepLabel, type Sequence, type CopyVariant } from '@/lib/formReminders';
 
-const FROM = 'DRC Academy <notificaciones@drcacademy.com>';
+export const FROM = 'DRC Academy <notificaciones@drcacademy.com>';
 
 // A dónde contesta el alumno si responde al correo. El remitente
 // (notificaciones@) es un buzón que nadie lee, así que las respuestas se
 // redirigen al de alumnos.
-const REPLY_TO = process.env.STUDENT_REPLY_TO_EMAIL?.trim() || 'alumnos@drcacademy.com';
+export const REPLY_TO = process.env.STUDENT_REPLY_TO_EMAIL?.trim() || 'alumnos@drcacademy.com';
 
 const VERDE = '#1E9E3A';
 const AMARILLO = '#FFC400';
 const FONDO = '#F7F7F5';
 
-/** Envoltorio de los correos al alumno. */
-export function studentEmailTemplate(content: string, previewText: string): string {
+/**
+ * Envoltorio de los correos al alumno.
+ *
+ * `inviteReplyInFooter: false` quita del pie el "responde a este correo": la
+ * bienvenida (lib/welcomeEmailCopy) ya lo dice en el cuerpo y repetido queda raro.
+ */
+export function studentEmailTemplate(
+  content: string, previewText: string,
+  opts: { inviteReplyInFooter?: boolean } = {},
+): string {
+  const pie = opts.inviteReplyInFooter === false
+    ? 'DRC Academy'
+    : 'Si tienes cualquier duda, responde a este correo y te ayudamos.<br />DRC Academy';
   return `<!DOCTYPE html>
 <html lang="es">
 <head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /></head>
@@ -48,7 +59,7 @@ export function studentEmailTemplate(content: string, previewText: string): stri
       <tr>
         <td align="center" style="padding:16px 24px; border-top:1px solid #E0E0DA;">
           <p style="color:#888880; font-size:12px; margin:0; line-height:1.5;">
-            Si tienes cualquier duda, responde a este correo y te ayudamos.<br />DRC Academy
+            ${pie}
           </p>
         </td>
       </tr>
@@ -60,7 +71,7 @@ export function studentEmailTemplate(content: string, previewText: string): stri
 }
 
 /** Botón verde. Va en tabla porque los enlaces con padding fallan en Outlook. */
-function boton(label: string, href: string): string {
+export function boton(label: string, href: string): string {
   return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:26px 0;" align="center">
   <tr><td align="center" bgcolor="${VERDE}" style="border-radius:8px;">
     <a href="${esc(href)}" target="_blank" style="display:inline-block; padding:14px 30px; font-size:15px; font-weight:700; color:#ffffff; text-decoration:none; border-radius:8px;">${esc(label)}</a>
@@ -68,10 +79,10 @@ function boton(label: string, href: string): string {
 </table>`;
 }
 
-const p = (text: string) => `<p style="margin:0 0 16px;">${text}</p>`;
+export const p = (text: string) => `<p style="margin:0 0 16px;">${text}</p>`;
 
 /** El enlace también en texto, por si el botón no se pinta o no se puede pulsar. */
-function enlaceDeRespaldo(url: string): string {
+export function enlaceDeRespaldo(url: string): string {
   return `<p style="margin:0; font-size:12.5px; color:#888880; line-height:1.5;">
     Si el botón no funciona, copia y pega esta dirección en tu navegador:<br />
     <span style="color:#5A5A55; word-break:break-all;">${esc(url)}</span>

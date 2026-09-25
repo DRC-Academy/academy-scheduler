@@ -5,6 +5,7 @@ import { minutesLateSpain, getSpainParts } from './spainTime';
 import { EVENT_POINTS } from './scoringConstants';
 import { fetchOpenAlertState } from './interventionsClient';
 import { findContiguityMismatches, type ContiguityMismatch } from './teacherClasses';
+import { triggerWelcomeEmail } from './welcomeEmail';
 import { Teacher, Student, Assignment, AppUser, Grid, TeacherStatus, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, AssignedSlot, EmailPreferences, SalesContactResult, RecoveryCell, TeacherBonus, BonusType } from '@/types';
 import {
   bonusClaimEnabledFor, RETENTION_UPCOMING_DAYS, isActiveAssignmentLike, retentionBonusFor, retentionDaysLeft,
@@ -3049,8 +3050,21 @@ export async function dbUpdateTeacherEmailPreferences(
 
 // ── MEET LINKS ────────────────────────────────────────────────────────────────
 
-export async function dbUpdateMeetLink(assignmentId: string, link: string): Promise<void> {
-  await supabase.from('assignments').update({ meet_link: link.trim() || null }).eq('id', assignmentId);
+/**
+ * Guarda el enlace de la clase vía PUT /api/assignments/[id]/meet-link, que lo
+ * normaliza, valida que sea de una videollamada y registra meet_link_set_at.
+ * Devuelve el enlace tal como quedó guardado. LANZA con el mensaje para el
+ * profesor si no se pudo guardar (antes el error se tragaba en silencio).
+ */
+export async function dbUpdateMeetLink(assignmentId: string, link: string): Promise<string> {
+  const res = await fetch(`/api/assignments/${encodeURIComponent(assignmentId)}/meet-link`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ link }),
+  });
+  const data = await res.json().catch(() => ({})) as { meetLink?: string; error?: string };
+  if (!res.ok || !data.meetLink) throw new Error(data.error || 'No se pudo guardar el enlace. Inténtalo de nuevo.');
+  return data.meetLink;
 }
 
 // ── CLASS JOIN LOGS ───────────────────────────────────────────────────────────
@@ -4629,6 +4643,10 @@ export async function dbChangeStudentTeacher(p: ChangeTeacherParams): Promise<vo
     presentation_email_sent:    false,
     presentation_email_sent_at: null,
     created_at:                 new Date().toISOString(),
+    // El enlace de la clase es la sala del profesor ANTERIOR: se borra para que
+    // el nuevo defina la suya (y el alumno no entre a la sala equivocada).
+    meet_link:                  null,
+    meet_link_set_at:           null,
     // Reloj del bono de retención: seis meses CON EL PROFESOR ACTUAL. El que
     // hereda al alumno empieza de cero; start_date no se toca (es la fecha de
     // alta del alumno en la academia y la usan otras pantallas).
@@ -4708,6 +4726,13 @@ export async function dbChangeStudentTeacher(p: ChangeTeacherParams): Promise<vo
   } catch (err) {
     console.error(`[transfer ${p.studentName}] el cambio se completó, pero fallaron los avisos/scoring:`, err);
   }
+
+  // ── 6) Email al alumno con su nuevo profesor: BEST-EFFORT ───────────────────
+  // Fuera del try anterior a propósito: un fallo del scoring no debe quedarse
+  // también sin email. triggerWelcomeEmail nunca lanza, tiene tope de tiempo y,
+  // fuera del navegador (scripts/cambiar-profesor.mts) sin NEXT_PUBLIC_APP_URL,
+  // lo omite con un aviso. La ruta decide si se envía (interruptor, ventana…).
+  await triggerWelcomeEmail(p.assignmentId, 'cambio_profesor');
 }
 
 // Elimina una assignment y libera las celdas del alumno en el grid del profesor.

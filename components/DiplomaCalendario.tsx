@@ -55,9 +55,8 @@ import { use, useEffect, useRef, useState } from 'react';
 import type { Diploma } from '@/lib/diplomaTypes';
 import { bannerDe, type DiplomaEstadoSlot } from '@/lib/diplomaCalendario';
 import { madridToday } from '@/lib/subscriptionAccess';
-
-/** A dónde lleva el botón: el inicio del LMS, que resuelve la sesión. */
-export const LMS_PUBLIC_URL = 'https://drc-lms.vercel.app';
+// A dónde lleva el botón: el inicio del LMS, que resuelve la sesión.
+import { LMS_PUBLIC_URL } from '@/lib/lmsUrl';
 
 export type { DiplomaEstadoSlot } from '@/lib/diplomaCalendario';
 

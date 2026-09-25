@@ -39,6 +39,7 @@ import { madridToday } from '@/lib/subscriptionAccess';
 import { RETENTION_BONUS_DAYS, RETENTION_UPCOMING_DAYS, retentionDaysLeft, retentionBonusFor } from '@/lib/retention';
 import { BONUS_STATE_LABEL } from '@/lib/bonuses';
 import BonusesTab from '@/components/admin/BonusesTab';
+import WelcomeEmailTestPanel from '@/components/admin/WelcomeEmailTestPanel';
 
 // ─── Edit Teacher Modal ───────────────────────────────────────────────────────
 function EditTeacherModal({ teacher, onClose, onSave, onArchive }: {
@@ -3058,6 +3059,7 @@ function AdminContent() {
         {/* WEEKLY VIEW TAB */}
         {activeTab === 'emails' && (
           <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '20px' }}>
+            <WelcomeEmailTestPanel assignments={assignments} />
             <div style={{ marginBottom: 16 }}>
               <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)' }}>Emails de presentación</div>
               <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3 }}>Estado del email de bienvenida por alumno. Los pendientes con más retraso, arriba.</div>

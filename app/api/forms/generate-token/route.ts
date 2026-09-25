@@ -7,6 +7,7 @@
 
 import { supabase } from '@/lib/supabase';
 import { publicBase } from '@/lib/appUrl';
+import { createFormToken } from '@/lib/formTokenServer';
 
 interface Body {
   studentId?: string;
@@ -71,38 +72,33 @@ export async function POST(request: Request): Promise<Response> {
     expiredCount = await expirePreviousTokens(body.studentId?.trim() || undefined, studentName);
   }
 
-  const token = crypto.randomUUID();
-  const id = `ft_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-
-  const { error } = await supabase.from('form_tokens').insert({
-    id,
-    token,
-    student_id:    body.studentId?.trim() || null,
-    student_name:  studentName,
-    student_email: body.studentEmail?.trim() || null,
-    teacher_id:    teacherId,
-    teacher_name:  teacherName,
-    assignment_id: body.assignmentId?.trim() || null,
-    plan:          body.plan?.trim() || null,
-    level:         body.level?.trim() || null,
-    status:        'pending',
+  const result = await createFormToken(supabase, {
+    studentId:    body.studentId,
+    studentName,
+    studentEmail: body.studentEmail,
+    teacherId,
+    teacherName,
+    assignmentId: body.assignmentId,
+    plan:         body.plan,
+    level:        body.level,
   });
 
-  if (error) {
-    console.error('[generate-token] Error al insertar el token:', error);
+  if (!result.ok) {
+    console.error('[generate-token] Error al insertar el token:', result);
     // PGRST205 = la tabla no existe todavía (falta correr la migración SQL).
-    if (error.code === 'PGRST205') {
+    if (result.code === 'PGRST205') {
       return Response.json(
         { error: 'La tabla form_tokens no existe. Ejecutá supabase-form-tokens.sql en el SQL editor de Supabase.' },
         { status: 500 },
       );
     }
     return Response.json(
-      { error: `No se pudo generar el link: ${error.message}` },
+      { error: `No se pudo generar el link: ${result.error}` },
       { status: 500 },
     );
   }
 
+  const { token, id } = result;
   const formUrl = `${publicBase(request)}/formulario/${token}`;
   return Response.json({ token, formUrl, id, expiredCount });
 }

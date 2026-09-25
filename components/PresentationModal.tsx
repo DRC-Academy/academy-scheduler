@@ -168,10 +168,16 @@ export function PresentationModal({ assignment, teacher, students, updateMeetLin
   }, [meetLink, student, formUrl]);
 
   // Guarda el enlace de Meet en la assignment (acción real, independiente del envío).
-  async function saveMeetIfAny() {
-    if (!meetLink.trim()) return;
-    try { await updateMeetLink(assignment.id, meetLink.trim()); setToast('✅ Enlace de Meet guardado'); }
-    catch { setToast('⚠️ No se pudo guardar el enlace'); }
+  // Devuelve el motivo si no se pudo guardar (enlace que no es de videollamada,
+  // fallo del servidor), para que quien llama no lo tape con otro aviso.
+  async function saveMeetIfAny(): Promise<string | null> {
+    if (!meetLink.trim()) return null;
+    try { await updateMeetLink(assignment.id, meetLink.trim()); setToast('✅ Enlace de Meet guardado'); return null; }
+    catch (err) {
+      const msg = err instanceof Error ? err.message : 'No se pudo guardar el enlace';
+      setToast(`⚠️ ${msg}`);
+      return msg;
+    }
   }
 
   // Copia el email al portapapeles para pegarlo en el webmail. NO marca nada:
@@ -187,9 +193,9 @@ export function PresentationModal({ assignment, teacher, students, updateMeetLin
       try { document.execCommand('copy'); } catch {}
       document.body.removeChild(ta);
     }
-    await saveMeetIfAny();
+    const meetErr = await saveMeetIfAny();
     reportAction('pres-copy');
-    setToast('📋 Email copiado. Pégalo en Gmail');
+    setToast(meetErr ? `📋 Email copiado, pero el enlace no se guardó: ${meetErr}` : '📋 Email copiado. Pégalo en Gmail');
   }
 
   // ÚNICA vía por la que el email pasa a "enviado": el profesor lo afirma
@@ -201,8 +207,14 @@ export function PresentationModal({ assignment, teacher, students, updateMeetLin
     setMarking(true);
     try {
       await markPresentationSent(assignment.id);
-      await saveMeetIfAny();
+      const meetErr = await saveMeetIfAny();
       onSent(assignment.studentName);
+      if (meetErr) {
+        // Marcada, pero el enlace no: el modal se queda abierto para corregirlo.
+        setToast(`✅ Marcada como enviada, pero el enlace no se guardó: ${meetErr}`);
+        setMarking(false);
+        return;
+      }
       setToast('✅ Presentación marcada como enviada');
       setTimeout(onClose, 900);
     } catch {

@@ -32,6 +32,7 @@ import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { checkSubscription } from '@/lib/useSubscriptionStatus';
 import { bonusEurosFor, accrualMonthFor, type BonusRow } from '@/lib/bonuses';
 import { retentionDueIso } from '@/lib/retention';
+import { triggerWelcomeEmail } from '@/lib/welcomeEmail';
 
 interface TeachersContextType {
   teachers: Teacher[];
@@ -374,6 +375,10 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ studentId: a.studentId, studentName: a.studentName, teacherId: a.teacherId }),
     }).catch(err => console.warn('[addAssignment] No se pudo entregar el aviso de nivel:', err));
+    // Email de bienvenida al alumno. Sin await: el alta ya está guardada y no
+    // espera a un email. La ruta decide si se envía (interruptor, ventana,
+    // anti-duplicado). Solo se dispara desde aquí y desde el cambio de profesor.
+    void triggerWelcomeEmail(a.id, 'alta');
     setAssignments(prev => [a, ...prev]);
     // The student now has an assignment â€” drop it from the unassigned list
     setUnassignedStudents(prev => prev.filter(s => s.id !== a.studentId && s.name !== a.studentName));
@@ -529,10 +534,11 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     setAssignments(prev => prev.map(a => a.id === assignmentId ? { ...a, slots, weeklyHours } : a));
   }
 
+  // Lanza con el mensaje para el profesor si el enlace no es válido o no se
+  // pudo guardar: quien llama lo muestra.
   async function updateMeetLink(assignmentId: string, link: string) {
-    await dbUpdateMeetLink(assignmentId, link);
-    const trimmed = link.trim();
-    setAssignments(prev => prev.map(a => a.id === assignmentId ? { ...a, meetLink: trimmed || undefined } : a));
+    const saved = await dbUpdateMeetLink(assignmentId, link);
+    setAssignments(prev => prev.map(a => a.id === assignmentId ? { ...a, meetLink: saved } : a));
   }
 
   // Marca el email de presentaciÃ³n como enviado (persiste vÃ­a API que ademÃ¡s
