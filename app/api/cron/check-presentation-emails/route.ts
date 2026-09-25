@@ -1,238 +1,159 @@
-// Cron horario (vercel.json → "0 * * * *"): recordatorios escalonados del email
-// de presentación pendiente. No penaliza scoring aquí (eso ocurre al enviarlo, en
-// /api/assignments/[id]/presentation-sent); solo avisa.
+// Cron horario de recordatorios del ENLACE DE CLASE. Lo dispara GitHub Actions
+// (.github/workflows/presentation-emails-cron.yml, "0 * * * *"), no vercel.json:
+// el plan Hobby de Vercel no admite crons por hora. La ruta conserva su nombre
+// histórico (era el recordatorio del email de presentación) porque el secret
+// PRESENTATION_CRON_URL de GitHub guarda la URL completa.
 //
-// Umbrales (desde la asignación):
-//   ·  4 h → email + aviso in-app al PROFE.
-//   · 12 h → email + aviso in-app al PROFE, y email + aviso in-app al ADMIN.
-//   · 24 h → email + aviso in-app al PROFE, y email + aviso in-app al ADMIN.
+// Desde la Fase 3 (sep/2026) vigila asignaciones ACTIVAS sin enlace definido
+// (meet_link_set_at nulo, lib/meetLinkStatus) y creadas hace menos de 96 h. No
+// penaliza aquí: la penalización 'enlace_tardio' se aplica al definir el enlace
+// (PUT /api/assignments/[assignmentId]/meet-link).
 //
-// Anti-duplicados: cada umbral se marca en una columna booleana de la asignación
-// (presentation_reminder_{4h,12h,24h}_sent). Se comprueba false antes de enviar y
-// se marca true después, así ningún aviso se repite en corridas sucesivas. Las
-// notificaciones in-app usan además un id determinista (upsert ignoreDuplicates)
-// para cerrar la carrera entre dos corridas simultáneas.
+// Umbrales (desde la asignación), con email + campanita:
+//   ·  4 h → al PROFE.
+//   · 12 h → al PROFE y al ADMIN.
+//   · 24 h → al PROFE y al ADMIN.
+// Qué toca en cada corrida lo decide lib/meetLinkReminders (puro, con tests).
+//
+// ANTI-DUPLICADOS, en tres capas:
+//   1. Cada EMAIL se reserva antes de enviarse en daily_reminder_log con un id
+//      único (drl_meetlink_<umbral>_<teacher|admin>_<asignación>_<profe>). Si
+//      Resend falla, la reserva se borra y la corrida siguiente lo reintenta.
+//   2. Las columnas presentation_reminder_{4h,12h,24h}_sent solo pasan a true
+//      cuando TODOS los emails de ese umbral salieron bien. Si uno falla, el
+//      umbral queda abierto; en la corrida siguiente el que ya salió está
+//      reservado y no se repite.
+//   3. Las campanitas usan un id determinista (upsert ignoreDuplicates).
+//
+// Seguridad: lib/cronAuth (sin CRON_SECRET la ruta queda CERRADA; comparación
+// en tiempo constante) y cliente service role.
 
-import { supabase } from '@/lib/supabase';
-import {
-  hoursSinceAssigned,
-  PRESENTATION_WARNING_HOURS,
-  PRESENTATION_AT_RISK_HOURS,
-  PRESENTATION_DEADLINE_HOURS,
-} from '@/lib/presentationEmailUtils';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { requireCronSecret, requireAdminClient } from '@/lib/cronAuth';
+import { madridToday } from '@/lib/subscriptionAccess';
+import { planMeetLinkReminders, REMINDER_WINDOW_HOURS, type PlannedReminder, type ReminderRow } from '@/lib/meetLinkReminders';
 import {
   fetchTeacher,
-  sendPresentationReminder4h, sendPresentationReminder12h, sendPresentationReminder24h,
-  sendPresentationAdminAlert12h, sendPresentationAdminAlert24h,
+  sendMeetLinkReminder4h, sendMeetLinkReminder12h, sendMeetLinkReminder24h,
+  sendMeetLinkAdminAlert12h, sendMeetLinkAdminAlert24h,
   type TeacherLike,
 } from '@/lib/emailNotifications';
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 60;
 
-interface AsgnRow {
-  id: string;
-  teacher_id: string;
-  teacher_name: string;
-  student_name: string;
-  created_at: string;
-  presentation_email_sent: boolean | null;
-  presentation_reminder_4h_sent: boolean | null;
-  presentation_reminder_12h_sent: boolean | null;
-  presentation_reminder_24h_sent: boolean | null;
-}
-
-interface NotifCandidate {
-  id: string;
-  target_user: string | null;
-  target_role: string | null;
-  title: string;
-  body: string;
-  type: string;
-}
-
-type EmailJob =
-  | { kind: 'teacher_4h';  teacherId: string; studentName: string }
-  | { kind: 'teacher_12h'; teacherId: string; studentName: string }
-  | { kind: 'teacher_24h'; teacherId: string; studentName: string }
-  | { kind: 'admin_12h';   teacherName: string; studentName: string }
-  | { kind: 'admin_24h';   teacherName: string; studentName: string };
-
-// Columnas a marcar true por asignación (los umbrales que dispararon en esta corrida).
-type FlagPatch = { presentation_reminder_4h_sent?: boolean; presentation_reminder_12h_sent?: boolean; presentation_reminder_24h_sent?: boolean };
+const LABEL = 'cron meet-links';
 
 export async function GET(request: Request): Promise<Response> {
-  // Autorización opcional: si hay CRON_SECRET configurado, exigir el bearer que
-  // envía Vercel Cron. Sin CRON_SECRET, el endpoint queda abierto (dev/manual).
-  const secret = process.env.CRON_SECRET;
-  if (secret) {
-    const auth = request.headers.get('authorization');
-    if (auth !== `Bearer ${secret}`) {
-      return Response.json({ error: 'No autorizado' }, { status: 401 });
-    }
-  }
+  const denied = requireCronSecret(request, LABEL);
+  if (denied) return denied;
+  const { admin, error: adminError } = requireAdminClient(LABEL);
+  if (adminError) return adminError;
 
-  // Asignaciones con el email de presentación pendiente.
-  const { data, error } = await supabase
+  const now = Date.now();
+  const desde = new Date(now - REMINDER_WINDOW_HOURS * 3_600_000).toISOString();
+
+  // Activas, sin enlace definido y recientes. El filtro de 96 h va en la propia
+  // consulta: las asignaciones viejas ni se leen.
+  const { data, error } = await admin
     .from('assignments')
-    .select('id, teacher_id, teacher_name, student_name, created_at, presentation_email_sent, presentation_reminder_4h_sent, presentation_reminder_12h_sent, presentation_reminder_24h_sent')
-    .or('presentation_email_sent.eq.false,presentation_email_sent.is.null');
+    .select('id, teacher_id, teacher_name, student_name, created_at, presentation_reminder_4h_sent, presentation_reminder_12h_sent, presentation_reminder_24h_sent')
+    .is('meet_link_set_at', null)
+    .or('status.is.null,status.eq.active')
+    .gte('created_at', desde);
 
   if (error) {
-    console.error('[cron presentation-emails] Error al leer asignaciones:', error);
+    console.error(`[${LABEL}] Error al leer asignaciones:`, error);
     return Response.json({ error: 'Error del servidor' }, { status: 500 });
   }
 
-  const pending = (data ?? []) as AsgnRow[];
-  const now = Date.now();
-  const createdAtIso = new Date(now).toISOString();
+  const rows = (data ?? []) as ReminderRow[];
+  const plan = planMeetLinkReminders(rows, now);
+  if (plan.length === 0) return Response.json({ ok: true, pending: rows.length, planned: 0, emailed: 0 });
 
-  // Ventana de recencia: solo alertamos por asignaciones recientes. Cubre con
-  // margen el último umbral (24 h) sin nagear por las asignaciones que ya existían
-  // antes de esta función (esas siguen viéndose "fuera de tiempo" en los badges de
-  // la UI, pero no generan avisos nuevos).
-  const ALERT_WINDOW_HOURS = 96;
+  const teachers = new Map<string, TeacherLike | null>();
+  const teacherOf = async (id: string) => {
+    if (!teachers.has(id)) teachers.set(id, await fetchTeacher(id));
+    return teachers.get(id) ?? null;
+  };
 
-  const candidates: NotifCandidate[] = [];
-  const emailJobs: EmailJob[] = [];
-  const flagUpdates = new Map<string, FlagPatch>();
+  let emailed = 0;
+  let completed = 0;
+  const failed: string[] = [];
 
-  for (const a of pending) {
-    const h = hoursSinceAssigned(a.created_at, now);
-    if (h > ALERT_WINDOW_HOURS) continue;   // asignación vieja → no genera alertas
+  for (const r of plan) {
+    await insertNotifications(admin, r, new Date(now).toISOString());
 
-    // 4 h → email + in-app al profe.
-    if (h >= PRESENTATION_WARNING_HOURS && !a.presentation_reminder_4h_sent) {
-      candidates.push({
-        id: `presalert_4h_teacher_${a.id}`,
-        target_user: a.teacher_id, target_role: null,
-        title: `📧 Recordatorio — Email de ${a.student_name}`,
-        body: `Llevas 4h sin enviar el email de presentación a ${a.student_name}. ¡Los alumnos que reciben bienvenida pronto tienen mayor retención!`,
-        type: 'presentation_email_reminder',
-      });
-      emailJobs.push({ kind: 'teacher_4h', teacherId: a.teacher_id, studentName: a.student_name });
-      markFlag(flagUpdates, a.id, { presentation_reminder_4h_sent: true });
-    }
+    let allOk = true;
+    for (const e of r.emails) {
+      const reserved = await claim(admin, e.claimId, r.teacherId);
+      if (reserved === 'taken') continue;          // ya salió en una corrida anterior
+      if (reserved === 'error') { allOk = false; continue; }
 
-    // 12 h → email + in-app al profe Y al admin.
-    if (h >= PRESENTATION_AT_RISK_HOURS && !a.presentation_reminder_12h_sent) {
-      candidates.push({
-        id: `presalert_12h_teacher_${a.id}`,
-        target_user: a.teacher_id, target_role: null,
-        title: `⚠️ Urgente — Email de ${a.student_name}`,
-        body: `Llevas 12h sin enviar el email de presentación a ${a.student_name}. Te quedan menos de 12 horas para enviarlo sin afectar tu scoring.`,
-        type: 'presentation_email_warning_teacher',
-      });
-      candidates.push({
-        id: `presalert_12h_admin_${a.id}`,
-        target_user: null, target_role: 'admin',
-        title: `⚠️ Email pendiente — ${a.teacher_name}`,
-        body: `${a.teacher_name} lleva 12h sin enviar el email de presentación a ${a.student_name}.`,
-        type: 'presentation_email_warning',
-      });
-      emailJobs.push({ kind: 'teacher_12h', teacherId: a.teacher_id, studentName: a.student_name });
-      emailJobs.push({ kind: 'admin_12h', teacherName: a.teacher_name, studentName: a.student_name });
-      markFlag(flagUpdates, a.id, { presentation_reminder_12h_sent: true });
-    }
-
-    // 24 h → email + in-app al profe Y al admin (fuera de plazo).
-    if (h >= PRESENTATION_DEADLINE_HOURS && !a.presentation_reminder_24h_sent) {
-      candidates.push({
-        id: `presalert_24h_teacher_${a.id}`,
-        target_user: a.teacher_id, target_role: null,
-        title: '🔴 Email de presentación fuera de plazo',
-        body: `No enviaste el email de presentación a ${a.student_name} en las primeras 24 horas. Cuando lo envíes se descontarán -5 puntos de tu scoring.`,
-        type: 'presentation_email_overdue_teacher',
-      });
-      candidates.push({
-        id: `presalert_24h_admin_${a.id}`,
-        target_user: null, target_role: 'admin',
-        title: `🔴 Email fuera de plazo — ${a.teacher_name}`,
-        body: `${a.teacher_name} no envió el email de presentación a ${a.student_name} en 24 horas.`,
-        type: 'presentation_email_overdue',
-      });
-      emailJobs.push({ kind: 'teacher_24h', teacherId: a.teacher_id, studentName: a.student_name });
-      emailJobs.push({ kind: 'admin_24h', teacherName: a.teacher_name, studentName: a.student_name });
-      markFlag(flagUpdates, a.id, { presentation_reminder_24h_sent: true });
-    }
-  }
-
-  if (candidates.length === 0 && flagUpdates.size === 0) {
-    return Response.json({ ok: true, pending: pending.length, inserted: 0, emailed: 0 });
-  }
-
-  // ── Notificaciones in-app (dedup determinista por si dos corridas se solapan) ──
-  let inserted = 0;
-  if (candidates.length > 0) {
-    const rows = candidates.map(c => ({
-      id:          c.id,
-      target_user: c.target_user,
-      target_role: c.target_role,
-      title:       c.title,
-      body:        c.body,
-      type:        c.type,
-      read_by:     [],
-      created_at:  createdAtIso,
-      created_by:  'sistema',
-    }));
-    const { error: insErr } = await supabase
-      .from('notifications')
-      .upsert(rows, { onConflict: 'id', ignoreDuplicates: true });
-    if (insErr) {
-      console.error('[cron presentation-emails] Error al insertar notificaciones:', insErr);
-    } else {
-      inserted = rows.length;
-    }
-  }
-
-  // ── Emails (best-effort) ──────────────────────────────────────────────────────
-  const emailed = await sendPendingEmails(emailJobs);
-
-  // ── Marcar los umbrales disparados para no repetirlos ─────────────────────────
-  for (const [assignmentId, patch] of flagUpdates) {
-    const { error: updErr } = await supabase.from('assignments').update(patch).eq('id', assignmentId);
-    if (updErr) console.error('[cron presentation-emails] Error al marcar recordatorios:', updErr);
-  }
-
-  return Response.json({ ok: true, pending: pending.length, inserted, emailed });
-}
-
-function markFlag(map: Map<string, FlagPatch>, id: string, patch: FlagPatch): void {
-  map.set(id, { ...(map.get(id) ?? {}), ...patch });
-}
-
-/**
- * Envía los emails de recordatorio. Los profesores se cachean: un profe con varios
- * alumnos pendientes aparece en varios jobs y no hace falta releerlo cada vez. Un
- * email fallido nunca aborta el resto del cron.
- */
-async function sendPendingEmails(jobs: EmailJob[]): Promise<number> {
-  if (jobs.length === 0) return 0;
-  const cache = new Map<string, TeacherLike | null>();
-  let sent = 0;
-
-  async function teacherOf(id: string): Promise<TeacherLike | null> {
-    if (!cache.has(id)) cache.set(id, await fetchTeacher(id));
-    return cache.get(id) ?? null;
-  }
-
-  for (const j of jobs) {
-    try {
-      let ok = false;
-      if (j.kind === 'teacher_4h' || j.kind === 'teacher_12h' || j.kind === 'teacher_24h') {
-        const teacher = await teacherOf(j.teacherId);
-        if (!teacher) continue;
-        ok = j.kind === 'teacher_4h'  ? await sendPresentationReminder4h(teacher, j.studentName)
-           : j.kind === 'teacher_12h' ? await sendPresentationReminder12h(teacher, j.studentName)
-           :                            await sendPresentationReminder24h(teacher, j.studentName);
+      const ok = await sendOne(r, e.to, teacherOf);
+      if (ok) {
+        emailed++;
       } else {
-        ok = j.kind === 'admin_12h'
-          ? await sendPresentationAdminAlert12h(j.teacherName, j.studentName)
-          : await sendPresentationAdminAlert24h(j.teacherName, j.studentName);
+        allOk = false;
+        await release(admin, e.claimId);
       }
-      if (ok) sent++;
-    } catch (err) {
-      console.error('[cron presentation-emails] Fallo al enviar email:', err);
     }
+
+    if (!allOk) {
+      failed.push(`${r.studentName} (${r.threshold})`);
+      continue;                                     // el umbral queda abierto: se reintenta
+    }
+    const patch = Object.fromEntries(r.flags.map(f => [f, true]));
+    const { error: updErr } = await admin.from('assignments').update(patch).eq('id', r.assignmentId);
+    if (updErr) console.error(`[${LABEL}] Error al marcar recordatorios de ${r.assignmentId}:`, updErr);
+    else completed++;
   }
-  return sent;
+
+  return Response.json({ ok: true, pending: rows.length, planned: plan.length, emailed, completed, failed });
+}
+
+async function insertNotifications(admin: SupabaseClient, r: PlannedReminder, createdAt: string): Promise<void> {
+  const rows = r.notifications.map(n => ({ ...n, read_by: [], created_at: createdAt, created_by: 'sistema' }));
+  const { error } = await admin.from('notifications').upsert(rows, { onConflict: 'id', ignoreDuplicates: true });
+  if (error) console.error(`[${LABEL}] Error al insertar notificaciones:`, error);
+}
+
+/** Reserva un email. 'claimed' = hay que enviarlo; 'taken' = ya se envió; 'error' = no se pudo reservar. */
+async function claim(admin: SupabaseClient, id: string, teacherId: string): Promise<'claimed' | 'taken' | 'error'> {
+  const { data, error } = await admin
+    .from('daily_reminder_log')
+    .upsert({ id, teacher_id: teacherId, reminder_date: madridToday(), classes_count: 0, sent_at: new Date().toISOString() },
+      { onConflict: 'id', ignoreDuplicates: true })
+    .select('id');
+  if (error) {
+    console.error(`[${LABEL}] No se pudo reservar ${id}:`, error);
+    return 'error';
+  }
+  return (data?.length ?? 0) > 0 ? 'claimed' : 'taken';
+}
+
+async function release(admin: SupabaseClient, id: string): Promise<void> {
+  const { error } = await admin.from('daily_reminder_log').delete().eq('id', id);
+  if (error) console.error(`[${LABEL}] No se pudo liberar la reserva ${id}:`, error);
+}
+
+/** Envía un email del plan. Nunca lanza: un fallo cuenta como false. */
+async function sendOne(
+  r: PlannedReminder, to: 'teacher' | 'admin', teacherOf: (id: string) => Promise<TeacherLike | null>,
+): Promise<boolean> {
+  try {
+    if (to === 'admin') {
+      return r.threshold === '12h'
+        ? await sendMeetLinkAdminAlert12h(r.teacherName, r.studentName, r.hours)
+        : await sendMeetLinkAdminAlert24h(r.teacherName, r.studentName, r.hours);
+    }
+    const teacher = await teacherOf(r.teacherId);
+    if (!teacher) return false;
+    return r.threshold === '4h'  ? await sendMeetLinkReminder4h(teacher, r.studentName)
+         : r.threshold === '12h' ? await sendMeetLinkReminder12h(teacher, r.studentName)
+         :                         await sendMeetLinkReminder24h(teacher, r.studentName);
+  } catch (err) {
+    console.error(`[${LABEL}] Fallo al enviar email:`, err);
+    return false;
+  }
 }

@@ -2441,8 +2441,15 @@ export async function dbRecalculateTeacherScore(teacherId: string): Promise<void
  * `quantity` sin migrar, PostgREST rechazaba TODOS los inserts (PGRST204) y no
  * se guardó ni un solo evento durante semanas sin que nadie lo notara.
  */
-export async function dbAddScoringEvent(event: Omit<ScoringEvent, 'id' | 'createdAt'>): Promise<ScoringEvent> {
-  const id        = `se_${Date.now()}`;
+/**
+ * `opts.id` fija el id del evento. Lo usa la penalización por enlace tardío
+ * (se_enlace_tardio_<asignación>_<profe>) para que la clave primaria impida
+ * aplicarla dos veces: un duplicado lanza con el código 23505 de Postgres.
+ */
+export async function dbAddScoringEvent(
+  event: Omit<ScoringEvent, 'id' | 'createdAt'>, opts: { id?: string } = {},
+): Promise<ScoringEvent> {
+  const id        = opts.id ?? `se_${Date.now()}`;
   const createdAt = new Date().toISOString();
 
   const row = {
@@ -2473,7 +2480,7 @@ export async function dbAddScoringEvent(event: Omit<ScoringEvent, 'id' | 'create
 
   if (error) {
     console.error('[dbAddScoringEvent] No se pudo guardar el evento:', error);
-    throw new Error(`No se pudo guardar el evento de scoring: ${error.message}`);
+    throw Object.assign(new Error(`No se pudo guardar el evento de scoring: ${error.message}`), { code: error.code });
   }
 
   await dbRecalculateTeacherScore(event.teacherId);
@@ -4635,10 +4642,11 @@ export async function dbChangeStudentTeacher(p: ChangeTeacherParams): Promise<vo
   }
 
   // ── 3) Reapuntar la assignment — ESTA es la que confirma el cambio ─────────
-  //    Se reinicia el email de presentación: created_at = ahora (el contador de
-  //    24 h se ancla en created_at, ver getPresentationEmailStatus) y se borra el
-  //    estado de enviado, para que el NUEVO profesor tenga sus 24 h completas para
-  //    presentarse sin penalización de scoring.
+  //    Se reinicia el plazo del enlace de clase: created_at = ahora (el contador
+  //    de 24 h se ancla en created_at, ver lib/meetLinkStatus), el enlace del
+  //    anterior se borra y los recordatorios vuelven a cero. Así el NUEVO
+  //    profesor tiene sus 24 h completas, sus recordatorios, y la penalización
+  //    'enlace_tardio' se evalúa para él al definir su enlace por primera vez.
   const { error: asgError } = await supabase.from('assignments').update({
     teacher_id:   p.to.id,
     teacher_name: p.to.name,
@@ -4648,6 +4656,12 @@ export async function dbChangeStudentTeacher(p: ChangeTeacherParams): Promise<vo
     availability: p.newSlots.map(s => `${s.day} ${s.hour}`).join(', '),
     presentation_email_sent:    false,
     presentation_email_sent_at: null,
+    // Recordatorios del enlace (cron check-presentation-emails): el profesor
+    // nuevo tiene los suyos. Sus avisos y reservas llevan su id, así que no
+    // chocan con los que recibió el anterior.
+    presentation_reminder_4h_sent:  false,
+    presentation_reminder_12h_sent: false,
+    presentation_reminder_24h_sent: false,
     created_at:                 new Date().toISOString(),
     // El enlace de la clase es la sala del profesor ANTERIOR: se borra para que
     // el nuevo defina la suya (y el alumno no entre a la sala equivocada).

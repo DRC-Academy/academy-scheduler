@@ -375,6 +375,7 @@ export type ScoringEventType =
   | 'cambio_por_alumno' | 'cambio_por_profesor'
   | 'profe_del_mes' | 'profe_del_trimestre'
   | 'email_presentacion_tardio'
+  | 'enlace_tardio'
   // Penalización económica por falta sin aviso (-5 €) y su reversión (+5 €).
   | 'falta_sin_aviso_penalizacion' | 'penalizacion_revertida'
   // Alerta de riesgo sin atender. NUNCA automático: solo lo carga el admin desde

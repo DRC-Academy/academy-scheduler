@@ -21,7 +21,12 @@ export const EVENT_POINTS: Record<string, number> = {
   cambio_por_profesor: -20,
   profe_del_mes:        50,
   profe_del_trimestre: 100,
+  // Histórico: el email de presentación que mandaba el profesor (hasta sep/2026).
   email_presentacion_tardio: -5,
+  // Enlace de clase definido pasadas 24 h de la asignación. Lo aplica SOLO la
+  // ruta PUT /api/assignments/[assignmentId]/meet-link, una vez por asignación y
+  // profesor (lib/meetLinkStatus.shouldPenalizeLateLink).
+  enlace_tardio: -5,
   // Se carga SOLO a mano desde la auditoría de intervenciones (panel de admin).
   // El sistema nunca lo aplica automáticamente: una intervención sutil puede no
   // verse en el transcript, así que la decisión es humana.

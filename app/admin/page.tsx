@@ -606,6 +606,7 @@ const EVENT_LABELS: Record<string, string> = {
   profe_del_mes:       '🏆 Profe del Mes',
   profe_del_trimestre: '🏆 Profe del Trimestre',
   email_presentacion_tardio: 'Email de presentación tardío',
+  enlace_tardio:       'Enlace de clase definido tarde',
   alerta_no_atendida:  'Alerta de riesgo no atendida',
 };
 
@@ -625,6 +626,7 @@ const EVENT_ICONS: Record<string, string> = {
   profe_del_mes:       '🏆',
   profe_del_trimestre: '🏆',
   email_presentacion_tardio: '📧',
+  enlace_tardio:       '🔗',
   alerta_no_atendida:  '🔕',
 };
 
@@ -1550,7 +1552,7 @@ function ScoringTab() {
           {Object.entries(EVENT_POINTS).map(([key, pts]) => (
             <div key={key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '7px 11px', borderRadius: 8, background: 'var(--bg-surface-2)' }}>
               <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                {EVENT_ICONS[key] ?? '📌'} {EVENT_LABELS[key] ?? key}{key === 'email_presentacion_tardio' ? ' (>24h)' : ''}
+                {EVENT_ICONS[key] ?? '📌'} {EVENT_LABELS[key] ?? key}{key === 'email_presentacion_tardio' || key === 'enlace_tardio' ? ' (>24h)' : ''}
               </span>
               <span style={{ fontSize: 12, fontWeight: 800, color: pts >= 0 ? '#1E9E3A' : '#ef4444', whiteSpace: 'nowrap' }}>
                 {pts > 0 ? '+' : ''}{pts} puntos

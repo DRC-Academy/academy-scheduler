@@ -450,6 +450,7 @@ const EVENT_LABELS: Record<string, string> = {
   review_trustpilot:  'Reseña Trustpilot',
   bonus_feedback:     'Bonus feedback',
   email_presentacion_tardio: '📧 Email de presentación tardío',
+  enlace_tardio: '🔗 Enlace de clase definido tarde',
 };
 
 const MOTIVATIONAL: Record<number, string> = {

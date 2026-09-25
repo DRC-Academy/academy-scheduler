@@ -20,14 +20,14 @@ import { PUBLIC_APP_URL as APP_URL } from '@/lib/appUrl';
 
 const FROM = 'DRC Academy <notificaciones@drcacademy.com>';
 const PAGOS_EMAIL = 'pagos@drcacademy.com';
-// Destinatario de los avisos al admin (recordatorios de emails de presentación).
+// Destinatario de los avisos al admin (recordatorios del enlace de clase).
 // Configurable por entorno; si no está, cae en la dirección de pagos de DRC.
 const ADMIN_EMAIL = process.env.ADMIN_NOTIFICATION_EMAIL?.trim() || PAGOS_EMAIL;
 
 // Destinatario ÚNICO del aviso de "Próximos a cancelar": alumnos@ (decisión del
 // 17/08/2026; antes iba a info@). Tiene el suyo propio y NO comparte
-// ADMIN_EMAIL a propósito: ese va a pagos@ y alimenta además las alertas de
-// emails de presentación, que las mira otra persona. Antes iban los tres al mismo
+// ADMIN_EMAIL a propósito: ese va a pagos@ y alimenta además las alertas del
+// enlace de clase, que las mira otra persona. Antes iban los tres al mismo
 // buzón, así que cambiar uno cambiaba los otros dos.
 //
 // La variable de entorno se mantiene para poder redirigir el aviso sin deployar.
@@ -340,66 +340,77 @@ export async function sendFormCompletedEmail(teacher: TeacherLike, studentName: 
   return send('sendFormCompletedEmail', teacher, subject, html);
 }
 
-// ═══ E) Recordatorios escalonados del email de presentación ═══════════════════
-// Tres umbrales, disparados por el cron con anti-duplicados en columnas
-// (presentation_reminder_{4h,12h,24h}_sent). El copy es fijo por especificación.
+// ═══ E) Recordatorios escalonados del enlace de clase ═════════════════════════
+// Tres umbrales desde la asignación (4 / 12 / 24 h), disparados por el cron
+// app/api/cron/check-presentation-emails mientras la asignación siga sin enlace
+// definido (meet_link_set_at nulo, lib/meetLinkStatus). Desde la Fase 3
+// (sep/2026) sustituyen a los del email de presentación: el alumno recibe la
+// bienvenida de la plataforma y al profesor solo le queda DEFINIR EL ENLACE.
+// Texto neutro sobre la bienvenida: vale aunque no haya salido (alumno sin email).
+
+/** Cuerpo común de los recordatorios al profesor. */
+function meetLinkReminderBody(teacher: TeacherLike, studentName: string, lead: string): string {
+  return (
+    p(`Hola ${esc(teacher.name)},`) +
+    p(lead) +
+    p(`${esc(studentName)} recibe automáticamente las instrucciones para acceder a la plataforma. Solo falta que definas el enlace de Meet de sus clases: es el que usará para unirse. Tienes 24 horas desde la asignación.`) +
+    ctaButton('Definir enlace', `${APP_URL}/clases`)
+  );
+}
 
 // 4 h — recordatorio al profesor.
-export async function sendPresentationReminder4h(teacher: TeacherLike, studentName: string): Promise<boolean> {
-  const subject = `Recordatorio: email pendiente · ${studentName}`;
+export async function sendMeetLinkReminder4h(teacher: TeacherLike, studentName: string): Promise<boolean> {
+  const subject = `Recordatorio: define el enlace de clase de ${studentName}`;
   const html = baseEmailTemplate(
-    p(`Hola ${esc(teacher.name)},`) +
-    p(`Llevas <strong>4 horas</strong> sin enviar el email de presentación a <strong>${esc(studentName)}</strong>. Los alumnos que reciben bienvenida pronto tienen mayor retención.`) +
-    ctaButton('Enviar ahora', APP_URL),
-    `${studentName} sigue sin email de bienvenida`,
+    meetLinkReminderBody(teacher, studentName, `Han pasado <strong>4 horas</strong> desde que se te asignó a <strong>${esc(studentName)}</strong> y todavía no has definido el enlace de su clase.`),
+    `${studentName} sigue sin enlace de clase`,
   );
-  return send('sendPresentationReminder4h', teacher, subject, html);
+  return send('sendMeetLinkReminder4h', teacher, subject, html);
 }
 
-// 12 h — aviso urgente al profesor.
-export async function sendPresentationReminder12h(teacher: TeacherLike, studentName: string): Promise<boolean> {
-  const subject = `Urgente: email pendiente · ${studentName}`;
+// 12 h — recordatorio al profesor (le quedan menos de 12 h).
+export async function sendMeetLinkReminder12h(teacher: TeacherLike, studentName: string): Promise<boolean> {
+  const subject = `Recordatorio: define el enlace de clase de ${studentName}`;
   const html = baseEmailTemplate(
-    p(`Hola ${esc(teacher.name)},`) +
-    p(`Llevas <strong>12 horas</strong> sin enviar el email de presentación a <strong>${esc(studentName)}</strong>. Te quedan menos de 12 horas para enviarlo sin afectar tu scoring.`) +
-    ctaButton('Enviar ahora', APP_URL),
-    `${studentName} · quedan menos de 12 h`,
+    meetLinkReminderBody(teacher, studentName, `Han pasado <strong>12 horas</strong> desde que se te asignó a <strong>${esc(studentName)}</strong> y todavía no has definido el enlace de su clase. Te quedan menos de 12 horas para hacerlo a tiempo.`),
+    `${studentName} · quedan menos de 12 h para definir el enlace`,
   );
-  return send('sendPresentationReminder12h', teacher, subject, html);
+  return send('sendMeetLinkReminder12h', teacher, subject, html);
 }
 
-// 24 h — email fuera de plazo (al enviarlo se descuentan -5 puntos).
-export async function sendPresentationReminder24h(teacher: TeacherLike, studentName: string): Promise<boolean> {
-  const subject = `Email fuera de plazo · ${studentName}`;
+// 24 h — fuera de plazo (al definirlo se descuentan -5 puntos: enlace_tardio).
+export async function sendMeetLinkReminder24h(teacher: TeacherLike, studentName: string): Promise<boolean> {
+  const subject = `Enlace fuera de plazo: ${studentName}`;
   const html = baseEmailTemplate(
     p(`Hola ${esc(teacher.name)},`) +
-    p(`Han pasado más de <strong>24 horas</strong> sin enviar el email de presentación a <strong>${esc(studentName)}</strong>. Cuando lo envíes se descontarán <strong>-5 puntos</strong> de tu scoring.`) +
-    ctaButton('Enviar ahora', APP_URL),
-    `${studentName} · email fuera de plazo`,
+    p(`Han pasado más de <strong>24 horas</strong> desde que se te asignó a <strong>${esc(studentName)}</strong> y su clase sigue sin enlace. Sin él, el alumno no tiene cómo unirse.`) +
+    p(`Defínelo cuanto antes. Al hacerlo fuera de plazo se descuentan <strong>-5 puntos</strong> de tu scoring.`) +
+    ctaButton('Definir enlace', `${APP_URL}/clases`),
+    `${studentName} · enlace fuera de plazo`,
   );
-  return send('sendPresentationReminder24h', teacher, subject, html);
+  return send('sendMeetLinkReminder24h', teacher, subject, html);
+}
+
+/** Aviso al admin: "{profesor} aún no ha definido el enlace de {alumno} ({horas} h)". */
+function meetLinkAdminAlert(label: string, teacherName: string, studentName: string, hours: number): Promise<boolean> {
+  const h = Math.floor(Math.max(0, hours));
+  const subject = `${teacherName} aún no ha definido el enlace de ${studentName} (${h} h)`;
+  const html = baseEmailTemplate(
+    p(`<strong>${esc(teacherName)}</strong> aún no ha definido el enlace de clase de <strong>${esc(studentName)}</strong>. Han pasado ${h} horas desde la asignación.`) +
+    ctaButton('Ver en DRC Gestión', `${APP_URL}/admin?tab=emails`),
+    `${teacherName} · ${studentName} sin enlace (${h} h)`,
+  );
+  return sendToAddress(label, ADMIN_EMAIL, subject, html);
 }
 
 // 12 h — aviso al admin.
-export async function sendPresentationAdminAlert12h(teacherName: string, studentName: string): Promise<boolean> {
-  const subject = `Alerta: ${teacherName} · email sin enviar 12h`;
-  const html = baseEmailTemplate(
-    p(`<strong>${esc(teacherName)}</strong> lleva 12h sin enviar el email de presentación a <strong>${esc(studentName)}</strong>.`) +
-    ctaButton('Ver en DRC Gestión', `${APP_URL}/dashboard`),
-    `${teacherName} · email sin enviar 12 h`,
-  );
-  return sendToAddress('sendPresentationAdminAlert12h', ADMIN_EMAIL, subject, html);
+export function sendMeetLinkAdminAlert12h(teacherName: string, studentName: string, hours: number): Promise<boolean> {
+  return meetLinkAdminAlert('sendMeetLinkAdminAlert12h', teacherName, studentName, hours);
 }
 
 // 24 h — aviso al admin (fuera de plazo).
-export async function sendPresentationAdminAlert24h(teacherName: string, studentName: string): Promise<boolean> {
-  const subject = `🔴 ${teacherName} · email fuera de plazo`;
-  const html = baseEmailTemplate(
-    p(`<strong>${esc(teacherName)}</strong> no envió el email de presentación a <strong>${esc(studentName)}</strong> en 24 horas.`) +
-    ctaButton('Ver en DRC Gestión', `${APP_URL}/dashboard`),
-    `${teacherName} · email fuera de plazo`,
-  );
-  return sendToAddress('sendPresentationAdminAlert24h', ADMIN_EMAIL, subject, html);
+export function sendMeetLinkAdminAlert24h(teacherName: string, studentName: string, hours: number): Promise<boolean> {
+  return meetLinkAdminAlert('sendMeetLinkAdminAlert24h', teacherName, studentName, hours);
 }
 
 // ═══ F/G/H) Hitos de clase ════════════════════════════════════════════════════

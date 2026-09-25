@@ -1,14 +1,18 @@
-name: Cron emails de presentación
+name: Cron recordatorios de enlace de clase
 
 # Reemplaza al cron de Vercel (el plan Hobby no permite crons por hora).
-# Pega cada hora al endpoint /api/cron/check-presentation-emails, que envía las
-# alertas de emails de presentación pendientes (4h/12h/24h).
+# Pega cada hora al endpoint /api/cron/check-presentation-emails, que desde
+# sep/2026 recuerda al profesor (4h/12h/24h) y al admin (12h/24h) que DEFINA EL
+# ENLACE de Meet de sus alumnos nuevos. La ruta conserva su nombre histórico
+# (era el recordatorio del email de presentación) para no tener que cambiar el
+# secret con la URL.
 #
 # Requiere dos secrets del repo (Settings → Secrets and variables → Actions):
 #   · PRESENTATION_CRON_URL  → URL completa del endpoint en producción, p. ej.
 #       https://TU-APP.vercel.app/api/cron/check-presentation-emails
-#   · CRON_SECRET            → el MISMO valor que configures como env var CRON_SECRET
-#       en Vercel (protege el endpoint para que solo lo dispare este workflow).
+#   · CRON_SECRET            → el MISMO valor que la env var CRON_SECRET de Vercel.
+#       Es obligatorio: sin ella el endpoint responde 500 (lib/cronAuth) y con
+#       otro valor, 401. Se manda como "Authorization: Bearer <CRON_SECRET>".
 
 on:
   schedule:

@@ -9,11 +9,14 @@
 // toca al profesor es DEFINIR EL ENLACE. "Hecho" = meet_link_set_at no nulo,
 // que solo escribe la ruta PUT /api/assignments/[assignmentId]/meet-link.
 //
-// Mismos plazos que tenía el email (4 / 12 / 24 h desde created_at).
-// lib/presentationEmailUtils sigue existiendo solo para el cron de
-// recordatorios, la ruta presentation-sent y el scoring (Fase 3).
+// Mismos plazos que tenía el email (4 / 12 / 24 h desde created_at). Los usan
+// también el cron de recordatorios (lib/meetLinkReminders) y la penalización
+// por enlace tardío (shouldPenalizeLateLink, más abajo).
 //
 // Branding DRC: verde #1E9E3A, amarillo #FFC400, naranja #f97316, rojo #ef4444.
+
+import { WELCOME_EMAIL_START_DATE } from '@/lib/welcomeEmail';
+import { spainWallClockToEpoch } from '@/lib/spainTime';
 
 const MS_PER_HOUR = 3_600_000;
 
@@ -97,4 +100,32 @@ export function getMeetLinkStatus(a: MeetLinkInput, now: number = Date.now()): M
     badgeText: `🔴 Enlace sin definir · Hace ${hace} — fuera de plazo`,
     subtextMessage: 'Defínelo ya: el alumno no puede unirse a la clase sin él',
   };
+}
+
+// ── Penalización por enlace tardío (scoring 'enlace_tardio', -5) ─────────────
+
+/**
+ * Corte de la penalización: solo asignaciones creadas desde esta fecha (hora de
+ * España). Es la misma que la de la bienvenida automática: antes de ella el
+ * profesor no tenía este flujo, y las asignaciones antiguas sin enlace (o con
+ * el enlace vaciado a mano) nunca penalizan al definirse.
+ */
+export const MEET_LINK_PENALTY_START_DATE = WELCOME_EMAIL_START_DATE;
+
+/**
+ * ¿Definir AHORA el enlace penaliza? Solo si es la PRIMERA vez que se define
+ * (antes no había meet_link_set_at), la asignación es del corte en adelante y
+ * pasaron más de 24 h desde created_at. Cambiar un enlace ya definido nunca
+ * penaliza. Exactamente 24 h todavía cuenta como a tiempo.
+ */
+export function shouldPenalizeLateLink(x: {
+  createdAt: string;
+  previousSetAt: string | null | undefined;
+  now?: number;
+}): boolean {
+  if (x.previousSetAt) return false;
+  const created = new Date(x.createdAt).getTime();
+  if (isNaN(created)) return false;
+  if (created < spainWallClockToEpoch(MEET_LINK_PENALTY_START_DATE, 0, 0)) return false;
+  return hoursSinceAssignment(x.createdAt, x.now ?? Date.now()) > LINK_DEADLINE_HOURS;
 }
