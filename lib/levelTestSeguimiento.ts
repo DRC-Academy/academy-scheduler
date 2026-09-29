@@ -182,7 +182,11 @@ export function construirSeguimiento(input: SeguimientoInput): Seguimiento[] {
 
     const sesiones = sesionesPor.get(clave) ?? [];
     const completada = sesiones.find(s => s.status === 'completed') ?? null;
-    const sesion = completada ?? sesiones[0] ?? null;
+    // La principal (lib/levelTest/canonical): la terminada; si no, la de más
+    // respuestas (a igualdad, la más reciente: la lista va de nueva a vieja).
+    const sesion = completada
+      ?? [...sesiones].sort((a, b) => (b.answered_count ?? 0) - (a.answered_count ?? 0))[0]
+      ?? null;
     const formulario = ref.status === 'completed' ? ref.completed_at : null;
 
     let tono: Tono;

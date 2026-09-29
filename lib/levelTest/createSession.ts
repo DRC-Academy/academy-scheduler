@@ -2,11 +2,12 @@
 // Compartido por la ruta /api/level-test/generate (link manual desde admin/profe)
 // y por el submit del formulario inicial (ofrece el test al terminar el formulario).
 //
-// `getOrCreateTestSession` reutiliza una sesión vigente del mismo alumno (para no
-// generar links duplicados), y solo crea una nueva si no hay o la anterior expiró.
+// `getOrCreateTestSession` reutiliza la prueba principal del alumno (para no
+// generar links duplicados) y solo crea una nueva si no tiene ninguna.
 
 import { supabase } from '@/lib/supabase';
 import { EXPIRES_DEFAULT_DAYS, START_DIFFICULTY } from './constants';
+import { pickCanonical, type SessionSummary } from './canonical';
 
 export interface TestSessionInput {
   candidateName?: string;
@@ -71,24 +72,47 @@ export async function createTestSession(input: TestSessionInput): Promise<Create
   return { token };
 }
 
-// Reutiliza la sesión vigente más reciente del alumno (misma persona → mismo link)
-// y solo crea una nueva si no existe o la anterior ya expiró.
-export async function getOrCreateTestSession(input: TestSessionInput): Promise<CreateSessionResult> {
+/**
+ * Todas las pruebas de un alumno con su número de respuestas: por student_id y,
+ * si no hay, por nombre (tokens viejos sin id). Lanza si la base falla.
+ */
+export async function loadStudentSessions(input: TestSessionInput): Promise<SessionSummary[]> {
   const studentId = input.studentId?.trim();
   const studentName = input.studentName?.trim() || input.candidateName?.trim() || '';
+  const cols = 'token, status, expires_at, created_at, student_id, level_test_answers(count)';
 
-  let query = supabase
-    .from('level_test_sessions')
-    .select('token, status, expires_at')
-    .order('created_at', { ascending: false })
-    .limit(1);
-  query = studentId ? query.eq('student_id', studentId) : query.ilike('student_name', studentName);
+  let query = supabase.from('level_test_sessions').select(cols)
+    .order('created_at', { ascending: false }).limit(20);
+  if (studentId) query = query.eq('student_id', studentId);
+  else if (studentName) query = query.ilike('student_name', studentName);
+  else return [];
 
-  const { data } = await query.maybeSingle();
-  if (data?.token) {
-    const expired = data.status === 'expired'
-      || (data.expires_at && new Date(data.expires_at).getTime() < Date.now());
-    if (!expired) return { token: data.token };
+  const { data, error } = await query;
+  if (error) throw new Error(`No se pudieron leer las pruebas del alumno: ${error.message}`);
+  return (data ?? []).map((r: Record<string, unknown>) => {
+    const cnt = r.level_test_answers as Array<{ count: number }> | undefined;
+    return {
+      token: String(r.token),
+      status: String(r.status),
+      expires_at: (r.expires_at as string | null) ?? null,
+      created_at: String(r.created_at),
+      student_id: (r.student_id as string | null) ?? null,
+      answered: cnt?.[0]?.count ?? 0,
+    };
+  });
+}
+
+// La prueba principal del alumno (lib/levelTest/canonical: la terminada, o la
+// abierta con más respuestas); solo crea una nueva si no tiene ninguna. La de un
+// alumno no caduca por fecha, así que un recordatorio nunca le crea una prueba
+// nueva por encima de la que dejó a medias.
+export async function getOrCreateTestSession(input: TestSessionInput): Promise<CreateSessionResult> {
+  let principal: ReturnType<typeof pickCanonical> = { kind: 'none' };
+  try {
+    principal = pickCanonical(await loadStudentSessions(input));
+  } catch (e) {
+    console.error('[level-test/createSession] No se pudieron leer las pruebas del alumno:', e);
   }
+  if (principal.kind !== 'none') return { token: principal.token };
   return createTestSession(input);
 }

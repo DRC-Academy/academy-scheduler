@@ -27,7 +27,11 @@ export const SECTION_LABEL: Record<LTSection, string> = {
 };
 
 export const START_DIFFICULTY = 3;   // arranca en B1
-export const EXPIRES_DEFAULT_DAYS = 7;
+// Caducidad por fecha: SOLO para leads (pruebas sin alumno, "Generar link" del
+// admin). 30 días desde el 28/09/2026 (antes 7). La prueba de un alumno se sigue
+// guardando con esta fecha (la columna es NOT NULL) pero no caduca: la regla está
+// en lib/levelTest/canonical.sessionExpired.
+export const EXPIRES_DEFAULT_DAYS = 30;
 
 // ÚNICA fuente de verdad de los umbrales: `scoreToCefr` y `cefrToScore` derivan de
 // aquí, así la escala del writing, la del reading y la del resultado final NUNCA

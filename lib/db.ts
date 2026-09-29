@@ -1,11 +1,13 @@
 import { supabase } from './supabase';
 import { triggerEmail } from './emailClient';
-import { baseStateOf, baseStudentOf, withBaseState, assignableCellKeys, puntualCellDates, puntualDateOf } from './cells';
+import { baseStateOf, baseStudentOf, withBaseState, assignableCellKeys, puntualCellDates, puntualDateOf, isPuntualState } from './cells';
 import { minutesLateSpain, getSpainParts } from './spainTime';
 import { EVENT_POINTS } from './scoringConstants';
 import { fetchOpenAlertState } from './interventionsClient';
 import { findContiguityMismatches, type ContiguityMismatch } from './teacherClasses';
 import { triggerWelcomeEmail } from './welcomeEmail';
+import { diffGrids, applyChanges, studentEvents, normLoose, splitCellKey, type GridChanges, type StudentCellEvent } from './gridPatch';
+import { findOffCalendar, slotStatusOf, type OffCalendarRow } from './offCalendar';
 import { Teacher, Student, Assignment, AppUser, Grid, TeacherStatus, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, AssignedSlot, EmailPreferences, SalesContactResult, RecoveryCell, TeacherBonus, BonusType } from '@/types';
 import {
   bonusClaimEnabledFor, RETENTION_UPCOMING_DAYS, isActiveAssignmentLike, retentionBonusFor, retentionDaysLeft,
@@ -412,61 +414,375 @@ export async function dbUnarchiveTeacher(teacherId: string): Promise<void> {
 
 // ── CALENDARS ─────────────────────────────────────────────────────────────────
 
+/**
+ * Lectura TOLERANTE: ante un error devuelve {} y lo registra. Solo para mostrar
+ * (listados, diagnósticos). NUNCA para editar: un {} por un fallo de red,
+ * guardado encima, vaciaba el calendario entero. Para editar, dbReadTeacherGrid.
+ */
 export async function dbGetTeacherGrid(teacherId: string): Promise<Grid> {
+  try {
+    return await dbReadTeacherGrid(teacherId);
+  } catch (err) {
+    console.error(`[db] No se pudo leer el calendario de ${teacherId}:`, err);
+    return {};
+  }
+}
+
+/** El calendario no se pudo leer: la pantalla debe avisar y NO dejar editar. */
+export class CalendarReadError extends Error {
+  constructor(teacherId: string, detail: string) {
+    super(`No se pudo leer el calendario (${teacherId}): ${detail}`);
+    this.name = 'CalendarReadError';
+  }
+}
+
+/**
+ * Lectura ESTRICTA. Un profesor sin fila de calendario devuelve {} (es legítimo:
+ * todavía no pintó nada); un error de lectura LANZA CalendarReadError.
+ */
+export async function dbReadTeacherGrid(teacherId: string): Promise<Grid> {
   const { data, error } = await supabase
     .from('teacher_calendars')
     .select('grid')
     .eq('teacher_id', teacherId)
-    .single();
-
-  if (error || !data) return {};
-  return data.grid as Grid;
+    .maybeSingle();
+  if (error) throw new CalendarReadError(teacherId, error.message);
+  return ((data?.grid as Grid | null) ?? {});
 }
 
-export async function dbSaveTeacherGrid(teacherId: string, grid: Grid): Promise<StudentLeftGrid[]> {
-  // El grid ANTERIOR se lee antes de pisarlo: hace falta para saber qué alumno
-  // se quedó sin celdas en ESTE guardado (ver reconcileAssignmentStatus).
-  const previous = await dbGetTeacherGrid(teacherId);
+/** Desde dónde se tocó el calendario. Va al historial (calendar_changes.origin). */
+export type CalendarOrigin = 'profesor' | 'admin' | 'alumnos' | 'setter' | 'clases' | 'sistema' | 'restauracion';
 
-  const { error } = await supabase
-    .from('teacher_calendars')
-    .upsert({
-      teacher_id: teacherId,
-      grid:       grid,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'teacher_id' });
+/** Quién toca el calendario y desde dónde. */
+export interface CalendarActor {
+  role: string;
+  name: string;
+  origin: CalendarOrigin;
+}
 
-  // El error se registra pero NO se lanza: el autoguardado del calendario llama
-  // a esta función en cada clic y romper ahí dejaría al profesor sin poder tocar
-  // su grid. Para las operaciones donde un fallo silencioso deja el sistema
-  // inconsistente (transferencias) está saveTeacherGridOrThrow.
-  if (error) console.error(`[db] No se pudo guardar el grid de ${teacherId}:`, error);
+/** Operaciones automáticas (cambio de profesor, eliminar alumno, quitar duplicado). */
+export const SYSTEM_ACTOR: CalendarActor = { role: 'sistema', name: 'Sistema', origin: 'sistema' };
 
-  return reconcileAssignmentStatus(teacherId, previous, grid);
+export interface GridSaveResult {
+  /** El calendario REAL tras guardar, con los cambios de otros incluidos. La pantalla lo adopta. */
+  grid: Grid;
+  applied: string[];
+  /** Casillas que NO se aplicaron porque otra persona las cambió mientras tanto. */
+  conflicts: string[];
+  /** Alumnos que con este guardado se quedaron sin ninguna casilla. */
+  studentsLeft: StudentLeftGrid[];
 }
 
 /**
- * Igual que dbSaveTeacherGrid pero LANZA si la escritura falla.
- *
- * Existe porque el upsert de arriba se traga el error: en una transferencia eso
- * significa que el calendario de un profesor puede no haberse guardado y el
- * resto de la operación sigue como si nada, dejando el estado partido (que es
- * exactamente lo que pasó con Izaro Gaztañaga en julio de 2026).
+ * Guarda SOLO las casillas que cambiaron entre `prev` (lo que la pantalla tenía)
+ * y `next` (lo que quiere dejar). Ver lib/gridPatch.ts para el porqué.
  */
-async function saveTeacherGridOrThrow(teacherId: string, grid: Grid): Promise<void> {
-  const previous = await dbGetTeacherGrid(teacherId);
+export async function dbSaveTeacherGridChanges(
+  teacherId: string, prev: Grid, next: Grid, actor: CalendarActor,
+): Promise<GridSaveResult> {
+  return dbApplyGridChanges(teacherId, diffGrids(prev, next), actor);
+}
 
-  const { error } = await supabase
-    .from('teacher_calendars')
-    .upsert({
-      teacher_id: teacherId,
-      grid:       grid,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'teacher_id' });
+/**
+ * Aplica cambios por casilla de forma atómica (función apply_calendar_patch: la
+ * fila del profesor queda bloqueada, así dos guardados simultáneos van en fila).
+ * Cada casilla se aplica solo si sigue valiendo lo que la pantalla vio.
+ *
+ * LANZA si no se pudo guardar. Antes el error se registraba y se seguía como si
+ * nada, y la pantalla mostraba "Guardado".
+ */
+export async function dbApplyGridChanges(
+  teacherId: string, changes: GridChanges, actor: CalendarActor,
+): Promise<GridSaveResult> {
+  if (Object.keys(changes).length === 0) {
+    return { grid: await dbReadTeacherGrid(teacherId), applied: [], conflicts: [], studentsLeft: [] };
+  }
 
-  if (error) throw new Error(`No se pudo guardar el calendario de ${teacherId}: ${error.message}`);
+  let before: Grid;
+  let after: Grid;
+  let applied: string[];
+  let conflicts: string[];
 
-  await reconcileAssignmentStatus(teacherId, previous, grid);
+  const { data, error } = await supabase.rpc('apply_calendar_patch', {
+    p_teacher_id: teacherId,
+    p_changes: changes,
+  });
+
+  if (error) {
+    // Función sin crear (falta supabase-calendar-history.sql): la misma regla
+    // desde acá. No es atómica —hay unos milisegundos entre leer y escribir—
+    // pero ya no pisa lo que otros cambiaron.
+    const missing = error.code === 'PGRST202' || error.code === '42883';
+    if (!missing) throw new Error(`No se pudo guardar el calendario: ${error.message}`);
+    console.warn('[db] apply_calendar_patch no existe: guardado por casillas desde el cliente. Corré supabase-calendar-history.sql.');
+    before = await dbReadTeacherGrid(teacherId);
+    const r = applyChanges(before, changes);
+    after = r.grid; applied = r.applied; conflicts = r.conflicts;
+    if (applied.length > 0) {
+      const { error: upErr } = await supabase.from('teacher_calendars').upsert(
+        { teacher_id: teacherId, grid: after, updated_at: new Date().toISOString() },
+        { onConflict: 'teacher_id' },
+      );
+      if (upErr) throw new Error(`No se pudo guardar el calendario: ${upErr.message}`);
+    }
+  } else {
+    const r = data as { before: Grid | null; grid: Grid | null; applied: string[] | null; conflicts: string[] | null };
+    before = r.before ?? {};
+    after = r.grid ?? {};
+    applied = r.applied ?? [];
+    conflicts = r.conflicts ?? [];
+  }
+
+  if (conflicts.length > 0) {
+    console.warn(`[db] Calendario ${teacherId}: ${conflicts.length} casilla(s) cambiadas por otra persona, no se pisaron:`, conflicts);
+  }
+
+  const studentsLeft = applied.length > 0
+    ? await afterGridChange(teacherId, before, after, applied, actor)
+    : [];
+  return { grid: after, applied, conflicts, studentsLeft };
+}
+
+/**
+ * Lo que sigue a un guardado real: historial, horario de las fichas y alta/baja
+ * de las asignaciones. `before`/`after` son el calendario REAL de la base antes y
+ * después de ESTE guardado, así que todo lo que difiere lo causó este guardado y
+ * nada más: una copia vieja ya no puede reactivar ni desactivar a nadie.
+ *
+ * Best-effort: el calendario ya está guardado; un fallo acá se registra y sigue.
+ */
+async function afterGridChange(
+  teacherId: string, before: Grid, after: Grid, appliedKeys: string[], actor: CalendarActor,
+): Promise<StudentLeftGrid[]> {
+  try {
+    await logCalendarChanges(teacherId, studentEvents(before, after, appliedKeys), actor);
+  } catch (err) {
+    console.error('[db] No se pudo registrar el historial del calendario:', err);
+  }
+  try {
+    return await reconcileAssignmentStatus(teacherId, before, after, actor);
+  } catch (err) {
+    console.error('[db] No se pudo reconciliar las asignaciones tras guardar el calendario:', err);
+    return [];
+  }
+}
+
+/** Escribe los movimientos en calendar_changes. Sin la tabla, avisa y sigue. */
+async function logCalendarChanges(teacherId: string, events: StudentCellEvent[], actor: CalendarActor): Promise<void> {
+  if (events.length === 0) return;
+  const [{ data: t }, assignments] = await Promise.all([
+    supabase.from('teachers').select('name').eq('id', teacherId).maybeSingle(),
+    dbGetAssignmentsByTeacher(teacherId),
+  ]);
+  const asgIdOf = (name: string) =>
+    (assignments.find(a => normKey(a.studentName) === normKey(name))
+      ?? assignments.find(a => normLoose(a.studentName) === normLoose(name)))?.id ?? null;
+
+  const rows = events.map(e => ({
+    teacher_id:    teacherId,
+    teacher_name:  (t as { name?: string } | null)?.name ?? null,
+    student_name:  e.studentName,
+    assignment_id: asgIdOf(e.studentName),
+    day:           e.day,
+    hour:          e.hour,
+    action:        e.action,
+    actor_role:    actor.role,
+    actor_name:    actor.name,
+    origin:        actor.origin,
+    detail:        e.previousName ? { nombre_anterior: e.previousName } : null,
+  }));
+  const { error } = await supabase.from('calendar_changes').insert(rows);
+  if (error) {
+    if (error.code === '42P01' || error.code === 'PGRST205') {
+      console.warn('[db] Falta la tabla calendar_changes: corré supabase-calendar-history.sql.');
+      return;
+    }
+    throw error;
+  }
+}
+
+/** Historial de un alumno o de un profesor, más reciente primero. */
+export interface CalendarChangeRow {
+  id: string;
+  teacherId: string;
+  teacherName: string | null;
+  studentName: string;
+  assignmentId: string | null;
+  day: string;
+  hour: string;
+  action: 'agregado' | 'quitado' | 'renombrado';
+  actorRole: string | null;
+  actorName: string | null;
+  origin: CalendarOrigin;
+  createdAt: string;
+}
+
+export async function dbGetCalendarChanges(filter: { assignmentId?: string; teacherId?: string; limit?: number }): Promise<CalendarChangeRow[]> {
+  let q = supabase.from('calendar_changes')
+    .select('id, teacher_id, teacher_name, student_name, assignment_id, day, hour, action, actor_role, actor_name, origin, created_at')
+    .order('created_at', { ascending: false })
+    .limit(filter.limit ?? 50);
+  if (filter.assignmentId) q = q.eq('assignment_id', filter.assignmentId);
+  if (filter.teacherId) q = q.eq('teacher_id', filter.teacherId);
+  const { data, error } = await q;
+  if (error) { console.error('[db] No se pudo leer el historial del calendario:', error); return []; }
+  type Row = { id: string; teacher_id: string; teacher_name: string | null; student_name: string; assignment_id: string | null; day: string; hour: string; action: CalendarChangeRow['action']; actor_role: string | null; actor_name: string | null; origin: CalendarOrigin; created_at: string };
+  return ((data ?? []) as Row[]).map(r => ({
+    id: r.id, teacherId: r.teacher_id, teacherName: r.teacher_name, studentName: r.student_name,
+    assignmentId: r.assignment_id, day: r.day, hour: r.hour, action: r.action,
+    actorRole: r.actor_role, actorName: r.actor_name, origin: r.origin, createdAt: r.created_at,
+  }));
+}
+
+/**
+ * Para las operaciones del sistema que parten de un grid recién leído y lo
+ * modifican en memoria (cambio de profesor, eliminar alumno...): guarda solo lo
+ * que cambiaron y LANZA si alguna casilla la tocó otra persona entre medio, para
+ * no dejar la operación a medias en silencio.
+ */
+async function saveTeacherGridOrThrow(teacherId: string, base: Grid, grid: Grid, actor: CalendarActor = SYSTEM_ACTOR): Promise<void> {
+  const r = await dbSaveTeacherGridChanges(teacherId, base, grid, actor);
+  if (r.conflicts.length > 0) {
+    throw new Error(`Otra persona cambió el calendario de ${teacherId} en ${r.conflicts.join(', ')} mientras tanto. Volvé a intentarlo.`);
+  }
+}
+
+// ── FUERA DE CALENDARIO: lista y restauración (pestaña del admin) ─────────────
+
+/**
+ * Asignaciones (activas e inactivas) cuyo alumno no se ve en el calendario de su
+ * profesor. Misma lógica que la consulta de diagnóstico: lib/offCalendar.ts.
+ * LANZA si no se pudieron leer los datos: una lista vacía por un error haría
+ * creer que no hay nadie fuera.
+ */
+export async function dbLoadOffCalendar(): Promise<OffCalendarRow[]> {
+  const [assignments, teachers, students, cal] = await Promise.all([
+    dbGetAssignments(),
+    dbGetTeachers(),
+    dbGetStudents(),
+    fetchAllPages<{ teacher_id: string; grid: Grid }>('teacher_calendars', (from, to) =>
+      supabase.from('teacher_calendars').select('teacher_id, grid').order('teacher_id').range(from, to)),
+  ]);
+  if (cal.error) throw new CalendarReadError('todos', cal.error.message);
+  if (assignments.length === 0) throw new Error('No se pudieron leer las asignaciones.');
+
+  return findOffCalendar({
+    assignments,
+    grids: new Map(cal.rows.map(r => [r.teacher_id, r.grid ?? {}])),
+    teacherNames: new Map(teachers.map(t => [t.id, t.name])),
+    studentNames: new Map(students.map(s => [s.id, s.name])),
+  });
+}
+
+export interface RestoreResult {
+  studentName: string;
+  teacherName: string;
+  restored: AssignedSlot[];
+  /** Horarios que NO se pusieron, con el motivo. Nunca se pisa a otro alumno. */
+  skipped: Array<AssignedSlot & { reason: string }>;
+}
+
+async function readAssignmentForCalendar(assignmentId: string) {
+  const { data, error } = await supabase.from('assignments')
+    .select('id, teacher_id, teacher_name, student_name')
+    .eq('id', assignmentId).maybeSingle();
+  if (error || !data) throw new Error(`No se encontró la asignación ${assignmentId}${error ? `: ${error.message}` : ''}`);
+  return data as { id: string; teacher_id: string; teacher_name: string; student_name: string };
+}
+
+/**
+ * Vuelve a poner a un alumno en el calendario de su profesor, en `slots`, con
+ * el nombre EXACTO de la asignación, y la deja activa. Solo usa casillas
+ * LIBRES: una ocupada por otro alumno, marcada "no trabajo" o inexistente se
+ * salta y se informa. Queda en el historial con origen "restauración" y el
+ * profesor recibe un aviso.
+ */
+export async function dbRestoreToCalendar(
+  assignmentId: string, slots: AssignedSlot[], actor: CalendarActor,
+): Promise<RestoreResult> {
+  const a = await readAssignmentForCalendar(assignmentId);
+  const grid = await dbReadTeacherGrid(a.teacher_id);
+  const name = a.student_name.trim();
+
+  const changes: GridChanges = {};
+  const skipped: RestoreResult['skipped'] = [];
+  const seen = new Set<string>();
+  for (const s of slots) {
+    const key = `${s.day}_${s.hour}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const st = slotStatusOf(grid, s);
+    if (st.state === 'libre') {
+      changes[key] = { expected: grid[key] ?? null, next: withBaseState(grid[key], 'ocupado', name) };
+    } else {
+      skipped.push({ ...s, reason:
+        st.state === 'ocupado' ? `ocupado por ${st.occupant ?? 'otro alumno'}`
+        : st.state === 'no_work' ? 'el profesor lo tiene marcado como "no trabajo"'
+        : 'el profesor no tiene habilitado ese horario' });
+    }
+  }
+
+  const restored: AssignedSlot[] = [];
+  if (Object.keys(changes).length > 0) {
+    const r = await dbApplyGridChanges(a.teacher_id, changes, { ...actor, origin: 'restauracion' });
+    for (const key of r.applied) { const p = splitCellKey(key); if (p) restored.push(p); }
+    for (const key of r.conflicts) {
+      const p = splitCellKey(key);
+      if (p) skipped.push({ ...p, reason: 'otra persona cambió esa casilla mientras tanto' });
+    }
+  }
+
+  if (restored.length > 0) {
+    // El guardado ya la reactiva (vuelve al grid); se asegura por si el alumno
+    // ya figuraba con otra grafía y el cruce no lo vio como "vuelta".
+    let { error } = await supabase.from('assignments')
+      .update({ status: 'active', ...CALENDAR_REMOVAL_CLEARED }).eq('id', a.id);
+    if (error && /calendar_removed/.test(error.message)) {
+      ({ error } = await supabase.from('assignments').update({ status: 'active' }).eq('id', a.id));
+    }
+    if (error) console.error(`[db] ${name}: restaurado en el calendario pero no se pudo reactivar la asignación:`, error);
+
+    try {
+      await dbSendNotification({
+        targetUser: a.teacher_id,
+        title: '🔁 Alumno restaurado en tu calendario',
+        body: `${name} volvió a tu calendario: ${restored.map(s => `${s.day} ${s.hour}`).join(', ')}. Lo restauró ${actor.name}.`,
+        type: 'calendar_restored',
+        createdBy: actor.name,
+      });
+    } catch (err) {
+      console.error('[db] No se pudo avisar al profesor de la restauración:', err);
+    }
+  }
+
+  return { studentName: name, teacherName: a.teacher_name, restored, skipped };
+}
+
+/**
+ * Corrige la grafía del alumno en el calendario de su profesor: las casillas
+ * donde figura como `gridName` pasan a llevar el nombre EXACTO de la
+ * asignación. No agrega casillas (no duplica), solo renombra las que hay.
+ */
+export async function dbFixCalendarName(
+  assignmentId: string, gridName: string, actor: CalendarActor,
+): Promise<{ renamed: number; conflicts: number }> {
+  const a = await readAssignmentForCalendar(assignmentId);
+  const grid = await dbReadTeacherGrid(a.teacher_id);
+  const from = gridName.trim();
+  const to = a.student_name.trim();
+
+  const changes: GridChanges = {};
+  for (const [key, cell] of Object.entries(grid)) {
+    if (!cell || baseStudentOf(cell)?.trim() !== from) continue;
+    const next = isPuntualState(cell.state) && cell.weekDate
+      ? { ...cell, baseStudent: to, ...(cell.student?.trim() === from ? { student: to } : {}) }
+      : { ...cell, student: to };
+    changes[key] = { expected: cell, next };
+  }
+  if (Object.keys(changes).length === 0) return { renamed: 0, conflicts: 0 };
+
+  const r = await dbApplyGridChanges(a.teacher_id, changes, { ...actor, origin: 'restauracion' });
+  return { renamed: r.applied.length, conflicts: r.conflicts.length };
 }
 
 /**
@@ -570,8 +886,28 @@ export interface StudentLeftGrid {
   studentEmail: string;
 }
 
+/**
+ * Quita del calendario: los datos que se guardan en la asignación al perder su
+ * última casilla. "Manual" = la quitó una persona desde un calendario (profesor,
+ * admin, setter...); las operaciones del sistema (cambio de profesor, eliminar
+ * alumno, quitar duplicado) no cuentan como quita manual.
+ */
+function calendarRemovalFields(actor: CalendarActor): Record<string, unknown> {
+  return {
+    calendar_removed_at:     new Date().toISOString(),
+    calendar_removed_manual: actor.origin !== 'sistema',
+    calendar_removed_by:     actor.name,
+    calendar_removed_role:   actor.role,
+  };
+}
+
+const CALENDAR_REMOVAL_CLEARED = {
+  calendar_removed_at: null, calendar_removed_manual: null,
+  calendar_removed_by: null, calendar_removed_role: null,
+};
+
 async function reconcileAssignmentStatus(
-  teacherId: string, before: Grid, after: Grid,
+  teacherId: string, before: Grid, after: Grid, actor: CalendarActor,
 ): Promise<StudentLeftGrid[]> {
   const namesOf = (g: Grid) => new Set(extractOcupadoCells(g).map(c => normKey(c.student)));
   const antes   = namesOf(before);
@@ -594,13 +930,18 @@ async function reconcileAssignmentStatus(
     return assignments.filter(a => set.has(normKey(a.studentName))).map(a => a.id);
   };
 
-  const cambios: Array<{ ids: string[]; status: string }> = [
-    { ids: idsOf(liberados),   status: 'inactive' },
-    { ids: idsOf(recuperados), status: 'active'   },
+  const cambios: Array<{ ids: string[]; status: string; extra: Record<string, unknown> }> = [
+    { ids: idsOf(liberados),   status: 'inactive', extra: calendarRemovalFields(actor) },
+    { ids: idsOf(recuperados), status: 'active',   extra: CALENDAR_REMOVAL_CLEARED },
   ].filter(c => c.ids.length > 0);
 
-  for (const { ids, status } of cambios) {
-    const { error } = await supabase.from('assignments').update({ status }).in('id', ids);
+  for (const { ids, status, extra } of cambios) {
+    let { error } = await supabase.from('assignments').update({ status, ...extra }).in('id', ids);
+    // Sin las columnas calendar_removed_* (SQL sin correr): al menos el status.
+    if (error && (error.code === '42703' || error.code === 'PGRST204') && /calendar_removed/.test(error.message)) {
+      console.warn('[db] Faltan las columnas calendar_removed_*: corré supabase-calendar-history.sql.');
+      ({ error } = await supabase.from('assignments').update({ status }).in('id', ids));
+    }
     if (error) {
       if (error.code === '42703' || error.code === 'PGRST204') {
         console.warn(
@@ -868,6 +1209,10 @@ export async function dbGetAssignments(): Promise<Assignment[]> {
     welcomeEmailSentAt:      row.welcome_email_sent_at ?? undefined,
     welcomeEmailTo:          row.welcome_email_to ?? undefined,
     status:                  row.status ?? undefined,
+    calendarRemovedAt:       row.calendar_removed_at ?? undefined,
+    calendarRemovedManual:   row.calendar_removed_manual ?? undefined,
+    calendarRemovedBy:       row.calendar_removed_by ?? undefined,
+    calendarRemovedRole:     row.calendar_removed_role ?? undefined,
   }));
 }
 
@@ -1831,6 +2176,10 @@ export async function dbGetAssignmentsByTeacher(teacherId: string): Promise<Assi
     welcomeEmailSentAt:      row.welcome_email_sent_at ?? undefined,
     welcomeEmailTo:          row.welcome_email_to ?? undefined,
     status:                  row.status ?? undefined,
+    calendarRemovedAt:       row.calendar_removed_at ?? undefined,
+    calendarRemovedManual:   row.calendar_removed_manual ?? undefined,
+    calendarRemovedBy:       row.calendar_removed_by ?? undefined,
+    calendarRemovedRole:     row.calendar_removed_role ?? undefined,
   }));
 }
 
@@ -2288,7 +2637,13 @@ export async function dbDeleteStudent(
 
   // Liberar las celdas del grid de cada profesor.
   for (const teacherId of teacherIds) {
-    const grid = await dbGetTeacherGrid(teacherId);
+    let grid: Grid;
+    try {
+      grid = await dbReadTeacherGrid(teacherId);
+    } catch (err) {
+      console.error(`[dbDeleteStudent] No se pudo leer el calendario de ${teacherId}: sus casillas quedan como estaban.`, err);
+      continue;
+    }
     const updated: Grid = { ...grid };
     let cleaned = 0;
 
@@ -2312,16 +2667,12 @@ export async function dbDeleteStudent(
     console.log(`[dbDeleteStudent] Profesor ${teacherId}: ${cleaned} celda(s) limpiada(s)`);
 
     if (cleaned > 0) {
-      const { error } = await supabase
-        .from('teacher_calendars')
-        .upsert(
-          { teacher_id: teacherId, grid: updated, updated_at: new Date().toISOString() },
-          { onConflict: 'teacher_id' }
-        );
-      if (error) {
+      // Solo las casillas de este alumno: el resto del calendario no se reescribe.
+      try {
+        const r = await dbSaveTeacherGridChanges(teacherId, grid, updated, SYSTEM_ACTOR);
+        console.log(`[dbDeleteStudent] Grid del profesor ${teacherId} guardado OK${r.conflicts.length ? ` (${r.conflicts.length} casilla(s) cambiadas por otra persona, no se tocaron)` : ''}`);
+      } catch (error) {
         console.error(`[dbDeleteStudent] Error al guardar grid del profesor ${teacherId}:`, error);
-      } else {
-        console.log(`[dbDeleteStudent] Grid del profesor ${teacherId} guardado OK`);
       }
     }
   }
@@ -4608,11 +4959,13 @@ export async function dbChangeStudentTeacher(p: ChangeTeacherParams): Promise<vo
     throw new TransferError('validación', [], new Error('el profesor de origen y el de destino son el mismo'));
   }
 
+  // Lectura estricta: con un calendario ilegible NO se transfiere (antes se
+  // tomaba como vacío y se guardaba encima).
   const [asgRow, newGrid, oldGrid] = await Promise.all([
     supabase.from('assignments').select('id').eq('id', p.assignmentId).maybeSingle(),
-    dbGetTeacherGrid(p.to.id),
-    dbGetTeacherGrid(p.from.id),
-  ]);
+    dbReadTeacherGrid(p.to.id),
+    dbReadTeacherGrid(p.from.id),
+  ]).catch(err => { throw new TransferError('validación', [], err); });
   if (asgRow.error || !asgRow.data) {
     throw new TransferError('validación', [], new Error(`la assignment ${p.assignmentId} ya no existe`));
   }
@@ -4634,7 +4987,7 @@ export async function dbChangeStudentTeacher(p: ChangeTeacherParams): Promise<vo
     updatedNew[`${s.day}_${s.hour}`] = withBaseState(updatedNew[`${s.day}_${s.hour}`], 'ocupado', p.studentName);
   }
   try {
-    await saveTeacherGridOrThrow(p.to.id, updatedNew);
+    await saveTeacherGridOrThrow(p.to.id, newGrid, updatedNew);
     completed.push(`se ocuparon los horarios en el calendario de ${p.to.name}`);
     log(`calendario de ${p.to.name} ocupado`);
   } catch (err) {
@@ -4695,7 +5048,7 @@ export async function dbChangeStudentTeacher(p: ChangeTeacherParams): Promise<vo
   }
   if (cleared > 0) {
     try {
-      await saveTeacherGridOrThrow(p.from.id, updatedOld);
+      await saveTeacherGridOrThrow(p.from.id, oldGrid, updatedOld);
       completed.push(`se liberaron ${cleared} horario(s) de ${p.from.name}`);
       log(`calendario de ${p.from.name}: ${cleared} celda(s) liberadas`);
     } catch (err) {
@@ -4760,8 +5113,9 @@ export async function dbChangeStudentTeacher(p: ChangeTeacherParams): Promise<vo
 export async function dbRemoveAssignment(
   assignmentId: string, teacherId: string, studentName: string, slots: AssignedSlot[],
 ): Promise<void> {
+  // Primero se lee el calendario (estricto): si no se puede leer, no se borra nada.
+  const grid = await dbReadTeacherGrid(teacherId);
   await supabase.from('assignments').delete().eq('id', assignmentId);
-  const grid = await dbGetTeacherGrid(teacherId);
   const updated: Grid = { ...grid };
   const keys = new Set(slots.map(s => `${s.day}_${s.hour}`));
   let changed = false;
@@ -4773,7 +5127,7 @@ export async function dbRemoveAssignment(
       changed = true;
     }
   }
-  if (changed) await dbSaveTeacherGrid(teacherId, updated);
+  if (changed) await dbSaveTeacherGridChanges(teacherId, grid, updated, SYSTEM_ACTOR);
   await dbRecalculateTeacherScore(teacherId);
 }
 

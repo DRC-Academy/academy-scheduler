@@ -35,7 +35,7 @@ const OTRAS_PANTALLAS = [
 ];
 
 export type AdminTabId =
-  | 'teachers' | 'emails' | 'scoring' | 'bonos' | 'tracking' | 'classlog' | 'transcripts'
+  | 'teachers' | 'emails' | 'scoring' | 'bonos' | 'tracking' | 'fueracal' | 'classlog' | 'transcripts'
   | 'leveltests' | 'validacion' | 'ai' | 'aiusage' | 'bajas' | 'notifications';
 
 /**
@@ -65,6 +65,7 @@ interface Seccion { id: AdminTabId | 'proximos'; label: string; href?: string }
 const GRUPOS: Array<{ nombre: string; secciones: Seccion[] }> = [
   { nombre: 'Alumnos', secciones: [
     { id: 'tracking', label: 'Seguimiento' },
+    { id: 'fueracal', label: 'Fuera de calendario' },
     { id: 'leveltests', label: 'Tests de nivel' },
     { id: 'ai', label: 'Riesgo' },
     { id: 'proximos', label: 'Próximos a cancelar', href: '/proximos-cancelar' },
@@ -128,7 +129,7 @@ export function AdminNavMovil({ activeTab, contadores, onSelect, onVolver, child
     ai: <AlertTriangle size={22} strokeWidth={1.75} aria-hidden />,
     teachers: <Users size={22} strokeWidth={1.75} aria-hidden />,
     emails: <Link2 size={22} strokeWidth={1.75} aria-hidden />,
-    scoring: null, bonos: null, tracking: null, classlog: null, transcripts: null, leveltests: null, aiusage: null, bajas: null, notifications: null,
+    scoring: null, bonos: null, tracking: null, fueracal: null, classlog: null, transcripts: null, leveltests: null, aiusage: null, bajas: null, notifications: null,
   };
 
   return (

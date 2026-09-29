@@ -1,5 +1,5 @@
 'use client';
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { NavBar } from '@/components/NavBar';
 import { StatusBadge } from '@/components/StatusBadge';
 import { AuthGuard } from '@/components/AuthGuard';
@@ -21,6 +21,8 @@ import FormStatusBadge from '@/components/FormStatusBadge';
 import { fetchFormTokensIndex, lookupToken, type FormTokenInfo } from '@/lib/formClient';
 import { isValidEmail } from '@/lib/validation';
 import AlumnoYaAsignadoModal from '@/components/AlumnoYaAsignadoModal';
+import { useGridSaver, conflictMessage, calendarErrorMessage } from '@/lib/useGridSaver';
+import CalendarLoadError from '@/components/CalendarLoadError';
 import { findOtherTeacherAssignments, type ExistingAssignmentMatch } from '@/lib/assignmentGuard';
 import { checkSubscription, subBadge, type SubscriptionInfo } from '@/lib/useSubscriptionStatus';
 
@@ -513,7 +515,6 @@ function AssignModal({
           setYaAsignado(null);
           doConfirm();
         }}
-        onKeepBoth={() => { setYaAsignado(null); doConfirm(); }}
         onCancel={() => setYaAsignado(null)}
       />
     )}
@@ -562,25 +563,44 @@ function TeacherCalendarModal({
   onClose: () => void;
   onAssigned: (a: Assignment, s: Student) => void;
 }) {
-  const { updateTeacherGrid, getTeacherGrid } = useTeachers();
+  const { getTeacherGrid } = useTeachers();
   const baseGrid = useMemo(() => buildGridFromTeacher(teacher.timeSlots, teacher.upcomingClasses), [teacher]);
   const [grid, setGrid] = useState<Grid>(baseGrid);
+  // Último grid conocido (lo de la base + clics en camino): el "antes" de cada
+  // guardado por casillas. Si el profesor no tiene calendario todavía, arranca
+  // vacío aunque en pantalla se vea el grid de muestra, así el primer guardado
+  // lo escribe entero.
+  const gridRef = useRef<Grid>({});
   const [loadingGrid, setLoadingGrid] = useState(true);
+  const [gridError, setGridError] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
   const [editMode, setEditMode] = useState(false);
   const [assignCell, setAssignCell] = useState<AssignedSlot | null>(null);
+  const saveGrid = useGridSaver('setter');
 
   useEffect(() => {
     // force=true: leer la disponibilidad viva del profesor, no un snapshot
     // cacheado. Así aparecen los slots que el profesor acaba de marcar libre.
     getTeacherGrid(teacher.id, true).then(g => {
+      gridRef.current = g;
+      setGridError(null);
       setGrid(Object.keys(g).length > 0 ? g : baseGrid);
-      setLoadingGrid(false);
-    });
-  }, [teacher.id]);
+    }).catch(err => setGridError(calendarErrorMessage(err)))
+      .finally(() => setLoadingGrid(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teacher.id, reload]);
 
-  function handleGridChange(g: Grid) {
+  async function handleGridChange(g: Grid) {
+    const prev = gridRef.current;
+    gridRef.current = g;
     setGrid(g);
-    updateTeacherGrid(teacher.id, g);
+    try {
+      const r = await saveGrid(teacher.id, prev, g);
+      if (r.idle) { gridRef.current = r.grid; setGrid(r.grid); }
+      if (r.conflicts.length > 0) alert(conflictMessage(r.conflicts));
+    } catch (err) {
+      setGridError(calendarErrorMessage(err));
+    }
   }
 
   return (
@@ -614,6 +634,8 @@ function TeacherCalendarModal({
 
         {loadingGrid ? (
           <div style={{ textAlign: 'center', padding: '48px 0', color: 'var(--text-muted)' }}>Cargando calendario...</div>
+        ) : gridError ? (
+          <CalendarLoadError message={gridError} onRetry={() => { setGridError(null); setLoadingGrid(true); setReload(n => n + 1); }} />
         ) : editMode ? (
           <VisualCalendar mode="teacher" grid={grid} onGridChange={handleGridChange} highlightSlots={highlightSlots} />
         ) : (
@@ -629,7 +651,7 @@ function TeacherCalendarModal({
           existingStudents={existingStudents}
           onClose={() => setAssignCell(null)}
           onConfirm={(a, s) => {
-            let updated = { ...grid };
+            let updated = { ...(Object.keys(gridRef.current).length > 0 ? gridRef.current : grid) };
             a.slots.forEach(sl => {
               // withBaseState: no borra una recuperación puntual de esa semana.
               const key = cellKey(sl.day, sl.hour);
@@ -878,6 +900,10 @@ function VincularModal({
 }
 
 // Carga la grilla del profesor y abre el AssignModal precargado con el alumno.
+//
+// Al confirmar PINTA las casillas en el calendario del profesor. Hasta sep/2026
+// no lo hacía: la ficha se creaba con sus horarios pero el alumno nunca aparecía
+// en el calendario (probable origen del caso María do Mar Campos Souto).
 function LinkCreateAssign({
   teacher, student, existingStudents, onClose, onAssigned,
 }: {
@@ -888,13 +914,47 @@ function LinkCreateAssign({
   onAssigned: (a: Assignment, s: Student) => void;
 }) {
   const { getTeacherGrid } = useTeachers();
+  const saveGrid = useGridSaver('setter');
   const baseGrid = useMemo(() => buildGridFromTeacher(teacher.timeSlots, teacher.upcomingClasses), [teacher]);
   const [grid, setGrid] = useState<Grid | null>(null);
+  // Lo que hay de verdad en la base: el "antes" del guardado por casillas.
+  const serverRef = useRef<Grid>({});
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    getTeacherGrid(teacher.id, true).then(g => setGrid(Object.keys(g).length > 0 ? g : baseGrid));
+    getTeacherGrid(teacher.id, true).then(g => {
+      serverRef.current = g;
+      setGrid(Object.keys(g).length > 0 ? g : baseGrid);
+    }).catch(err => setError(calendarErrorMessage(err)));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [teacher.id]);
+
+  async function confirm(a: Assignment, s: Student) {
+    const base = grid ?? {};
+    let updated: Grid = { ...base };
+    for (const sl of a.slots) {
+      const key = cellKey(sl.day, sl.hour);
+      updated = { ...updated, [key]: withBaseState(updated[key], 'ocupado', s.name) };
+    }
+    try {
+      const r = await saveGrid(teacher.id, serverRef.current, updated);
+      if (r.conflicts.length > 0) alert(conflictMessage(r.conflicts));
+    } catch (err) {
+      alert('No se pudo marcar el horario en el calendario del profesor, así que NO se creó la asignación.\n\n' + calendarErrorMessage(err));
+      return;
+    }
+    onAssigned(a, s);
+  }
+
+  if (error) {
+    return (
+      <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(6px)', zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+        <div style={{ maxWidth: 460, width: '100%' }}>
+          <CalendarLoadError message={error} onRetry={onClose} />
+        </div>
+      </div>
+    );
+  }
 
   if (!grid) {
     return (
@@ -912,7 +972,7 @@ function LinkCreateAssign({
       existingStudents={existingStudents}
       initialStudentId={student.id}
       onClose={onClose}
-      onConfirm={onAssigned}
+      onConfirm={confirm}
     />
   );
 }

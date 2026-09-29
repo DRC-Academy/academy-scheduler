@@ -90,8 +90,14 @@ export function CambiarProfesorModal({
     setLoadingGrid(true);
     setNewGrid(null);
     try {
-      const g = await getTeacherGrid(t.id);
+      // Fresco de la base: con una copia vieja se ofrecían como libres horarios
+      // que otro ya había ocupado.
+      const g = await getTeacherGrid(t.id, true);
       setNewGrid(g);
+    } catch (err) {
+      alert('No se pudo leer el calendario de ' + t.name + ': ' + (err instanceof Error ? err.message : String(err)));
+      setNewTeacher(null);
+      return;
     } finally {
       setLoadingGrid(false);
     }

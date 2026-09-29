@@ -28,6 +28,7 @@ import { getNextDifficulty } from '@/lib/levelTest/adaptive';
 import { checkWritingAttempt, type InvalidReason } from '@/lib/levelTest/attemptValidity';
 import { evaluateWriting } from '@/lib/evaluateWriting';
 import type { Cefr, WritingEvaluation } from '@/lib/levelTest/types';
+import { sessionExpired } from '@/lib/levelTest/canonical';
 
 export const dynamic = 'force-dynamic';
 
@@ -84,8 +85,11 @@ export async function POST(
   if (error) return Response.json({ error: 'Error del servidor.' }, { status: 500 });
   if (!s) return Response.json({ error: 'Este link no es válido.' }, { status: 404 });
   if (s.status === 'completed') return Response.json({ error: 'El test ya fue completado.' }, { status: 409 });
-  if (s.expires_at && new Date(s.expires_at).getTime() < Date.now()) {
-    await supabase.from('level_test_sessions').update({ status: 'expired' }).eq('id', s.id);
+  // Solo caducan las pruebas de leads; la de un alumno no (lib/levelTest/canonical).
+  if (sessionExpired({ student_id: s.student_id, status: s.status, expires_at: s.expires_at })) {
+    if (s.status !== 'expired' && s.status !== 'abandoned') {
+      await supabase.from('level_test_sessions').update({ status: 'expired' }).eq('id', s.id);
+    }
     return Response.json({ error: 'Este link ya expiró.' }, { status: 410 });
   }
 

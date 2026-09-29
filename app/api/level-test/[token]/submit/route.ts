@@ -9,6 +9,8 @@
 //   · incompleto y el enlace vigente → 409 y la sesión intacta en 'in_progress',
 //     para que el alumno pueda retomarla. NO es un error: es "todavía no".
 //   · incompleto y el enlace caducado → 'abandoned', sin nivel y sin vuelta atrás.
+//     Solo pasa con leads: la prueba de un alumno no caduca por fecha desde el
+//     28/09/2026 (lib/levelTest/canonical).
 //
 // PROVISIONAL (cambio A.3): si la escritura no se pudo puntuar —intento no válido
 // o IA caída— el nivel sale solo de la lectura y queda marcado como provisional.
@@ -26,6 +28,7 @@ import { markLevelValidationPending } from '@/lib/levelValidationPending';
 import { CAP_REASON_LABEL } from '@/lib/levelTest/scoring';
 import { computeFinalResult } from '@/lib/levelTest/finalResult';
 import { GRAND_TOTAL } from '@/lib/levelTest/constants';
+import { sessionExpired } from '@/lib/levelTest/canonical';
 
 export const dynamic = 'force-dynamic';
 
@@ -105,7 +108,7 @@ export async function POST(
       provisional: s.writing_score == null,
     });
   }
-  if (s.status === 'abandoned') {
+  if (s.status === 'abandoned' && sessionExpired({ student_id: s.student_id, status: s.status, expires_at: s.expires_at })) {
     return Response.json({ error: 'Este test quedó sin terminar y el enlace ya expiró.', abandoned: true }, { status: 410 });
   }
 
@@ -118,9 +121,7 @@ export async function POST(
   const answeredCount = new Set(rows.map(r => r.question_id)).size;
 
   if (answeredCount < GRAND_TOTAL) {
-    const expired = s.expires_at && new Date(s.expires_at).getTime() < Date.now();
-
-    if (expired) {
+    if (sessionExpired({ student_id: s.student_id, status: s.status, expires_at: s.expires_at })) {
       await updateSession(s.id, { status: 'abandoned' }, { answered_count: answeredCount });
       return Response.json({
         error: 'Este test quedó sin terminar y el enlace ya expiró.',

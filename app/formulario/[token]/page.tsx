@@ -32,8 +32,40 @@ interface TokenRow {
 type LoadState =
   | { kind: 'loading' }
   | { kind: 'invalid' }
-  | { kind: 'done' }               // token ya completado
+  | { kind: 'done'; token: TokenRow }   // token ya completado
   | { kind: 'ready'; token: TokenRow };
+
+/** La prueba de nivel en la pantalla final (lo arma lib/formFinalScreen). */
+interface FinalTest {
+  state: 'start' | 'continue' | 'completed';
+  url: string | null;
+}
+
+/** Lee la prueba de nivel de un formulario ya completado (/api/forms/status). */
+async function fetchFinalTest(formToken: string): Promise<FinalTest | null> {
+  const res = await fetch(`/api/forms/status?token=${encodeURIComponent(formToken)}`, { cache: 'no-store' });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || 'status');
+  return (data?.test as FinalTest | null) ?? null;
+}
+
+// Borrador de respuestas en el navegador: si el envío falla y el alumno recarga,
+// no pierde lo escrito. Se borra al enviar bien. Todo con try/catch: en modo
+// privado o con el almacenamiento bloqueado simplemente no hay borrador.
+const draftKey = (t: string) => `drc-form-draft:${t}`;
+function loadDraft(t: string): FormResponses {
+  try {
+    const raw = localStorage.getItem(draftKey(t));
+    const v = raw ? JSON.parse(raw) : null;
+    return v && typeof v === 'object' ? v as FormResponses : {};
+  } catch { return {}; }
+}
+function saveDraft(t: string, r: FormResponses) {
+  try { localStorage.setItem(draftKey(t), JSON.stringify(r)); } catch { /* sin borrador */ }
+}
+function clearDraft(t: string) {
+  try { localStorage.removeItem(draftKey(t)); } catch { /* nada */ }
+}
 
 export default function FormularioPage() {
   const params = useParams<{ token: string }>();
@@ -53,7 +85,7 @@ export default function FormularioPage() {
 
       if (cancelled) return;
       if (error || !data) { setState({ kind: 'invalid' }); return; }
-      if (data.status === 'completed') { setState({ kind: 'done' }); return; }
+      if (data.status === 'completed') { setState({ kind: 'done', token: data as TokenRow }); return; }
       const expired = data.expires_at && new Date(data.expires_at).getTime() < Date.now();
       if (data.status === 'expired' || expired) { setState({ kind: 'invalid' }); return; }
       setState({ kind: 'ready', token: data as TokenRow });
@@ -63,7 +95,7 @@ export default function FormularioPage() {
 
   if (state.kind === 'loading') return <LoadingScreen />;
   if (state.kind === 'invalid') return <ErrorScreen />;
-  if (state.kind === 'done') return <AlreadyDoneScreen />;
+  if (state.kind === 'done') return <AlreadyDoneScreen token={state.token} />;
   return <FormFlow token={state.token} />;
 }
 
@@ -74,11 +106,15 @@ function FormFlow({ token }: { token: TokenRow }) {
   const questions = questionsOf(resolveFormVariant({ plan: token.plan }));
   const total = questions.length;
   const [step, setStep] = useState(-1);   // -1 = pantalla de bienvenida
-  const [responses, setResponses] = useState<FormResponses>({});
+  const [responses, setResponses] = useState<FormResponses>(() => loadDraft(token.token));
   const [error, setError] = useState<string | null>(null);
+  // Fallo de envío (sin conexión, error del servidor): muestra "Reintentar".
+  const [sendFailed, setSendFailed] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [sent, setSent] = useState(false);
-  const [testUrl, setTestUrl] = useState<string | null>(null);
+  // Cerrojo síncrono contra el doble envío: `submitting` es estado de React y
+  // tarda un render en desactivar el botón; esto corta ya en el mismo clic.
+  const inFlight = useRef(false);
+  const [final, setFinal] = useState<{ test: FinalTest | null } | null>(null);
 
   const q = step >= 0 && step < total ? questions[step] : null;
 
@@ -100,8 +136,13 @@ function FormFlow({ token }: { token: TokenRow }) {
   }
 
   function setAnswer(id: string, value: unknown) {
-    setResponses(prev => ({ ...prev, [id]: value }));
+    setResponses(prev => {
+      const next = { ...prev, [id]: value };
+      saveDraft(token.token, next);
+      return next;
+    });
     setError(null);
+    setSendFailed(false);
   }
 
   function isAnswered(question: FormQuestion): boolean {
@@ -129,6 +170,7 @@ function FormFlow({ token }: { token: TokenRow }) {
   function prev() { setError(null); setStep(s => s - 1); }
 
   async function submit() {
+    if (inFlight.current) return;
     const missing = firstUnansweredRequired(responses, questions);
     if (missing) {
       setError(`Falta responder: ${missing.title}`);
@@ -137,32 +179,40 @@ function FormFlow({ token }: { token: TokenRow }) {
       if (idx >= 0) setStep(idx);
       return;
     }
+    inFlight.current = true;
     setSubmitting(true);
     setError(null);
+    setSendFailed(false);
     gecko.dispara('estudiando');
+    const fallo = (msg: string) => {
+      setError(msg);
+      setSendFailed(true);
+      setSubmitting(false);
+      inFlight.current = false;
+      gecko.dispara('duda');
+    };
     try {
       const res = await fetch('/api/forms/submit', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ token: token.token, responses }),
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setError(data?.error || 'No se pudieron enviar tus respuestas. Inténtalo de nuevo.');
-        setSubmitting(false);
-        gecko.dispara('duda');
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.success) {
+        // Un error con mensaje propio (falta una respuesta, enlace no disponible)
+        // se enseña tal cual; lo demás (caída del servidor, respuesta cortada)
+        // es un fallo de envío que se puede reintentar.
+        fallo(data?.error || 'No hemos podido enviar tus respuestas. No se ha perdido nada: vuelve a intentarlo.');
         return;
       }
-      setTestUrl(typeof data?.testUrl === 'string' ? data.testUrl : null);
-      setSent(true);
+      clearDraft(token.token);
+      setFinal({ test: (data.test as FinalTest | null) ?? null });
     } catch {
-      setError('No hay conexión. Revisa tu internet e inténtalo de nuevo.');
-      setSubmitting(false);
-      gecko.dispara('duda');
+      fallo('No hemos podido enviar tus respuestas. Revisa tu conexión y vuelve a intentarlo: lo que has escrito sigue aquí.');
     }
   }
 
-  if (sent) return <ThankYouScreen studentName={token.student_name} testUrl={testUrl} />;
+  if (final) return <FinalScreen token={token} initialTest={final.test} />;
 
   const progress =
     step < 0 ? null
@@ -186,7 +236,16 @@ function FormFlow({ token }: { token: TokenRow }) {
             />
           ) : null}
 
-          {error && <div className="drc-f-err" role="alert">⚠️ {error}</div>}
+          {error && (
+            <div className="drc-f-err" role="alert">
+              <span>⚠️ {error}</span>
+              {sendFailed && (
+                <button type="button" className="drc-f-retry" disabled={submitting} onClick={submit}>
+                  Reintentar
+                </button>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -452,33 +511,73 @@ function firstName(fullName: string): string {
 }
 
 /**
- * Pantalla final: una frase y un botón a la prueba de nivel. `testUrl` lo arma el
- * servidor con la URL PÚBLICA (lib/appUrl), nunca la del deployment de Vercel.
- * Si no se pudo preparar el enlace (raro), solo la frase: el recordatorio
- * automático de la prueba se lo manda por email igualmente.
+ * Pantalla final, la misma al terminar el formulario y al volver a abrir un
+ * enlace ya completado (nunca un error). Según la prueba de nivel:
+ *   · sin empezar  → "Genial, gracias…" + Empezar test de nivel
+ *   · a medias     → "Genial, gracias…" + Continuar test de nivel (la retoma)
+ *   · terminada    → "Ya lo tienes todo listo…", sin botón
+ * El enlace lo arma el servidor con la URL PÚBLICA (lib/appUrl), nunca la del
+ * deployment de Vercel. Si no se pudo preparar (raro), se ofrece reintentar.
  */
-function ThankYouScreen({ studentName, testUrl }: { studentName: string; testUrl: string | null }) {
-  const nombre = firstName(studentName);
+function FinalScreen({ token, initialTest }: { token: TokenRow; initialTest: FinalTest | null }) {
+  const nombre = firstName(token.student_name);
+  const [test, setTest] = useState<FinalTest | null>(initialTest);
+  const [retrying, setRetrying] = useState(false);
+  const [retryFailed, setRetryFailed] = useState(false);
   // Llega con el salto y las estrellas de «éxito», y se queda en reposo.
   const gecko = useMandoGecko();
   useEffect(() => {
     const t = setTimeout(() => gecko.dispara('exito'), 350);
     return () => clearTimeout(t);
   }, [gecko.dispara]);
+
+  async function retry() {
+    setRetrying(true);
+    setRetryFailed(false);
+    try {
+      const t = await fetchFinalTest(token.token);
+      setTest(t);
+      if (!t) setRetryFailed(true);
+    } catch {
+      setRetryFailed(true);
+    }
+    setRetrying(false);
+  }
+
+  const done = test?.state === 'completed';
   return (
     <Shell>
       <CardHeader progress={null} />
       <div className="drc-f-content">
         <div className="drc-f-screen center drc-f-anim drc-f-final">
           <div className="drc-f-gecko-final"><GeckoAnimado mando={gecko} alto={150} altoMovil={120} /></div>
-          <h1>
-            Genial, gracias{nombre ? ` ${nombre}` : ''}.
-            {testUrl && <> Vamos ahora con tu prueba de nivel.</>}
-          </h1>
-          {testUrl && (
-            <a className="drc-f-btn drc-f-btn-primary drc-f-final-btn" href={testUrl}>
-              Empezar test de nivel
+          {done ? (
+            <>
+              <h1>Ya lo tienes todo listo{nombre ? `, ${nombre}` : ''}.</h1>
+              <p className="drc-f-muted">Tu profe ya tiene tus respuestas y tu nivel. ¡Nos vemos en clase!</p>
+            </>
+          ) : (
+            <h1>
+              Genial, gracias{nombre ? ` ${nombre}` : ''}.
+              {test?.url && <> Vamos ahora con tu prueba de nivel.</>}
+            </h1>
+          )}
+          {!done && test?.url && (
+            <a className="drc-f-btn drc-f-btn-primary drc-f-final-btn" href={test.url}>
+              {test.state === 'continue' ? 'Continuar test de nivel' : 'Empezar test de nivel'}
             </a>
+          )}
+          {!test && (
+            <>
+              <p className="drc-f-muted">
+                {retryFailed
+                  ? 'Seguimos sin poder abrir tu prueba de nivel. Inténtalo en unos minutos o escríbenos y te ayudamos.'
+                  : 'Tus respuestas están guardadas. No hemos podido preparar tu prueba de nivel ahora mismo.'}
+              </p>
+              <button type="button" className="drc-f-btn drc-f-btn-primary drc-f-final-btn" disabled={retrying} onClick={retry}>
+                {retrying ? 'Preparando…' : 'Ir a la prueba de nivel'}
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -506,24 +605,22 @@ function ErrorScreen() {
   );
 }
 
-function AlreadyDoneScreen() {
-  const gecko = useMandoGecko();
+/**
+ * Enlace de un formulario ya completado: consulta la prueba de nivel y muestra
+ * la misma pantalla final que al enviar (con su botón), nunca un error.
+ */
+function AlreadyDoneScreen({ token }: { token: TokenRow }) {
+  const [test, setTest] = useState<FinalTest | null | undefined>(undefined);
   useEffect(() => {
-    const t = setTimeout(() => gecko.gesto('saludo'), 500);
-    return () => clearTimeout(t);
-  }, [gecko.gesto]);
-  return (
-    <Shell>
-      <CardHeader progress={null} />
-      <div className="drc-f-content">
-        <div className="drc-f-screen center drc-f-anim">
-          <div className="drc-f-gecko-final"><GeckoAnimado mando={gecko} alto={130} altoMovil={110} /></div>
-          <h1>Ya has completado el formulario.</h1>
-          <p className="drc-f-muted">Gracias por tus respuestas. Ya las tengo y se las he pasado a tu profe. Nos vemos en clase.</p>
-        </div>
-      </div>
-    </Shell>
-  );
+    let cancelled = false;
+    fetchFinalTest(token.token)
+      .then(t => { if (!cancelled) setTest(t); })
+      .catch(() => { if (!cancelled) setTest(null); });
+    return () => { cancelled = true; };
+  }, [token.token]);
+
+  if (test === undefined) return <LoadingScreen />;
+  return <FinalScreen token={token} initialTest={test} />;
 }
 
 function LoadingScreen() {
@@ -718,6 +815,14 @@ const FORM_CSS = `
   display: flex; align-items: center; gap: 8px; max-width: 640px;
   animation: drc-f-shake 0.3s;
 }
+.drc-f-err span { flex: 1; }
+.drc-f-retry {
+  flex-shrink: 0; appearance: none; font-family: inherit; font-size: 14px; font-weight: 700;
+  padding: 8px 14px; min-height: 40px; border-radius: 9px; cursor: pointer;
+  background: #fff; color: #C0392B; border: 1.5px solid rgba(192, 57, 43, 0.45);
+}
+.drc-f-retry:hover { background: rgba(192, 57, 43, 0.06); }
+.drc-f-retry:disabled { opacity: 0.6; cursor: wait; }
 @keyframes drc-f-shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
 
 /* Nav */

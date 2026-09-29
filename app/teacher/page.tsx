@@ -1,5 +1,5 @@
 ﻿'use client';
-import { useState, useEffect, useMemo, Suspense } from 'react';
+import { useState, useEffect, useMemo, useRef, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { NavBar } from '@/components/NavBar';
 import { AuthGuard } from '@/components/AuthGuard';
@@ -12,6 +12,8 @@ import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
 import { calcRegisteredClassNumber, dbCheckStudentExists, dbSetStudentProduct, dbEnsureStudentAndAssignment, dbSaveTeacherCalendarHours, getTeacherAssignments } from '@/lib/db';
 import type { StudentLeftGrid } from '@/lib/db';
+import { useGridSaver, conflictMessage, calendarErrorMessage } from '@/lib/useGridSaver';
+import CalendarLoadError from '@/components/CalendarLoadError';
 import { checkSubscription, resolveSubscriptionEmail, subCategory } from '@/lib/useSubscriptionStatus';
 import { planBadgeStyle } from '@/lib/productUtils';
 import { isAssignableCell, withBaseState, baseStudentOf } from '@/lib/cells';
@@ -1222,7 +1224,7 @@ type TeacherTab = typeof TEACHER_TABS[number];
 
 function TeacherContent() {
   const { user } = useAuth();
-  const { teachers, students, assignments, scoringEvents, notifications, classRecords, getTeacherGrid, updateTeacherGrid, addStudent, addAssignment, updateAssignmentStartDate, updateAssignmentSlots, reloadAll, updateTeacherSpecialties, loadNotifications, markNotificationRead, updateMeetLink, addRecoveryClass, removeAssignment, classJoinLogs, classAnalyses, registerClassRecord, teacherBonuses, claimRetentionBonus } = useTeachers();
+  const { teachers, students, assignments, scoringEvents, notifications, classRecords, getTeacherGrid, addStudent, addAssignment, updateAssignmentStartDate, updateAssignmentSlots, reloadAll, updateTeacherSpecialties, loadNotifications, markNotificationRead, updateMeetLink, addRecoveryClass, removeAssignment, classJoinLogs, classAnalyses, registerClassRecord, teacherBonuses, claimRetentionBonus } = useTeachers();
   const [activeTab, setActiveTab] = useState<TeacherTab>('calendar');
 
   // El campanario del header navega a /teacher?tab=notifications. Sincronizamos
@@ -1242,6 +1244,14 @@ function TeacherContent() {
   const [specialtiesDraft, setSpecialtiesDraft] = useState<string[]>([]);
   const [savingSpecialties, setSavingSpecialties] = useState(false);
   const [grid, setGrid]           = useState<Grid>({});
+  // Último grid que la pantalla conoce (incluye clics que todavía se están
+  // guardando). Es el "antes" de cada guardado por casillas: con el estado de
+  // React, dos clics seguidos compararían contra el mismo grid viejo.
+  const gridRef = useRef<Grid>({});
+  // Error de lectura o de guardado: el calendario no se muestra editable.
+  const [gridError, setGridError] = useState<string | null>(null);
+  const [gridReload, setGridReload] = useState(0);
+  const saveGrid = useGridSaver('profesor');
   const [calendarRange, setCalendarRange] = useState({ start: CAL_DEFAULT_START, end: CAL_DEFAULT_END });
   const [gridLoading, setGridLoading]   = useState(true);
   const [saveStatus, setSaveStatus]     = useState<'idle' | 'saving' | 'saved'>('idle');
@@ -1267,10 +1277,31 @@ function TeacherContent() {
       start: teacher.calendarStartHour ?? CAL_DEFAULT_START,
       end:   teacher.calendarEndHour   ?? CAL_DEFAULT_END,
     });
-    getTeacherGrid(teacher.id).then(g => {
+    // force: siempre el calendario vivo de la base, nunca una copia en memoria.
+    getTeacherGrid(teacher.id, true).then(g => {
+      gridRef.current = g;
       setGrid(g);
-      setGridLoading(false);
-    });
+      setGridError(null);
+    }).catch(err => {
+      setGridError(calendarErrorMessage(err));
+    }).finally(() => setGridLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teacher?.id, gridReload]);
+
+  // Al volver a esta pestaña se relee el calendario: si mientras tanto el setter
+  // o el admin lo cambiaron, se ve enseguida en vez de al primer clic.
+  useEffect(() => {
+    if (!teacher) return;
+    const id = teacher.id;
+    function onVisible() {
+      if (document.hidden) return;
+      getTeacherGrid(id, true)
+        .then(g => { gridRef.current = g; setGrid(g); })
+        .catch(() => { /* sin red: sigue la copia actual; el guardado igual no pisa nada */ });
+    }
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [teacher?.id]);
 
   // ── Alumnos del profesor: FUENTE ÚNICA DE VERDAD ───────────────────────────
@@ -1344,9 +1375,23 @@ function TeacherContent() {
   }, [teacher?.id, gridOccupancy]);
 
   async function handleGridChange(g: Grid) {
+    const prev = gridRef.current;
+    gridRef.current = g;
     setGrid(g);
     setSaveStatus('saving');
-    const sinHorario = await updateTeacherGrid(teacher.id, g);
+    let sinHorario: StudentLeftGrid[];
+    try {
+      // Solo las casillas que cambiaron: lo que otros hicieron mientras esta
+      // pantalla estaba abierta ya no se pisa.
+      const r = await saveGrid(teacher.id, prev, g);
+      if (r.idle) { gridRef.current = r.grid; setGrid(r.grid); }
+      if (r.conflicts.length > 0) alert(conflictMessage(r.conflicts));
+      sinHorario = r.studentsLeft;
+    } catch (err) {
+      setSaveStatus('idle');
+      setGridError(calendarErrorMessage(err));
+      return;
+    }
     setSaveStatus('saved');
     setTimeout(() => setSaveStatus('idle'), 2000);
 
@@ -1607,7 +1652,7 @@ function TeacherContent() {
     }
 
     // Update grid — SOLO si el guardado en base fue exitoso.
-    const updatedGrid = { ...grid };
+    const updatedGrid = { ...gridRef.current };
     if (data.existingAssignment) {
       for (const old of data.existingAssignment.slots ?? []) {
         if (!data.slots.some(s => s.day === old.day && s.hour === old.hour)) {
@@ -1911,6 +1956,8 @@ function TeacherContent() {
                 chips que renderiza VisualCalendar (una sola fila, una sola fuente). */}
             {gridLoading ? (
               <div style={{ textAlign: 'center', padding: '48px 0', color: '#8b8e88' }}>Cargando calendario...</div>
+            ) : gridError ? (
+              <CalendarLoadError message={gridError} onRetry={() => { setGridError(null); setGridLoading(true); setGridReload(n => n + 1); }} />
             ) : (
               <VisualCalendar
                 mode="teacher"
@@ -2022,11 +2069,6 @@ function TeacherContent() {
             for (const m of yaAsignado.matches) {
               await removeAssignment(m.assignmentId, m.teacherId, m.studentName, m.slots);
             }
-            const pend = yaAsignado.data;
-            setYaAsignado(null);
-            await aplicarAsignacion(pend);
-          }}
-          onKeepBoth={async () => {
             const pend = yaAsignado.data;
             setYaAsignado(null);
             await aplicarAsignacion(pend);

@@ -42,7 +42,7 @@ import {
 } from '@/lib/levelTestSeguimiento';
 import { useAuth } from '@/lib/AuthContext';
 import type { WritingEvaluation } from '@/lib/levelTest/types';
-import { CEFR_COLOR, GRAND_TOTAL, scoreToCefr } from '@/lib/levelTest/constants';
+import { CEFR_COLOR, EXPIRES_DEFAULT_DAYS, GRAND_TOTAL, scoreToCefr } from '@/lib/levelTest/constants';
 import { INVALID_REASON_LABEL } from '@/lib/levelTest/attemptValidity';
 import ReevaluarRedacciones from '@/components/admin/ReevaluarRedacciones';
 
@@ -704,7 +704,8 @@ function GenerateModal({ onClose, onDone }: { onClose: () => void; onDone: () =>
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
-  const [days, setDays] = useState(7);
+  // Solo los leads caducan por fecha (lib/levelTest/canonical); 30 días por defecto.
+  const [days, setDays] = useState(EXPIRES_DEFAULT_DAYS);
   const [url, setUrl] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
@@ -742,7 +743,7 @@ function GenerateModal({ onClose, onDone }: { onClose: () => void; onDone: () =>
           <label style={labelStyle}>Teléfono (opcional)</label>
           <input value={phone} onChange={e => setPhone(e.target.value)} style={input} />
           <label style={labelStyle}>Expira en (días)</label>
-          <input value={days} onChange={e => setDays(parseInt(e.target.value) || 7)} style={input} type="number" min={1} />
+          <input value={days} onChange={e => setDays(parseInt(e.target.value) || EXPIRES_DEFAULT_DAYS)} style={input} type="number" min={1} />
           {err && <div style={{ fontSize: 12.5, color: '#b42318', marginBottom: 10 }}>{err}</div>}
           <div style={{ display: 'flex', gap: 10 }}>
             <button onClick={onClose} className="adm-btn adm-btn-ghost" style={{ flex: 1 }}>Cancelar</button>

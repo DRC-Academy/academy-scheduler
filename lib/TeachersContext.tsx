@@ -6,7 +6,7 @@ import {
   dbGetTeachers, dbAddTeacher, dbArchiveTeacher,
   dbGetStudents, dbUpsertStudent, dbDeleteStudent, dbUpdateStudent,
   dbGetAssignments, dbAddAssignment, dbGetAllStudentsWithAssignments,
-  dbGetTeacherGrid, dbSaveTeacherGrid, dbUpdateTeacherRating,
+  dbReadTeacherGrid, dbSaveTeacherGridChanges, dbUpdateTeacherRating,
   dbAddScoringEvent, dbGetScoringEvents,
   dbAssignTeacherOfMonth, dbAssignTeacherOfQuarter,
   dbCheckAndResetMonthly, dbCheckAndResetQuarterly,
@@ -25,7 +25,7 @@ import {
   dbApplyFaltaSideEffects, dbRevertStudentAbsence, dbFindStudentAbsence,
   dbGetTeacherBonuses, dbClaimRetentionBonus, dbMarkBonusPaid, dbAddUpsellBonuses, dbUpdateAssignmentTeacherSince,
 } from '@/lib/db';
-import type { AffectedTeacher, ChangeTeacherParams, ArchiveTeacherResult, StudentLeftGrid } from '@/lib/db';
+import type { AffectedTeacher, ChangeTeacherParams, ArchiveTeacherResult, CalendarOrigin, GridSaveResult } from '@/lib/db';
 import type { AssignedSlot } from '@/types';
 import { calculateTeacherFinance, canMarkStudentLostClass, LOST_CLASS_CAP_MESSAGE, type ClassTranscriptRef } from '@/lib/finance';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
@@ -63,7 +63,13 @@ interface TeachersContextType {
   markSalesContact: (studentId: string, result: SalesContactResult, by: string, forDate: string) => Promise<void>;
   addAssignment: (a: Assignment) => Promise<void>;
   getTeacherGrid: (teacherId: string, force?: boolean) => Promise<Grid>;
-  updateTeacherGrid: (teacherId: string, grid: Grid) => Promise<StudentLeftGrid[]>;
+  /**
+   * Guarda SOLO las casillas que cambiaron entre `prev` (lo que la pantalla tenía)
+   * y `next`. Devuelve el calendario real tras guardar (con los cambios de otros)
+   * y las casillas que no se pisaron porque otra persona las cambió. Lanza si no
+   * se pudo guardar. Quién guarda sale de la sesión; la pantalla dice desde dónde.
+   */
+  saveTeacherGridChanges: (teacherId: string, prev: Grid, next: Grid, origin: CalendarOrigin) => Promise<GridSaveResult>;
   updateTeacherRating: (teacherId: string, rating: number) => Promise<void>;
   updateTeacherSpecialties: (teacherId: string, specialties: string[]) => Promise<void>;
   updateTeacherInfo: (teacherId: string, data: { name: string; email: string; specialties: string[]; notificationEmail?: string }) => Promise<void>;
@@ -128,7 +134,7 @@ const TeachersContext = createContext<TeachersContextType>({
   markSalesContact:         async () => {},
   addAssignment:            async () => {},
   getTeacherGrid:           async () => ({}),
-  updateTeacherGrid:        async () => [],
+  saveTeacherGridChanges:   async () => ({ grid: {}, applied: [], conflicts: [], studentsLeft: [] }),
   updateTeacherRating:      async () => {},
   updateTeacherSpecialties: async () => {},
   updateTeacherInfo:        async () => {},
@@ -385,20 +391,27 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   // force=true saltea el caché y trae el grid vivo de Supabase. Lo usa el setter
   // al abrir el formulario de asignación: si el profesor acaba de marcar celdas
   // como 'libre', esos slots deben aparecer sin esperar al reloadAll de 60 s.
+  //
+  // Lectura ESTRICTA: si falla, LANZA (CalendarReadError). Antes devolvía {} y
+  // una pantalla que guardaba encima vaciaba el calendario del profesor.
   async function getTeacherGrid(teacherId: string, force = false): Promise<Grid> {
     if (!force && teacherGrids[teacherId]) return teacherGrids[teacherId];
-    const grid = await dbGetTeacherGrid(teacherId);
+    const grid = await dbReadTeacherGrid(teacherId);
     setTeacherGrids(prev => ({ ...prev, [teacherId]: grid }));
     return grid;
   }
 
-  // Devuelve los alumnos que se quedaron SIN ninguna celda con este guardado, para
-  // que la pantalla decida: si su suscripción está cancelada se ofrece eliminarlos
-  // (con confirmación, porque es irreversible), y si no, siguen asignados al
-  // profesor como "actualmente sin tomar clases".
-  async function updateTeacherGrid(teacherId: string, grid: Grid): Promise<StudentLeftGrid[]> {
-    setTeacherGrids(prev => ({ ...prev, [teacherId]: grid }));
-    return dbSaveTeacherGrid(teacherId, grid);
+  // Quién guarda: la sesión. El historial (calendar_changes) y la marca de quita
+  // manual de la asignación salen de acá.
+  async function saveTeacherGridChanges(teacherId: string, prev: Grid, next: Grid, origin: CalendarOrigin): Promise<GridSaveResult> {
+    const actor = {
+      role: user?.role ?? 'desconocido',
+      name: user?.displayName || user?.username || 'desconocido',
+      origin,
+    };
+    const result = await dbSaveTeacherGridChanges(teacherId, prev, next, actor);
+    setTeacherGrids(g => ({ ...g, [teacherId]: result.grid }));
+    return result;
   }
 
   async function updateTeacherRating(teacherId: string, rating: number) {
@@ -814,7 +827,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
       scoringEvents, classCounts, notifications, unassignedStudents, classJoinLogs,
       classRecords, classAnalyses, financeRates, financePayments, manualApprovals, teacherBonuses, lastUpdated,
       addTeacher, archiveTeacher, addStudent, deleteStudent, updateStudent, markSalesContact, addAssignment,
-      getTeacherGrid, updateTeacherGrid, updateTeacherRating,
+      getTeacherGrid, saveTeacherGridChanges, updateTeacherRating,
       updateTeacherSpecialties, updateTeacherInfo, updateTeacherEmailPreferences,
       addScoringEvent, loadScoringEvents, checkAndRunResets,
       assignTeacherOfMonth, assignTeacherOfQuarter,

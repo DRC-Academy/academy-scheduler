@@ -6,12 +6,16 @@
 // profesor), para que el control sea el mismo en ambos. Antes solo existía en el
 // setter, comparaba únicamente el student_id exacto y no ofrecía mover al
 // alumno: te mandaba a otra pantalla a hacerlo a mano.
+//
+// UN ALUMNO, UN PROFESOR (regla desde el 25/09/2026): las únicas salidas son
+// mover al alumno o cancelar. Antes había un tercer botón, "No, quiero que
+// tenga los dos profesores", que dejaba al alumno con dos asignaciones activas.
 
 import { useState } from 'react';
 import { matchLabel, slotsLabel, type ExistingAssignmentMatch } from '@/lib/assignmentGuard';
 
 export default function AlumnoYaAsignadoModal({
-  studentName, targetTeacherName, matches, onMove, onKeepBoth, onCancel,
+  studentName, targetTeacherName, matches, onMove, onCancel,
 }: {
   studentName: string;
   /** Profesor al que se le está intentando asignar ahora. */
@@ -19,17 +23,15 @@ export default function AlumnoYaAsignadoModal({
   matches: ExistingAssignmentMatch[];
   /** Mover: se quitan las asignaciones anteriores y se libera su calendario. */
   onMove: () => Promise<void> | void;
-  /** Mantener las dos (casos legítimos: alumno con dos profesores). */
-  onKeepBoth: () => Promise<void> | void;
   onCancel: () => void;
 }) {
-  const [busy, setBusy] = useState<'move' | 'keep' | null>(null);
+  const [busy, setBusy] = useState(false);
   const varios = matches.length > 1;
   const profes = [...new Set(matches.map(m => m.teacherName))];
 
-  async function run(kind: 'move' | 'keep', fn: () => Promise<void> | void) {
-    setBusy(kind);
-    try { await fn(); } finally { setBusy(null); }
+  async function move() {
+    setBusy(true);
+    try { await onMove(); } finally { setBusy(false); }
   }
 
   return (
@@ -69,11 +71,11 @@ export default function AlumnoYaAsignadoModal({
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <button
-            onClick={() => run('move', onMove)}
-            disabled={!!busy}
+            onClick={move}
+            disabled={busy}
             style={{ padding: '11px', borderRadius: 8, border: 'none', background: busy ? '#8fc7a0' : '#1E9E3A', color: 'white', cursor: busy ? 'wait' : 'pointer', fontSize: 13.5, fontWeight: 700, fontFamily: 'inherit' }}
           >
-            {busy === 'move' ? 'Moviendo…' : `Sí, mover a ${targetTeacherName}`}
+            {busy ? 'Moviendo…' : `Sí, mover a ${targetTeacherName}`}
           </button>
           <div style={{ fontSize: 11.5, color: 'var(--text-muted, #9ca3af)', textAlign: 'center', lineHeight: 1.5 }}>
             Se {varios ? 'eliminan las asignaciones anteriores' : 'elimina la asignación anterior'} y se
@@ -81,16 +83,8 @@ export default function AlumnoYaAsignadoModal({
           </div>
 
           <button
-            onClick={() => run('keep', onKeepBoth)}
-            disabled={!!busy}
-            style={{ padding: '10px', borderRadius: 8, border: '1px solid var(--border, #e5e7eb)', background: 'var(--bg-surface-3, #f3f4f6)', color: 'var(--text-primary, #111827)', cursor: busy ? 'wait' : 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}
-          >
-            {busy === 'keep' ? 'Asignando…' : 'No, quiero que tenga los dos profesores'}
-          </button>
-
-          <button
             onClick={onCancel}
-            disabled={!!busy}
+            disabled={busy}
             style={{ padding: '10px', borderRadius: 8, border: 'none', background: 'transparent', color: 'var(--text-secondary, #4b5563)', cursor: busy ? 'not-allowed' : 'pointer', fontSize: 13, fontFamily: 'inherit' }}
           >
             Cancelar

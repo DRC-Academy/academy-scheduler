@@ -80,8 +80,9 @@ export async function enviarRecordatorio(
   }
   const filaId = reservado?.id as string | undefined;
 
-  // 2) El enlace. Para el test puede haber que crear una sesión nueva (la
-  //    anterior caduca a los 7 días y muchas ya están vencidas).
+  // 2) El enlace. Para el test, su prueba principal (la que dejó a medias o la
+  //    pendiente); solo se crea una si no tiene ninguna. Desde el 28/09/2026 la
+  //    prueba de un alumno no caduca por fecha (lib/levelTest/canonical).
   let enlace: string | null = null;
   if (e.sequence === 'formulario') {
     enlace = `${base}/formulario/${e.token.token}`;

@@ -8,7 +8,6 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
-import { supabase } from '@/lib/supabase';
 import type { LTQuestionPublic, LTProgress, WritingEvaluation, Cefr } from '@/lib/levelTest/types';
 import { SECTION_LABEL, CEFR_DESC, CEFR_COLOR, scoreToCefr } from '@/lib/levelTest/constants';
 import GeckoAnimado, { useMandoGecko } from '@/components/mascota/MascotaFormulario';
@@ -22,7 +21,7 @@ interface Result {
   // El nivel salió solo de la lectura porque la escritura no se pudo puntuar.
   provisional?: boolean;
 }
-type Phase = 'loading' | 'invalid' | 'expired' | 'abandoned' | 'welcome' | 'testing' | 'results' | 'stuck';
+type Phase = 'loading' | 'invalid' | 'expired' | 'abandoned' | 'unavailable' | 'neterror' | 'welcome' | 'testing' | 'results' | 'stuck';
 
 // El alumno ve SIEMPRE este texto cuando su escritura no se puntuó, sea porque el
 // filtro la descartó o porque la IA no respondió. Distinguir los dos casos le
@@ -81,33 +80,30 @@ export default function TestPage() {
   const intentosFinalizar = useRef(0);
   const esperaLenta = useEsperaLenta(busy);
 
-  // Carga inicial: lee la sesión SIN iniciar el test (como la página del form).
+  // Carga inicial: el estado de la sesión SIN iniciar el test (?peek=1). Pasa
+  // por la API y no por la base directa porque la API decide si la prueba sigue
+  // disponible: la de un alumno no caduca por fecha, sino si deja de estar activo,
+  // y un enlace antiguo suyo lleva a su prueba principal (lib/levelTest/canonical).
   useEffect(() => {
     let cancelled = false;
     (async () => {
       if (!token) { setPhase('invalid'); return; }
-      const { data, error: e } = await supabase
-        .from('level_test_sessions')
-        .select('candidate_name, student_name, status, expires_at, reading_score, writing_score, overall_score, cefr_level, ai_evaluation')
-        .eq('token', token).maybeSingle();
-      if (cancelled) return;
-      if (e || !data) { setPhase('invalid'); return; }
-      setCandidateName(data.student_name || data.candidate_name || '');
-      if (data.status === 'completed') {
-        setResult({
-          reading_score: data.reading_score, writing_score: data.writing_score,
-          overall_score: data.overall_score, cefr_level: data.cefr_level as Cefr | null,
-          ai_evaluation: data.ai_evaluation as WritingEvaluation | null,
-          provisional: data.writing_score == null,
-        });
-        setPhase('results');
-        return;
+      try {
+        const res = await fetch(`/api/level-test/${token}?peek=1`, { cache: 'no-store' });
+        const data = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (data.status === 'redirect' && data.token) { window.location.replace(`/test/${data.token}`); return; }
+        setCandidateName(data.student_name || data.candidate_name || '');
+        if (data.status === 'completed') { setResult(data.result); setPhase('results'); return; }
+        if (data.status === 'unavailable') { setPhase('unavailable'); return; }
+        if (data.status === 'abandoned') { setPhase('abandoned'); return; }
+        if (data.status === 'expired') { setPhase('expired'); return; }
+        if (!res.ok || data.status !== 'ready') { setPhase('invalid'); return; }
+        setResuming(!!data.resuming);
+        setPhase('welcome');
+      } catch {
+        if (!cancelled) setPhase('neterror');
       }
-      if (data.status === 'abandoned') { setPhase('abandoned'); return; }
-      const expired = data.expires_at && new Date(data.expires_at).getTime() < Date.now();
-      if (data.status === 'expired' || expired) { setPhase('expired'); return; }
-      setResuming(data.status === 'in_progress');
-      setPhase('welcome');
     })();
     return () => { cancelled = true; };
   }, [token]);
@@ -117,7 +113,9 @@ export default function TestPage() {
     try {
       const res = await fetch(`/api/level-test/${token}`, { cache: 'no-store' });
       const data = await res.json();
+      if (data.status === 'redirect' && data.token) { window.location.replace(`/test/${data.token}`); return; }
       if (data.status === 'completed') { setResult(data.result); setPhase('results'); return; }
+      if (data.status === 'unavailable') { setPhase('unavailable'); return; }
       if (data.status === 'abandoned') { setPhase('abandoned'); return; }
       if (data.status === 'expired') { setPhase('expired'); return; }
       if (!res.ok || data.status === 'invalid') { setPhase('invalid'); return; }
@@ -186,6 +184,8 @@ export default function TestPage() {
   if (phase === 'loading') return <LoadingScreen />;
   if (phase === 'invalid') return <StatusScreen emoji="🔒" title="Este enlace no es válido" text="Contacta con tu asesor de DRC Academy para obtener uno nuevo." />;
   if (phase === 'expired') return <StatusScreen emoji="⌛" title="Este enlace ya ha expirado" text="Pide uno nuevo a tu asesor de DRC Academy." />;
+  if (phase === 'unavailable') return <StatusScreen emoji="🔒" title="Este enlace ya no está disponible" text="Si crees que es un error, escríbenos." />;
+  if (phase === 'neterror') return <StatusScreen emoji="📡" title="No hemos podido cargar la prueba" text="Revisa tu conexión y vuelve a abrir este enlace." />;
   if (phase === 'abandoned') return <StatusScreen emoji="⌛" title="Este test quedó sin terminar" text="El enlace ha caducado antes de completar la prueba, así que no hemos podido calcular tu nivel. Pide uno nuevo a tu asesor de DRC Academy." />;
   // Se llega aquí cuando no quedan preguntas que servir pero el test tampoco está
   // completo. La sesión NO se cierra: sigue en curso y el mismo enlace la retoma.

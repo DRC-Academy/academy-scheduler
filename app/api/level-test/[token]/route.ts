@@ -1,10 +1,23 @@
 // GET público del Test de Nivel: devuelve el estado de la sesión + la próxima
 // pregunta a responder (adaptativa). No requiere login (token). Es resumible: al
 // recargar retoma la misma pregunta (current_question_id).
+//
+// Caducidad (28/09/2026, lib/levelTest/canonical):
+//   · Prueba de ALUMNO: no caduca por fecha. Vale mientras el alumno esté activo
+//     (lib/levelTest/studentAccess); si no, 'unavailable'. Un enlace antiguo del
+//     alumno redirige a su prueba principal ('redirect'), y una marcada
+//     'expired'/'abandoned' por la regla vieja se reabre donde se quedó.
+//   · Prueba de LEAD: caduca por fecha, como siempre.
+//
+// ?peek=1 → solo el estado, para la pantalla de bienvenida: no empieza la prueba
+// ni elige pregunta.
 
 import { supabase } from '@/lib/supabase';
 import { computeNext, loadSessionWithAnswers } from '@/lib/levelTest/server';
 import { GRAND_TOTAL } from '@/lib/levelTest/constants';
+import { pickCanonical, sessionExpired } from '@/lib/levelTest/canonical';
+import { loadStudentSessions } from '@/lib/levelTest/createSession';
+import { canTakeLevelTest } from '@/lib/levelTest/studentAccess';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,7 +28,7 @@ function countAnswers(answers: Array<{ question_id: string }>): number {
 }
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ token: string }> },
 ): Promise<Response> {
   const { token } = await params;
@@ -29,12 +42,14 @@ export async function GET(
     return Response.json({ error: 'Error del servidor.' }, { status: 500 });
   }
   if (!s) return Response.json({ status: 'invalid' }, { status: 404 });
+  const peek = new URL(request.url).searchParams.get('peek') === '1';
 
   // Ya completado → devolver el resultado (para la pantalla de resultados).
   if (s.status === 'completed') {
     return Response.json({
       status: 'completed',
       candidate_name: s.candidate_name,
+      student_name: s.student_name,
       result: {
         reading_score: s.reading_score,
         writing_score: s.writing_score,
@@ -47,20 +62,56 @@ export async function GET(
     });
   }
 
-  // Caducó a medias: no hay nivel y ya no se puede retomar.
-  if (s.status === 'abandoned') return Response.json({ status: 'abandoned' });
-
-  // Expirado. Se distingue del abandono: 'expired' es el enlace que caducó sin
-  // que nadie lo abriera; 'abandoned' es el que se empezó y quedó a medias. Para
-  // el alumno la pantalla es la misma; para el admin no son lo mismo.
-  const expired = s.expires_at && new Date(s.expires_at).getTime() < Date.now();
-  if (s.status === 'expired' || expired) {
-    const answered = countAnswers(answers);
-    const nuevoEstado = answered > 0 && answered < GRAND_TOTAL ? 'abandoned' : 'expired';
-    if (s.status !== nuevoEstado) {
-      await supabase.from('level_test_sessions').update({ status: nuevoEstado }).eq('id', s.id);
+  if (s.student_id) {
+    // ── Prueba de un alumno: sin fecha de caducidad ─────────────────────────
+    // 1) ¿Es su prueba principal? Si tiene otra terminada, o una con más
+    //    respuestas, este enlace (viejo) lleva a esa.
+    try {
+      const principal = pickCanonical(await loadStudentSessions({ studentId: s.student_id }));
+      if (principal.kind !== 'none' && principal.token !== s.token) {
+        return Response.json({ status: 'redirect', token: principal.token });
+      }
+    } catch (e) {
+      console.error('[level-test GET] No se pudo elegir la prueba principal:', e);
     }
-    return Response.json({ status: nuevoEstado });
+
+    // 2) ¿Sigue activo?
+    if (!(await canTakeLevelTest(s.student_id))) {
+      return Response.json({ status: 'unavailable' });
+    }
+
+    // 3) Marcas de la regla vieja: se reabre donde se quedó.
+    if (s.status === 'expired' || s.status === 'abandoned') {
+      const reabierta = countAnswers(answers) > 0 ? 'in_progress' : 'pending';
+      await supabase.from('level_test_sessions').update({ status: reabierta }).eq('id', s.id);
+      s.status = reabierta;
+    }
+  } else {
+    // ── Prueba de un lead: caduca por fecha ─────────────────────────────────
+    // Caducó a medias: no hay nivel y ya no se puede retomar.
+    if (s.status === 'abandoned') return Response.json({ status: 'abandoned' });
+
+    // Expirado. Se distingue del abandono: 'expired' es el enlace que caducó sin
+    // que nadie lo abriera; 'abandoned' es el que se empezó y quedó a medias. Para
+    // el candidato la pantalla es la misma; para el admin no son lo mismo.
+    if (sessionExpired({ student_id: s.student_id, status: s.status, expires_at: s.expires_at })) {
+      const answered = countAnswers(answers);
+      const nuevoEstado = answered > 0 && answered < GRAND_TOTAL ? 'abandoned' : 'expired';
+      if (s.status !== nuevoEstado) {
+        await supabase.from('level_test_sessions').update({ status: nuevoEstado }).eq('id', s.id);
+      }
+      return Response.json({ status: nuevoEstado });
+    }
+  }
+
+  // Solo el estado, para la bienvenida: todavía no se empieza.
+  if (peek) {
+    return Response.json({
+      status: 'ready',
+      resuming: countAnswers(answers) > 0,
+      candidate_name: s.candidate_name,
+      student_name: s.student_name,
+    });
   }
 
   // pending → in_progress (empieza el test).

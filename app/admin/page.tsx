@@ -5,6 +5,8 @@ import { StatusBadge } from '@/components/StatusBadge';
 import { AuthGuard } from '@/components/AuthGuard';
 import { PullToRefresh } from '@/components/PullToRefresh';
 import { VisualCalendar, buildGridFromTeacher } from '@/components/VisualCalendar';
+import { useGridSaver, conflictMessage, calendarErrorMessage } from '@/lib/useGridSaver';
+import CalendarLoadError from '@/components/CalendarLoadError';
 import { useTeachers } from '@/lib/TeachersContext';
 import { useAuth } from '@/lib/AuthContext';
 // `mockAlerts` ya no se usa: las alertas del dashboard salen de la auditoría real
@@ -26,6 +28,7 @@ import AiUsageTab from '@/components/admin/AiUsageTab';
 import LevelTestsTab from '@/components/admin/LevelTestsTab';
 import ClassLogTab from '@/components/admin/ClassLogTab';
 import TranscriptsTab from '@/components/admin/TranscriptsTab';
+import FueraDeCalendarioTab from '@/components/admin/FueraDeCalendarioTab';
 import TranscriptValidationTab from '@/components/admin/TranscriptValidationTab';
 import ChurnTab from '@/components/admin/ChurnTab';
 import { triggerEmail } from '@/lib/emailClient';
@@ -972,30 +975,45 @@ function MeetLinksTab({ assignments, nowMs, initialFilter }: {
 }
 
 // ─── Edit Calendar Modal ──────────────────────────────────────────────────────
-function EditCalendarModal({ teacher, onClose, getTeacherGrid, updateTeacherGrid }: {
+function EditCalendarModal({ teacher, onClose, getTeacherGrid }: {
   teacher: Teacher;
   onClose: () => void;
-  getTeacherGrid: (id: string) => Promise<Grid>;
-  // Devuelve los alumnos que quedaron sin horario; acá no se usan (el admin edita
-  // el calendario de otro), pero el tipo tiene que aceptarlos.
-  updateTeacherGrid: (id: string, grid: Grid) => Promise<unknown>;
+  getTeacherGrid: (id: string, force?: boolean) => Promise<Grid>;
 }) {
   const [grid, setGrid] = useState<Grid>(buildGridFromTeacher(teacher.timeSlots, teacher.upcomingClasses));
+  // Lo que hay REALMENTE en la base (no el grid de muestra que se arma cuando el
+  // profesor todavía no tiene calendario): es el "antes" del guardado por casillas.
+  const serverRef = useRef<Grid>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
+  const saveGrid = useGridSaver('admin');
 
   useEffect(() => {
-    getTeacherGrid(teacher.id).then(g => {
+    getTeacherGrid(teacher.id, true).then(g => {
+      serverRef.current = g;
+      setError(null);
       setGrid(Object.keys(g).length > 0 ? g : buildGridFromTeacher(teacher.timeSlots, teacher.upcomingClasses));
-      setLoading(false);
-    });
-  }, [teacher.id]);
+    }).catch(err => setError(calendarErrorMessage(err)))
+      .finally(() => setLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teacher.id, reload]);
 
   async function handleGridChange(g: Grid) {
+    const prev = serverRef.current;
+    serverRef.current = g;
     setGrid(g);
     setSaving(true);
-    await updateTeacherGrid(teacher.id, g);
-    setSaving(false);
+    try {
+      const r = await saveGrid(teacher.id, prev, g);
+      if (r.idle) { serverRef.current = r.grid; setGrid(r.grid); }
+      if (r.conflicts.length > 0) alert(conflictMessage(r.conflicts));
+    } catch (err) {
+      setError(calendarErrorMessage(err));
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -1016,6 +1034,8 @@ function EditCalendarModal({ teacher, onClose, getTeacherGrid, updateTeacherGrid
         </div>
         {loading ? (
           <div style={{ textAlign: 'center', padding: '48px 0', color: 'var(--text-muted)' }}>Cargando calendario...</div>
+        ) : error ? (
+          <CalendarLoadError message={error} onRetry={() => { setError(null); setLoading(true); setReload(n => n + 1); }} />
         ) : (
           <VisualCalendar mode="teacher" grid={grid} onGridChange={handleGridChange} />
         )}
@@ -2437,7 +2457,7 @@ function DuplicatesBanner() {
 }
 
 // ─── Admin Content ────────────────────────────────────────────────────────────
-const ADMIN_TABS = ['teachers', 'emails', 'scoring', 'bonos', 'tracking', 'classlog', 'transcripts', 'leveltests', 'validacion', 'ai', 'aiusage', 'bajas', 'notifications'] as const;
+const ADMIN_TABS = ['teachers', 'emails', 'scoring', 'bonos', 'tracking', 'fueracal', 'classlog', 'transcripts', 'leveltests', 'validacion', 'ai', 'aiusage', 'bajas', 'notifications'] as const;
 type AdminTab = typeof ADMIN_TABS[number];
 
 /**
@@ -2447,7 +2467,7 @@ type AdminTab = typeof ADMIN_TABS[number];
 const MOVED_TO_DASHBOARD = 'overview';
 
 function AdminContent() {
-  const { teachers, assignments, students, classRecords, scoringEvents, addTeacher, archiveTeacher, loadingTeachers, getTeacherGrid, updateTeacherGrid, checkAndRunResets, reloadAll, updateTeacherInfo } = useTeachers();
+  const { teachers, assignments, students, classRecords, scoringEvents, addTeacher, archiveTeacher, loadingTeachers, getTeacherGrid, checkAndRunResets, reloadAll, updateTeacherInfo } = useTeachers();
   const [selectedTeacher, setSelectedTeacher] = useState<string | null>(null);
   const [showNewTeacher, setShowNewTeacher] = useState(false);
   const [activeTab, setActiveTab] = useState<AdminTab>('teachers');
@@ -2543,6 +2563,7 @@ function AdminContent() {
     { id: 'scoring',        label: 'Scoring' },
     { id: 'bonos',          label: 'Bonos' },
     { id: 'tracking',       label: 'Seguimiento' },
+    { id: 'fueracal',       label: 'Fuera de calendario' },
     { id: 'classlog',       label: 'Registro de clases' },
     { id: 'transcripts',    label: 'Transcripts' },
     { id: 'leveltests',     label: 'Tests de nivel' },
@@ -3094,6 +3115,7 @@ function AdminContent() {
         {/* CLASS LOG TAB */}
         {activeTab === 'classlog' && <ClassLogTab />}
         {activeTab === 'transcripts' && <TranscriptsTab />}
+        {activeTab === 'fueracal' && <FueraDeCalendarioTab />}
 
         {activeTab === 'leveltests' && <LevelTestsTab />}
 
@@ -3125,7 +3147,6 @@ function AdminContent() {
           teacher={editCalendarTeacher}
           onClose={() => setEditCalendarTeacher(null)}
           getTeacherGrid={getTeacherGrid}
-          updateTeacherGrid={updateTeacherGrid}
         />
       )}
 

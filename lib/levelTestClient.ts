@@ -31,6 +31,12 @@ export interface LevelTestInfo {
 export function testStateOf(info: LevelTestInfo | undefined | null): LTState {
   if (!info) return 'none';
   if (info.status === 'completed') return 'completed';
+  // La prueba de un ALUMNO no caduca por fecha desde el 28/09/2026 (la regla está
+  // en lib/levelTest/canonical): sus marcas 'expired'/'abandoned' de la regla
+  // vieja se reabren al abrir el enlace, así que aquí nunca se ven caducadas.
+  if (info.student_id) {
+    return info.status === 'in_progress' || (info.answered_count ?? 0) > 0 ? 'in_progress' : 'pending';
+  }
   if (info.status === 'abandoned') return 'abandoned';
   const expired = info.expires_at && new Date(info.expires_at).getTime() < Date.now();
   if (info.status === 'expired' || expired) {
@@ -47,7 +53,9 @@ export function testStateOf(info: LevelTestInfo | undefined | null): LTState {
 const norm = (s: string) => (s ?? '').trim().toLowerCase();
 
 // Todas las sesiones (la tabla es chica), indexadas por student_id y por nombre,
-// quedándose con la más reciente de cada alumno. Para listados y badges.
+// quedándose con la PRINCIPAL de cada alumno (misma regla que
+// lib/levelTest/canonical): la terminada; si no, la de más respuestas; si no, la
+// más reciente. Para listados y badges.
 export async function fetchLevelTestIndex(): Promise<{
   all: LevelTestInfo[];
   byId: Map<string, LevelTestInfo>;
@@ -68,10 +76,17 @@ export async function fetchLevelTestIndex(): Promise<{
 
   // Doble cast: al pasar las columnas como variable, PostgREST pierde el tipo.
   const all = data as unknown as LevelTestInfo[];
+  // Rango: terminada > más respuestas. Como `all` viene de la más reciente a la
+  // más vieja, solo se reemplaza si la nueva es ESTRICTAMENTE mejor.
+  const rango = (r: LevelTestInfo) => (r.status === 'completed' ? 1e6 : 0) + (r.answered_count ?? 0);
+  const quedarse = (m: Map<string, LevelTestInfo>, k: string, row: LevelTestInfo) => {
+    const prev = m.get(k);
+    if (!prev || rango(row) > rango(prev)) m.set(k, row);
+  };
   for (const row of all) {
-    if (row.student_id && !byId.has(row.student_id)) byId.set(row.student_id, row);
+    if (row.student_id) quedarse(byId, row.student_id, row);
     const key = norm(row.student_name || row.candidate_name);
-    if (key && !byName.has(key)) byName.set(key, row);
+    if (key) quedarse(byName, key, row);
   }
   return { all, byId, byName };
 }

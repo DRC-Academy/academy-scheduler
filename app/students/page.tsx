@@ -15,6 +15,9 @@ import { dbCheckStudentExists, dbSetStudentManualActive, dbActivateOneTimeAccess
 import { isUntilActive, madridToday } from '@/lib/subscriptionAccess';
 import { classifyFor, planBadgeStyle } from '@/lib/productUtils';
 import { isAssignableCell, withBaseState } from '@/lib/cells';
+import { useGridSaver, conflictMessage, calendarErrorMessage } from '@/lib/useGridSaver';
+import { isOffCalendar, removalText } from '@/lib/offCalendar';
+import { HelpTooltip } from '@/components/ui/HelpTooltip';
 import { checkSubscription, clearSubscriptionCache, subBadge, subCategory, type SubscriptionInfo, type SubCategory } from '@/lib/useSubscriptionStatus';
 import { isValidEmail } from '@/lib/validation';
 // Semáforo de retención y cuenta atrás del plan: MISMA fuente que la pestaña
@@ -219,7 +222,7 @@ function EditStudentModal({ student, assignment, teacherGrid, onClose, onSave }:
                 {/* Teacher name (read-only) */}
                 <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
                   <span style={{ fontWeight: 600, color: 'var(--text-muted)' }}>Profesor:</span>
-                  <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{assignment.teacherName}</span>
+                  <ProfesorDeAsignacion a={assignment} />
                 </div>
 
                 {/* Slot rows */}
@@ -605,12 +608,33 @@ function AccessModal({ student, onConfirm, onCancel }: {
   );
 }
 
+/**
+ * Nombre del profesor de una asignación. Si el alumno ya no está en su
+ * calendario (asignación inactiva) se dice: "Carmela (fuera de calendario)",
+ * con quién y cuándo lo quitó, si se sabe. Antes se veía igual que un alumno
+ * con clases, y parecía que el calendario del profesor "lo perdía".
+ */
+function ProfesorDeAsignacion({ a }: { a: Assignment }) {
+  if (!isOffCalendar(a)) {
+    return <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{a.teacherName}</span>;
+  }
+  const horario = a.slots?.length ? ` Horario que tenía: ${a.slots.map(s => `${s.day} ${s.hour}`).join(', ')}.` : '';
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+      <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{a.teacherName}</span>
+      <span style={{ color: '#b45309', fontWeight: 600 }}>(fuera de calendario)</span>
+      <HelpTooltip content={removalText(a) + horario} label="Por qué está fuera de calendario" />
+    </span>
+  );
+}
+
 function StudentsContent() {
   const {
     students, assignments, teachers, deleteStudent, updateStudent, removeAssignment,
-    getTeacherGrid, updateTeacherGrid, updateAssignmentSlots, updateAssignmentStartDate, reloadAll,
+    getTeacherGrid, updateAssignmentSlots, updateAssignmentStartDate, reloadAll,
   } = useTeachers();
   const { user } = useAuth();
+  const saveGrid = useGridSaver('alumnos');
   const [search, setSearch] = useState('');
   const [editingStudent, setEditingStudent] = useState<DisplayStudent | null>(null);
   const [editingAssignment, setEditingAssignment] = useState<Assignment | null>(null);
@@ -882,7 +906,12 @@ function StudentsContent() {
     const asgn = assignmentsForStudent(s)[0] ?? null;
     let tGrid: Grid = {};
     if (asgn) {
-      tGrid = await getTeacherGrid(asgn.teacherId);
+      try {
+        tGrid = await getTeacherGrid(asgn.teacherId, true);
+      } catch (err) {
+        alert(calendarErrorMessage(err));
+        return;
+      }
     }
     setEditingAssignment(asgn);
     setTeacherGridForEdit(tGrid);
@@ -897,8 +926,22 @@ function StudentsContent() {
       if (startDate !== editingAssignment.startDate) {
         await updateAssignmentStartDate(editingAssignment.id, startDate);
       }
-      // Update teacher's grid
-      const currentGrid = await getTeacherGrid(editingAssignment.teacherId);
+      // Calendario del profesor: se lee FRESCO de la base (no la copia en
+      // memoria, que podía revivir alumnos ya quitados) y se guardan solo las
+      // casillas que cambian.
+      let currentGrid: Grid;
+      try {
+        currentGrid = await getTeacherGrid(editingAssignment.teacherId, true);
+      } catch (err) {
+        alert('Los datos del alumno se guardaron, pero NO su horario en el calendario.\n\n' + calendarErrorMessage(err));
+        setEditingStudent(null);
+        setEditingAssignment(null);
+        return;
+      }
+      // El calendario lleva el nombre EXACTO de la asignación: es con lo que se
+      // cruzan. Con el de la ficha de Alumnos, si difería, el alumno "salía" de
+      // su propio calendario y la asignación quedaba inactiva.
+      const gridName = editingAssignment.studentName || updated.name;
       const updatedGrid = { ...currentGrid };
       for (const old of editingAssignment.slots) {
         if (!slots.some(s => s.day === old.day && s.hour === old.hour)) {
@@ -910,10 +953,15 @@ function StudentsContent() {
       for (const slot of slots) {
         if (slot.day && slot.hour) {
           const key = cellKey(slot.day, slot.hour);
-          updatedGrid[key] = withBaseState(updatedGrid[key], 'ocupado', updated.name);
+          updatedGrid[key] = withBaseState(updatedGrid[key], 'ocupado', gridName);
         }
       }
-      await updateTeacherGrid(editingAssignment.teacherId, updatedGrid);
+      try {
+        const r = await saveGrid(editingAssignment.teacherId, currentGrid, updatedGrid);
+        if (r.conflicts.length > 0) alert(conflictMessage(r.conflicts));
+      } catch (err) {
+        alert('Los datos del alumno se guardaron, pero NO su horario en el calendario.\n\n' + calendarErrorMessage(err));
+      }
     }
     setEditingStudent(null);
     setEditingAssignment(null);
@@ -996,8 +1044,10 @@ function StudentsContent() {
             <div style={{ display: 'grid', gridTemplateColumns: twoCols ? 'minmax(0, 1fr) minmax(0, 1fr)' : 'minmax(0, 1fr)', gap: 12, alignItems: 'start' }}>
               {visible.map(s => {
                 const studentAssignments = assignmentsForStudent(s);
-                const horarios = studentAssignments.flatMap(a => a.slots.map(sl => `${sl.day} ${sl.hour}`)).join(', ');
-                const profes = studentAssignments.map(a => a.teacherName).join(', ');
+                // Los horarios de una asignación fuera de calendario son historia
+                // (lo que tenía al salir): no se listan como si siguieran vigentes.
+                const horarios = studentAssignments.filter(a => !isOffCalendar(a))
+                  .flatMap(a => a.slots.map(sl => `${sl.day} ${sl.hour}`)).join(', ');
                 const hasTeacher = studentAssignments.length > 0;
                 const planText = planFor(s);
                 // Fecha de inicio de suscripción: la de la asignación (sincronizada
@@ -1180,7 +1230,12 @@ function StudentsContent() {
                     <div style={{ fontSize: 12.5, marginTop: 6 }}>
                       {hasTeacher ? (
                         <span style={{ color: 'var(--text-secondary)' }}>
-                          <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{profes}</span>
+                          {studentAssignments.map((a, i) => (
+                            <span key={a.id}>
+                              {i > 0 && ', '}
+                              <ProfesorDeAsignacion a={a} />
+                            </span>
+                          ))}
                           {horarios && <> · {horarios}</>}
                         </span>
                       ) : (

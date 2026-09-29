@@ -219,6 +219,16 @@ export interface Assignment {
    * `undefined` = la columna todavía no está migrada (ver supabase-assignment-status.sql).
    */
   status?: string;
+  /**
+   * Cuándo y quién sacó al alumno de su ÚLTIMA casilla del calendario
+   * (supabase-calendar-history.sql). Manual = una persona desde un calendario;
+   * false = el sistema (cambio de profesor, eliminar alumno). Todo ausente en
+   * las asignaciones inactivas de antes de sep/2026: motivo desconocido.
+   */
+  calendarRemovedAt?: string;
+  calendarRemovedManual?: boolean;
+  calendarRemovedBy?: string;
+  calendarRemovedRole?: string;
 }
 
 export interface ClassJoinLog {
