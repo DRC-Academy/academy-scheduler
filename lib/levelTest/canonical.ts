@@ -22,6 +22,12 @@
 // vez que la anterior caducaba). La PRINCIPAL es la terminada si la hay; si no,
 // la que tiene más respuestas y, a igualdad, la más reciente. Cualquier enlace
 // antiguo del alumno lleva a ella, para no perder progreso ni duplicar.
+//
+// "Regenerar todo" (30/09/2026, app/api/students/regenerate-all): marca
+// `superseded_at` en TODAS las pruebas y formularios anteriores del alumno. Se
+// quedan como historial (con sus respuestas, nivel y fecha) y dejan de contar
+// para todo: aquí, en los recordatorios, en el admin y en la bienvenida. La
+// única prueba que cuenta es la nueva.
 
 export interface SessionSummary {
   token: string;
@@ -30,7 +36,13 @@ export interface SessionSummary {
   created_at: string;
   student_id?: string | null;
   teacher_id?: string | null;
+  superseded_at?: string | null;
   answered: number;
+}
+
+/** ¿Quedó como historial por un "Regenerar todo"? */
+export function isSuperseded(s: { superseded_at?: string | null }): boolean {
+  return !!s.superseded_at;
 }
 
 /** ¿Es la prueba de un alumno (y no la de un lead)? Ver arriba. */
@@ -55,7 +67,9 @@ export type Canonical =
 
 /** La prueba principal de un conjunto de sesiones del MISMO alumno. */
 export function pickCanonical(sessions: SessionSummary[], now: number = Date.now()): Canonical {
-  const recientes = [...sessions].sort((a, b) => b.created_at.localeCompare(a.created_at));
+  // Las reemplazadas por un "Regenerar todo" no cuentan, ni siquiera terminadas.
+  const recientes = sessions.filter(s => !isSuperseded(s))
+    .sort((a, b) => b.created_at.localeCompare(a.created_at));
   const terminada = recientes.find(s => s.status === 'completed');
   if (terminada) return { kind: 'completed', token: terminada.token };
   const abierta = recientes

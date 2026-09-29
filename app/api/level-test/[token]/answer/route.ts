@@ -85,6 +85,8 @@ export async function POST(
   if (error) return Response.json({ error: 'Error del servidor.' }, { status: 500 });
   if (!s) return Response.json({ error: 'Este link no es válido.' }, { status: 404 });
   if (s.status === 'completed') return Response.json({ error: 'El test ya fue completado.' }, { status: 409 });
+  // Historial de un "Regenerar todo": ya no admite respuestas.
+  if (s.superseded_at) return Response.json({ error: 'Tienes un enlace nuevo para la prueba. Vuelve a abrir este enlace y te llevamos a él.', replaced: true }, { status: 410 });
   // Solo caducan las pruebas de leads; la de un alumno no (lib/levelTest/canonical).
   if (sessionExpired({ student_id: s.student_id, teacher_id: s.teacher_id, status: s.status, expires_at: s.expires_at })) {
     if (s.status !== 'expired' && s.status !== 'abandoned') {

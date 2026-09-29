@@ -21,7 +21,7 @@ interface Result {
   // El nivel salió solo de la lectura porque la escritura no se pudo puntuar.
   provisional?: boolean;
 }
-type Phase = 'loading' | 'invalid' | 'expired' | 'abandoned' | 'unavailable' | 'neterror' | 'welcome' | 'testing' | 'results' | 'stuck';
+type Phase = 'loading' | 'invalid' | 'expired' | 'abandoned' | 'unavailable' | 'replaced' | 'neterror' | 'welcome' | 'testing' | 'results' | 'stuck';
 
 // El alumno ve SIEMPRE este texto cuando su escritura no se puntuó, sea porque el
 // filtro la descartó o porque la IA no respondió. Distinguir los dos casos le
@@ -103,6 +103,7 @@ export default function TestPage() {
         setCandidateName(data.student_name || data.candidate_name || '');
         if (data.status === 'completed') { setResult(data.result); setPhase('results'); return; }
         if (data.status === 'unavailable') { setPhase('unavailable'); return; }
+        if (data.status === 'replaced') { setPhase('replaced'); return; }
         if (data.status === 'abandoned') { setPhase('abandoned'); return; }
         if (data.status === 'expired') { setPhase('expired'); return; }
         if (res.status === 404 || data.status === 'invalid') { setPhase('invalid'); return; }
@@ -128,6 +129,7 @@ export default function TestPage() {
       if (data.status === 'redirect' && data.token) { window.location.replace(`/test/${data.token}`); return; }
       if (data.status === 'completed') { setResult(data.result); setPhase('results'); return; }
       if (data.status === 'unavailable') { setPhase('unavailable'); return; }
+      if (data.status === 'replaced') { setPhase('replaced'); return; }
       if (data.status === 'abandoned') { setPhase('abandoned'); return; }
       if (data.status === 'expired') { setPhase('expired'); return; }
       if (res.status === 404 || data.status === 'invalid') { setPhase('invalid'); return; }
@@ -162,6 +164,8 @@ export default function TestPage() {
         return;
       }
       if (res.status === 410 && data?.abandoned) { setPhase('abandoned'); return; }
+      // Se regeneró la prueba con esta pestaña abierta: recargar lleva a la nueva.
+      if (res.status === 410 && data?.replaced) { window.location.reload(); return; }
       if (!res.ok) { setError(data?.error || 'No se pudo finalizar el test.'); return; }
 
       intentosFinalizar.current = 0;
@@ -185,7 +189,8 @@ export default function TestPage() {
           written_response: isWriting ? written : undefined,
         }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 410 && data?.replaced) { window.location.reload(); return; }
       if (!res.ok) { setError(data?.error || 'No se pudo guardar la respuesta.'); return; }
       if (data.done || !data.question) { await finalize(); return; }
       setQuestion(data.question); setProgress(data.progress);
@@ -198,6 +203,7 @@ export default function TestPage() {
   if (phase === 'loading') return <LoadingScreen />;
   if (phase === 'invalid') return <StatusScreen emoji="🔒" title="Este enlace no es válido" text="Contacta con tu asesor de DRC Academy para obtener uno nuevo." />;
   if (phase === 'expired') return <StatusScreen emoji="⌛" title="Este enlace ya ha expirado" text="Pide uno nuevo a tu asesor de DRC Academy." />;
+  if (phase === 'replaced') return <StatusScreen emoji="✉️" title="Tienes un enlace nuevo" text="Tu profe te ha preparado una prueba de nivel nueva. Búscala en tu correo o pídesela y la haces cuando quieras." />;
   if (phase === 'unavailable') return <StatusScreen emoji="🔒" title="Este enlace ya no está disponible" text="Si crees que es un error, escríbenos." />;
   // Error del servidor o de red: nada que ver con el enlace, así que sin candado
   // y con un botón para volver a intentarlo.

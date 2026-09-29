@@ -44,8 +44,9 @@ import {
 } from '@/lib/interventions';
 import ProximaClaseTab from '@/components/alumnos/ProximaClaseTab';
 import NivelProfesorCard from '@/components/alumnos/NivelProfesorCard';
-import FormLinkModal from '@/components/alumnos/FormLinkModal';
-import ResetProfileModal from '@/components/alumnos/ResetProfileModal';
+import FormLinkModal, { REGENERATE_ALL_HINT } from '@/components/alumnos/FormLinkModal';
+import ResetProfileModal, { RESET_PROFILE_HINT } from '@/components/alumnos/ResetProfileModal';
+import OnboardingStatusCard from '@/components/alumnos/OnboardingStatusCard';
 import {
   Accordion, BulletList, ClampText, ProgressCompare, toBullets,
 } from '@/components/alumnos/studentPageUi';
@@ -80,6 +81,12 @@ const menuItemStyle: CSSProperties = {
   fontSize: 13.5, fontWeight: 500, fontFamily: 'inherit', color: 'var(--sp-t1)',
 };
 
+// Frase de debajo de un elemento del menú: qué hace, para no confundir botones.
+const menuHintStyle: CSSProperties = {
+  display: 'block', marginTop: 2, fontSize: 11.5, fontWeight: 400, lineHeight: 1.4,
+  color: 'var(--sp-t3)', whiteSpace: 'normal',
+};
+
 function StudentPageContent() {
   const params = useParams<{ studentId: string }>();
   const routeId = Array.isArray(params.studentId) ? params.studentId[0] : params.studentId;
@@ -97,8 +104,10 @@ function StudentPageContent() {
   const [menuOpen, setMenuOpen] = useState(false);     // menú "⋯" de la cabecera
   const [formOpen, setFormOpen] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
-  // Enlace recién generado tras reiniciar el perfil: el modal lo muestra ya listo.
-  const [freshFormUrl, setFreshFormUrl] = useState<string | null>(null);
+  // Formulario abierto desde "Regenerar todo" del menú (va directo a confirmar),
+  // y contador para que la tarjeta de formulario y prueba se relea al regenerar.
+  const [regenStart, setRegenStart] = useState(false);
+  const [statusKey, setStatusKey] = useState(0);
 
   const myAssignments = useMemo(
     () => (teacher ? assignments.filter(a => a.teacherId === teacher.id) : []),
@@ -289,24 +298,37 @@ function StudentPageContent() {
                   <div
                     role="menu"
                     style={{
-                      position: 'absolute', right: 0, top: 44, zIndex: 91, minWidth: 250,
+                      position: 'absolute', right: 0, top: 44, zIndex: 91, minWidth: 250, maxWidth: 300,
                       background: '#fff', border: '1px solid var(--border)', borderRadius: 12,
                       boxShadow: '0 8px 28px rgba(0,0,0,0.14)', padding: 6,
                     }}
                   >
                     <button
                       role="menuitem"
-                      onClick={() => { setMenuOpen(false); setFreshFormUrl(null); setFormOpen(true); }}
+                      onClick={() => { setMenuOpen(false); setRegenStart(false); setFormOpen(true); }}
                       style={menuItemStyle}
                     >
                       Formulario inicial · enlace
                     </button>
+                    {/* Los dos botones "de empezar de cero" llevan debajo qué hace
+                        cada uno: se parecen de nombre y no hacen lo mismo. */}
                     <button
                       role="menuitem"
+                      title={REGENERATE_ALL_HINT}
+                      onClick={() => { setMenuOpen(false); setRegenStart(true); setFormOpen(true); }}
+                      style={menuItemStyle}
+                    >
+                      Regenerar todo
+                      <span style={menuHintStyle}>{REGENERATE_ALL_HINT}</span>
+                    </button>
+                    <button
+                      role="menuitem"
+                      title={RESET_PROFILE_HINT}
                       onClick={() => { setMenuOpen(false); setResetOpen(true); }}
                       style={{ ...menuItemStyle, color: '#B91C1C' }}
                     >
                       Reiniciar perfil de IA
+                      <span style={menuHintStyle}>{RESET_PROFILE_HINT}</span>
                     </button>
                   </div>
                 </>
@@ -370,6 +392,12 @@ function StudentPageContent() {
             </div>
           </div>
 
+          <OnboardingStatusCard
+            studentId={a.studentId || profile?.student_id || null}
+            studentName={a.studentName}
+            refreshKey={statusKey}
+          />
+
           <LevelTestCard profile={profile} />
 
           {/* Respaldo humano a la prueba: el profesor confirma o corrige el
@@ -408,7 +436,7 @@ function StudentPageContent() {
           bundle={bundle} ficha={ficha} risk={risk}
           teacher={{ id: teacher.id, name: teacher.name }}
           onToast={showToast} onRefresh={load}
-          onOpenForm={() => { setFreshFormUrl(null); setFormOpen(true); }}
+          onOpenForm={() => { setRegenStart(false); setFormOpen(true); }}
         />
       )}
 
@@ -484,8 +512,9 @@ function StudentPageContent() {
               plan: a.plan || undefined,
               level: a.studentLevel || undefined,
             }}
-            initialUrl={freshFormUrl}
-            onClose={() => { setFormOpen(false); setFreshFormUrl(null); }}
+            startWithRegenerate={regenStart}
+            onRegenerated={() => { setStatusKey(k => k + 1); void load(); }}
+            onClose={() => { setFormOpen(false); setRegenStart(false); }}
             onToast={showToast}
           />
         )}
@@ -507,8 +536,9 @@ function StudentPageContent() {
             onDone={async (res) => {
               setResetOpen(false);
               await load();
-              showToast('Perfil reiniciado. Envía el nuevo formulario al alumno.');
-              if (res.formUrl) { setFreshFormUrl(res.formUrl); setFormOpen(true); }
+              showToast(res.fichaRegenerating
+                ? 'Perfil de IA reiniciado. La ficha se está rehaciendo con las respuestas guardadas; tarda un minuto.'
+                : 'Perfil de IA reiniciado. No hay respuestas del formulario guardadas, así que la ficha se hará cuando el alumno lo rellene.');
             }}
           />
         )}

@@ -62,7 +62,7 @@ const TOKEN_COLS =
   'id, token, student_id, student_name, student_email, teacher_id, teacher_name, ' +
   'assignment_id, plan, level, status, created_at, completed_at, expires_at, ' +
   'form_reminder_count, form_reminder_last_sent, test_reminder_count, test_reminder_last_sent, ' +
-  'reminder_variant';
+  'reminder_variant, superseded_at';
 
 const STUDENT_COLS = 'id, name, email, followup_opt_out';
 const STUDENT_COLS_LEGACY = 'id, name, email';
@@ -92,7 +92,7 @@ async function run(request: Request): Promise<Response> {
   }
   const [tk, ls, dr, ag, fu] = await Promise.all([
     admin.from('form_tokens').select(TOKEN_COLS),
-    admin.from('level_test_sessions').select('student_id, student_name, candidate_name, status'),
+    admin.from('level_test_sessions').select('student_id, student_name, candidate_name, status, superseded_at'),
     admin.from('student_dropouts').select('student_id, student_name'),
     admin.from('assignments').select('id, student_id, student_name, student_email, teacher_id, teacher_name, plan, student_level'),
     admin.from('level_test_followups').select('student_id, numero_envio, sent_at, status'),

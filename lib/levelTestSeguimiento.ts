@@ -11,7 +11,7 @@
 // Funciones puras sobre filas ya leídas; la pestaña solo pinta.
 
 import {
-  buildPendingList, latestTokenPerStudent, studentKeyOf, tokenStateOf, daysSince, norm, stepLabel,
+  buildPendingList, latestTokenPerStudent, vigentes, studentKeyOf, tokenStateOf, daysSince, norm, stepLabel,
   type FormTokenRow, type StudentRow, type TestSessionRow, type DropoutRow, type PendingEntry, type FollowupRow,
 } from '@/lib/formReminders';
 import { testStateOf, type LevelTestInfo } from '@/lib/levelTestClient';
@@ -102,7 +102,10 @@ function tonoPendiente(dias: number, enviado: string, formulario: string | null,
  * entrar; los trabados de hace meses ya los cuenta el filtro "Parados".
  */
 export function construirSeguimiento(input: SeguimientoInput): Seguimiento[] {
-  const { tokens, sessions, students, dropouts, now, followups, assignments } = input;
+  const { students, dropouts, now, followups, assignments } = input;
+  // Lo reemplazado por un "Regenerar todo" es historial: no entra en el seguimiento.
+  const tokens = vigentes(input.tokens);
+  const sessions = vigentes(input.sessions);
 
   // Último envío y total por alumno (level_test_followups).
   const followupPor = new Map<string, { sentAt: string; numero: number; total: number }>();

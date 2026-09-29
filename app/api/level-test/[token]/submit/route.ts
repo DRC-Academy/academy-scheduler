@@ -86,6 +86,43 @@ async function upsertProfile(row: Row, extra: Row) {
   return supabase.from('student_profiles').upsert(row, { onConflict: 'id' });
 }
 
+/**
+ * Si la ficha tiene un nivel confirmado por el profe sobre OTRA prueba (la de
+ * antes de un "Regenerar todo"), lo guarda en esa sesión vieja, dentro de
+ * ai_evaluation.teacher_confirmation (no hay columna propia), y devuelve los
+ * campos que hay que limpiar en la ficha. Si no hay nada que archivar, {}.
+ */
+async function archiveTeacherConfirmation(studentId: string, newSessionId: string): Promise<Row> {
+  const { data: prof, error } = await supabase.from('student_profiles')
+    .select('teacher_confirmed_level, teacher_confirmed_at, teacher_confirmed_by, teacher_confirmed_against, level_test_session_id')
+    .eq('id', studentId).maybeSingle();
+  if (error) {
+    // Sin las columnas del nivel del profe (migración vieja) no hay nada que mover.
+    if (error.code !== '42703') console.error('[level-test/submit] No se pudo leer la confirmación del profe:', error);
+    return {};
+  }
+  if (!prof?.teacher_confirmed_level || prof.level_test_session_id === newSessionId) return {};
+
+  const confirmation = {
+    level: prof.teacher_confirmed_level, at: prof.teacher_confirmed_at,
+    by: prof.teacher_confirmed_by, against: prof.teacher_confirmed_against,
+  };
+  if (prof.level_test_session_id) {
+    const { data: old } = await supabase.from('level_test_sessions')
+      .select('ai_evaluation').eq('id', prof.level_test_session_id).maybeSingle();
+    const evaluation = (old?.ai_evaluation && typeof old.ai_evaluation === 'object') ? old.ai_evaluation : {};
+    const { error: archErr } = await supabase.from('level_test_sessions')
+      .update({ ai_evaluation: { ...evaluation, teacher_confirmation: confirmation } })
+      .eq('id', prof.level_test_session_id);
+    if (archErr) console.error('[level-test/submit] No se pudo archivar la confirmación del profe:', archErr);
+  }
+  console.log(`[level-test/submit] ${studentId}: confirmación del profe (${confirmation.level}) pasa al historial.`);
+  return {
+    teacher_confirmed_level: null, teacher_confirmed_at: null,
+    teacher_confirmed_by: null, teacher_confirmed_against: null,
+  };
+}
+
 export async function POST(
   _request: Request,
   { params }: { params: Promise<{ token: string }> },
@@ -97,6 +134,11 @@ export async function POST(
     .from('level_test_sessions').select('*').eq('token', token).maybeSingle();
   if (error) return Response.json({ error: 'Error del servidor.' }, { status: 500 });
   if (!s) return Response.json({ error: 'Este link no es válido.' }, { status: 404 });
+
+  // Historial de un "Regenerar todo": no se cierra ni se refleja en la ficha.
+  if (s.superseded_at) {
+    return Response.json({ error: 'Tienes un enlace nuevo para la prueba.', replaced: true }, { status: 410 });
+  }
 
   // Idempotente: si ya se cerró, devolver el resultado guardado.
   if (s.status === 'completed') {
@@ -171,7 +213,7 @@ export async function POST(
 
   // Reflejar el resultado en la ficha del alumno (misma tabla que el formulario).
   if (s.student_id) {
-    const fichaRow = {
+    const fichaRow: Row = {
       student_name:            s.student_name || s.candidate_name,
       level_test_cefr:         cefr,
       level_test_score:        overall,
@@ -180,6 +222,12 @@ export async function POST(
       level_test_session_id:   s.id,
       updated_at:              now,
     };
+    // Prueba NUEVA tras un "Regenerar todo": la confirmación del profe era sobre
+    // la prueba anterior. Pasa al historial (dentro de esa sesión vieja) y se
+    // limpia, así manda el nivel nuevo y el alumno vuelve a "Niveles a validar"
+    // de su profe, que sigue teniendo la última palabra.
+    Object.assign(fichaRow, await archiveTeacherConfirmation(s.student_id, s.id));
+    if (s.teacher_id) fichaRow.teacher_id = s.teacher_id;
     // El motivo REAL va aquí: es lo que el profesor necesita para saber si repetir
     // la prueba o darla por buena.
     const fichaExtra = {

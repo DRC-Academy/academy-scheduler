@@ -73,6 +73,8 @@ export interface FormTokenRow {
   created_at: string;
   completed_at: string | null;
   expires_at: string | null;
+  /** Historial de un "Regenerar todo": no cuenta para nada (ver lib/levelTest/canonical). */
+  superseded_at?: string | null;
   form_reminder_count: number | null;
   form_reminder_last_sent: string | null;
   test_reminder_count: number | null;
@@ -102,6 +104,13 @@ export interface TestSessionRow {
   student_name: string | null;
   candidate_name: string | null;
   status: string | null;
+  /** Historial de un "Regenerar todo": no cuenta para nada (ver lib/levelTest/canonical). */
+  superseded_at?: string | null;
+}
+
+/** Quita lo que quedó como historial de un "Regenerar todo": solo cuenta lo vigente. */
+export function vigentes<T extends { superseded_at?: string | null }>(rows: T[]): T[] {
+  return rows.filter(r => !r.superseded_at);
 }
 
 export interface DropoutRow {
@@ -330,7 +339,9 @@ export interface BuildPendingInput {
  *   · Los alumnos sin ninguna dirección de correo a la que escribir.
  */
 export function buildPendingList(input: BuildPendingInput): PendingEntry[] {
-  const { tokens, students, sessions, dropouts, now, followups, assignments } = input;
+  const { students, dropouts, now, followups, assignments } = input;
+  const tokens = vigentes(input.tokens);
+  const sessions = vigentes(input.sessions);
 
   // Envíos hechos por alumno (level_test_followups): cuántos y el último.
   const enviadosPor = new Map<string, { count: number; lastSent: string | null }>();
@@ -490,7 +501,9 @@ export function studentsNeedingToken(input: {
   assignments: AssignmentRow[];
   now: number;
 }): NeedsToken[] {
-  const { tokens, students, sessions, dropouts, assignments, now } = input;
+  const { students, dropouts, assignments, now } = input;
+  const tokens = vigentes(input.tokens);
+  const sessions = vigentes(input.sessions);
 
   const bajaIds = new Set(dropouts.map(d => d.student_id).filter(Boolean) as string[]);
   const bajaNames = new Set(dropouts.map(d => norm(d.student_name)).filter(Boolean));

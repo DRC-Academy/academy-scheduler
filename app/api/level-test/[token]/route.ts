@@ -16,7 +16,7 @@
 import { supabase } from '@/lib/supabase';
 import { computeNext, loadSessionWithAnswers } from '@/lib/levelTest/server';
 import { GRAND_TOTAL } from '@/lib/levelTest/constants';
-import { isStudentSession, pickCanonical, sessionExpired } from '@/lib/levelTest/canonical';
+import { isStudentSession, isSuperseded, pickCanonical, sessionExpired } from '@/lib/levelTest/canonical';
 import { loadStudentSessions } from '@/lib/levelTest/createSession';
 import { canTakeLevelTest } from '@/lib/levelTest/studentAccess';
 
@@ -44,6 +44,23 @@ export async function GET(
   }
   if (!s) return Response.json({ status: 'invalid' }, { status: 404 });
   const peek = new URL(request.url).searchParams.get('peek') === '1';
+
+  // Reemplazada por un "Regenerar todo": este enlace es historial. Lleva a la
+  // prueba nueva del alumno, aunque esta estuviera terminada; si no hubiera
+  // ninguna, se le dice que tiene un enlace nuevo. Va ANTES de 'completed' para
+  // que un resultado viejo nunca se enseñe como si fuera el vigente.
+  if (isSuperseded({ superseded_at: s.superseded_at })) {
+    try {
+      const principal = pickCanonical(await loadStudentSessions({
+        studentId: s.student_id || undefined,
+        studentName: s.student_name || s.candidate_name || undefined,
+      }));
+      if (principal.kind !== 'none') return Response.json({ status: 'redirect', token: principal.token });
+    } catch (e) {
+      console.error('[level-test GET] No se pudo buscar la prueba nueva:', e);
+    }
+    return Response.json({ status: 'replaced' });
+  }
 
   // Ya completado → devolver el resultado (para la pantalla de resultados).
   if (s.status === 'completed') {

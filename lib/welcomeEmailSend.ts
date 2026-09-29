@@ -139,13 +139,13 @@ export async function decideWelcomeVariant(
 async function levelTestDone(admin: SupabaseClient, a: AssignmentForWelcome): Promise<boolean> {
   if (a.student_id) {
     const { data } = await admin.from('level_test_sessions').select('id')
-      .eq('student_id', a.student_id).eq('status', 'completed').limit(1);
+      .eq('student_id', a.student_id).eq('status', 'completed').is('superseded_at', null).limit(1);
     if (data?.length) return true;
   }
   const name = a.student_name.trim();
   const { data } = await admin.from('level_test_sessions').select('id')
     .or(`student_name.ilike."${name.replace(/"/g, '')}",candidate_name.ilike."${name.replace(/"/g, '')}"`)
-    .eq('status', 'completed').limit(1);
+    .eq('status', 'completed').is('superseded_at', null).limit(1);
   return Boolean(data?.length);
 }
 

@@ -168,7 +168,7 @@ export default function LevelTestsTab() {
     }
     const [idx, tkRes, drRes, spRes, fuRes, agRes] = await Promise.all([
       fetchLevelTestIndex(),
-      supabase.from('form_tokens').select('id, token, student_id, student_name, student_email, teacher_id, teacher_name, assignment_id, plan, level, status, created_at, completed_at, expires_at, form_reminder_count, form_reminder_last_sent, test_reminder_count, test_reminder_last_sent, reminder_variant'),
+      supabase.from('form_tokens').select('id, token, student_id, student_name, student_email, teacher_id, teacher_name, assignment_id, plan, level, status, created_at, completed_at, expires_at, form_reminder_count, form_reminder_last_sent, test_reminder_count, test_reminder_last_sent, reminder_variant, superseded_at'),
       supabase.from('student_dropouts').select('student_id, student_name'),
       // Si supabase-teacher-level.sql no se corrió, esta consulta falla con
       // 42703 y el nivel del profesor queda vacío. La pestaña sigue funcionando.

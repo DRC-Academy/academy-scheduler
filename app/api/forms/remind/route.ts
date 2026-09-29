@@ -34,7 +34,7 @@ const TOKEN_COLS =
   'id, token, student_id, student_name, student_email, teacher_id, teacher_name, ' +
   'assignment_id, plan, level, status, created_at, completed_at, expires_at, ' +
   'form_reminder_count, form_reminder_last_sent, test_reminder_count, test_reminder_last_sent, ' +
-  'reminder_variant';
+  'reminder_variant, superseded_at';
 
 export async function POST(request: Request): Promise<Response> {
   let body: { tokenIds?: unknown };
@@ -56,7 +56,7 @@ export async function POST(request: Request): Promise<Response> {
   }
   const [tk, ls, dr, ag, fu] = await Promise.all([
     supabase.from('form_tokens').select(TOKEN_COLS),
-    supabase.from('level_test_sessions').select('student_id, student_name, candidate_name, status'),
+    supabase.from('level_test_sessions').select('student_id, student_name, candidate_name, status, superseded_at'),
     supabase.from('student_dropouts').select('student_id, student_name'),
     supabase.from('assignments').select('student_id, student_name, student_email'),
     supabase.from('level_test_followups').select('student_id, numero_envio, sent_at, status'),

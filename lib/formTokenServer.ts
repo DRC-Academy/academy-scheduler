@@ -62,7 +62,8 @@ export async function createFormToken(client: SupabaseClient, body: FormTokenPay
 /**
  * El token más reciente del alumno: por student_id y, si no hay, por nombre
  * (hay tokens viejos creados sin student_id). Misma regla que lookupToken en
- * lib/formClient, que es la que usa el modal de presentación.
+ * lib/formClient, que es la que usa el modal de presentación. Los que quedaron
+ * como historial de un "Regenerar todo" (superseded_at) no cuentan.
  */
 export async function findLatestFormToken(
   client: SupabaseClient, student: { id?: string | null; name: string },
@@ -70,29 +71,32 @@ export async function findLatestFormToken(
   const cols = 'id, token, status, expires_at, completed_at, student_id, student_name';
   if (student.id) {
     const { data } = await client.from('form_tokens').select(cols)
-      .eq('student_id', student.id).order('created_at', { ascending: false }).limit(1);
+      .eq('student_id', student.id).is('superseded_at', null)
+      .order('created_at', { ascending: false }).limit(1);
     if (data?.[0]) return data[0] as FormTokenRow;
   }
   const name = student.name.trim();
   if (!name) return null;
   const { data } = await client.from('form_tokens').select(cols)
-    .ilike('student_name', name).order('created_at', { ascending: false }).limit(1);
+    .ilike('student_name', name).is('superseded_at', null)
+    .order('created_at', { ascending: false }).limit(1);
   return (data?.[0] as FormTokenRow | undefined) ?? null;
 }
 
-/** ¿Algún token del alumno está completado? (formulario ya hecho, aunque luego se regenerara). */
+/** ¿Algún token VIGENTE del alumno está completado? (formulario ya hecho, aunque
+ *  luego se regenerara el enlace; tras un "Regenerar todo" lo anterior no cuenta). */
 export async function hasCompletedFormToken(
   client: SupabaseClient, student: { id?: string | null; name: string },
 ): Promise<boolean> {
   if (student.id) {
     const { data } = await client.from('form_tokens').select('id')
-      .eq('student_id', student.id).eq('status', 'completed').limit(1);
+      .eq('student_id', student.id).eq('status', 'completed').is('superseded_at', null).limit(1);
     if (data?.length) return true;
   }
   const name = student.name.trim();
   if (!name) return false;
   const { data } = await client.from('form_tokens').select('id')
-    .ilike('student_name', name).eq('status', 'completed').limit(1);
+    .ilike('student_name', name).eq('status', 'completed').is('superseded_at', null).limit(1);
   return Boolean(data?.length);
 }
 

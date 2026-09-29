@@ -1,7 +1,9 @@
 'use client';
 
-// "Reiniciar perfil de IA" de un alumno. Confirmación explícita porque borra la
-// ficha y el contenido generado por IA.
+// "Reiniciar perfil de IA" de un alumno: rehace SOLO la parte de la IA (ficha de
+// la IA e informes de clase) con las respuestas del formulario ya guardadas. No
+// le pide nada al alumno ni toca el nivel ni el formulario. Para que el alumno
+// repita formulario y prueba está "Regenerar todo" (otro botón, otro uso).
 //
 // Lo que NO toca: el transcript de cada clase, su fecha y su profesor. Son el
 // segundo factor de verificación de finanzas — borrarlos dejaría clases ya dadas
@@ -12,10 +14,14 @@ import { useState } from 'react';
 import { btnSecondary } from '@/components/alumnos/ui';
 
 export interface ResetProfileResult {
-  profilesDeleted: number;
+  profilesCleared: number;
   analysesCleared: number;
-  formUrl: string | null;
+  /** true si se está rehaciendo la ficha de la IA con las respuestas guardadas. */
+  fichaRegenerating: boolean;
 }
+
+/** Una frase para el botón y el menú: qué hace, sin confundirlo con "Regenerar todo". */
+export const RESET_PROFILE_HINT = 'Rehace la ficha de la IA y los informes de clase con las respuestas ya guardadas. No le pide nada al alumno.';
 
 export default function ResetProfileModal({ payload, onClose, onDone }: {
   payload: {
@@ -50,9 +56,9 @@ export default function ResetProfileModal({ payload, onClose, onDone }: {
         throw new Error(typeof data.error === 'string' ? data.error : `No se pudo reiniciar (error ${res.status}).`);
       }
       await onDone({
-        profilesDeleted: Number(data.profilesDeleted ?? 0),
+        profilesCleared: Number(data.profilesCleared ?? 0),
         analysesCleared: Number(data.analysesCleared ?? 0),
-        formUrl: (data.formUrl as string) ?? null,
+        fichaRegenerating: !!data.fichaRegenerating,
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo reiniciar el perfil.');
@@ -67,14 +73,19 @@ export default function ResetProfileModal({ payload, onClose, onDone }: {
     >
       <div className="sp" style={{ background: '#fff', borderRadius: 14, padding: 24, maxWidth: 480, width: '100%', margin: 0 }}>
         <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 10 }}>
-          Reiniciar perfil de {payload.studentName}
+          Reiniciar perfil de IA de {payload.studentName}
         </div>
         <div style={{ fontSize: 13.5, color: 'var(--sp-t2)', lineHeight: 1.65 }}>
-          Esto eliminará la ficha actual, el historial de análisis y las clases generadas
-          por IA. El alumno deberá completar el formulario de nuevo.
+          Se borran y se vuelven a hacer la <strong>ficha de la IA</strong> y los{' '}
+          <strong>informes de las clases</strong>. La ficha se rehace con las respuestas
+          del formulario que ya tenemos guardadas.
           <br /><br />
-          <strong>Los datos de finanzas NO se ven afectados:</strong> las clases registradas y
-          sus transcripciones se conservan tal cual. ¿Continuar?
+          <strong>No cambia:</strong> el nivel, la confirmación del profe, las respuestas
+          del formulario ni las clases registradas y sus transcripciones (finanzas).
+          Al alumno no se le pide nada.
+          <br /><br />
+          Si lo que quieres es que el alumno repita el formulario y la prueba, usa
+          «Regenerar todo». ¿Continuar?
         </div>
 
         {error && (

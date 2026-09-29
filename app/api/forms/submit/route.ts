@@ -62,6 +62,13 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ error: 'Este link no es válido.' }, { status: 404 });
   }
 
+  // Historial de un "Regenerar todo": este enlace ya no guarda nada. La página
+  // lleva al formulario nuevo al abrirse; esto cubre una pestaña que se quedó
+  // abierta desde antes.
+  if (tk.superseded_at) {
+    return Response.json({ error: 'Tienes un enlace nuevo para el formulario. Vuelve a abrir este enlace y te llevamos a él.', replaced: true }, { status: 410 });
+  }
+
   // Ya completado (segundo envío, reintento tras un corte…): no es un error.
   // Las respuestas del primer envío son las que valen; no se vuelven a guardar.
   if (tk.status === 'completed') {
@@ -92,7 +99,9 @@ export async function POST(request: Request): Promise<Response> {
   //    ESTE envío fue el que lo cerró: si llegan dos a la vez, solo uno guarda.
   const { data: closed, error: updErr } = await supabase
     .from('form_tokens')
-    .update({ status: 'completed', completed_at: now })
+    // `responses` también en el token: la ficha guarda solo las ÚLTIMAS, y tras
+    // un "Regenerar todo" las anteriores tienen que seguir como historial.
+    .update({ status: 'completed', completed_at: now, responses })
     .eq('id', tk.id)
     .eq('status', 'pending')
     .select('id');

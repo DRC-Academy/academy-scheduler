@@ -64,10 +64,10 @@ export async function cargarInformeUso(opts: { semanas: number; now?: number }):
     leer('assignments', (f, t) => supabase.from('assignments')
       .select('id, teacher_id, student_id, student_name, start_date, created_at').order('id').range(f, t), errores),
     leer('form_tokens', (f, t) => supabase.from('form_tokens')
-      .select('id, token, student_id, student_name, student_email, teacher_id, teacher_name, assignment_id, plan, level, status, created_at, completed_at, expires_at, form_reminder_count, form_reminder_last_sent, test_reminder_count, test_reminder_last_sent, reminder_variant')
+      .select('id, token, student_id, student_name, student_email, teacher_id, teacher_name, assignment_id, plan, level, status, created_at, completed_at, expires_at, form_reminder_count, form_reminder_last_sent, test_reminder_count, test_reminder_last_sent, reminder_variant, superseded_at')
       .order('id').range(f, t), errores),
     leer('level_test_sessions', (f, t) => supabase.from('level_test_sessions')
-      .select('id, token, status, expires_at, completed_at, student_id, student_name, candidate_name, candidate_email, cefr_level, overall_score, created_at')
+      .select('id, token, status, expires_at, completed_at, student_id, student_name, candidate_name, candidate_email, cefr_level, overall_score, created_at, superseded_at')
       .order('id').range(f, t), errores),
     leer('students', (f, t) => supabase.from('students').select('id, name, email').order('id').range(f, t), errores),
     leer('student_dropouts', (f, t) => supabase.from('student_dropouts').select('id, student_id, student_name').order('id').range(f, t), errores),

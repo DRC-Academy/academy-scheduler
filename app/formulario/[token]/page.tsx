@@ -32,6 +32,7 @@ interface TokenRow {
 type LoadState =
   | { kind: 'loading' }
   | { kind: 'invalid' }
+  | { kind: 'replaced' }                // historial de un "Regenerar todo", sin destino
   | { kind: 'done'; token: TokenRow }   // token ya completado
   | { kind: 'ready'; token: TokenRow };
 
@@ -79,12 +80,23 @@ export default function FormularioPage() {
       if (!token) { setState({ kind: 'invalid' }); return; }
       const { data, error } = await supabase
         .from('form_tokens')
-        .select('id, token, student_name, teacher_name, plan, level, status, expires_at')
+        .select('id, token, student_name, teacher_name, plan, level, status, expires_at, superseded_at')
         .eq('token', token)
         .maybeSingle();
 
       if (cancelled) return;
       if (error || !data) { setState({ kind: 'invalid' }); return; }
+      // Enlace de antes de un "Regenerar todo": lleva al formulario vigente.
+      if (data.superseded_at) {
+        try {
+          const res = await fetch(`/api/forms/status?token=${encodeURIComponent(token)}`, { cache: 'no-store' });
+          const st = await res.json().catch(() => ({}));
+          if (cancelled) return;
+          if (st.status === 'redirect' && st.token) { window.location.replace(`/formulario/${st.token}`); return; }
+        } catch { /* sin destino: se le dice que tiene un enlace nuevo */ }
+        if (!cancelled) setState({ kind: 'replaced' });
+        return;
+      }
       if (data.status === 'completed') { setState({ kind: 'done', token: data as TokenRow }); return; }
       const expired = data.expires_at && new Date(data.expires_at).getTime() < Date.now();
       if (data.status === 'expired' || expired) { setState({ kind: 'invalid' }); return; }
@@ -95,6 +107,7 @@ export default function FormularioPage() {
 
   if (state.kind === 'loading') return <LoadingScreen />;
   if (state.kind === 'invalid') return <ErrorScreen />;
+  if (state.kind === 'replaced') return <ErrorScreen title="Tienes un enlace nuevo" text="Tu profe te ha enviado un formulario nuevo. Búscalo en tu correo o pídeselo y lo rellenas en unos minutos." />;
   if (state.kind === 'done') return <AlreadyDoneScreen token={state.token} />;
   return <FormFlow token={state.token} />;
 }
@@ -592,7 +605,10 @@ function FinalScreen({ token, initialTest }: { token: TokenRow; initialTest: Fin
   );
 }
 
-function ErrorScreen() {
+function ErrorScreen({
+  title = 'Este enlace ya no está disponible',
+  text = 'Contacta con tu profesor para obtener uno nuevo.',
+}: { title?: string; text?: string } = {}) {
   const gecko = useMandoGecko();
   useEffect(() => {
     const t = setTimeout(() => gecko.dispara('duda'), 350);
@@ -604,8 +620,8 @@ function ErrorScreen() {
       <div className="drc-f-content">
         <div className="drc-f-screen center drc-f-anim">
           <div className="drc-f-gecko-final"><GeckoAnimado mando={gecko} alto={130} altoMovil={110} /></div>
-          <h1>Este enlace ya no está disponible</h1>
-          <p className="drc-f-muted">Contacta con tu profesor para obtener uno nuevo.</p>
+          <h1>{title}</h1>
+          <p className="drc-f-muted">{text}</p>
         </div>
       </div>
     </Shell>

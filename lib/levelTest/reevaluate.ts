@@ -150,7 +150,11 @@ async function reevaluateOne(row: PendingRow): Promise<ReevalItem> {
     writing_score: r.writingScore,
     overall_score: r.overall,
     cefr_level: r.cefr,
-    ai_evaluation: r.aiEvaluation,
+    // La confirmación del profe archivada por un "Regenerar todo" vive dentro de
+    // ai_evaluation (app/api/level-test/[token]/submit): no se pierde al reevaluar.
+    ai_evaluation: s.ai_evaluation?.teacher_confirmation && r.aiEvaluation
+      ? { ...r.aiEvaluation, teacher_confirmation: s.ai_evaluation.teacher_confirmation }
+      : r.aiEvaluation,
     ...sessionWriting,
   }).eq('id', s.id);
   if (sesErr) return { ...base, resultado, error: `Evaluada, pero no se pudo actualizar la prueba: ${sesErr.message}` };

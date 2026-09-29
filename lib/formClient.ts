@@ -86,16 +86,6 @@ export async function generateFormToken(
   return { token: data.token, formUrl: data.formUrl, expiredCount: data.expiredCount };
 }
 
-/**
- * "Regenerar enlace del formulario": marca como 'expired' el/los enlaces
- * anteriores del alumno y crea uno nuevo. Para cuando el anterior caducó, el
- * alumno lo perdió o se envió a un email equivocado.
- */
-export async function regenerateFormLink(payload: GenerateTokenPayload): Promise<{ token: string; formUrl: string }> {
-  const { token, formUrl } = await generateFormToken({ ...payload, expirePrevious: true });
-  return { token, formUrl };
-}
-
 // Email pre-armado para enviarle el formulario al alumno.
 export function buildFormEmail(studentName: string, teacherName: string, url: string): { subject: string; body: string } {
   const subject = 'Antes de tu primera clase · DRC Academy 🎓';

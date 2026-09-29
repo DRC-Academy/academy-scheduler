@@ -25,6 +25,16 @@ describe('sessionExpired', () => {
     const vieja = s({ token: 'nom', student_id: null, teacher_id: 'prof1', expires_at: '2026-08-01T00:00:00Z', answered: 4 });
     expect(pickCanonical([vieja], NOW)).toEqual({ kind: 'open', token: 'nom', answered: 4 });
   });
+  it('tras "Regenerar todo" la prueba vieja terminada NO cuenta: manda la nueva', () => {
+    const vieja = s({ token: 'vieja', status: 'completed', created_at: '2026-09-25T08:00:00Z', superseded_at: '2026-09-30T10:00:00Z' });
+    const nueva = s({ token: 'nueva', status: 'pending', created_at: '2026-09-30T10:00:00Z' });
+    expect(pickCanonical([vieja, nueva], NOW)).toEqual({ kind: 'open', token: 'nueva', answered: 0 });
+    expect(decideStudentTest([vieja, nueva], NOW)).toEqual({ kind: 'ready', token: 'nueva', started: false });
+  });
+  it('si todo quedó como historial, no hay prueba principal', () => {
+    const vieja = s({ status: 'completed', superseded_at: '2026-09-30T10:00:00Z' });
+    expect(pickCanonical([vieja], NOW)).toEqual({ kind: 'none' });
+  });
   it('la de un lead caduca por fecha o por marca', () => {
     expect(sessionExpired(lead({ expires_at: '2026-09-28T08:00:00Z' }), NOW)).toBe(true);
     expect(sessionExpired(lead({ status: 'abandoned' }), NOW)).toBe(true);

@@ -21,6 +21,8 @@ export interface LevelTestInfo {
   student_id: string | null;
   // Con profe = prueba de un alumno, aunque no tenga student_id (no caduca).
   teacher_id?: string | null;
+  // Historial de un "Regenerar todo" (lib/levelTest/canonical): no cuenta.
+  superseded_at?: string | null;
   student_name: string | null;
   candidate_name: string;
   candidate_email: string;
@@ -67,7 +69,7 @@ export async function fetchLevelTestIndex(): Promise<{
   const byId = new Map<string, LevelTestInfo>();
   const byName = new Map<string, LevelTestInfo>();
 
-  const COLS = 'id, token, status, expires_at, completed_at, student_id, teacher_id, student_name, candidate_name, candidate_email, cefr_level, overall_score, created_at';
+  const COLS = 'id, token, status, expires_at, completed_at, student_id, teacher_id, student_name, candidate_name, candidate_email, cefr_level, overall_score, created_at, superseded_at';
   const read = (cols: string) => supabase
     .from('level_test_sessions').select(cols).order('created_at', { ascending: false });
 
@@ -87,6 +89,7 @@ export async function fetchLevelTestIndex(): Promise<{
     if (!prev || rango(row) > rango(prev)) m.set(k, row);
   };
   for (const row of all) {
+    if (row.superseded_at) continue;   // historial de un "Regenerar todo"
     if (row.student_id) quedarse(byId, row.student_id, row);
     const key = norm(row.student_name || row.candidate_name);
     if (key) quedarse(byName, key, row);

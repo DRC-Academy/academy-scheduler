@@ -127,6 +127,18 @@ describe('buildPendingList (un solo reloj)', () => {
     expect(e.skipReason).toBe('no_enviar');
   });
 
+  it('tras "Regenerar todo": la prueba y el formulario viejos no cuentan, se persigue lo nuevo desde el primero', () => {
+    const viejo = token({ id: 'ft0', token: 'tok0', status: 'completed', completed_at: iso(0), created_at: iso(0), superseded_at: iso(5) });
+    const nuevo = token({ id: 'ft1', token: 'tok1', created_at: iso(5), expires_at: iso(35) });
+    const [e] = buildPendingList({
+      tokens: [viejo, nuevo], students, dropouts: [], now: dia(6), followups: [],
+      sessions: [{ student_id: 's1', student_name: 'Laura', candidate_name: 'Laura', status: 'completed', superseded_at: iso(5) }],
+    });
+    expect(e.token.id).toBe('ft1');
+    expect(e.sequence).toBe('formulario');
+    expect(e.step).toBe(1);
+  });
+
   it('el email de students manda; el de la assignment queda como alternativo si difiere', () => {
     const [e] = buildPendingList({
       tokens: [token({})], students, sessions: sinSesiones, dropouts: [], now: dia(1), followups: [],

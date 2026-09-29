@@ -1,25 +1,34 @@
-// "Reiniciar perfil de IA" de un alumno: borra la ficha y el contenido generado
-// por IA para poder empezar de cero (formulario mal contestado, alumno que cambia
-// de objetivo, ficha con datos de otra persona…).
+// "Reiniciar perfil de IA" de un alumno: rehace SOLO la parte de la IA (la
+// ficha de la IA y los informes de las clases). No le pide nada al alumno.
 //
-// QUÉ SE BORRA Y QUÉ NO — decisión deliberada:
+// QUÉ SE LIMPIA Y QUÉ NO — decisión deliberada (Facundo, 30/09/2026):
 //
-//   · student_profiles → SE BORRA la fila entera. Es la ficha: se regenera con el
-//     formulario nuevo.
+//   · student_profiles → NO se borra la fila. Se vacían solo los campos que
+//     escribe la IA (ficha, foco recomendado, riesgo, progreso, próxima clase) y
+//     se CONSERVAN las respuestas del formulario, el nivel de la prueba, la
+//     confirmación del profe y el resto. Hasta el 30/09/2026 se borraba la fila
+//     entera y con ella el nivel: eso ahora es cosa de "Regenerar todo"
+//     (app/api/students/regenerate-all), que es otro botón con otro uso.
 //   · class_analyses   → NO se borra la fila. El transcript es el SEGUNDO FACTOR
 //     de verificación del cálculo de finanzas (lib/finance.ts: una clase cuenta si
 //     hay ingreso + transcript). Borrarlo dejaría clases ya dadas sin pagar.
 //     Se limpian SOLO los campos de análisis (resumen, errores, progreso, guía,
 //     riesgo…) y se conservan transcript, class_date, teacher_id, student_name,
 //     join_log_id y validation_status.
-//
-// Además se genera un formulario nuevo (el enlace anterior deja de funcionar).
+//   · La ficha de la IA se vuelve a generar sola, después de responder, con las
+//     respuestas del formulario YA GUARDADAS. Sin respuestas, se queda vacía
+//     hasta que el alumno rellene el formulario.
+//   · NO se crea formulario nuevo.
 
+import { after } from 'next/server';
 import { supabase } from '@/lib/supabase';
-import { publicBase } from '@/lib/appUrl';
+import { generateFicha } from '@/lib/analyzeForm';
+import { fichaToColumns } from '@/lib/aiTypes';
+import { formatResponsesForAI, type FormResponses } from '@/lib/formQuestions';
 
 export const runtime = 'nodejs';
-export const maxDuration = 30;
+// La ficha se regenera en after(), dentro de este límite (generateFicha: 45 s).
+export const maxDuration = 60;
 
 interface Body {
   studentId?: string | null;
@@ -30,8 +39,6 @@ interface Body {
   assignmentId?: string | null;
   plan?: string | null;
   level?: string | null;
-  /** false → solo limpia, sin crear un formulario nuevo. */
-  newFormLink?: boolean;
 }
 
 // Campos del informe de IA. `transcript`, `class_date`, `teacher_id`,
@@ -48,6 +55,27 @@ const AI_FIELDS: Record<string, unknown> = {
   risk_explanation:   null,
 };
 
+// Campos de la ficha que escribe la IA. Todo lo demás de la fila se conserva:
+// respuestas del formulario, nivel de la prueba, confirmación del profe…
+const PROFILE_AI_FIELDS: Record<string, unknown> = {
+  initial_diagnosis:       null,
+  strong_points:           null,
+  weak_points:             null,
+  learning_style:          null,
+  personal_objective:      null,
+  occupation:              null,
+  recommended_focus:       null,
+  ai_ficha:                null,
+  risk_signal:             null,
+  risk_explanation:        null,
+  risk_updated_at:         null,
+  progress_score:          null,
+  total_classes_analyzed:  0,
+  last_class_analyzed_at:  null,
+  next_class_content:      null,
+  next_class_generated_at: null,
+};
+
 const isMissingCol = (e: { code?: string } | null): boolean =>
   e?.code === 'PGRST204' || e?.code === '42703';
 
@@ -61,35 +89,39 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   const studentName = body.studentName?.trim();
-  const teacherId = body.teacherId?.trim();
   if (!studentName) return Response.json({ error: 'Falta studentName.' }, { status: 400 });
 
   const studentId = body.studentId?.trim() || null;
 
-  // ── 1. Ficha del alumno ──
-  let profilesDeleted = 0;
+  // ── 1. Ficha del alumno: se vacía la parte de la IA, la fila se queda ──
+  type ProfRow = { id: string; student_name: string | null; form_responses: unknown; form_token_id: string | null };
+  const perfiles = new Map<string, ProfRow>();
   {
-    const del = async (col: 'student_id' | 'student_name', val: string) => {
-      const q = supabase.from('student_profiles').delete();
-      const { data, error } = col === 'student_id'
-        ? await q.eq('student_id', val).select('id')
-        : await q.ilike('student_name', val).select('id');
+    const cols = 'id, student_name, form_responses, form_token_id';
+    const reads = [
+      studentId ? supabase.from('student_profiles').select(cols).eq('student_id', studentId) : null,
+      supabase.from('student_profiles').select(cols).ilike('student_name', studentName),
+    ];
+    for (const r of reads) {
+      if (!r) continue;
+      const { data, error } = await r;
       if (error) {
-        console.error(`[reset-profile] Error al borrar la ficha por ${col}:`, error);
-        throw new Error(`No se pudo borrar la ficha: ${error.message}`);
+        console.error('[reset-profile] Error al leer la ficha:', error);
+        return Response.json({ error: `No se pudo leer la ficha: ${error.message}` }, { status: 500 });
       }
-      profilesDeleted += data?.length ?? 0;
-    };
-    try {
-      if (studentId) await del('student_id', studentId);
-      await del('student_name', studentName);
-    } catch (err) {
-      return Response.json(
-        { error: err instanceof Error ? err.message : 'No se pudo borrar la ficha.' },
-        { status: 500 },
-      );
+      for (const p of (data ?? []) as ProfRow[]) perfiles.set(p.id, p);
+    }
+    for (const p of perfiles.values()) {
+      const { error } = await supabase.from('student_profiles')
+        .update({ ...PROFILE_AI_FIELDS, ai_status: p.form_responses ? 'pending' : null, updated_at: new Date().toISOString() })
+        .eq('id', p.id);
+      if (error) {
+        console.error('[reset-profile] Error al limpiar la ficha:', error);
+        return Response.json({ error: `No se pudo limpiar la ficha: ${error.message}` }, { status: 500 });
+      }
     }
   }
+  const profilesCleared = perfiles.size;
 
   // ── 2. Análisis de clase: se limpia el informe, se conserva el transcript ──
   let analysesCleared = 0;
@@ -127,37 +159,41 @@ export async function POST(request: Request): Promise<Response> {
     }
   }
 
-  // ── 3. Formulario nuevo (el anterior deja de funcionar) ──
-  let formUrl: string | null = null;
-  if (body.newFormLink !== false && teacherId) {
-    try {
-      const patch = { status: 'expired' };
-      if (studentId) await supabase.from('form_tokens').update(patch).eq('student_id', studentId).neq('status', 'expired');
-      await supabase.from('form_tokens').update(patch).ilike('student_name', studentName).neq('status', 'expired');
-
-      const token = crypto.randomUUID();
-      const { error } = await supabase.from('form_tokens').insert({
-        id:            `ft_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-        token,
-        student_id:    studentId,
-        student_name:  studentName,
-        student_email: body.studentEmail?.trim() || null,
-        teacher_id:    teacherId,
-        teacher_name:  body.teacherName?.trim() || '',
-        assignment_id: body.assignmentId?.trim() || null,
-        plan:          body.plan?.trim() || null,
-        level:         body.level?.trim() || null,
-        status:        'pending',
-      });
-      if (error) console.error('[reset-profile] No se pudo crear el formulario nuevo:', error);
-      else formUrl = `${publicBase(request)}/formulario/${token}`;
-    } catch (err) {
-      // El reinicio en sí ya salió bien: no se tumba por el link.
-      console.error('[reset-profile] Error al generar el formulario nuevo:', err);
-    }
+  // ── 3. La ficha de la IA, otra vez, con las respuestas guardadas ──
+  const conRespuestas = [...perfiles.values()].filter(p => p.form_responses);
+  if (conRespuestas.length) {
+    after(async () => {
+      for (const p of conRespuestas) {
+        const responses = (typeof p.form_responses === 'string'
+          ? safeParse(p.form_responses) : p.form_responses) as FormResponses | null;
+        if (!responses || Object.keys(responses).length === 0) continue;
+        let plan = body.plan ?? undefined, level = body.level ?? undefined;
+        let teacherName = body.teacherName ?? undefined;
+        if (p.form_token_id) {
+          const { data: tk } = await supabase.from('form_tokens')
+            .select('plan, level, teacher_name').eq('id', p.form_token_id).maybeSingle();
+          plan ??= tk?.plan ?? undefined; level ??= tk?.level ?? undefined; teacherName ??= tk?.teacher_name ?? undefined;
+        }
+        const ficha = await generateFicha({
+          studentName: p.student_name ?? studentName, teacherName: teacherName ?? '',
+          plan, level, responsesText: formatResponsesForAI(responses),
+        });
+        const { error } = await supabase.from('student_profiles').update({
+          ai_status: ficha.status,
+          ...(ficha.data ? fichaToColumns(ficha.data) : {}),
+          updated_at: new Date().toISOString(),
+        }).eq('id', p.id);
+        if (error) console.error('[reset-profile] Error al guardar la ficha nueva:', error);
+        else if (ficha.status !== 'ready') console.error(`[reset-profile] Ficha de ${studentName} sin generar (${ficha.status}); se puede regenerar desde la ficha.`);
+      }
+    });
   }
 
-  console.log(`[reset-profile] ${studentName}: ${profilesDeleted} ficha(s) borrada(s), ${analysesCleared} análisis limpiados, link nuevo: ${!!formUrl}`);
+  console.log(`[reset-profile] ${studentName}: ${profilesCleared} ficha(s) limpiada(s), ${analysesCleared} análisis limpiados, ficha IA rehaciéndose: ${conRespuestas.length > 0}`);
 
-  return Response.json({ ok: true, profilesDeleted, analysesCleared, formUrl });
+  return Response.json({ ok: true, profilesCleared, analysesCleared, fichaRegenerating: conRespuestas.length > 0 });
+}
+
+function safeParse(s: string): unknown {
+  try { return JSON.parse(s); } catch { return null; }
 }
