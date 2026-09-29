@@ -11,6 +11,7 @@
 
 import { createTestSession, loadStudentSessions, type TestSessionInput } from './createSession';
 import { pickCanonical, type SessionSummary } from './canonical';
+import { canTakeLevelTest } from './studentAccess';
 
 export type { SessionSummary } from './canonical';
 
@@ -29,15 +30,26 @@ export function decideStudentTest(sessions: SessionSummary[], now: number = Date
 
 export type ResolvedStudentTest =
   | { kind: 'completed' }
-  | { kind: 'ready'; token: string; started: boolean };
+  | { kind: 'ready'; token: string; started: boolean }
+  | { kind: 'unavailable' };   // no puede hacerla (lib/levelTest/studentAccess)
 
 /**
  * Estado de la prueba del alumno, creando una sesión nueva si no tiene ninguna.
  * Lanza si la base falla: el llamador decide qué mostrar.
+ *
+ * Antes de ofrecer una prueba sin terminar se pasa por la MISMA regla que usa
+ * el enlace al abrirse (canTakeLevelTest): el formulario nunca ofrece una
+ * prueba que luego se vaya a rechazar. Una terminada se enseña siempre.
  */
 export async function resolveStudentTest(input: TestSessionInput): Promise<ResolvedStudentTest> {
   const state = decideStudentTest(await loadStudentSessions(input));
-  if (state.kind !== 'none') return state;
+  if (state.kind === 'completed') return state;
+  // Solo las pruebas con student_id pasan por la regla al abrirse; sin él, la
+  // sesión es como la de un lead y el enlace no pregunta.
+  if (input.studentId && !(await canTakeLevelTest(input.studentId)).allowed) {
+    return { kind: 'unavailable' };
+  }
+  if (state.kind === 'ready') return state;
   const created = await createTestSession(input);
   if (!created.token) throw new Error(created.error || 'No se pudo crear la prueba de nivel.');
   return { kind: 'ready', token: created.token, started: false };

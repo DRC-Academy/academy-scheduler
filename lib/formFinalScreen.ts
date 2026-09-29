@@ -5,6 +5,8 @@
 //   · 'start'     → "Vamos ahora con tu prueba de nivel" + Empezar test de nivel
 //   · 'continue'  → lo mismo + Continuar test de nivel (retoma donde lo dejó)
 //   · 'completed' → "Ya lo tienes todo listo…", sin botón
+//   · 'unavailable' → el alumno no puede hacerla ahora (lib/levelTest/
+//     studentAccess): sin botón, "tu profe o el equipo te la harán llegar"
 //   · null        → no se pudo preparar la prueba (raro): solo el agradecimiento
 //
 // El enlace sale SIEMPRE de lib/appUrl (URL pública), nunca del deployment.
@@ -12,11 +14,11 @@
 import { publicBase } from '@/lib/appUrl';
 import { resolveStudentTest } from '@/lib/levelTest/studentTest';
 
-export type FinalTestState = 'start' | 'continue' | 'completed';
+export type FinalTestState = 'start' | 'continue' | 'completed' | 'unavailable';
 
 export interface FinalTest {
   state: FinalTestState;
-  url: string | null;   // null solo en 'completed'
+  url: string | null;   // null en 'completed' y 'unavailable'
 }
 
 /** Campos de form_tokens que hacen falta para buscar o crear la prueba. */
@@ -44,6 +46,7 @@ export async function finalTestFor(tk: FormTokenForTest, request: Request): Prom
       level:        tk.level || undefined,
     });
     if (t.kind === 'completed') return { state: 'completed', url: null };
+    if (t.kind === 'unavailable') return { state: 'unavailable', url: null };
     return {
       state: t.started ? 'continue' : 'start',
       url: `${publicBase(request)}/test/${t.token}`,

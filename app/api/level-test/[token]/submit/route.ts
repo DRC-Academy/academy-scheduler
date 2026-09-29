@@ -108,7 +108,7 @@ export async function POST(
       provisional: s.writing_score == null,
     });
   }
-  if (s.status === 'abandoned' && sessionExpired({ student_id: s.student_id, status: s.status, expires_at: s.expires_at })) {
+  if (s.status === 'abandoned' && sessionExpired({ student_id: s.student_id, teacher_id: s.teacher_id, status: s.status, expires_at: s.expires_at })) {
     return Response.json({ error: 'Este test quedó sin terminar y el enlace ya expiró.', abandoned: true }, { status: 410 });
   }
 
@@ -121,7 +121,7 @@ export async function POST(
   const answeredCount = new Set(rows.map(r => r.question_id)).size;
 
   if (answeredCount < GRAND_TOTAL) {
-    if (sessionExpired({ student_id: s.student_id, status: s.status, expires_at: s.expires_at })) {
+    if (sessionExpired({ student_id: s.student_id, teacher_id: s.teacher_id, status: s.status, expires_at: s.expires_at })) {
       await updateSession(s.id, { status: 'abandoned' }, { answered_count: answeredCount });
       return Response.json({
         error: 'Este test quedó sin terminar y el enlace ya expiró.',

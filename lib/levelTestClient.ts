@@ -5,6 +5,7 @@
 
 import { supabase } from '@/lib/supabase';
 import { publicBaseClient } from '@/lib/appUrl';
+import { isStudentSession } from '@/lib/levelTest/canonical';
 
 // 'abandoned' = se empezó y el enlace caducó a medias. Sin nivel y sin vuelta
 // atrás; distinto de 'expired', que es el enlace que caducó sin abrirse nunca.
@@ -18,6 +19,8 @@ export interface LevelTestInfo {
   expires_at: string | null;
   completed_at: string | null;
   student_id: string | null;
+  // Con profe = prueba de un alumno, aunque no tenga student_id (no caduca).
+  teacher_id?: string | null;
   student_name: string | null;
   candidate_name: string;
   candidate_email: string;
@@ -34,7 +37,7 @@ export function testStateOf(info: LevelTestInfo | undefined | null): LTState {
   // La prueba de un ALUMNO no caduca por fecha desde el 28/09/2026 (la regla está
   // en lib/levelTest/canonical): sus marcas 'expired'/'abandoned' de la regla
   // vieja se reabren al abrir el enlace, así que aquí nunca se ven caducadas.
-  if (info.student_id) {
+  if (isStudentSession(info)) {
     return info.status === 'in_progress' || (info.answered_count ?? 0) > 0 ? 'in_progress' : 'pending';
   }
   if (info.status === 'abandoned') return 'abandoned';
@@ -64,7 +67,7 @@ export async function fetchLevelTestIndex(): Promise<{
   const byId = new Map<string, LevelTestInfo>();
   const byName = new Map<string, LevelTestInfo>();
 
-  const COLS = 'id, token, status, expires_at, completed_at, student_id, student_name, candidate_name, candidate_email, cefr_level, overall_score, created_at';
+  const COLS = 'id, token, status, expires_at, completed_at, student_id, teacher_id, student_name, candidate_name, candidate_email, cefr_level, overall_score, created_at';
   const read = (cols: string) => supabase
     .from('level_test_sessions').select(cols).order('created_at', { ascending: false });
 

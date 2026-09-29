@@ -3,8 +3,9 @@
 // recargar retoma la misma pregunta (current_question_id).
 //
 // Caducidad (28/09/2026, lib/levelTest/canonical):
-//   · Prueba de ALUMNO: no caduca por fecha. Vale mientras el alumno esté activo
-//     (lib/levelTest/studentAccess); si no, 'unavailable'. Un enlace antiguo del
+//   · Prueba de ALUMNO: no caduca por fecha. Al abrir el enlace (?peek=1) se
+//     mira si puede hacerla (lib/levelTest/studentAccess, 29/09/2026: solo se
+//     cierra a quien se dio de baja); si no, 'unavailable'. Un enlace antiguo del
 //     alumno redirige a su prueba principal ('redirect'), y una marcada
 //     'expired'/'abandoned' por la regla vieja se reabre donde se quedó.
 //   · Prueba de LEAD: caduca por fecha, como siempre.
@@ -15,7 +16,7 @@
 import { supabase } from '@/lib/supabase';
 import { computeNext, loadSessionWithAnswers } from '@/lib/levelTest/server';
 import { GRAND_TOTAL } from '@/lib/levelTest/constants';
-import { pickCanonical, sessionExpired } from '@/lib/levelTest/canonical';
+import { isStudentSession, pickCanonical, sessionExpired } from '@/lib/levelTest/canonical';
 import { loadStudentSessions } from '@/lib/levelTest/createSession';
 import { canTakeLevelTest } from '@/lib/levelTest/studentAccess';
 
@@ -62,12 +63,17 @@ export async function GET(
     });
   }
 
-  if (s.student_id) {
+  if (isStudentSession({ student_id: s.student_id, teacher_id: s.teacher_id })) {
     // ── Prueba de un alumno: sin fecha de caducidad ─────────────────────────
+    // También la de un alumno vinculado solo por nombre (formulario sin
+    // student_id): lleva teacher_id (lib/levelTest/canonical.isStudentSession).
     // 1) ¿Es su prueba principal? Si tiene otra terminada, o una con más
     //    respuestas, este enlace (viejo) lleva a esa.
     try {
-      const principal = pickCanonical(await loadStudentSessions({ studentId: s.student_id }));
+      const principal = pickCanonical(await loadStudentSessions({
+        studentId: s.student_id || undefined,
+        studentName: s.student_name || s.candidate_name || undefined,
+      }));
       if (principal.kind !== 'none' && principal.token !== s.token) {
         return Response.json({ status: 'redirect', token: principal.token });
       }
@@ -75,8 +81,14 @@ export async function GET(
       console.error('[level-test GET] No se pudo elegir la prueba principal:', e);
     }
 
-    // 2) ¿Sigue activo?
-    if (!(await canTakeLevelTest(s.student_id))) {
+    // 2) ¿Puede hacerla? Solo al ABRIR el enlace (peek, la carga inicial): una
+    //    prueba empezada siempre se puede terminar, así que ni este GET sin peek
+    //    (siguiente pregunta), ni answer, ni submit vuelven a preguntar. Tampoco
+    //    al recargar una ya empezada: tiene respuestas o está en curso.
+    //    Sin student_id no hay ficha contra la que mirarlo: pasa, igual que en
+    //    el formulario (lib/levelTest/studentTest).
+    const empezada = s.status === 'in_progress' || countAnswers(answers) > 0;
+    if (peek && !empezada && s.student_id && !(await canTakeLevelTest(s.student_id)).allowed) {
       return Response.json({ status: 'unavailable' });
     }
 
@@ -94,7 +106,7 @@ export async function GET(
     // Expirado. Se distingue del abandono: 'expired' es el enlace que caducó sin
     // que nadie lo abriera; 'abandoned' es el que se empezó y quedó a medias. Para
     // el candidato la pantalla es la misma; para el admin no son lo mismo.
-    if (sessionExpired({ student_id: s.student_id, status: s.status, expires_at: s.expires_at })) {
+    if (sessionExpired({ student_id: s.student_id, teacher_id: s.teacher_id, status: s.status, expires_at: s.expires_at })) {
       const answered = countAnswers(answers);
       const nuevoEstado = answered > 0 && answered < GRAND_TOTAL ? 'abandoned' : 'expired';
       if (s.status !== nuevoEstado) {

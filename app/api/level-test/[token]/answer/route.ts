@@ -86,7 +86,7 @@ export async function POST(
   if (!s) return Response.json({ error: 'Este link no es válido.' }, { status: 404 });
   if (s.status === 'completed') return Response.json({ error: 'El test ya fue completado.' }, { status: 409 });
   // Solo caducan las pruebas de leads; la de un alumno no (lib/levelTest/canonical).
-  if (sessionExpired({ student_id: s.student_id, status: s.status, expires_at: s.expires_at })) {
+  if (sessionExpired({ student_id: s.student_id, teacher_id: s.teacher_id, status: s.status, expires_at: s.expires_at })) {
     if (s.status !== 'expired' && s.status !== 'abandoned') {
       await supabase.from('level_test_sessions').update({ status: 'expired' }).eq('id', s.id);
     }

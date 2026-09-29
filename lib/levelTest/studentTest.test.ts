@@ -15,6 +15,16 @@ describe('sessionExpired', () => {
     expect(sessionExpired(s({ status: 'expired' }), NOW)).toBe(false);
     expect(sessionExpired(s({ status: 'abandoned' }), NOW)).toBe(false);
   });
+  it('la de un alumno vinculado solo por nombre (con profe, sin student_id) tampoco caduca', () => {
+    const porNombre = { student_id: null, teacher_id: 'prof1' };
+    expect(sessionExpired({ ...porNombre, expires_at: '2026-01-01T00:00:00Z' }, NOW)).toBe(false);
+    expect(sessionExpired({ ...porNombre, status: 'expired' }, NOW)).toBe(false);
+    expect(sessionExpired({ ...porNombre, status: 'abandoned' }, NOW)).toBe(false);
+  });
+  it('pickCanonical no descarta la prueba vieja de un alumno vinculado por nombre', () => {
+    const vieja = s({ token: 'nom', student_id: null, teacher_id: 'prof1', expires_at: '2026-08-01T00:00:00Z', answered: 4 });
+    expect(pickCanonical([vieja], NOW)).toEqual({ kind: 'open', token: 'nom', answered: 4 });
+  });
   it('la de un lead caduca por fecha o por marca', () => {
     expect(sessionExpired(lead({ expires_at: '2026-09-28T08:00:00Z' }), NOW)).toBe(true);
     expect(sessionExpired(lead({ status: 'abandoned' }), NOW)).toBe(true);

@@ -8,8 +8,15 @@
 //     y eso se mira al abrir el enlace. Sus marcas antiguas 'expired' y
 //     'abandoned' no son definitivas: al abrirla, se reabre donde se quedó (las
 //     respuestas nunca se borraron).
-//   · La de un LEAD (sin student_id, "Generar link" del admin) sí caduca por
-//     fecha: ahí no hay suscripción que mirar.
+//   · La de un LEAD ("Generar link" del admin) sí caduca por fecha: ahí no hay
+//     suscripción que mirar.
+//
+// Qué es "de un alumno" (29/09/2026): tiene student_id O teacher_id. Las pruebas
+// que nacen del formulario, de la bienvenida o de los recordatorios llevan
+// siempre el profe; las del admin, nunca. Antes solo contaba student_id, y la
+// prueba de un alumno vinculado solo por NOMBRE (formulario sin student_id)
+// caducaba a los 30 días como la de un lead. No se mira student_name: el admin
+// también lo rellena al generar el enlace de un lead.
 //
 // Un alumno puede tener varias pruebas (los recordatorios creaban una nueva cada
 // vez que la anterior caducaba). La PRINCIPAL es la terminada si la hay; si no,
@@ -22,15 +29,21 @@ export interface SessionSummary {
   expires_at: string | null;
   created_at: string;
   student_id?: string | null;
+  teacher_id?: string | null;
   answered: number;
+}
+
+/** ¿Es la prueba de un alumno (y no la de un lead)? Ver arriba. */
+export function isStudentSession(s: { student_id?: string | null; teacher_id?: string | null }): boolean {
+  return !!(s.student_id || s.teacher_id);
 }
 
 /** ¿Caducó esta prueba? Solo las de leads caducan; las de alumnos, nunca. */
 export function sessionExpired(
-  s: { student_id?: string | null; status?: string | null; expires_at?: string | null },
+  s: { student_id?: string | null; teacher_id?: string | null; status?: string | null; expires_at?: string | null },
   now: number = Date.now(),
 ): boolean {
-  if (s.student_id) return false;
+  if (isStudentSession(s)) return false;
   if (s.status === 'expired' || s.status === 'abandoned') return true;
   return !!s.expires_at && new Date(s.expires_at).getTime() < now;
 }

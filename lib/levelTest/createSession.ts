@@ -79,7 +79,7 @@ export async function createTestSession(input: TestSessionInput): Promise<Create
 export async function loadStudentSessions(input: TestSessionInput): Promise<SessionSummary[]> {
   const studentId = input.studentId?.trim();
   const studentName = input.studentName?.trim() || input.candidateName?.trim() || '';
-  const cols = 'token, status, expires_at, created_at, student_id, level_test_answers(count)';
+  const cols = 'token, status, expires_at, created_at, student_id, teacher_id, level_test_answers(count)';
 
   let query = supabase.from('level_test_sessions').select(cols)
     .order('created_at', { ascending: false }).limit(20);
@@ -97,6 +97,7 @@ export async function loadStudentSessions(input: TestSessionInput): Promise<Sess
       expires_at: (r.expires_at as string | null) ?? null,
       created_at: String(r.created_at),
       student_id: (r.student_id as string | null) ?? null,
+      teacher_id: (r.teacher_id as string | null) ?? null,
       answered: cnt?.[0]?.count ?? 0,
     };
   });

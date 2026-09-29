@@ -37,7 +37,7 @@ type LoadState =
 
 /** La prueba de nivel en la pantalla final (lo arma lib/formFinalScreen). */
 interface FinalTest {
-  state: 'start' | 'continue' | 'completed';
+  state: 'start' | 'continue' | 'completed' | 'unavailable';
   url: string | null;
 }
 
@@ -516,6 +516,8 @@ function firstName(fullName: string): string {
  *   · sin empezar  → "Genial, gracias…" + Empezar test de nivel
  *   · a medias     → "Genial, gracias…" + Continuar test de nivel (la retoma)
  *   · terminada    → "Ya lo tienes todo listo…", sin botón
+ *   · no disponible → "Genial, gracias…" + tu profe o el equipo te la harán
+ *                     llegar, sin botón (lib/levelTest/studentAccess)
  * El enlace lo arma el servidor con la URL PÚBLICA (lib/appUrl), nunca la del
  * deployment de Vercel. Si no se pudo preparar (raro), se ofrece reintentar.
  */
@@ -561,6 +563,11 @@ function FinalScreen({ token, initialTest }: { token: TokenRow; initialTest: Fin
               Genial, gracias{nombre ? ` ${nombre}` : ''}.
               {test?.url && <> Vamos ahora con tu prueba de nivel.</>}
             </h1>
+          )}
+          {test?.state === 'unavailable' && (
+            <p className="drc-f-muted">
+              Tus respuestas ya están guardadas. Tu profe o nuestro equipo te harán llegar la prueba de nivel muy pronto.
+            </p>
           )}
           {!done && test?.url && (
             <a className="drc-f-btn drc-f-btn-primary drc-f-final-btn" href={test.url}>

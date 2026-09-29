@@ -79,15 +79,22 @@ export default function TestPage() {
   // seguidos sin avanzar.
   const intentosFinalizar = useRef(0);
   const esperaLenta = useEsperaLenta(busy);
+  // Sube al pulsar "Reintentar" en la pantalla de error de carga: vuelve a
+  // lanzar la carga inicial sin recargar la página.
+  const [intentoCarga, setIntentoCarga] = useState(0);
 
   // Carga inicial: el estado de la sesión SIN iniciar el test (?peek=1). Pasa
   // por la API y no por la base directa porque la API decide si la prueba sigue
   // disponible: la de un alumno no caduca por fecha, sino si deja de estar activo,
   // y un enlace antiguo suyo lleva a su prueba principal (lib/levelTest/canonical).
+  //
+  // Solo el 404 es "enlace no válido". Un 500 o un corte de red NO dicen nada del
+  // enlace: van a la pantalla de reintentar, nunca al candado.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       if (!token) { setPhase('invalid'); return; }
+      setPhase('loading');
       try {
         const res = await fetch(`/api/level-test/${token}?peek=1`, { cache: 'no-store' });
         const data = await res.json().catch(() => ({}));
@@ -98,7 +105,12 @@ export default function TestPage() {
         if (data.status === 'unavailable') { setPhase('unavailable'); return; }
         if (data.status === 'abandoned') { setPhase('abandoned'); return; }
         if (data.status === 'expired') { setPhase('expired'); return; }
-        if (!res.ok || data.status !== 'ready') { setPhase('invalid'); return; }
+        if (res.status === 404 || data.status === 'invalid') { setPhase('invalid'); return; }
+        if (!res.ok || data.status !== 'ready') {
+          console.error('[test] Carga inicial fallida:', res.status, data);
+          setPhase('neterror');
+          return;
+        }
         setResuming(!!data.resuming);
         setPhase('welcome');
       } catch {
@@ -106,26 +118,28 @@ export default function TestPage() {
       }
     })();
     return () => { cancelled = true; };
-  }, [token]);
+  }, [token, intentoCarga]);
 
   async function loadCurrent() {
     setBusy(true); setError('');
     try {
       const res = await fetch(`/api/level-test/${token}`, { cache: 'no-store' });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (data.status === 'redirect' && data.token) { window.location.replace(`/test/${data.token}`); return; }
       if (data.status === 'completed') { setResult(data.result); setPhase('results'); return; }
       if (data.status === 'unavailable') { setPhase('unavailable'); return; }
       if (data.status === 'abandoned') { setPhase('abandoned'); return; }
       if (data.status === 'expired') { setPhase('expired'); return; }
-      if (!res.ok || data.status === 'invalid') { setPhase('invalid'); return; }
+      if (res.status === 404 || data.status === 'invalid') { setPhase('invalid'); return; }
+      // Un fallo del servidor no es un enlace inválido: se avisa y se reintenta.
+      if (!res.ok) { setError('No hemos podido cargar la siguiente pregunta. Vuelve a intentarlo en un momento.'); return; }
       if (data.done || !data.question) { await finalize(); return; }
       // Llegó pregunta: el test avanza y se olvidan los intentos fallidos previos.
       intentosFinalizar.current = 0;
       setQuestion(data.question); setProgress(data.progress);
       setSelected(null); setWritten('');
       setPhase('testing');
-    } catch { setError('No se pudo cargar el test. Revisa tu conexión.'); }
+    } catch { setError('No hemos podido cargar la prueba. Revisa tu conexión y vuelve a intentarlo.'); }
     finally { setBusy(false); }
   }
 
@@ -185,7 +199,17 @@ export default function TestPage() {
   if (phase === 'invalid') return <StatusScreen emoji="🔒" title="Este enlace no es válido" text="Contacta con tu asesor de DRC Academy para obtener uno nuevo." />;
   if (phase === 'expired') return <StatusScreen emoji="⌛" title="Este enlace ya ha expirado" text="Pide uno nuevo a tu asesor de DRC Academy." />;
   if (phase === 'unavailable') return <StatusScreen emoji="🔒" title="Este enlace ya no está disponible" text="Si crees que es un error, escríbenos." />;
-  if (phase === 'neterror') return <StatusScreen emoji="📡" title="No hemos podido cargar la prueba" text="Revisa tu conexión y vuelve a abrir este enlace." />;
+  // Error del servidor o de red: nada que ver con el enlace, así que sin candado
+  // y con un botón para volver a intentarlo.
+  if (phase === 'neterror') {
+    return (
+      <StatusScreen emoji="📡" title="No hemos podido cargar tu prueba" text="Vuelve a intentarlo en un momento. Todo lo que hayas respondido sigue guardado.">
+        <button className="drc-t-btn drc-t-btn-primary" onClick={() => setIntentoCarga(n => n + 1)}>
+          Reintentar
+        </button>
+      </StatusScreen>
+    );
+  }
   if (phase === 'abandoned') return <StatusScreen emoji="⌛" title="Este test quedó sin terminar" text="El enlace ha caducado antes de completar la prueba, así que no hemos podido calcular tu nivel. Pide uno nuevo a tu asesor de DRC Academy." />;
   // Se llega aquí cuando no quedan preguntas que servir pero el test tampoco está
   // completo. La sesión NO se cierra: sigue en curso y el mismo enlace la retoma.
@@ -475,7 +499,7 @@ function ScoreGauge({ value, color }: { value: number; color: string }) {
   );
 }
 
-function StatusScreen({ emoji, title, text }: { emoji: string; title: string; text: string }) {
+function StatusScreen({ emoji, title, text, children }: { emoji: string; title: string; text: string; children?: React.ReactNode }) {
   return (
     <Shell>
       <CardHeader progress={null} />
@@ -484,6 +508,7 @@ function StatusScreen({ emoji, title, text }: { emoji: string; title: string; te
           <div className="drc-t-big">{emoji}</div>
           <h1>{title}</h1>
           <p className="drc-t-muted">{text}</p>
+          {children}
         </div>
       </div>
     </Shell>
