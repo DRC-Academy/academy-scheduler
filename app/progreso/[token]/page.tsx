@@ -3,10 +3,9 @@
 // Página PÚBLICA de progreso del alumno (link único, sin login).
 //
 // Es la CÁSCARA: resuelve el token, carga los datos y monta la ficha. El contenido
-// vive en components/ProgresoFicha, que comparte con /progreso-cuenta (la misma
-// ficha dentro de "Mi cuenta" de WooCommerce). Antes estaba todo en este archivo;
-// se movió al aparecer la segunda ruta, para que no hubiera dos fichas que se
-// separaran en el primer retoque. Para el alumno esta página no cambió en nada.
+// vive en components/ProgresoFichaV2 (rediseño del 30/09/2026), que comparte con
+// /progreso-cuenta (la misma ficha dentro de "Mi cuenta" de WooCommerce), para
+// que no haya dos fichas que se separen en el primer retoque.
 //
 // Mismo criterio que /test/[token] y /formulario/[token]: sin NavBar, sin
 // AuthGuard, con su propia cabecera.
@@ -14,8 +13,8 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
-import { ProgresoFicha, ProgresoStyles } from '@/components/ProgresoFicha';
-import { DiplomaFromToken } from '@/components/DiplomaCalendario';
+import { ProgresoFichaV2, ProgresoV2Styles } from '@/components/ProgresoFichaV2';
+import { DiplomaV2FromToken } from '@/components/DiplomaBannerV2';
 import {
   PROFILE_COLS, PROFILE_COLS_EXTRA, ANALYSIS_COLS, ASSIGNMENT_COLS, STUDENT_COLS,
   isMissingColumnError, pickAssignment, earliestStartDate, type AssignmentLite, type StudentLite,
@@ -98,38 +97,38 @@ export default function ProgresoPage() {
   }, [token]);
 
   return (
-    <div className="pg-page">
-      <ProgresoStyles />
-      <div className="pg-topline" aria-hidden />
+    <div className="p2-page">
+      <ProgresoV2Styles />
+      <div className="p2-topline" aria-hidden />
 
-      <header className="pg-header">
-        <div className="pg-header-in">
+      <header className="p2-header">
+        <div className="p2-header-in">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/drc-logo.png" alt="DRC Academy" className="pg-logo" />
+          <img src="/drc-logo.png" alt="DRC Academy" className="p2-logo" />
         </div>
       </header>
 
-      <main className="pg-main">
+      <main className="p2-main">
         {state.kind === 'loading' && (
-          <div className="pg-notice" role="status">Cargando tu progreso…</div>
+          <div className="p2-aviso" role="status">Cargando tu progreso…</div>
         )}
 
         {state.kind === 'invalid' && (
-          <div className="pg-notice">
+          <div className="p2-aviso">
             <strong>Este enlace no es válido.</strong>
             <span>Pídele a tu profesor que te comparta uno nuevo.</span>
           </div>
         )}
 
         {state.kind === 'expired' && (
-          <div className="pg-notice">
+          <div className="p2-aviso">
             <strong>Este enlace ha caducado.</strong>
             <span>Pídele a tu profesor que te comparta uno nuevo.</span>
           </div>
         )}
 
         {state.kind === 'ready' && (
-          <ProgresoFicha
+          <ProgresoFichaV2
             studentName={state.row.student_name}
             profile={state.profile}
             analyses={state.analyses}
@@ -140,7 +139,7 @@ export default function ProgresoPage() {
             // este mismo token (el secreto del LMS se queda en el servidor) y llega
             // después, sin frenar la ficha. Los tokens viejos que solo guardaron el
             // nombre no tienen cruce posible con el LMS: cuenta por fecha y ya.
-            diplomaSlot={<DiplomaFromToken token={state.row.student_id ? token : null} startDate={state.startDate} />}
+            diplomaSlot={<DiplomaV2FromToken token={state.row.student_id ? token : null} startDate={state.startDate} />}
           />
         )}
       </main>

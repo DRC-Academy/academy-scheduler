@@ -1,16 +1,19 @@
 'use client';
 
-// ── La ficha de progreso del alumno, REDISEÑO (vista previa) ─────────────────
+// ── La ficha de progreso del alumno ──────────────────────────────────────────
 //
-// Solo la monta /progreso-preview/[token] para que dirección la revise antes de
-// que la vean los alumnos. La ficha de producción es components/ProgresoFicha y
-// no se ha tocado: cuando se apruebe, esta sustituye a aquella en las dos rutas
-// (/progreso/[token] y /progreso-cuenta).
+// EL CONTENIDO, sin la cáscara. Lo montan DOS rutas:
+//   · /progreso/[token]  - enlace único que comparte el profesor. Carga los datos
+//     en el navegador (anon key) y pinta su cabecera con el logo de DRC.
+//   · /progreso-cuenta   - dentro de un iframe en "Mi cuenta" de WooCommerce. Los
+//     datos llegan ya cargados desde el servidor y no hay cabecera.
 //
-// MISMOS DATOS, MISMAS REGLAS. Todo lo que se enseña pasa por el mismo
-// cortafuegos (lib/studentFacing), el nivel sale de lib/effectiveLevel y la
-// estimación de lib/estimacion.construirEstimacion con las mismas fuentes y en
-// el mismo orden que en ProgresoFicha. Lo que cambia es el orden y el dibujo:
+// Rediseño aprobado el 30/09/2026 (sustituye a components/ProgresoFicha, que se
+// borró: está en el historial de git). Mismos datos y mismas reglas que aquella:
+// todo lo que se enseña pasa por el cortafuegos de lib/studentFacing, el nivel
+// sale de lib/effectiveLevel y la estimación de lib/estimacion.construirEstimacion
+// con las fuentes en el mismo orden (el producto de WooCommerce primero: 54 de
+// los 63 alumnos de examen solo se detectan por ahí). Orden de la página:
 //
 //   1. Saludo con el nombre de pila y, al lado (debajo en el móvil), la tarjeta
 //      compacta del diploma (components/DiplomaBannerV2, por `diplomaSlot`).
@@ -20,8 +23,12 @@
 //   5. En qué trabajamos ahora: la única tarjeta blanca.
 //   6. Tu recorrido, clase a clase: PLEGADO, con la última clase como resumen.
 //
-// Estilos propios con prefijo `p2-` (al final del archivo), para no chocar con
-// los `pg-` de la ficha de producción.
+// QUÉ NO SE ENSEÑA, a propósito: errores detectados, notas para el profesor,
+// transcripciones, señal de riesgo, puntuación de progreso (1-10).
+//
+// Estilos propios con prefijo `p2-` (al final del archivo, también los de la
+// cáscara de las dos rutas). No reutiliza los `.sp-*` de globals.css, que son la
+// ficha interna del profesor.
 
 import { useMemo, useState } from 'react';
 import { toBullets } from '@/components/alumnos/studentPageUi';
@@ -50,7 +57,7 @@ export function ProgresoFichaV2({ studentName, profile, analyses, assignment, st
   const eff = effectiveLevelOf(profile, assignment?.student_level);
   const weeklyHours = resolveWeeklyHours(assignment);
 
-  // Idéntico a ProgresoFicha: mismas fuentes, mismo orden.
+  // Las fuentes van EN ORDEN y gana la primera con un examen reconocible.
   const estimacion = useMemo<Estimacion | null>(() => construirEstimacion({
     nivelActual: eff.raw,
     horasSemanales: weeklyHours,
@@ -145,7 +152,10 @@ export function ProgresoFichaV2({ studentName, profile, analyses, assignment, st
   );
 }
 
-/** La escalera del MCER: superados, «Estás aquí» y «Tu meta». Misma regla que ProgresoFicha. */
+/**
+ * La escalera del MCER: superados, «Estás aquí» y «Tu meta». La meta puede ser
+ * el propio peldaño (un B1 preparando el PET): entonces manda «Estás aquí».
+ */
 function Escalera({ level, target }: { level: string | null; target: string | null }) {
   const at = level ? CEFR_LADDER.indexOf(level as typeof CEFR_LADDER[number]) : -1;
   const targetAt = target ? CEFR_LADDER.indexOf(target as typeof CEFR_LADDER[number]) : -1;
@@ -179,8 +189,8 @@ function classDate(r: ClassAnalysisRow): string | null {
 
 /**
  * El recorrido clase a clase, PLEGADO: una fila con cuántas clases hay y cuál
- * fue la última. Al abrirla, la lista completa. Mismo filtro que producción:
- * las clases sin título ni resumen no se enseñan.
+ * fue la última. Al abrirla, la lista completa. Las clases cuyo informe quedó
+ * pendiente o falló (sin título ni resumen) no se enseñan.
  */
 function Recorrido({ analyses }: { analyses: ClassAnalysisRow[] }) {
   const [abierto, setAbierto] = useState(false);
@@ -272,6 +282,27 @@ const P2_CSS = `
   font-variant-numeric: tabular-nums;
   -webkit-font-smoothing: antialiased;
 }
+/* ── La cáscara de las dos rutas ──────────────────────────────────────── */
+/* /progreso/[token]: franja de marca, cabecera con el logo y la ficha
+   centrada a 920. /progreso-cuenta (clase p2-embed): dentro del iframe de Mi
+   cuenta, sin cabecera, a ancho completo y sin márgenes laterales (los pone
+   la plantilla de WordPress), y con el alto que mande el contenido para que
+   ProgresoAltura pueda ajustar el iframe. */
+.p2-topline { height: 4px; background: linear-gradient(90deg, var(--p2-marca) 0%, var(--p2-marca) 58%, var(--p2-amarillo) 100%); }
+.p2-header { background: #FFFFFF; border-bottom: 1px solid var(--p2-linea); }
+.p2-header-in { max-width: 920px; margin: 0 auto; padding: 14px 20px; }
+.p2-logo { height: 30px; width: auto; display: block; }
+.p2-main { max-width: 920px; margin: 0 auto; padding: 40px 20px 72px; }
+.p2-embed { min-height: 0; }
+.p2-embed .p2-main { max-width: none; margin: 0; padding: 0 0 28px; }
+.p2-aviso {
+  background: #FFFFFF; border: 1px solid var(--p2-linea); border-radius: 18px; padding: 46px 26px;
+  text-align: center; color: var(--p2-gris); font-size: 15px; line-height: 1.7;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.p2-aviso strong { color: var(--p2-ink); font-size: 16.5px; font-weight: 700; }
+.p2-aviso a { color: var(--p2-bosque); font-weight: 600; }
+
 .p2-ficha { display: flex; flex-direction: column; gap: 52px; }
 .p2-arriba { display: flex; flex-direction: column; gap: 26px; }
 
@@ -400,6 +431,10 @@ const P2_CSS = `
 
 /* ── Móvil y tablet estrecha (≤ 720 px, también el iframe de Mi cuenta) ── */
 @media (max-width: 720px) {
+  .p2-main { padding: 22px 16px 56px; }
+  .p2-embed .p2-main { padding: 0 0 20px; }
+  .p2-header-in { padding: 12px 16px; }
+  .p2-logo { height: 26px; }
   .p2-ficha { gap: 36px; }
   .p2-arriba { gap: 20px; }
   .p2-cabeza { grid-template-columns: minmax(0, 1fr); gap: 16px; }

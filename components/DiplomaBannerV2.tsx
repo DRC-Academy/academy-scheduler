@@ -1,25 +1,34 @@
 'use client';
 
-// ── Diploma, rediseño: tarjeta compacta junto al saludo ───────────────────────
+// ── Diploma: tarjeta compacta junto al saludo ─────────────────────────────────
 //
-// VISTA PREVIA. Solo la monta /progreso-preview/[token]. La de producción sigue
-// siendo components/DiplomaCalendario.
+// Desde el 30/09/2026 es el diploma de la ficha del alumno (sustituye al banner
+// de components/DiplomaCalendario). Lo monta components/ProgresoFichaV2 por
+// `diplomaSlot`, desde las dos rutas:
+//   · /progreso/[token]  → DiplomaV2FromToken (el navegador pide /api/progreso/diploma);
+//   · /progreso-cuenta   → DiplomaV2FromPromise (el servidor pasa la promesa del LMS).
 //
-// QUÉ SE ENSEÑA lo decide lib/diplomaCalendario.bannerDe, lo mismo que en
-// producción: conseguido, vencido, hoy, días, meses, o nada sin fecha de inicio.
-// Aquí solo se redacta en una línea ("2 meses y 5 días para tu diploma") y se
-// pinta. La consulta al LMS es la misma que DiplomaFromToken: /api/progreso/
-// diploma con el token, y mientras no contesta se cuenta por fecha.
+// QUÉ SE ENSEÑA lo decide lib/diplomaCalendario.bannerDe: conseguido, vencido,
+// hoy, días, meses, o nada sin fecha de inicio. Aquí solo se redacta
+// ("2 meses y 5 días" · "para tu diploma · 38 de 168 lecciones") y se pinta.
+// Mientras el LMS no contesta se cuenta por fecha; la segunda línea existe
+// siempre, así que nada salta cuando llega.
 //
 // TODA LA TARJETA ES EL ENLACE a la plataforma (el mismo destino de siempre).
 
-import { useEffect, useState } from 'react';
+import { use, useEffect, useState } from 'react';
 import type { Diploma } from '@/lib/diplomaTypes';
 import { bannerDe, type DiplomaEstadoSlot } from '@/lib/diplomaCalendario';
 import { madridToday } from '@/lib/subscriptionAccess';
 import { LMS_PUBLIC_URL } from '@/lib/lmsUrl';
 
-/** Igual que DiplomaFromToken (components/DiplomaCalendario), con el dibujo nuevo. */
+/** Ficha embebida (/progreso-cuenta): el servidor pasa la promesa sin esperarla. */
+export function DiplomaV2FromPromise({ promise, startDate = null }: { promise: Promise<Diploma | null>; startDate?: string | null }) {
+  const diploma = use(promise);
+  return <DiplomaBannerV2 diploma={diploma} startDate={startDate} />;
+}
+
+/** Ficha pública (/progreso/[token]): se pide a /api/progreso/diploma desde el navegador. */
 export function DiplomaV2FromToken({ token, startDate = null }: { token: string | null; startDate?: string | null }) {
   const [diploma, setDiploma] = useState<DiplomaEstadoSlot>(token ? 'cargando' : null);
 

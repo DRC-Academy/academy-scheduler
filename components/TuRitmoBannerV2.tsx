@@ -1,10 +1,11 @@
 'use client';
 
-// ── «Tu ritmo», rediseño (variación C: «Elige tu ritmo») ──────────────────────
+// ── «Tu ritmo»: el banner de ampliación de plan («Elige tu ritmo») ────────────
 //
-// VISTA PREVIA. Lo monta solo components/ProgresoFichaV2, que solo se ve en
-// /progreso-preview/[token]. La ficha de los alumnos sigue con
-// components/BannerAmpliar hasta que se apruebe este diseño.
+// Desde el 30/09/2026 es el banner de la ficha del alumno (lo monta
+// components/ProgresoFichaV2 en /progreso/[token] y /progreso-cuenta). Sustituye
+// a components/BannerAmpliar, las tres tarjetas de planes, que se borró: está en
+// el historial de git si hace falta volver atrás.
 //
 // UN SIMULADOR, NO UNA TABLA. Fondo amarillo de marca, un selector con los
 // planes (el suyo y las ampliaciones) y, en una tarjeta blanca, la respuesta
@@ -12,17 +13,15 @@
 // plan de más horas, que es la respuesta que el banner quiere enseñar; el
 // alumno toca su plan y ve la diferencia.
 //
-// NO CALCULA NADA. Todo sale de lib/estimacion.construirEstimacion, la misma
-// función que usa el banner de producción: mismos meses, misma fecha de
-// llegada, mismos estados (`ahorro`, `examen`, `tope`; con `null` no se pinta).
+// NO CALCULA NADA. Todo sale de lib/estimacion.construirEstimacion: meses,
+// fecha de llegada y estado (`ahorro`, `examen`, `tope`; con `null`, que es no
+// saber las horas semanales, no se pinta). Con `tope` (ya en 5 h) no hay
+// selector ni botón: solo se le reconoce el ritmo.
 //
-// EL BOTÓN es el de producción copiado tal cual (components/BannerAmpliar,
-// CtaAmpliar): dentro del iframe de Mi cuenta manda `drc:ampliar-plan` al padre
-// y no navega; fuera, lleva a UPSELL_URL. Ver allí por qué no hay target _top.
+// EL BOTÓN ES VERDE OSCURO y no amarillo: va sobre el fondo amarillo del banner.
 
 import { useState } from 'react';
 import { etiquetaMeses, type Estimacion, type OpcionPlan } from '@/lib/estimacion';
-import { AMPLIAR_MESSAGE_TYPE } from '@/components/BannerAmpliar';
 import { ORIGENES_PADRE } from '@/components/ProgresoAltura';
 
 /** Textos del banner según el estado y la meta. Español de España, tuteo. */
@@ -111,10 +110,29 @@ export function TuRitmoBannerV2({ estimacion }: { estimacion: Estimacion | null 
   );
 }
 
-// ─── El botón: copia literal del de producción (BannerAmpliar, CtaAmpliar) ────
+// ─── El botón, y a dónde lleva ───────────────────────────────────────────────
+//
+// EL DESTINO DE VERDAD ES EL CAMBIO DE PLAN DE WOOCOMMERCE, cuya URL lleva un
+// nonce de la sesión del usuario y SOLO la puede generar WordPress. Así que:
+//
+//   · DENTRO DEL IFRAME DE MI CUENTA: NO NAVEGA. Manda al padre `drc:ampliar-plan`
+//     (solo a los orígenes de la academia) y el snippet de WordPress
+//     (docs/progreso-wordpress.md, sección 6) lleva la ventana principal al
+//     cambio de plan.
+//   · COMO PÁGINA SUELTA (/progreso/[token]): lleva a UPSELL_URL.
+//
+// SIN RED DE SEGURIDAD NI target="_top", A PROPÓSITO: hubo un temporizador que,
+// si el padre no confirmaba en 1,2 s, navegaba a la lista de suscripciones, y en
+// producción esa navegación ganaba a la del snippet. Si el snippet no está, el
+// botón no hace nada y se ve en la consola de /mi-cuenta/.
+//
+// ES UN <button>, NO UN <a>: un enlace tiene navegación propia (clic antes de
+// hidratar, botón central, abrir en pestaña nueva) que no decide este onClick.
 
-/** A dónde lleva "Amplía tu plan" fuera del iframe. Mismo valor que en BannerAmpliar. */
+/** A dónde lleva "Amplía tu plan" fuera del iframe. Configurable sin tocar código. */
 const UPSELL_URL = process.env.NEXT_PUBLIC_UPSELL_URL || 'https://drcacademy.com/mi-cuenta/subscriptions/';
+/** Lo que se le pide al padre. El snippet de WordPress escucha este tipo. */
+export const AMPLIAR_MESSAGE_TYPE = 'drc:ampliar-plan';
 
 function CtaAmpliarV2() {
   function alPulsar(e: React.MouseEvent<HTMLButtonElement>) {

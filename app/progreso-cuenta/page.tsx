@@ -1,6 +1,6 @@
 // ── La ficha de progreso dentro de "Mi cuenta" de WooCommerce ─────────────────
 //
-// LA MISMA ficha que /progreso/[token] (components/ProgresoFicha), pero:
+// LA MISMA ficha que /progreso/[token] (components/ProgresoFichaV2), pero:
 //
 //   · el alumno se identifica por EMAIL, no por token — el de su cuenta de
 //     WooCommerce, que WordPress firma y manda en la URL;
@@ -22,8 +22,8 @@
 
 import type { Metadata } from 'next';
 import { Suspense } from 'react';
-import { ProgresoFicha, ProgresoStyles } from '@/components/ProgresoFicha';
-import { DiplomaFromPromise, DiplomaCalendario } from '@/components/DiplomaCalendario';
+import { ProgresoFichaV2, ProgresoV2Styles } from '@/components/ProgresoFichaV2';
+import { DiplomaV2FromPromise, DiplomaBannerV2 } from '@/components/DiplomaBannerV2';
 import { getLmsDiploma } from '@/lib/lmsDiploma';
 import { ProgresoAltura } from '@/components/ProgresoAltura';
 import { verifyProgresoLink } from '@/lib/progresoSignature';
@@ -45,42 +45,18 @@ function uno(v: string | string[] | undefined): string {
 }
 
 /**
- * La cáscara sin cabecera. `pg-page` es obligatorio: ahí viven el fondo #F7F7F5,
+ * La cáscara sin cabecera. `p2-page` es obligatorio: ahí viven el fondo #F7F7F5,
  * la tipografía Radio Canada y las variables de color que usa toda la ficha.
+ * `p2-embed` la adapta al iframe de "Mi cuenta" (hoja de components/ProgresoFichaV2):
+ * a ancho completo, sin márgenes laterales —los pone la plantilla de Mi cuenta—
+ * y sin `min-height`, para que el alto lo mande el contenido y ProgresoAltura
+ * pueda ajustar el iframe.
  */
 function Marco({ children }: { children: React.ReactNode }) {
   return (
-    <div className="pg-page pg-embed">
-      <ProgresoStyles />
-      {/*
-        Ajustes que valen SOLO dentro del iframe. Van aquí, en la página, y no en la
-        hoja compartida: /progreso/[token] es una página entera con su cabecera y
-        tiene que seguir centrada y con su ancho de lectura. Lo de dentro de "Mi
-        cuenta" es otra cosa — es un bloque más de una página ajena.
-
-        · `min-height: 100dvh` de .pg-page dejaría el iframe siempre a la altura de
-          la pantalla y pelearía con el ajuste automático de altura; dentro del
-          marco el alto lo manda el contenido.
-        · ANCHO COMPLETO. La ficha colgaba centrada a 780 px con aire muerto a los
-          lados, justo debajo del "Panel de estudiante" de WooCommerce, que va a
-          todo el ancho. Sin el `max-width` y sin el `margin: auto` la ficha
-          continúa la línea del panel en vez de flotar dentro de él.
-        · Sin padding lateral: el margen lo pone la plantilla de Mi cuenta, y
-          sumarle el nuestro dejaba la ficha metida hacia dentro otra vez.
-        · Y sin cabecera propia, el aire de arriba sobra.
-      */}
-      <style>{`
-        .pg-embed { min-height: 0; }
-        /* Sin aire arriba (21/09/2026): el banner del diploma arranca en el
-           borde del iframe; el margen lo pone Mi cuenta. */
-        .pg-embed .pg-main { max-width: none; margin: 0; padding: 0 0 28px; }
-        /* La TARJETA va a ancho completo; el texto largo, no. Una línea de resumen
-           de 180 caracteres es incómoda de leer, así que el cuerpo de la línea de
-           tiempo conserva su medida aunque su tarjeta se estire. */
-        .pg-embed .pg-tl-card .pg-body { max-width: 70ch; }
-        @media (max-width: 720px) { .pg-embed .pg-main { padding: 0 0 20px; } }
-      `}</style>
-      <main className="pg-main">{children}</main>
+    <div className="p2-page p2-embed">
+      <ProgresoV2Styles />
+      <main className="p2-main">{children}</main>
       <ProgresoAltura />
     </div>
   );
@@ -89,7 +65,7 @@ function Marco({ children }: { children: React.ReactNode }) {
 /** Enlace caducado o firma que no cuadra. Sin tecnicismos: no son del alumno. */
 function Caducado() {
   return (
-    <div className="pg-notice">
+    <div className="p2-aviso">
       <strong>Este enlace ha caducado.</strong>
       <span>Recarga la página de Mi cuenta y volverá a aparecer tu progreso.</span>
     </div>
@@ -99,11 +75,11 @@ function Caducado() {
 /** El email es válido pero no hay ningún alumno con él. */
 function SinFicha() {
   return (
-    <div className="pg-notice">
+    <div className="p2-aviso">
       <strong>Todavía no tenemos tu ficha de progreso.</strong>
       <span>
         Se crea a partir de tus primeras clases. Si ya has empezado, escríbenos a{' '}
-        <a href={`mailto:${CONTACTO}`} style={{ color: 'var(--pg-green-dark)', fontWeight: 600 }}>{CONTACTO}</a>{' '}
+        <a href={`mailto:${CONTACTO}`}>{CONTACTO}</a>{' '}
         y lo revisamos.
       </span>
     </div>
@@ -122,9 +98,9 @@ function Selector({ students, email, ts, sig }: {
   students: ProgresoStudent[]; email: string; ts: string; sig: string;
 }) {
   return (
-    <div className="pg-card">
-      <p className="pg-kicker">¿De quién quieres ver el progreso?</p>
-      <p className="pg-body" style={{ marginTop: 6, marginBottom: 16 }}>
+    <div className="p2-foco">
+      <h1 className="p2-h2">¿De quién quieres ver el progreso?</h1>
+      <p style={{ margin: '0 0 6px', fontSize: 15, lineHeight: 1.6, color: 'var(--p2-gris)' }}>
         Con este correo hay más de un alumno en la academia.
       </p>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -134,8 +110,8 @@ function Selector({ students, email, ts, sig }: {
             <a key={s.id} href={`/progreso-cuenta?${q.toString()}`}
               style={{
                 display: 'block', padding: '13px 16px', borderRadius: 12,
-                border: '1.5px solid var(--pg-line)', background: 'var(--pg-surface)',
-                color: 'var(--pg-ink)', textDecoration: 'none', fontSize: 15, fontWeight: 600,
+                border: '1.5px solid var(--p2-linea)', background: '#FFFFFF',
+                color: 'var(--p2-ink)', textDecoration: 'none', fontSize: 15, fontWeight: 600,
               }}>
               {s.name}
             </a>
@@ -194,21 +170,21 @@ export default async function ProgresoCuentaPage({ searchParams }: {
 
   return (
     <Marco>
-      <ProgresoFicha
+      <ProgresoFichaV2
         studentName={payload.student.name}
         profile={payload.profile}
         analyses={payload.analyses}
         assignment={payload.assignment}
         student={payload.studentLite}
         diplomaSlot={
-          // El `key` no es por un map: ProgresoFicha (cliente) pinta este
+          // El `key` no es por un map: ProgresoFichaV2 (cliente) pinta este
           // elemento junto a las demás piezas de la ficha, y en desarrollo llega
           // del servidor como referencia perezosa; si aún no se resolvió
           // cuando corre su JSX, React no lo marca como validado y al
           // resolverse avisa "Each child in a list should have a unique key".
           // Con `key` la comprobación no aplica. Sin efecto en producción.
-          <Suspense key="diploma" fallback={<DiplomaCalendario diploma="cargando" startDate={payload.startDate} />}>
-            <DiplomaFromPromise promise={diploma} startDate={payload.startDate} />
+          <Suspense key="diploma" fallback={<DiplomaBannerV2 diploma="cargando" startDate={payload.startDate} />}>
+            <DiplomaV2FromPromise promise={diploma} startDate={payload.startDate} />
           </Suspense>
         }
       />
