@@ -20,6 +20,7 @@ import {
   type TestimonialCandidate, type TestimonialSide, type RecordingRequest,
 } from '@/lib/testimonialsDb';
 import FluencyBackfillPanel from '@/components/admin/FluencyBackfillPanel';
+import { requestsForPair, recordingItems, requestCopy } from '@/lib/testimonialRequests';
 
 /** En qué punto está el aviso al profesor de una pareja. */
 type Aviso = 'ia_pendiente' | 'sin_enviar' | 'enviada' | 'subida';
@@ -274,9 +275,16 @@ function Detalle({ c, rq, aviso, nombreProfe, onChanged, sinTabla }: {
       <div className="ts-caja">
         <span className="ts-caja-t">Aviso al profesor</span>
         {rq.length === 0 ? (
-          <p className="ts-gris">{aviso === 'ia_pendiente'
-            ? 'Se podrá enviar cuando la IA confirme que la mejora es real.'
-            : 'Todavía no se ha enviado. Cada profesor recibirá el aviso de la grabación de su clase.'}</p>
+          <>
+            <p className="ts-gris">{aviso === 'ia_pendiente'
+              ? 'Se podrá enviar cuando la IA confirme que la mejora es real.'
+              : 'Todavía no se ha enviado. Esto es lo que recibirá cada profesor (campanita y email):'}</p>
+            {aviso !== 'ia_pendiente' && requestsForPair(c).map(r => (
+              <blockquote key={r.teacherId} className="ts-preview">
+                {requestCopy(c.studentName ?? 'el alumno', recordingItems(c, r.sides), nombreProfe(r.teacherId)).body}
+              </blockquote>
+            ))}
+          </>
         ) : (
           <ul className="ts-avisos">
             {rq.map(r => (
@@ -373,6 +381,7 @@ const ESTILOS = `
 .ts-caja { background: #fff; border: 1px solid #ECECE8; border-radius: 12px; padding: 12px 14px; }
 .ts-caja-t { font-size: 12px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: #6E6E66; }
 .ts-caja p { margin: 6px 0 0; font-size: 14px; line-height: 1.5; }
+.ts-preview { margin: 8px 0 0; padding: 10px 12px; border-left: 3px solid #1E9E3A; background: #F7F7F5; border-radius: 0 8px 8px 0; font-size: 13.5px; line-height: 1.55; color: #1a1c1a; }
 .ts-avisos { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; line-height: 1.7; }
 .ts-acc { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .ts-acc .adm-btn { display: inline-flex; align-items: center; gap: 6px; }

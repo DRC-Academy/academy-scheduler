@@ -75,7 +75,9 @@ async function avisar(a: {
   pair: PairForRequest; studentName: string;
 }): Promise<NotifyResult> {
   const items = recordingItems(a.pair, a.sides);
-  const { title, body } = requestCopy(a.studentName, items);
+  // El profesor se carga ANTES: el aviso abre con su nombre ("Ignacio, sube la clase del…").
+  const teacher = await fetchTeacher(a.teacherId).catch(() => null);
+  const { title, body } = requestCopy(a.studentName, items, teacher?.name);
   const now = new Date().toISOString();
 
   // 1) Campanita. El tipo propio le da el icono 🎬 y lo distingue en el panel.
@@ -89,7 +91,6 @@ async function avisar(a: {
   // 2) Email. Si falla, el aviso de la campanita ya está: se anota y se sigue.
   let emailSent = false;
   try {
-    const teacher = await fetchTeacher(a.teacherId);
     if (teacher) emailSent = await sendTestimonialRecordingEmail(teacher, { studentName: a.studentName, items });
   } catch (err) {
     console.error('[testimonial-notify] Email fallido:', err);

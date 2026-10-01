@@ -955,7 +955,7 @@ function TeacherNotificationsTab({ teacher, myAssignments, bonusRows, students, 
       {avisos.map(av => {
         if (av.kind === 'grabacion') {
           return (
-            <TestimonialRecordingCard key={av.key} req={av.data} teacherId={teacher.id}
+            <TestimonialRecordingCard key={av.key} req={av.data} teacherId={teacher.id} teacherName={teacher.name}
               onUploaded={(id, at) => setGrabaciones(gs => gs.map(g => g.id === id ? { ...g, uploadedAt: at } : g))} />
           );
         }

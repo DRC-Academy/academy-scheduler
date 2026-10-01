@@ -58,24 +58,49 @@ export function shortDate(iso: string | null): string {
   return `${d}/${m}`;
 }
 
-/** "la clase 4 (14/07, momento clave en el minuto 3:15)" */
-export function describeItem(it: RecordingItem): string {
-  const num = it.classNumber != null ? `la clase ${it.classNumber}` : 'la clase';
-  const min = it.minute ? `, momento clave en el minuto ${it.minute}` : '';
-  return `${num} (${shortDate(it.classDate)}${min})`;
+const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+
+/** "16 de abril". La fecha de la clase ya es de España: se lee tal cual, sin zonas horarias. */
+export function longDate(iso: string | null): string {
+  if (!iso) return 'fecha sin registrar';
+  const [, m, d] = iso.slice(0, 10).split('-');
+  return `${Number(d)} de ${MESES[Number(m) - 1]}`;
 }
 
-/** Título y cuerpo del aviso de la campanita (el email dice lo mismo). */
-export function requestCopy(studentName: string, items: RecordingItem[]): { title: string; body: string } {
+/** "Ignacio Lauridia Polo" → "Ignacio" */
+export const firstName = (name: string | null | undefined): string => (name ?? '').trim().split(/\s+/)[0] ?? '';
+
+/** "Clase 4 · 14 de julio · momento clave en el minuto 3:15" (detalle de cada grabación). */
+export function describeItem(it: RecordingItem): string {
+  const num = it.classNumber != null ? `Clase ${it.classNumber}` : 'Clase';
+  const min = it.minute ? ` · momento clave en el minuto ${it.minute}` : '';
+  return `${num} · ${longDate(it.classDate)}${min}`;
+}
+
+/**
+ * La frase que abre el aviso, directa y con las fechas exactas:
+ *   "Ignacio, sube la clase del 16 de abril y la del 16 de junio de Sonia Becerra"
+ */
+export function uploadSentence(teacherName: string | null | undefined, studentName: string, items: RecordingItem[]): string {
+  const fechas = items.map(it => longDate(it.classDate));
+  const clases = fechas.length === 1
+    ? `la clase del ${fechas[0]}`
+    : `la clase del ${fechas[0]} y la del ${fechas[1]}`;
+  const nombre = firstName(teacherName);
+  return `${nombre ? `${nombre}, sube` : 'Sube'} ${clases} de ${studentName}`;
+}
+
+/** Título y cuerpo del aviso de la campanita (el email y la tarjeta dicen lo mismo). */
+export function requestCopy(
+  studentName: string, items: RecordingItem[], teacherName?: string | null,
+): { title: string; body: string } {
   const una = items.length === 1;
-  const clases = items.map(describeItem).join(' y ');
   return {
     // Sin emoji: la campanita ya pone el 🎬 delante por el tipo del aviso.
     title: `Grabación para testimonio: ${studentName}`,
     body:
-      `${studentName} ha mejorado mucho su fluidez y queremos usarlo como testimonio. ` +
-      `Necesitamos ${una ? 'la grabación de' : 'las grabaciones de'} ${clases}. ` +
-      `${una ? 'Súbela' : 'Súbelas'} a la pestaña «${RECORDINGS_SHEET_TAB}» del sheet de grabaciones ` +
-      `y pulsa «Grabación subida» en tus avisos.`,
+      `${uploadSentence(teacherName, studentName, items)} a la pestaña «${RECORDINGS_SHEET_TAB}» del sheet de grabaciones. ` +
+      `${firstName(studentName) || studentName} ha mejorado mucho su fluidez y queremos usarlo como testimonio. ` +
+      `Cuando ${una ? 'la' : 'las'} subas, pulsa «Grabación subida» en tus avisos.`,
   };
 }

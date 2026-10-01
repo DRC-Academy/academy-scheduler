@@ -11,18 +11,21 @@ import { useState } from 'react';
 import { ExternalLink } from 'lucide-react';
 import { dbMarkRecordingUploaded, type TeacherRecordingRequest } from '@/lib/testimonialsDb';
 import {
-  recordingItems, describeItem, RECORDINGS_SHEET_URL, RECORDINGS_SHEET_TAB, shortDate,
+  recordingItems, describeItem, requestCopy, RECORDINGS_SHEET_URL, RECORDINGS_SHEET_TAB, shortDate,
 } from '@/lib/testimonialRequests';
 
-export default function TestimonialRecordingCard({ req, teacherId, onUploaded }: {
+export default function TestimonialRecordingCard({ req, teacherId, teacherName, onUploaded }: {
   req: TeacherRecordingRequest;
   teacherId: string;
+  /** Para abrir con su nombre: "Ignacio, sube la clase del…". */
+  teacherName: string;
   onUploaded: (requestId: string, uploadedAt: string) => void;
 }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const items = recordingItems({ studentName: req.studentName, before: req.before, after: req.after }, req.sides);
   const subida = !!req.uploadedAt;
+  const { body } = requestCopy(req.studentName, items, teacherName);
 
   async function marcar() {
     setSaving(true); setError(null);
@@ -45,17 +48,16 @@ export default function TestimonialRecordingCard({ req, teacherId, onUploaded }:
             Grabación para testimonio: {req.studentName}
           </div>
           <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 3, lineHeight: 1.5 }}>
-            {req.studentName} ha mejorado mucho su fluidez y queremos usarlo como testimonio.{' '}
             {subida
               ? `Marcaste la grabación como subida el ${shortDate(req.uploadedAt)}. ¡Gracias!`
-              : <>Necesitamos {items.length === 1 ? 'la grabación de' : 'las grabaciones de'}:</>}
+              : body}
           </div>
 
           {!subida && (
             <ul style={{ margin: '8px 0 0', paddingLeft: 18, fontSize: 13, lineHeight: 1.7, color: '#1a1c1a' }}>
               {items.map(it => (
                 <li key={it.side}>
-                  {describeItem(it).replace(/^la /, 'La ')}
+                  {describeItem(it)}
                   {it.fathomUrl && (
                     <> · <a href={it.fathomUrl} target="_blank" rel="noopener noreferrer"
                       style={{ color: '#2563eb', fontWeight: 600, textDecoration: 'none' }}>
