@@ -28,6 +28,7 @@ import AiUsageTab from '@/components/admin/AiUsageTab';
 import LevelTestsTab from '@/components/admin/LevelTestsTab';
 import ClassLogTab from '@/components/admin/ClassLogTab';
 import TranscriptsTab from '@/components/admin/TranscriptsTab';
+import TestimonialsTab from '@/components/admin/TestimonialsTab';
 import FueraDeCalendarioTab from '@/components/admin/FueraDeCalendarioTab';
 import TranscriptValidationTab from '@/components/admin/TranscriptValidationTab';
 import ChurnTab from '@/components/admin/ChurnTab';
@@ -2457,7 +2458,7 @@ function DuplicatesBanner() {
 }
 
 // ─── Admin Content ────────────────────────────────────────────────────────────
-const ADMIN_TABS = ['teachers', 'emails', 'scoring', 'bonos', 'tracking', 'fueracal', 'classlog', 'transcripts', 'leveltests', 'validacion', 'ai', 'aiusage', 'bajas', 'notifications'] as const;
+const ADMIN_TABS = ['teachers', 'emails', 'scoring', 'bonos', 'tracking', 'fueracal', 'classlog', 'transcripts', 'leveltests', 'validacion', 'ai', 'aiusage', 'bajas', 'testimoniales', 'notifications'] as const;
 type AdminTab = typeof ADMIN_TABS[number];
 
 /**
@@ -2571,6 +2572,7 @@ function AdminContent() {
     { id: 'ai',             label: 'Riesgo' },
     { id: 'aiusage',        label: 'Uso de IA' },
     { id: 'bajas',          label: 'Bajas' },
+    { id: 'testimoniales',  label: 'Testimoniales' },
     { id: 'notifications',  label: 'Notificaciones' },
   ] as const;
   // Las ocultas (ver SECCIONES_OCULTAS) no se pintan; su contenido sigue abajo,
@@ -3115,6 +3117,7 @@ function AdminContent() {
         {/* CLASS LOG TAB */}
         {activeTab === 'classlog' && <ClassLogTab />}
         {activeTab === 'transcripts' && <TranscriptsTab />}
+        {activeTab === 'testimoniales' && <TestimonialsTab />}
         {activeTab === 'fueracal' && <FueraDeCalendarioTab />}
 
         {activeTab === 'leveltests' && <LevelTestsTab />}

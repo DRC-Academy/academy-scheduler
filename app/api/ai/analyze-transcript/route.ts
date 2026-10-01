@@ -31,6 +31,8 @@ import {
 } from '@/lib/interventionStore';
 import { aiLevelOf, type ProfileLevelFields } from '@/lib/effectiveLevel';
 import { fetchTeacher, sendInterventionEmail } from '@/lib/emailNotifications';
+import { after } from 'next/server';
+import { runFluencyInBackground } from '@/lib/fluencyStore';
 
 export const runtime = 'nodejs';
 // El análisis con IA puede tardar. Sin esto, la plataforma corta la función a los
@@ -64,6 +66,8 @@ interface Body {
 }
 
 export async function POST(request: Request): Promise<Response> {
+  // Reloj de la función: after() vive dentro del mismo maxDuration.
+  const startedAt = Date.now();
   let body: Body;
   try {
     body = await request.json();
@@ -76,7 +80,7 @@ export async function POST(request: Request): Promise<Response> {
   if (!studentName) return Response.json({ error: 'Falta studentName.' }, { status: 400 });
 
   if (body.analysisId) return handleAttach(body, studentName, body.analysisId);
-  if (body.save)       return handleSaveWithAnalysis(body, studentName);
+  if (body.save)       return handleSaveWithAnalysis(body, studentName, startedAt);
   return handleAnalyzeOnly(body, studentName);
 }
 
@@ -227,7 +231,7 @@ async function handleAnalyzeOnly(body: Body, studentName: string): Promise<Respo
 }
 
 // ── Modo 3: guardar transcript + informe ya revisado, en un paso ─────────────
-async function handleSaveWithAnalysis(body: Body, studentName: string): Promise<Response> {
+async function handleSaveWithAnalysis(body: Body, studentName: string, startedAt: number): Promise<Response> {
   if (!body.analysis || !body.transcript?.trim()) {
     return Response.json({ error: 'Faltan datos (analysis, transcript).' }, { status: 400 });
   }
@@ -274,6 +278,12 @@ async function handleSaveWithAnalysis(body: Body, studentName: string): Promise<
   if (saved.error || !saved.id) {
     return Response.json({ error: saved.error ?? 'No se pudo guardar la clase.' }, { status: 500 });
   }
+
+  // Testimoniales: fluidez del alumno, después de responder. En este modo la
+  // llamada a Opus ya se hizo en una petición anterior ("solo analizar"), así que
+  // no comparte reloj con ella. Nunca lanza.
+  const savedId = saved.id;
+  after(() => runFluencyInBackground(savedId, startedAt + 56_000));
 
   const fieldsErr = await persistAnalysisFields(saved.id, body.analysis);
   if (fieldsErr.error) {

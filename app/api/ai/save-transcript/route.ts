@@ -7,16 +7,25 @@
 //
 // El informe se genera después con /api/ai/analyze-transcript (paso 2), que puede
 // reintentarse sin volver a pegar el texto.
+//
+// TESTIMONIALES: después de responder, con `after()`, corre aquí el análisis de
+// fluidez del alumno (Haiku, lib/fluencyStore). Va en ESTA función y no en la del
+// paso 2 a propósito: el análisis con Opus va justo contra su timeout y no debe
+// compartir reloj con nada más.
 
 import { computeTranscriptVerdict } from '@/lib/transcriptVerdict';
 import {
   persistTranscript, notifyAdminTranscript, verdictPayload,
 } from '@/lib/transcriptStore';
 import { logUsageEvent } from '@/lib/usageEvents';
+import { after } from 'next/server';
+import { runFluencyInBackground } from '@/lib/fluencyStore';
 
 export const runtime = 'nodejs';
-// Sin IA de por medio esto son 2-3 consultas a Supabase; 30 s es margen de sobra.
-export const maxDuration = 30;
+// El guardado son 2-3 consultas a Supabase (unos segundos). El resto del margen es
+// para el análisis de fluidez en after(), que vive dentro de este mismo límite
+// (peor caso 50 s, ver lib/analyzeFluency).
+export const maxDuration = 60;
 
 interface Body {
   transcript?: string;
@@ -35,6 +44,8 @@ interface Body {
 }
 
 export async function POST(request: Request): Promise<Response> {
+  // Reloj de la función: after() vive dentro del mismo maxDuration.
+  const startedAt = Date.now();
   let body: Body;
   try {
     body = await request.json();
@@ -111,6 +122,10 @@ export async function POST(request: Request): Promise<Response> {
       teacherName: body.teacherName, classDate,
     });
   }
+
+  // También al reemplazar el transcript: la nota anterior era del texto viejo.
+  const analysisId = saved.id;
+  after(() => runFluencyInBackground(analysisId, startedAt + 56_000));
 
   return Response.json({
     saved: true,

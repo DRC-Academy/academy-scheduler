@@ -1,0 +1,197 @@
+// Testimoniales — la parte SIN IA del análisis de fluidez del alumno.
+//
+// Lee un transcript exportado de Fathom, averigua quién es el profe y quién el
+// alumno, y decide si merece la pena gastar una llamada a la IA. Módulo PURO:
+// no toca la red ni la base, así que se prueba entero en lib/fluency.test.ts.
+//
+// FORMATO DE FATHOM (78 de 80 transcripts de la muestra de sep/2026):
+//
+//   Impromptu Google Meet Meeting - August 25
+//   VIEW RECORDING - 55 mins (No highlights): https://fathom.video/share/…
+//   ---
+//   0:01 - Nombre Alumno
+//     So, is there anything to check today?
+//   0:06 - Nombre Profe (profe@gmail.com)
+//     No.
+//
+// El PROFE es quien organiza la reunión y Fathom le pone el email entre
+// paréntesis. Es la pista más fiable (70 de 78): los nombres de la plataforma
+// solo coinciden con los de Meet en ~60 de 78.
+
+import { normName } from '@/lib/retention';
+
+/** Por debajo de esto no hay material para juzgar la soltura. */
+export const MIN_WORDS = 800;
+
+export type FluencySkipReason =
+  | 'pocas_palabras'
+  | 'mas_de_dos_hablantes'
+  | 'un_solo_hablante'
+  | 'sin_formato_hablantes';
+
+export interface Turn {
+  /** Minuto tal como lo escribe Fathom: "12:40" o "1:02:15". */
+  at: string;
+  speaker: string;
+  text: string;
+}
+
+export interface FluencyPrep {
+  turns: Turn[];
+  speakers: string[];
+  wordCount: number;
+  teacherSpeaker: string | null;
+  studentSpeaker: string | null;
+  /** % de palabras del alumno según las ETIQUETAS de Fathom (que a veces fallan). */
+  labelShare: number | null;
+  fathomUrl: string | null;
+  skip: FluencySkipReason | null;
+}
+
+const TURN_HEADER = /^\s*(\d{1,2}:\d{2}(?::\d{2})?)\s+-\s+(.+?)\s*$/;
+const EMAIL_IN_LABEL = /\([^()\s]+@[^()\s]+\)/;
+
+const countWords = (s: string): number => s.split(/\s+/).filter(Boolean).length;
+
+/** Turnos de habla. Lo que va antes del primer "m:ss - Nombre" (título, enlace) se ignora. */
+export function parseFathomTurns(transcript: string): Turn[] {
+  const turns: Turn[] = [];
+  let current: Turn | null = null;
+  for (const line of (transcript ?? '').split(/\r?\n/)) {
+    const m = line.match(TURN_HEADER);
+    if (m) {
+      if (current) turns.push(current);
+      current = { at: m[1], speaker: m[2].trim(), text: '' };
+    } else if (current && line.trim()) {
+      current.text = current.text ? `${current.text} ${line.trim()}` : line.trim();
+    }
+  }
+  if (current) turns.push(current);
+  return turns.filter(t => t.text);
+}
+
+// Formato de SUBTÍTULOS (Meet/Zoom), el otro que aparece con hablantes:
+//   06:03:51 --> 06:03:53
+//   Nury Barreto: Michael Jast?
+// Sin emails: el profe se identifica por los nombres.
+const CAPTION_TIME = /^\s*(\d{1,2}:\d{2}:\d{2})(?:[.,]\d+)?\s*-->\s*\d{1,2}:\d{2}:\d{2}/;
+const CAPTION_LINE = /^\s*([^:]{2,60}?):\s+(.+)$/;
+
+export function parseCaptionTurns(transcript: string): Turn[] {
+  const turns: Turn[] = [];
+  let at: string | null = null;
+  for (const line of (transcript ?? '').split(/\r?\n/)) {
+    const t = line.match(CAPTION_TIME);
+    if (t) { at = t[1].replace(/^0(?=\d:)/, ''); continue; }
+    const m = at ? line.match(CAPTION_LINE) : null;
+    if (m && at) {
+      turns.push({ at, speaker: m[1].trim(), text: m[2].trim() });
+      at = null;
+    }
+  }
+  return turns;
+}
+
+/** Turnos del transcript en cualquiera de los dos formatos con hablantes. */
+export function parseTurns(transcript: string): Turn[] {
+  const fathom = parseFathomTurns(transcript);
+  return fathom.length >= 5 ? fathom : parseCaptionTurns(transcript);
+}
+
+/** Primer enlace de Fathom del transcript (la grabación), si lo trae. */
+export function extractFathomUrl(transcript: string): string | null {
+  const m = (transcript ?? '').match(/https?:\/\/(?:www\.)?fathom\.video\/[^\s)>\]"']+/i);
+  return m ? m[0] : null;
+}
+
+/** Primer nombre normalizado ("María José Pérez" → "maria"). */
+const firstName = (s: string | null | undefined): string => normName(s).split(' ')[0] ?? '';
+
+/**
+ * Quién es el profe entre los hablantes. Orden de confianza:
+ *   1. el ÚNICO que lleva email entre paréntesis;
+ *   2. el que contiene el nombre del profe de la plataforma;
+ *   3. con dos hablantes, el que NO contiene el nombre del alumno.
+ * Si nada lo decide, null: la IA recibe los nombres y lo deduce por el contenido.
+ */
+export function identifyTeacher(
+  speakers: string[], names: { teacherName?: string | null; studentName?: string | null },
+): string | null {
+  const withEmail = speakers.filter(s => EMAIL_IN_LABEL.test(s));
+  if (withEmail.length === 1) return withEmail[0];
+
+  const t = firstName(names.teacherName);
+  const byTeacher = t ? speakers.filter(s => normName(s).includes(t)) : [];
+  if (byTeacher.length === 1) return byTeacher[0];
+
+  const a = firstName(names.studentName);
+  if (speakers.length === 2 && a) {
+    const notStudent = speakers.filter(s => !normName(s).includes(a));
+    if (notStudent.length === 1) return notStudent[0];
+  }
+  return null;
+}
+
+/** Todo lo que se sabe del transcript antes de (y para decidir si) llamar a la IA. */
+export function prepareFluency(
+  transcript: string, names: { teacherName?: string | null; studentName?: string | null } = {},
+): FluencyPrep {
+  const turns = parseTurns(transcript);
+  const speakers = [...new Set(turns.map(t => t.speaker))];
+  const wordCount = turns.reduce((n, t) => n + countWords(t.text), 0);
+  const fathomUrl = extractFathomUrl(transcript);
+
+  const teacherSpeaker = speakers.length === 2 ? identifyTeacher(speakers, names) : null;
+  const studentSpeaker = teacherSpeaker ? speakers.find(s => s !== teacherSpeaker) ?? null : null;
+
+  let labelShare: number | null = null;
+  if (studentSpeaker && wordCount > 0) {
+    const w = turns.filter(t => t.speaker === studentSpeaker).reduce((n, t) => n + countWords(t.text), 0);
+    labelShare = Math.round((100 * w) / wordCount);
+  }
+
+  // Menos de 5 turnos = no es un transcript con hablantes. Suele ser el RESUMEN
+  // de Fathom ("Meeting Purpose / Key Takeaways") pegado en lugar del transcript.
+  const skip: FluencySkipReason | null =
+      turns.length < 5         ? 'sin_formato_hablantes'
+    : speakers.length > 2      ? 'mas_de_dos_hablantes'
+    : speakers.length < 2      ? 'un_solo_hablante'
+    : wordCount < MIN_WORDS    ? 'pocas_palabras'
+    : null;
+
+  return { turns, speakers, wordCount, teacherSpeaker, studentSpeaker, labelShare, fathomUrl, skip };
+}
+
+/**
+ * El transcript tal como lo lee la IA: una línea por turno, con el ROL delante
+ * y sin los emails (no aportan y gastan tokens).
+ *   [12:40] ALUMNO (Sonia): I was afraid of the dark...
+ */
+export function formatTurnsForAi(prep: Pick<FluencyPrep, 'turns' | 'teacherSpeaker' | 'studentSpeaker'>): string {
+  const clean = (s: string) => s.replace(EMAIL_IN_LABEL, '').trim();
+  const role = (s: string) =>
+      s === prep.teacherSpeaker ? `PROFE (${clean(s)})`
+    : s === prep.studentSpeaker ? `ALUMNO (${clean(s)})`
+    : clean(s);
+  return prep.turns.map(t => `[${t.at}] ${role(t.speaker)}: ${t.text}`).join('\n');
+}
+
+/** Texto comparable: sin acentos, sin puntuación, espacios simples, minúsculas. */
+function comparable(s: string): string {
+  return (s ?? '')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+}
+
+/**
+ * ¿La cita que devolvió la IA aparece de verdad en lo que se dijo? Se busca en el
+ * texto hablado (no en las etiquetas), tolerando puntuación y mayúsculas. Una
+ * cita inventada no debe llegar nunca a pedirle al profe un minuto concreto.
+ */
+export function excerptFound(turns: Turn[], excerpt: string | null | undefined): boolean {
+  const needle = comparable(excerpt ?? '');
+  if (needle.split(' ').length < 3) return false;
+  return comparable(turns.map(t => t.text).join(' ')).includes(needle);
+}

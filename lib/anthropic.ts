@@ -43,6 +43,9 @@ export interface AskClaudeJsonOptions {
   maxTokens: number;
   effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   timeoutMs?: number;
+  /** Reintentos del SDK (por defecto 2). Ojo: un timeout también se reintenta,
+   *  así que el peor caso es timeoutMs × (maxRetries + 1). */
+  maxRetries?: number;
   /** Sólo para los logs, para saber qué llamada falló. */
   label: string;
   /** Campos que NO se limpian de guiones (identificadores, enums, códigos). */
@@ -177,7 +180,10 @@ export async function askClaudeJson<T>(opts: AskClaudeJsonOptions): Promise<AiRe
         },
         messages: [{ role: 'user', content: opts.prompt }],
       },
-      { timeout: opts.timeoutMs ?? 120_000 },
+      {
+        timeout: opts.timeoutMs ?? 120_000,
+        ...(opts.maxRetries != null ? { maxRetries: opts.maxRetries } : {}),
+      },
     );
 
     // Monitoreo de caché (una sola vez, común a todos los endpoints de IA; `label`

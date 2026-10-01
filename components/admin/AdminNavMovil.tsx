@@ -36,7 +36,7 @@ const OTRAS_PANTALLAS = [
 
 export type AdminTabId =
   | 'teachers' | 'emails' | 'scoring' | 'bonos' | 'tracking' | 'fueracal' | 'classlog' | 'transcripts'
-  | 'leveltests' | 'validacion' | 'ai' | 'aiusage' | 'bajas' | 'notifications';
+  | 'leveltests' | 'validacion' | 'ai' | 'aiusage' | 'bajas' | 'testimoniales' | 'notifications';
 
 /**
  * Secciones que existen (código, datos y cron siguen ahí) pero NO se muestran,
@@ -70,6 +70,7 @@ const GRUPOS: Array<{ nombre: string; secciones: Seccion[] }> = [
     { id: 'ai', label: 'Riesgo' },
     { id: 'proximos', label: 'Próximos a cancelar', href: '/proximos-cancelar' },
     { id: 'bajas', label: 'Bajas' },
+    { id: 'testimoniales', label: 'Testimoniales' },
   ] },
   { nombre: 'Profesores', secciones: [
     { id: 'teachers', label: 'Profesores' },
@@ -129,7 +130,7 @@ export function AdminNavMovil({ activeTab, contadores, onSelect, onVolver, child
     ai: <AlertTriangle size={22} strokeWidth={1.75} aria-hidden />,
     teachers: <Users size={22} strokeWidth={1.75} aria-hidden />,
     emails: <Link2 size={22} strokeWidth={1.75} aria-hidden />,
-    scoring: null, bonos: null, tracking: null, fueracal: null, classlog: null, transcripts: null, leveltests: null, aiusage: null, bajas: null, notifications: null,
+    scoring: null, bonos: null, tracking: null, fueracal: null, classlog: null, transcripts: null, leveltests: null, aiusage: null, bajas: null, testimoniales: null, notifications: null,
   };
 
   return (
