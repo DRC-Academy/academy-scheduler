@@ -102,6 +102,10 @@ export default function FluencyBackfillPanel({ onPairs }: { onPairs: () => void 
   const pct = s && s.total > 0 ? Math.min(100, (hechas / s.total) * 100) : 0;
   const eta = msPorTanda && quedan > 0 ? duracion((quedan / 5) * msPorTanda) : null;
 
+  // Sin atraso ni errores que reintentar no hay nada que hacer aquí: las clases
+  // nuevas reciben su nota solas al subir el transcript.
+  if (s && !running && !msg && !error && quedan === 0 && s.failedRetryable === 0) return null;
+
   return (
     <div className="adm-card fb">
       <div className="fb-top">

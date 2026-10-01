@@ -41,6 +41,8 @@ import { isValidOptionalEmail } from '@/lib/validation';
 import { SpecialtyChip, ToggleChip } from '@/components/ui';
 import AlumnoYaAsignadoModal from '@/components/AlumnoYaAsignadoModal';
 import { findOtherTeacherAssignments, type ExistingAssignmentMatch } from '@/lib/assignmentGuard';
+import TestimonialRecordingCard from '@/components/TestimonialRecordingCard';
+import { dbGetTeacherRecordingRequests, type TeacherRecordingRequest } from '@/lib/testimonialsDb';
 
 // Índice de tokens de formulario (por id/nombre de alumno). Se pasa a los tabs.
 type FormIndex = { byId: Map<string, FormTokenInfo>; byName: Map<string, FormTokenInfo> };
@@ -832,6 +834,16 @@ function TeacherNotificationsTab({ teacher, myAssignments, bonusRows, students, 
   updateMeetLink: (assignmentId: string, link: string) => Promise<void>;
 }) {
   const [linkModal, setLinkModal] = useState<Assignment | null>(null);
+  // Grabaciones pedidas para testimonios (pestaña Testimoniales del admin).
+  const [grabaciones, setGrabaciones] = useState<TeacherRecordingRequest[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const r = await dbGetTeacherRecordingRequests(teacher.id);
+      if (!cancelled) setGrabaciones(r);
+    })();
+    return () => { cancelled = true; };
+  }, [teacher.id]);
 
   useEffect(() => {
     loadNotifications(teacher.id, 'teacher');
@@ -905,6 +917,12 @@ function TeacherNotificationsTab({ teacher, myAssignments, bonusRows, students, 
   //   4 aviso ya leído   · archivo
   // Desempate dentro de cada grupo: menos clases/días restantes, o más reciente.
   const avisos = [
+    // Grabación para testimonio: arriba del todo mientras esté pendiente (es lo
+    // único que pide una acción suya); ya subida, baja con los avisos leídos.
+    ...grabaciones.map(g => ({
+      kind: 'grabacion' as const, key: `tg_${g.id}`,
+      priority: g.uploadedAt ? 4 : -1, sort: -new Date(g.notifiedAt).getTime(), data: g,
+    })),
     ...near15.map(d => ({
       kind: 'near15' as const, key: `n15_${d.name}`, priority: 2, sort: d.faltanClases, data: d,
     })),
@@ -914,7 +932,8 @@ function TeacherNotificationsTab({ teacher, myAssignments, bonusRows, students, 
       sort: d.bonusAvailable ? -d.daysActive : d.daysTo6m,
       data: d,
     })),
-    ...notifications.map(n => ({
+    // El aviso de la campanita de una grabación ya lo representa su tarjeta.
+    ...notifications.filter(n => n.type !== 'testimonial_grabacion').map(n => ({
       kind: 'notif' as const, key: n.id,
       priority: n.readBy.includes(teacher.id) ? 4 : 1,
       sort: -new Date(n.createdAt).getTime(),
@@ -934,6 +953,12 @@ function TeacherNotificationsTab({ teacher, myAssignments, bonusRows, students, 
       )}
 
       {avisos.map(av => {
+        if (av.kind === 'grabacion') {
+          return (
+            <TestimonialRecordingCard key={av.key} req={av.data} teacherId={teacher.id}
+              onUploaded={(id, at) => setGrabaciones(gs => gs.map(g => g.id === id ? { ...g, uploadedAt: at } : g))} />
+          );
+        }
         if (av.kind === 'near15') {
           const item = av.data;
           return (

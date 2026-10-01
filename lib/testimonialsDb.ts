@@ -100,3 +100,93 @@ export async function dbUpdateTestimonialCandidate(
   if (error?.code === '23505') return { error: 'Este alumno ya tiene otra pareja activa. Descarta esa antes de reactivar esta.' };
   return error ? { error: error.message } : {};
 }
+
+// ── Avisos al profesor para subir la grabación (supabase-testimoniales-avisos.sql) ──
+
+export interface RecordingRequest {
+  id: string;
+  candidateId: string;
+  teacherId: string;
+  sides: Array<'antes' | 'despues'>;
+  notifiedAt: string;
+  emailSent: boolean;
+  timesNotified: number;
+  uploadedAt: string | null;
+}
+
+const mapRequest = (r: Row): RecordingRequest => ({
+  id: r.id, candidateId: r.candidate_id, teacherId: r.teacher_id, sides: r.sides ?? [],
+  notifiedAt: r.notified_at, emailSent: !!r.email_sent, timesNotified: r.times_notified ?? 1,
+  uploadedAt: r.uploaded_at ?? null,
+});
+
+/** Todos los avisos enviados (para el admin). null = falta la tabla. */
+export async function dbGetRecordingRequests(): Promise<RecordingRequest[] | null> {
+  const out: RecordingRequest[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await supabase.from('testimonial_recording_requests')
+      .select('id, candidate_id, teacher_id, sides, notified_at, email_sent, times_notified, uploaded_at')
+      .order('id').range(from, from + 999);
+    if (error) {
+      if (error.code === '42P01' || error.code === 'PGRST205') return null;
+      throw new Error(error.message);
+    }
+    out.push(...(data ?? []).map(mapRequest));
+    if ((data ?? []).length < 1000) break;
+  }
+  return out;
+}
+
+/** "Enviar al profesor": campanita + email, en el servidor (la clave de Resend vive allí). */
+export async function sendTestimonialToTeachers(candidateId: string): Promise<{
+  results?: Array<{ teacherId: string; outcome: 'enviado' | 'reenviado' | 'ya_subida' | 'error'; emailSent?: boolean; error?: string }>;
+  error?: string;
+}> {
+  try {
+    const res = await fetch('/api/admin/testimonial-notify', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ candidateId }),
+    });
+    const data = await res.json().catch(() => ({ error: `Error ${res.status} del servidor.` }));
+    return res.ok ? data : { error: data.error ?? `Error ${res.status} del servidor.` };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+// ── Lado del profesor ────────────────────────────────────────────────────────
+
+export interface TeacherRecordingRequest extends RecordingRequest {
+  studentName: string;
+  before: TestimonialSide;
+  after: TestimonialSide;
+}
+
+/**
+ * Grabaciones que se le han pedido a un profesor: las pendientes y las subidas
+ * en los últimos 30 días (para que vea el "Subida ✓"). [] si falta la tabla.
+ */
+export async function dbGetTeacherRecordingRequests(teacherId: string): Promise<TeacherRecordingRequest[]> {
+  const desde = new Date(Date.now() - 30 * 86_400_000).toISOString();
+  const { data, error } = await supabase.from('testimonial_recording_requests')
+    .select('id, candidate_id, teacher_id, sides, notified_at, email_sent, times_notified, uploaded_at, testimonial_candidates(*)')
+    .eq('teacher_id', teacherId)
+    .or(`uploaded_at.is.null,uploaded_at.gte.${desde}`)
+    .order('notified_at', { ascending: false });
+  if (error) return [];
+  return (data ?? [])
+    .filter((r: Row) => r.testimonial_candidates && r.testimonial_candidates.status !== 'descartado')
+    .map((r: Row) => ({
+      ...mapRequest(r),
+      studentName: r.testimonial_candidates.student_name ?? 'Alumno',
+      before: side(r.testimonial_candidates, 'before'),
+      after: side(r.testimonial_candidates, 'after'),
+    }));
+}
+
+/** El profesor pulsa "Grabación subida". Solo puede marcar las suyas. */
+export async function dbMarkRecordingUploaded(requestId: string, teacherId: string): Promise<{ error?: string }> {
+  const now = new Date().toISOString();
+  const { error } = await supabase.from('testimonial_recording_requests')
+    .update({ uploaded_at: now, updated_at: now }).eq('id', requestId).eq('teacher_id', teacherId);
+  return error ? { error: error.message } : {};
+}

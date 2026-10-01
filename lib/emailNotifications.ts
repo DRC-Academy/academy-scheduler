@@ -17,6 +17,9 @@ import {
 import { cleanAiText } from '@/lib/textCleanup';
 import { longDateEs, retentionLine, type EndingPlan } from '@/lib/endingPlans';
 import { PUBLIC_APP_URL as APP_URL } from '@/lib/appUrl';
+import {
+  requestCopy, describeItem, RECORDINGS_SHEET_URL, RECORDINGS_SHEET_TAB, type RecordingItem,
+} from '@/lib/testimonialRequests';
 
 const FROM = 'DRC Academy <notificaciones@drcacademy.com>';
 const PAGOS_EMAIL = 'pagos@drcacademy.com';
@@ -324,6 +327,36 @@ export async function sendInterventionEmail(
   );
 
   return send('sendInterventionEmail', teacher, subject, html);
+}
+
+// ═══ A.4) Grabación para un testimonio ════════════════════════════════════════
+//
+// Sale cuando el admin pulsa "Enviar al profesor" en la pestaña Testimoniales.
+// Mismo texto que el aviso de la campanita (lib/testimonialRequests), más los
+// enlaces a cada grabación y al sheet. El "Grabación subida" se marca en la app.
+export async function sendTestimonialRecordingEmail(
+  teacher: TeacherLike,
+  info: { studentName: string; items: RecordingItem[] },
+): Promise<boolean> {
+  const { body } = requestCopy(info.studentName, info.items);
+  const lista = info.items.map(it =>
+    `<li style="margin-bottom:6px;">${esc(describeItem(it).replace(/^la /, 'La '))}${
+      it.fathomUrl ? ` · <a href="${esc(it.fathomUrl)}" target="_blank" style="color:#2563eb;">abrir grabación</a>` : ''
+    }</li>`).join('');
+
+  const html = baseEmailTemplate(
+    p(`Hola ${esc(teacher.name)},`) +
+    p(esc(body)) +
+    `<div style="margin:0 0 16px; padding:14px 16px; border:1px solid #E0E0DA; border-radius:8px;">
+  <div style="font-size:12px; font-weight:700; color:#1E9E3A; text-transform:uppercase; letter-spacing:0.04em; margin-bottom:8px;">${info.items.length === 1 ? 'Grabación' : 'Grabaciones'}</div>
+  <ul style="margin:0; padding-left:18px; font-size:14px; line-height:1.65;">${lista}</ul>
+</div>` +
+    ctaButton(`Abrir el sheet (pestaña ${RECORDINGS_SHEET_TAB})`, RECORDINGS_SHEET_URL) +
+    p(`Cuando la hayas subido, pulsa <strong>«Grabación subida»</strong> en la sección Avisos de la plataforma.`),
+    `${info.studentName} · grabación para testimonio`,
+  );
+
+  return send('sendTestimonialRecordingEmail', teacher, `Grabación para testimonio · ${info.studentName}`, html);
 }
 
 // ═══ B) Formulario completado ═════════════════════════════════════════════════
