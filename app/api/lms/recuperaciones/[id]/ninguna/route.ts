@@ -4,7 +4,7 @@
 // Contrato: docs/recuperaciones-contrato.md
 //
 // Ronda 1 → 'alumno_propuso' (le toca al profesor). Ronda 2 → 'sin_acuerdo'.
-// El aviso al profesor (campanita + email) llega en el bloque B.
+// Ronda 1 avisa al profesor (campanita + email); ronda 2 avisa al profe y al admin.
 
 import { requireLmsSecret } from '@/lib/lmsAuth';
 import { getRecovery, belongsToStudent, studentProposesOther, expireIfDue } from '@/lib/classRecoveryStore';

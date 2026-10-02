@@ -27,6 +27,7 @@ import type {
 } from '@/types';
 import type { ClassTranscriptRef } from '@/lib/finance';
 import { periodIndex, existsForStudent } from '@/lib/studentPeriod';
+import { isRecoveryBetaTeacher } from '@/lib/classRecoveries';
 
 const nk = (s: string | null | undefined): string => (s ?? '').trim().toLowerCase();
 
@@ -597,17 +598,23 @@ export async function dbResolveReviewRequest(p: {
     // un class_record de más solo puede ganarle el cruce a otro (ver el bug de
     // las faltas descartadas por colisión, lib/finance.ts).
     if (tipo !== 'normal') {
-      await dbAddClassRecord(
+      const constancia = await dbAddClassRecord(
         r.teacherId, r.teacherName, r.studentName, r.classDate, r.classTime, '',
         tipo as ClassRecordType,
         `Solicitud de revisión aprobada por ${reviewerName}${r.comment ? ` — ${r.comment}` : ''}`,
       );
+      // Profesor beta de "No puedo dar esta clase": la cancelación del profesor
+      // se registra en class_recoveries ('sin_acuerdo', multa fija de 5 € desde
+      // PENALTY_START_DATE, mes de la clase) en vez de los −5 € de siempre. Solo
+      // si falta el SQL del bloque B (503) se vuelve al camino de siempre.
+      const viaRecuperaciones = tipo === 'cancelada_por_profesor' && isRecoveryBetaTeacher(r.teacherId)
+        && await reclasificarComoRecuperacion(r, constancia.id);
       // MISMA condición que TeachersContext.registerClassRecord, a propósito: la
       // falta DEL ALUMNO no dispara ningún efecto (no penaliza y no es asunto del
       // profesor); las cancelaciones sí, y 'cancelada_por_profesor' es la que
       // lleva los -5 €. Enumerarlas acá en vez de llamar siempre evita que un
       // cambio futuro en esa función acabe penalizando una falta del alumno.
-      if (tipo === 'cancelada_por_profesor' || tipo === 'cancelacion_hora' || tipo === 'falta_con_aviso') {
+      if (!viaRecuperaciones && (tipo === 'cancelada_por_profesor' || tipo === 'cancelacion_hora' || tipo === 'falta_con_aviso')) {
         await dbApplyFaltaSideEffects({
           teacherId:   r.teacherId,
           teacherName: r.teacherName,
@@ -659,4 +666,27 @@ export async function dbResolveReviewRequest(p: {
   }
 
   return { joinLogId };
+}
+
+/**
+ * Reclasificación a "cancelada por el profesor" de un profesor beta: la manda
+ * al servidor (class_recoveries). true = registrada ahí (o ya lo estaba), así
+ * que NO se aplica la multa de siempre. false solo si falta el SQL del bloque B
+ * (503): entonces se sigue con los −5 € de siempre. Ante cualquier otro error
+ * NO se vuelve al camino viejo (podría cobrar dos veces si el servidor llegó a
+ * guardar): se avisa en consola y el admin lo ve en la pestaña Recuperaciones.
+ */
+async function reclasificarComoRecuperacion(r: ClassReviewRequest, cancelRecordId: string): Promise<boolean> {
+  try {
+    const res = await fetch('/api/recuperaciones/reclasificar', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ teacherId: r.teacherId, studentName: r.studentName, classDate: r.classDate, classTime: r.classTime, cancelRecordId }),
+    });
+    if (res.status === 503) return false;
+    if (!res.ok) console.error('[reviewRequests] La reclasificación en recuperaciones falló:', res.status, await res.text().catch(() => ''));
+    return true;
+  } catch (err) {
+    console.error('[reviewRequests] La reclasificación en recuperaciones falló:', err);
+    return true;
+  }
 }

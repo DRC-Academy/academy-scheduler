@@ -44,6 +44,7 @@ import { findOtherTeacherAssignments, type ExistingAssignmentMatch } from '@/lib
 import TestimonialRecordingCard from '@/components/TestimonialRecordingCard';
 import { isRecoveryBetaTeacher } from '@/lib/classRecoveries';
 import { useTeacherRecoveries, reservedSlotAt } from '@/lib/useTeacherRecoveries';
+import { PendingRecoveriesPanel } from '@/components/RecoveryResponseCard';
 import { dbGetTeacherRecordingRequests, type TeacherRecordingRequest } from '@/lib/testimonialsDb';
 
 // Índice de tokens de formulario (por id/nombre de alumno). Se pasa a los tabs.
@@ -1296,6 +1297,13 @@ function TeacherContent() {
   // Beta "No puedo dar esta clase": reservas de recuperación pintadas en el
   // calendario. Para el resto de profesores no se consulta nada (null).
   const recov = useTeacherRecoveries(teacher && isRecoveryBetaTeacher(teacher.id) ? teacher.id : null);
+  // Confirmación tras responder a una propuesta del alumno (esta página no tiene toast).
+  const [recovMsg, setRecovMsg] = useState<string | null>(null);
+  useEffect(() => {
+    if (!recovMsg) return;
+    const t = setTimeout(() => setRecovMsg(null), 6000);
+    return () => clearTimeout(t);
+  }, [recovMsg]);
 
   // El popup recordatorio de enlaces sin definir se monta en el NavBar
   // (components/MeetLinkReminder), así aparece en toda la app del profesor.
@@ -1984,6 +1992,16 @@ function TeacherContent() {
                 </span>
               )}
             </div>
+
+            {/* Beta "No puedo dar esta clase": el alumno propuso otros horarios y
+                le toca responder al profesor (vacío para el resto). */}
+            {recovMsg && (
+              <div role="status" style={{ fontSize: 13, fontWeight: 600, color: '#1f7a3d', margin: '0 0 10px' }}>{recovMsg}</div>
+            )}
+            {teacher && isRecoveryBetaTeacher(teacher.id) && (
+              <PendingRecoveriesPanel teacherId={teacher.id} recoveries={recov.recoveries}
+                onChanged={async msg => { setRecovMsg(msg); await recov.reload(); setGridReload(n => n + 1); }} />
+            )}
 
             {/* La leyenda ya no vive acá: se fusionó con los contadores en los
                 chips que renderiza VisualCalendar (una sola fila, una sola fuente). */}

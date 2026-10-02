@@ -56,6 +56,22 @@ export const NO_SHOW_PENALTY_EUROS = 10;
 export const PROPOSAL_WINDOW_DAYS = 7;
 export const MAX_ROUNDS = 2;
 export const MAX_STUDENT_PROPOSALS = 3;
+
+/**
+ * De dónde salió una fila. 'admin_reclasificacion': el admin aprobó una
+ * revisión como "cancelada por el profesor" (la clase pasó sin aviso). Esa NO
+ * usa comodín ni ocupa uno: lleva la multa fija (ver reclassPenalty).
+ */
+export type RecoveryOrigin = 'profesor' | 'admin_reclasificacion';
+
+/**
+ * Multa de una reclasificación del admin: fija, sin comodines, contada en el
+ * mes de la CLASE. Antes de PENALTY_START_DATE no se cobra, solo se marca.
+ */
+export function reclassPenalty(classDate: string): { chargeNow: boolean; wouldHavePenalty: boolean; penaltyEuros: number } {
+  const chargeNow = classDate >= PENALTY_START_DATE;
+  return { chargeNow, wouldHavePenalty: !chargeNow, penaltyEuros: chargeNow ? -PENALTY_EUROS : 0 };
+}
 export const MAX_NOTE_LENGTH = 500;
 
 // ── Estados ───────────────────────────────────────────────────────────────────
@@ -323,6 +339,61 @@ export function validateStudentProposals(
 /** ¿Ya empezaron TODAS las fechas propuestas? Entonces la espera venció. */
 export function proposalsExpired(proposals: Slot[], nowMs: number): boolean {
   return proposals.length > 0 && proposals.every(s => !(slotStartMs(s.date, s.hour) > nowMs));
+}
+
+// ── Chequeo nocturno ──────────────────────────────────────────────────────────
+
+/** Lo mínimo de una recuperación que necesita el chequeo nocturno. */
+export interface NightlyInput {
+  status: RecoveryStatus;
+  teacherProposals: Slot[];
+  studentProposals: Array<{ date: string; hour: string }>;
+  chosenDate: string | null;
+  chosenHour: string | null;
+}
+
+export type NightlyAction = 'recuperada' | 'sin_acuerdo' | 'anular' | null;
+
+/**
+ * Qué hace el chequeo nocturno con una recuperación, en este orden:
+ *  1. confirmada, ya empezó y hubo ingreso → 'recuperada' (aunque el alumno se
+ *     diera de baja después: la clase se dio);
+ *  2. el alumno ya no está activo con ese profesor (baja, desvinculación, cambio
+ *     de profesor) y la recuperación sigue viva → 'anular';
+ *  3. esperando al alumno y pasaron TODAS las fechas del profesor → 'sin_acuerdo';
+ *  4. esperando al profesor y pasaron TODOS los horarios del alumno → 'sin_acuerdo'.
+ * Una confirmada que pasó SIN ingreso no se toca: la pestaña del admin la destaca.
+ */
+export function nightlyAction(r: NightlyInput, opts: { nowMs: number; given: boolean; assignmentActive: boolean }): NightlyAction {
+  const chosenStarted = !!r.chosenDate && !!r.chosenHour && !(slotStartMs(r.chosenDate, r.chosenHour) > opts.nowMs);
+  if (r.status === 'confirmada' && chosenStarted && opts.given) return 'recuperada';
+  if (!opts.assignmentActive && (['esperando_alumno', 'alumno_propuso', 'sin_acuerdo'] as RecoveryStatus[]).includes(r.status)) return 'anular';
+  if (!opts.assignmentActive && r.status === 'confirmada' && !chosenStarted) return 'anular';
+  if (r.status === 'esperando_alumno' && proposalsExpired(r.teacherProposals, opts.nowMs)) return 'sin_acuerdo';
+  if (r.status === 'alumno_propuso' && proposalsExpired(r.studentProposals.map(s => ({ ...s, hours: 1 })), opts.nowMs)) return 'sin_acuerdo';
+  return null;
+}
+
+// ── Contadores de faltas del admin ────────────────────────────────────────────
+
+/** Lo mínimo de una fila de class_recoveries para los contadores. */
+export interface LateCancellationRow {
+  teacherId: string;
+  groupId: string;
+  cancelMonth: string;   // 'YYYY-MM', hora de España
+  late: boolean;
+  status: RecoveryStatus;
+}
+
+/**
+ * Cancelaciones SIN antelación de un profesor en un mes, contadas UNA vez por
+ * cancelación (una clase de 2 h partida en dos días son dos filas del mismo
+ * grupo). Las anuladas no cuentan, igual que en los comodines.
+ */
+export function lateCancellationsOfMonth(rows: LateCancellationRow[], teacherId: string, month: string): number {
+  return new Set(rows
+    .filter(r => r.teacherId === teacherId && r.late && r.status !== 'anulada' && r.cancelMonth === month)
+    .map(r => r.groupId)).size;
 }
 
 /** Las horas que ocupa un hueco: [{date, hour}] una por hora. */

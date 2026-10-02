@@ -324,6 +324,17 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   }
 
   async function deleteStudent(studentId: string, studentName: string, createdBy?: string, alsoStudentIds?: string[]) {
+    // Recuperaciones de "No puedo dar esta clase": se anulan ANTES de borrar,
+    // en el servidor (el store es solo de servidor). Best-effort: si falla, el
+    // borrado sigue igual que siempre y el chequeo nocturno las anula.
+    try {
+      const ids = [studentId, ...(alsoStudentIds ?? [])];
+      const email = students.find(s => ids.includes(s.id))?.email ?? null;
+      await fetch('/api/recuperaciones/baja', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ studentIds: ids, studentEmail: email, studentName, by: createdBy || 'admin', reason: 'Alumno eliminado de la plataforma' }),
+      });
+    } catch { /* best-effort */ }
     const affected = await dbDeleteStudent(studentId, studentName, createdBy, alsoStudentIds);
     const [t, sa, unassigned] = await Promise.all([
       dbGetTeachers(),

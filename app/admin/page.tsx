@@ -27,6 +27,7 @@ import AiRiskTab from '@/components/ai/AiRiskTab';
 import AiUsageTab from '@/components/admin/AiUsageTab';
 import LevelTestsTab from '@/components/admin/LevelTestsTab';
 import ClassLogTab from '@/components/admin/ClassLogTab';
+import RecoveriesTab from '@/components/admin/RecoveriesTab';
 import TranscriptsTab from '@/components/admin/TranscriptsTab';
 import TestimonialsTab from '@/components/admin/TestimonialsTab';
 import FueraDeCalendarioTab from '@/components/admin/FueraDeCalendarioTab';
@@ -42,6 +43,7 @@ import { proximosSinContactar } from '@/lib/dashboardMetrics';
 import { madridToday } from '@/lib/subscriptionAccess';
 import { RETENTION_BONUS_DAYS, RETENTION_UPCOMING_DAYS, retentionDaysLeft, retentionBonusFor } from '@/lib/retention';
 import { BONUS_STATE_LABEL } from '@/lib/bonuses';
+import { useAdminRecoveries } from '@/lib/useTeacherRecoveries';
 import BonusesTab from '@/components/admin/BonusesTab';
 
 // ─── Edit Teacher Modal ───────────────────────────────────────────────────────
@@ -2458,7 +2460,7 @@ function DuplicatesBanner() {
 }
 
 // ─── Admin Content ────────────────────────────────────────────────────────────
-const ADMIN_TABS = ['teachers', 'emails', 'scoring', 'bonos', 'tracking', 'fueracal', 'classlog', 'transcripts', 'leveltests', 'validacion', 'ai', 'aiusage', 'bajas', 'testimoniales', 'notifications'] as const;
+const ADMIN_TABS = ['teachers', 'emails', 'scoring', 'bonos', 'tracking', 'fueracal', 'classlog', 'transcripts', 'leveltests', 'validacion', 'recuperaciones', 'ai', 'aiusage', 'bajas', 'testimoniales', 'notifications'] as const;
 type AdminTab = typeof ADMIN_TABS[number];
 
 /**
@@ -2538,10 +2540,22 @@ function AdminContent() {
   // dejó de mezclar los dos casos sin necesidad de tocarlo. El event_type
   // conserva el nombre viejo ('falta_sin_aviso_penalizacion') para no orfanar los
   // eventos ya emitidos.
+  //
+  // Desde oct/2026 suma también las cancelaciones del flujo nuevo ("No puedo dar
+  // esta clase" y reclasificaciones del admin, tabla class_recoveries), una por
+  // cancelación. No se cuentan dos veces: el flujo nuevo no crea el evento viejo.
   const faltasMonth = new Date().toISOString().slice(0, 7);
-  const faltasOfTeacher = (teacherId: string) => scoringEvents.filter(e =>
-    e.teacherId === teacherId && e.eventType === 'falta_sin_aviso_penalizacion' &&
-    (e.createdAt ?? '').slice(0, 7) === faltasMonth && !e.reverted);
+  const { rows: recRows } = useAdminRecoveries();
+  const faltasOfTeacher = (teacherId: string): Array<{ note: string }> => {
+    const viejas = scoringEvents.filter(e =>
+      e.teacherId === teacherId && e.eventType === 'falta_sin_aviso_penalizacion' &&
+      (e.createdAt ?? '').slice(0, 7) === faltasMonth && !e.reverted).map(e => ({ note: e.note }));
+    const vistos = new Set<string>();
+    const nuevas = recRows.filter(r => r.teacherId === teacherId && r.late && r.status !== 'anulada' && r.cancelMonth === faltasMonth)
+      .filter(r => (vistos.has(r.groupId) ? false : (vistos.add(r.groupId), true)))
+      .map(r => ({ note: `alumno ${r.studentName}, fecha ${r.originalDate}${r.origin === 'admin_reclasificacion' ? ' (reclasificada por el admin)' : ' (No puedo dar esta clase)'}` }));
+    return [...viejas, ...nuevas];
+  };
 
   // Referencia temporal compartida por las pestañas que muestran antigüedades
   // (Emails, Seguimiento, Registro). No requiere reloj vivo: se recalcula al
@@ -2569,6 +2583,7 @@ function AdminContent() {
     { id: 'transcripts',    label: 'Transcripts' },
     { id: 'leveltests',     label: 'Tests de nivel' },
     { id: 'validacion',     label: 'Validación' },
+    { id: 'recuperaciones', label: 'Recuperaciones' },
     { id: 'ai',             label: 'Riesgo' },
     { id: 'aiusage',        label: 'Uso de IA' },
     { id: 'bajas',          label: 'Bajas' },
@@ -3116,6 +3131,7 @@ function AdminContent() {
 
         {/* CLASS LOG TAB */}
         {activeTab === 'classlog' && <ClassLogTab />}
+        {activeTab === 'recuperaciones' && <RecoveriesTab />}
         {activeTab === 'transcripts' && <TranscriptsTab />}
         {activeTab === 'testimoniales' && <TestimonialsTab />}
         {activeTab === 'fueracal' && <FueraDeCalendarioTab />}

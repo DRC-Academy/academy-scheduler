@@ -78,6 +78,35 @@ export function buildCancellationEmail(i: CancellationEmailInput): { subject: st
   };
 }
 
+/**
+ * Ronda 2: el alumno dijo "ninguna" y el profesor propone otras 2 fechas.
+ * `part`: en una clase de 2 h partida, qué hora es (1 o 2); null si no.
+ */
+export function buildReproposalEmail(i: {
+  studentName: string; teacherName: string; recoveryId: string;
+  original: { date: string; hour: string }; todayIso: string;
+  proposals: Slot[]; part: number | null;
+}): { subject: string; html: string } {
+  const nombre = primerNombre(i.studentName) || i.studentName;
+  const profe = primerNombre(i.teacherName) || i.teacherName;
+  const clase = claseDe(i.original.date, i.todayIso);
+  const link = recoveryLink(i.recoveryId);
+  const deQue = i.part ? ` (la ${i.part === 1 ? 'primera' : 'segunda'} hora)` : '';
+  return {
+    subject: `Te propongo otras fechas para recuperar ${clase}`,
+    html: studentEmailTemplate(
+      p(`Hola ${esc(nombre)},`) +
+      p(`gracias por proponerme horarios. No puedo en esos, así que te propongo otras dos fechas para recuperar ${esc(clase)}${esc(deQue)}: ${esc(opciones(i.proposals))}.`) +
+      p('Elige aquí la que prefieras:') +
+      boton('Elegir fecha', link) +
+      p(`Un abrazo,<br />${esc(profe)}`) +
+      enlaceDeRespaldo(link),
+      `Otras fechas para recuperar ${clase}`,
+      { noReply: true },
+    ),
+  };
+}
+
 /** El alumno eligió (o el profe aceptó) una fecha: confirmación al alumno. */
 export function buildConfirmedEmail(i: {
   studentName: string; teacherName: string; original: { date: string; hour: string }; chosen: { date: string; hour: string };

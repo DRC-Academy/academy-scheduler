@@ -33,6 +33,10 @@
 // SEGURIDAD: secreto comparado en tiempo constante y cliente ADMIN de Supabase
 // para todo lo que escribe (lib/cronAuth). Las lecturas masivas van por los
 // helpers de lib/db, que hoy usan la anon key sin RLS.
+//
+// CUARTA TAREA (oct/2026): chequeo nocturno de recuperaciones del profesor
+// ("No puedo dar esta clase", lib/classRecoveryStore.runNightlyRecoveryCheck).
+// Va aquí y no en un cron nuevo: el plan Hobby solo admite tres.
 
 import {
   dbGetTeachers, dbGetStudents, dbGetAssignments, dbGetClassJoinLogs, dbGetClassRecords,
@@ -48,6 +52,7 @@ import { fetchTeacher, sendDailyTranscriptReminder, type PendingTranscriptClass 
 import { spainWallClockToEpoch } from '@/lib/spainTime';
 import { clasesProgramadasDe } from '@/lib/teacherUsageLoad';
 import { nkName } from '@/lib/sessions';
+import { runNightlyRecoveryCheck, type NightlyResult } from '@/lib/classRecoveryStore';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -155,6 +160,7 @@ export async function GET(request: Request): Promise<Response> {
         classes: t.classes.map(c => `${c.studentName}${c.hours ? ` ${c.hours}` : ''}`),
       })),
       deadlines: plazo?.candidates.map(c => `${c.teacherName} · ${c.studentName} · ${c.date} ${c.hours} · ${c.kind}`) ?? 'error',
+      recoveries: await revisarRecuperaciones(true),
     });
   }
 
@@ -202,7 +208,24 @@ export async function GET(request: Request): Promise<Response> {
   // Va dentro de este cron a propósito: el plan Hobby solo admite tres.
   const snapshot = await guardarFotoCalendario(admin, targetDate);
 
-  return Response.json({ ok: true, date: targetDate, candidates: pendientes.length, sent, skipped, failed, deadlines, snapshot });
+  // Cuarta tarea: chequeo nocturno de "No puedo dar esta clase" (recuperada /
+  // sin acuerdo / anulada por baja o desvinculación). Aislada como las demás.
+  const recoveries = await revisarRecuperaciones(false);
+
+  return Response.json({ ok: true, date: targetDate, candidates: pendientes.length, sent, skipped, failed, deadlines, snapshot, recoveries });
+}
+
+/** Chequeo nocturno de recuperaciones (lib/classRecoveryStore). Best-effort. */
+async function revisarRecuperaciones(dry: boolean): Promise<NightlyResult | { error: string }> {
+  try {
+    const r = await runNightlyRecoveryCheck({ dry });
+    console.log(`[cron transcript-reminder] recuperaciones${dry ? ' (ensayo)' : ''}: ${r.revisadas} revisada(s), ` +
+      `${r.recuperadas.length} recuperada(s), ${r.sinAcuerdo.length} sin acuerdo, ${r.anuladas.length} anulada(s), ${r.errores.length} error(es).`);
+    return r;
+  } catch (err) {
+    console.error('[cron transcript-reminder] Error en el chequeo de recuperaciones:', err);
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 /**

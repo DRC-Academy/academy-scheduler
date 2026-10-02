@@ -366,6 +366,18 @@ describe('faltasProfesorDelMes', () => {
     ];
     expect(faltasProfesorDelMes(eventos, '2026-09')).toBe(1);
   });
+
+  it('suma las cancelaciones del flujo nuevo, una por grupo, sin anuladas ni con antelación', () => {
+    const recs = [
+      { groupId: 'g1', cancelMonth: '2026-09', late: true, status: 'esperando_alumno' },
+      { groupId: 'g1', cancelMonth: '2026-09', late: true, status: 'esperando_alumno' },   // 2.ª hora de la misma
+      { groupId: 'g2', cancelMonth: '2026-09', late: true, status: 'anulada' },
+      { groupId: 'g3', cancelMonth: '2026-09', late: false, status: 'confirmada' },
+      { groupId: 'g4', cancelMonth: '2026-08', late: true, status: 'sin_acuerdo' },
+      { groupId: 'g5', cancelMonth: '2026-09', late: true, status: 'sin_acuerdo' },
+    ];
+    expect(faltasProfesorDelMes([ev({})], '2026-09', recs)).toBe(3);
+  });
 });
 
 describe('alumnosResumen', () => {

@@ -167,3 +167,23 @@ describe('el cupo del alumno que ve el admin', () => {
     expect(fin.studentQuota).toEqual([]);
   });
 });
+
+// "No puedo dar esta clase" (class_recoveries): la recuperación de una clase que
+// canceló EL PROFESOR se registra como constancia 'recuperacion' con
+// recovery_for_date. Se paga si se da, pero no gasta nada del cupo del alumno.
+describe('recuperación de una clase cancelada por el profesor', () => {
+  it('se paga y no consume cupo del alumno', () => {
+    const recuperaciones = ['2026-08-07', '2026-08-14'];
+    const fechas = [...MARTES, ...recuperaciones].sort();
+    const fin = armar({
+      assignments: [alumno('Ana', [{ day: 'Martes', hour: '10:00' }])],
+      joinLogs: fechas.map(d => log('Ana', d)),
+      analyses: fechas.map(d => tx('Ana', d)),
+      classRecords: recuperaciones.map((d, i) => ({ ...rec('Ana', d, 'recuperacion'), recoveryForDate: MARTES[i] })),
+    });
+    // 1 h/semana → 5 al mes. Si las 2 recuperaciones contaran, serían 6 y una excedería.
+    expect(studentQuotaOf(fin, 'Ana')!.used).toBe(4);
+    expect(fin.rows.filter(r => r.status === 'excede_limite')).toHaveLength(0);
+    expect(fin.rows.filter(r => r.classType === 'recuperacion').every(r => r.status === 'pagable')).toBe(true);
+  });
+});

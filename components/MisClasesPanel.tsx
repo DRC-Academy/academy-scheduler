@@ -59,6 +59,7 @@ import { isMeetLinkDefined } from '@/lib/meetLinkStatus';
 // Para el resto, este panel funciona exactamente como antes.
 import { isRecoveryBetaTeacher } from '@/lib/classRecoveries';
 import NoPuedoDarClaseModal from '@/components/NoPuedoDarClaseModal';
+import { PendingRecoveriesPanel } from '@/components/RecoveryResponseCard';
 import { useTeacherRecoveries, recoveryLineFor, reservedSlotAt } from '@/lib/useTeacherRecoveries';
 import type { Grid, Teacher, Assignment, Student, ClassRecord, ClassRecordType, ClassJoinLog } from '@/types';
 
@@ -1435,8 +1436,9 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
                       onClick={() => { setOpenMenu(null); setRescheduleModal({ c, date }); }}>
                       {beta ? 'El alumno pidió cambiarla' : 'Reprogramar clase'}
                     </button>
-                    {/* Una clase ya cancelada no se vuelve a cancelar: era un −5 € doble. */}
-                    {!passed && !rescheduled && !cancelled && (
+                    {/* Una clase ya cancelada no se vuelve a cancelar: era un −5 € doble.
+                        Beta: no se muestra; lo del profesor va por "No puedo dar esta clase". */}
+                    {!beta && !passed && !rescheduled && !cancelled && (
                       <button className="mc-menu-item" role="menuitem"
                         onClick={() => { setOpenMenu(null); setCancelModal({ c, date }); }}>
                         Cancelar clase
@@ -1511,6 +1513,12 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
 
   return (
     <div className="mc">
+      {/* Beta: recuperaciones en las que el alumno propuso otros horarios y le
+          toca responder al profesor. Para el resto, la lista viene vacía. */}
+      {beta && (
+        <PendingRecoveriesPanel teacherId={teacher.id} recoveries={recov.recoveries}
+          onChanged={async msg => { showToast(msg, 4000); await Promise.all([onDataChanged(), recov.reload()]); }} />
+      )}
       <div className="mc-head">
         <div>
           <div className="mc-title">Mis clases</div>

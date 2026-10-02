@@ -14,10 +14,66 @@ export interface TeacherRecovery {
   status: 'esperando_alumno' | 'alumno_propuso' | 'confirmada' | 'recuperada' | 'sin_acuerdo' | 'anulada';
   teacherProposals: Array<{ date: string; hour: string; hours: number }>;
   studentProposals: Array<{ date: string; hour: string }>;
+  studentNote: string | null; round: number;
   chosenDate: string | null; chosenHour: string | null;
 }
 
 export interface Reservation { date: string; hour: string; studentName: string }
+
+/** Una fila de class_recoveries tal como la devuelve /api/recuperaciones/admin. */
+export interface AdminRecovery extends TeacherRecovery {
+  assignmentId: string | null; teacherId: string; teacherName: string | null; studentEmail: string | null;
+  cancelledAt: string; cancelMonth: string; noticeMinutes: number; late: boolean;
+  usedWildcard: boolean; penaltyEuros: number; wouldHavePenalty: boolean;
+  agreedDirectly: boolean; chosenBy: string | null;
+  reason: string | null; statusChangedAt: string; createdAt: string;
+  origin: 'profesor' | 'admin_reclasificacion';
+  annulledAt: string | null; annulledBy: string | null; annulReason: string | null;
+}
+
+/**
+ * Todas las recuperaciones (admin): la pestaña "Recuperaciones" y los contadores
+ * de faltas. Si la tabla no existe o falla, lista vacía: los contadores siguen
+ * contando los eventos viejos como siempre.
+ */
+export function useAdminRecoveries() {
+  const [rows, setRows] = useState<AdminRecovery[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const reload = useCallback(async () => {
+    try {
+      const res = await fetch('/api/recuperaciones/admin', { cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok) { setError(data.mensaje ?? 'No se pudieron cargar las recuperaciones.'); return; }
+      setRows(data.recoveries ?? []); setError(null);
+    } catch {
+      setError('No se pudo conectar con el servidor.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/recuperaciones/admin', { cache: 'no-store' });
+        const data = await res.json();
+        if (cancelled) return;
+        if (!res.ok) { setError(data.mensaje ?? 'No se pudieron cargar las recuperaciones.'); return; }
+        setRows(data.recoveries ?? []);
+      } catch {
+        if (!cancelled) setError('No se pudo conectar con el servidor.');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  return { rows, error, loading, reload };
+}
 
 export function useTeacherRecoveries(teacherId: string | null) {
   const [recoveries, setRecoveries] = useState<TeacherRecovery[]>([]);
@@ -61,7 +117,7 @@ export function recoveryLineFor(recoveries: TeacherRecovery[], studentName: stri
     const pre = r.parts > 1 ? `${r.part}.ª hora: ` : '';
     switch (r.status) {
       case 'esperando_alumno': return `${pre}esperando que elija: ${r.teacherProposals.map(corta).join(' o ')}`;
-      case 'alumno_propuso':   return `${pre}propuso otros horarios: ${r.studentProposals.map(corta).join(', ')}`;
+      case 'alumno_propuso':   return `${pre}propuso otros horarios: ${r.studentProposals.map(corta).join(', ')} — respóndele arriba`;
       case 'confirmada':       return `${pre}recuperación el ${r.chosenDate ? corta({ date: r.chosenDate, hour: r.chosenHour ?? '' }) : '—'}`;
       case 'recuperada':       return `${pre}recuperada`;
       case 'sin_acuerdo':      return `${pre}sin acuerdo de fecha`;

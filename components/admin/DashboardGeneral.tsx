@@ -31,6 +31,7 @@
 // abrir en el teléfono, y las herramientas de mantenimiento se montan UNA vez,
 // compartidas, porque tienen estado propio y cargan cosas al abrirse.
 
+import { useAdminRecoveries } from '@/lib/useTeacherRecoveries';
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -1175,6 +1176,8 @@ export default function DashboardGeneral() {
 
   // El "ahora" se congela al montar. Leerlo en cada render haría que las fechas
   // se movieran solas entre renders, y el linter de pureza lo prohíbe con razón.
+  // Cancelaciones del flujo nuevo ("No puedo dar esta clase"), para el contador.
+  const { rows: recRows } = useAdminRecoveries();
   const [ahora] = useState(() => new Date());
   const mes = monthKey(ahora);
   const semana = weekRange(ahora);
@@ -1187,7 +1190,7 @@ export default function DashboardGeneral() {
   const op = operacionDelMes(classRecords, mes);
   const clasesSemana = clasesEnRango(classRecords, semana);
   const programadas = clasesProgramadasSemana(assignments);
-  const faltasProfe = faltasProfesorDelMes(scoringEvents, mes);
+  const faltasProfe = faltasProfesorDelMes(scoringEvents, mes, recRows);
   const profesActivos = teachers.filter(t => t.status !== 'vacation').length;
 
   // Sin useMemo a propósito: el proyecto compila con el compilador de React, que

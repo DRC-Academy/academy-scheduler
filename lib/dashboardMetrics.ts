@@ -348,16 +348,27 @@ export function filasProfesores(args: {
 // ── Faltas del profesor ──────────────────────────────────────────────────────
 
 /**
- * Penalizaciones del mes por cancelar con menos de 24 h, sin las revertidas.
- * Son eventos de scoring, no registros de clase: la falta del ALUMNO se cuenta
- * en `operacionDelMes`.
+ * Cancelaciones del PROFESOR con menos de 24 h en el mes, de los dos sistemas:
+ *  · los eventos de −5 € del flujo viejo ('falta_sin_aviso_penalizacion'), sin
+ *    los revertidos;
+ *  · las filas de class_recoveries ("No puedo dar esta clase" y las
+ *    reclasificaciones del admin), una por cancelación (group_id), sin anuladas.
+ * No se cuentan dos veces: una cancelación del flujo nuevo nunca crea el evento
+ * viejo. La falta del ALUMNO se cuenta en `operacionDelMes`.
  */
-export function faltasProfesorDelMes(events: readonly ScoringEvent[], mes: string): number {
-  return events.filter(e =>
+export function faltasProfesorDelMes(
+  events: readonly ScoringEvent[], mes: string,
+  recoveries: ReadonlyArray<{ groupId: string; cancelMonth: string; late: boolean; status: string }> = [],
+): number {
+  const viejas = events.filter(e =>
     e.eventType === 'falta_sin_aviso_penalizacion' &&
     (e.createdAt ?? '').slice(0, 7) === mes &&
     !e.reverted,
   ).length;
+  const nuevas = new Set(recoveries
+    .filter(r => r.late && r.status !== 'anulada' && r.cancelMonth === mes)
+    .map(r => r.groupId)).size;
+  return viejas + nuevas;
 }
 
 // ── Alumnos ──────────────────────────────────────────────────────────────────

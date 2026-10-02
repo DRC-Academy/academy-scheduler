@@ -375,6 +375,24 @@ export async function sendRecoveryChosenEmail(
   return send('sendRecoveryChosenEmail', teacher, info.title, html);
 }
 
+// ═══ A.6) El alumno propone otros horarios para la recuperación ═══════════════
+//
+// "Ninguna me viene bien": el alumno no puede en las fechas del profesor y
+// propone las suyas. Mismo texto que la campanita, con botón a su panel.
+export async function sendRecoveryStudentProposedEmail(
+  teacher: TeacherLike,
+  info: { title: string; body: string },
+): Promise<boolean> {
+  const html = baseEmailTemplate(
+    p(`Hola ${esc(teacher.name)},`) +
+    p(esc(info.body)) +
+    p('Desde "Mis clases" puedes aceptar uno de sus horarios con un clic o proponerle otras dos fechas.') +
+    ctaButton('Responder en Mis clases', `${APP_URL}/clases`),
+    info.title,
+  );
+  return send('sendRecoveryStudentProposedEmail', teacher, info.title, html);
+}
+
 // ═══ B) Formulario completado ═════════════════════════════════════════════════
 export async function sendFormCompletedEmail(teacher: TeacherLike, studentName: string): Promise<boolean> {
   const subject = `${studentName} completó el formulario inicial`;

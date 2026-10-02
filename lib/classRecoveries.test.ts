@@ -3,7 +3,7 @@ import {
   isRecoveryBetaTeacher, noticeMinutes, isLateNotice, wildcardOutcome, slotProblems,
   validateTeacherProposals, validateStudentProposals, canTransition, statusAfterNone,
   proposalsExpired, spainMonthOf, fechaLarga, claseDe, cuandoEs, slotHours,
-  teacherProposalDays, teacherSlotProblems,
+  teacherProposalDays, teacherSlotProblems, nightlyAction, lateCancellationsOfMonth, reclassPenalty,
   PENALTY_START_DATE, type PriorCancellation,
 } from '@/lib/classRecoveries';
 
@@ -160,5 +160,51 @@ describe('textos', () => {
     expect(claseDe('2026-10-19', '2026-10-19')).toBe('la clase de hoy');
     expect(claseDe('2026-10-22', '2026-10-19')).toBe('la clase del jueves 22 de octubre');
     expect(cuandoEs({ date: '2026-10-12', hour: '17' })).toBe('el lunes 12 de octubre a las 17:00');
+  });
+});
+
+describe('chequeo nocturno', () => {
+  const now = madrid('2026-10-19', 23);   // lunes 19/10 a las 23:00
+  const base = { teacherProposals: [], studentProposals: [], chosenDate: null, chosenHour: null };
+  const activo = { nowMs: now, given: false, assignmentActive: true };
+
+  it('confirmada que ya empezó: recuperada si hubo ingreso, y si no la deja para el admin', () => {
+    const r = { ...base, status: 'confirmada' as const, chosenDate: '2026-10-19', chosenHour: '17:00' };
+    expect(nightlyAction(r, { ...activo, given: true })).toBe('recuperada');
+    expect(nightlyAction(r, activo)).toBeNull();
+    // Se dio aunque el alumno se haya ido después: recuperada, no anulada.
+    expect(nightlyAction(r, { ...activo, given: true, assignmentActive: false })).toBe('recuperada');
+  });
+  it('sin acuerdo cuando vencen las fechas del profesor o los horarios del alumno', () => {
+    expect(nightlyAction({ ...base, status: 'esperando_alumno', teacherProposals: [{ date: '2026-10-19', hour: '10:00', hours: 1 }] }, activo)).toBe('sin_acuerdo');
+    expect(nightlyAction({ ...base, status: 'esperando_alumno', teacherProposals: [{ date: '2026-10-19', hour: '10:00', hours: 1 }, { date: '2026-10-21', hour: '10:00', hours: 1 }] }, activo)).toBeNull();
+    expect(nightlyAction({ ...base, status: 'alumno_propuso', studentProposals: [{ date: '2026-10-18', hour: '18:00' }] }, activo)).toBe('sin_acuerdo');
+    expect(nightlyAction({ ...base, status: 'alumno_propuso', studentProposals: [{ date: '2026-10-22', hour: '18:00' }] }, activo)).toBeNull();
+  });
+  it('anula si el alumno ya no está activo con ese profesor', () => {
+    const fuera = { ...activo, assignmentActive: false };
+    expect(nightlyAction({ ...base, status: 'esperando_alumno', teacherProposals: [{ date: '2026-10-21', hour: '10:00', hours: 1 }] }, fuera)).toBe('anular');
+    expect(nightlyAction({ ...base, status: 'sin_acuerdo' }, fuera)).toBe('anular');
+    expect(nightlyAction({ ...base, status: 'confirmada', chosenDate: '2026-10-22', chosenHour: '10:00' }, fuera)).toBe('anular');
+    expect(nightlyAction({ ...base, status: 'recuperada' }, fuera)).toBeNull();
+    expect(nightlyAction({ ...base, status: 'anulada' }, fuera)).toBeNull();
+  });
+});
+
+describe('contadores y reclasificación', () => {
+  it('cuenta una vez por cancelación, solo sin antelación y no anuladas', () => {
+    const rows = [
+      { teacherId: 't1', groupId: 'g1', cancelMonth: '2026-10', late: true, status: 'esperando_alumno' as const },
+      { teacherId: 't1', groupId: 'g1', cancelMonth: '2026-10', late: true, status: 'esperando_alumno' as const },
+      { teacherId: 't1', groupId: 'g2', cancelMonth: '2026-10', late: true, status: 'anulada' as const },
+      { teacherId: 't1', groupId: 'g3', cancelMonth: '2026-10', late: false, status: 'confirmada' as const },
+      { teacherId: 't2', groupId: 'g4', cancelMonth: '2026-10', late: true, status: 'sin_acuerdo' as const },
+    ];
+    expect(lateCancellationsOfMonth(rows, 't1', '2026-10')).toBe(1);
+    expect(lateCancellationsOfMonth(rows, 't1', '2026-09')).toBe(0);
+  });
+  it('la reclasificación lleva multa fija desde el 15/10 (fecha de la clase); antes solo se marca', () => {
+    expect(reclassPenalty('2026-10-14')).toEqual({ chargeNow: false, wouldHavePenalty: true, penaltyEuros: 0 });
+    expect(reclassPenalty('2026-10-15')).toEqual({ chargeNow: true, wouldHavePenalty: false, penaltyEuros: -5 });
   });
 });

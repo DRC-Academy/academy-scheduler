@@ -4,6 +4,7 @@
 // cada profesor afectado. Siempre responde 200 (salvo firma inválida → 401)
 // para que WooCommerce no reintente indefinidamente.
 
+import { annulStudentRecoveries } from '@/lib/classRecoveryStore';
 import crypto from 'crypto';
 import { supabase } from '@/lib/supabase';
 import { dbDeleteStudent } from '@/lib/db';
@@ -104,6 +105,16 @@ export async function POST(req: Request): Promise<Response> {
       await flagChurnWithOpenAlert({ studentId, studentName, teacherName });
     } catch (e) {
       console.error('[webhook cancelled] No se pudo capturar la foto de churn:', e);
+    }
+
+    // 5.6) Recuperaciones de "No puedo dar esta clase": anularlas ANTES de borrar
+    //      (libera reservas y quita del calendario las recuperaciones futuras).
+    //      Best-effort: si falla, el chequeo nocturno las anula igual.
+    try {
+      await annulStudentRecoveries({ studentIds: [studentId], studentEmail: email, studentName },
+        { by: 'sistema', reason: 'Baja del alumno (webhook de WooCommerce)' });
+    } catch (e) {
+      console.error('[webhook cancelled] No se pudieron anular las recuperaciones:', e);
     }
 
     // 6) Eliminar al alumno en todos lados (grid + assignments + students) y

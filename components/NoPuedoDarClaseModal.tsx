@@ -31,7 +31,7 @@ interface Preview {
   freeSlots?: Array<{ date: string; hours: string[] }>;
 }
 
-type SlotInput = { date: string; hour: string };
+export type SlotInput = { date: string; hour: string };
 const empty = (): SlotInput => ({ date: '', hour: '' });
 
 const VERDE = '#1E9E3A';
@@ -48,7 +48,7 @@ function dow(iso: string): number {
 const diaBoton = (iso: string) => `${DIAS_CORTOS[dow(iso)]} ${Number(iso.slice(8, 10))}`;
 /** '2026-10-06' → 'martes 6' (frases). */
 const diaFrase = (iso: string) => `${DIAS[dow(iso)]} ${Number(iso.slice(8, 10))}`;
-const cuando = (s: SlotInput) => `${diaFrase(s.date)} a las ${s.hour}`;
+export const cuando = (s: SlotInput) => `${diaFrase(s.date)} a las ${s.hour}`;
 const keyOf = (s: SlotInput) => `${s.date}|${s.hour}`;
 
 function antelacion(min: number): string {
@@ -173,7 +173,7 @@ export default function NoPuedoDarClaseModal({ teacherId, assignmentId, studentN
 
   return (
     <div className="npd-overlay" onClick={e => { if (e.target === e.currentTarget && !saving) onClose(); }}>
-      <style>{CSS}</style>
+      <style>{NPD_CSS}</style>
       <div className="npd-modal" role="dialog" aria-modal="true" aria-labelledby="npd-title">
         {/* 1. Cabecera */}
         <div id="npd-title" className="npd-title">No puedo dar esta clase</div>
@@ -304,8 +304,12 @@ export default function NoPuedoDarClaseModal({ teacherId, assignmentId, studentN
   );
 }
 
-/** Un hueco: botones de día y, al elegir el día, sus horas libres. */
-function SlotPicker({ label, showZone, value, freeSlots, taken, problems, onChange }: {
+/**
+ * Un hueco: botones de día y, al elegir el día, sus horas libres. Lo usa
+ * también la tarjeta "Proponer otras 2 fechas" (RecoveryResponseCard); necesita
+ * el CSS de este archivo (NPD_CSS) en la página.
+ */
+export function SlotPicker({ label, showZone, value, freeSlots, taken, problems, onChange }: {
   label: string;
   showZone: boolean;
   value: SlotInput;
@@ -358,7 +362,7 @@ function SlotPicker({ label, showZone, value, freeSlots, taken, problems, onChan
   );
 }
 
-const CSS = `
+export const NPD_CSS = `
 .npd-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); z-index: 85;
   display: flex; align-items: center; justify-content: center; padding: 16px; font-family: var(--font-app); }
 .npd-modal { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 14px; padding: 22px;
