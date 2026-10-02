@@ -42,6 +42,8 @@ import { SpecialtyChip, ToggleChip } from '@/components/ui';
 import AlumnoYaAsignadoModal from '@/components/AlumnoYaAsignadoModal';
 import { findOtherTeacherAssignments, type ExistingAssignmentMatch } from '@/lib/assignmentGuard';
 import TestimonialRecordingCard from '@/components/TestimonialRecordingCard';
+import { isRecoveryBetaTeacher } from '@/lib/classRecoveries';
+import { useTeacherRecoveries, reservedSlotAt } from '@/lib/useTeacherRecoveries';
 import { dbGetTeacherRecordingRequests, type TeacherRecordingRequest } from '@/lib/testimonialsDb';
 
 // Índice de tokens de formulario (por id/nombre de alumno). Se pasa a los tabs.
@@ -1291,6 +1293,9 @@ function TeacherContent() {
   useEffect(() => { refreshFormIndex(); }, []);
 
   const teacher = teachers.find(t => t.id === user?.teacherId) ?? teachers[0];
+  // Beta "No puedo dar esta clase": reservas de recuperación pintadas en el
+  // calendario. Para el resto de profesores no se consulta nada (null).
+  const recov = useTeacherRecoveries(teacher && isRecoveryBetaTeacher(teacher.id) ? teacher.id : null);
 
   // El popup recordatorio de enlaces sin definir se monta en el NavBar
   // (components/MeetLinkReminder), así aparece en toda la app del profesor.
@@ -1507,15 +1512,18 @@ function TeacherContent() {
    * nunca es menos de 1). Decide si una recuperación de 2 h cabe JUNTA: sin esto
    * el bloque se comería la clase recurrente del alumno de al lado.
    */
-  function freeHoursFrom(day: string, hour: string): number {
+  function freeHoursFrom(day: string, hour: string, date?: string): number {
     const start = parseInt(hour, 10);
     if (!Number.isFinite(start)) return 1;
     let n = 1;
     for (let h = start + 1; h <= start + 3; h++) {
-      const cell = grid[cellKey(day, `${String(h).padStart(2, '0')}:00`)];
+      const hh = `${String(h).padStart(2, '0')}:00`;
+      const cell = grid[cellKey(day, hh)];
       // Libre de verdad: sin celda, ofrecida o sin trabajar. Una recuperación de
       // otro alumno también ocupa, aunque el horario de fondo esté libre.
       if (cell && cell.state !== 'libre' && cell.state !== 'no_work') break;
+      // Beta: una hora reservada para otra recuperación propuesta tampoco está libre.
+      if (date && reservedSlotAt(recov.reservations, date, hh)) break;
       n++;
     }
     return n;
@@ -1994,6 +2002,7 @@ function TeacherContent() {
                 onOcupadoNeed={handleOcupadoNeed}
                 onRecuperacionNeed={handleRecuperacionNeed}
                 inactiveStudents={inactiveStudents}
+                reservations={recov.reservations.length ? recov.reservations : undefined}
               />
             )}
           </div>
@@ -2110,7 +2119,7 @@ function TeacherContent() {
           date={pendingRecuperacion.date}
           verdictOf={recoveryVerdictOf}
           ledgerOf={recoveryLedgerFor}
-          freeHours={freeHoursFrom(pendingRecuperacion.day, pendingRecuperacion.hour)}
+          freeHours={freeHoursFrom(pendingRecuperacion.day, pendingRecuperacion.hour, pendingRecuperacion.date)}
           onRegisterAbsence={registrarFaltaConAviso}
           studentNames={Array.from(new Set(myAssignments.map(a => a.studentName))).sort()}
           onConfirm={handleRecuperacionConfirm}

@@ -2884,10 +2884,15 @@ export async function dbApplyFaltaSideEffects(p: {
       });
 
       // Contador interno (SOLO admin): cancelaciones NO revertidas del mes.
+      // Un solo mes para las dos cosas: el de la CANCELACIÓN, en hora de España.
+      // Antes se comparaba el mes UTC del evento con el mes de la CLASE, así que
+      // cancelar el 30/09 una clase del 01/10 contaba en un mes que no era.
+      const cancelMonth = getSpainParts(new Date()).dateStr.slice(0, 7);
       const { data } = await supabase.from('scoring_events')
         .select('created_at, student_ref, reverted')
         .eq('teacher_id', p.teacherId).eq('event_type', 'falta_sin_aviso_penalizacion');
-      const month = (data ?? []).filter(e => (e.created_at ?? '').slice(0, 7) === monthPrefix && !e.reverted);
+      const month = (data ?? []).filter(e =>
+        !!e.created_at && getSpainParts(new Date(e.created_at)).dateStr.slice(0, 7) === cancelMonth && !e.reverted);
       if (month.length === 4) {
         const alumnos = [...new Set(month.map(e => e.student_ref).filter(Boolean))].join(', ');
         await notifyAdmin(
@@ -4683,7 +4688,14 @@ export async function dbAddClassRecord(
     subscription_status: subscriptionStatus ?? null,
     ...(recoveryForDate ? { recovery_for_date: recoveryForDate } : {}),
   });
-  if (error) await supabase.from('class_records').insert(base);
+  // 23505: la base ya tiene esa cancelación del profesor (índice único de
+  // supabase-class-recoveries.sql). Antes el error se tragaba y se reintentaba,
+  // así que cancelar dos veces la misma clase cobraba dos veces los -5 €.
+  if (error?.code === '23505') throw Object.assign(new Error('Esta clase ya está cancelada.'), { code: '23505' });
+  if (error) {
+    const { error: e2 } = await supabase.from('class_records').insert(base);
+    if (e2?.code === '23505') throw Object.assign(new Error('Esta clase ya está cancelada.'), { code: '23505' });
+  }
   return { id, teacherId, teacherName, studentName, classDate, classTime, screenshotUrl, classType, comment, subscriptionStatus, recoveryForDate, createdAt };
 }
 

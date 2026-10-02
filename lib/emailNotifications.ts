@@ -358,6 +358,23 @@ export async function sendTestimonialRecordingEmail(
   return send('sendTestimonialRecordingEmail', teacher, `Grabación para testimonio · ${info.studentName}`, html);
 }
 
+// ═══ A.5) Recuperación elegida por el alumno ══════════════════════════════════
+//
+// "No puedo dar esta clase": el alumno eligió en el LMS una de las fechas que
+// propuso el profesor. Mismo texto que el aviso de la campanita.
+export async function sendRecoveryChosenEmail(
+  teacher: TeacherLike,
+  info: { studentName: string; title: string; body: string },
+): Promise<boolean> {
+  const html = baseEmailTemplate(
+    p(`Hola ${esc(teacher.name)},`) +
+    p(esc(info.body)) +
+    ctaButton('Ver mis clases', `${APP_URL}/clases`),
+    info.title,
+  );
+  return send('sendRecoveryChosenEmail', teacher, info.title, html);
+}
+
 // ═══ B) Formulario completado ═════════════════════════════════════════════════
 export async function sendFormCompletedEmail(teacher: TeacherLike, studentName: string): Promise<boolean> {
   const subject = `${studentName} completó el formulario inicial`;

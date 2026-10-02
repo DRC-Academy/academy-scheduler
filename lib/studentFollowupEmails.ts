@@ -35,11 +35,20 @@ const FONDO = '#F7F7F5';
  */
 export function studentEmailTemplate(
   content: string, previewText: string,
-  opts: { inviteReplyInFooter?: boolean } = {},
+  opts: {
+    inviteReplyInFooter?: boolean;
+    /**
+     * Correo automático que NO admite respuesta (se envía sin reply-to): el pie
+     * lo dice. Lo usan los avisos de recuperación (lib/classRecoveryEmails).
+     */
+    noReply?: boolean;
+  } = {},
 ): string {
-  const pie = opts.inviteReplyInFooter === false
-    ? 'DRC Academy'
-    : 'Si tienes cualquier duda, responde a este correo y te ayudamos.<br />DRC Academy';
+  const pie = opts.noReply
+    ? 'No respondas a este email, es automático.<br />DRC Academy'
+    : opts.inviteReplyInFooter === false
+      ? 'DRC Academy'
+      : 'Si tienes cualquier duda, responde a este correo y te ayudamos.<br />DRC Academy';
   return `<!DOCTYPE html>
 <html lang="es">
 <head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /></head>

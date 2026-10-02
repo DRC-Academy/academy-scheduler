@@ -55,6 +55,11 @@ import FormStatusBadge from '@/components/FormStatusBadge';
 import { lookupToken, formStateOf, type FormTokenInfo } from '@/lib/formClient';
 import { stripProtocol, MeetLinkBadge } from '@/components/teacherPanelUi';
 import { isMeetLinkDefined } from '@/lib/meetLinkStatus';
+// "No puedo dar esta clase": solo para los profesores beta (RECOVERY_BETA_TEACHERS).
+// Para el resto, este panel funciona exactamente como antes.
+import { isRecoveryBetaTeacher } from '@/lib/classRecoveries';
+import NoPuedoDarClaseModal from '@/components/NoPuedoDarClaseModal';
+import { useTeacherRecoveries, recoveryLineFor, reservedSlotAt } from '@/lib/useTeacherRecoveries';
 import type { Grid, Teacher, Assignment, Student, ClassRecord, ClassRecordType, ClassJoinLog } from '@/types';
 
 export type FormIndex = { byId: Map<string, FormTokenInfo>; byName: Map<string, FormTokenInfo> };
@@ -180,6 +185,15 @@ const RESCHEDULE_REASONS = [
 ] as const;
 type RescheduleReason = typeof RESCHEDULE_REASONS[number]['id'];
 
+// Beta "No puedo dar esta clase": "Reprogramar" queda SOLO para lo que pide el
+// alumno (lo del profesor va por el botón nuevo). Y el aviso sobre la hora ya no
+// crea una recuperación: es una clase perdida del alumno, cobrable y NO
+// recuperable — antes se cobraba Y se reponía.
+const RESCHEDULE_REASONS_BETA: ReadonlyArray<{ id: RescheduleReason; label: string }> = [
+  { id: 'alumno_antic', label: 'El alumno pidió cambiarla con antelación' },
+  { id: 'alumno_hora',  label: 'El alumno avisó sobre la hora (la clase se pierde, no se recupera)' },
+];
+
 /** 'HH' | 'H:M' | 'HH:MM' → 'HH:MM'. El grid guarda '17' y el input pide '17:00'. */
 function timeInputValue(hour: string): string {
   const [h, m = '00'] = (hour ?? '').split(':');
@@ -187,8 +201,10 @@ function timeInputValue(hour: string): string {
   return Number.isFinite(n) ? `${String(n).padStart(2, '0')}:${m.padStart(2, '0')}` : '';
 }
 
-function RescheduleModal({ studentName, currentDate, currentHour, durationHours, todayIso, saving, splitPlanOf, onConfirm, onClose }: {
+function RescheduleModal({ studentName, currentDate, currentHour, durationHours, todayIso, saving, splitPlanOf, onConfirm, onClose, beta = false }: {
   studentName: string; currentDate: string; currentHour: string; todayIso: string; saving: boolean;
+  /** Profesor beta: solo motivos del alumno, y "sobre la hora" sin fecha nueva. */
+  beta?: boolean;
   /** Duración de la clase que se mueve. Con 2 h aparece la opción de partirla. */
   durationHours: number;
   /** Valida las dos horas del modo partido. La decisión vive en lib/rescheduleSplit. */
@@ -237,22 +253,32 @@ function RescheduleModal({ studentName, currentDate, currentHour, durationHours,
       : '';
   // En modo partido manda el veredicto del módulo puro; en modo normal, la regla de
   // siempre. Los dos exigen lo mismo de fondo: la clase se mueve hacia adelante.
+  // Beta + "sobre la hora": no hay fecha nueva que elegir, la clase se pierde.
+  const sinFecha = beta && reason === 'alumno_hora';
+  const reasons = beta ? RESCHEDULE_REASONS_BETA : RESCHEDULE_REASONS;
   const canConfirm = saving
     ? false
-    : split && puedePartir
-      ? !!splitResult?.ok
-      : !!newDate && !!newTime && !problema;
+    : sinFecha
+      ? true
+      : split && puedePartir
+        ? !!splitResult?.ok
+        : !!newDate && !!newTime && !problema;
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 85, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
       onClick={e => { if (e.target === e.currentTarget && !saving) onClose(); }}>
       <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 14, padding: 24, width: '100%', maxWidth: 420 }}>
-        <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)', marginBottom: 4 }}>📅 Reprogramar clase</div>
+        <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)', marginBottom: 4 }}>{beta ? '📅 El alumno pidió cambiarla' : '📅 Reprogramar clase'}</div>
         <div style={{ fontSize: 12.5, color: 'var(--text-muted)', marginBottom: 16 }}>{studentName} — {fmtDateDMY(currentDate)} {currentHour}</div>
+        {beta && (
+          <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: -8, marginBottom: 14, lineHeight: 1.5 }}>
+            Solo para cambios que pidió el alumno: le enviaremos un email para confirmarlo. Si eres tú quien no puede dar la clase, usa «No puedo dar esta clase».
+          </div>
+        )}
 
         <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 8 }}>¿Qué pasó con esta clase?</label>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginBottom: 16 }}>
-          {RESCHEDULE_REASONS.map(r => (
+          {reasons.map(r => (
             <button key={r.id} onClick={() => setReason(r.id)}
               style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '9px 12px', borderRadius: 9, textAlign: 'left', fontFamily: 'inherit', cursor: 'pointer',
                 border: `1.5px solid ${reason === r.id ? '#1E9E3A' : 'var(--border)'}`,
@@ -273,7 +299,7 @@ function RescheduleModal({ studentName, currentDate, currentHour, durationHours,
         {/* Clase de 2 h: se puede reponer en dos días de una hora cada uno. El
             hueco de 2 horas seguidas es justo el que no aparece cuando hay que
             recolocar a alguien, y antes esto se hacía a mano en dos modales. */}
-        {puedePartir && (
+        {!sinFecha && puedePartir && (
           <button type="button" onClick={() => setSplit(v => !v)} disabled={saving}
             style={{ display: 'flex', alignItems: 'flex-start', gap: 9, width: '100%', textAlign: 'left', padding: '10px 12px', borderRadius: 9, marginBottom: 14, fontFamily: 'inherit', cursor: saving ? 'not-allowed' : 'pointer',
               border: `1.5px solid ${split ? '#1E9E3A' : 'var(--border)'}`,
@@ -290,7 +316,7 @@ function RescheduleModal({ studentName, currentDate, currentHour, durationHours,
           </button>
         )}
 
-        {split && puedePartir ? (
+        {sinFecha ? null : split && puedePartir ? (
           <>
             {[0, 1].map(i => (
               <div key={i} style={{ marginBottom: 12 }}>
@@ -359,12 +385,12 @@ function RescheduleModal({ studentName, currentDate, currentHour, durationHours,
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={onClose} disabled={saving} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: saving ? 'not-allowed' : 'pointer', fontSize: 13, fontFamily: 'inherit' }}>Cancelar</button>
           <button onClick={() => canConfirm && onConfirm({
-              reason, reasonLabel: RESCHEDULE_REASONS.find(r => r.id === reason)!.label,
+              reason, reasonLabel: reasons.find(r => r.id === reason)!.label,
               newDate, newTime,
               ...(split && puedePartir ? { split: slots } : {}),
             })} disabled={!canConfirm}
             style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: canConfirm ? '#1E9E3A' : 'var(--bg-surface-3)', color: canConfirm ? 'white' : 'var(--text-muted)', cursor: canConfirm ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
-            {saving ? 'Guardando...' : split && puedePartir ? 'Reprogramar en dos horas ✓' : 'Reprogramar ✓'}
+            {saving ? 'Guardando...' : sinFecha ? 'Registrar ✓' : split && puedePartir ? 'Reprogramar en dos horas ✓' : 'Reprogramar ✓'}
           </button>
         </div>
       </div>
@@ -452,6 +478,10 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
   const [savingReschedule, setSavingReschedule] = useState(false);
   const [cancelModal, setCancelModal] = useState<{ c: TodayClass; date: string } | null>(null);
   const [savingCancel, setSavingCancel] = useState(false);
+  // Beta "No puedo dar esta clase". Para el resto, `beta` es false y no se consulta nada.
+  const beta = isRecoveryBetaTeacher(teacher.id);
+  const [noPuedoModal, setNoPuedoModal] = useState<{ c: TodayClass; date: string } | null>(null);
+  const recov = useTeacherRecoveries(beta ? teacher.id : null);
   const [toast, setToast] = useState<string | null>(null);
   // Navegador de fechas: desplazamiento en días respecto de hoy (0 = hoy). En
   // modo semana las flechas lo mueven de 7 en 7, así que la fecha ancla siempre
@@ -948,6 +978,18 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
 
     setRescheduleModal(null);
     showToast(`📅 Clase repartida en dos horas: ${fmtDateDMY(plan.recuperaciones[0].date)} y ${fmtDateDMY(plan.recuperaciones[1].date)}`);
+    if (beta) avisarCambioAlAlumno(c, date, plan.recuperaciones.map(r => ({ date: r.date, hour: r.hour })));
+  }
+
+  /**
+   * Beta: email de CONTROL al alumno ("X ha registrado que pediste cambiar tu
+   * clase…"). Best-effort: el cambio ya está guardado.
+   */
+  function avisarCambioAlAlumno(c: TodayClass, originalDate: string, newDates: Array<{ date: string; hour: string }>) {
+    fetch('/api/recuperaciones/aviso-cambio', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ teacherId: teacher.id, assignmentId: c.assignment.id, originalDate, originalHour: c.hour, newDates }),
+    }).catch(() => {});
   }
 
   async function handleRescheduleConfirm(data: { reason: RescheduleReason; reasonLabel: string; newDate: string; newTime: string; split?: SplitSlot[] }) {
@@ -955,6 +997,24 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     const { c, date } = rescheduleModal;
     setSavingReschedule(true);
     try {
+      // Beta: el aviso sobre la hora es una clase PERDIDA del alumno (cobrable y no
+      // recuperable). Antes se guardaba 'cancelacion_hora' Y se creaba una
+      // recuperación en la fecha nueva: la misma clase se cobraba dos veces.
+      if (beta && data.reason === 'alumno_hora') {
+        await registerClassRecord(teacher.id, c.studentName, date, c.hour, null, 'cancelacion_hora', `Cancelación sobre la hora — ${data.reasonLabel}`);
+        setRescheduleModal(null);
+        showToast('⏰ Registrada como clase perdida del alumno');
+        await onDataChanged();
+        return;
+      }
+      // Beta: no se puede mover a una hora reservada para otra recuperación.
+      if (beta) {
+        const destinos = data.split
+          ? data.split.map(s => ({ date: s.date, hour: `${(s.time || '').slice(0, 2)}:00` }))
+          : [{ date: data.newDate, hour: `${(data.newTime || c.hour).slice(0, 2)}:00` }];
+        const reservada = destinos.map(d => reservedSlotAt(recov.reservations, d.date, d.hour)).find(Boolean);
+        if (reservada) { showToast(`⚠️ Esa hora está reservada para la recuperación de ${reservada}.`, 4000); return; }
+      }
       // Modo partido: camino aparte, de todo o nada. El de siempre sigue abajo,
       // sin un solo cambio.
       if (data.split) {
@@ -1030,6 +1090,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
 
       setRescheduleModal(null);
       showToast(`📅 Clase reprogramada para ${fmtDateDMY(data.newDate)}`);
+      if (beta) avisarCambioAlAlumno(c, date, [{ date: data.newDate, hour: data.newTime || c.hour }]);
     } catch (e) {
       // Antes esto no existía: si la constancia fallaba, el error se perdía y el
       // modal se quedaba colgado sin decir nada (y la base guardaba, en el mejor de
@@ -1056,17 +1117,23 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
       // cobrable la cancelación de última hora del profesor.
       const classType = withNotice ? 'cancelada_con_preaviso' : 'cancelada_por_profesor';
       await registerClassRecord(teacher.id, c.studentName, date, c.hour, null, classType, reason);
-      // Email al alumno + aviso al admin (best-effort).
+      // Email al alumno + aviso al admin (best-effort). `classDate` es lo que la
+      // ruta usa para comprobar que la cancelación existe de verdad.
       fetch('/api/classes/cancel', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           studentEmail: subEmailForAssignment(c.assignment),
           studentName: c.studentName, teacherName: teacher.name, teacherId: teacher.id,
+          classDate: date,
           dateLabel: fmtDateDMY(date), timeLabel: c.hour, hoursNotice, reason, withNotice,
         }),
       }).catch(() => {});
       setCancelModal(null);
       showToast(withNotice ? '✅ Clase cancelada — avisamos al alumno' : '⚠️ Registrada como falta — avisamos al alumno');
+    } catch (e) {
+      // 23505: la base ya tenía esa cancelación (doble clic, dos pestañas).
+      showToast(`⚠️ ${e instanceof Error ? e.message : 'No se pudo cancelar la clase.'}`, 4000);
+      if ((e as { code?: string }).code === '23505') { setCancelModal(null); await onDataChanged(); }
     } finally {
       setSavingCancel(false);
     }
@@ -1282,6 +1349,11 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
               <span className="mc-status is-muted">
                 <span className="mc-dot" style={{ background: '#a4a7a1' }} />
                 {rescheduled ? 'Reprogramada' : cancelLabel}
+                {/* Beta: en qué punto está la recuperación de esta clase. */}
+                {beta && cancelled && (() => {
+                  const line = recoveryLineFor(recov.recoveries, c.studentName, date, c.hour);
+                  return line ? <span style={{ marginLeft: 6, fontWeight: 500 }}>· {line}</span> : null;
+                })()}
               </span>
             ) : passed && dBadge ? (
               // La CASILLA del transcript, junto al estado del enlace de la clase:
@@ -1353,11 +1425,18 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
                 </button>
                 {menuOpen && (
                   <div className="mc-menu" role="menu">
+                    {beta && !passed && !inactive && !c.isRecovery && (
+                      <button className="mc-menu-item" role="menuitem"
+                        onClick={() => { setOpenMenu(null); setNoPuedoModal({ c, date }); }}>
+                        No puedo dar esta clase
+                      </button>
+                    )}
                     <button className="mc-menu-item" role="menuitem"
                       onClick={() => { setOpenMenu(null); setRescheduleModal({ c, date }); }}>
-                      Reprogramar clase
+                      {beta ? 'El alumno pidió cambiarla' : 'Reprogramar clase'}
                     </button>
-                    {!passed && !rescheduled && (
+                    {/* Una clase ya cancelada no se vuelve a cancelar: era un −5 € doble. */}
+                    {!passed && !rescheduled && !cancelled && (
                       <button className="mc-menu-item" role="menuitem"
                         onClick={() => { setOpenMenu(null); setCancelModal({ c, date }); }}>
                         Cancelar clase
@@ -1688,6 +1767,25 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
           splitPlanOf={slots => splitPlanOf(rescheduleModal.c, rescheduleModal.date, slots)}
           onConfirm={handleRescheduleConfirm}
           onClose={() => setRescheduleModal(null)}
+          beta={beta}
+        />
+      )}
+
+      {/* Beta: "No puedo dar esta clase" */}
+      {beta && noPuedoModal && (
+        <NoPuedoDarClaseModal
+          teacherId={teacher.id}
+          assignmentId={noPuedoModal.c.assignment.id}
+          studentName={noPuedoModal.c.studentName}
+          date={noPuedoModal.date}
+          hour={noPuedoModal.c.hour}
+          todayIso={todayIso}
+          onClose={() => setNoPuedoModal(null)}
+          onDone={async msg => {
+            setNoPuedoModal(null);
+            showToast(msg, 4000);
+            await Promise.all([onDataChanged(), recov.reload()]);
+          }}
         />
       )}
 

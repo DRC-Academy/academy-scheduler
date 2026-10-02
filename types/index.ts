@@ -388,6 +388,9 @@ export type ScoringEventType =
   | 'enlace_tardio'
   // Penalización económica por falta sin aviso (-5 €) y su reversión (+5 €).
   | 'falta_sin_aviso_penalizacion' | 'penalizacion_revertida'
+  // "No puedo dar esta clase": 3.ª cancelación sin antelación del mes o posterior
+  // (-5 €, id fijo se_cancel_prof_<grupo>). Ver lib/classRecoveries.ts.
+  | 'cancelacion_profesor_penalizacion'
   // Alerta de riesgo sin atender. NUNCA automático: solo lo carga el admin desde
   // la auditoría de intervenciones si decide que hubo negligencia real.
   | 'alerta_no_atendida';

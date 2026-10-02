@@ -156,6 +156,13 @@ interface BaseProps {
    * cobrable. El aviso está para que se vea y alguien pregunte.
    */
   inactiveStudents?: Set<string>;
+  /**
+   * Beta "No puedo dar esta clase": horas reservadas para una recuperación
+   * propuesta mientras el alumno elige. NO son clases (no están en el grid): se
+   * pintan encima, solo su semana, y no se pueden tocar desde el menú de celda.
+   * Sin esta prop el calendario se comporta exactamente como siempre.
+   */
+  reservations?: Array<{ date: string; hour: string; studentName: string }>;
 }
 
 export interface RecuperacionData {
@@ -430,9 +437,26 @@ export function VisualCalendar(props: Props) {
     return cell;
   }
 
+  /** Reserva de recuperación en esa casilla ESTA semana (solo si la casilla está libre). */
+  function reservationAt(day: string, hour: string): string | null {
+    if (!props.reservations?.length) return null;
+    const idx = DAYS.indexOf(day);
+    if (idx < 0 || !weekDates[idx]) return null;
+    const date = toISODateStr(weekDates[idx]);
+    const r = props.reservations.find(x => x.date === date && x.hour === hour);
+    if (!r) return null;
+    const st = getCell(day, hour).state;
+    return st === 'libre' || st === 'no_work' ? r.studentName : null;
+  }
+
   function handleCellClick(day: string, hour: string) {
     const cell = getCell(day, hour);
     if (props.mode === 'teacher') {
+      const reservada = reservationAt(day, hour);
+      if (reservada) {
+        window.alert(`Esta hora está reservada para la recuperación de ${reservada} mientras elige fecha. Se libera sola si elige la otra opción.`);
+        return;
+      }
       setMenu({ day, hour });
     } else if (props.mode === 'setter') {
       // Se puede asignar un alumno recurrente sobre una recuperación puntual: la
@@ -731,6 +755,17 @@ export function VisualCalendar(props: Props) {
     return { background: colors.bg, border: `1px solid ${colors.border}`, color: colors.text };
   }
 
+  // Reserva de recuperación pintada encima (beta). Amarillo de marca, borde discontinuo.
+  const RESERVED_STYLE = { background: 'rgba(255,196,0,0.14)', border: '1px dashed #d9a400', color: '#7a5c00' } as const;
+  function reservedContent(studentName: string) {
+    return (
+      <>
+        <div className="vc-b-name">Reservada para {studentName}</div>
+        <div className="vc-b-sub">Recuperación propuesta</div>
+      </>
+    );
+  }
+
   function isClickable(cell: Cell) {
     return props.mode === 'teacher' || (props.mode === 'setter' && isAssignableCell(cell));
   }
@@ -789,6 +824,7 @@ export function VisualCalendar(props: Props) {
         {hours.map(hour => {
           const day  = DAYS[activeDay];
           const cell = getCell(day, hour);
+          const resv = reservationAt(day, hour);
           const run  = runFor(day, hour);
           const isTodayCol = activeDay === todayColIndex;
           const dimPast = isTodayCol && currentHour >= 0 && parseInt(hour) < currentHour;
@@ -800,11 +836,11 @@ export function VisualCalendar(props: Props) {
               </div>
               <div
                 className={`vc-block${isClickable(cell) ? ' is-clickable' : ''}${dimPast ? ' is-past' : ''}${runClass(run)}`}
-                style={blockStyle(cell)}
-                title={cellTitle(cell, run)}
+                style={resv ? RESERVED_STYLE : blockStyle(cell)}
+                title={resv ? `Reservada para la recuperación de ${resv}` : cellTitle(cell, run)}
                 onClick={() => handleCellClick(day, hour)}
               >
-                {blockContent(cell, run)}
+                {resv ? reservedContent(resv) : blockContent(cell, run)}
               </div>
             </div>
           );
@@ -841,6 +877,7 @@ export function VisualCalendar(props: Props) {
                 </td>
                 {DAYS.map((day, colIdx) => {
                   const cell = getCell(day, hour);
+                  const resv = reservationAt(day, hour);
                   const run  = runFor(day, hour);
                   const hlCell = isHighlighted(day, hour);
 
@@ -860,10 +897,10 @@ export function VisualCalendar(props: Props) {
                       )}
                       <div
                         className={`vc-block${isClickable(cell) ? ' is-clickable' : ''}${dimPast ? ' is-past' : ''}${hlCell ? ' is-highlight' : ''}${runClass(run)}`}
-                        style={blockStyle(cell)}
-                        title={cellTitle(cell, run)}
+                        style={resv ? RESERVED_STYLE : blockStyle(cell)}
+                        title={resv ? `Reservada para la recuperación de ${resv}` : cellTitle(cell, run)}
                       >
-                        {blockContent(cell, run)}
+                        {resv ? reservedContent(resv) : blockContent(cell, run)}
                       </div>
                     </td>
                   );
