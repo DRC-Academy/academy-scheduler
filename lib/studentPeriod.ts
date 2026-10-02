@@ -74,11 +74,14 @@ function toIsoDate(raw: string | undefined | null): string | null {
  * `startDate` se rellenó automáticamente con el día del alta, NINGUNA tiene
  * hechos anteriores a esa fecha.
  *
- * `to` = el día de la baja, si la hubo. Sin baja, abierto.
+ * `to` = el día de la baja, si la hubo. Sin baja, abierto. Una baja ANTERIOR al
+ * inicio es de una etapa pasada (el alumno volvió con el mismo profesor) y no
+ * cierra nada: si la usáramos, `to < from` escondería todas sus clases nuevas.
  */
 export function periodOf(assignment: PeriodSource, dropout?: DropoutSource | null): StudentPeriod {
   const from = toIsoDate(assignment.startDate) ?? toIsoDate(assignment.createdAt) ?? '0000-01-01';
-  return { from, to: toIsoDate(dropout?.droppedAt) };
+  const baja = toIsoDate(dropout?.droppedAt);
+  return { from, to: baja && baja >= from ? baja : null };
 }
 
 /**
