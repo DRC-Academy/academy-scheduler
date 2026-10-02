@@ -3,6 +3,7 @@ import {
   isRecoveryBetaTeacher, noticeMinutes, isLateNotice, wildcardOutcome, slotProblems,
   validateTeacherProposals, validateStudentProposals, canTransition, statusAfterNone,
   proposalsExpired, spainMonthOf, fechaLarga, claseDe, cuandoEs, slotHours,
+  teacherProposalDays, teacherSlotProblems,
   PENALTY_START_DATE, type PriorCancellation,
 } from '@/lib/classRecoveries';
 
@@ -104,6 +105,21 @@ describe('fechas propuestas', () => {
     expect(validateTeacherProposals([a, a], { agreedDirectly: false, nowMs: now, occupied: libre, original }).general).toContain('Las dos fechas propuestas son iguales.');
     expect(validateTeacherProposals([a, { ...a, hour: '18:00' }], { agreedDirectly: false, nowMs: now, occupied: libre, original }).ok).toBe(true);
     expect(validateTeacherProposals([a], { agreedDirectly: true, nowMs: now, occupied: libre, original }).ok).toBe(true);
+  });
+  it('el profesor no puede proponer hoy: desde mañana', () => {
+    const hoy = { date: '2026-10-19', hour: '18:00', hours: 1 };
+    const r = validateTeacherProposals([hoy, { date: '2026-10-21', hour: '17:00', hours: 1 }], { agreedDirectly: false, nowMs: now, occupied: libre, original });
+    expect(r.ok).toBe(false);
+    expect(r.perSlot[0]).toEqual(['Tiene que ser a partir de mañana.']);
+    expect(r.perSlot[1]).toEqual([]);
+    // Una hora de hoy que ya pasó dice solo eso.
+    expect(teacherSlotProblems({ date: '2026-10-19', hour: '11:00', hours: 1 }, { nowMs: now, occupied: libre })).toEqual([expect.stringMatching(/ya pasó/)]);
+  });
+  it('días que puede proponer el profesor: mañana y los 7 días, sin domingos', () => {
+    // Lunes 19/10 → martes 20 a lunes 26, sin el domingo 25.
+    expect(teacherProposalDays(now)).toEqual(['2026-10-20', '2026-10-21', '2026-10-22', '2026-10-23', '2026-10-24', '2026-10-26']);
+    // De noche en España sigue siendo el mismo día.
+    expect(teacherProposalDays(madrid('2026-10-19', 23))[0]).toBe('2026-10-20');
   });
   it('horarios del alumno: 1 a 3, futuros, en 7 días, nota corta', () => {
     expect(validateStudentProposals([{ date: '2026-10-22', hour: '18:00' }], 'ok', now)).toEqual([]);

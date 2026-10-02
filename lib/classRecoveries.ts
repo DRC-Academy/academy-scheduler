@@ -255,6 +255,27 @@ export function slotProblems(slot: Slot, opts: {
 }
 
 /**
+ * Días que el PROFESOR puede proponer: desde mañana hasta dentro de
+ * PROPOSAL_WINDOW_DAYS, sin domingos (hora de España). Hoy no: el alumno tiene
+ * que tener tiempo de leer el email y elegir. El modal pinta estos días y el
+ * servidor valida con la misma regla (teacherSlotProblems).
+ */
+export function teacherProposalDays(nowMs: number): string[] {
+  const today = spainDateOf(nowMs);
+  return Array.from({ length: PROPOSAL_WINDOW_DAYS }, (_, i) => addDaysIso(today, i + 1))
+    .filter(d => dayNameFromIso(d) !== 'Domingo');
+}
+
+/** slotProblems + la regla del profesor: nunca para hoy. */
+export function teacherSlotProblems(slot: Slot, opts: Parameters<typeof slotProblems>[1]): string[] {
+  const problems = slotProblems(slot, opts);
+  if (ISO.test(slot.date ?? '') && slot.date <= spainDateOf(opts.nowMs) && !problems.some(p => p.includes('ya pasó'))) {
+    problems.unshift('Tiene que ser a partir de mañana.');
+  }
+  return problems;
+}
+
+/**
  * Las propuestas del profesor para UN trozo a recuperar: 2 obligatorias (o 1 si
  * ya lo acordó con el alumno), distintas entre sí. Devuelve un problema por
  * propuesta (índice) y los generales.
@@ -272,7 +293,7 @@ export function validateTeacherProposals(proposals: Slot[], opts: {
       ? 'Indica la fecha que acordaste con el alumno.'
       : 'Propón dos fechas distintas para recuperar la clase.');
   }
-  const perSlot = proposals.map(s => slotProblems(s, opts));
+  const perSlot = proposals.map(s => teacherSlotProblems(s, opts));
   const keys = proposals.map(s => `${s.date}|${normalizeHour(s.hour)}`);
   if (new Set(keys).size !== keys.length) general.push('Las dos fechas propuestas son iguales.');
   return { ok: general.length === 0 && perSlot.every(p => p.length === 0), general, perSlot };

@@ -32,6 +32,7 @@ import { hourNum, hourText, nkName } from '@/lib/sessions';
 import { normEmail } from '@/lib/email';
 import {
   isRecoveryBetaTeacher, noticeMinutes, isLateNotice, wildcardOutcome, validateTeacherProposals,
+  teacherProposalDays, teacherSlotProblems,
   spainMonthOf, spainDateOf, slotHours, normalizeHour, proposalsExpired, claseDe, cuandoEs, fechaLarga, statusAfterNone,
   BLOCKING_STATUSES, MONTHLY_WILDCARDS, PENALTY_START_DATE, NO_SHOW_PENALTY_EUROS, PENALTY_EUROS,
   type Slot, type RecoveryStatus, type PriorCancellation, type WildcardOutcome, type OccupiedCheck,
@@ -252,6 +253,13 @@ export interface CancellationPreview {
   /** Problemas de las fechas que mandó el navegador (por trozo y por fecha). */
   proposalProblems?: Array<{ general: string[]; perSlot: string[][] }>;
   reservations: Array<{ date: string; hour: string; studentName: string }>;
+  /**
+   * Días que se pueden proponer (desde mañana, 7 días, sin domingos) con las
+   * horas de inicio que pasarían la validación ahora mismo, dentro del rango
+   * visible del calendario del profesor. Solo para pintar el modal: al enviar,
+   * el servidor vuelve a validar todo.
+   */
+  freeSlots: Array<{ date: string; hours: string[] }>;
 }
 
 export interface CancelInput {
@@ -300,6 +308,7 @@ export async function previewCancellation(input: CancelInput): Promise<Cancellat
   ]);
   const wildcard = wildcardOutcome({ prior, cancelledAt: new Date(ctx.nowMs).toISOString(), late: ctx.late });
   const v = input.proposals ? validateAll(ctx, input, reservations) : null;
+  const freeSlots = await freeSlotsFor(ctx, input, reservations);
   return {
     noticeMinutes: ctx.notice, late: ctx.late, sessionHours: ctx.sessionHours, canSplit: ctx.sessionHours === 2,
     wildcard, wildcardsTotal: MONTHLY_WILDCARDS, penaltyStartDate: PENALTY_START_DATE,
@@ -307,7 +316,42 @@ export async function previewCancellation(input: CancelInput): Promise<Cancellat
     alreadyCancelled: already,
     proposalProblems: v?.results.map(r => ({ general: r.general, perSlot: r.perSlot })),
     reservations: reservations.map(({ date, hour, studentName }) => ({ date, hour, studentName })),
+    freeSlots,
   };
+}
+
+/**
+ * Horas libres para el modal, con la MISMA comprobación que valida al enviar
+ * (teacherSlotProblems + occupiedChecker). Solo las horas del rango visible del
+ * calendario (como visibleHours en VisualCalendar): sin esto, las 04:00 saldrían
+ * libres porque para la base están vacías. Una clase de 2 h junta necesita las
+ * dos horas libres y dentro del rango.
+ */
+async function freeSlotsFor(
+  ctx: ClassContext, input: CancelInput, reservations: Awaited<ReturnType<typeof reservationsOf>>,
+): Promise<Array<{ date: string; hours: string[] }>> {
+  const { hoursPerPart } = partsOf(ctx, input);
+  const { data: t, error } = await supabase.from('teachers')
+    .select('calendar_start_hour, calendar_end_hour').eq('id', input.teacherId).maybeSingle();
+  const row = (error ? null : t) as Row | null;
+  let from = Math.max(0, Math.min(23, Number(row?.calendar_start_hour ?? 9)));
+  let to = Math.max(from, Math.min(23, Number(row?.calendar_end_hour ?? 22)));
+  for (const [key, cell] of Object.entries(ctx.grid)) {
+    if (!cell || cell.state === 'no_work') continue;
+    const h = parseInt(key.split('_')[1] ?? '', 10);
+    if (!Number.isFinite(h) || h < 0 || h > 23) continue;
+    if (h < from) from = h;
+    if (h > to) to = h;
+  }
+  const occupied = occupiedChecker(ctx.grid, reservations);
+  const original = { date: ctx.date, hour: ctx.hour };
+  return teacherProposalDays(ctx.nowMs).map(date => ({
+    date,
+    hours: Array.from({ length: to - from + 1 }, (_, i) => from + i)
+      .filter(h => h + hoursPerPart - 1 <= to)
+      .map(h => hourText(h))
+      .filter(hour => teacherSlotProblems({ date, hour, hours: hoursPerPart }, { nowMs: ctx.nowMs, occupied, original }).length === 0),
+  }));
 }
 
 // ── Cancelar ──────────────────────────────────────────────────────────────────
