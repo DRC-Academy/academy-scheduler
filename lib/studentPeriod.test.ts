@@ -41,6 +41,11 @@ describe('periodOf', () => {
     const p = periodOf({ startDate: '2026-01-01' }, { droppedAt: '2026-08-12T09:00:00Z' });
     expect(p.to).toBe('2026-08-12');
   });
+  it('una baja anterior al inicio (volvió con el mismo profe) no cierra nada', () => {
+    const p = periodOf({ startDate: '2026-10-01' }, { droppedAt: '2026-09-21T19:30:58Z' });
+    expect(p.to).toBeNull();
+    expect(classExistsOn(p, '2026-10-05')).toBe(true);
+  });
 });
 
 describe('classExistsOn — extremos incluidos', () => {
