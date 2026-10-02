@@ -195,3 +195,82 @@ export function excerptFound(turns: Turn[], excerpt: string | null | undefined):
   if (needle.split(' ').length < 3) return false;
   return comparable(turns.map(t => t.text).join(' ')).includes(needle);
 }
+
+// ── Segundo exacto de una cita (clips de testimonios) ─────────────────────────
+//
+// Fathom solo pone la hora al INICIO de cada intervención ("12:40 - Nombre"), con
+// precisión de segundo. Si la cita está en mitad de una intervención larga, se
+// estima por la posición de sus palabras entre el inicio de esa intervención y
+// el de la siguiente. La IA tiene pedido elegir citas al inicio de una
+// intervención, donde el segundo es exacto.
+
+/** "12:40" o "1:02:15" → segundos. null si no es una hora. */
+export function toSeconds(at: string | null | undefined): number | null {
+  const m = (at ?? '').trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (!m) return null;
+  return m[3] != null ? Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]) : Number(m[1]) * 60 + Number(m[2]);
+}
+
+/** Segundos → "12:40" o "1:02:15", como los escribe Fathom. */
+export function formatSeconds(total: number): string {
+  const s = Math.max(0, Math.round(total));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = String(s % 60).padStart(2, '0');
+  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
+}
+
+export interface ExcerptLocation {
+  turnIndex: number;
+  /** Palabras de la intervención antes de la cita (0 = empieza la intervención). */
+  wordsBefore: number;
+  turnWords: number;
+}
+
+/**
+ * Dónde está la cita: la intervención que la contiene entera. null si no está
+ * (o si cruza dos intervenciones: entonces mezcla dos voces y no sirve de clip).
+ */
+export function locateExcerpt(turns: Turn[], excerpt: string | null | undefined): ExcerptLocation | null {
+  const needle = comparable(excerpt ?? '');
+  if (needle.split(' ').length < 3) return null;
+  for (let i = 0; i < turns.length; i++) {
+    const hay = comparable(turns[i].text);
+    // Por palabras enteras: "I go" no debe encontrarse dentro de "I gone".
+    const idx = ` ${hay} `.indexOf(` ${needle} `);
+    if (idx < 0) continue;
+    const before = hay.slice(0, idx).trim();
+    return { turnIndex: i, wordsBefore: before ? before.split(' ').length : 0, turnWords: hay.split(' ').length };
+  }
+  return null;
+}
+
+/** Palabras por segundo de reserva si no hay intervención siguiente para medir. */
+const WORDS_PER_SECOND = 2.5;
+
+/**
+ * Segundo en que empieza la cita. Al inicio de una intervención es la hora de
+ * Fathom tal cual; en mitad, se reparte el tiempo de la intervención por palabras
+ * y se adelanta 1 s de margen (nunca antes del inicio de la intervención).
+ */
+export function excerptStartSeconds(turns: Turn[], loc: ExcerptLocation): number | null {
+  const start = toSeconds(turns[loc.turnIndex]?.at);
+  if (start == null) return null;
+  if (loc.wordsBefore === 0) return start;
+  const next = toSeconds(turns[loc.turnIndex + 1]?.at);
+  const offset = next != null && next > start
+    ? ((next - start) * loc.wordsBefore) / Math.max(1, loc.turnWords)
+    : loc.wordsBefore / WORDS_PER_SECOND;
+  return Math.max(start, Math.floor(start + offset) - 1);
+}
+
+/** Enlace de Fathom que abre la grabación en ese segundo (?timestamp=SEGUNDOS). */
+export function withFathomTimestamp(url: string | null | undefined, seconds: number | null | undefined): string | null {
+  if (!url) return null;
+  if (seconds == null) return url;
+  try {
+    const u = new URL(url);
+    u.searchParams.set('timestamp', String(Math.max(0, Math.round(seconds))));
+    return u.toString();
+  } catch {
+    return url;
+  }
+}

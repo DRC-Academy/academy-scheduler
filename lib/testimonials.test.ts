@@ -1,17 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { findBestPair, pairKey, daysBetween, isBetterPair, type FluencyClass } from '@/lib/testimonials';
-import { TESTIMONIAL_RULES } from '@/lib/testimonialRules';
+import { planCandidate, studentTrend, goodOptionsAfter, daysBetween, improvementLine, type FluencyClass } from '@/lib/testimonials';
 
 let n = 0;
-function clase(day: string, score: number, extra: Partial<FluencyClass> = {}): FluencyClass {
+function clase(day: string, score: number): FluencyClass {
   n++;
-  return {
-    analysisId: `ca_${n}`, classNumber: n, classDay: day, teacherId: 't1', score,
-    bestExcerpt: 'I went to the market and bought some fruit', bestAt: '10:00', bestFound: true,
-    worstExcerpt: 'I, I... eh... yesterday I... no sé', worstAt: '3:15', worstFound: true,
-    fathomUrl: 'https://fathom.video/share/x',
-    ...extra,
-  };
+  return { analysisId: `ca_${String(n).padStart(3, '0')}`, classNumber: n, classDay: day, teacherId: 't1', score, fathomUrl: null };
+}
+
+/** Seis clases semanales desde el 1 de julio con estas notas. */
+function semanal(scores: number[], desde = '2026-07-01'): FluencyClass[] {
+  const t0 = Date.parse(`${desde}T00:00:00Z`);
+  return scores.map((s, i) => clase(new Date(t0 + i * 7 * 86_400_000).toISOString().slice(0, 10), s));
 }
 
 describe('daysBetween', () => {
@@ -20,71 +19,72 @@ describe('daysBetween', () => {
   });
 });
 
-describe('findBestPair', () => {
-  it('pareja válida: antes ≤ 4, después ≥ 7, mejora ≥ 3, 6 semanas', () => {
-    const a = clase('2026-07-14', 3);
-    const b = clase('2026-09-01', 8);
-    const p = findBestPair([a, b]);
-    expect(p?.before.analysisId).toBe(a.analysisId);
-    expect(p?.after.analysisId).toBe(b.analysisId);
-    expect(p?.improvement).toBe(5);
-    expect(p?.daysApart).toBe(49);
+describe('studentTrend', () => {
+  it('media de las 3 primeras y las 3 últimas, en orden de fecha aunque lleguen desordenadas', () => {
+    const cs = semanal([5, 5, 6, 6, 7, 8]);
+    const t = studentTrend([...cs].reverse())!;
+    expect(t.firstMean).toBeCloseTo(16 / 3);
+    expect(t.lastMean).toBe(7);
+    expect(t.first.map(c => c.analysisId)).toEqual(cs.slice(0, 3).map(c => c.analysisId));
   });
 
-  it('menos de 6 semanas entre las clases: no hay pareja', () => {
-    expect(findBestPair([clase('2026-07-14', 2), clase('2026-08-20', 9)])).toBeNull();
-  });
-
-  it('justo 6 semanas sí vale', () => {
-    expect(findBestPair([clase('2026-07-01', 4), clase('2026-08-12', 7)])).not.toBeNull();
-  });
-
-  it('notas fuera de rango: no hay pareja', () => {
-    expect(findBestPair([clase('2026-07-01', 5), clase('2026-09-01', 9)])).toBeNull();   // antes 5 > 4
-    expect(findBestPair([clase('2026-07-01', 2), clase('2026-09-01', 6)])).toBeNull();   // después 6 < 7
-  });
-
-  it('la mejora exige que la buena sea POSTERIOR', () => {
-    expect(findBestPair([clase('2026-07-01', 8), clase('2026-09-01', 3)])).toBeNull();
-  });
-
-  it('se queda con la de mayor mejora', () => {
-    const a1 = clase('2026-07-01', 4);
-    const a2 = clase('2026-07-03', 2);
-    const b = clase('2026-09-01', 8);
-    expect(findBestPair([a1, a2, b])?.before.analysisId).toBe(a2.analysisId);
-  });
-
-  it('a igual mejora, la del "después" más reciente', () => {
-    const a = clase('2026-07-01', 3);
-    const b1 = clase('2026-08-20', 7);
-    const b2 = clase('2026-09-10', 7);
-    expect(findBestPair([a, b1, b2])?.after.analysisId).toBe(b2.analysisId);
-  });
-
-  it('una cita no comprobada no vale si CITAS_COMPROBADAS', () => {
-    const a = clase('2026-07-01', 3, { worstFound: false });
-    const b = clase('2026-09-01', 8);
-    expect(findBestPair([a, b])).toBeNull();
-    expect(findBestPair([a, b], { ...TESTIMONIAL_RULES, CITAS_COMPROBADAS: false })).not.toBeNull();
-  });
-
-  it('no repite una pareja descartada, pero puede proponer otra', () => {
-    const a1 = clase('2026-07-01', 2);
-    const a2 = clase('2026-07-02', 3);
-    const b = clase('2026-09-01', 8);
-    const p = findBestPair([a1, a2, b], TESTIMONIAL_RULES, new Set([pairKey(a1.analysisId, b.analysisId)]));
-    expect(p?.before.analysisId).toBe(a2.analysisId);
+  it('menos de 6 clases: sin tendencia', () => {
+    expect(studentTrend(semanal([4, 5, 6, 7, 8]))).toBeNull();
   });
 });
 
-describe('isBetterPair', () => {
-  it('mejora manda sobre fecha', () => {
-    expect(isBetterPair({ improvement: 5, daysApart: 50, afterDay: '2026-08-01' },
-                        { improvement: 4, daysApart: 90, afterDay: '2026-09-30' })).toBe(true);
+describe('planCandidate (regla 6b)', () => {
+  it('entra si la media sube 1 punto, sin mínimos ni máximos de nota', () => {
+    const p = planCandidate(semanal([6, 6, 7, 7, 7, 8]))!;
+    expect(p).not.toBeNull();
+    expect(p.trend.improvement).toBeCloseTo(1);
   });
-  it('una pareja igual no es mejor', () => {
-    const x = { improvement: 4, daysApart: 50, afterDay: '2026-09-01' };
-    expect(isBetterPair(x, x)).toBe(false);
+
+  it('justo 1 punto con decimales también entra', () => {
+    // (5+5+6)/3 = 5,33 → (6+6+7)/3 = 6,33
+    expect(planCandidate(semanal([5, 5, 6, 6, 6, 7]))).not.toBeNull();
+  });
+
+  it('menos de 1 punto de mejora: no entra', () => {
+    expect(planCandidate(semanal([5, 6, 6, 6, 6, 7]))).toBeNull();
+  });
+
+  it('notas planas o que bajan: no entra', () => {
+    expect(planCandidate(semanal([7, 7, 7, 7, 7, 7]))).toBeNull();
+    expect(planCandidate(semanal([8, 7, 7, 6, 6, 6]))).toBeNull();
+  });
+
+  it('pareja provisional: peor nota de las primeras, mejor de las últimas a 28 días o más', () => {
+    const cs = semanal([6, 4, 5, 6, 8, 7]);
+    const p = planCandidate(cs)!;
+    expect(p.before.analysisId).toBe(cs[1].analysisId);
+    // El 8 está a solo 21 días del 4: la buena es el 7, a 28.
+    expect(p.after.analysisId).toBe(cs[5].analysisId);
+  });
+
+  it('sin 4 semanas entre alguna primera y alguna última: no entra', () => {
+    // 6 clases en 12 días.
+    const cs = ['2026-07-01', '2026-07-03', '2026-07-05', '2026-07-08', '2026-07-10', '2026-07-12']
+      .map((d, i) => clase(d, [4, 4, 4, 7, 7, 7][i]));
+    expect(planCandidate(cs)).toBeNull();
+  });
+
+  it('solo ofrece a la IA clases a 28 días o más entre sí', () => {
+    const cs = ['2026-07-01', '2026-07-20', '2026-07-25', '2026-08-10', '2026-08-20', '2026-08-28']
+      .map((d, i) => clase(d, [4, 4, 4, 6, 6, 6][i]));
+    const p = planCandidate(cs)!;
+    // 20/07 → 20/08 son 31 días; 25/07 → 28/08 son 34; 25/07 → 20/08 son 26 (no).
+    expect(p.badOptions.map(c => c.classDay)).toEqual(['2026-07-01', '2026-07-20', '2026-07-25']);
+    expect(p.goodOptions.map(c => c.classDay)).toEqual(['2026-08-10', '2026-08-20', '2026-08-28']);
+    expect(goodOptionsAfter(cs[2], p.goodOptions).map(c => c.classDay)).toEqual(['2026-08-28']);
+    expect(daysBetween(p.before.classDay, p.after.classDay)).toBeGreaterThanOrEqual(28);
+  });
+});
+
+describe('improvementLine', () => {
+  it('formato con coma y puntos', () => {
+    expect(improvementLine(5, 7)).toBe('Media de 5,0 → 7,0 (+2 puntos)');
+    expect(improvementLine(16 / 3, 19 / 3)).toBe('Media de 5,3 → 6,3 (+1 punto)');
+    expect(improvementLine(5, 6.67)).toBe('Media de 5,0 → 6,7 (+1,7 puntos)');
   });
 });

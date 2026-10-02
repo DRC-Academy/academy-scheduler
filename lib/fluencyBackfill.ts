@@ -1,8 +1,9 @@
 // Testimoniales — "Analizar clases pasadas": nota de fluidez de los transcripts
 // que no la tienen, por tandas pequeñas. SOLO SERVIDOR.
 //
-// El navegador (components/admin/FluencyBackfillPanel) pide una tanda tras otra
-// a /api/admin/fluency-backfill; cada tanda cabe en los 60 s de Vercel. El estado
+// Se pide tanda a tanda a /api/admin/fluency-backfill (el panel que lo hacía se
+// quitó de la pestaña el 02/10/2026, con el relleno ya terminado; el script
+// `npm run fluidez` hace lo mismo). Cada tanda cabe en los 60 s de Vercel. El estado
 // vive en la base (transcript_fluency.status), no en el navegador: si se cierra
 // la pestaña, al volver a pulsar sigue con lo que quede en 'pending'.
 //
@@ -15,7 +16,7 @@ import 'server-only';
 
 import { supabase } from '@/lib/supabase';
 import { runFluencyFor, resolveStudentKey, type FluencyRunStatus } from '@/lib/fluencyStore';
-import { detectForStudent, reviewPending } from '@/lib/testimonialStore';
+import { detectForStudent, prepareNext } from '@/lib/testimonialStore';
 
 /** Transcripts analizados a la vez en cada tanda. */
 export const BATCH_SIZE = 5;
@@ -148,15 +149,15 @@ export async function runBatch(opts: { retryFailed?: boolean; deadline: number }
     }))));
     for (const r of results) outcomes[r.status] = (outcomes[r.status] ?? 0) + 1;
 
-    // Detección de parejas de los alumnos que estrenaron nota (sin IA salvo la
-    // revisión de una pareja nueva, y solo si queda tiempo).
+    // Detección de parejas de los alumnos que estrenaron nota (sin IA: los clips
+    // se preparan después, en las tandas vacías o desde la pestaña).
     const groups = [...new Set(results
       .filter(r => r.status === 'ready' && r.row?.fluency_score != null && r.studentGroup)
       .map(r => r.studentGroup as string))];
     for (const g of groups) {
       try {
-        const d = await detectForStudent(g, { deadline: opts.deadline });
-        if (d.outcome === 'creada' || d.outcome === 'reemplazada') newPairs++;
+        const d = await detectForStudent(g);
+        if (d.outcome === 'creada') newPairs++;
       } catch (err) {
         console.error(`[backfill] Detección fallida para ${g}:`, err);
       }
@@ -164,7 +165,7 @@ export async function runBatch(opts: { retryFailed?: boolean; deadline: number }
     return { claimed: mias.length, outcomes, newPairs, status: await backfillStatus() };
   }
 
-  // Nada que analizar: se aprovecha la tanda para las revisiones de IA pendientes.
-  await reviewPending({ limit: 5, deadline: opts.deadline });
+  // Nada que analizar: se aprovecha la tanda para preparar los clips de una pareja.
+  await prepareNext({ deadline: opts.deadline });
   return { claimed: 0, outcomes, newPairs, status: await backfillStatus() };
 }

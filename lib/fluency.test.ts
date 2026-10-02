@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   parseFathomTurns, parseCaptionTurns, parseTurns, extractFathomUrl, identifyTeacher, prepareFluency,
   formatTurnsForAi, excerptFound, MIN_WORDS,
+  toSeconds, formatSeconds, locateExcerpt, excerptStartSeconds, withFathomTimestamp,
 } from '@/lib/fluency';
 
 const HEADER = `Impromptu Google Meet Meeting - August 25
@@ -148,5 +149,52 @@ describe('excerptFound', () => {
   });
   it('una cita de menos de 3 palabras no vale como prueba', () => {
     expect(excerptFound(turns, 'afraid')).toBe(false);
+  });
+});
+
+describe('segundo exacto de una cita', () => {
+  const turns = [
+    { at: '0:05', speaker: 'Profe', text: 'Tell me about your weekend.' },
+    { at: '0:10', speaker: 'Alumno', text: 'I went to the beach with my family and we ate paella, it was very nice and sunny' },
+    { at: '0:20', speaker: 'Profe', text: 'Great!' },
+    { at: '1:02:15', speaker: 'Alumno', text: 'Last one here' },
+  ];
+
+  it('toSeconds y formatSeconds van y vuelven', () => {
+    expect(toSeconds('12:40')).toBe(760);
+    expect(toSeconds('1:02:15')).toBe(3735);
+    expect(toSeconds('hola')).toBeNull();
+    expect(formatSeconds(760)).toBe('12:40');
+    expect(formatSeconds(3735)).toBe('1:02:15');
+    expect(formatSeconds(7)).toBe('0:07');
+  });
+
+  it('al inicio de la intervención: la hora de Fathom tal cual', () => {
+    const loc = locateExcerpt(turns, 'I went to the beach')!;
+    expect(loc).toEqual({ turnIndex: 1, wordsBefore: 0, turnWords: 18 });
+    expect(excerptStartSeconds(turns, loc)).toBe(10);
+  });
+
+  it('en mitad: reparte el tiempo por palabras y adelanta 1 s', () => {
+    // 11 de 18 palabras antes, en una intervención de 10 s → ⌊10 + 6,1⌋ − 1.
+    const loc = locateExcerpt(turns, 'paella, it was very nice')!;
+    expect(loc.wordsBefore).toBe(11);
+    expect(excerptStartSeconds(turns, loc)).toBe(15);
+  });
+
+  it('tolera mayúsculas y puntuación, pero solo palabras enteras', () => {
+    expect(locateExcerpt(turns, 'i WENT to the beach!')).not.toBeNull();
+    expect(locateExcerpt(turns, 'went to the bea')).toBeNull();
+  });
+
+  it('una cita que cruza dos intervenciones no vale', () => {
+    expect(locateExcerpt(turns, 'very nice and sunny Great')).toBeNull();
+  });
+
+  it('añade ?timestamp al enlace de Fathom', () => {
+    expect(withFathomTimestamp('https://fathom.video/share/abc', 95)).toBe('https://fathom.video/share/abc?timestamp=95');
+    expect(withFathomTimestamp('https://fathom.video/share/abc?timestamp=3', 95)).toBe('https://fathom.video/share/abc?timestamp=95');
+    expect(withFathomTimestamp('https://fathom.video/share/abc', null)).toBe('https://fathom.video/share/abc');
+    expect(withFathomTimestamp(null, 95)).toBeNull();
   });
 });

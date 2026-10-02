@@ -7,9 +7,9 @@
 //   npm run fluidez -- --registrar --apply                     les crea la fila 'pending' (sin IA)
 //   npm run fluidez -- --procesar 50                           qué 50 pendientes/fallidas haría
 //   npm run fluidez -- --procesar 50 --apply                   las analiza y guarda (~1 cént. c/u)
-//   npm run fluidez -- --detectar                              parejas antes/después que saldrían (sin IA)
-//   npm run fluidez -- --detectar --apply                      las crea/reemplaza y las revisa con IA
-//   npm run fluidez -- --revisar --apply                       completa revisiones de IA pendientes
+//   npm run fluidez -- --detectar                              alumnos que entrarían con la regla (sin IA)
+//   npm run fluidez -- --detectar --apply                      les crea la pareja (sin IA, aún sin clips)
+//   npm run fluidez -- --revisar --apply                       prepara los clips pendientes con IA (~4 cént. c/u)
 //
 // Las clases nuevas se analizan solas al subir el transcript (after() en
 // save-transcript). Esto es para lo que ya había antes y para los reintentos.
@@ -28,7 +28,7 @@ for (const line of existsSync('.env.local') ? readFileSync('.env.local', 'utf8')
 
 const { supabase } = await import('@/lib/supabase');
 const { runFluencyFor, resolveStudentKey } = await import('@/lib/fluencyStore');
-const { detectForStudent, reviewPending } = await import('@/lib/testimonialStore');
+const { detectAll, prepareNext } = await import('@/lib/testimonialStore');
 
 const args = process.argv.slice(2);
 const APPLY = args.includes('--apply');
@@ -133,29 +133,30 @@ async function procesar(n: number) {
   console.log('Resumen:', cuenta);
 }
 
-// ── --detectar: parejas antes/después de todos los alumnos con nota ─────────
+// ── --detectar: la regla sobre todos los alumnos con nota ───────────────────
 async function detectar() {
-  const filas = await allRows<{ student_group: string; status: string }>('transcript_fluency_numbered', 'student_group, status');
-  const grupos = [...new Set(filas.filter(f => f.status === 'ready').map(f => f.student_group))];
-  console.log(`Alumnos con alguna nota: ${grupos.length}.`);
-  const cuenta: Record<string, number> = {};
-  for (const g of grupos) {
-    const r = await detectForStudent(g, { dryRun: !APPLY });
-    cuenta[r.outcome] = (cuenta[r.outcome] ?? 0) + 1;
-    if (r.pair) {
-      const p = r.pair;
-      console.log(`  ${g}: ${r.outcome} · clase ${p.before.classNumber} (${p.before.classDay}, nota ${p.before.score}) → clase ${p.after.classNumber} (${p.after.classDay}, nota ${p.after.score}) · +${p.improvement}${r.review ? ` · IA: ${r.review}` : ''}`);
-    }
+  const { counts, created } = await detectAll({ dryRun: !APPLY });
+  for (const { studentGroup, plan } of created) {
+    const t = plan.trend;
+    console.log(`  ${studentGroup}: media ${t.firstMean.toFixed(2)} → ${t.lastMean.toFixed(2)} (+${t.improvement.toFixed(2)}) · ` +
+      `malas posibles ${plan.badOptions.map(c => c.classDay).join(', ')} · buenas posibles ${plan.goodOptions.map(c => c.classDay).join(', ')}`);
   }
-  console.log('Resumen:', cuenta);
-  if (!APPLY) console.log('Modo prueba: no se creó nada ni se llamó a la IA (añade --apply).');
+  console.log('Resumen:', counts);
+  if (!APPLY) console.log('Modo prueba: no se creó nada (añade --apply). Los clips se preparan con --revisar --apply o desde la pestaña.');
 }
 
-// ── --revisar: revisiones de IA pendientes o fallidas ───────────────────────
+// ── --revisar: clips pendientes (o fallidos, con --fallidas) ────────────────
 async function revisar() {
-  if (!APPLY) { console.log('Añade --apply para lanzar las revisiones con IA.'); return; }
+  if (!APPLY) { console.log('Añade --apply para preparar los clips con IA.'); return; }
   if (noKey()) { process.exitCode = 1; return; }
-  console.log('Resultado:', await reviewPending({ limit: 200 }));
+  const cuenta: Record<string, number> = {};
+  for (;;) {
+    const r = await prepareNext({ deadline: Date.now() + 56_000, retryFailed: args.includes('--fallidas') });
+    if (r === 'nada') break;
+    cuenta[r] = (cuenta[r] ?? 0) + 1;
+    console.log(`  ${r}`);
+  }
+  console.log('Resultado:', cuenta);
 }
 
 const id = valueOf('--id');

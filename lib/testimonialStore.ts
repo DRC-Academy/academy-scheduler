@@ -1,255 +1,361 @@
-// Testimoniales — detección de la pareja "antes / después" de un alumno y su
-// segunda revisión con IA, sobre `testimonial_candidates`
-// (supabase-testimoniales-candidatos.sql). SOLO SERVIDOR.
+// Testimoniales — detección de alumnos "antes / después" y preparación de sus
+// clips, sobre `testimonial_candidates` (supabase-testimoniales-candidatos.sql).
+// SOLO SERVIDOR.
 //
-// Se llama cada vez que un transcript recibe nota de fluidez (lib/fluencyStore)
-// y al final de cada tanda de "Analizar clases pasadas" (lib/fluencyBackfill).
-// No avisa a nadie: las parejas solo se ven en la pestaña Testimoniales.
+// DOS PASOS:
+//   1. Detección (sin IA, barata): el alumno entra si su tendencia es de mejora
+//      (lib/testimonials planCandidate). Se crea su fila en 'detectado' con
+//      ai_review_status 'pending' y una pareja provisional. La pestaña del admin
+//      NO la enseña todavía.
+//   2. Preparación (Haiku, ~3-5 céntimos): elige el peor momento entre sus
+//      primeras clases y el mejor entre sus últimas, comprueba que las citas
+//      existen y son del alumno, calcula su segundo exacto y escribe el resumen.
+//      Entonces pasa a 'ready' y aparece en "Por revisar".
 //
-// REGLAS DE LA TABLA (las decide Facundo, 30/09/2026):
-//   · máximo una pareja ACTIVA por alumno (= cualquier estado menos descartado);
-//     lo garantiza también un índice único en la base;
-//   · si sale una mejor y la activa sigue en 'detectado', se reemplaza en el
-//     sitio; si ya está en revisado o más allá, no se toca nunca;
-//   · si el ADMIN descartó una pareja del alumno, el alumno no se vuelve a
-//     proponer; si la descartó la IA, puede salir otra pareja, nunca la misma.
+// La detección corre tras cada nota de fluidez (lib/fluencyStore) y entera al
+// abrir la pestaña (app/api/admin/testimonial-prepare). La preparación la pide
+// la pestaña, de una en una, para que cada una quepa en los 60 s de Vercel.
+//
+// REGLAS DE LA TABLA:
+//   · máximo una pareja ACTIVA por alumno (= cualquier estado menos descartado),
+//     también por un índice único en la base. Una vez creada no se reemplaza:
+//     la tendencia del alumno cambia con cada clase y el admin necesita algo fijo
+//     que revisar;
+//   · si el ADMIN la marcó "No sirve", el alumno no se vuelve a proponer.
 
 import 'server-only';
 
 import { supabase } from '@/lib/supabase';
-import { findBestPair, isBetterPair, pairKey, type FluencyClass, type TestimonialPair } from '@/lib/testimonials';
-import { reviewTestimonial, type ReviewSide } from '@/lib/reviewTestimonial';
+import { planCandidate, goodOptionsAfter, type FluencyClass, type TestimonialCandidatePlan } from '@/lib/testimonials';
+import {
+  prepareFluency, formatTurnsForAi, locateExcerpt, excerptStartSeconds, formatSeconds, withFathomTimestamp,
+  type FluencyPrep,
+} from '@/lib/fluency';
+import { pickMoment, type MomentKind, type MomentIA } from '@/lib/testimonialClips';
 
 type Row = Record<string, unknown>;
 
-/** Margen mínimo que tiene que quedar para lanzar la revisión con IA (20 s de tope + escrituras). */
-export const REVIEW_MIN_MS = 23_000;
+/** Tiempo mínimo que tiene que quedar para lanzar las dos llamadas de la preparación. */
+export const PREPARE_MIN_MS = 40_000;
+/** Una fila tocada hace menos de esto se considera "en preparación" en otro proceso. */
+const LEASE_MS = 2 * 60_000;
 
 export type DetectOutcome =
   | 'no_table'          // falta supabase-testimoniales-candidatos.sql
-  | 'bloqueado_admin'   // el admin descartó una pareja de este alumno
-  | 'bloqueado_estado'  // la pareja activa ya está en revisado o más allá
-  | 'sin_pareja'
-  | 'sin_cambios'       // la activa sigue siendo la mejor
-  | 'creada'
-  | 'reemplazada';
+  | 'bloqueado_admin'   // el admin dijo "No sirve" a este alumno
+  | 'ya_tiene'          // ya tiene una pareja activa
+  | 'sin_pareja'        // no cumple la regla
+  | 'creada';
 
-export interface DetectResult {
-  studentGroup: string;
-  outcome: DetectOutcome;
-  candidateId?: string;
-  pair?: TestimonialPair;
-  review?: ReviewOutcome;
-}
-
-export type ReviewOutcome = 'real' | 'descartada' | 'fallida' | 'sin_tiempo';
+export type PrepareOutcome = 'lista' | 'fallida' | 'sin_tiempo' | 'ya_no_cumple' | 'nada';
 
 const isMissingTable = (err: { code?: string } | null | undefined): boolean =>
   err?.code === '42P01' || err?.code === 'PGRST205';
 
-const FLUENCY_COLS =
-  'analysis_id, student_class_number, class_day, teacher_id, fluency_score, ' +
-  'best_excerpt, best_excerpt_at, best_excerpt_found, worst_excerpt, worst_excerpt_at, worst_excerpt_found, fathom_url';
+const FLUENCY_COLS = 'student_group, analysis_id, student_class_number, class_day, teacher_id, fluency_score, fathom_url';
 
 function toClass(r: Row): FluencyClass {
   return {
-    analysisId:   String(r.analysis_id),
-    classNumber:  (r.student_class_number as number | null) ?? null,
-    classDay:     String(r.class_day ?? ''),
-    teacherId:    (r.teacher_id as string | null) ?? null,
-    score:        Number(r.fluency_score),
-    bestExcerpt:  (r.best_excerpt as string | null) ?? null,
-    bestAt:       (r.best_excerpt_at as string | null) ?? null,
-    bestFound:    (r.best_excerpt_found as boolean | null) ?? null,
-    worstExcerpt: (r.worst_excerpt as string | null) ?? null,
-    worstAt:      (r.worst_excerpt_at as string | null) ?? null,
-    worstFound:   (r.worst_excerpt_found as boolean | null) ?? null,
-    fathomUrl:    (r.fathom_url as string | null) ?? null,
+    analysisId:  String(r.analysis_id),
+    classNumber: (r.student_class_number as number | null) ?? null,
+    classDay:    String(r.class_day ?? ''),
+    teacherId:   (r.teacher_id as string | null) ?? null,
+    score:       Number(r.fluency_score),
+    fathomUrl:   (r.fathom_url as string | null) ?? null,
   };
 }
 
-/** Los campos de la pareja tal como van a la tabla (foto del momento). */
-function pairColumns(p: TestimonialPair): Row {
+/** Columnas de un lado de la pareja (foto del momento). */
+function sideColumns(pre: 'before' | 'after', c: FluencyClass, clip?: { excerpt: string; seconds: number }): Row {
   return {
-    before_analysis_id:  p.before.analysisId,
-    before_teacher_id:   p.before.teacherId,
-    before_class_number: p.before.classNumber,
-    before_class_date:   p.before.classDay || null,
-    before_score:        p.before.score,
-    before_excerpt:      p.before.worstExcerpt,
-    before_excerpt_at:   p.before.worstAt,
-    before_fathom_url:   p.before.fathomUrl,
-    after_analysis_id:   p.after.analysisId,
-    after_teacher_id:    p.after.teacherId,
-    after_class_number:  p.after.classNumber,
-    after_class_date:    p.after.classDay || null,
-    after_score:         p.after.score,
-    after_excerpt:       p.after.bestExcerpt,
-    after_excerpt_at:    p.after.bestAt,
-    after_fathom_url:    p.after.fathomUrl,
-    improvement:         p.improvement,
-    // Pareja nueva o cambiada: la revisión de la anterior ya no vale.
-    ai_review_status: 'pending', ai_is_real: null, ai_reason: null, ai_summary: null, ai_error: null,
+    [`${pre}_analysis_id`]:  c.analysisId,
+    [`${pre}_teacher_id`]:   c.teacherId,
+    [`${pre}_class_number`]: c.classNumber,
+    [`${pre}_class_date`]:   c.classDay || null,
+    [`${pre}_score`]:        c.score,
+    [`${pre}_excerpt`]:      clip?.excerpt ?? null,
+    // Segundo exacto donde empieza la cita, como "12:47".
+    [`${pre}_excerpt_at`]:   clip ? formatSeconds(clip.seconds) : null,
+    // El enlace ya abre la grabación en ese segundo.
+    [`${pre}_fathom_url`]:   withFathomTimestamp(c.fathomUrl, clip?.seconds),
   };
 }
 
-/**
- * Busca la mejor pareja del alumno y la crea o reemplaza según las reglas de
- * arriba. Si queda tiempo antes de `deadline` (epoch ms), lanza la revisión con
- * IA de la pareja nueva; si no, queda 'pending' para la siguiente pasada.
- */
-export async function detectForStudent(
-  studentGroup: string, opts: { deadline?: number; dryRun?: boolean } = {},
-): Promise<DetectResult> {
-  const base = { studentGroup };
-
-  const existing = await supabase
-    .from('testimonial_candidates')
-    .select('id, status, discarded_by, before_analysis_id, after_analysis_id, improvement, before_class_date, after_class_date, ai_review_status')
-    .eq('student_group', studentGroup);
-  if (isMissingTable(existing.error)) return { ...base, outcome: 'no_table' };
-  if (existing.error) throw new Error(`testimonial_candidates: ${existing.error.message}`);
-  const rows = (existing.data ?? []) as Row[];
-
-  if (rows.some(r => r.status === 'descartado' && r.discarded_by === 'admin')) return { ...base, outcome: 'bloqueado_admin' };
-  const active = rows.find(r => r.status !== 'descartado') ?? null;
-  if (active && active.status !== 'detectado') return { ...base, outcome: 'bloqueado_estado', candidateId: String(active.id) };
-
-  // Clases con nota del alumno. Solo columnas ligeras: la vista nunca trae transcript.
-  const cls = await supabase
-    .from('transcript_fluency_numbered')
-    .select(FLUENCY_COLS)
-    .eq('student_group', studentGroup)
-    .eq('status', 'ready')
-    .not('fluency_score', 'is', null);
-  if (cls.error) throw new Error(`transcript_fluency_numbered: ${cls.error.message}`);
-
-  const excluded = new Set(rows.filter(r => r.status === 'descartado')
-    .map(r => pairKey(String(r.before_analysis_id), String(r.after_analysis_id))));
-  const pair = findBestPair(((cls.data ?? []) as unknown as Row[]).map(toClass), undefined, excluded);
-
-  // Si la activa sigue siendo la mejor (o igual de buena), solo se completa su
-  // revisión si quedó pendiente.
-  if (active) {
-    const same = pair && pair.before.analysisId === active.before_analysis_id && pair.after.analysisId === active.after_analysis_id;
-    const activeScore = {
-      improvement: Number(active.improvement),
-      afterDay: String(active.after_class_date ?? ''),
-      daysApart: 0,
+async function allRows(table: string, cols: string, apply?: (q: any) => any): Promise<Row[]> {   // eslint-disable-line @typescript-eslint/no-explicit-any
+  const out: Row[] = [];
+  for (let from = 0; ; from += 1000) {
+    const page = () => {
+      let q = supabase.from(table).select(cols);
+      if (apply) q = apply(q);
+      return q.order(table === 'testimonial_candidates' ? 'id' : 'analysis_id').range(from, from + 999);
     };
-    if (!pair || same || !isBetterPair({ ...pair, afterDay: pair.after.classDay, daysApart: 0 }, activeScore)) {
-      const review = !opts.dryRun && active.ai_review_status !== 'ready'
-        ? await reviewIfTime(String(active.id), opts.deadline) : undefined;
-      return { ...base, outcome: pair || same ? 'sin_cambios' : 'sin_pareja', candidateId: String(active.id), review };
-    }
-  } else if (!pair) {
-    return { ...base, outcome: 'sin_pareja' };
-  }
-
-  const p = pair as TestimonialPair;
-  if (opts.dryRun) return { ...base, outcome: active ? 'reemplazada' : 'creada', pair: p, candidateId: active ? String(active.id) : undefined };
-
-  // Nombre e id del alumno, de la clase "después" (la más reciente).
-  const { data: ca } = await supabase.from('class_analyses')
-    .select('student_id, student_name').eq('id', p.after.analysisId).maybeSingle();
-  const now = new Date().toISOString();
-  const cols: Row = {
-    ...pairColumns(p),
-    student_id: (ca?.student_id as string | null) ?? null,
-    student_name: (ca?.student_name as string | null) ?? null,
-    updated_at: now,
-  };
-
-  let id: string;
-  if (active) {
-    id = String(active.id);
-    // El .eq('status') evita pisar una pareja que el admin movió mientras tanto.
-    const { error } = await supabase.from('testimonial_candidates').update(cols).eq('id', id).eq('status', 'detectado');
-    if (error) throw new Error(`Reemplazando pareja ${id}: ${error.message}`);
-  } else {
-    id = `tc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const { error } = await supabase.from('testimonial_candidates').insert({
-      id, student_group: studentGroup, status: 'detectado', status_changed_at: now, ...cols,
-    });
-    // 23505: otra ejecución creó la pareja activa a la vez (índice único). La suya vale.
-    if (error?.code === '23505') return { ...base, outcome: 'sin_cambios' };
-    if (error) throw new Error(`Creando pareja: ${error.message}`);
-  }
-
-  const review = await reviewIfTime(id, opts.deadline);
-  return { ...base, outcome: active ? 'reemplazada' : 'creada', candidateId: id, pair: p, review };
-}
-
-async function reviewIfTime(id: string, deadline?: number): Promise<ReviewOutcome> {
-  if (deadline != null && deadline - Date.now() < REVIEW_MIN_MS) return 'sin_tiempo';
-  return reviewCandidate(id);
-}
-
-/**
- * Segunda revisión con Haiku de una pareja. Si la IA no la ve real, la pareja
- * pasa a 'descartado' (por: IA) con el motivo. Si la IA falla, queda 'failed'
- * en `ai_review_status` y sigue en 'detectado' para reintentarla.
- */
-export async function reviewCandidate(id: string): Promise<ReviewOutcome> {
-  const { data: c, error } = await supabase.from('testimonial_candidates').select('*').eq('id', id).maybeSingle();
-  if (error || !c || c.status !== 'detectado') return 'fallida';
-
-  const { data: fl } = await supabase.from('transcript_fluency')
-    .select('analysis_id, fluency_evidence, hesitation_level, spanish_usage')
-    .in('analysis_id', [c.before_analysis_id, c.after_analysis_id]);
-  const extra = (aid: unknown) => ((fl ?? []) as Row[]).find(r => r.analysis_id === aid) ?? {};
-
-  const sideOf = (pre: 'before' | 'after'): ReviewSide => {
-    const e = extra(c[`${pre}_analysis_id`]);
-    return {
-      date: c[`${pre}_class_date`], classNumber: c[`${pre}_class_number`], score: c[`${pre}_score`],
-      excerpt: c[`${pre}_excerpt`], at: c[`${pre}_excerpt_at`],
-      evidence: (e.fluency_evidence as string | null) ?? null,
-      hesitation: (e.hesitation_level as string | null) ?? null,
-      spanish: (e.spanish_usage as string | null) ?? null,
-    };
-  };
-
-  const res = await reviewTestimonial({ before: sideOf('before'), after: sideOf('after') });
-  const now = new Date().toISOString();
-
-  if (res.status !== 'ready' || !res.data) {
-    await supabase.from('testimonial_candidates').update({
-      ai_review_status: 'failed', ai_error: (res.error ?? 'La IA no respondió.').slice(0, 500), updated_at: now,
-    }).eq('id', id);
-    return 'fallida';
-  }
-
-  const real = res.data.is_real;
-  await supabase.from('testimonial_candidates').update({
-    ai_review_status: 'ready', ai_is_real: real, ai_reason: res.data.reason, ai_summary: res.data.summary, ai_error: null,
-    updated_at: now,
-    ...(real ? {} : { status: 'descartado', discarded_by: 'ia', status_changed_at: now }),
-  }).eq('id', id).eq('status', 'detectado');
-  return real ? 'real' : 'descartada';
-}
-
-/** Revisiones pendientes o fallidas de parejas en 'detectado', mientras haya tiempo. */
-export async function reviewPending(opts: { limit: number; deadline?: number }): Promise<Record<ReviewOutcome, number>> {
-  const out: Record<ReviewOutcome, number> = { real: 0, descartada: 0, fallida: 0, sin_tiempo: 0 };
-  const { data, error } = await supabase.from('testimonial_candidates')
-    .select('id').eq('status', 'detectado').in('ai_review_status', ['pending', 'failed']).limit(opts.limit);
-  if (error) return out;
-  for (const r of data ?? []) {
-    const o = await reviewIfTime(String(r.id), opts.deadline);
-    out[o]++;
-    if (o === 'sin_tiempo') break;
+    let { data, error } = await page();
+    // 57014: la vista de fluidez calcula el número de clase de todos los alumnos
+    // y a veces roza el límite de tiempo de la clave anon. Un reintento basta.
+    if (error?.code === '57014') ({ data, error } = await page());
+    if (error) throw Object.assign(new Error(`${table}: ${error.message}`), { code: error.code });
+    out.push(...((data ?? []) as unknown as Row[]));
+    if ((data ?? []).length < 1000) break;
   }
   return out;
 }
 
-/** Para después de un análisis de fluidez: nunca lanza. */
+const scoredFilter = (q: any) => q.eq('status', 'ready').not('fluency_score', 'is', null);   // eslint-disable-line @typescript-eslint/no-explicit-any
+
+/** Clases con nota de un alumno. */
+async function classesOf(studentGroup: string): Promise<FluencyClass[]> {
+  const rows = await allRows('transcript_fluency_numbered', FLUENCY_COLS, q => scoredFilter(q).eq('student_group', studentGroup));
+  return rows.map(toClass);
+}
+
+/** Qué hacer con un alumno según sus filas de la tabla y su plan. */
+function decide(rows: Row[], plan: TestimonialCandidatePlan | null): DetectOutcome {
+  if (rows.some(r => r.status === 'descartado' && r.discarded_by === 'admin')) return 'bloqueado_admin';
+  if (rows.some(r => r.status !== 'descartado')) return 'ya_tiene';
+  return plan ? 'creada' : 'sin_pareja';
+}
+
+/** Crea la fila 'detectado' + 'pending' con la pareja provisional. Devuelve su id, o null si otra ejecución se adelantó. */
+async function insertCandidate(studentGroup: string, plan: TestimonialCandidatePlan): Promise<string | null> {
+  // Nombre e id del alumno, de su clase más reciente.
+  const { data: ca } = await supabase.from('class_analyses')
+    .select('student_id, student_name').eq('id', plan.trend.last.at(-1)!.analysisId).maybeSingle();
+  const now = new Date().toISOString();
+  const id = `tc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const { error } = await supabase.from('testimonial_candidates').insert({
+    id, student_group: studentGroup,
+    student_id: (ca?.student_id as string | null) ?? null,
+    student_name: (ca?.student_name as string | null) ?? null,
+    ...sideColumns('before', plan.before),
+    ...sideColumns('after', plan.after),
+    improvement: Math.round(plan.trend.improvement),
+    ai_review_status: 'pending',
+    status: 'detectado', status_changed_at: now,
+    // Viejo: la preparación la puede coger ya, sin esperar al plazo de reserva.
+    updated_at: '2000-01-01T00:00:00.000Z',
+  });
+  // 23505: otra ejecución creó la pareja activa a la vez (índice único). La suya vale.
+  if (error?.code === '23505') return null;
+  if (error) throw new Error(`Creando pareja: ${error.message}`);
+  return id;
+}
+
+/** Detección de UN alumno (tras cada nota de fluidez). Sin IA. */
+export async function detectForStudent(
+  studentGroup: string, opts: { dryRun?: boolean } = {},
+): Promise<{ outcome: DetectOutcome; candidateId?: string; plan?: TestimonialCandidatePlan }> {
+  const existing = await supabase.from('testimonial_candidates')
+    .select('id, status, discarded_by').eq('student_group', studentGroup);
+  if (isMissingTable(existing.error)) return { outcome: 'no_table' };
+  if (existing.error) throw new Error(`testimonial_candidates: ${existing.error.message}`);
+
+  const plan = planCandidate(await classesOf(studentGroup));
+  const outcome = decide((existing.data ?? []) as Row[], plan);
+  if (outcome !== 'creada' || !plan || opts.dryRun) return { outcome, plan: plan ?? undefined };
+  const id = await insertCandidate(studentGroup, plan);
+  return id ? { outcome, candidateId: id, plan } : { outcome: 'ya_tiene' };
+}
+
+/** Detección de TODOS los alumnos de una vez (dos lecturas ligeras). Sin IA. */
+export async function detectAll(opts: { dryRun?: boolean } = {}): Promise<{
+  counts: Record<DetectOutcome, number>;
+  created: Array<{ studentGroup: string; plan: TestimonialCandidatePlan }>;
+}> {
+  const counts: Record<DetectOutcome, number> = { no_table: 0, bloqueado_admin: 0, ya_tiene: 0, sin_pareja: 0, creada: 0 };
+  let candidates: Row[];
+  try {
+    candidates = await allRows('testimonial_candidates', 'id, student_group, status, discarded_by');
+  } catch (err) {
+    if (isMissingTable(err as { code?: string })) { counts.no_table = 1; return { counts, created: [] }; }
+    throw err;
+  }
+  const rowsOf = new Map<string, Row[]>();
+  for (const r of candidates) rowsOf.set(String(r.student_group), [...(rowsOf.get(String(r.student_group)) ?? []), r]);
+
+  const byGroup = new Map<string, FluencyClass[]>();
+  for (const r of await allRows('transcript_fluency_numbered', FLUENCY_COLS, scoredFilter)) {
+    const g = String(r.student_group);
+    byGroup.set(g, [...(byGroup.get(g) ?? []), toClass(r)]);
+  }
+
+  const created: Array<{ studentGroup: string; plan: TestimonialCandidatePlan }> = [];
+  for (const [g, classes] of byGroup) {
+    const plan = planCandidate(classes);
+    let outcome = decide(rowsOf.get(g) ?? [], plan);
+    if (outcome === 'creada' && plan) {
+      if (!opts.dryRun && !(await insertCandidate(g, plan))) outcome = 'ya_tiene';
+      else created.push({ studentGroup: g, plan });
+    }
+    counts[outcome]++;
+  }
+  return { counts, created };
+}
+
+// ── Preparación de los clips (IA) ────────────────────────────────────────────
+
+interface LoadedClass {
+  cls: FluencyClass;
+  prep: FluencyPrep;
+}
+
+/** Lee los transcripts de unas clases (una a una: nunca en listados) y los prepara para la IA. */
+async function loadClasses(classes: FluencyClass[], studentName: string): Promise<LoadedClass[]> {
+  const teacherNames = new Map<string, string | null>();
+  const out: LoadedClass[] = [];
+  for (const cls of classes) {
+    const { data: ca } = await supabase.from('class_analyses')
+      .select('transcript, teacher_id').eq('id', cls.analysisId).maybeSingle();
+    if (!ca) continue;
+    const tid = (ca.teacher_id as string | null) ?? null;
+    if (tid && !teacherNames.has(tid)) {
+      const { data: t } = await supabase.from('teachers').select('name').eq('id', tid).maybeSingle();
+      teacherNames.set(tid, (t?.name as string | undefined) ?? null);
+    }
+    const prep = prepareFluency(String(ca.transcript ?? ''), { teacherName: tid ? teacherNames.get(tid) : null, studentName });
+    if (prep.turns.length > 0) out.push({ cls, prep });
+  }
+  return out;
+}
+
+interface Clip {
+  cls: FluencyClass;
+  excerpt: string;
+  seconds: number;
+  ai: MomentIA;
+}
+
+/** Por qué una cita de la IA no vale (null = vale), y su segundo si vale. */
+function checkClip(loaded: LoadedClass[], ai: MomentIA): { error: string } | { clip: Clip } {
+  const chosen = loaded[ai.class_option - 1];
+  if (!chosen) return { error: `la clase ${ai.class_option} no existe.` };
+  const loc = locateExcerpt(chosen.prep.turns, ai.excerpt);
+  if (!loc) return { error: `la cita "${ai.excerpt.slice(0, 80)}" no aparece literal en un solo turno de la clase ${ai.class_option}.` };
+  const speaker = chosen.prep.turns[loc.turnIndex].speaker;
+  if (chosen.prep.teacherSpeaker && speaker === chosen.prep.teacherSpeaker) {
+    return { error: `la cita "${ai.excerpt.slice(0, 80)}" está en un turno del PROFE.` };
+  }
+  const seconds = excerptStartSeconds(chosen.prep.turns, loc);
+  if (seconds == null) return { error: 'el turno de la cita no tiene minuto.' };
+  return { clip: { cls: chosen.cls, excerpt: ai.excerpt.trim(), seconds, ai } };
+}
+
+const formatForAi = (l: LoadedClass[]) =>
+  l.map(x => ({ date: x.cls.classDay, turnsText: formatTurnsForAi(x.prep) }));
+
+/** Una llamada (y un reintento si la cita no vale y queda tiempo). `noTime`: no se llegó a llamar. */
+async function choose(
+  kind: MomentKind, loaded: LoadedClass[], studentName: string, deadline: number,
+  badMoment?: { date: string; excerpt: string },
+): Promise<{ clip?: Clip; error?: string; noTime?: boolean }> {
+  let retryNote: string | undefined;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    // La llamada nunca puede pasar del final de la función.
+    const left = deadline - Date.now() - 2_000;
+    if (left < 10_000) return retryNote ? { error: `Sin tiempo para reintentar. ${retryNote}` } : { noTime: true };
+    const res = await pickMoment({
+      kind, studentName, classes: formatForAi(loaded), badMoment, retryNote, timeoutMs: Math.min(25_000, left),
+    });
+    if (res.status !== 'ready' || !res.data) return { error: res.error ?? `La IA no respondió (${res.status}).` };
+    const checked = checkClip(loaded, res.data);
+    if ('clip' in checked) return { clip: checked.clip };
+    retryNote = `La cita no valía: ${checked.error}`;
+  }
+  return { error: retryNote };
+}
+
+/**
+ * Prepara los clips de una pareja en 'detectado'. Si el alumno ya no cumple la
+ * regla (nunca se enseñó, así que nadie la ha revisado), la pareja se borra.
+ */
+export async function prepareCandidate(id: string, deadline: number): Promise<PrepareOutcome> {
+  const { data: c, error } = await supabase.from('testimonial_candidates')
+    .select('id, student_group, student_name, status').eq('id', id).maybeSingle();
+  if (error || !c || c.status !== 'detectado') return 'nada';
+
+  const plan = planCandidate(await classesOf(String(c.student_group)));
+  if (!plan) {
+    await supabase.from('testimonial_candidates').delete().eq('id', id).eq('status', 'detectado').neq('ai_review_status', 'ready');
+    return 'ya_no_cumple';
+  }
+
+  const fail = async (msg: string): Promise<PrepareOutcome> => {
+    await supabase.from('testimonial_candidates').update({
+      ai_review_status: 'failed', ai_error: msg.slice(0, 500), updated_at: new Date().toISOString(),
+    }).eq('id', id).eq('status', 'detectado');
+    return 'fallida';
+  };
+
+  const studentName = String(c.student_name ?? 'el alumno');
+  const badLoaded = await loadClasses(plan.badOptions, studentName);
+  if (badLoaded.length === 0) return fail('No se pudieron leer los transcripts de sus primeras clases.');
+  const bad = await choose('malo', badLoaded, studentName, deadline);
+  if (bad.noTime) return 'sin_tiempo';
+  if (!bad.clip) return fail(`Momento malo: ${bad.error}`);
+
+  // La buena, a los días mínimos de la mala que eligió la IA.
+  const goodLoaded = await loadClasses(goodOptionsAfter(bad.clip.cls, plan.goodOptions), studentName);
+  if (goodLoaded.length === 0) return fail('No se pudieron leer los transcripts de sus últimas clases.');
+  const good = await choose('bueno', goodLoaded, studentName, deadline,
+    { date: bad.clip.cls.classDay, excerpt: bad.clip.excerpt });
+  if (good.noTime) return 'sin_tiempo';
+  if (!good.clip) return fail(`Momento bueno: ${good.error}`);
+
+  const { error: upErr } = await supabase.from('testimonial_candidates').update({
+    ...sideColumns('before', bad.clip.cls, bad.clip),
+    ...sideColumns('after', good.clip.cls, good.clip),
+    improvement: Math.round(plan.trend.improvement),
+    ai_review_status: 'ready',
+    ai_summary: good.clip.ai.summary?.trim() || null,
+    ai_reason: `Malo: ${bad.clip.ai.why} Bueno: ${good.clip.ai.why}`.slice(0, 1000),
+    ai_is_real: null, ai_error: null,
+    updated_at: new Date().toISOString(),
+  }).eq('id', id).eq('status', 'detectado');
+  if (upErr) return fail(`Guardando: ${upErr.message}`);
+  return 'lista';
+}
+
+/** Cuántas parejas esperan preparación (las que la pestaña no enseña aún). */
+export async function prepareQueue(): Promise<{ pending: number; failed: number }> {
+  const count = async (st: string) => {
+    const { count: n } = await supabase.from('testimonial_candidates').select('id', { count: 'exact' })
+      .eq('status', 'detectado').eq('ai_review_status', st).range(0, 0);
+    return n ?? 0;
+  };
+  const [pending, failed] = await Promise.all([count('pending'), count('failed')]);
+  return { pending, failed };
+}
+
+/**
+ * Coge UNA pareja sin preparar (o fallida, con `retryFailed`) que nadie esté
+ * preparando y la prepara. 'nada' = no queda ninguna libre.
+ */
+export async function prepareNext(opts: { deadline: number; retryFailed?: boolean }): Promise<PrepareOutcome> {
+  const estado = opts.retryFailed ? 'failed' : 'pending';
+  const cutoff = new Date(Date.now() - LEASE_MS).toISOString();
+  const { data } = await supabase.from('testimonial_candidates').select('id')
+    .eq('status', 'detectado').eq('ai_review_status', estado).lt('updated_at', cutoff)
+    .order('id').limit(1);
+  const id = data?.[0]?.id as string | undefined;
+  if (!id) return 'nada';
+  // Reserva: solo sigue si esta ejecución consiguió marcarla.
+  const { data: mine } = await supabase.from('testimonial_candidates')
+    .update({ updated_at: new Date().toISOString() })
+    .eq('id', id).eq('ai_review_status', estado).lt('updated_at', cutoff).select('id');
+  if (!mine?.length) return 'sin_tiempo';
+  return prepareCandidate(id, opts.deadline);
+}
+
+/**
+ * Para después de un análisis de fluidez: nunca lanza. Si el alumno entra y
+ * queda tiempo antes de `deadline`, prepara sus clips en el momento; si no, los
+ * prepara la pestaña del admin cuando se abra.
+ */
 export async function detectInBackground(studentGroup: string, deadline: number): Promise<void> {
   try {
-    const r = await detectForStudent(studentGroup, { deadline });
-    if (r.outcome === 'creada' || r.outcome === 'reemplazada') {
-      console.log(`[testimonials] ${studentGroup}: pareja ${r.outcome} (${r.candidateId}), revisión ${r.review}.`);
-    }
+    const r = await detectForStudent(studentGroup);
+    if (r.outcome !== 'creada' || !r.candidateId) return;
+    const prep = deadline - Date.now() >= PREPARE_MIN_MS ? await prepareCandidate(r.candidateId, deadline) : 'sin_tiempo';
+    console.log(`[testimonials] ${studentGroup}: pareja creada (${r.candidateId}), clips: ${prep}.`);
   } catch (err) {
     console.error(`[testimonials] Detección fallida para ${studentGroup}:`, err);
   }
