@@ -36,7 +36,7 @@ import { effectiveLevelOf, aiLevelOf } from '@/lib/effectiveLevel';
 import { planFieldsOf } from '@/lib/productUtils';
 import { questionsForResponses } from '@/lib/formQuestions';
 import {
-  asObject, fichaFromRow, isRiskSignal, needsAnalysis,
+  asObject, fichaFromRow, isRiskSignal, needsAnalysis, isAnalysisQueued,
   type ClassAnalysisRow, type FichaIA, type GeneratedClassIA, type NextClassGuide, type RiskSignal,
 } from '@/lib/aiTypes';
 import {
@@ -738,13 +738,14 @@ function PendingTranscriptModal({ pending, assignment, profile, ficha, teacher, 
       const res = await registerClassWithTranscript(base);
       await onSaved();
       onToast(res.validation && res.validation.decision !== 'ok'
-        ? 'Clase guardada ✓ Pendiente de revisión del equipo. El análisis se completará en unos instantes.'
-        : 'Clase guardada ✓ El análisis se completará en unos instantes.');
+        ? 'Clase guardada ✓ Pendiente de revisión del equipo. El análisis estará listo en unas horas.'
+        : 'Clase guardada ✓ El análisis estará listo en unas horas.');
       onClose();
 
       // Segundo aviso solo si hay algo que decir: que el informe falló.
-      res.analysis.then(({ analyzed }) => {
-        if (!analyzed) {
+      // `queued` = en la cola del análisis en lote: no es un fallo.
+      res.analysis.then(({ analyzed, queued }) => {
+        if (!analyzed && !queued) {
           onToast('La clase está guardada, pero el análisis no se completó: puedes reintentarlo en Seguimiento.');
         }
       });
@@ -1317,6 +1318,11 @@ function SeguimientoTab({ analyses, risk, intervention, progressScore, classNumb
 
               {needsAnalysis(r) && (
                 <RetryAnalysisRow row={r} ctx={retryCtx} onDone={onRetried} />
+              )}
+              {isAnalysisQueued(r) && (
+                <div style={{ marginTop: 10, padding: '11px 13px', borderRadius: 9, background: 'var(--bg-surface-3)', fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                  La clase está guardada. Su análisis está en cola y estará listo en unas horas.
+                </div>
               )}
               </div>
             </div>

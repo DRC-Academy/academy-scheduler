@@ -27,6 +27,14 @@ export function hasAnthropicKey(): boolean {
 // Modelo por defecto de todo el módulo, configurable por entorno.
 export const AI_MODEL = process.env.ANTHROPIC_MODEL || 'claude-opus-4-8';
 
+// Modelo de las funciones de VOLUMEN (análisis de cada transcript, generar la
+// siguiente clase). Oct/2026: con Opus 4.8 el análisis de los ~70 transcripts de
+// cada día laborable era el 80 % del gasto (~250 USD/mes de ~300) y el
+// presupuesto de la clave es de 100 €/mes. Sonnet 5.5 cuesta 2/10 USD por millón
+// de tokens (entrada/salida) frente a 5/25 de Opus 4.8. Configurable por entorno
+// para poder volver atrás sin tocar código.
+export const ECONOMY_MODEL = process.env.ANTHROPIC_ECONOMY_MODEL || 'claude-sonnet-5-5';
+
 export type AiStatus = 'ready' | 'skipped' | 'error';
 
 export interface AiResult<T> {
@@ -53,6 +61,14 @@ export interface AskClaudeJsonOptions {
   /** Override puntual del modelo (por defecto AI_MODEL=opus-4-8). P. ej. la
    *  evaluación de writing del test de nivel usa 'claude-haiku-4-5'. */
   model?: string;
+  /**
+   * 'off' = sin razonamiento previo. Hace falta con Sonnet 5.5: si se omite
+   * `thinking`, razona antes de responder y ese razonamiento se cobra como
+   * salida. Opus 4.8 ya respondía sin razonar al omitirlo, así que 'off' deja a
+   * Sonnet igual que estaba Opus. Sonnet 5.5 rechaza `{type:'disabled'}`: su
+   * forma de apagarlo es `between_tools`, válido con effort 'high' o menor.
+   */
+  thinking?: 'off';
 }
 
 // ── Saneado del esquema antes de enviarlo ─────────────────────────────────────
@@ -133,6 +149,96 @@ export function sanitizeSchemaForApi(
 }
 
 /**
+ * La petición tal como se manda a la API. Separada de askClaudeJson porque la
+ * Batch API (lib/analysisBatch) manda EXACTAMENTE la misma petición diferida: si
+ * hubiera dos copias, el análisis en lote y el inmediato acabarían distintos.
+ */
+export function buildClaudeRequest(opts: AskClaudeJsonOptions): Anthropic.MessageCreateParamsNonStreaming {
+  return {
+    model: opts.model ?? AI_MODEL,
+    max_tokens: opts.maxTokens,
+    ...(opts.thinking === 'off'
+      // El SDK instalado (0.112) todavía no tipa `between_tools`.
+      ? { thinking: { type: 'between_tools' } as unknown as Anthropic.ThinkingConfigParam }
+      : {}),
+    // ── Prompt caching ──────────────────────────────────────────────────────
+    // El breakpoint de caché va en el SYSTEM prompt (grande y estable entre
+    // llamadas: metodología, formato, avatar), NO en el request completo. El
+    // texto del usuario (transcript, ficha del alumno) cambia en cada llamada y
+    // queda FUERA del prefijo cacheado — que es justo lo que queremos: en la
+    // siguiente llamada con el mismo system, ese prefijo se lee del caché (~10%
+    // del costo) y solo se cobra el texto nuevo a precio completo.
+    //
+    // Ojo: auto-cachear el request completo (cache_control al tope del request)
+    // pondría el breakpoint en el último bloque = el texto variable del usuario,
+    // generando escrituras de caché sin lecturas (sin ahorro). Por eso va acá.
+    //
+    // Requiere un prefijo mínimo cacheable (~4096 tokens en Opus 4.8); los system
+    // prompts más cortos simplemente no cachean (el log de abajo lo muestra en 0).
+    // Las reglas de estilo van al final del system prompt: son constantes, así
+    // que el prefijo cacheado sigue siendo estable entre llamadas.
+    system: [
+      { type: 'text', text: `${opts.system}\n\n${NO_DASH_RULES}`, cache_control: { type: 'ephemeral' } },
+    ],
+    output_config: {
+      format: { type: 'json_schema', schema: sanitizeSchemaForApi(opts.schema, opts.label) },
+      ...(opts.effort ? { effort: opts.effort } : {}),
+    },
+    messages: [{ role: 'user', content: opts.prompt }],
+  };
+}
+
+/**
+ * Lee la respuesta de Claude: motivos de corte, JSON y limpieza de guiones.
+ * Compartida por la llamada inmediata y por los resultados de la Batch API.
+ */
+export function readClaudeJson<T>(message: Anthropic.Message, opts: AskClaudeJsonOptions): AiResult<T> {
+  // Monitoreo de caché y de tokens (común a todos los endpoints de IA; `label`
+  // identifica cuál llamó). cache_read alto en llamadas repetidas = está andando.
+  // Si cache_read queda en 0 entre llamadas con el mismo system, algo invalida el
+  // prefijo o el prompt no llega al mínimo cacheable.
+  console.log('[AI Cache]', {
+    endpoint: opts.label,
+    model: message.model,
+    cache_read: message.usage?.cache_read_input_tokens ?? 0,
+    cache_write: message.usage?.cache_creation_input_tokens ?? 0,
+    uncached_input: message.usage?.input_tokens ?? 0,
+    output: message.usage?.output_tokens ?? 0,
+  });
+
+  // Claude puede negarse por seguridad; en ese caso la salida no cumple el esquema.
+  if (message.stop_reason === 'refusal') {
+    console.error(`[ai:${opts.label}] Claude rechazó la petición.`);
+    return { data: null, status: 'error', error: 'La IA rechazó la petición.' };
+  }
+  if (message.stop_reason === 'max_tokens') {
+    console.error(`[ai:${opts.label}] Respuesta truncada por max_tokens (${opts.maxTokens}).`);
+    return { data: null, status: 'error', error: 'La respuesta de la IA quedó incompleta.' };
+  }
+
+  const text = message.content
+    .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+    .map(b => b.text)
+    .join('')
+    .trim();
+
+  if (!text) {
+    console.error(`[ai:${opts.label}] Respuesta sin texto utilizable.`);
+    return { data: null, status: 'error', error: 'La IA no devolvió contenido.' };
+  }
+
+  try {
+    // Limpieza de guiones ANTES de que nadie guarde ni muestre el resultado.
+    const parsed = JSON.parse(text) as T;
+    return { data: cleanAiDeep(parsed, opts.skipCleanKeys ?? []), status: 'ready' };
+  } catch (err) {
+    const msg = describeError(err);
+    console.error(`[ai:${opts.label}] ${msg}`);
+    return { data: null, status: 'error', error: msg };
+  }
+}
+
+/**
  * Le pide a Claude una respuesta que cumpla `schema` y la devuelve parseada.
  *
  * Usa structured outputs (`output_config.format`): la API restringe la salida al
@@ -144,6 +250,12 @@ export function sanitizeSchemaForApi(
  *   · se añaden las NO_DASH_RULES al final de CADA system prompt;
  *   · se pasa la respuesta por cleanAiDeep antes de devolverla.
  * Ver lib/textCleanup.ts.
+ *
+ * RED DEL MODELO ECONÓMICO: si una función pide un modelo distinto del de por
+ * defecto y la API rechaza la petición (400: modelo o parámetro no aceptado),
+ * se repite UNA vez con AI_MODEL y sin `thinking`. Un parámetro nuevo que la API
+ * no acepte no puede tumbar el análisis de todas las clases (ver el caso de
+ * maxItems más arriba): como mucho, esa llamada cuesta lo de antes.
  */
 export async function askClaudeJson<T>(opts: AskClaudeJsonOptions): Promise<AiResult<T>> {
   if (!hasAnthropicKey()) {
@@ -151,86 +263,26 @@ export async function askClaudeJson<T>(opts: AskClaudeJsonOptions): Promise<AiRe
   }
 
   try {
-    const message = await anthropic.messages.create(
-      {
-        model: opts.model ?? AI_MODEL,
-        max_tokens: opts.maxTokens,
-        // ── Prompt caching ──────────────────────────────────────────────────────
-        // El breakpoint de caché va en el SYSTEM prompt (grande y estable entre
-        // llamadas: metodología, formato, avatar), NO en el request completo. El
-        // texto del usuario (transcript, ficha del alumno) cambia en cada llamada y
-        // queda FUERA del prefijo cacheado — que es justo lo que queremos: en la
-        // siguiente llamada con el mismo system, ese prefijo se lee del caché (~10%
-        // del costo) y solo se cobra el texto nuevo a precio completo.
-        //
-        // Ojo: auto-cachear el request completo (cache_control al tope del request)
-        // pondría el breakpoint en el último bloque = el texto variable del usuario,
-        // generando escrituras de caché sin lecturas (sin ahorro). Por eso va acá.
-        //
-        // Requiere un prefijo mínimo cacheable (~4096 tokens en Opus 4.8); los system
-        // prompts más cortos simplemente no cachean (el log de abajo lo muestra en 0).
-        // Las reglas de estilo van al final del system prompt: son constantes, así
-        // que el prefijo cacheado sigue siendo estable entre llamadas.
-        system: [
-          { type: 'text', text: `${opts.system}\n\n${NO_DASH_RULES}`, cache_control: { type: 'ephemeral' } },
-        ],
-        output_config: {
-          format: { type: 'json_schema', schema: sanitizeSchemaForApi(opts.schema, opts.label) },
-          ...(opts.effort ? { effort: opts.effort } : {}),
-        },
-        messages: [{ role: 'user', content: opts.prompt }],
-      },
-      {
-        timeout: opts.timeoutMs ?? 120_000,
-        ...(opts.maxRetries != null ? { maxRetries: opts.maxRetries } : {}),
-      },
-    );
-
-    // Monitoreo de caché (una sola vez, común a todos los endpoints de IA; `label`
-    // identifica cuál llamó). cache_read alto en llamadas repetidas = está andando.
-    // Si cache_read queda en 0 entre llamadas con el mismo system, algo invalida el
-    // prefijo o el prompt no llega al mínimo cacheable.
-    console.log('[AI Cache]', {
-      endpoint: opts.label,
-      cache_read: message.usage?.cache_read_input_tokens ?? 0,
-      cache_write: message.usage?.cache_creation_input_tokens ?? 0,
-      uncached_input: message.usage?.input_tokens ?? 0,
+    const message = await anthropic.messages.create(buildClaudeRequest(opts), {
+      timeout: opts.timeoutMs ?? 120_000,
+      ...(opts.maxRetries != null ? { maxRetries: opts.maxRetries } : {}),
     });
-
-    // Claude puede negarse por seguridad; en ese caso la salida no cumple el esquema.
-    if (message.stop_reason === 'refusal') {
-      console.error(`[ai:${opts.label}] Claude rechazó la petición.`);
-      return { data: null, status: 'error', error: 'La IA rechazó la petición.' };
-    }
-    if (message.stop_reason === 'max_tokens') {
-      console.error(`[ai:${opts.label}] Respuesta truncada por max_tokens (${opts.maxTokens}).`);
-      return { data: null, status: 'error', error: 'La respuesta de la IA quedó incompleta.' };
-    }
-
-    const text = message.content
-      .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-      .map(b => b.text)
-      .join('')
-      .trim();
-
-    if (!text) {
-      console.error(`[ai:${opts.label}] Respuesta sin texto utilizable.`);
-      return { data: null, status: 'error', error: 'La IA no devolvió contenido.' };
-    }
-
-    // Limpieza de guiones ANTES de que nadie guarde ni muestre el resultado.
-    const parsed = JSON.parse(text) as T;
-    return { data: cleanAiDeep(parsed, opts.skipCleanKeys ?? []), status: 'ready' };
+    return readClaudeJson<T>(message, opts);
   } catch (err: unknown) {
     const msg = describeError(err);
+    if (err instanceof Anthropic.BadRequestError && opts.model && opts.model !== AI_MODEL && !isCreditExhaustedError(msg)) {
+      console.error(`[ai:${opts.label}] ${opts.model} rechazó la petición (${msg}). Se repite con ${AI_MODEL}.`);
+      return askClaudeJson<T>({ ...opts, model: AI_MODEL, thinking: undefined });
+    }
     console.error(`[ai:${opts.label}] Falló la llamada a Claude: ${msg}`);
-    // Sin saldo falla TODA la IA a la vez: se avisa al admin (una vez al día).
+    // Sin saldo (o con el límite de gasto alcanzado) falla TODA la IA a la vez:
+    // se avisa al admin (una vez al día).
     if (isCreditExhaustedError(msg)) await notifyAiCreditExhausted({ label: opts.label, error: msg });
     return { data: null, status: 'error', error: msg };
   }
 }
 
-function describeError(err: unknown): string {
+export function describeError(err: unknown): string {
   if (err instanceof Anthropic.AuthenticationError) return 'ANTHROPIC_API_KEY inválida.';
   if (err instanceof Anthropic.RateLimitError) return 'Límite de peticiones alcanzado. Probá de nuevo en un momento.';
   if (err instanceof Anthropic.APIConnectionTimeoutError) return 'La IA tardó demasiado en responder.';

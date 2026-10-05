@@ -1173,8 +1173,9 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     });
     if (result.notice) setSaveNotice(result.notice);
     // Solo se vuelve a avisar si el informe de IA falla: la clase ya está guardada.
-    result.analysis?.then(({ analyzed }) => {
-      if (!analyzed) setSaveNotice(ANALYSIS_FAILED_NOTICE);
+    // `queued` = en la cola del análisis en lote: no es un fallo.
+    result.analysis?.then(({ analyzed, queued }) => {
+      if (!analyzed && !queued) setSaveNotice(ANALYSIS_FAILED_NOTICE);
     });
 
     // Tutorial: el transcript ya está guardado (no se espera al informe de IA, que

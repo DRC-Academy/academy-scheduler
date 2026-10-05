@@ -1,7 +1,7 @@
 // Análisis pedagógico de la transcripción de una clase (p. ej. exportada de
 // Fathom). Devuelve el informe, la puntuación de progreso y la señal de riesgo.
 
-import { askClaudeJson, type AiResult } from '@/lib/anthropic';
+import { askClaudeJson, ECONOMY_MODEL, type AiResult, type AskClaudeJsonOptions } from '@/lib/anthropic';
 import type { TranscriptIA } from '@/lib/aiTypes';
 import type { ActiveIntervention } from '@/lib/interventions';
 
@@ -258,20 +258,36 @@ ${input.transcript}`;
 // La API los rechaza en las respuestas estructuradas y la petición entera falla
 // con 400: fue exactamente el bug que dejó 370 análisis en 'failed' entre el
 // 04/08/2026 y el 17/08/2026. Ver sanitizeSchemaForApi en lib/anthropic.ts.
-export async function analyzeTranscript(input: TranscriptInput): Promise<TranscriptResult> {
-  return askClaudeJson<TranscriptIA>({
+//
+// COSTE (oct/2026). Esta llamada era el 80 % del gasto de la clave: ~70
+// transcripts por día laborable con Opus 4.8. Ahora va con ECONOMY_MODEL
+// (Sonnet 5.5) sin razonamiento previo, igual que respondía Opus, y el registro
+// normal de clases la manda en LOTE (lib/analysisBatch, mitad de precio). La
+// llamada inmediata queda para cuando alguien espera el informe en pantalla.
+//
+// maxRetries 0: un timeout del SDK se reintentaba dos veces y cada intento se
+// pagaba entero. El profesor ya tiene "Reintentar análisis".
+export function transcriptRequestOptions(input: TranscriptInput): AskClaudeJsonOptions {
+  return {
     label: 'analyze-transcript',
+    model: ECONOMY_MODEL,
+    thinking: 'off',
     system: SYSTEM_PROMPT,
     prompt: buildUserPrompt(input),
     schema: schemaFor(!!input.activeIntervention),
     maxTokens: 12000,
     effort: 'medium',
     timeoutMs: 40_000,
+    maxRetries: 0,
     // `channel`, `confidence`, `riskCause` y `cause` son enums, no prosa: la
     // limpieza de guiones no debe tocarlos (hoy no los rompería, pero no
     // dependemos de eso). 'externa_temporal' lleva guion bajo, no guion.
     skipCleanKeys: ['channel', 'confidence', 'riskCause', 'cause'],
-  });
+  };
+}
+
+export async function analyzeTranscript(input: TranscriptInput): Promise<TranscriptResult> {
+  return askClaudeJson<TranscriptIA>(transcriptRequestOptions(input));
 }
 
 /**

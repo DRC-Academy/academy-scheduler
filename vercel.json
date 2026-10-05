@@ -11,6 +11,14 @@
     {
       "path": "/api/cron/followups-nivel",
       "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/cron/analisis-lote",
+      "schedule": "0 4 * * *"
+    },
+    {
+      "path": "/api/cron/analisis-lote-tarde",
+      "schedule": "0 15 * * *"
     }
   ]
 }

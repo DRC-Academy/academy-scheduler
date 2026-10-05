@@ -25,9 +25,16 @@ import { resend, hasResendKey } from '@/lib/resend';
 
 const FROM = 'DRC Academy <notificaciones@drcacademy.com>';
 
-/** ¿Este error de la API es "no queda saldo"? */
+/**
+ * ¿Este error de la API es "no queda saldo"?
+ *
+ * Desde oct/2026 la clave de la plataforma vive en un espacio de trabajo con
+ * límite de gasto mensual. Al alcanzarlo la API contesta "You have reached your
+ * specified (workspace) API usage limits": para la plataforma es lo mismo que
+ * quedarse sin saldo (toda la IA para hasta el mes siguiente) y avisa igual.
+ */
 export function isCreditExhaustedError(message: string | null | undefined): boolean {
-  return /credit balance is too low|billing_error|insufficient[_ ]credit/i.test(message ?? '');
+  return /credit balance is too low|billing_error|insufficient[_ ]credit|usage limits?/i.test(message ?? '');
 }
 
 /** Fecha de hoy en España, AAAA-MM-DD: el "día" del tope de un aviso diario. */
@@ -48,14 +55,19 @@ export async function notifyAiCreditExhausted(opts: {
   try {
     const day = madridDay();
     const id = opts.test ? `notif_ai_credit_test_${Date.now()}` : `notif_ai_credit_${day}`;
+    const limit = /usage limits?/i.test(opts.error);
     const title = opts.test
       ? '🧪 PRUEBA · Aviso de IA sin crédito'
-      : '🚨 La IA se ha quedado sin crédito';
-    const body =
-      `Anthropic ha rechazado una petición por falta de saldo (función: ${opts.label}). ` +
-      'Mientras no se recargue, fallan la evaluación de la redacción de la prueba de nivel, ' +
-      'el análisis de transcripts y la generación de clases. Recarga en console.anthropic.com → Billing.' +
-      `\n\nError: ${opts.error.slice(0, 300)}`;
+      : limit ? '🚨 La IA llegó al límite de gasto del mes' : '🚨 La IA se ha quedado sin crédito';
+    const body = limit
+      ? `Anthropic ha rechazado una petición porque la clave llegó a su límite de gasto mensual (función: ${opts.label}). ` +
+        'Hasta el mes que viene, o hasta subir el límite, fallan la evaluación de la redacción de la prueba de nivel, ' +
+        'el análisis de transcripts y la generación de clases. El límite se cambia en console.anthropic.com → Workspaces → Limits.' +
+        `\n\nError: ${opts.error.slice(0, 300)}`
+      : `Anthropic ha rechazado una petición por falta de saldo (función: ${opts.label}). ` +
+        'Mientras no se recargue, fallan la evaluación de la redacción de la prueba de nivel, ' +
+        'el análisis de transcripts y la generación de clases. Recarga en console.anthropic.com → Billing.' +
+        `\n\nError: ${opts.error.slice(0, 300)}`;
 
     const { error: insErr } = await supabase.from('notifications').insert({
       id,

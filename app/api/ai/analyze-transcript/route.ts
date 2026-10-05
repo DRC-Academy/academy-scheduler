@@ -5,32 +5,32 @@
 // "Reintentar análisis" en la ficha del alumno.
 //
 // Modos (según el cuerpo):
+//   · { analysisId, defer: true }    → el paso 2 del registro normal: la fila se
+//                                      ENCOLA para la Batch API (mitad de precio)
+//                                      y el informe llega en unas horas. Ver
+//                                      lib/analysisBatch.
 //   · { analysisId, ... }            → analiza la fila ya guardada y le pega el
-//                                      informe. Es el paso 2 y el reintento.
+//                                      informe al momento. Es el reintento.
 //   · { transcript, ... }            → solo analiza y devuelve el informe (el
 //                                      profesor lo revisa/edita antes de guardar).
 //   · { save: true, analysis, ... }  → guarda transcript + informe de una vez
 //                                      (flujo "Registrar clase dada", donde el
 //                                      profesor edita el informe antes de guardar).
+//
+// Lo que pasa antes y después de la IA (ficha, riesgo, intervención,
+// autenticidad) vive en lib/transcriptAnalysis, compartido con el lote.
 
-import { supabase } from '@/lib/supabase';
 import { analyzeTranscript } from '@/lib/analyzeTranscript';
-import { isRiskCause, isRiskSignal, type TranscriptIA } from '@/lib/aiTypes';
-import { computeTranscriptVerdict, decideTranscript, shouldRunAI, statusForDecision } from '@/lib/transcriptVerdict';
-import { validateTranscriptStructure } from '@/lib/transcriptValidation';
-import { verifyTranscriptAI } from '@/lib/verifyTranscriptAI';
+import { computeTranscriptVerdict, statusForDecision } from '@/lib/transcriptVerdict';
 import {
-  persistTranscript, persistAnalysisFields, markAnalysisFailed, recordLateAuthenticityCheck,
-  ensureProfileId, updateProfileFromAnalysis,
-  notifyAdminRisk, notifyAdminTranscript, verdictPayload,
+  persistTranscript, persistAnalysisFields, markAnalysisFailed,
+  notifyAdminTranscript, verdictPayload,
 } from '@/lib/transcriptStore';
-import { normalizeSuggestion, normalizeCheck } from '@/lib/interventions';
+import { loadInterventionContext } from '@/lib/interventionStore';
 import {
-  loadInterventionContext, saveActiveIntervention, recordInterventionAudit,
-  notifyTeacherIntervention, notifyAdminUnattended, type InterventionContext,
-} from '@/lib/interventionStore';
-import { aiLevelOf, type ProfileLevelFields } from '@/lib/effectiveLevel';
-import { fetchTeacher, sendInterventionEmail } from '@/lib/emailNotifications';
+  prepareAttach, finishAttach, resolveAiLevel, afterAnalysis, type AnalysisBody,
+} from '@/lib/transcriptAnalysis';
+import { enqueueAnalysis } from '@/lib/analysisBatch';
 import { after } from 'next/server';
 import { runFluencyInBackground } from '@/lib/fluencyStore';
 
@@ -40,30 +40,7 @@ export const runtime = 'nodejs';
 // real de que la subida de transcripciones fallara.
 export const maxDuration = 60;
 
-interface Body {
-  transcript?: string;
-  studentProfile?: Record<string, unknown> | null;
-  classHistory?: unknown[] | null;
-  classNumber?: number | null;
-  classDate?: string | null;
-  studentName?: string;
-  teacherName?: string;
-  plan?: string;
-  level?: string;
-  // Paso 2 / reintento: fila ya guardada a la que pegarle el informe.
-  analysisId?: string | null;
-  // Guardado en un paso (informe ya revisado por el profesor).
-  save?: boolean;
-  analysis?: TranscriptIA;
-  studentId?: string | null;
-  teacherId?: string | null;
-  profileId?: string | null;
-  transcriptHash?: string | null;
-  replaceId?: string | null;
-  joinLogId?: string | null;
-  /** 120 en una sesión de 2h (celdas contiguas). Por defecto, 60. */
-  durationMinutes?: number | null;
-}
+type Body = AnalysisBody;
 
 export async function POST(request: Request): Promise<Response> {
   // Reloj de la función: after() vive dentro del mismo maxDuration.
@@ -84,116 +61,24 @@ export async function POST(request: Request): Promise<Response> {
   return handleAnalyzeOnly(body, studentName);
 }
 
-/**
- * EL NIVEL QUE VA AL PROMPT.
- *
- * El cuerpo trae `assignment.student_level`, o sea el CURSO CONTRATADO, que es
- * la última fuente de la prioridad. Si el alumno tiene ficha mandan, por ese
- * orden, el visto bueno del profesor y el resultado de la prueba de nivel.
- *
- * Se resuelve acá, en el servidor, y no en cada pantalla: /revisiones y
- * /mis-clases registran clases sin cargar la ficha, así que le mandaban a la IA
- * el nivel del curso aunque el profesor hubiera corregido al alumno. Regla
- * única en lib/effectiveLevel.
- */
-async function resolveAiLevel(args: {
-  profileId?: string | null; studentId?: string | null; studentName: string; level?: string;
-}): Promise<string | undefined> {
-  const read = (cols: string) => {
-    const base = supabase.from('student_profiles').select(cols);
-    const q = args.profileId  ? base.eq('id', args.profileId)
-            : args.studentId  ? base.eq('student_id', args.studentId)
-            :                   base.eq('student_name', args.studentName);
-    return q.limit(1).maybeSingle();
-  };
-
-  // `teacher_confirmed_level` llega con supabase-teacher-level.sql. Si todavía
-  // no se corrió, pedirla haría fallar la consulta ENTERA (42703) y el nivel se
-  // perdería en silencio: mismo reintento por grupos que el resto del archivo.
-  let res = await read('teacher_confirmed_level, current_level, level_test_cefr');
-  if (res.error?.code === '42703' || res.error?.code === 'PGRST204') {
-    res = await read('current_level, level_test_cefr');
-  }
-  if (res.error) console.warn('[analyze-transcript] Sin ficha para resolver el nivel; va el del curso:', res.error.message);
-
-  // Sin ficha, `aiLevelOf` devuelve el nivel del cuerpo: el comportamiento de
-  // siempre para los alumnos que no completaron el formulario.
-  const profile = (res.data ?? null) as ProfileLevelFields | null;
-  return aiLevelOf(profile, args.level) ?? undefined;
-}
-
 // ── Modo 1: analizar una fila ya guardada (paso 2 y "Reintentar análisis") ────
 async function handleAttach(body: Body, studentName: string, analysisId: string): Promise<Response> {
-  // La fila manda: el transcript guardado es el bueno (en el reintento el cliente
-  // ni siquiera lo envía).
-  const read = (cols: string) =>
-    supabase.from('class_analyses').select(cols).eq('id', analysisId).maybeSingle();
-
-  let res = await read('id, transcript, class_number, class_date, teacher_id, student_id, validation_status');
-  if (res.error && (res.error.code === '42703' || res.error.code === 'PGRST204')) {
-    res = await read('id, transcript, class_number, class_date, teacher_id, student_id');
+  // Paso 2 del registro normal: nadie espera el informe, va en lote. Si la cola
+  // no está disponible (falta el SQL), se analiza al momento como siempre.
+  if (body.defer) {
+    const queued = await enqueueAnalysis(analysisId, body);
+    if (queued) return Response.json({ analyzed: false, queued: true, saved: true, analysisId });
   }
-  if (res.error) console.error('[analyze-transcript] Error al leer la fila a analizar:', res.error);
-  const row = (res.data ?? null) as Record<string, unknown> | null;
-  const transcript = String(row?.transcript ?? body.transcript ?? '').trim();
-  if (!transcript) {
+
+  const prep = await prepareAttach(body, studentName, analysisId);
+  if (!prep) {
     return Response.json({ error: 'No encontramos la transcripción de esta clase.' }, { status: 404 });
   }
 
-  const classNumber = body.classNumber ?? (row?.class_number as number | null) ?? null;
-  const classDate   = body.classDate   ?? (row?.class_date as string | null)   ?? null;
-  const studentId   = (row?.student_id as string | null) ?? body.studentId ?? null;
-
-  // Alerta que el alumno traía abierta: si la hay, la IA evalúa además si el
-  // profesor intervino (auditoría de seguimiento). `currentAnalysisId` evita
-  // auditar esta clase contra la alerta que ella misma generó en un intento
-  // anterior ("Reintentar análisis").
-  const ctx = await loadInterventionContext({
-    profileId: body.profileId, studentId, studentName, currentAnalysisId: analysisId,
-  });
-
-  const result = await analyzeTranscript({
-    transcript,
-    studentName,
-    teacherName: body.teacherName?.trim() || '',
-    plan: body.plan,
-    level: await resolveAiLevel({ profileId: body.profileId, studentId, studentName, level: body.level }),
-    classNumber,
-    classDate,
-    studentProfile: body.studentProfile,
-    classHistory: body.classHistory,
-    activeIntervention: ctx.active,
-  });
-
-  if (result.status !== 'ready' || !result.data) {
-    const msg = result.error ?? 'No se pudo analizar la transcripción.';
-    console.error(`[analyze-transcript] Análisis fallido para ${analysisId} (${studentName}): ${msg}`);
-    await markAnalysisFailed(analysisId, msg);
-    // 200 a propósito: la CLASE está guardada. El cliente distingue por `analyzed`.
-    return Response.json({ analyzed: false, saved: true, analysisId, error: msg });
-  }
-
-  const saveErr = await persistAnalysisFields(analysisId, result.data);
-  if (saveErr.error) {
-    console.error(`[analyze-transcript] No se pudo guardar el informe de ${analysisId}:`, saveErr.error);
-    return Response.json({ analyzed: false, saved: true, analysisId, error: saveErr.error });
-  }
-
-  await afterAnalysis({
-    analysisId,
-    analysis: result.data,
-    transcript,
-    studentName,
-    classDate,
-    classNumber,
-    body,
-    teacherId: (row?.teacher_id as string | null) ?? body.teacherId ?? null,
-    studentId,
-    validationStatus: (row?.validation_status as string | null) ?? 'ok',
-    intervention: ctx,
-  });
-
-  return Response.json({ analyzed: true, saved: true, analysisId, analysis: result.data });
+  const done = await finishAttach(prep, await analyzeTranscript(prep.input));
+  // 200 también en el fallo, a propósito: la CLASE está guardada. El cliente
+  // distingue por `analyzed`.
+  return Response.json({ ...done, saved: true, analysisId });
 }
 
 // ── Modo 2: solo analizar, sin guardar ───────────────────────────────────────
@@ -320,237 +205,6 @@ async function handleSaveWithAnalysis(body: Body, studentName: string, startedAt
     analysisId: saved.id, replaced: !!body.replaceId,
     validation: verdict ? verdictPayload(verdict) : null,
   });
-}
-
-/**
- * Después de guardar el informe: ficha del alumno, aviso de riesgo, sugerencia
- * de intervención, auditoría de seguimiento y CAPA 3 (autenticidad por IA).
- * Todo best-effort — acá ya no se puede perder la clase.
- */
-async function afterAnalysis(args: {
-  analysisId: string;
-  analysis: TranscriptIA;
-  transcript: string;
-  studentName: string;
-  classDate: string | null;
-  classNumber: number | null;
-  body: Body;
-  teacherId: string | null;
-  studentId: string | null;
-  validationStatus: string;
-  intervention: InterventionContext;
-}): Promise<void> {
-  const { analysis, studentName, body } = args;
-
-  // La ficha se CREA si no existe: sin ella el riesgo se quedaba en
-  // class_analyses y el panel del admin no tenía nada que mostrar.
-  let profileId: string | null = args.intervention.profileId;
-  try {
-    profileId ??= await ensureProfileId({
-      profileId: body.profileId, studentId: args.studentId, studentName,
-      teacherId: args.teacherId,
-    });
-    if (profileId) {
-      await updateProfileFromAnalysis({
-        profileId, studentId: args.studentId, studentName,
-        classDate: args.classDate, analysis,
-      });
-    } else {
-      console.warn(`[analyze-transcript] ${studentName}: sin ficha y no se pudo crear; el riesgo queda solo en class_analyses.`);
-    }
-  } catch (err) {
-    console.error('[analyze-transcript] No se pudo actualizar la ficha:', err);
-  }
-
-  const risk = isRiskSignal(analysis.riskSignal) ? analysis.riskSignal : 'verde';
-
-  // AUDITORÍA primero, sugerencia después: si esta clase vuelve a salir en
-  // riesgo, la intervención nueva tiene que sobrescribir a la que se cierre acá.
-  try {
-    await runInterventionAudit({ ...args, profileId });
-  } catch (err) {
-    console.error('[analyze-transcript] Auditoría de seguimiento no disponible:', err);
-  }
-
-  // Solo el ROJO avisa. El amarillo se retiró entero: era una señal débil que
-  // generaba alerta e incomodaba sin decir nada accionable.
-  if (risk === 'rojo') {
-    try {
-      await notifyAdminRisk(risk, studentName, {
-        teacherName: body.teacherName, classNumber: args.classNumber,
-      }, analysis);
-    } catch (err) {
-      console.error('[analyze-transcript] No se pudo avisar del riesgo:', err);
-    }
-
-    try {
-      await openIntervention({ ...args, profileId, risk });
-    } catch (err) {
-      console.error('[analyze-transcript] No se pudo generar la intervención:', err);
-    }
-  }
-
-  // CAPA 3 — solo si la clase iba a contar tal cual ('ok') y está en zona gris.
-  //
-  // NO PUEDE DESPAGAR LA CLASE. Deja constancia del hallazgo y avisa al admin,
-  // pero el `validation_status` no baja: la clase ya se le prometió pagada al
-  // profesor, y quitársela minutos después sin decirle nada era peor que el
-  // problema que esto intenta detectar. Sacarla de 'ok' es decisión de una
-  // persona, con el botón "Reabrir" del panel de Validación.
-  if (args.validationStatus !== 'ok') return;
-  try {
-    // Duración REAL de la clase: 120 en una sesión de 2h. La IA verificadora
-    // recibe lo mismo, para no juzgar como sospechoso un transcript que dura el
-    // doble simplemente porque la clase también duraba el doble.
-    const durationMinutes = body.durationMinutes ?? 60;
-    const structure = validateTranscriptStructure(args.transcript, { durationMinutes });
-    if (!shouldRunAI(structure.score, 0)) return;
-
-    const res = await verifyTranscriptAI({
-      transcript: args.transcript,
-      teacherName: body.teacherName?.trim() || '',
-      studentName,
-      level: body.level,
-      durationMinutes,
-    });
-    const ai = res.data;
-    if (!ai) return;
-
-    const decision = decideTranscript({ score: structure.score, flags: structure.flags, ai });
-    if (decision === 'ok') return;
-
-    const flags = Array.from(new Set([...structure.flags, ...(ai.authentic ? [] : ['ia_no_autentico'])]));
-    await recordLateAuthenticityCheck(args.analysisId, ai as unknown as Record<string, unknown>, flags);
-    await notifyAdminTranscript(
-      {
-        decision, structure, flags,
-        cross: { flags: [], hasAccess: false, estimatedDurationMin: null, daysLate: 0, similarityPct: 0, similarMatch: null },
-        ai, aiRan: true, teacherTitle: '', teacherBody: '',
-      },
-      studentName,
-      { teacherName: body.teacherName, classDate: args.classDate },
-    );
-  } catch (err) {
-    console.error('[analyze-transcript] Verificación de autenticidad no disponible:', err);
-  }
-}
-
-/**
- * BLOQUE 1 — la clase salió en ROJO: se abre la intervención.
- *
- * Deja la sugerencia como alerta ABIERTA en la ficha y se la hace llegar al
- * profesor por los dos canales (campanita + email) con el mismo contenido.
- */
-async function openIntervention(args: {
-  analysis: TranscriptIA;
-  studentName: string;
-  classNumber: number | null;
-  analysisId: string;
-  teacherId: string | null;
-  body: Body;
-  profileId: string | null;
-  risk: 'rojo';
-}): Promise<void> {
-  const suggestion = normalizeSuggestion(args.analysis.interventionSuggestion);
-  if (!suggestion) {
-    console.warn(`[analyze-transcript] ${args.studentName}: riesgo ${args.risk} sin sugerencia de intervención utilizable.`);
-    return;
-  }
-
-  // Contexto que viaja CON la alerta: el razonamiento de la IA sobre esta clase.
-  // Es lo que el pop-up de la clase siguiente enseña como "en la última clase…",
-  // y lo que hace que los pasos lleguen con un motivo detrás en vez de sueltos.
-  const context = (args.analysis.riskExplanation ?? '').trim()
-    || (args.analysis.classSummary ?? '').trim();
-  const cause = isRiskCause(args.analysis.riskCause) ? args.analysis.riskCause : null;
-
-  // `afterAnalysis` ya garantiza la ficha (la crea si hace falta), así que acá
-  // normalmente hay profileId. El guard queda por si la creación falló.
-  if (args.profileId) {
-    await saveActiveIntervention({
-      profileId:   args.profileId,
-      suggestion,
-      risk:        args.risk,
-      analysisId:  args.analysisId,
-      classNumber: args.classNumber,
-      context,
-      cause,
-    });
-  } else {
-    console.warn(`[analyze-transcript] ${args.studentName}: intervención sin ficha donde guardarla; solo se avisa al profesor.`);
-  }
-
-  if (!args.teacherId) return;   // sin profesor asignado no hay a quién avisar
-
-  await notifyTeacherIntervention({
-    teacherId: args.teacherId, studentName: args.studentName, suggestion, context,
-  });
-
-  // Email: es el único correo ligado a las señales de riesgo y sale solo cuando
-  // hay una sugerencia concreta. Best-effort, como el resto de los avisos.
-  try {
-    const teacher = await fetchTeacher(args.teacherId);
-    if (teacher) {
-      await sendInterventionEmail(teacher, {
-        studentName: args.studentName, suggestion, classNumber: args.classNumber, context,
-      });
-    }
-  } catch (err) {
-    console.error('[analyze-transcript] No se pudo enviar el email de intervención:', err);
-  }
-}
-
-/**
- * BLOQUE 2 — el alumno traía una alerta abierta: se registra si hubo señales de
- * intervención y, tras 2 auditorías consecutivas sin ellas, se avisa al ADMIN.
- *
- * Nunca crea scoring_events ni notifica al profesor: detectar una intervención
- * sutil leyendo un transcript es impreciso y la decisión final es humana.
- */
-async function runInterventionAudit(args: {
-  analysis: TranscriptIA;
-  studentName: string;
-  studentId: string | null;
-  teacherId: string | null;
-  analysisId: string;
-  body: Body;
-  profileId: string | null;
-  intervention: InterventionContext;
-}): Promise<void> {
-  const previous = args.intervention.active;
-  if (!previous) return;
-
-  const check = normalizeCheck(args.analysis.interventionCheck);
-  if (!check) {
-    console.warn(`[analyze-transcript] ${args.studentName}: había alerta abierta pero la IA no devolvió la auditoría.`);
-    return;
-  }
-
-  const { counted, consecutive } = await recordInterventionAudit({
-    profileId:        args.profileId,
-    studentId:        args.studentId,
-    studentName:      args.studentName,
-    teacherId:        args.teacherId,
-    teacherName:      args.body.teacherName?.trim() || null,
-    previous,
-    check,
-    analysisId:       args.analysisId,
-    unattendedBefore: args.intervention.unattended,
-  });
-
-  console.log(
-    `[analyze-transcript] Auditoría de ${args.studentName}: ` +
-    `señales=${check.signsOfIntervention} confianza=${check.confidence} ` +
-    `(cuenta=${counted}, consecutivas=${consecutive}).`,
-  );
-
-  if (counted && consecutive >= 2) {
-    await notifyAdminUnattended({
-      studentName: args.studentName,
-      teacherName: args.body.teacherName,
-      classes:     consecutive,
-    });
-  }
 }
 
 // Veredicto neutro si la validación se cae: la clase se guarda y va a revisión.

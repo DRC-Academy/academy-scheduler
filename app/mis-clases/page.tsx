@@ -467,8 +467,9 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
     if (result.notice) setValidationNotice(result.notice);
     // Solo se vuelve a avisar si el informe falla: si sale bien, no hay nada que
     // contarle al profesor que no vea ya en la ficha del alumno.
-    result.analysis?.then(({ analyzed }) => {
-      if (!analyzed) setValidationNotice(ANALYSIS_FAILED_NOTICE);
+    // `queued` = en la cola del análisis en lote: no es un fallo.
+    result.analysis?.then(({ analyzed, queued }) => {
+      if (!analyzed && !queued) setValidationNotice(ANALYSIS_FAILED_NOTICE);
     });
     await loadFinanceData();
     // La detección de hitos ocurre en el barrido de MyClassesTab (useEffect), que

@@ -13,7 +13,7 @@
 //   · Metodología aplicada → fases input→práctica→producción (NextClassIA).
 //   · Conversación guiada (B1+) → charla continua guiada (ConversacionGuiadaIA).
 
-import { askClaudeJson, type AiResult } from '@/lib/anthropic';
+import { askClaudeJson, ECONOMY_MODEL, type AiResult } from '@/lib/anthropic';
 import {
   resolveAvatar, buildAvatarBlock, METHODOLOGY_CORE, FORMAT_STANDARDS,
   COMMON_ERRORS, CONVERSACION_GUIADA_MECANICA, PROGRAM_PHASE,
@@ -268,6 +268,11 @@ export async function generateNextClass(input: NextClassInput): Promise<NextClas
     schema: schema as unknown as Record<string, unknown>,
     maxTokens: 16000,
     effort: 'high',
+    // Oct/2026: Sonnet 5.5 en vez de Opus 4.8, por coste (ver ECONOMY_MODEL en
+    // lib/anthropic). Sin razonamiento previo, como respondía Opus; `between_tools`
+    // admite como mucho effort 'high', que es el que ya llevaba.
+    model: ECONOMY_MODEL,
+    thinking: 'off',
     // Por debajo del maxDuration (60 s) de /api/ai/generate-next-class. Con 180 s
     // la plataforma mataba la función antes de que venciera el timeout del SDK y
     // el profesor recibía un fallo sin explicación.

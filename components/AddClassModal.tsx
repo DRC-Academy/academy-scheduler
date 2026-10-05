@@ -14,7 +14,7 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { getSpainParts } from '@/components/VisualCalendar';
-import { registerClassWithTranscript } from '@/lib/aiClient';
+import { registerClassWithTranscript, type AnalysisOutcome } from '@/lib/aiClient';
 import { checkTranscriptDuplicates, transcriptHash, type DupeCheck } from '@/lib/transcriptDupes';
 import { quickTranscriptCheck } from '@/lib/transcriptValidation';
 import { canMarkStudentLostClass, LOST_CLASS_MONTHLY_CAP, LOST_CLASS_CAP_MESSAGE } from '@/lib/finance';
@@ -85,7 +85,7 @@ export interface SaveClassResult {
   /** Aviso a mostrar en pantalla en cuanto termina el guardado. */
   notice: { title: string; body: string } | null;
   /** Informe de IA todavía en curso. null si la clase no llevaba transcript. */
-  analysis: Promise<{ analyzed: boolean; error?: string }> | null;
+  analysis: Promise<AnalysisOutcome> | null;
 }
 
 /**
@@ -136,7 +136,7 @@ export async function saveTeacherClass(args: SaveClassArgs): Promise<SaveClassRe
     ? { title: result.validation.teacherTitle, body: result.validation.teacherBody }
     : {
         title: 'Clase guardada ✓',
-        body: 'La clase quedó registrada y cuenta para tu pago. El análisis se completará en unos instantes; no hace falta que esperes.',
+        body: 'La clase quedó registrada y cuenta para tu pago. El análisis de la clase estará listo en unas horas; no hace falta que esperes.',
       };
 
   return { notice, analysis: result.analysis };

@@ -239,9 +239,10 @@ export interface RegisterClassResult {
   /**
    * El análisis de IA, todavía en curso. La clase YA está guardada y validada
    * cuando esto se devuelve; escuchar la promesa es opcional (sirve para avisar
-   * al profesor cuando el informe esté listo o si falló).
+   * al profesor cuando el informe esté listo o si falló). `queued` = quedó en la
+   * cola del análisis en lote: no es un fallo, el informe llega en unas horas.
    */
-  analysis: Promise<{ analyzed: boolean; error?: string }>;
+  analysis: Promise<AnalysisOutcome>;
 }
 
 /** Paso 1 — guarda el transcript. Devuelve el id de la fila creada. */
@@ -270,13 +271,18 @@ export async function saveTranscriptOnly(args: AnalyzeArgs): Promise<{
   return { analysisId: data.analysisId, validation: data.validation ?? null };
 }
 
+/** Resultado del paso 2. `queued`: en la cola del lote, sin fallo. */
+export interface AnalysisOutcome { analyzed: boolean; queued?: boolean; error?: string }
+
 /** Paso 2 — genera el informe sobre una fila ya guardada. No lanza: la clase
- *  ya está a salvo, así que un fallo acá solo se informa. */
-export async function runAnalysisFor(args: AnalyzeArgs & { analysisId: string }): Promise<{
-  analyzed: boolean; error?: string;
-}> {
+ *  ya está a salvo, así que un fallo acá solo se informa.
+ *
+ *  `defer`: el informe no hace falta ya, así que va en LOTE (mitad de precio)
+ *  y llega en unas horas. Lo manda el registro normal de una clase; el
+ *  "Reintentar análisis" no, porque quien lo pulsa quiere verlo al momento. */
+export async function runAnalysisFor(args: AnalyzeArgs & { analysisId: string; defer?: boolean }): Promise<AnalysisOutcome> {
   try {
-    const data = await postJson<{ analyzed?: boolean; error?: string }>(
+    const data = await postJson<{ analyzed?: boolean; queued?: boolean; error?: string }>(
       '/api/ai/analyze-transcript',
       {
         analysisId: args.analysisId,
@@ -292,10 +298,11 @@ export async function runAnalysisFor(args: AnalyzeArgs & { analysisId: string })
         studentProfile: args.studentProfile,
         classHistory: args.classHistory,
         durationMinutes: args.durationMinutes,
+        defer: args.defer || undefined,
       },
       'No se pudo generar el análisis.',
     );
-    return { analyzed: !!data.analyzed, error: data.error };
+    return { analyzed: !!data.analyzed, queued: !!data.queued, error: data.error };
   } catch (err) {
     return { analyzed: false, error: err instanceof Error ? err.message : 'No se pudo generar el análisis.' };
   }
@@ -304,7 +311,10 @@ export async function runAnalysisFor(args: AnalyzeArgs & { analysisId: string })
 /**
  * Flujo del profesor: guarda el transcript y DEVUELVE en cuanto está guardado.
  *
- * El análisis de IA (10-30 s con Sonnet) arranca pero NO se espera: se devuelve
+ * El análisis de IA va en LOTE desde oct/2026 (`defer`, ver lib/analysisBatch):
+ * el servidor lo encola y responde al instante con `queued`, y el informe llega
+ * en unas horas. Si la cola no está disponible, se analiza al momento como
+ * antes. En los dos casos NO se espera: se devuelve
  * su promesa en `analysis` para que la pantalla pueda avisar cuando termine. Antes
  * se hacía `await` de los dos pasos y el profesor se quedaba mirando el spinner
  * todo ese rato, aunque la clase ya estuviera guardada y validada desde el primer
@@ -319,7 +329,7 @@ export async function runAnalysisFor(args: AnalyzeArgs & { analysisId: string })
  */
 export async function registerClassWithTranscript(args: AnalyzeArgs): Promise<RegisterClassResult> {
   const { analysisId, validation } = await saveTranscriptOnly(args);   // si esto falla, sí lanza
-  const analysis = runAnalysisFor({ ...args, analysisId });
+  const analysis = runAnalysisFor({ ...args, analysisId, defer: true });
   return { analysisId, validation, analysis };
 }
 
@@ -335,7 +345,7 @@ export async function retryAnalysis(args: {
   level?: string | null;
   studentProfile?: FichaIA | null;
   classHistory?: unknown[] | null;
-}): Promise<{ analyzed: boolean; error?: string }> {
+}): Promise<AnalysisOutcome> {
   return runAnalysisFor({
     ...args,
     transcript: '',                 // el servidor usa el transcript guardado

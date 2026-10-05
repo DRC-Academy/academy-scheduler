@@ -281,17 +281,25 @@ export interface ClassAnalysisRow {
   join_log_id?: string | null;
   /** 'ok' | 'review' | 'approved' | 'rejected' — validación del transcript. */
   validation_status?: string | null;
-  /** 'ready' | 'pending' | 'failed' — estado del informe de IA (puede reintentarse). */
+  /** 'ready' | 'pending' | 'queued' | 'failed' — estado del informe de IA (puede reintentarse).
+   *  'queued' = en la cola del análisis en lote (lib/analysisBatch): llega solo. */
   analysis_status?: string | null;
   analysis_error?: string | null;
 }
 
-/** ¿El informe de IA de esta clase quedó a medias? (transcript guardado, informe no) */
+/** ¿El informe de IA de esta clase quedó a medias? (transcript guardado, informe no)
+ *  Una clase EN COLA no: su informe llega solo con el lote, y ofrecer
+ *  "Reintentar análisis" la haría analizar aparte, a precio completo. */
 export function needsAnalysis(r: ClassAnalysisRow): boolean {
-  if (r.analysis_status === 'ready') return false;
+  if (r.analysis_status === 'ready' || r.analysis_status === 'queued') return false;
   if (r.analysis_status === 'pending' || r.analysis_status === 'failed') return true;
   // Base sin migrar (sin analysis_status): se deduce del contenido.
   return !(r.class_summary ?? '').trim();
+}
+
+/** ¿El informe de esta clase está en la cola del análisis en lote? */
+export function isAnalysisQueued(r: ClassAnalysisRow): boolean {
+  return r.analysis_status === 'queued';
 }
 
 /** Bloque de una clase generada (warm-up, contenido, práctica, cierre). */
