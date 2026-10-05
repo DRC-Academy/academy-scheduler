@@ -25,7 +25,30 @@ export function hasAnthropicKey(): boolean {
 }
 
 // Modelo por defecto de todo el módulo, configurable por entorno.
-export const AI_MODEL = process.env.ANTHROPIC_MODEL || 'claude-opus-4-8';
+// Opus 5.5 cuesta un 20 % menos por token que Opus 4.8 (4 / 20 USD frente a 5 / 25 por millón de
+// tokens de entrada / salida). Para volver al anterior: ANTHROPIC_MODEL=claude-opus-4-8.
+export const AI_MODEL = process.env.ANTHROPIC_MODEL || 'claude-opus-5-5';
+
+/**
+ * Modelo de una llamada concreta. Por orden: el que pida el código (`override`), la variable
+ * ANTHROPIC_MODEL_<ETIQUETA> (p. ej. ANTHROPIC_MODEL_ANALYZE_TRANSCRIPT, ANTHROPIC_MODEL_ANALYZE_FORM
+ * o ANTHROPIC_MODEL_GENERATE_NEXT_CLASS; lo que va detrás de ":" en la etiqueta no cuenta) y AI_MODEL.
+ * Así se puede probar un modelo más barato en una sola tarea desde el entorno, sin desplegar código.
+ */
+function modelFor(label: string, override?: string): string {
+  if (override) return override;
+  const key = `ANTHROPIC_MODEL_${label.split(':')[0].toUpperCase().replace(/[^A-Z0-9]+/g, '_')}`;
+  return process.env[key] || AI_MODEL;
+}
+
+// Precio aproximado en USD por millón de tokens, solo para el log de coste de abajo.
+const PRICE_USD_PER_MTOK: Array<{ prefix: string; input: number; output: number; cacheRead: number }> = [
+  { prefix: 'claude-opus-5-5', input: 4, output: 20, cacheRead: 0.2 },
+  { prefix: 'claude-opus-4', input: 5, output: 25, cacheRead: 0.5 },
+  { prefix: 'claude-sonnet-5', input: 2, output: 10, cacheRead: 0.2 },
+  { prefix: 'claude-sonnet-4', input: 3, output: 15, cacheRead: 0.3 },
+  { prefix: 'claude-haiku-4-5', input: 1, output: 5, cacheRead: 0.1 },
+];
 
 export type AiStatus = 'ready' | 'skipped' | 'error';
 
@@ -50,7 +73,7 @@ export interface AskClaudeJsonOptions {
   label: string;
   /** Campos que NO se limpian de guiones (identificadores, enums, códigos). */
   skipCleanKeys?: readonly string[];
-  /** Override puntual del modelo (por defecto AI_MODEL=opus-4-8). P. ej. la
+  /** Override puntual del modelo (por defecto AI_MODEL=opus-5-5). P. ej. la
    *  evaluación de writing del test de nivel usa 'claude-haiku-4-5'. */
   model?: string;
 }
@@ -153,7 +176,7 @@ export async function askClaudeJson<T>(opts: AskClaudeJsonOptions): Promise<AiRe
   try {
     const message = await anthropic.messages.create(
       {
-        model: opts.model ?? AI_MODEL,
+        model: modelFor(opts.label, opts.model),
         max_tokens: opts.maxTokens,
         // ── Prompt caching ──────────────────────────────────────────────────────
         // El breakpoint de caché va en el SYSTEM prompt (grande y estable entre
@@ -190,11 +213,27 @@ export async function askClaudeJson<T>(opts: AskClaudeJsonOptions): Promise<AiRe
     // identifica cuál llamó). cache_read alto en llamadas repetidas = está andando.
     // Si cache_read queda en 0 entre llamadas con el mismo system, algo invalida el
     // prefijo o el prompt no llega al mínimo cacheable.
+    const usedModel = modelFor(opts.label, opts.model);
+    const price = PRICE_USD_PER_MTOK.find(p => usedModel.startsWith(p.prefix));
+    const input = message.usage?.input_tokens ?? 0;
+    const cacheRead = message.usage?.cache_read_input_tokens ?? 0;
+    const cacheWrite = message.usage?.cache_creation_input_tokens ?? 0;
+    const output = message.usage?.output_tokens ?? 0;
     console.log('[AI Cache]', {
       endpoint: opts.label,
-      cache_read: message.usage?.cache_read_input_tokens ?? 0,
-      cache_write: message.usage?.cache_creation_input_tokens ?? 0,
-      uncached_input: message.usage?.input_tokens ?? 0,
+      cache_read: cacheRead,
+      cache_write: cacheWrite,
+      uncached_input: input,
+    });
+    // Coste aproximado de cada llamada, para ver en los logs cuál de ellas gasta más (la escritura de
+    // caché se cuenta a 1,25 veces la entrada: es la de 5 minutos).
+    console.log('[AI Cost]', {
+      endpoint: opts.label,
+      model: usedModel,
+      output_tokens: output,
+      usd_approx: price
+        ? Number(((input * price.input + cacheWrite * price.input * 1.25 + cacheRead * price.cacheRead + output * price.output) / 1e6).toFixed(4))
+        : null,
     });
 
     // Claude puede negarse por seguridad; en ese caso la salida no cumple el esquema.
