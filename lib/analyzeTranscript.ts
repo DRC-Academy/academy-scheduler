@@ -191,10 +191,10 @@ function buildUserPrompt(input: TranscriptInput): string {
   ].filter(Boolean).join('\n');
 
   const profile = input.studentProfile
-    ? `\n\nFicha del alumno:\n${JSON.stringify(input.studentProfile, null, 2)}`
+    ? `\n\nFicha del alumno:\n${JSON.stringify(input.studentProfile)}`
     : '';
   const history = input.classHistory?.length
-    ? `\n\nHistorial de las últimas clases:\n${JSON.stringify(input.classHistory, null, 2)}`
+    ? `\n\nHistorial de las últimas clases:\n${JSON.stringify(input.classHistory)}`
     : '\n\nHistorial de las últimas clases: (no hay clases anteriores analizadas)';
 
   // Alerta abierta de la clase anterior: activa la auditoría de seguimiento.
