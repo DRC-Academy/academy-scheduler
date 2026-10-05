@@ -224,10 +224,10 @@ REGLAS DE LA CLASE GENÉRICA (obligatorias):
 function buildUserPrompt(input: NextClassInput, avatar: ResolvedAvatar): string {
   const classType = avatar.classType;
   const last = input.lastAnalysis
-    ? `\n\nANÁLISIS DE LA ÚLTIMA CLASE:\n${JSON.stringify(input.lastAnalysis, null, 2)}`
+    ? `\n\nANÁLISIS DE LA ÚLTIMA CLASE:\n${JSON.stringify(input.lastAnalysis)}`
     : '\n\nANÁLISIS DE LA ÚLTIMA CLASE: (no hay: esta es la primera clase del alumno)';
   const history = input.classHistory?.length
-    ? `\n\nHISTORIAL RECIENTE:\n${JSON.stringify(input.classHistory, null, 2)}`
+    ? `\n\nHISTORIAL RECIENTE:\n${JSON.stringify(input.classHistory)}`
     : '';
   const idioma = `RECORDATORIO DE IDIOMA: todo el contenido dirigido al alumno va en inglés, calibrado a su nivel${input.level ? ` (${input.level})` : ''}. Solo las notas del profesor van en español.`;
 
@@ -237,7 +237,7 @@ function buildUserPrompt(input: NextClassInput, avatar: ResolvedAvatar): string 
 
   const perfil = input.generic
     ? buildGenericBlock(input.generic, avatar)
-    : `PERFIL DEL ALUMNO (incluye la lista de prioridades del diagnóstico):\n${JSON.stringify(input.studentProfile, null, 2)}`;
+    : `PERFIL DEL ALUMNO (incluye la lista de prioridades del diagnóstico):\n${JSON.stringify(input.studentProfile)}`;
 
   return `Generá la clase ${input.classNumber} para ${input.studentName}${input.level ? `, nivel ${input.level}` : ''}${input.plan ? `, plan ${input.plan}` : ''}.
 
