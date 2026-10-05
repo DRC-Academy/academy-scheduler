@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { planCandidate, studentTrend, goodOptionsAfter, daysBetween, improvementLine, type FluencyClass } from '@/lib/testimonials';
+import {
+  planCandidate, studentTrend, goodOptionsAfter, daysBetween, improvementLine, evidenceImproves, blindConfirms,
+  type FluencyClass,
+} from '@/lib/testimonials';
 
 let n = 0;
 function clase(day: string, score: number): FluencyClass {
@@ -28,12 +31,13 @@ describe('studentTrend', () => {
     expect(t.first.map(c => c.analysisId)).toEqual(cs.slice(0, 3).map(c => c.analysisId));
   });
 
-  it('menos de 6 clases: sin tendencia', () => {
-    expect(studentTrend(semanal([4, 5, 6, 7, 8]))).toBeNull();
+  it('menos de 5 clases: sin tendencia', () => {
+    expect(studentTrend(semanal([4, 5, 6, 7]))).toBeNull();
+    expect(studentTrend(semanal([4, 5, 6, 7, 8]))).not.toBeNull();
   });
 });
 
-describe('planCandidate (regla 6b)', () => {
+describe('planCandidate (regla V3: tendencia de la nota, primer filtro)', () => {
   it('entra si la media sube 1 punto, sin mínimos ni máximos de nota', () => {
     const p = planCandidate(semanal([6, 6, 7, 7, 7, 8]))!;
     expect(p).not.toBeNull();
@@ -45,8 +49,9 @@ describe('planCandidate (regla 6b)', () => {
     expect(planCandidate(semanal([5, 5, 6, 6, 6, 7]))).not.toBeNull();
   });
 
-  it('menos de 1 punto de mejora: no entra', () => {
-    expect(planCandidate(semanal([5, 6, 6, 6, 6, 7]))).toBeNull();
+  it('2 puntos entre 3 clases (+0,67 de media) entran; 1 punto no', () => {
+    expect(planCandidate(semanal([5, 5, 6, 6, 6, 7]))).not.toBeNull();
+    expect(planCandidate(semanal([5, 6, 6, 6, 6, 6]))).toBeNull();
   });
 
   it('notas planas o que bajan: no entra', () => {
@@ -86,5 +91,46 @@ describe('improvementLine', () => {
     expect(improvementLine(5, 7)).toBe('Media de 5,0 → 7,0 (+2 puntos)');
     expect(improvementLine(16 / 3, 19 / 3)).toBe('Media de 5,3 → 6,3 (+1 punto)');
     expect(improvementLine(5, 6.67)).toBe('Media de 5,0 → 6,7 (+1,7 puntos)');
+  });
+});
+
+describe('evidenceImproves (V3: el transcript respalda la mejora)', () => {
+  const st = (topTurnsMean: number, longTurns: number) => ({ topTurnsMean, longTurns });
+
+  it('entra si las intervenciones en inglés más largas suben 5 palabras', () => {
+    expect(evidenceImproves([st(30, 1), st(32, 1)], [st(36, 1), st(38, 1)]).ok).toBe(true);
+  });
+
+  it('o si hace 2 intervenciones largas más por clase', () => {
+    expect(evidenceImproves([st(40, 1), st(40, 2)], [st(40, 4), st(40, 3)]).ok).toBe(true);
+  });
+
+  it('sin ninguna de las dos subidas, no', () => {
+    const r = evidenceImproves([st(40, 2), st(40, 2)], [st(43, 3), st(42, 3)]);
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/no muestra/);
+  });
+
+  it('con menos de 2 clases legibles a un lado no se puede juzgar: no entra', () => {
+    const r = evidenceImproves([st(10, 0)], [st(80, 9), st(80, 9)]);
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/legibles/);
+  });
+});
+
+describe('blindConfirms (V3: comparación a ciegas)', () => {
+  it('confirma si elige la reciente con confianza alta o media', () => {
+    expect(blindConfirms('A', 'alta', true)).toBe(true);
+    expect(blindConfirms('B', 'media', false)).toBe(true);
+  });
+
+  it('no confirma si elige la antigua', () => {
+    expect(blindConfirms('B', 'alta', true)).toBe(false);
+    expect(blindConfirms('A', 'alta', false)).toBe(false);
+  });
+
+  it('un empate o una confianza baja no confirman', () => {
+    expect(blindConfirms('igual', 'alta', true)).toBe(false);
+    expect(blindConfirms('A', 'baja', true)).toBe(false);
   });
 });

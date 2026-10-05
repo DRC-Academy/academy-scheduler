@@ -10,6 +10,7 @@
 // Aquí solo se dice entre cuáles puede elegir, respetando los días mínimos.
 
 import { TESTIMONIAL_RULES, type TestimonialRules } from '@/lib/testimonialRules';
+import type { EnglishStats } from '@/lib/fluency';
 
 /** Una clase del alumno con nota (fila de transcript_fluency_numbered). */
 export interface FluencyClass {
@@ -88,6 +89,59 @@ export function planCandidate(classes: FluencyClass[], rules: TestimonialRules =
   const before = [...badOptions].sort((a, b) => a.score - b.score || byDate(a, b))[0];
   const after = [...goodOptionsAfter(before, goodOptions, rules)].sort((a, b) => b.score - a.score || byDate(b, a))[0];
   return { trend, badOptions, goodOptions, before, after };
+}
+
+// ── Evidencia del transcript (V3) ────────────────────────────────────────────
+
+export interface EvidenceResult {
+  ok: boolean;
+  /** Frase para el admin y los logs: qué se midió y por qué entra o no. */
+  reason: string;
+  firstTop: number;
+  lastTop: number;
+  firstLong: number;
+  lastLong: number;
+}
+
+/**
+ * ¿El transcript respalda la mejora? Compara las intervenciones en inglés de
+ * sus primeras clases con las de sus últimas (solo las clases legibles).
+ * Entra si sube UNA de las dos medidas; sin clases legibles suficientes, no.
+ */
+export function evidenceImproves(
+  first: EnglishStats[], last: EnglishStats[], rules: TestimonialRules = TESTIMONIAL_RULES,
+): EvidenceResult {
+  const firstTop = first.length ? mean(first.map(s => s.topTurnsMean)) : 0;
+  const lastTop = last.length ? mean(last.map(s => s.topTurnsMean)) : 0;
+  const firstLong = first.length ? mean(first.map(s => s.longTurns)) : 0;
+  const lastLong = last.length ? mean(last.map(s => s.longTurns)) : 0;
+  const base = { firstTop, lastTop, firstLong, lastLong };
+
+  if (first.length < rules.EVIDENCIA_CLASES_MIN || last.length < rules.EVIDENCIA_CLASES_MIN) {
+    return { ...base, ok: false, reason: 'No hay suficientes transcripts legibles (con alumno y profe identificados) para comprobar la mejora.' };
+  }
+  const subeTop = lastTop - firstTop >= rules.MEJORA_TURNOS_TOP_MIN;
+  const subeLargos = lastLong - firstLong >= rules.MEJORA_TURNOS_LARGOS_MIN;
+  const medida = `intervenciones en inglés más largas: ${Math.round(firstTop)} → ${Math.round(lastTop)} palabras; `
+    + `intervenciones largas por clase: ${fmtMean(firstLong)} → ${fmtMean(lastLong)}`;
+  return subeTop || subeLargos
+    ? { ...base, ok: true, reason: `El transcript lo respalda (${medida}).` }
+    : { ...base, ok: false, reason: `El transcript no muestra intervenciones en inglés más largas (${medida}).` };
+}
+
+// ── Comparación a ciegas (V3) ────────────────────────────────────────────────
+
+export type BlindChoice = 'A' | 'B' | 'igual';
+export type BlindConfidence = 'alta' | 'media' | 'baja';
+
+/**
+ * ¿La comparación a ciegas confirma la mejora? Sí solo si la IA eligió la clase
+ * RECIENTE como la de más soltura, con confianza alta o media. Un empate o una
+ * confianza baja no confirman: para un anuncio la diferencia tiene que oírse.
+ */
+export function blindConfirms(choice: BlindChoice, confidence: BlindConfidence, laterIsA: boolean): boolean {
+  if (confidence === 'baja' || choice === 'igual') return false;
+  return (choice === 'A') === laterIsA;
 }
 
 /** "5,0" */

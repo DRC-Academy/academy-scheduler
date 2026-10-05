@@ -7,10 +7,18 @@
 //      (lib/testimonials planCandidate). Se crea su fila en 'detectado' con
 //      ai_review_status 'pending' y una pareja provisional. La pestaña del admin
 //      NO la enseña todavía.
-//   2. Preparación (Haiku, ~3-5 céntimos): elige el peor momento entre sus
-//      primeras clases y el mejor entre sus últimas, comprueba que las citas
-//      existen y son del alumno, calcula su segundo exacto y escribe el resumen.
-//      Entonces pasa a 'ready' y aparece en "Por revisar".
+//   2. Preparación (Haiku, ~3-5 céntimos), en tres comprobaciones (V3, 05/10/2026):
+//      a) EVIDENCIA del transcript, sin IA: intervenciones en inglés más largas
+//         en sus últimas clases (lib/testimonials evidenceImproves);
+//      b) COMPARACIÓN A CIEGAS (lib/testimonialCompare): Haiku ve lo que dijo el
+//         alumno en la clase antigua y en la reciente, en orden sorteado y sin
+//         fechas, y tiene que elegir la reciente. Se hace una vez por pareja
+//         (queda en ai_is_real);
+//      c) los CLIPS: el peor momento entre sus primeras clases y el mejor entre
+//         sus últimas, con las citas comprobadas, su segundo exacto y el resumen.
+//      Si a) o b) no lo confirman, la pareja se descarta sola (discarded_by 'ia')
+//      sin enseñarse nunca, y el alumno no vuelve hasta tener clases nuevas.
+//      Si todo va bien pasa a 'ready' y aparece en "Por revisar".
 //
 // La detección corre tras cada nota de fluidez (lib/fluencyStore) y entera al
 // abrir la pestaña (app/api/admin/testimonial-prepare). La preparación la pide
@@ -26,12 +34,21 @@
 import 'server-only';
 
 import { supabase } from '@/lib/supabase';
-import { planCandidate, goodOptionsAfter, type FluencyClass, type TestimonialCandidatePlan } from '@/lib/testimonials';
+import {
+  planCandidate, goodOptionsAfter, evidenceImproves, blindConfirms,
+  type FluencyClass, type TestimonialCandidatePlan,
+} from '@/lib/testimonials';
 import {
   prepareFluency, formatTurnsForAi, locateExcerpt, excerptStartSeconds, formatSeconds, withFathomTimestamp,
-  type FluencyPrep,
+  studentEnglishStats, studentOnlyText,
+  type FluencyPrep, type EnglishStats,
 } from '@/lib/fluency';
 import { pickMoment, type MomentKind, type MomentIA } from '@/lib/testimonialClips';
+import { compareBlind } from '@/lib/testimonialCompare';
+import { TESTIMONIAL_RULES } from '@/lib/testimonialRules';
+
+/** Caracteres de lo que dice el alumno por clase en la comparación a ciegas (~1.500 tokens). */
+const BLIND_MAX_CHARS = 6_000;
 
 type Row = Record<string, unknown>;
 
@@ -47,7 +64,8 @@ export type DetectOutcome =
   | 'sin_pareja'        // no cumple la regla
   | 'creada';
 
-export type PrepareOutcome = 'lista' | 'fallida' | 'sin_tiempo' | 'ya_no_cumple' | 'nada';
+/** 'descartada': la evidencia del transcript o la comparación a ciegas no confirmaron la mejora. */
+export type PrepareOutcome = 'lista' | 'fallida' | 'descartada' | 'sin_tiempo' | 'ya_no_cumple' | 'nada';
 
 const isMissingTable = (err: { code?: string } | null | undefined): boolean =>
   err?.code === '42P01' || err?.code === 'PGRST205';
@@ -108,10 +126,25 @@ async function classesOf(studentGroup: string): Promise<FluencyClass[]> {
   return rows.map(toClass);
 }
 
-/** Qué hacer con un alumno según sus filas de la tabla y su plan. */
-function decide(rows: Row[], plan: TestimonialCandidatePlan | null): DetectOutcome {
+/** Día ('YYYY-MM-DD') de la clase más reciente del alumno. */
+const latestDay = (classes: FluencyClass[]): string =>
+  classes.reduce((max, c) => (c.classDay > max ? c.classDay : max), '');
+
+/**
+ * Qué hacer con un alumno según sus filas de la tabla y su plan.
+ *
+ * Un descarte AUTOMÁTICO (discarded_by 'ia': la evidencia del transcript o la
+ * comparación a ciegas no lo confirmaron) bloquea al alumno hasta que tenga una
+ * clase posterior al descarte. Sin esto se volvería a crear y descartar la misma
+ * pareja cada vez que se abre la pestaña.
+ */
+function decide(rows: Row[], plan: TestimonialCandidatePlan | null, lastClassDay: string): DetectOutcome {
   if (rows.some(r => r.status === 'descartado' && r.discarded_by === 'admin')) return 'bloqueado_admin';
   if (rows.some(r => r.status !== 'descartado')) return 'ya_tiene';
+  const autoDiscardedSince = rows.some(r =>
+    r.status === 'descartado' && r.discarded_by === 'ia'
+    && String(r.status_changed_at ?? '').slice(0, 10) >= lastClassDay);
+  if (autoDiscardedSince) return 'sin_pareja';
   return plan ? 'creada' : 'sin_pareja';
 }
 
@@ -145,12 +178,13 @@ export async function detectForStudent(
   studentGroup: string, opts: { dryRun?: boolean } = {},
 ): Promise<{ outcome: DetectOutcome; candidateId?: string; plan?: TestimonialCandidatePlan }> {
   const existing = await supabase.from('testimonial_candidates')
-    .select('id, status, discarded_by').eq('student_group', studentGroup);
+    .select('id, status, discarded_by, status_changed_at').eq('student_group', studentGroup);
   if (isMissingTable(existing.error)) return { outcome: 'no_table' };
   if (existing.error) throw new Error(`testimonial_candidates: ${existing.error.message}`);
 
-  const plan = planCandidate(await classesOf(studentGroup));
-  const outcome = decide((existing.data ?? []) as Row[], plan);
+  const classes = await classesOf(studentGroup);
+  const plan = planCandidate(classes);
+  const outcome = decide((existing.data ?? []) as Row[], plan, latestDay(classes));
   if (outcome !== 'creada' || !plan || opts.dryRun) return { outcome, plan: plan ?? undefined };
   const id = await insertCandidate(studentGroup, plan);
   return id ? { outcome, candidateId: id, plan } : { outcome: 'ya_tiene' };
@@ -164,7 +198,7 @@ export async function detectAll(opts: { dryRun?: boolean } = {}): Promise<{
   const counts: Record<DetectOutcome, number> = { no_table: 0, bloqueado_admin: 0, ya_tiene: 0, sin_pareja: 0, creada: 0 };
   let candidates: Row[];
   try {
-    candidates = await allRows('testimonial_candidates', 'id, student_group, status, discarded_by');
+    candidates = await allRows('testimonial_candidates', 'id, student_group, status, discarded_by, status_changed_at');
   } catch (err) {
     if (isMissingTable(err as { code?: string })) { counts.no_table = 1; return { counts, created: [] }; }
     throw err;
@@ -181,7 +215,7 @@ export async function detectAll(opts: { dryRun?: boolean } = {}): Promise<{
   const created: Array<{ studentGroup: string; plan: TestimonialCandidatePlan }> = [];
   for (const [g, classes] of byGroup) {
     const plan = planCandidate(classes);
-    let outcome = decide(rowsOf.get(g) ?? [], plan);
+    let outcome = decide(rowsOf.get(g) ?? [], plan, latestDay(classes));
     if (outcome === 'creada' && plan) {
       if (!opts.dryRun && !(await insertCandidate(g, plan))) outcome = 'ya_tiene';
       else created.push({ studentGroup: g, plan });
@@ -269,7 +303,7 @@ async function choose(
  */
 export async function prepareCandidate(id: string, deadline: number): Promise<PrepareOutcome> {
   const { data: c, error } = await supabase.from('testimonial_candidates')
-    .select('id, student_group, student_name, status').eq('id', id).maybeSingle();
+    .select('id, student_group, student_name, status, ai_is_real, ai_reason').eq('id', id).maybeSingle();
   if (error || !c || c.status !== 'detectado') return 'nada';
 
   const plan = planCandidate(await classesOf(String(c.student_group)));
@@ -285,15 +319,72 @@ export async function prepareCandidate(id: string, deadline: number): Promise<Pr
     return 'fallida';
   };
 
+  // Las comprobaciones de la V3 dicen que la mejora no es real: la pareja se
+  // descarta sola (sin enseñarse nunca) y el alumno no se vuelve a proponer
+  // hasta que tenga clases nuevas (ver decide()).
+  const discard = async (reason: string): Promise<PrepareOutcome> => {
+    const now = new Date().toISOString();
+    console.log(`[testimonials] ${c.student_group}: descartada. ${reason}`);
+    await supabase.from('testimonial_candidates').update({
+      status: 'descartado', discarded_by: 'ia', status_changed_at: now,
+      ai_review_status: 'ready', ai_is_real: false, ai_reason: reason.slice(0, 1000), ai_error: null,
+      updated_at: now,
+    }).eq('id', id).eq('status', 'detectado');
+    return 'descartada';
+  };
+
   const studentName = String(c.student_name ?? 'el alumno');
-  const badLoaded = await loadClasses(plan.badOptions, studentName);
+  const firstLoaded = await loadClasses(plan.trend.first, studentName);
+  const lastLoaded = await loadClasses(plan.trend.last, studentName);
+
+  // 1. Evidencia del transcript (sin IA): intervenciones en inglés más largas.
+  const statsOf = (l: LoadedClass[]) => l
+    .map(x => studentEnglishStats(x.prep, { top: TESTIMONIAL_RULES.TURNOS_TOP, longWords: TESTIMONIAL_RULES.PALABRAS_TURNO_LARGO }))
+    .filter((s): s is EnglishStats => s !== null);
+  const evidence = evidenceImproves(statsOf(firstLoaded), statsOf(lastLoaded));
+  if (!evidence.ok) return discard(evidence.reason);
+
+  // 2. Comparación a ciegas (Haiku), una sola vez por pareja: si la preparación
+  //    se corta después por tiempo, el siguiente intento no la repite.
+  let blindReason = c.ai_is_real === true ? String(c.ai_reason ?? '') : '';
+  if (c.ai_is_real !== true) {
+    const older = firstLoaded.find(x => x.cls.analysisId === plan.before.analysisId);
+    const newer = lastLoaded.find(x => x.cls.analysisId === plan.after.analysisId);
+    if (!older || !newer) return fail('No se pudieron leer los transcripts de la clase antigua o de la reciente.');
+    const left = deadline - Date.now() - 2_000;
+    if (left < 10_000) return 'sin_tiempo';
+    // El orden lo decide un sorteo: la IA no sabe cuál es la reciente.
+    const laterIsA = Math.random() < 0.5;
+    const olderText = studentOnlyText(older.prep, BLIND_MAX_CHARS);
+    const newerText = studentOnlyText(newer.prep, BLIND_MAX_CHARS);
+    const res = await compareBlind({
+      a: laterIsA ? newerText : olderText,
+      b: laterIsA ? olderText : newerText,
+      timeoutMs: Math.min(15_000, left),
+    });
+    if (res.status !== 'ready' || !res.data) return fail(`Comparación a ciegas: ${res.error ?? 'la IA no respondió'}`);
+    const { mas_soltura, confianza, motivo } = res.data;
+    if (!blindConfirms(mas_soltura, confianza, laterIsA)) {
+      const pick = mas_soltura === 'igual' ? 'no vio diferencia' : (mas_soltura === 'A') === laterIsA ? 'eligió la reciente' : 'eligió la ANTIGUA';
+      return discard(`Comparación a ciegas: ${pick} (confianza ${confianza}). ${motivo}`);
+    }
+    blindReason = `Comparación a ciegas: eligió la reciente (confianza ${confianza}). ${motivo}`;
+    await supabase.from('testimonial_candidates').update({
+      ai_is_real: true, ai_reason: blindReason.slice(0, 1000), updated_at: new Date().toISOString(),
+    }).eq('id', id).eq('status', 'detectado');
+  }
+
+  // 3. Los clips (Haiku): el peor momento de las primeras clases y el mejor de las últimas.
+  const badIds = new Set(plan.badOptions.map(x => x.analysisId));
+  const badLoaded = firstLoaded.filter(x => badIds.has(x.cls.analysisId));
   if (badLoaded.length === 0) return fail('No se pudieron leer los transcripts de sus primeras clases.');
   const bad = await choose('malo', badLoaded, studentName, deadline);
   if (bad.noTime) return 'sin_tiempo';
   if (!bad.clip) return fail(`Momento malo: ${bad.error}`);
 
   // La buena, a los días mínimos de la mala que eligió la IA.
-  const goodLoaded = await loadClasses(goodOptionsAfter(bad.clip.cls, plan.goodOptions), studentName);
+  const goodIds = new Set(goodOptionsAfter(bad.clip.cls, plan.goodOptions).map(x => x.analysisId));
+  const goodLoaded = lastLoaded.filter(x => goodIds.has(x.cls.analysisId));
   if (goodLoaded.length === 0) return fail('No se pudieron leer los transcripts de sus últimas clases.');
   const good = await choose('bueno', goodLoaded, studentName, deadline,
     { date: bad.clip.cls.classDay, excerpt: bad.clip.excerpt });
@@ -306,8 +397,8 @@ export async function prepareCandidate(id: string, deadline: number): Promise<Pr
     improvement: Math.round(plan.trend.improvement),
     ai_review_status: 'ready',
     ai_summary: good.clip.ai.summary?.trim() || null,
-    ai_reason: `Malo: ${bad.clip.ai.why} Bueno: ${good.clip.ai.why}`.slice(0, 1000),
-    ai_is_real: null, ai_error: null,
+    ai_reason: `${blindReason} ${evidence.reason} Malo: ${bad.clip.ai.why} Bueno: ${good.clip.ai.why}`.trim().slice(0, 1000),
+    ai_is_real: true, ai_error: null,
     updated_at: new Date().toISOString(),
   }).eq('id', id).eq('status', 'detectado');
   if (upErr) return fail(`Guardando: ${upErr.message}`);

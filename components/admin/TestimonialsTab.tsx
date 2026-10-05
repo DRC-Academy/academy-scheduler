@@ -208,6 +208,7 @@ function Tarjeta({ c, trend, nombreProfe, onCambiar }: {
         <span className="ts-et">Mejora</span>
         <p className="ts-mejora-l">{mejora}</p>
         {c.aiSummary && <p className="ts-resumen">{c.aiSummary}</p>}
+        {comprobado(c) && <p className="ts-comprobado">{comprobado(c)}</p>}
       </section>
 
       <footer className="ts-acc">
@@ -220,6 +221,19 @@ function Tarjeta({ c, trend, nombreProfe, onCambiar }: {
       </footer>
     </article>
   );
+}
+
+/**
+ * Lo que confirmó la mejora además de la nota (V3, lib/testimonialStore): la
+ * comparación a ciegas y la medida del transcript, que viven en ai_reason.
+ */
+function comprobado(c: TestimonialCandidate): string | null {
+  const medida = (c.aiReason ?? '').match(/El transcript lo respalda \((.+?)\)\./)?.[1];
+  const partes = [
+    c.aiIsReal ? 'Comprobado a ciegas: la IA eligió la clase reciente sin saber cuál era' : null,
+    medida ? medida.charAt(0).toUpperCase() + medida.slice(1) : null,
+  ].filter(Boolean);
+  return partes.length ? `${partes.join('. ')}.` : null;
 }
 
 function Clase({ tipo, s }: { tipo: 'mala' | 'buena'; s: TestimonialSide }) {
@@ -278,6 +292,7 @@ const ESTILOS = `
 .ts-mejora { display: flex; flex-direction: column; gap: 4px; }
 .ts-mejora-l { margin: 0; font-size: 16px; font-weight: 700; color: var(--verde); font-variant-numeric: tabular-nums; }
 .ts-resumen { margin: 0; font-size: 14.5px; line-height: 1.55; color: #333; }
+.ts-comprobado { margin: 6px 0 0; font-size: 13px; line-height: 1.5; color: #666; }
 
 .ts-acc { display: flex; gap: 10px; flex-wrap: wrap; }
 .ts-btn { min-height: 44px; padding: 0 18px; border-radius: 10px; font-family: inherit; font-size: 14.5px; font-weight: 700; cursor: pointer; }

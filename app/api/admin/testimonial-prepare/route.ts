@@ -7,14 +7,16 @@
 //
 // Acciones (POST { action }):
 //   · 'detectar' → pasa la regla por todos los alumnos y crea las parejas nuevas (sin IA).
-//   · 'preparar' → prepara los clips de UNA pareja (Haiku). { retryFailed: true } coge una fallida.
+//   · 'preparar' → comprueba y prepara UNA pareja (Haiku). { retryFailed: true } coge una fallida.
 // Las dos devuelven la cola: { pending, failed }.
 
 import { detectAll, prepareNext, prepareQueue } from '@/lib/testimonialStore';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-// Una pareja: hasta 6 transcripts leídos y dos llamadas a Haiku de 25 s como mucho.
+// Una pareja: hasta 6 transcripts leídos, la comparación a ciegas (15 s como
+// mucho, una vez por pareja) y dos llamadas a Haiku de 25 s. Si no caben, la
+// preparación sale con 'sin_tiempo' y la siguiente petición sigue donde quedó.
 export const maxDuration = 60;
 
 export async function POST(request: Request): Promise<Response> {

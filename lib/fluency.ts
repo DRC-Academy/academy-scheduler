@@ -176,6 +176,75 @@ export function formatTurnsForAi(prep: Pick<FluencyPrep, 'turns' | 'teacherSpeak
   return prep.turns.map(t => `[${t.at}] ${role(t.speaker)}: ${t.text}`).join('\n');
 }
 
+// ── Evidencia del transcript, sin IA (testimoniales V3) ─────────────────────
+//
+// ¿En qué idioma está una intervención? Se cuentan palabras de función, que
+// aparecen en cualquier frase y casi no se cruzan entre los dos idiomas. No es
+// un detector de idioma de verdad, pero para separar "el alumno habla inglés"
+// de "el alumno se pasa al español" en un turno entero basta y no cuesta nada.
+const EN_WORDS = new Set(('the and you is are was were have has i it to of in that this what do does did not but '
+  + 'with for my your can will would going like think know really very so because').split(' '));
+const ES_WORDS = new Set(('el la los las que de y en es un una por para con no lo se pero como muy porque yo tu '
+  + 'mi está estoy tengo hay sí bueno vale entonces').split(' '));
+
+/** Lo que mide la evidencia en UNA clase: las intervenciones en inglés del alumno. */
+export interface EnglishStats {
+  /** Media de palabras de sus N intervenciones en inglés más largas. */
+  topTurnsMean: number;
+  /** Cuántas intervenciones en inglés de al menos `longWords` palabras hace. */
+  longTurns: number;
+}
+
+/**
+ * Intervenciones en inglés del alumno en una clase. null si no se sabe quién es
+ * el alumno (sin hablantes, o el profe no se identificó): esa clase no cuenta.
+ */
+export function studentEnglishStats(
+  prep: Pick<FluencyPrep, 'turns' | 'studentSpeaker' | 'skip'>,
+  opts: { top: number; longWords: number },
+): EnglishStats | null {
+  if (prep.skip || !prep.studentSpeaker) return null;
+  const lengths: number[] = [];
+  for (const t of prep.turns) {
+    if (t.speaker !== prep.studentSpeaker) continue;
+    const words = t.text.toLowerCase().match(/[a-záéíóúüñ']+/g) ?? [];
+    let en = 0, es = 0;
+    for (const w of words) {
+      if (EN_WORDS.has(w)) en++;
+      if (ES_WORDS.has(w)) es++;
+    }
+    if (en > es) lengths.push(words.length);
+  }
+  lengths.sort((a, b) => b - a);
+  const top = lengths.slice(0, opts.top);
+  return {
+    topTurnsMean: top.length ? top.reduce((a, b) => a + b, 0) / top.length : 0,
+    longTurns: lengths.filter(n => n >= opts.longWords).length,
+  };
+}
+
+/**
+ * Solo lo que dice el ALUMNO, para la comparación a ciegas: sin el profe, sin
+ * nombres y sin minutos (nada que delate cuál de las dos clases es la antigua).
+ * Las respuestas de menos de 4 palabras ("yes", "ok, perfect") se saltan: no
+ * dicen nada de la soltura y gastarían el espacio. Se corta en `maxChars` por el
+ * final de un turno.
+ */
+export function studentOnlyText(
+  prep: Pick<FluencyPrep, 'turns' | 'studentSpeaker'>, maxChars: number,
+): string {
+  const out: string[] = [];
+  let size = 0;
+  for (const t of prep.turns) {
+    if (t.speaker !== prep.studentSpeaker || countWords(t.text) < 4) continue;
+    const line = `- ${t.text}`;
+    if (size + line.length > maxChars && out.length > 0) break;
+    out.push(line);
+    size += line.length + 1;
+  }
+  return out.join('\n');
+}
+
 /** Texto comparable: sin acentos, sin puntuación, espacios simples, minúsculas. */
 function comparable(s: string): string {
   return (s ?? '')
