@@ -198,6 +198,7 @@ const NOT_FOUND_STATUS: WooStatusMeta = {
 export function wooStatusMeta(status: string | null | undefined): WooStatusMeta {
   if (!status) return UNKNOWN_STATUS;
   if (status === 'not_found') return NOT_FOUND_STATUS;
+  if (status === PAUSED_STATUS) return PAUSED_META;
   return WOO_STATUS[status] ?? UNKNOWN_STATUS;
 }
 
@@ -220,3 +221,94 @@ export function isScheduledWooStatus(status: string | null | undefined): boolean
 /** Estados que permiten tomar clases, en el orden en que se prefieren cuando un
  *  alumno tiene varias suscripciones. */
 export const ACTIVE_WOO_STATUSES = Object.keys(WOO_STATUS).filter(s => WOO_STATUS[s].countsAsActive);
+
+// ── EN PAUSA ─────────────────────────────────────────────────────────────────
+//
+// Variación "Pausa" (20 €/mes) que existe en varios productos de suscripción. El
+// alumno sigue pagando y Woo dice 'active' (o 'pending-cancel'), pero para
+// nosotros está EN PAUSA: conserva su hueco en el calendario, no toma clases, no
+// se le escanea el riesgo de baja ni se le mandan recordatorios.
+//
+// NO es un estado de WooCommerce: lo calcula el endpoint con resolveWooSubscriptions
+// y viaja como status 'paused'. Por eso no está en WOO_STATUS (que el endpoint
+// externo y los filtros de finanzas recorren como lista de estados de Woo), pero
+// wooStatusMeta('paused') sí lo conoce, para que cualquier badge lo pinte bien.
+//
+// Precedencia: Oritalk > manual > suscripción NORMAL que da acceso > Pausa > el
+// resto. Si vuelve a un plan normal (cambio de suscripción en Woo), la suscripción
+// deja de tener la variación Pausa y vuelve solo a Activo.
+
+export const PAUSED_STATUS = 'paused';
+
+export const PAUSED_META: WooStatusMeta = {
+  label: 'En pausa', countsAsActive: false, icon: '⏸️',
+  // Amarillo de marca con texto oscuro (el amarillo no se lee como texto).
+  color: '#3d2e00', bg: '#FFC400',
+};
+
+export function isPausedStatus(status: string | null | undefined): boolean {
+  return status === PAUSED_STATUS;
+}
+
+/** Texto comparable: sin tildes, en minúsculas. */
+const plain = (s: string): string => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+
+/** ¿Este valor de atributo de variación es la "Pausa"? Sin mayúsculas ni tildes. */
+export function isPauseVariationText(text: string | null | undefined): boolean {
+  return !!text && plain(text).includes('pausa');
+}
+
+/** Línea de producto de una suscripción o pedido de Woo (lo que se usa de ella). */
+export interface WooLineItem {
+  name?: unknown;
+  variation_id?: unknown;
+  meta_data?: Array<{ key?: unknown; value?: unknown; display_key?: unknown; display_value?: unknown }> | unknown;
+}
+
+/**
+ * ¿La línea es la variación "Pausa"? Se mira SOLO el atributo de la variación
+ * (las metas sin "_" delante, que es como Woo guarda los atributos elegidos), no
+ * el nombre del producto: así un producto que llevara "pausa" en el nombre por
+ * otro motivo no se confunde.
+ */
+export function isPauseLineItem(li: WooLineItem | null | undefined): boolean {
+  const meta = Array.isArray(li?.meta_data) ? li!.meta_data as Array<Record<string, unknown>> : [];
+  return meta.some(m => {
+    const key = String(m?.key ?? '');
+    if (key.startsWith('_')) return false;
+    const v = m?.display_value ?? m?.value;
+    return typeof v === 'string' && isPauseVariationText(v);
+  });
+}
+
+/** ¿Alguna línea de esta suscripción (o pedido) es la variación Pausa? */
+export function hasPauseItem(lineItems: unknown): boolean {
+  return Array.isArray(lineItems) && lineItems.some(li => isPauseLineItem(li as WooLineItem));
+}
+
+/** Lo que se necesita de cada suscripción para decidir el estado. */
+export interface WooSubLike {
+  status?: unknown;
+  line_items?: unknown;
+}
+
+/**
+ * Qué suscripción manda entre las de un alumno y con qué estado. Las suscripciones
+ * vienen de la más reciente a la más antigua.
+ *
+ *   1. una NORMAL que da acceso (active / pending-cancel)  → su estado (Activo)
+ *   2. una en PAUSA que daría acceso                         → 'paused'
+ *   3. si no, la más reciente                                → su estado de Woo
+ *
+ * Una suscripción de Pausa cancelada, vencida o en espera NO pone al alumno en
+ * pausa: manda su estado de Woo, como cualquier otra.
+ */
+export function resolveWooSubscriptions<T extends WooSubLike>(subsByRecent: T[]): { chosen: T | undefined; status: string } {
+  const giving = subsByRecent.filter(s => isActiveWooStatus(String(s?.status ?? '')));
+  const normal = giving.find(s => !hasPauseItem(s.line_items));
+  if (normal) return { chosen: normal, status: String(normal.status) };
+  const paused = giving.find(s => hasPauseItem(s.line_items));
+  if (paused) return { chosen: paused, status: PAUSED_STATUS };
+  const latest = subsByRecent[0];
+  return { chosen: latest, status: String(latest?.status ?? 'cancelled') };
+}

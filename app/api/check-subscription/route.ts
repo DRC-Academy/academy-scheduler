@@ -11,7 +11,9 @@ import {
 } from '@/lib/productUtils';
 // La regla de "activo" (Woo OR manual OR Oritalk) vive en un módulo puro para
 // que exista una sola definición. Ver lib/subscriptionAccess.ts.
-import { accessOverrideOf, isActiveWooStatus, madridToday } from '@/lib/subscriptionAccess';
+import {
+  accessOverrideOf, isActiveWooStatus, madridToday, resolveWooSubscriptions, hasPauseItem,
+} from '@/lib/subscriptionAccess';
 
 // La lista de productos de PAGO ÚNICO vive en lib/productUtils.isOneTimeProduct:
 // era una constante local duplicada en sync-student-plans, y las dos copias ya
@@ -23,7 +25,7 @@ type ProductType = 'subscription' | 'one_time' | null;
 
 interface SubResult {
   active: boolean | null;
-  status: string;                 // 'active'|'cancelled'|'on-hold'|'expired'|'pending-cancel'|'not_found'|'error'|'manual_override'|'manual_active'|'one_time_no_access'|'oritalk'
+  status: string;                 // 'active'|'cancelled'|'on-hold'|'expired'|'pending-cancel'|'paused'|'not_found'|'error'|'manual_override'|'manual_active'|'one_time_no_access'|'oritalk'
   endDate: string | null;
   daysRemaining: number | null;
   planName: string | null;        // = productName (compat hacia atrás)
@@ -56,6 +58,8 @@ interface RichProduct {
   productType: ProductType;
   billingName: string | null;
   orderDate: string | null;       // 'YYYY-MM-DD' — fecha de compra (fallback de inicio)
+  /** El último pedido es de la variación "Pausa" (el cambio a la pausa o su renovación). */
+  isPause: boolean;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -167,7 +171,7 @@ async function fetchLastProduct(c: { base: string; ck: string; cs: string }, ema
   // Fecha de compra: pago completado → pagado → creación (fallback de inicio).
   const orderDate = toDateStr(firstNonEmpty(order?.date_completed, order?.date_paid, order?.date_created));
   const name = (typeof li?.name === 'string' && li.name.trim()) ? li.name.trim() : null;
-  if (!name) return { name: null, variation: null, fullName: null, hours: null, metaData: [], productType: null, billingName, orderDate };
+  if (!name) return { name: null, variation: null, fullName: null, hours: null, metaData: [], productType: null, billingName, orderDate, isPause: false };
 
   const metaData = Array.isArray(li?.meta_data) ? li.meta_data : [];
   const variation = li?.variation_id ? variationFromMeta(metaData) : variationFromMeta(metaData);
@@ -178,7 +182,7 @@ async function fetchLastProduct(c: { base: string; ck: string; cs: string }, ema
   const hours = parseHoursFromMeta(metaData) ?? parseHoursFromText(variation) ?? parseHoursFromText(name) ?? parseHoursFromText(broad);
 
   const productType: ProductType = isOneTimeProduct(name) ? 'one_time' : 'subscription';
-  return { name, variation, fullName, hours, metaData, productType, billingName, orderDate };
+  return { name, variation, fullName, hours, metaData, productType, billingName, orderDate, isPause: hasPauseItem([li]) };
 }
 
 // Estado de la suscripción recurrente (como antes).
@@ -199,16 +203,19 @@ async function fetchSubStatus(c: { base: string; ck: string; cs: string }, email
   // Antes acá solo se buscaba `status === 'active'`. Un alumno con una
   // 'pending-cancel' vigente y una 'cancelled' más nueva se quedaba con la
   // cancelada, cuando la que manda es la que todavía le da acceso.
-  const chosen = byRecent.find(s => isActiveWooStatus(s?.status)) ?? byRecent[0];
-  const status = String(chosen?.status ?? 'cancelled');
+  //
+  // EN PAUSA: si la que da acceso es de la variación "Pausa" (y no hay otra
+  // normal que dé acceso), el estado es 'paused' aunque Woo diga active o
+  // pending-cancel. La regla vive en lib/subscriptionAccess.
+  const { chosen, status } = resolveWooSubscriptions(byRecent);
   const endDate = parseWcDate(firstNonEmpty(chosen?.end_date, chosen?.next_payment_date));
   const startDate = toDateStr(firstNonEmpty(chosen?.start_date, chosen?.date_created));
   const planName = (Array.isArray(chosen?.line_items) && typeof chosen.line_items[0]?.name === 'string') ? chosen.line_items[0].name : null;
   const phone = (typeof chosen?.billing?.phone === 'string' && chosen.billing.phone.trim()) ? chosen.billing.phone.trim() : null;
   return {
-    // 'active' y 'pending-cancel' dan acceso; 'on-hold', 'cancelled' y 'expired'
-    // no. El criterio vive en lib/subscriptionAccess y lo comparten el badge, el
-    // popup de ingreso y finanzas.
+    // 'active' y 'pending-cancel' dan acceso; 'paused', 'on-hold', 'cancelled' y
+    // 'expired' no. El criterio vive en lib/subscriptionAccess y lo comparten el
+    // badge, el popup de ingreso y finanzas.
     active: isActiveWooStatus(status),
     status,
     endDate: endDate ? endDate.toISOString() : null,
@@ -341,8 +348,17 @@ export async function GET(request: Request): Promise<Response> {
     } else if (creds) {
       try {
         rich = await fetchLastProduct(creds, email);
-        productCache.set(email, { product: rich, ts: Date.now() });
-        if (student?.id && rich.name) {
+        // El último pedido es la PAUSA (el cambio a la variación o su renovación
+        // mensual): no describe el plan del alumno. NUNCA se guarda en
+        // students.product_name / plan —el LMS elige el curso con ese texto— y
+        // tampoco se usa como producto en esta respuesta: vale lo persistido.
+        if (rich.isPause) {
+          rich = null;
+          // La Pausa es siempre una variación de SUSCRIPCIÓN: sin plan guardado,
+          // se sigue por la rama de suscripción para que el estado salga bien.
+          productType ??= 'subscription';
+        } else productCache.set(email, { product: rich, ts: Date.now() });
+        if (rich && student?.id && rich.name) {
           const updates: Record<string, unknown> = { product_type: rich.productType, product_name: rich.fullName, plan: rich.fullName };
           supabase.from('students').update(updates).eq('id', student.id).then(() => {}, () => {});
         }

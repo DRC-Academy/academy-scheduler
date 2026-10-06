@@ -30,6 +30,7 @@ import { TranscriptDeadlineBanner } from '@/components/TranscriptDeadlineBanner'
 import { planFieldsOf } from '@/lib/productUtils';
 import { baseCellOf } from '@/lib/cells';
 import { checkSubscription, subBadge, type SubscriptionInfo } from '@/lib/useSubscriptionStatus';
+import { isPausedStatus } from '@/lib/subscriptionAccess';
 import { isMilestone, getMilestoneSlides, MILESTONES, MILESTONE_SLIDES, MILESTONE_TITLES } from '@/lib/milestones';
 import {
   classesForDate, recoveriesForDate, addDaysIso, isoDateLocal, dayNameFromDate, mondayIsoOf,
@@ -735,10 +736,20 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
   // Las dos fuentes (slots recurrentes + celdas de recuperación del grid) pasan
   // por la MISMA agrupación: dos celdas contiguas del mismo alumno salen como
   // una sola card de 2h, con un botón de transcript y un solo "Ingresar".
+  //
+  // Alumnos EN PAUSA (variación "Pausa" de Woo): sus clases de HOY en adelante
+  // no se muestran. Las anteriores sí, que pueden ser de antes de la pausa y el
+  // profe puede tener que subir su transcript. Se sabe al llegar la verificación
+  // de la suscripción (subInfo), igual que el badge.
+  const pausada = (c: { assignment: TodayClass['assignment'] }, iso: string) => {
+    if (iso < todayIso) return false;
+    const e = subEmailForAssignment(c.assignment);
+    return !!e && isPausedStatus(subInfo[e]?.status);
+  };
   const sessionsOn = (iso: string) => groupContiguousClasses([
     ...classesForDate(myAssignments, iso, periodos),
     ...recoveriesForDate(grid, iso, myAssignments),
-  ], teacher.id, gridOccupancy);
+  ].filter(c => !pausada(c, iso)), teacher.id, gridOccupancy);
 
   const dayGroups = visibleDays.map(iso => {
     const all = sessionsOn(iso);

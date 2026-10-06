@@ -157,6 +157,13 @@ interface BaseProps {
    */
   inactiveStudents?: Set<string>;
   /**
+   * Alumnos EN PAUSA (nombres normalizados): variación "Pausa" de WooCommerce.
+   * Conservan su hueco —la celda sigue 'ocupado', si se liberara pasarían a
+   * "Fuera de calendario"— y la celda se ve marcada "En pausa", para que el
+   * profesor no la cuente como falta ni ofrezca esa hora a otro alumno.
+   */
+  pausedStudents?: Set<string>;
+  /**
    * Beta "No puedo dar esta clase": horas reservadas para una recuperación
    * propuesta mientras el alumno elige. NO son clases (no están en el grid): se
    * pintan encima, solo su semana, y no se pueden tocar desde el menú de celda.
@@ -688,6 +695,11 @@ export function VisualCalendar(props: Props) {
     return !!student && !!props.inactiveStudents?.has(nkName(student));
   }
 
+  /** ¿Este alumno está EN PAUSA? Solo marca la celda, no la libera. */
+  function enPausa(student?: string): boolean {
+    return !!student && !!props.pausedStudents?.has(nkName(student));
+  }
+
   function blockContent(cell: Cell, run?: RunInfo) {
     if (cell.state === 'no_work') {
       return props.mode === 'teacher' ? <div className="vc-b-name">No work</div> : null;
@@ -699,14 +711,20 @@ export function VisualCalendar(props: Props) {
           {run && run.index === 0 && <span className="vc-hours-badge">{run.length}h</span>}
           <div className="vc-b-name">
             {cell.student || 'Ocupado'}
-            {sinSuscripcion(cell.student) && (
+            {enPausa(cell.student) && (
+              <span
+                title="Este alumno está en pausa: conserva el horario, pero no tiene clases."
+                style={{ marginLeft: 4, padding: '0 5px', borderRadius: 6, background: '#FFC400', color: '#3d2e00', fontSize: 10, fontWeight: 700, whiteSpace: 'nowrap' }}
+              >En pausa</span>
+            )}
+            {!enPausa(cell.student) && sinSuscripcion(cell.student) && (
               <span
                 title="Este alumno figura sin suscripción activa. La clase se sigue mostrando y contando: verificá con el equipo."
                 style={{ marginLeft: 4, color: '#ea580c', fontWeight: 700 }}
               >⚠</span>
             )}
           </div>
-          <div className="vc-b-sub">{run ? (run.index === 0 ? run.label : 'continúa') : 'Semanal'}</div>
+          <div className="vc-b-sub">{enPausa(cell.student) ? 'En pausa' : run ? (run.index === 0 ? run.label : 'continúa') : 'Semanal'}</div>
         </>
       );
     }
@@ -730,6 +748,9 @@ export function VisualCalendar(props: Props) {
   }
 
   function cellTitle(cell: Cell, run?: RunInfo) {
+    if (cell.state === 'ocupado' && cell.student && enPausa(cell.student)) {
+      return `${cell.student} · En pausa: conserva el horario, pero no tiene clases`;
+    }
     if (cell.state === 'ocupado' && cell.student) {
       return run
         ? `${cell.student} · Sesión de ${run.length}h (${run.label}) · cuenta como ${run.length} clases`

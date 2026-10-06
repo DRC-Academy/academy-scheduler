@@ -28,6 +28,7 @@ import { useState, type ReactNode } from 'react';
 import { calcRegisteredClassNumber } from '@/lib/db';
 import { isMilestone, getMilestoneSlides, getMilestoneCopy } from '@/lib/milestones';
 import { checkSubscription, type SubscriptionInfo } from '@/lib/useSubscriptionStatus';
+import { isPausedStatus } from '@/lib/subscriptionAccess';
 import { markInterventionShown } from '@/lib/interventionsClient';
 import { AVOID_ITEMS, AVOID_TITLE, ESCALATED_GUARDRAIL, NATURAL_REMINDER, type RiskBriefing } from '@/lib/interventions';
 import { RISK_CAUSE_META } from '@/lib/aiTypes';
@@ -403,6 +404,9 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
       {/* Disclaimer de suscripción inactiva */}
       {subModal && (() => {
         const d = subDisclaimer(subModal.c.studentName, subModal.status, subModal.daysRemaining, subModal.endDate, subModal.startDate);
+        // EN PAUSA: solo el aviso, sin "Ingresar de todas formas". Sin ingreso no
+        // hay join log, y sin join log la clase no existe en finanzas.
+        const pausa = isPausedStatus(subModal.status);
         return (
           <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 85, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
             onClick={e => { if (e.target === e.currentTarget) setSubModal(null); }}>
@@ -411,14 +415,17 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
               <div style={{ fontSize: 14, color: 'var(--text-secondary)', marginBottom: 18, lineHeight: 1.6 }}>
                 {d.body}
               </div>
-              <div style={{ fontSize: 14, color: 'var(--text-primary)', fontWeight: 600, marginBottom: 20 }}>
-                ¿Seguro que deseas ingresar a la clase de todas formas?
-              </div>
+              {!pausa && (
+                <div style={{ fontSize: 14, color: 'var(--text-primary)', fontWeight: 600, marginBottom: 20 }}>
+                  ¿Seguro que deseas ingresar a la clase de todas formas?
+                </div>
+              )}
               <div style={{ display: 'flex', gap: 10 }}>
                 <button onClick={() => setSubModal(null)} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-surface)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
-                  Cancelar
+                  {pausa ? 'Entendido' : 'Cancelar'}
                 </button>
                 {/* "pending-cancel" sigue activo hasta la fecha → CTA con menor énfasis (outline) */}
+                {!pausa && (
                 <button onClick={joinAnyway} style={{
                   flex: 2, padding: '10px', borderRadius: 8, cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit',
                   border: d.soft ? `1.5px solid ${d.accent}` : 'none',
@@ -427,6 +434,7 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
                 }}>
                   Ingresar de todas formas
                 </button>
+                )}
               </div>
             </div>
           </div>
@@ -458,6 +466,14 @@ export function normalizeUrl(url: string): string {
 export function subDisclaimer(name: string, status: string, daysRemaining: number | null, endDate: string | null, startDate?: string | null):
   { title: string; body: string; accent: string; bg: string; soft: boolean } {
   switch (status) {
+    // EN PAUSA (variación "Pausa" de Woo): no se puede ingresar (el modal no
+    // ofrece "Ingresar de todas formas"). Texto acordado con coordinación.
+    case 'paused':
+      return {
+        title: '⏸️ Alumno en pausa',
+        body: 'Este alumno está en pausa. Si crees que es un error, consulta con coordinación.',
+        accent: '#3d2e00', bg: 'rgba(255,196,0,0.14)', soft: false,
+      };
     // Suscripción PROGRAMADA: pagada, pero empieza en el futuro. No es un
     // problema de cobro ni una baja, así que no se pinta en rojo ni en ámbar: es
     // el mismo azul informativo del badge. Aun así NO da acceso, y por eso pasa

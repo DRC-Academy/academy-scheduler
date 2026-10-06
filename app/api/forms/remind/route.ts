@@ -10,7 +10,8 @@
 //   · como mucho uno por día de calendario y alumno, para que un doble clic no
 //     mande dos.
 // "No enviar más" (students.followup_opt_out) también corta el envío manual:
-// si el equipo quiere escribirle igual, primero quita la marca.
+// si el equipo quiere escribirle igual, primero quita la marca. Y tampoco sale
+// a un alumno EN PAUSA (variación "Pausa" de Woo), igual que en el cron.
 //
 // Lo llama el admin ya logueado (auth client-side, igual que el resto de rutas
 // del panel). Body: { tokenIds: string[] } con los ids de form_tokens.
@@ -22,6 +23,7 @@ import {
   type FormTokenRow, type StudentRow, type TestSessionRow, type DropoutRow, type FollowupRow,
 } from '@/lib/formReminders';
 import { publicBase } from '@/lib/appUrl';
+import { pausedEmailsOrEmpty } from '@/lib/wooPausedEmails';
 import type { ResultadoManual } from '@/lib/levelTestSeguimiento';
 
 export const dynamic = 'force-dynamic';
@@ -87,6 +89,7 @@ export async function POST(request: Request): Promise<Response> {
     now,
   });
   const porToken = new Map(pendientes.map(e => [e.token.id, e]));
+  const paused = await pausedEmailsOrEmpty('forms/remind');
   const nombreDe = new Map(((tk.data ?? []) as unknown as FormTokenRow[]).map(t => [t.id, t.student_name]));
 
   const resultados: ResultadoManual[] = [];
@@ -98,6 +101,10 @@ export async function POST(request: Request): Promise<Response> {
     if (!e) { resultados.push({ tokenId: id, alumno: nombreDe.get(id) ?? null, ok: false, motivo: 'no_pendiente' }); continue; }
     if (e.skipReason === 'no_enviar') {
       resultados.push({ tokenId: id, alumno: e.student.name, ok: false, motivo: 'no_enviar' });
+      continue;
+    }
+    if (paused.has(e.email) || paused.has((e.student.email ?? '').trim().toLowerCase())) {
+      resultados.push({ tokenId: id, alumno: e.student.name, ok: false, motivo: 'en_pausa' });
       continue;
     }
     if (e.lastSent && calendarDaysSince(e.lastSent, now) < 1) {

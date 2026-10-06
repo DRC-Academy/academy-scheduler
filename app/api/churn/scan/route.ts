@@ -15,6 +15,7 @@
 
 import { supabase } from '@/lib/supabase';
 import { captureChurnSnapshot, markChurnAlerted } from '@/lib/churnSnapshot';
+import { pausedEmailsOrEmpty } from '@/lib/wooPausedEmails';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
@@ -36,16 +37,34 @@ export async function POST(request: Request): Promise<Response> {
   // cursor signifique lo mismo en cada llamada.
   const { data: asgns, error } = await supabase
     .from('assignments')
-    .select('student_id, student_name, teacher_id, teacher_name, start_date, created_at')
+    .select('student_id, student_name, student_email, teacher_id, teacher_name, start_date, created_at')
     .order('student_name', { ascending: true });
   if (error) return Response.json({ error: error.message }, { status: 500 });
+
+  // Alumnos EN PAUSA (variación "Pausa" de Woo): no se escanean. Sin clases
+  // durante la pausa, la inactividad los marcaría a todos como riesgo de baja.
+  // El email de verdad es el de `students` (el de Woo); el de la asignación es
+  // el respaldo, como en lib/useSubscriptionStatus.
+  const paused = await pausedEmailsOrEmpty('churn/scan');
+  const emailOf = new Map<string, string>();
+  if (paused.size > 0) {
+    for (let from = 0; ; from += 1000) {
+      const { data } = await supabase.from('students').select('id, email').order('id').range(from, from + 999);
+      for (const s of data ?? []) if (s.email) emailOf.set(String(s.id), String(s.email).trim().toLowerCase());
+      if ((data ?? []).length < 1000) break;
+    }
+  }
+  const isPaused = (a: { student_id: string | null; student_email: string | null }) => {
+    const e = (a.student_id && emailOf.get(a.student_id)) || (a.student_email ?? '').trim().toLowerCase();
+    return !!e && paused.has(e);
+  };
 
   const seen = new Set<string>();
   const students = (asgns ?? []).filter(a => {
     const k = (a.student_name ?? '').trim().toLowerCase();
     if (!k || seen.has(k)) return false;
     seen.add(k);
-    return true;
+    return !isPaused(a);
   });
   const total = students.length;
   const batch = students.slice(offset, offset + HARD_CAP);

@@ -1333,10 +1333,14 @@ function TeacherContent() {
   // vencida no significa que el alumno dejó de venir, y esconder su clase le
   // borraría al profesor una clase real.
   const [inactiveStudents, setInactiveStudents] = useState<Set<string>>(new Set());
+  // Alumnos EN PAUSA (variación "Pausa" de Woo): conservan su hueco, que se ve
+  // marcado "En pausa" para que el profe no lo cuente como falta ni lo ofrezca.
+  const [pausedStudents, setPausedStudents] = useState<Set<string>>(new Set());
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const out = new Set<string>();
+      const paused = new Set<string>();
       for (const a of myAssignments) {
         const email = resolveSubscriptionEmail(
           students.find(s => s.name.trim().toLowerCase() === a.studentName.trim().toLowerCase())?.email,
@@ -1347,9 +1351,10 @@ function TeacherContent() {
           // Solo lo que es DE VERDAD una anomalía: 'unverified' y 'pending' no
           // se marcan, para que el aviso signifique algo cuando aparece.
           if (subCategory(info) === 'inactive') out.add(a.studentName.trim().toLowerCase());
+          if (subCategory(info) === 'paused') paused.add(a.studentName.trim().toLowerCase());
         } catch { /* si Woo falla no se marca nada: mejor sin aviso que uno falso */ }
       }
-      if (!cancelled) setInactiveStudents(out);
+      if (!cancelled) { setInactiveStudents(out); setPausedStudents(paused); }
     })();
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1777,9 +1782,11 @@ function TeacherContent() {
   const periodosHeader = periodIndex(myAssignments, headerDropouts, teacher?.id ?? '');
   // Agrupada como en el resto de la app: una sesión de 2h es UNA clase que sigue
   // en curso hasta su hora de fin (endHourNum), no hasta la hora siguiente.
+  // Los alumnos EN PAUSA no tienen clases: no se anuncian como próxima clase.
   const todayClassesHeader = groupContiguousClasses(
-    classesForDate(myAssignments, spainHeader.dateStr, periodosHeader), teacher.id,
-    gridOccupancyOfTeacher(teacher),
+    classesForDate(myAssignments, spainHeader.dateStr, periodosHeader)
+      .filter(c => !pausedStudents.has(c.studentName.trim().toLowerCase())),
+    teacher.id, gridOccupancyOfTeacher(teacher),
   );
   const nowDecimalHeader = spainHeader.hour + spainHeader.minute / 60;
   const nextClassHeader = todayClassesHeader.find(c => c.endHourNum > nowDecimalHeader);
@@ -1994,6 +2001,7 @@ function TeacherContent() {
                 onOcupadoNeed={handleOcupadoNeed}
                 onRecuperacionNeed={handleRecuperacionNeed}
                 inactiveStudents={inactiveStudents}
+                pausedStudents={pausedStudents}
                 reservations={recov.reservations.length ? recov.reservations : undefined}
               />
             )}

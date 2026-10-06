@@ -337,7 +337,7 @@ export function resumenSeguimiento(filas: Seguimiento[], now: number): ResumenSe
 }
 
 // ── Respuesta de /api/forms/remind ───────────────────────────────────────────
-export type MotivoManual = 'no_pendiente' | 'ya_hoy' | 'no_enviar' | 'reserva' | 'ya_tomado' | 'sin enlace' | 'envío';
+export type MotivoManual = 'no_pendiente' | 'ya_hoy' | 'no_enviar' | 'en_pausa' | 'reserva' | 'ya_tomado' | 'sin enlace' | 'envío';
 
 export interface ResultadoManual {
   tokenId: string;
@@ -352,6 +352,7 @@ export const MOTIVO_MANUAL: Record<MotivoManual, string> = {
   no_pendiente: 'ya no está pendiente',
   ya_hoy:       'ya recibió uno hoy',
   no_enviar:    'tiene marcado "No enviar más"',
+  en_pausa:     'está en pausa',
   reserva:      'no se pudo reservar el envío',
   ya_tomado:    'otro envío se adelantó',
   'sin enlace': 'no se pudo preparar el enlace',

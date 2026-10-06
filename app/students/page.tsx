@@ -12,7 +12,7 @@ import { dbCheckStudentExists, dbSetStudentManualActive, dbActivateOneTimeAccess
 // Misma regla de vigencia que usa el servidor para decidir "activo": acá solo se
 // usa para saber qué opciones ofrecer en el menú, nunca para pintar el badge (eso
 // sale siempre de subBadge, que lee la respuesta de /api/check-subscription).
-import { isUntilActive, madridToday } from '@/lib/subscriptionAccess';
+import { isUntilActive, madridToday, isPausedStatus } from '@/lib/subscriptionAccess';
 import { classifyFor, planBadgeStyle } from '@/lib/productUtils';
 import { isAssignableCell, withBaseState } from '@/lib/cells';
 import { useGridSaver, conflictMessage, calendarErrorMessage } from '@/lib/useGridSaver';
@@ -867,7 +867,10 @@ function StudentsContent() {
     // `info.active`, no subCategory: 'pending-cancel' tiene categoría propia para
     // los filtros pero SÍ da acceso, y ofrecerle "Activar" a un alumno que puede
     // tomar clases no tiene sentido.
-    const showActivate = !isRefreshing && info != null && student.inStudentsTable && !isOneTime && info.active !== true;
+    // Tampoco a uno EN PAUSA: no tiene acceso porque así lo decidió su plan,
+    // no por un fallo que haya que tapar con una activación manual.
+    const showActivate = !isRefreshing && info != null && student.inStudentsTable && !isOneTime && info.active !== true
+      && !isPausedStatus(info.status);
 
     const openAccess = () => setAccessStudent({ ...student, productName: info?.productName ?? student.productName });
 
@@ -1017,6 +1020,8 @@ function StudentsContent() {
             // a propósito: con estos alumnos no hay nada que recuperar, solo que
             // esperar a su fecha de inicio.
             { id: 'scheduled',  label: 'Programada' },
+            // Variación "Pausa" de Woo: sigue pagando y conserva su hueco.
+            { id: 'paused',     label: 'En pausa' },
             { id: 'unverified', label: 'Sin verificar' },
           ] as const).map(chip => (
             <button key={chip.id} onClick={() => { setSubFilter(chip.id); setVisibleCount(50); }}

@@ -12,6 +12,7 @@ import { supabase } from '@/lib/supabase';
 // solo se aplicó a check-subscription), así que este endpoint marcaba como
 // suscripción a 8 alumnos que el otro marcaba como pago único.
 import { detectLevel, isOneTimeProduct } from '@/lib/productUtils';
+import { hasPauseItem } from '@/lib/subscriptionAccess';
 
 const TIMEOUT_MS = 10_000;
 
@@ -40,6 +41,8 @@ interface WooProduct {
   productFullName: string | null;
   productType: 'subscription' | 'one_time' | null;
   detectedLevel: string | null;
+  /** El último pedido es de la variación "Pausa": no se guarda como plan. */
+  isPause: boolean;
 }
 
 async function fetchProduct(c: { base: string; ck: string; cs: string }, email: string): Promise<WooProduct | null> {
@@ -63,6 +66,7 @@ async function fetchProduct(c: { base: string; ck: string; cs: string }, email: 
       productFullName: fullName,
       productType: isOneTimeProduct(name) ? 'one_time' : 'subscription',
       detectedLevel: detectLevel(fullName, metaData),
+      isPause: hasPauseItem([li]),
     };
   } catch {
     return null;
@@ -94,6 +98,14 @@ export async function POST(request: Request): Promise<Response> {
 
     const prod = await fetchProduct(creds, email.toLowerCase());
     if (!prod?.productFullName) { notFound++; details.push({ id: s.id, email, result: 'not_found' }); return; }
+
+    // El pedido de la PAUSA (el cambio o su renovación) no es el plan del
+    // alumno: NUNCA sobrescribe students.plan / product_name (el LMS elige el
+    // curso con ese texto). Se deja como está.
+    if (prod.isPause) {
+      unchanged++; details.push({ id: s.id, email, result: 'unchanged', plan: (s.plan ?? '').trim() });
+      return;
+    }
 
     const currentPlan = (s.plan ?? '').trim();
     if (currentPlan === prod.productFullName) {

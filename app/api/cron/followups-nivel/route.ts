@@ -47,6 +47,7 @@ import {
 } from '@/lib/formReminders';
 import { sendFollowupEmail, followupCopy } from '@/lib/studentFollowupEmails';
 import { publicBase } from '@/lib/appUrl';
+import { pausedEmailsOrEmpty } from '@/lib/wooPausedEmails';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -137,12 +138,18 @@ async function run(request: Request): Promise<Response> {
   const followups = (fu.data ?? []) as unknown as FollowupRow[];
   let tokens = (tk.data ?? []) as unknown as FormTokenRow[];
 
+  // Alumnos EN PAUSA (variación "Pausa" de Woo): ni enlace nuevo ni recordatorio
+  // mientras dure. Su secuencia queda donde estaba y sigue cuando vuelva.
+  const paused = await pausedEmailsOrEmpty('cron followups-nivel');
+  const enPausa = (email: string | null | undefined) => !!email && paused.has(email.trim().toLowerCase());
+
   // ── Paso previo: enlaces para quien no tiene ninguno vigente ───────────────
   // Su día 0 es HOY (created_at del token nuevo), como pidió Facundo.
   const sinEnlace = studentsNeedingToken({ tokens, students, sessions, dropouts, assignments, now })
     // "No enviar más" también corta la generación de enlaces: sin enlace no hay
     // secuencia que empezar.
-    .filter(n => !n.student.followup_opt_out);
+    .filter(n => !n.student.followup_opt_out)
+    .filter(n => !enPausa(n.email) && !enPausa(n.student.email));
 
   // En dry se simulan en memoria (misma forma de fila, sin insertar nada), para
   // que la previsualización incluya de verdad a quién le llegaría su enlace hoy.
@@ -159,7 +166,7 @@ async function run(request: Request): Promise<Response> {
     assignments: assignments.map(a => ({ student_id: a.student_id, student_name: a.student_name, student_email: a.student_email })),
   });
 
-  const tocanHoy = pendientes.filter(e => e.step !== null);
+  const tocanHoy = pendientes.filter(e => e.step !== null && !enPausa(e.email) && !enPausa(e.student.email));
   const resumen = summarize(pendientes, sinEnlace.length);
 
   // ── Modo dry: quién recibiría qué, sin enviar ni escribir ──────────────────

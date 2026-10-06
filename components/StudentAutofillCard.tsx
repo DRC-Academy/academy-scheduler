@@ -25,7 +25,9 @@ function Row({ children }: { children: ReactNode }) {
 // Etiqueta legible del estado de suscripción.
 const STATUS_LABEL: Record<string, string> = {
   active: 'Activa', manual_active: 'Activa (manual)', manual_override: 'Activa (manual)',
-  cancelled: 'Cancelada', 'pending-cancel': 'Cancelación pendiente', 'on-hold': 'En pausa',
+  // 'on-hold' es pago fallido: "En espera", como en el resto de la app. "En
+  // pausa" es otra cosa (la variación "Pausa", status 'paused').
+  cancelled: 'Cancelada', 'pending-cancel': 'Cancelación pendiente', 'on-hold': 'En espera', paused: 'En pausa',
   expired: 'Expirada', 'one_time_no_access': 'Pago único — sin acceso',
   not_found: 'No encontrada', error: 'No verificable',
 };

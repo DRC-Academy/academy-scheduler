@@ -15,14 +15,14 @@
 
 // El mapa de estados de WooCommerce (nombre, color y si dan acceso) es el mismo
 // que usan el endpoint, finanzas y las asistencias. Ver lib/subscriptionAccess.
-import { WOO_STATUS, isScheduledWooStatus } from '@/lib/subscriptionAccess';
+import { WOO_STATUS, isScheduledWooStatus, isPausedStatus, PAUSED_META } from '@/lib/subscriptionAccess';
 import { addCalendarMonths } from '@/lib/productUtils';
 // Una sola regla de normalización de emails para todo el proyecto (lib/email).
 import { normEmail } from '@/lib/email';
 
 export interface SubscriptionInfo {
   active: boolean | null;                            // true=activa · false=inactiva · null=sin verificar
-  status: string;                                    // 'active'|'cancelled'|'on-hold'|'expired'|'pending-cancel'|'scheduled'|'not_found'|'error'|'manual_override'|'manual_active'|'one_time_no_access'|'oritalk'
+  status: string;                                    // 'active'|'cancelled'|'on-hold'|'expired'|'pending-cancel'|'scheduled'|'paused'|'not_found'|'error'|'manual_override'|'manual_active'|'one_time_no_access'|'oritalk'
   daysRemaining: number | null;
   endDate: string | null;
   productType: 'subscription' | 'one_time' | null;
@@ -54,7 +54,7 @@ export interface SubscriptionInfo {
  * 28/08/2026 y cae en 'inactive' como corresponde (no da acceso). Son dos cosas
  * distintas que se llaman igual: no cablear una con la otra.
  */
-export type SubCategory = 'active' | 'inactive' | 'pending' | 'scheduled' | 'unverified';
+export type SubCategory = 'active' | 'inactive' | 'pending' | 'scheduled' | 'paused' | 'unverified';
 
 // Cache compartido entre TODOS los componentes (vive en el módulo). Si "Alumnos"
 // ya verificó a María, "Próximas clases" reutiliza el mismo resultado.
@@ -127,6 +127,9 @@ export function resolveSubscriptionEmail(studentEmail?: string | null, assignmen
  */
 export function subCategory(info: SubscriptionInfo | undefined): SubCategory {
   if (!info) return 'unverified';
+  // EN PAUSA (variación "Pausa" de Woo): categoría propia. No es una anomalía
+  // como 'inactive': el alumno sigue pagando y conserva su hueco.
+  if (isPausedStatus(info.status)) return 'paused';
   // 'pending-cancel' va ANTES del check de `active`: desde que cuenta como activa
   // (que es lo correcto: el alumno pagó hasta el fin del periodo) caería en
   // 'active' y el chip "Pendiente cancelar" de la lista quedaría siempre vacío.
@@ -193,6 +196,11 @@ export function subBadge(info: SubscriptionInfo | undefined): { label: string; c
         : { label: '❌ Expirado', ...red };
     }
     return { label: '⚪ Sin activar', ...gray };
+  }
+
+  // EN PAUSA: amarillo de marca con texto oscuro (lib/subscriptionAccess).
+  if (isPausedStatus(info.status)) {
+    return { label: `${PAUSED_META.icon} ${PAUSED_META.label}`, color: PAUSED_META.color, bg: PAUSED_META.bg };
   }
 
   // SUSCRIPCIÓN (y desconocido)
