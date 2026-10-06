@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   parseFathomTurns, parseCaptionTurns, parseTurns, extractFathomUrl, identifyTeacher, prepareFluency,
   formatTurnsForAi, excerptFound, MIN_WORDS,
-  toSeconds, formatSeconds, locateExcerpt, excerptStartSeconds, withFathomTimestamp,
+  toSeconds, formatSeconds, locateExcerpt, excerptStartSeconds, excerptEndSeconds, excerptWordCount, withFathomTimestamp,
   studentEnglishStats, studentOnlyText, type Turn,
 } from '@/lib/fluency';
 
@@ -238,5 +238,36 @@ describe('studentOnlyText (comparación a ciegas)', () => {
     const turns = Array.from({ length: 10 }, () => T('Ana', 'one two three four five six seven eight nine ten'));
     const txt = studentOnlyText({ studentSpeaker: 'Ana', turns }, 120);
     expect(txt.split('\n')).toHaveLength(2);
+  });
+});
+
+describe('excerptEndSeconds (fin del clip)', () => {
+  const t = (at: string, text: string, speaker = 'Alumno'): Turn => ({ at, speaker, text });
+
+  it('si la cita llega al final de la intervención, termina donde empieza la siguiente', () => {
+    const turns = [t('8:20', 'I went to the beach with my family last weekend and it was great'), t('8:27', 'Nice!', 'Profe')];
+    const loc = locateExcerpt(turns, turns[0].text)!;
+    expect(excerptEndSeconds(turns, loc, excerptWordCount(turns[0].text), 500)).toBe(507);
+  });
+
+  it('en una intervención larga lo estima por la posición de la última palabra', () => {
+    const words = Array.from({ length: 100 }, (_, i) => `w${i}`);
+    const turns = [t('10:00', words.join(' ')), t('10:50', 'Ok', 'Profe')];
+    // Palabras 0-19 de 100 en 50 s → termina hacia el segundo 10 (+1 de margen).
+    const loc = locateExcerpt(turns, words.slice(0, 20).join(' '))!;
+    expect(excerptEndSeconds(turns, loc, 20, 600)).toBe(611);
+  });
+
+  it('un silencio largo antes de la siguiente no alarga el clip: se estima por palabras', () => {
+    const turns = [t('5:00', 'I think that my English is getting better every week'), t('6:30', 'Yes', 'Profe')];
+    const loc = locateExcerpt(turns, turns[0].text)!;
+    // 10 palabras a 2,5 por segundo = 4 s, +1 de margen.
+    expect(excerptEndSeconds(turns, loc, 10, 300)).toBe(305);
+  });
+
+  it('nunca menos de 4 s ni más de 20 s', () => {
+    const turns = [t('1:00', 'yes I do like it'), t('1:01', 'Ok', 'Profe')];
+    const loc = locateExcerpt(turns, 'yes I do like it')!;
+    expect(excerptEndSeconds(turns, loc, 5, 60)).toBe(64);
   });
 });

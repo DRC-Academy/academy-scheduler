@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   planCandidate, studentTrend, goodOptionsAfter, daysBetween, improvementLine, evidenceImproves, blindConfirms,
+  clipLabel, clipsOverlap,
   type FluencyClass,
 } from '@/lib/testimonials';
 
@@ -132,5 +133,20 @@ describe('blindConfirms (V3: comparación a ciegas)', () => {
   it('un empate o una confianza baja no confirman', () => {
     expect(blindConfirms('igual', 'alta', true)).toBe(false);
     expect(blindConfirms('A', 'baja', true)).toBe(false);
+  });
+});
+
+describe('clips', () => {
+  it('clipLabel: "16 jul · 8:20 – 8:27"', () => {
+    expect(clipLabel({ classDate: '2026-07-16', start: 500, end: 507 })).toBe('16 jul · 8:20 – 8:27');
+    expect(clipLabel({ classDate: '2026-09-03', start: 3725, end: 3734 })).toBe('3 sep · 1:02:05 – 1:02:14');
+  });
+
+  it('clipsOverlap: solo si son de la misma clase y se pisan', () => {
+    const k = (analysisId: string, start: number, end: number) =>
+      ({ analysisId, classDate: '2026-07-16', teacherId: null, start, end, excerpt: '', why: '', fathomUrl: null });
+    expect(clipsOverlap(k('a', 10, 20), k('a', 15, 25))).toBe(true);
+    expect(clipsOverlap(k('a', 10, 20), k('a', 20, 30))).toBe(false);
+    expect(clipsOverlap(k('a', 10, 20), k('b', 10, 20))).toBe(false);
   });
 });

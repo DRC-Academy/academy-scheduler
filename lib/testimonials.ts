@@ -5,12 +5,12 @@
 // de mejora. Lo prueba lib/testimonials.test.ts. Lo usan la detección (servidor)
 // y la pestaña del admin (para la línea "Media de 5,0 → 7,0").
 //
-// La clase mala y la buena NO las fija esta cuenta: Haiku elige el peor momento
-// entre las primeras clases y el mejor entre las últimas (lib/testimonialClips).
+// Los momentos NO los fija esta cuenta: Haiku elige hasta 3 clips malos entre
+// las primeras clases y hasta 3 buenos entre las últimas (lib/testimonialClips).
 // Aquí solo se dice entre cuáles puede elegir, respetando los días mínimos.
 
 import { TESTIMONIAL_RULES, type TestimonialRules } from '@/lib/testimonialRules';
-import type { EnglishStats } from '@/lib/fluency';
+import { formatSeconds, type EnglishStats } from '@/lib/fluency';
 
 /** Una clase del alumno con nota (fila de transcript_fluency_numbered). */
 export interface FluencyClass {
@@ -153,3 +153,40 @@ export function improvementLine(firstMean: number, lastMean: number): string {
   const n = Number.isInteger(diff) ? String(diff) : fmtMean(diff);
   return `Media de ${fmtMean(firstMean)} → ${fmtMean(lastMean)} (${diff >= 0 ? '+' : ''}${n} ${Math.abs(diff) === 1 ? 'punto' : 'puntos'})`;
 }
+
+// ── Clips (columna testimonial_candidates.clips, supabase-testimoniales-clips.sql) ──
+
+/** Un clip corto del alumno, ya comprobado: la cita existe y es suya. */
+export interface TestimonialClip {
+  analysisId: string;
+  /** 'YYYY-MM-DD', fecha de la clase en España. */
+  classDate: string;
+  teacherId: string | null;
+  /** Segundos desde el inicio de la grabación. */
+  start: number;
+  end: number;
+  excerpt: string;
+  /** Por qué es un momento malo o bueno (una frase de la IA). */
+  why: string;
+  /** Grabación de Fathom abierta en `start` (?timestamp=), o null si la clase no la trae. */
+  fathomUrl: string | null;
+}
+
+/** Del más claro al menos claro, como los ordenó la IA. */
+export interface TestimonialClips {
+  malos: TestimonialClip[];
+  buenos: TestimonialClip[];
+}
+
+const MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+
+/** "16 jul · 8:20 – 8:27" */
+export function clipLabel(c: Pick<TestimonialClip, 'classDate' | 'start' | 'end'>): string {
+  const [, m, d] = c.classDate.slice(0, 10).split('-').map(Number);
+  const dia = m && d ? `${d} ${MESES[m - 1]}` : 'Sin fecha';
+  return `${dia} · ${formatSeconds(c.start)} – ${formatSeconds(c.end)}`;
+}
+
+/** ¿Dos clips de la misma clase se pisan? (la IA a veces repite el mismo momento) */
+export const clipsOverlap = (a: TestimonialClip, b: TestimonialClip): boolean =>
+  a.analysisId === b.analysisId && a.start < b.end && b.start < a.end;

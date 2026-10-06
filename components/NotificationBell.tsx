@@ -34,7 +34,6 @@ function timeAgo(isoDate: string): string {
 
 function notifIcon(type: string): string {
   if (type === 'clase15')              return '🎬';
-  if (type === 'testimonial_grabacion') return '🎬';   // grabación para testimonio
   if (type === 'bono6m')               return '🎁';
   if (type === 'new_student')          return '📚';
   if (type === 'new_assignment')       return '📚';

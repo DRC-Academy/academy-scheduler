@@ -456,7 +456,9 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
 
   async function loadNotifications(userId: string, role: string) {
     const data = await dbGetNotificationsForUser(userId, role);
-    setNotifications(data);
+    // Los avisos de testimoniales al profe se retiraron (oct/2026): los que ya
+    // se enviaron no se enseñan ni en la campanita ni en Avisos.
+    setNotifications(data.filter(n => n.type !== 'testimonial_grabacion'));
   }
 
   async function markNotificationRead(notifId: string, userId: string) {

@@ -1,7 +1,9 @@
 'use client';
 
-// Pestaña admin "Testimoniales": una tarjeta por alumno que mejoró, con el clip
-// de su clase mala y el de su clase buena, y dos botones: Sirve / No sirve.
+// Pestaña admin "Testimoniales": una tarjeta por alumno que mejoró, con sus
+// clips cortos (hasta 3 momentos malos de sus primeras clases y hasta 3 buenos
+// de las últimas) y dos botones: Sirve / No sirve. Cada ▶ abre la grabación de
+// Fathom en el segundo de inicio del clip.
 //
 // Solo se enseñan parejas con los clips ya preparados por la IA. Al abrir la
 // pestaña se pasa la detección por todos los alumnos y se preparan, de una en
@@ -11,30 +13,23 @@
 //   Sirven      = 'listo' (y los estados antiguos 'revisado' / 'permiso_alumno')
 //   No sirve    = 'descartado' por el admin: oculto, y el alumno no se vuelve a proponer
 //
-// Lo que ya no se enseña (notas sueltas, avisos al profe, notas del admin…)
-// sigue guardado en la base.
+// Lo que ya no se enseña (notas sueltas, avisos al profe de antes de oct/2026,
+// notas del admin…) sigue guardado en la base. El profesor no ve nada de esto.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTeachers } from '@/lib/TeachersContext';
 import {
   dbGetTestimonialCandidates, dbGetStudentTrends, dbUpdateTestimonialCandidate,
-  type TestimonialCandidate, type TestimonialSide,
+  type TestimonialCandidate,
 } from '@/lib/testimonialsDb';
-import { improvementLine, type StudentTrend } from '@/lib/testimonials';
+import { improvementLine, clipLabel, type StudentTrend, type TestimonialClip } from '@/lib/testimonials';
 
 type Vista = 'revisar' | 'sirven';
 interface Queue { pending: number; failed: number }
 
 const SIRVEN = new Set(['listo', 'revisado', 'permiso_alumno']);
-const porRevisar = (c: TestimonialCandidate) => c.status === 'detectado' && c.aiReviewStatus === 'ready';
+const porRevisar = (c: TestimonialCandidate) => c.status === 'detectado' && c.aiReviewStatus === 'ready' && c.clips !== null;
 const sirve = (c: TestimonialCandidate) => SIRVEN.has(c.status);
-
-/** "14/07/2026" */
-function fecha(iso: string | null): string {
-  if (!iso) return 'Sin fecha';
-  const [y, m, d] = iso.slice(0, 10).split('-');
-  return `${d}/${m}/${y}`;
-}
 
 async function post(body: Record<string, unknown>): Promise<{ outcome?: string; queue?: Queue; error?: string }> {
   try {
@@ -199,17 +194,19 @@ function Tarjeta({ c, trend, nombreProfe, onCambiar }: {
         <span className="ts-profe">Profe: {pa === pd ? pd : `${pa} → ${pd}`}</span>
       </header>
 
-      <div className="ts-clases">
-        <Clase tipo="mala" s={c.before} />
-        <Clase tipo="buena" s={c.after} />
-      </div>
-
       <section className="ts-mejora">
-        <span className="ts-et">Mejora</span>
         <p className="ts-mejora-l">{mejora}</p>
         {c.aiSummary && <p className="ts-resumen">{c.aiSummary}</p>}
-        {comprobado(c) && <p className="ts-comprobado">{comprobado(c)}</p>}
       </section>
+
+      {c.clips ? (
+        <>
+          <Momentos tipo="malos" clips={c.clips.malos} />
+          <Momentos tipo="buenos" clips={c.clips.buenos} />
+        </>
+      ) : (
+        <p className="ts-sin">Preparando los clips…</p>
+      )}
 
       <footer className="ts-acc">
         <button type="button" className="ts-btn ts-si" aria-pressed={esSirve}
@@ -223,30 +220,21 @@ function Tarjeta({ c, trend, nombreProfe, onCambiar }: {
   );
 }
 
-/**
- * Lo que confirmó la mejora además de la nota (V3, lib/testimonialStore): la
- * comparación a ciegas y la medida del transcript, que viven en ai_reason.
- */
-function comprobado(c: TestimonialCandidate): string | null {
-  const medida = (c.aiReason ?? '').match(/El transcript lo respalda \((.+?)\)\./)?.[1];
-  const partes = [
-    c.aiIsReal ? 'Comprobado a ciegas: la IA eligió la clase reciente sin saber cuál era' : null,
-    medida ? medida.charAt(0).toUpperCase() + medida.slice(1) : null,
-  ].filter(Boolean);
-  return partes.length ? `${partes.join('. ')}.` : null;
-}
-
-function Clase({ tipo, s }: { tipo: 'mala' | 'buena'; s: TestimonialSide }) {
+function Momentos({ tipo, clips }: { tipo: 'malos' | 'buenos'; clips: TestimonialClip[] }) {
   return (
-    <section className={`ts-clase is-${tipo}`}>
-      <div className="ts-clase-h">
-        <span className="ts-et">{tipo === 'mala' ? 'Clase mala' : 'Clase buena'}</span>
-        <span className="ts-fecha">{fecha(s.classDate)}</span>
-      </div>
-      {s.excerpt && <blockquote className="ts-cita">“{s.excerpt}”</blockquote>}
-      {s.fathomUrl
-        ? <a className="ts-ver" href={s.fathomUrl} target="_blank" rel="noopener noreferrer">▶ Ver clase {tipo}</a>
-        : <span className="ts-sin">Sin grabación</span>}
+    <section className={`ts-momentos is-${tipo}`}>
+      <span className="ts-et">{tipo === 'malos' ? 'Momentos malos' : 'Momentos buenos'}</span>
+      <ul className="ts-clips">
+        {clips.map(k => (
+          <li key={`${k.analysisId}_${k.start}`} className="ts-clip">
+            {k.fathomUrl
+              ? <a className="ts-ver" href={k.fathomUrl} target="_blank" rel="noopener noreferrer">▶ {clipLabel(k)}</a>
+              : <span className="ts-ver is-sin">{clipLabel(k)} · Sin grabación</span>}
+            <blockquote className="ts-cita">“{k.excerpt}”</blockquote>
+            {k.why && <p className="ts-why">{k.why}</p>}
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }
@@ -275,24 +263,25 @@ const ESTILOS = `
 .ts-alumno { font-size: 17px; font-weight: 700; }
 .ts-profe { font-size: 14px; color: var(--gris); }
 
-.ts-clases { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.ts-clase { background: var(--fondo); border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 10px; border-left: 4px solid var(--amarillo); }
-.ts-clase.is-buena { border-left-color: var(--verde); }
-.ts-clase-h { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.ts-momentos { background: var(--fondo); border-radius: 12px; padding: 12px 14px; border-left: 4px solid var(--amarillo); display: flex; flex-direction: column; gap: 8px; }
+.ts-momentos.is-buenos { border-left-color: var(--verde); }
 .ts-et { font-size: 12px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--gris); }
-.ts-clase.is-mala .ts-et { color: #8a6a00; }
-.ts-clase.is-buena .ts-et { color: var(--verde); }
-.ts-fecha { font-size: 13.5px; font-weight: 600; color: #4A4A4A; font-variant-numeric: tabular-nums; }
+.ts-momentos.is-malos .ts-et { color: #8a6a00; }
+.ts-momentos.is-buenos .ts-et { color: var(--verde); }
+.ts-clips { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.ts-clip { display: flex; flex-direction: column; gap: 2px; padding: 8px 0; border-top: 1px solid var(--linea); }
+.ts-clip:first-child { border-top: 0; padding-top: 2px; }
+.ts-ver { align-self: flex-start; display: inline-flex; align-items: center; min-height: 32px; font-size: 14px; font-weight: 700;
+  color: var(--azul); text-decoration: none; font-variant-numeric: tabular-nums; }
+.ts-ver:hover { text-decoration: underline; }
+.ts-ver.is-sin { color: var(--gris); font-weight: 600; }
 .ts-cita { margin: 0; font-size: 15px; line-height: 1.5; color: var(--tinta); }
-.ts-ver { display: inline-flex; align-items: center; justify-content: center; align-self: flex-start; min-height: 44px; padding: 0 16px;
-  border-radius: 10px; background: var(--azul); color: #fff; font-size: 14px; font-weight: 700; text-decoration: none; margin-top: auto; }
-.ts-ver:hover { background: #1d4fd8; }
-.ts-sin { align-self: flex-start; margin-top: auto; font-size: 13.5px; font-weight: 600; color: var(--gris); }
+.ts-why { margin: 0; font-size: 13px; line-height: 1.45; color: var(--gris); }
+.ts-sin { margin: 0; font-size: 13.5px; font-weight: 600; color: var(--gris); }
 
 .ts-mejora { display: flex; flex-direction: column; gap: 4px; }
 .ts-mejora-l { margin: 0; font-size: 16px; font-weight: 700; color: var(--verde); font-variant-numeric: tabular-nums; }
 .ts-resumen { margin: 0; font-size: 14.5px; line-height: 1.55; color: #333; }
-.ts-comprobado { margin: 6px 0 0; font-size: 13px; line-height: 1.5; color: #666; }
 
 .ts-acc { display: flex; gap: 10px; flex-wrap: wrap; }
 .ts-btn { min-height: 44px; padding: 0 18px; border-radius: 10px; font-family: inherit; font-size: 14.5px; font-weight: 700; cursor: pointer; }
@@ -307,12 +296,11 @@ const ESTILOS = `
 .ts-toast .ts-linkbtn { color: var(--amarillo); }
 
 @media (max-width: 760px) {
-  .ts-clases { grid-template-columns: 1fr; }
   .ts-card { padding: 14px; }
   .ts-tabs { display: flex; }
   .ts-tab { flex: 1; justify-content: center; }
   .ts-acc .ts-btn { flex: 1; }
-  .ts-ver { align-self: stretch; }
+  .ts-ver { min-height: 44px; }
   /* Encima de la barra inferior de AdminNavMovil. */
   .ts-toast { bottom: 84px; }
 }

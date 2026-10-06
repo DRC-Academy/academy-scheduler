@@ -14,8 +14,10 @@
 //         alumno en la clase antigua y en la reciente, en orden sorteado y sin
 //         fechas, y tiene que elegir la reciente. Se hace una vez por pareja
 //         (queda en ai_is_real);
-//      c) los CLIPS: el peor momento entre sus primeras clases y el mejor entre
-//         sus últimas, con las citas comprobadas, su segundo exacto y el resumen.
+//      c) los CLIPS (oct/2026): hasta 3 momentos cortos en que se traba en sus
+//         primeras clases y hasta 3 en que habla con soltura en las últimas, con
+//         las citas comprobadas, su segundo de inicio y de fin, y el resumen.
+//         Van en la columna `clips` (supabase-testimoniales-clips.sql).
 //      Si a) o b) no lo confirman, la pareja se descarta sola (discarded_by 'ia')
 //      sin enseñarse nunca, y el alumno no vuelve hasta tener clases nuevas.
 //      Si todo va bien pasa a 'ready' y aparece en "Por revisar".
@@ -23,6 +25,10 @@
 // La detección corre tras cada nota de fluidez (lib/fluencyStore) y entera al
 // abrir la pestaña (app/api/admin/testimonial-prepare). La preparación la pide
 // la pestaña, de una en una, para que cada una quepa en los 60 s de Vercel.
+//
+// Una pareja activa sin `clips` (las preparadas antes de oct/2026, con un solo
+// momento por lado) vuelve a la cola: se le generan los clips sin repetir las
+// comprobaciones a) y b), que ya pasó.
 //
 // REGLAS DE LA TABLA:
 //   · máximo una pareja ACTIVA por alumno (= cualquier estado menos descartado),
@@ -35,15 +41,15 @@ import 'server-only';
 
 import { supabase } from '@/lib/supabase';
 import {
-  planCandidate, goodOptionsAfter, evidenceImproves, blindConfirms,
-  type FluencyClass, type TestimonialCandidatePlan,
+  planCandidate, studentTrend, evidenceImproves, blindConfirms, clipsOverlap,
+  type FluencyClass, type TestimonialCandidatePlan, type TestimonialClip, type TestimonialClips,
 } from '@/lib/testimonials';
 import {
-  prepareFluency, formatTurnsForAi, locateExcerpt, excerptStartSeconds, formatSeconds, withFathomTimestamp,
-  studentEnglishStats, studentOnlyText,
+  prepareFluency, formatTurnsForAi, locateExcerpt, excerptStartSeconds, excerptEndSeconds, excerptWordCount,
+  formatSeconds, withFathomTimestamp, studentEnglishStats, studentOnlyText,
   type FluencyPrep, type EnglishStats,
 } from '@/lib/fluency';
-import { pickMoment, type MomentKind, type MomentIA } from '@/lib/testimonialClips';
+import { pickMoments, MAX_CLIPS, type MomentKind, type MomentIA } from '@/lib/testimonialClips';
 import { compareBlind } from '@/lib/testimonialCompare';
 import { TESTIMONIAL_RULES } from '@/lib/testimonialRules';
 
@@ -251,63 +257,109 @@ async function loadClasses(classes: FluencyClass[], studentName: string): Promis
   return out;
 }
 
-interface Clip {
-  cls: FluencyClass;
-  excerpt: string;
-  seconds: number;
-  ai: MomentIA;
-}
-
-/** Por qué una cita de la IA no vale (null = vale), y su segundo si vale. */
-function checkClip(loaded: LoadedClass[], ai: MomentIA): { error: string } | { clip: Clip } {
+/** Una cita de la IA comprobada: o el clip, o por qué no vale. */
+function checkClip(loaded: LoadedClass[], ai: MomentIA): { error: string } | { clip: TestimonialClip } {
   const chosen = loaded[ai.class_option - 1];
+  const cita = `"${String(ai.excerpt ?? '').slice(0, 80)}"`;
   if (!chosen) return { error: `la clase ${ai.class_option} no existe.` };
+  const words = excerptWordCount(ai.excerpt ?? '');
+  if (words < 6) return { error: `la cita ${cita} es demasiado corta.` };
   const loc = locateExcerpt(chosen.prep.turns, ai.excerpt);
-  if (!loc) return { error: `la cita "${ai.excerpt.slice(0, 80)}" no aparece literal en un solo turno de la clase ${ai.class_option}.` };
+  if (!loc) return { error: `la cita ${cita} no aparece literal en un solo turno de la clase ${ai.class_option}.` };
   const speaker = chosen.prep.turns[loc.turnIndex].speaker;
   if (chosen.prep.teacherSpeaker && speaker === chosen.prep.teacherSpeaker) {
-    return { error: `la cita "${ai.excerpt.slice(0, 80)}" está en un turno del PROFE.` };
+    return { error: `la cita ${cita} está en un turno del PROFE.` };
   }
-  const seconds = excerptStartSeconds(chosen.prep.turns, loc);
-  if (seconds == null) return { error: 'el turno de la cita no tiene minuto.' };
-  return { clip: { cls: chosen.cls, excerpt: ai.excerpt.trim(), seconds, ai } };
+  const start = excerptStartSeconds(chosen.prep.turns, loc);
+  if (start == null) return { error: `el turno de la cita ${cita} no tiene minuto.` };
+  const end = excerptEndSeconds(chosen.prep.turns, loc, words, start);
+  return {
+    clip: {
+      analysisId: chosen.cls.analysisId,
+      classDate: chosen.cls.classDay,
+      teacherId: chosen.cls.teacherId,
+      start, end,
+      excerpt: ai.excerpt.trim(),
+      why: String(ai.why ?? '').trim(),
+      // El enlace ya abre la grabación en el segundo de inicio.
+      fathomUrl: withFathomTimestamp(chosen.cls.fathomUrl ?? chosen.prep.fathomUrl, start),
+    },
+  };
 }
 
 const formatForAi = (l: LoadedClass[]) =>
   l.map(x => ({ date: x.cls.classDay, turnsText: formatTurnsForAi(x.prep) }));
 
-/** Una llamada (y un reintento si la cita no vale y queda tiempo). `noTime`: no se llegó a llamar. */
-async function choose(
+/**
+ * Una llamada para los clips de un tipo (y un reintento si NINGUNA cita vale y
+ * queda tiempo). Las citas que no valen se tiran, y las que se pisan con otra
+ * anterior también. `noTime`: no se llegó a llamar.
+ */
+async function chooseClips(
   kind: MomentKind, loaded: LoadedClass[], studentName: string, deadline: number,
-  badMoment?: { date: string; excerpt: string },
-): Promise<{ clip?: Clip; error?: string; noTime?: boolean }> {
+  badMoments?: Array<{ date: string; excerpt: string }>,
+): Promise<{ clips?: TestimonialClip[]; summary?: string; error?: string; noTime?: boolean }> {
   let retryNote: string | undefined;
   for (let attempt = 0; attempt < 2; attempt++) {
     // La llamada nunca puede pasar del final de la función.
     const left = deadline - Date.now() - 2_000;
     if (left < 10_000) return retryNote ? { error: `Sin tiempo para reintentar. ${retryNote}` } : { noTime: true };
-    const res = await pickMoment({
-      kind, studentName, classes: formatForAi(loaded), badMoment, retryNote, timeoutMs: Math.min(25_000, left),
+    const res = await pickMoments({
+      kind, studentName, classes: formatForAi(loaded), badMoments, retryNote, timeoutMs: Math.min(25_000, left),
     });
     if (res.status !== 'ready' || !res.data) return { error: res.error ?? `La IA no respondió (${res.status}).` };
-    const checked = checkClip(loaded, res.data);
-    if ('clip' in checked) return { clip: checked.clip };
-    retryNote = `La cita no valía: ${checked.error}`;
+    const clips: TestimonialClip[] = [];
+    const errors: string[] = [];
+    for (const m of res.data.momentos ?? []) {
+      const checked = checkClip(loaded, m);
+      if ('error' in checked) { errors.push(checked.error); continue; }
+      if (clips.some(c => clipsOverlap(c, checked.clip))) continue;
+      clips.push(checked.clip);
+      if (clips.length === MAX_CLIPS) break;
+    }
+    if (errors.length) console.log(`[testimonials] clips ${kind} descartados: ${errors.join(' | ')}`);
+    if (clips.length > 0) return { clips, summary: res.data.summary?.trim() };
+    retryNote = errors.length ? errors.join(' ') : 'no devolviste ningún momento.';
   }
   return { error: retryNote };
 }
 
 /**
- * Prepara los clips de una pareja en 'detectado'. Si el alumno ya no cumple la
- * regla (nunca se enseñó, así que nadie la ha revisado), la pareja se borra.
+ * Entre qué clases busca la IA: con la regla vigente, las primeras y las últimas
+ * a los días mínimos (plan). Una pareja ya confirmada cuyo alumno ya no cumple
+ * la regla (solo pasa al regenerar los clips) usa sus 3 primeras y sus 3
+ * últimas, sin repetir ninguna.
+ */
+function clipWindows(plan: TestimonialCandidatePlan | null, classes: FluencyClass[]): { bad: FluencyClass[]; good: FluencyClass[] } | null {
+  if (plan) return { bad: plan.badOptions, good: plan.goodOptions };
+  const trend = studentTrend(classes);
+  if (!trend) return null;
+  const firstIds = new Set(trend.first.map(c => c.analysisId));
+  return { bad: trend.first, good: trend.last.filter(c => !firstIds.has(c.analysisId)) };
+}
+
+/** Falta la columna `clips` (supabase-testimoniales-clips.sql sin correr). */
+const isMissingColumn = (err: { code?: string; message?: string } | null | undefined): boolean =>
+  err?.code === 'PGRST204' || err?.code === '42703' || (/clips/.test(err?.message ?? '') && /column/i.test(err?.message ?? ''));
+
+export const MISSING_CLIPS_SQL = 'Falta correr supabase-testimoniales-clips.sql en Supabase.';
+
+/**
+ * Prepara los clips de una pareja activa. Si está en 'detectado' y aún no pasó
+ * las comprobaciones de la V3, las pasa antes; si el alumno ya no cumple la regla
+ * (nunca se enseñó, así que nadie la ha revisado), la pareja se borra.
  */
 export async function prepareCandidate(id: string, deadline: number): Promise<PrepareOutcome> {
   const { data: c, error } = await supabase.from('testimonial_candidates')
     .select('id, student_group, student_name, status, ai_is_real, ai_reason').eq('id', id).maybeSingle();
-  if (error || !c || c.status !== 'detectado') return 'nada';
+  if (error || !c || c.status === 'descartado') return 'nada';
+  // Ya pasó la comparación a ciegas: está en la pestaña (clips de antes de
+  // oct/2026) o la preparación se cortó justo después.
+  const confirmed = c.ai_is_real === true;
 
-  const plan = planCandidate(await classesOf(String(c.student_group)));
-  if (!plan) {
+  const classes = await classesOf(String(c.student_group));
+  const plan = planCandidate(classes);
+  if (!plan && !confirmed) {
     await supabase.from('testimonial_candidates').delete().eq('id', id).eq('status', 'detectado').neq('ai_review_status', 'ready');
     return 'ya_no_cumple';
   }
@@ -315,7 +367,7 @@ export async function prepareCandidate(id: string, deadline: number): Promise<Pr
   const fail = async (msg: string): Promise<PrepareOutcome> => {
     await supabase.from('testimonial_candidates').update({
       ai_review_status: 'failed', ai_error: msg.slice(0, 500), updated_at: new Date().toISOString(),
-    }).eq('id', id).eq('status', 'detectado');
+    }).eq('id', id).neq('status', 'descartado');
     return 'fallida';
   };
 
@@ -334,20 +386,23 @@ export async function prepareCandidate(id: string, deadline: number): Promise<Pr
   };
 
   const studentName = String(c.student_name ?? 'el alumno');
-  const firstLoaded = await loadClasses(plan.trend.first, studentName);
-  const lastLoaded = await loadClasses(plan.trend.last, studentName);
 
-  // 1. Evidencia del transcript (sin IA): intervenciones en inglés más largas.
-  const statsOf = (l: LoadedClass[]) => l
-    .map(x => studentEnglishStats(x.prep, { top: TESTIMONIAL_RULES.TURNOS_TOP, longWords: TESTIMONIAL_RULES.PALABRAS_TURNO_LARGO }))
-    .filter((s): s is EnglishStats => s !== null);
-  const evidence = evidenceImproves(statsOf(firstLoaded), statsOf(lastLoaded));
-  if (!evidence.ok) return discard(evidence.reason);
+  // ai_reason de las parejas antiguas acababa en " Malo: … Bueno: …" (el porqué
+  // de su único clip): ahora el porqué va en cada clip.
+  let checksReason = confirmed ? String(c.ai_reason ?? '').replace(/ Malo: [\s\S]*$/, '') : '';
+  if (!confirmed && plan) {
+    const firstLoaded = await loadClasses(plan.trend.first, studentName);
+    const lastLoaded = await loadClasses(plan.trend.last, studentName);
 
-  // 2. Comparación a ciegas (Haiku), una sola vez por pareja: si la preparación
-  //    se corta después por tiempo, el siguiente intento no la repite.
-  let blindReason = c.ai_is_real === true ? String(c.ai_reason ?? '') : '';
-  if (c.ai_is_real !== true) {
+    // 1. Evidencia del transcript (sin IA): intervenciones en inglés más largas.
+    const statsOf = (l: LoadedClass[]) => l
+      .map(x => studentEnglishStats(x.prep, { top: TESTIMONIAL_RULES.TURNOS_TOP, longWords: TESTIMONIAL_RULES.PALABRAS_TURNO_LARGO }))
+      .filter((s): s is EnglishStats => s !== null);
+    const evidence = evidenceImproves(statsOf(firstLoaded), statsOf(lastLoaded));
+    if (!evidence.ok) return discard(evidence.reason);
+
+    // 2. Comparación a ciegas (Haiku), una sola vez por pareja: si la preparación
+    //    se corta después por tiempo, el siguiente intento no la repite.
     const older = firstLoaded.find(x => x.cls.analysisId === plan.before.analysisId);
     const newer = lastLoaded.find(x => x.cls.analysisId === plan.after.analysisId);
     if (!older || !newer) return fail('No se pudieron leer los transcripts de la clase antigua o de la reciente.');
@@ -368,70 +423,89 @@ export async function prepareCandidate(id: string, deadline: number): Promise<Pr
       const pick = mas_soltura === 'igual' ? 'no vio diferencia' : (mas_soltura === 'A') === laterIsA ? 'eligió la reciente' : 'eligió la ANTIGUA';
       return discard(`Comparación a ciegas: ${pick} (confianza ${confianza}). ${motivo}`);
     }
-    blindReason = `Comparación a ciegas: eligió la reciente (confianza ${confianza}). ${motivo}`;
+    checksReason = `Comparación a ciegas: eligió la reciente (confianza ${confianza}). ${motivo} ${evidence.reason}`;
     await supabase.from('testimonial_candidates').update({
-      ai_is_real: true, ai_reason: blindReason.slice(0, 1000), updated_at: new Date().toISOString(),
+      ai_is_real: true, ai_reason: checksReason.slice(0, 1000), updated_at: new Date().toISOString(),
     }).eq('id', id).eq('status', 'detectado');
   }
 
-  // 3. Los clips (Haiku): el peor momento de las primeras clases y el mejor de las últimas.
-  const badIds = new Set(plan.badOptions.map(x => x.analysisId));
-  const badLoaded = firstLoaded.filter(x => badIds.has(x.cls.analysisId));
+  // 3. Los clips (Haiku): hasta 3 malos de las primeras clases y hasta 3 buenos de las últimas.
+  const windows = clipWindows(plan, classes);
+  if (!windows) return fail('El alumno ya no tiene clases con nota suficientes.');
+  const badLoaded = await loadClasses(windows.bad, studentName);
   if (badLoaded.length === 0) return fail('No se pudieron leer los transcripts de sus primeras clases.');
-  const bad = await choose('malo', badLoaded, studentName, deadline);
-  if (bad.noTime) return 'sin_tiempo';
-  if (!bad.clip) return fail(`Momento malo: ${bad.error}`);
-
-  // La buena, a los días mínimos de la mala que eligió la IA.
-  const goodIds = new Set(goodOptionsAfter(bad.clip.cls, plan.goodOptions).map(x => x.analysisId));
-  const goodLoaded = lastLoaded.filter(x => goodIds.has(x.cls.analysisId));
+  const goodLoaded = await loadClasses(windows.good, studentName);
   if (goodLoaded.length === 0) return fail('No se pudieron leer los transcripts de sus últimas clases.');
-  const good = await choose('bueno', goodLoaded, studentName, deadline,
-    { date: bad.clip.cls.classDay, excerpt: bad.clip.excerpt });
-  if (good.noTime) return 'sin_tiempo';
-  if (!good.clip) return fail(`Momento bueno: ${good.error}`);
 
+  const bad = await chooseClips('malo', badLoaded, studentName, deadline);
+  if (bad.noTime) return 'sin_tiempo';
+  if (!bad.clips) return fail(`Momentos malos: ${bad.error}`);
+  const good = await chooseClips('bueno', goodLoaded, studentName, deadline,
+    bad.clips.map(x => ({ date: x.classDate, excerpt: x.excerpt })));
+  if (good.noTime) return 'sin_tiempo';
+  if (!good.clips) return fail(`Momentos buenos: ${good.error}`);
+
+  const clips: TestimonialClips = { malos: bad.clips, buenos: good.clips };
+  // before_*/after_*: el clip más claro de cada lado, para lo que aún lea esas columnas.
+  const byId = new Map(classes.map(x => [x.analysisId, x]));
+  const side = (pre: 'before' | 'after', clip: TestimonialClip): Row => sideColumns(pre, {
+    analysisId: clip.analysisId, classNumber: byId.get(clip.analysisId)?.classNumber ?? null,
+    classDay: clip.classDate, teacherId: clip.teacherId, score: byId.get(clip.analysisId)?.score ?? 0,
+    fathomUrl: byId.get(clip.analysisId)?.fathomUrl ?? null,
+  }, { excerpt: clip.excerpt, seconds: clip.start });
   const { error: upErr } = await supabase.from('testimonial_candidates').update({
-    ...sideColumns('before', bad.clip.cls, bad.clip),
-    ...sideColumns('after', good.clip.cls, good.clip),
-    improvement: Math.round(plan.trend.improvement),
+    ...side('before', clips.malos[0]),
+    ...side('after', clips.buenos[0]),
+    clips,
+    ...(plan ? { improvement: Math.round(plan.trend.improvement) } : {}),
     ai_review_status: 'ready',
-    ai_summary: good.clip.ai.summary?.trim() || null,
-    ai_reason: `${blindReason} ${evidence.reason} Malo: ${bad.clip.ai.why} Bueno: ${good.clip.ai.why}`.trim().slice(0, 1000),
+    ai_summary: good.summary || null,
+    ai_reason: checksReason.trim().slice(0, 1000) || null,
     ai_is_real: true, ai_error: null,
     updated_at: new Date().toISOString(),
-  }).eq('id', id).eq('status', 'detectado');
+  }).eq('id', id).neq('status', 'descartado');
+  if (isMissingColumn(upErr)) return fail(MISSING_CLIPS_SQL);
   if (upErr) return fail(`Guardando: ${upErr.message}`);
   return 'lista';
 }
 
+/**
+ * Parejas activas que esperan clips: las nuevas ('pending') y las preparadas
+ * antes de oct/2026, que están 'ready' pero sin `clips`.
+ */
+const NEEDS_CLIPS = 'ai_review_status.eq.pending,and(ai_review_status.eq.ready,clips.is.null)';
+
 /** Cuántas parejas esperan preparación (las que la pestaña no enseña aún). */
 export async function prepareQueue(): Promise<{ pending: number; failed: number }> {
-  const count = async (st: string) => {
-    const { count: n } = await supabase.from('testimonial_candidates').select('id', { count: 'exact' })
-      .eq('status', 'detectado').eq('ai_review_status', st).range(0, 0);
-    return n ?? 0;
+  const count = async (apply: (q: any) => any) => {   // eslint-disable-line @typescript-eslint/no-explicit-any
+    const { count: n, error } = await apply(supabase.from('testimonial_candidates').select('id', { count: 'exact' })
+      .neq('status', 'descartado')).range(0, 0);
+    if (isMissingColumn(error)) throw new Error(MISSING_CLIPS_SQL);
+    return (n as number | null) ?? 0;
   };
-  const [pending, failed] = await Promise.all([count('pending'), count('failed')]);
+  const [pending, failed] = await Promise.all([
+    count(q => q.or(NEEDS_CLIPS)),
+    count(q => q.eq('ai_review_status', 'failed')),
+  ]);
   return { pending, failed };
 }
 
 /**
- * Coge UNA pareja sin preparar (o fallida, con `retryFailed`) que nadie esté
+ * Coge UNA pareja sin clips (o fallida, con `retryFailed`) que nadie esté
  * preparando y la prepara. 'nada' = no queda ninguna libre.
  */
 export async function prepareNext(opts: { deadline: number; retryFailed?: boolean }): Promise<PrepareOutcome> {
-  const estado = opts.retryFailed ? 'failed' : 'pending';
   const cutoff = new Date(Date.now() - LEASE_MS).toISOString();
-  const { data } = await supabase.from('testimonial_candidates').select('id')
-    .eq('status', 'detectado').eq('ai_review_status', estado).lt('updated_at', cutoff)
-    .order('id').limit(1);
+  let q = supabase.from('testimonial_candidates').select('id').neq('status', 'descartado').lt('updated_at', cutoff);
+  q = opts.retryFailed ? q.eq('ai_review_status', 'failed') : q.or(NEEDS_CLIPS);
+  const { data, error } = await q.order('id').limit(1);
+  if (isMissingColumn(error)) throw new Error(MISSING_CLIPS_SQL);
   const id = data?.[0]?.id as string | undefined;
   if (!id) return 'nada';
   // Reserva: solo sigue si esta ejecución consiguió marcarla.
   const { data: mine } = await supabase.from('testimonial_candidates')
     .update({ updated_at: new Date().toISOString() })
-    .eq('id', id).eq('ai_review_status', estado).lt('updated_at', cutoff).select('id');
+    .eq('id', id).lt('updated_at', cutoff).select('id');
   if (!mine?.length) return 'sin_tiempo';
   return prepareCandidate(id, opts.deadline);
 }

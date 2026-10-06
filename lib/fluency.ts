@@ -331,6 +331,40 @@ export function excerptStartSeconds(turns: Turn[], loc: ExcerptLocation): number
   return Math.max(start, Math.floor(start + offset) - 1);
 }
 
+/** Duración mínima y máxima de un clip, en segundos. */
+export const CLIP_MIN_SECONDS = 4;
+export const CLIP_MAX_SECONDS = 20;
+
+/**
+ * Segundo en que termina la cita. Si la cita llega al final de su intervención,
+ * es el inicio de la siguiente (exacto). Si no (intervención larga), se estima
+ * por la posición de su última palabra, con 1 s de margen y sin pasar nunca del
+ * inicio de la siguiente intervención. Si eso da un clip larguísimo (silencio
+ * antes de que conteste el profe) o no hay siguiente, se estima por palabras.
+ * El resultado queda entre CLIP_MIN_SECONDS y CLIP_MAX_SECONDS desde el inicio.
+ */
+export function excerptEndSeconds(turns: Turn[], loc: ExcerptLocation, excerptWords: number, startSeconds: number): number {
+  const turnStart = toSeconds(turns[loc.turnIndex]?.at) ?? startSeconds;
+  const next = toSeconds(turns[loc.turnIndex + 1]?.at);
+  const wordsEnd = Math.min(loc.turnWords, loc.wordsBefore + excerptWords);
+  let end: number;
+  if (next != null && next > turnStart) {
+    end = wordsEnd >= loc.turnWords
+      ? next
+      : Math.min(next, Math.ceil(turnStart + ((next - turnStart) * wordsEnd) / Math.max(1, loc.turnWords)) + 1);
+  } else {
+    end = Math.ceil(startSeconds + excerptWords / WORDS_PER_SECOND) + 1;
+  }
+  if (end - startSeconds > CLIP_MAX_SECONDS) end = Math.ceil(startSeconds + excerptWords / WORDS_PER_SECOND) + 1;
+  return Math.min(startSeconds + CLIP_MAX_SECONDS, Math.max(startSeconds + CLIP_MIN_SECONDS, end));
+}
+
+/** Palabras de una cita, contadas igual que locateExcerpt. */
+export const excerptWordCount = (excerpt: string): number => {
+  const c = comparable(excerpt);
+  return c ? c.split(' ').length : 0;
+};
+
 /** Enlace de Fathom que abre la grabación en ese segundo (?timestamp=SEGUNDOS). */
 export function withFathomTimestamp(url: string | null | undefined, seconds: number | null | undefined): string | null {
   if (!url) return null;
