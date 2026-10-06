@@ -50,6 +50,8 @@ function monthLabel(monthYear: string): string {
 }
 function finShortDate(iso: string): string {
   const d = new Date(iso + 'T00:00:00');
+  // Una fecha vacía o rota no puede tumbar la pantalla entera: se muestra vacía.
+  if (isNaN(d.getTime())) return '';
   return `${String(d.getDate()).padStart(2, '0')} ${FIN_MONTHS[d.getMonth()].slice(0, 3)}`;
 }
 function isoOf(d: Date): string {
@@ -403,8 +405,14 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
 
       // Fecha del cruce de umbral (30 días) cuando cambió la tarifa.
       let changeIso = ''; let prevDayLabel = '';
-      if (rateChanged && startDate) {
-        const t = new Date(startDate + 'T00:00:00'); t.setDate(t.getDate() + 30);
+      // Sin startDate (ex-alumno o asignación sin fecha de inicio) el cruce se
+      // deduce de la primera clase con la tarifa nueva: su fecha menos los días
+      // que lleva pasados del umbral.
+      if (rateChanged) {
+        const t = startDate
+          ? new Date(startDate + 'T00:00:00')
+          : new Date(antiguoRows[0].date + 'T00:00:00');
+        t.setDate(t.getDate() + (startDate ? 30 : 30 - antiguoRows[0].antiquityDays));
         changeIso = isoOf(t);
         const prev = new Date(t); prev.setDate(prev.getDate() - 1);
         prevDayLabel = String(prev.getDate());
