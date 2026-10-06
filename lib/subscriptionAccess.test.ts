@@ -28,6 +28,12 @@ describe('variación Pausa', () => {
     expect(hasPauseItem([linea('2h semanales'), linea('Pausa')])).toBe(true);
     expect(hasPauseItem(undefined)).toBe(false);
   });
+
+  it('por ID de Woo (#35634), sea el del producto o el de la variación', () => {
+    expect(isPauseLineItem({ product_id: 35634, variation_id: 0, meta_data: [] })).toBe(true);
+    expect(isPauseLineItem({ product_id: 100, variation_id: 35634, meta_data: [] })).toBe(true);
+    expect(isPauseLineItem({ product_id: 100, variation_id: 200, meta_data: [] })).toBe(false);
+  });
 });
 
 describe('resolveWooSubscriptions (más reciente primero)', () => {
