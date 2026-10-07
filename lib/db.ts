@@ -2731,32 +2731,59 @@ export async function dbGetDropoutCount(teacherId: string): Promise<number> {
   return count ?? 0;
 }
 
+// Alumnos EN PAUSA ahora (pausas abiertas de student_pauses), por id y por
+// nombre normalizado. No son activos (no suman a la retención ni al puntaje) ni
+// bajas (pausar no escribe en student_dropouts). Sin la tabla, vacío: nadie en
+// pausa, como antes.
+async function dbGetOpenPauseKeys(): Promise<Set<string>> {
+  const { data, error } = await supabase.from('student_pauses').select('student_id, student_name').is('ended_on', null);
+  const out = new Set<string>();
+  if (error) return out;
+  for (const r of (data ?? []) as Array<{ student_id?: string | null; student_name?: string | null }>) {
+    if (r.student_id) out.add(r.student_id);
+    const n = (r.student_name ?? '').trim().toLowerCase();
+    if (n) out.add(n);
+  }
+  return out;
+}
+
+function enPausa(paused: Set<string>, studentId?: string | null, studentName?: string | null): boolean {
+  if (paused.size === 0) return false;
+  return (!!studentId && paused.has(studentId)) || paused.has((studentName ?? '').trim().toLowerCase());
+}
+
 export async function calcRetentionRate(teacherId: string): Promise<number> {
-  const [{ data }, dropouts] = await Promise.all([
-    supabase.from('assignments').select('id').eq('teacher_id', teacherId),
+  const [{ data }, dropouts, paused] = await Promise.all([
+    supabase.from('assignments').select('id, student_id, student_name').eq('teacher_id', teacherId),
     dbGetDropoutCount(teacherId),
+    dbGetOpenPauseKeys(),
   ]);
-  const activeStudents = (data ?? []).length;
+  const activeStudents = ((data ?? []) as Array<{ student_id?: string | null; student_name?: string | null }>)
+    .filter(a => !enPausa(paused, a.student_id, a.student_name)).length;
   return retentionRateFromCounts(activeStudents, dropouts);
 }
 
 // ── SCORE RECALCULATION ───────────────────────────────────────────────────────
 
 export async function dbRecalculateTeacherScore(teacherId: string): Promise<void> {
-  const [evRes, asRes, calRes, dropouts] = await Promise.all([
+  const [evRes, asRes, calRes, dropouts, paused] = await Promise.all([
     supabase.from('scoring_events').select('points, euros').eq('teacher_id', teacherId),
-    supabase.from('assignments').select('id').eq('teacher_id', teacherId),
+    supabase.from('assignments').select('id, student_id, student_name').eq('teacher_id', teacherId),
     supabase.from('teacher_calendars').select('grid').eq('teacher_id', teacherId).single(),
     dbGetDropoutCount(teacherId),
+    dbGetOpenPauseKeys(),
   ]);
 
   const manualPoints = (evRes.data ?? []).reduce((s: number, e: any) => s + (e.points ?? 0), 0);
   const manualEuros  = (evRes.data ?? []).reduce((s: number, e: any) => s + (e.euros ?? 0), 0);
 
-  const as = asRes.data ?? [];
+  // Los EN PAUSA no cuentan: ni como alumno activo ni sus celdas como horas.
+  const as = ((asRes.data ?? []) as Array<{ student_id?: string | null; student_name?: string | null }>)
+    .filter(a => !enPausa(paused, a.student_id, a.student_name));
   const activeStudents = as.length;
   const grid = ((calRes.data?.grid ?? {}) as Grid);
-  const ocupado = Object.values(grid).filter(c => c.state === 'ocupado').length;
+  const ocupado = Object.values(grid)
+    .filter(c => c.state === 'ocupado' && !enPausa(paused, null, c.student)).length;
   const monthlyHours = ocupado * 4;
 
   // Retención churn-aware: activos vs. bajas de la ventana (ver retentionRateFromCounts).
