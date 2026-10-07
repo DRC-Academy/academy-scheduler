@@ -1,0 +1,8 @@
+-- ===========================================================================
+-- VOLCADO de producción, NO es una migración. No ejecutar.
+-- Objeto: triggers teacher_calendars
+-- Extraído el 2026-10-07 con supabase/versionado/_extraer-definiciones.sql
+-- (pg_get_functiondef / pg_get_viewdef / catálogo). Copiado tal cual.
+-- Sirve para saber qué hay en la base; los cambios van en supabase/migraciones/.
+-- ===========================================================================
+-- (ninguno)
