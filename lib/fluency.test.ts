@@ -3,7 +3,7 @@ import {
   parseFathomTurns, parseCaptionTurns, parseTurns, extractFathomUrl, identifyTeacher, prepareFluency,
   formatTurnsForAi, excerptFound, MIN_WORDS,
   toSeconds, formatSeconds, locateExcerpt, excerptStartSeconds, excerptEndSeconds, excerptWordCount, withFathomTimestamp,
-  studentEnglishStats, studentOnlyText, type Turn,
+  readingCue, type Turn,
 } from '@/lib/fluency';
 
 const HEADER = `Impromptu Google Meet Meeting - August 25
@@ -200,44 +200,31 @@ describe('segundo exacto de una cita', () => {
   });
 });
 
-describe('studentEnglishStats (evidencia V3)', () => {
+describe('readingCue (lectura, audio o repetición)', () => {
   const T = (speaker: string, text: string): Turn => ({ at: '0:01', speaker, text });
-  const OPTS = { top: 10, longWords: 25 };
-  const largo = 'I think that the most important thing for my job is that I can talk with the clients and I know what they really need from us';
-  const corto = 'yes I think so';
-  const espanol = 'bueno pues no lo sé porque la verdad es que yo no tengo muy claro lo que hay que hacer con esto y entonces';
 
-  it('mide solo las intervenciones del alumno en inglés', () => {
-    const s = studentEnglishStats({
-      skip: null, studentSpeaker: 'Ana',
-      turns: [T('Ana', largo), T('Ana', corto), T('Ana', espanol), T('Profe (p@x.com)', largo + ' ' + largo)],
-    }, OPTS)!;
-    expect(s.longTurns).toBe(1);                    // el español y el del profe no cuentan
-    expect(s.topTurnsMean).toBeCloseTo((largo.split(' ').length + 4) / 2);
+  it('tira el clip si justo antes se anuncia un audio o una lectura', () => {
+    const turns = [
+      T('Profe', 'Okay. So now we are going to listen to Petra telling Dave about her vision board.'),
+      T('Ana', "I'm going to buy some really good running shoes. Then I'm going to get up at 5am every day."),
+    ];
+    expect(readingCue(turns, 1)).toMatch(/listen/);
+    expect(readingCue([T('Profe', 'Mientras, puedes ir leyendo el diálogo.'), turns[1]], 1)).toMatch(/leyendo/);
+    expect(readingCue([T('Profe', 'Ahora cerremos el ensayo con el Párrafo 4.'), turns[1]], 1)).toMatch(/ensayo/);
   });
 
-  it('sin alumno identificado, la clase no cuenta', () => {
-    expect(studentEnglishStats({ skip: null, studentSpeaker: null, turns: [T('Ana', largo)] }, OPTS)).toBeNull();
-    expect(studentEnglishStats({ skip: 'pocas_palabras', studentSpeaker: 'Ana', turns: [T('Ana', largo)] }, OPTS)).toBeNull();
-  });
-});
-
-describe('studentOnlyText (comparación a ciegas)', () => {
-  const T = (speaker: string, text: string, at = '12:40'): Turn => ({ at, speaker, text });
-
-  it('solo el alumno, sin minutos ni nombres, y sin respuestas de menos de 4 palabras', () => {
-    const txt = studentOnlyText({
-      studentSpeaker: 'Ana',
-      turns: [T('Ana', 'yes ok'), T('Profe', 'What did you do yesterday?'), T('Ana', 'I went to the cinema with my sister')],
-    }, 1000);
-    expect(txt).toBe('- I went to the cinema with my sister');
-    expect(txt).not.toMatch(/12:40|Ana|Profe/);
+  it('tira el clip si el propio texto suena a podcast', () => {
+    expect(readingCue([T('Ana', "In this podcast, we'll be understanding how our brains change when we fall in love.")], 0)).toMatch(/podcast/);
   });
 
-  it('se corta por el final de un turno', () => {
-    const turns = Array.from({ length: 10 }, () => T('Ana', 'one two three four five six seven eight nine ten'));
-    const txt = studentOnlyText({ studentSpeaker: 'Ana', turns }, 120);
-    expect(txt.split('\n')).toHaveLength(2);
+  it('una pregunta normal del profe no es pista', () => {
+    const turns = [
+      T('Profe', 'How was the fusion food, finally? Did you like it?'),
+      T('Ana', 'It was honestly one of the best meals we had in a long time, my wife loved it.'),
+    ];
+    expect(readingCue(turns, 1)).toBeNull();
+    // "already" no es "read": por palabras enteras.
+    expect(readingCue([T('Profe', 'Have you already finished?'), turns[1]], 1)).toBeNull();
   });
 });
 

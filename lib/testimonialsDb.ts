@@ -2,7 +2,7 @@
 // Solo la tabla testimonial_candidates, que es ligera: nunca transcripts.
 
 import { supabase } from '@/lib/supabase';
-import { studentTrend, type FluencyClass, type StudentTrend, type TestimonialClips } from '@/lib/testimonials';
+import type { TestimonialClips } from '@/lib/testimonials';
 
 export const TESTIMONIAL_STATUSES = ['detectado', 'revisado', 'permiso_alumno', 'listo', 'descartado'] as const;
 export type TestimonialStatus = typeof TESTIMONIAL_STATUSES[number];
@@ -43,7 +43,7 @@ export interface TestimonialCandidate {
   discardedBy: 'ia' | 'admin' | null;
   statusChangedAt: string;
   adminNotes: string | null;
-  /** Hasta 3 clips malos y 3 buenos. null = aún sin preparar (o pareja de antes de oct/2026). */
+  /** Un clip malo y uno bueno (las parejas de antes del 07/10/2026, hasta 3). null = aún sin preparar. */
   clips: TestimonialClips | null;
 }
 
@@ -84,36 +84,6 @@ export async function dbGetTestimonialCandidates(): Promise<TestimonialCandidate
     }
     out.push(...(data ?? []).map(map));
     if ((data ?? []).length < 1000) break;
-  }
-  return out;
-}
-
-/**
- * Media de las primeras y las últimas clases de cada alumno (para "Media de 5,0
- * → 7,0"). Solo notas y fechas de la vista: nunca transcripts.
- */
-export async function dbGetStudentTrends(groups: string[]): Promise<Map<string, StudentTrend>> {
-  const byGroup = new Map<string, FluencyClass[]>();
-  for (let i = 0; i < groups.length; i += 100) {
-    const lote = groups.slice(i, i + 100);
-    for (let from = 0; ; from += 1000) {
-      const { data, error } = await supabase.from('transcript_fluency_numbered')
-        .select('student_group, analysis_id, class_day, fluency_score')
-        .in('student_group', lote).eq('status', 'ready').not('fluency_score', 'is', null)
-        .order('analysis_id').range(from, from + 999);
-      if (error) throw new Error(error.message);
-      for (const r of (data ?? []) as Row[]) {
-        const list = byGroup.get(r.student_group) ?? [];
-        list.push({ analysisId: r.analysis_id, classNumber: null, classDay: String(r.class_day ?? ''), teacherId: null, score: Number(r.fluency_score), fathomUrl: null });
-        byGroup.set(r.student_group, list);
-      }
-      if ((data ?? []).length < 1000) break;
-    }
-  }
-  const out = new Map<string, StudentTrend>();
-  for (const [g, classes] of byGroup) {
-    const t = studentTrend(classes);
-    if (t) out.set(g, t);
   }
   return out;
 }

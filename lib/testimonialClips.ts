@@ -1,14 +1,14 @@
-// Testimoniales — Haiku elige los CLIPS cortos del alumno. SOLO SERVIDOR.
+// Testimoniales — Haiku propone los CLIPS cortos del alumno. SOLO SERVIDOR.
 // Modelo: claude-haiku-4-5 (~3-5 céntimos por alumno: lee hasta 6 transcripts).
 //
 // Lo que se busca son trozos de 5 a 15 segundos para montar un anuncio, no
-// clases enteras buenas o malas. Dos llamadas por alumno:
-//   · 'malo':  hasta 3 momentos de sus PRIMERAS clases en que se traba;
-//   · 'bueno': hasta 3 momentos de sus ÚLTIMAS clases en que habla con soltura,
-//              y el resumen de 2 frases para el admin.
+// clases enteras buenas o malas. Dos llamadas por alumno, en paralelo:
+//   · 'malo':  hasta 3 candidatos de sus PRIMERAS clases en que se traba;
+//   · 'bueno': hasta 3 candidatos de sus ÚLTIMAS clases en que habla muy bien.
 // La IA los devuelve del más claro al menos claro. El código comprueba después
-// que cada cita existe literal y es del alumno, y calcula su segundo de inicio y
-// de fin (lib/testimonialStore + lib/fluency).
+// que cada cita existe literal y está en un turno del alumno, calcula su segundo
+// de inicio y de fin (lib/testimonialStore + lib/fluency), y lib/testimonialVerify
+// los revisa uno a uno. Al final se guarda UN clip de cada lado.
 
 import 'server-only';   // llega al SDK de Anthropic vía askClaudeJson
 
@@ -17,7 +17,7 @@ import { FLUENCY_MODEL } from '@/lib/analyzeFluency';
 
 export type MomentKind = 'malo' | 'bueno';
 
-/** Clips de cada tipo que se guardan como mucho (el esquema no lleva maxItems). */
+/** Candidatos de cada tipo que se piden como mucho (el esquema no lleva maxItems). Se guarda uno. */
 export const MAX_CLIPS = 3;
 
 export interface MomentIA {
@@ -29,8 +29,6 @@ export interface MomentIA {
 
 export interface MomentsIA {
   momentos: MomentIA[];
-  /** Solo en 'bueno'. */
-  summary?: string;
 }
 
 /** Una clase tal como se le enseña a la IA. */
@@ -41,8 +39,8 @@ export interface MomentClass {
 }
 
 const CLIP_RULES = `REGLAS DE CADA CLIP (todas obligatorias):
-- Habla el ALUMNO, no el profe. Fathom a veces pega frases del profe en un turno del alumno: una frase que corrige, explica gramática, da instrucciones o felicita es del profe aunque la etiqueta diga ALUMNO. Esas no valen.
-- Habla espontáneamente. Nada de lectura en voz alta de un texto o ejercicio, ni de repetir lo que acaba de decir el profe, ni de frases memorizadas.
+- Habla el ALUMNO, no el profe ni ninguna otra persona. Solo valen turnos marcados ALUMNO. Fathom a veces pega frases del profe en un turno del alumno: una frase que corrige, explica gramática, da instrucciones, pregunta como profe o felicita es del profe aunque la etiqueta diga ALUMNO. Esas no valen.
+- Habla espontáneamente: contesta una pregunta, cuenta algo, opina. NO valen: lectura en voz alta (un texto, un ejercicio, un diálogo, una redacción o ensayo, aunque lo haya escrito él), un audio, podcast o vídeo puesto en clase (Fathom lo transcribe como si hablara alguien), repetir lo que dice el profe, frases de un ejercicio, presentaciones preparadas o frases memorizadas. Si justo antes alguien dice "listen", "read", "lee", "escuchamos", "repeat", "párrafo" o "ensayo", ese turno no vale. Un inglés de libro, sin ninguna duda y demasiado perfecto para el alumno, casi siempre es lectura o audio.
 - Se entiende lo que intenta decir. Nada de frases incoherentes ni de errores de la transcripción automática.
 - Dura unos 5 a 15 segundos: entre 12 y 35 palabras seguidas.
 - Preferiblemente al INICIO de una intervención del alumno (el minuto del corchete es entonces el segundo exacto del clip).
@@ -53,20 +51,19 @@ const CLIP_RULES = `REGLAS DE CADA CLIP (todas obligatorias):
 
 Devuelve HASTA ${MAX_CLIPS} clips, ORDENADOS del más claro al menos claro. Si solo hay uno o dos que cumplan todas las reglas, devuelve solo esos: mejor pocos y buenos.`;
 
-const SYSTEM_MALO = `Buscas material para un anuncio de una academia de inglés online para adultos hispanohablantes: el ANTES de un alumno. Recibes las transcripciones automáticas (Fathom) de sus primeras clases y eliges los momentos cortos en que SE TRABA hablando inglés: duda, hace pausas o muletillas ("eh", "um"), empieza frases y las abandona, repite palabras, no le sale la pronunciación o la frase, o salta al español para salir del paso. Tiene que verse claramente que le cuesta, pero que se entienda qué intenta decir.
+const SYSTEM_MALO = `Buscas material para un anuncio de una academia de inglés online para adultos hispanohablantes: el ANTES de un alumno. Recibes las transcripciones automáticas (Fathom) de sus primeras clases y eliges los momentos cortos en que SE TRABA intentando hablar inglés por su cuenta: duda, hace pausas o muletillas ("eh", "um"), empieza frases y las abandona, repite palabras, no le sale la pronunciación o la frase, o salta al español para salir del paso. Tiene que verse claramente que le cuesta, pero que se entienda qué intenta decir.
 
 ${CLIP_RULES}
 
 "class_option" es el número de la CLASE (1, 2, 3...) donde está la cita. "why" es una frase corta en español que dice por qué es un momento malo (qué se ve en el clip).`;
 
-const SYSTEM_BUENO = `Buscas material para un anuncio de una academia de inglés online para adultos hispanohablantes: el DESPUÉS de un alumno. Recibes las transcripciones automáticas (Fathom) de sus últimas clases y eliges los momentos cortos en que HABLA BIEN inglés: con fluidez y buena pronunciación, frases completas e ideas encadenadas, sin apenas pausas ni español. Te doy también sus momentos malos de las primeras clases, para que el contraste sea claro.
+const SYSTEM_BUENO = `Buscas material para un anuncio de una academia de inglés online para adultos hispanohablantes: el DESPUÉS de un alumno. Recibes las transcripciones automáticas (Fathom) de sus últimas clases y eliges los momentos cortos en que HABLA MUY BIEN inglés por su cuenta: con fluidez, frases completas e ideas encadenadas, sin apenas pausas ni español. No hace falta que toda la clase sea buena: basta un momento.
 
 ${CLIP_RULES}
 
-"class_option" es el número de la CLASE (1, 2, 3...) donde está la cita. "why" es una frase corta en español que dice por qué es un momento bueno (qué se ve en el clip).
-"summary": EXACTAMENTE DOS frases en español: la primera describe cómo hablaba el alumno antes y la segunda cómo habla ahora. Concretas y sin exagerar.`;
+"class_option" es el número de la CLASE (1, 2, 3...) donde está la cita. "why" es una frase corta en español que dice por qué es un momento bueno (qué se ve en el clip).`;
 
-function schema(kind: MomentKind, options: number): Record<string, unknown> {
+function schema(options: number): Record<string, unknown> {
   const momento = {
     type: 'object', additionalProperties: false,
     required: ['class_option', 'excerpt', 'at', 'why'],
@@ -77,33 +74,27 @@ function schema(kind: MomentKind, options: number): Record<string, unknown> {
       why: { type: 'string', description: 'Una frase corta en español: por qué es un momento malo o bueno.' },
     },
   };
-  const props: Record<string, unknown> = {
-    // Sin maxItems ni minItems: la API los rechaza o los ignora según el modelo.
-    // El tope de MAX_CLIPS lo aplica el código.
-    momentos: { type: 'array', items: momento, description: `Hasta ${MAX_CLIPS} clips, del más claro al menos claro.` },
+  return {
+    type: 'object', additionalProperties: false, required: ['momentos'],
+    properties: {
+      // Sin maxItems ni minItems: la API los rechaza o los ignora según el modelo.
+      // El tope de MAX_CLIPS lo aplica el código.
+      momentos: { type: 'array', items: momento, description: `Hasta ${MAX_CLIPS} clips, del más claro al menos claro.` },
+    },
   };
-  const required = ['momentos'];
-  if (kind === 'bueno') {
-    props.summary = { type: 'string', description: 'Exactamente DOS frases en español: cómo hablaba antes y cómo habla ahora.' };
-    required.push('summary');
-  }
-  return { type: 'object', additionalProperties: false, required, properties: props };
 }
 
 export async function pickMoments(input: {
   kind: MomentKind;
   studentName: string;
   classes: MomentClass[];
-  /** 'bueno': los momentos malos ya elegidos, para el contraste y el resumen. */
-  badMoments?: Array<{ date: string; excerpt: string }>;
   /** Reintento: por qué no valieron las citas anteriores. */
   retryNote?: string;
   /** Tope de la llamada (por defecto 25 s). */
   timeoutMs?: number;
 }): Promise<AiResult<MomentsIA>> {
   const header = [
-    `Alumno/a: ${input.studentName}`,
-    ...(input.badMoments ?? []).map(m => `Momento MALO (clase del ${m.date}): "${m.excerpt}"`),
+    `Alumno/a: ${input.studentName} (sus turnos van marcados ALUMNO)`,
     input.retryNote ? `OJO, en el intento anterior ninguna cita valió: ${input.retryNote} Elige citas que cumplan todas las reglas.` : '',
   ].filter(Boolean).join('\n');
   const body = input.classes
@@ -115,9 +106,10 @@ export async function pickMoments(input: {
     model: FLUENCY_MODEL,
     system: input.kind === 'malo' ? SYSTEM_MALO : SYSTEM_BUENO,
     prompt: `${header}\n\n${body}`,
-    schema: schema(input.kind, input.classes.length),
+    schema: schema(input.classes.length),
     maxTokens: 1500,
-    // Dos llamadas por alumno en una función de 60 s (app/api/admin/testimonial-prepare).
+    // Las dos llamadas van en paralelo, más la revisión, en una función de 60 s
+    // (app/api/admin/testimonial-prepare).
     timeoutMs: input.timeoutMs ?? 25_000,
     maxRetries: 0,
     // La cita es literal y el minuto se copia: la limpieza de guiones los rompería.

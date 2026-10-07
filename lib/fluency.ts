@@ -176,73 +176,44 @@ export function formatTurnsForAi(prep: Pick<FluencyPrep, 'turns' | 'teacherSpeak
   return prep.turns.map(t => `[${t.at}] ${role(t.speaker)}: ${t.text}`).join('\n');
 }
 
-// ── Evidencia del transcript, sin IA (testimoniales V3) ─────────────────────
+// ── Lectura, audio o repetición (testimoniales V4) ──────────────────────────
 //
-// ¿En qué idioma está una intervención? Se cuentan palabras de función, que
-// aparecen en cualquier frase y casi no se cruzan entre los dos idiomas. No es
-// un detector de idioma de verdad, pero para separar "el alumno habla inglés"
-// de "el alumno se pasa al español" en un turno entero basta y no cuesta nada.
-const EN_WORDS = new Set(('the and you is are was were have has i it to of in that this what do does did not but '
-  + 'with for my your can will would going like think know really very so because').split(' '));
-const ES_WORDS = new Set(('el la los las que de y en es un una por para con no lo se pero como muy porque yo tu '
-  + 'mi está estoy tengo hay sí bueno vale entonces').split(' '));
+// Un clip tiene que ser el alumno hablando por su cuenta. En la V3 salieron como
+// "momento bueno" un podcast puesto en clase ("In this podcast, we'll be…"), el
+// audio de un ejercicio ("now we are going to listen to Petra…"), un ensayo leído
+// ("cerremos el ensayo con el Párrafo 4") y un diálogo leído ("puedes ir
+// leyendo"). Fathom pega el audio y la lectura en el turno de quien comparte la
+// pantalla, y a veces en el del alumno, así que la etiqueta no basta.
+// Este filtro sin IA tira lo evidente; lo demás lo juzga lib/testimonialVerify,
+// que ve el clip con lo que se dijo antes y después.
 
-/** Lo que mide la evidencia en UNA clase: las intervenciones en inglés del alumno. */
-export interface EnglishStats {
-  /** Media de palabras de sus N intervenciones en inglés más largas. */
-  topTurnsMean: number;
-  /** Cuántas intervenciones en inglés de al menos `longWords` palabras hace. */
-  longTurns: number;
-}
+/** Palabra entera, también con tildes (\b de JavaScript no entiende la "é"). */
+const wholeWords = (alts: string): RegExp => new RegExp(`(?<![\\p{L}\\p{N}])(?:${alts})(?![\\p{L}\\p{N}])`, 'iu');
 
-/**
- * Intervenciones en inglés del alumno en una clase. null si no se sabe quién es
- * el alumno (sin hablantes, o el profe no se identificó): esa clase no cuenta.
- */
-export function studentEnglishStats(
-  prep: Pick<FluencyPrep, 'turns' | 'studentSpeaker' | 'skip'>,
-  opts: { top: number; longWords: number },
-): EnglishStats | null {
-  if (prep.skip || !prep.studentSpeaker) return null;
-  const lengths: number[] = [];
-  for (const t of prep.turns) {
-    if (t.speaker !== prep.studentSpeaker) continue;
-    const words = t.text.toLowerCase().match(/[a-záéíóúüñ']+/g) ?? [];
-    let en = 0, es = 0;
-    for (const w of words) {
-      if (EN_WORDS.has(w)) en++;
-      if (ES_WORDS.has(w)) es++;
-    }
-    if (en > es) lengths.push(words.length);
-  }
-  lengths.sort((a, b) => b - a);
-  const top = lengths.slice(0, opts.top);
-  return {
-    topTurnsMean: top.length ? top.reduce((a, b) => a + b, 0) / top.length : 0,
-    longTurns: lengths.filter(n => n >= opts.longWords).length,
-  };
-}
+/** Lo que se dice justo antes y anuncia que lo siguiente no es habla espontánea. */
+const CUE_BEFORE = wholeWords([
+  'listen(?:ing)?', 'podcast', 'audio', 'video', 'track', 'read(?:ing)?', 'aloud', 'repeat(?:ing)?',
+  'escuch\\p{L}*', 'leyendo', 'lee(?:r|lo|la|d)?', 'leé', 'lectura', 'repet\\p{L}*', 'repit\\p{L}*',
+  'paragraph', 'p[aá]rrafo', 'essay', 'ensayo', 'redacci[oó]n',
+].join('|'));
+
+/** Lo que solo dice un audio o un texto preparado, no un alumno en clase. */
+const CUE_IN_CLIP = wholeWords('podcast|episode|in this (?:video|lesson|episode)|welcome (?:back )?to');
 
 /**
- * Solo lo que dice el ALUMNO, para la comparación a ciegas: sin el profe, sin
- * nombres y sin minutos (nada que delate cuál de las dos clases es la antigua).
- * Las respuestas de menos de 4 palabras ("yes", "ok, perfect") se saltan: no
- * dicen nada de la soltura y gastarían el espacio. Se corta en `maxChars` por el
- * final de un turno.
+ * ¿El turno del clip huele a lectura, audio o repetición? Devuelve el motivo, o
+ * null si no hay pista. Mira el propio turno y los DOS anteriores, sean de quien
+ * sean (Fathom a veces cambia las etiquetas dentro de una misma clase).
  */
-export function studentOnlyText(
-  prep: Pick<FluencyPrep, 'turns' | 'studentSpeaker'>, maxChars: number,
-): string {
-  const out: string[] = [];
-  let size = 0;
-  for (const t of prep.turns) {
-    if (t.speaker !== prep.studentSpeaker || countWords(t.text) < 4) continue;
-    const line = `- ${t.text}`;
-    if (size + line.length > maxChars && out.length > 0) break;
-    out.push(line);
-    size += line.length + 1;
+export function readingCue(turns: Turn[], turnIndex: number): string | null {
+  const own = turns[turnIndex]?.text ?? '';
+  const inClip = own.match(CUE_IN_CLIP);
+  if (inClip) return `el propio texto dice "${inClip[0]}" (suena a audio o texto preparado)`;
+  for (let i = Math.max(0, turnIndex - 2); i < turnIndex; i++) {
+    const m = turns[i].text.match(CUE_BEFORE);
+    if (m) return `justo antes se habla de "${m[0]}" (suena a lectura, audio o repetición)`;
   }
-  return out.join('\n');
+  return null;
 }
 
 /** Texto comparable: sin acentos, sin puntuación, espacios simples, minúsculas. */

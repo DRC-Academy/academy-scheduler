@@ -14,9 +14,9 @@ import { detectAll, prepareNext, prepareQueue } from '@/lib/testimonialStore';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-// Una pareja: hasta 6 transcripts leídos, la comparación a ciegas (15 s como
-// mucho, una vez por pareja) y dos llamadas a Haiku de 25 s. Si no caben, la
-// preparación sale con 'sin_tiempo' y la siguiente petición sigue donde quedó.
+// Una pareja: hasta 6 transcripts leídos, dos llamadas a Haiku en paralelo (25 s
+// como mucho) y la revisión de los clips (14 s). Si no caben, la preparación sale
+// con 'sin_tiempo' y la pareja se vuelve a intentar entera más tarde.
 export const maxDuration = 60;
 
 export async function POST(request: Request): Promise<Response> {

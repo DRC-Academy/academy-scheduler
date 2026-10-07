@@ -1,13 +1,13 @@
 'use client';
 
-// Pestaña admin "Testimoniales": una tarjeta por alumno que mejoró, con sus
-// clips cortos (hasta 3 momentos malos de sus primeras clases y hasta 3 buenos
-// de las últimas) y dos botones: Sirve / No sirve. Cada ▶ abre la grabación de
-// Fathom en el segundo de inicio del clip.
+// Pestaña admin "Testimoniales": una tarjeta por alumno con dos clips cortos
+// suyos (uno en que habla mal en sus primeras clases y otro en que habla muy
+// bien en las últimas) y dos botones: Sirve / No sirve. Cada ▶ abre la grabación
+// de Fathom en el segundo de inicio del clip.
 //
-// Solo se enseñan parejas con los clips ya preparados por la IA. Al abrir la
-// pestaña se pasa la detección por todos los alumnos y se preparan, de una en
-// una, las que falten (app/api/admin/testimonial-prepare).
+// Solo se enseñan parejas con los clips ya preparados y revisados por la IA. Al
+// abrir la pestaña se pasa la detección por todos los alumnos y se preparan, unas
+// pocas a la vez, las que falten (app/api/admin/testimonial-prepare).
 //
 //   Por revisar = 'detectado' con clips listos
 //   Sirven      = 'listo' (y los estados antiguos 'revisado' / 'permiso_alumno')
@@ -19,13 +19,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTeachers } from '@/lib/TeachersContext';
 import {
-  dbGetTestimonialCandidates, dbGetStudentTrends, dbUpdateTestimonialCandidate,
+  dbGetTestimonialCandidates, dbUpdateTestimonialCandidate,
   type TestimonialCandidate,
 } from '@/lib/testimonialsDb';
-import { improvementLine, clipLabel, type StudentTrend, type TestimonialClip } from '@/lib/testimonials';
+import { clipLabel, type TestimonialClip } from '@/lib/testimonials';
 
 type Vista = 'revisar' | 'sirven';
 interface Queue { pending: number; failed: number }
+
+/** Preparaciones a la vez: cada una es una función de Vercel de hasta 60 s. */
+const EN_PARALELO = 3;
 
 const SIRVEN = new Set(['listo', 'revisado', 'permiso_alumno']);
 const porRevisar = (c: TestimonialCandidate) => c.status === 'detectado' && c.aiReviewStatus === 'ready' && c.clips !== null;
@@ -46,7 +49,6 @@ async function post(body: Record<string, unknown>): Promise<{ outcome?: string; 
 export default function TestimonialsTab() {
   const { teachers } = useTeachers();
   const [rows, setRows] = useState<TestimonialCandidate[] | null | undefined>(undefined);
-  const [trends, setTrends] = useState<Map<string, StudentTrend>>(new Map());
   const [error, setError] = useState<string | null>(null);
   const [vista, setVista] = useState<Vista>('revisar');
   const [queue, setQueue] = useState<Queue | null>(null);
@@ -59,27 +61,29 @@ export default function TestimonialsTab() {
       const c = await dbGetTestimonialCandidates();
       if (!vivo.current) return;
       setRows(c);
-      if (c) {
-        const t = await dbGetStudentTrends([...new Set(c.filter(x => porRevisar(x) || sirve(x)).map(x => x.studentGroup))]);
-        if (vivo.current) setTrends(t);
-      }
       setError(null);
     } catch (e) {
       if (vivo.current) setError(e instanceof Error ? e.message : String(e));
     }
   }, []);
 
-  /** Prepara de una en una las parejas sin clips, recargando al terminar cada una. */
+  /** Prepara las parejas sin clips, EN_PARALELO a la vez, recargando al terminar cada una. */
   const preparar = useCallback(async (retryFailed: boolean) => {
     setPreparando(true);
-    for (;;) {
-      const r = await post({ action: 'preparar', retryFailed });
-      if (!vivo.current) return;
-      if (r.error) { setError(r.error); break; }
-      if (r.queue) setQueue(r.queue);
-      if (r.outcome === 'lista') await cargar();
-      if (r.outcome === 'nada' || r.outcome === 'sin_tiempo') break;
-    }
+    const trabajador = async () => {
+      // 'sin_tiempo' (otra petición se la quedó, o no cupo en los 60 s) se
+      // reintenta; tres seguidas = no queda nada libre por ahora.
+      for (let sinTiempo = 0; sinTiempo < 3;) {
+        const r = await post({ action: 'preparar', retryFailed });
+        if (!vivo.current) return;
+        if (r.error) { setError(r.error); return; }
+        if (r.queue) setQueue(r.queue);
+        if (r.outcome === 'lista') await cargar();
+        if (r.outcome === 'nada') return;
+        sinTiempo = r.outcome === 'sin_tiempo' ? sinTiempo + 1 : 0;
+      }
+    };
+    await Promise.all(Array.from({ length: EN_PARALELO }, trabajador));
     if (vivo.current) setPreparando(false);
   }, [cargar]);
 
@@ -161,7 +165,7 @@ export default function TestimonialsTab() {
       ) : (
         <div className="ts-lista">
           {visibles.map(c => (
-            <Tarjeta key={c.id} c={c} trend={trends.get(c.studentGroup)} nombreProfe={nombreProfe} onCambiar={s => cambiar(c, s)} />
+            <Tarjeta key={c.id} c={c} nombreProfe={nombreProfe} onCambiar={s => cambiar(c, s)} />
           ))}
         </div>
       )}
@@ -177,16 +181,13 @@ export default function TestimonialsTab() {
   );
 }
 
-function Tarjeta({ c, trend, nombreProfe, onCambiar }: {
-  c: TestimonialCandidate; trend: StudentTrend | undefined;
+function Tarjeta({ c, nombreProfe, onCambiar }: {
+  c: TestimonialCandidate;
   nombreProfe: (id: string | null) => string;
   onCambiar: (s: 'listo' | 'detectado' | 'descartado') => void;
 }) {
   const pa = nombreProfe(c.before.teacherId), pd = nombreProfe(c.after.teacherId);
   const esSirve = sirve(c);
-  const mejora = trend
-    ? improvementLine(trend.firstMean, trend.lastMean)
-    : `Nota de ${c.before.score ?? '?'} → ${c.after.score ?? '?'}`;
   return (
     <article className="ts-card">
       <header className="ts-card-h">
@@ -194,10 +195,7 @@ function Tarjeta({ c, trend, nombreProfe, onCambiar }: {
         <span className="ts-profe">Profe: {pa === pd ? pd : `${pa} → ${pd}`}</span>
       </header>
 
-      <section className="ts-mejora">
-        <p className="ts-mejora-l">{mejora}</p>
-        {c.aiSummary && <p className="ts-resumen">{c.aiSummary}</p>}
-      </section>
+      {c.aiSummary && <p className="ts-resumen">{c.aiSummary}</p>}
 
       {c.clips ? (
         <>
@@ -223,7 +221,7 @@ function Tarjeta({ c, trend, nombreProfe, onCambiar }: {
 function Momentos({ tipo, clips }: { tipo: 'malos' | 'buenos'; clips: TestimonialClip[] }) {
   return (
     <section className={`ts-momentos is-${tipo}`}>
-      <span className="ts-et">{tipo === 'malos' ? 'Momentos malos' : 'Momentos buenos'}</span>
+      <span className="ts-et">{tipo === 'malos' ? 'Antes: habla mal' : 'Después: habla muy bien'}</span>
       <ul className="ts-clips">
         {clips.map(k => (
           <li key={`${k.analysisId}_${k.start}`} className="ts-clip">
@@ -279,8 +277,6 @@ const ESTILOS = `
 .ts-why { margin: 0; font-size: 13px; line-height: 1.45; color: var(--gris); }
 .ts-sin { margin: 0; font-size: 13.5px; font-weight: 600; color: var(--gris); }
 
-.ts-mejora { display: flex; flex-direction: column; gap: 4px; }
-.ts-mejora-l { margin: 0; font-size: 16px; font-weight: 700; color: var(--verde); font-variant-numeric: tabular-nums; }
 .ts-resumen { margin: 0; font-size: 14.5px; line-height: 1.55; color: #333; }
 
 .ts-acc { display: flex; gap: 10px; flex-wrap: wrap; }
