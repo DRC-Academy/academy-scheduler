@@ -13,6 +13,7 @@
     "check:bank": "tsx scripts/check-bank.mts",
     "calibrate:writing": "node --conditions=react-server --import tsx scripts/calibrate-writing.mts",
     "fluidez": "node --conditions=react-server --import tsx scripts/fluidez.mts",
+    "testimonios": "node --conditions=react-server --import tsx scripts/testimonios.mts",
     "check:seed": "tsx scripts/check-seed.mts"
   },
   "dependencies": {

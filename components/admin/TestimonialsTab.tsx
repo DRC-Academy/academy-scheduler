@@ -1,20 +1,21 @@
 'use client';
 
-// Pestaña admin "Testimoniales": una tarjeta por alumno con dos clips cortos
-// suyos (uno en que habla mal en sus primeras clases y otro en que habla muy
-// bien en las últimas) y dos botones: Sirve / No sirve. Cada ▶ abre la grabación
-// de Fathom en el segundo de inicio del clip.
+// Pestaña admin "Testimoniales" (V5, 07/10/2026): una tarjeta por alumno Y PROFE
+// con dos clips cortos del alumno: uno en que habla mal y otro, de OTRA clase con
+// el mismo profe, en que habla muy bien. Botones: Sirve / No sirve. Cada ▶ abre
+// la grabación de Fathom en el segundo de inicio del clip.
 //
-// Solo se enseñan parejas con los clips ya preparados y revisados por la IA. Al
-// abrir la pestaña se pasa la detección por todos los alumnos y se preparan, unas
-// pocas a la vez, las que falten (app/api/admin/testimonial-prepare).
+// Las parejas las elige el código (lib/testimonialPairs) entre los momentos que
+// Haiku sacó de cada clase SOLO de las intervenciones del alumno, y el alumno de
+// cada clase lo decide el código por su etiqueta de Fathom (lib/testimonialSpeaker).
+// Arriba, el panel del análisis de los transcripts antiguos: se lanza a mano
+// (cuesta dinero); los transcripts nuevos se analizan solos al subirse.
 //
-//   Por revisar = 'detectado' con clips listos
+//   Por revisar = 'detectado' de la V5; primero las de orden normal (la clase
+//                 mala antes que la buena), después las de "Orden inverso"
 //   Sirven      = 'listo' (y los estados antiguos 'revisado' / 'permiso_alumno')
-//   No sirve    = 'descartado' por el admin: oculto, y el alumno no se vuelve a proponer
-//
-// Lo que ya no se enseña (notas sueltas, avisos al profe de antes de oct/2026,
-// notas del admin…) sigue guardado en la base. El profesor no ve nada de esto.
+//   No sirve    = 'descartado' por el admin: oculto, y esa combinación alumno +
+//                 profe no se vuelve a proponer
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTeachers } from '@/lib/TeachersContext';
@@ -25,24 +26,31 @@ import {
 import { clipLabel, type TestimonialClip } from '@/lib/testimonials';
 
 type Vista = 'revisar' | 'sirven';
-interface Queue { pending: number; failed: number }
 
-/** Preparaciones a la vez: cada una es una función de Vercel de hasta 60 s. */
+interface Estado {
+  total: number; pending: number; ready: number; excluded: number;
+  failed: number; failedRetryable: number; withMoments: number; pairs: number;
+}
+
+/** Tandas a la vez: cada una es una función de Vercel de hasta 60 s con 6 transcripts. */
 const EN_PARALELO = 3;
+/** Coste aproximado por transcript con Haiku 4.5 (~7.000 tokens de entrada y ~500 de salida). */
+const COSTE_POR_TRANSCRIPT_USD = 0.01;
 
 const SIRVEN = new Set(['listo', 'revisado', 'permiso_alumno']);
-const porRevisar = (c: TestimonialCandidate) => c.status === 'detectado' && c.aiReviewStatus === 'ready' && c.clips !== null;
+const porRevisar = (c: TestimonialCandidate) => c.status === 'detectado' && !!c.pairTeacherId && c.clips !== null;
 const sirve = (c: TestimonialCandidate) => SIRVEN.has(c.status);
+const fuerza = (c: TestimonialCandidate) => (c.before.score ?? 0) + (c.after.score ?? 0);
 
-async function post(body: Record<string, unknown>): Promise<{ outcome?: string; queue?: Queue; error?: string }> {
+async function post<T>(body: Record<string, unknown>): Promise<T & { error?: string }> {
   try {
     const res = await fetch('/api/admin/testimonial-prepare', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     });
     const data = await res.json().catch(() => ({ error: `Error ${res.status} del servidor.` }));
-    return res.ok ? data : { error: data.error ?? `Error ${res.status} del servidor.` };
+    return res.ok ? data : { ...data, error: data.error ?? `Error ${res.status} del servidor.` };
   } catch (e) {
-    return { error: e instanceof Error ? e.message : String(e) };
+    return { error: e instanceof Error ? e.message : String(e) } as T & { error?: string };
   }
 }
 
@@ -51,8 +59,8 @@ export default function TestimonialsTab() {
   const [rows, setRows] = useState<TestimonialCandidate[] | null | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [vista, setVista] = useState<Vista>('revisar');
-  const [queue, setQueue] = useState<Queue | null>(null);
-  const [preparando, setPreparando] = useState(false);
+  const [estado, setEstado] = useState<Estado | null>(null);
+  const [analizando, setAnalizando] = useState(false);
   const [deshacer, setDeshacer] = useState<{ id: string; nombre: string } | null>(null);
   const vivo = useRef(true);
 
@@ -67,39 +75,34 @@ export default function TestimonialsTab() {
     }
   }, []);
 
-  /** Prepara las parejas sin clips, EN_PARALELO a la vez, recargando al terminar cada una. */
-  const preparar = useCallback(async (retryFailed: boolean) => {
-    setPreparando(true);
+  /** Analiza los transcripts pendientes (o los fallidos) por tandas, EN_PARALELO a la vez. */
+  const analizar = useCallback(async (retryFailed: boolean) => {
+    setAnalizando(true);
     const trabajador = async () => {
-      // 'sin_tiempo' (otra petición se la quedó, o no cupo en los 60 s) se
-      // reintenta; tres seguidas = no queda nada libre por ahora.
-      for (let sinTiempo = 0; sinTiempo < 3;) {
-        const r = await post({ action: 'preparar', retryFailed });
+      for (;;) {
+        const r = await post<{ claimed?: number; status?: Estado }>({ action: 'tanda', retryFailed });
         if (!vivo.current) return;
         if (r.error) { setError(r.error); return; }
-        if (r.queue) setQueue(r.queue);
-        if (r.outcome === 'lista') await cargar();
-        if (r.outcome === 'nada') return;
-        sinTiempo = r.outcome === 'sin_tiempo' ? sinTiempo + 1 : 0;
+        if (r.status) setEstado(r.status);
+        if (!r.claimed) return;
+        await cargar();
       }
     };
     await Promise.all(Array.from({ length: EN_PARALELO }, trabajador));
-    if (vivo.current) setPreparando(false);
+    if (vivo.current) setAnalizando(false);
   }, [cargar]);
 
   useEffect(() => {
     vivo.current = true;
     (async () => {
       await cargar();
-      const d = await post({ action: 'detectar' });
+      const e = await post<{ status?: Estado }>({ action: 'estado' });
       if (!vivo.current) return;
-      // Si la detección falla (o se corta), las parejas que ya existan se preparan igual.
-      if (d.error) { setError(d.error); await preparar(false); return; }
-      if (d.queue) setQueue(d.queue);
-      if (d.queue && d.queue.pending > 0) await preparar(false);
+      if (e.error) setError(e.error);
+      if (e.status) setEstado(e.status);
     })();
     return () => { vivo.current = false; };
-  }, [cargar, preparar]);
+  }, [cargar]);
 
   // El aviso de "Deshacer" se va solo a los 8 s.
   useEffect(() => {
@@ -127,13 +130,16 @@ export default function TestimonialsTab() {
   }
 
   const lista = rows ?? [];
-  const revisar = lista.filter(porRevisar);
+  const revisar = lista.filter(porRevisar)
+    .sort((a, b) => Number(a.reverseOrder) - Number(b.reverseOrder) || fuerza(b) - fuerza(a));
   const sirven = lista.filter(sirve);
   const visibles = vista === 'revisar' ? revisar : sirven;
 
   return (
     <div className="ts">
       <h2 className="ts-title">Testimoniales</h2>
+
+      {estado && <PanelAnalisis estado={estado} analizando={analizando} onAnalizar={analizar} />}
 
       <div className="ts-tabs" role="tablist">
         <button type="button" role="tab" className="ts-tab" aria-selected={vista === 'revisar'} onClick={() => setVista('revisar')}>
@@ -144,15 +150,6 @@ export default function TestimonialsTab() {
         </button>
       </div>
 
-      {(preparando || (queue && queue.pending > 0)) && (
-        <p className="ts-aviso">Preparando los clips de {queue?.pending || 'algunos'} {queue?.pending === 1 ? 'alumno' : 'alumnos'}… Aparecerán aquí al terminar.</p>
-      )}
-      {!preparando && queue && queue.failed > 0 && (
-        <p className="ts-aviso">
-          {queue.failed === 1 ? '1 alumno no se pudo preparar.' : `${queue.failed} alumnos no se pudieron preparar.`}{' '}
-          <button type="button" className="ts-linkbtn" onClick={() => preparar(true)}>Reintentar</button>
-        </p>
-      )}
       {error && <p className="ts-error">{error}</p>}
 
       {rows === null ? (
@@ -161,7 +158,9 @@ export default function TestimonialsTab() {
         <p className="ts-vacio">Cargando…</p>
       ) : visibles.length === 0 ? (
         <p className="ts-vacio">
-          {vista === 'revisar' ? 'No hay alumnos por revisar.' : 'Todavía no has marcado ninguno como “Sirve”.'}
+          {vista === 'revisar'
+            ? (estado && estado.pending > 0 ? 'Todavía no hay parejas: analiza los transcripts pendientes.' : 'No hay alumnos por revisar.')
+            : 'Todavía no has marcado ninguno como “Sirve”.'}
         </p>
       ) : (
         <div className="ts-lista">
@@ -182,29 +181,70 @@ export default function TestimonialsTab() {
   );
 }
 
+function PanelAnalisis({ estado: e, analizando, onAnalizar }: {
+  estado: Estado; analizando: boolean; onAnalizar: (retryFailed: boolean) => void;
+}) {
+  const hechos = e.ready + e.excluded;
+  const coste = Math.max(1, Math.round(e.pending * COSTE_POR_TRANSCRIPT_USD));
+  return (
+    <section className="ts-panel">
+      <p className="ts-panel-l">
+        Transcripts analizados: <b>{hechos.toLocaleString('es-ES')}</b> de {e.total.toLocaleString('es-ES')}
+        {' · '}válidos {e.ready.toLocaleString('es-ES')} · excluidos {e.excluded.toLocaleString('es-ES')}
+        {e.failed > 0 && <> · fallidos {e.failed}</>}
+      </p>
+      {analizando ? (
+        <p className="ts-panel-l">Analizando… quedan {e.pending.toLocaleString('es-ES')}. Deja la pestaña abierta.</p>
+      ) : (
+        <div className="ts-panel-acc">
+          {e.pending > 0 && (
+            <button type="button" className="ts-btn ts-si" onClick={() => onAnalizar(false)}>
+              Analizar {e.pending.toLocaleString('es-ES')} pendientes (~{coste} $)
+            </button>
+          )}
+          {e.failedRetryable > 0 && (
+            <button type="button" className="ts-btn ts-no" onClick={() => onAnalizar(true)}>
+              Reintentar {e.failedRetryable} fallidos
+            </button>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function Tarjeta({ c, nombreProfe, onCambiar }: {
   c: TestimonialCandidate;
   nombreProfe: (id: string | null) => string;
   onCambiar: (s: 'listo' | 'detectado' | 'descartado') => void;
 }) {
-  const pa = nombreProfe(c.before.teacherId), pd = nombreProfe(c.after.teacherId);
   const esSirve = sirve(c);
+  const malo = c.clips?.malos[0];
+  const bueno = c.clips?.buenos[0];
+  const v5 = !!c.pairTeacherId;
+  const etiquetas = [...new Set([malo?.speakerLabel, bueno?.speakerLabel, c.studentLabel].filter(Boolean))];
   return (
     <article className="ts-card">
       <header className="ts-card-h">
         <span className="ts-alumno">{c.studentName ?? 'Alumno sin nombre'}</span>
-        <span className="ts-profe">Profe: {pa === pd ? pd : `${pa} → ${pd}`}</span>
+        <span className="ts-profe">Profe: {nombreProfe(c.pairTeacherId ?? c.after.teacherId)}</span>
       </header>
-
+      {v5 && (
+        <div className="ts-checks">
+          <span className="ts-ok">Mismo alumno ✓ · Mismo profe ✓</span>
+          {c.reverseOrder && <span className="ts-inverso">Orden inverso</span>}
+          {etiquetas.length > 0 && <span className="ts-fathom">En Fathom: {etiquetas.join(' / ')}</span>}
+        </div>
+      )}
       {c.aiSummary && <p className="ts-resumen">{c.aiSummary}</p>}
 
-      {c.clips ? (
+      {malo && bueno ? (
         <>
-          <Momentos tipo="malos" clips={c.clips.malos} />
-          <Momentos tipo="buenos" clips={c.clips.buenos} />
+          <Clip tipo="malo" k={malo} />
+          <Clip tipo="bueno" k={bueno} />
         </>
       ) : (
-        <p className="ts-sin">Preparando los clips…</p>
+        <p className="ts-sin">Sin clips.</p>
       )}
 
       <footer className="ts-acc">
@@ -219,21 +259,17 @@ function Tarjeta({ c, nombreProfe, onCambiar }: {
   );
 }
 
-function Momentos({ tipo, clips }: { tipo: 'malos' | 'buenos'; clips: TestimonialClip[] }) {
+function Clip({ tipo, k }: { tipo: 'malo' | 'bueno'; k: TestimonialClip }) {
   return (
-    <section className={`ts-momentos is-${tipo}`}>
-      <span className="ts-et">{tipo === 'malos' ? 'Antes: habla mal' : 'Después: habla muy bien'}</span>
-      <ul className="ts-clips">
-        {clips.map(k => (
-          <li key={`${k.analysisId}_${k.start}`} className="ts-clip">
-            {k.fathomUrl
-              ? <a className="ts-ver" href={k.fathomUrl} target="_blank" rel="noopener noreferrer">▶ {clipLabel(k)}</a>
-              : <span className="ts-ver is-sin">{clipLabel(k)} · Sin grabación</span>}
-            <blockquote className="ts-cita">“{k.excerpt}”</blockquote>
-            {k.why && <p className="ts-why">{k.why}</p>}
-          </li>
-        ))}
-      </ul>
+    <section className={`ts-momentos is-${tipo === 'malo' ? 'malos' : 'buenos'}`}>
+      <span className="ts-et">{tipo === 'malo' ? 'Habla mal' : 'Habla muy bien'}</span>
+      <div className="ts-clip">
+        {k.fathomUrl
+          ? <a className="ts-ver" href={k.fathomUrl} target="_blank" rel="noopener noreferrer">▶ {clipLabel(k)}</a>
+          : <span className="ts-ver is-sin">{clipLabel(k)} · Sin grabación</span>}
+        <blockquote className="ts-cita">“{k.excerpt}”</blockquote>
+        {k.why && <p className="ts-why">{k.why}</p>}
+      </div>
     </section>
   );
 }
@@ -252,6 +288,13 @@ const ESTILOS = `
 .ts-tab .n { min-width: 22px; padding: 1px 7px; border-radius: 999px; background: rgba(30,158,58,0.12); color: var(--verde); font-size: 12px; font-weight: 700; text-align: center; }
 
 .ts-aviso { margin: 0 0 12px; font-size: 13.5px; color: #4A4A4A; }
+.ts-panel { margin: 0 0 14px; padding: 12px 14px; border-radius: 12px; background: var(--fondo); display: flex; flex-direction: column; gap: 8px; }
+.ts-panel-l { margin: 0; font-size: 13.5px; color: #4A4A4A; font-variant-numeric: tabular-nums; }
+.ts-panel-acc { display: flex; gap: 8px; flex-wrap: wrap; }
+.ts-checks { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; font-size: 13px; }
+.ts-ok { font-weight: 700; color: var(--verde); }
+.ts-inverso { padding: 2px 8px; border-radius: 999px; background: rgba(255,196,0,0.2); color: #8a6a00; font-weight: 700; font-size: 12px; }
+.ts-fathom { color: var(--gris); }
 .ts-error { margin: 0 0 12px; font-size: 13.5px; font-weight: 600; color: #C81E1E; }
 .ts-vacio { margin: 0; padding: 28px 16px; border-radius: 14px; background: var(--fondo); font-size: 14px; color: var(--gris); text-align: center; }
 .ts-linkbtn { border: 0; background: none; padding: 0 0 0 6px; min-height: 0; font-family: inherit; font-size: inherit; font-weight: 700; color: var(--azul); cursor: pointer; text-decoration: underline; }
@@ -267,9 +310,7 @@ const ESTILOS = `
 .ts-et { font-size: 12px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--gris); }
 .ts-momentos.is-malos .ts-et { color: #8a6a00; }
 .ts-momentos.is-buenos .ts-et { color: var(--verde); }
-.ts-clips { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
-.ts-clip { display: flex; flex-direction: column; gap: 2px; padding: 8px 0; border-top: 1px solid var(--linea); }
-.ts-clip:first-child { border-top: 0; padding-top: 2px; }
+.ts-clip { display: flex; flex-direction: column; gap: 2px; }
 .ts-ver { align-self: flex-start; display: inline-flex; align-items: center; min-height: 32px; font-size: 14px; font-weight: 700;
   color: var(--azul); text-decoration: none; font-variant-numeric: tabular-nums; }
 .ts-ver:hover { text-decoration: underline; }

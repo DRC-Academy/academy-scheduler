@@ -8,10 +8,11 @@
 // El informe se genera después con /api/ai/analyze-transcript (paso 2), que puede
 // reintentarse sin volver a pegar el texto.
 //
-// TESTIMONIALES: después de responder, con `after()`, corre aquí el análisis de
-// fluidez del alumno (Haiku, lib/fluencyStore). Va en ESTA función y no en la del
-// paso 2 a propósito: el análisis con Opus va justo contra su timeout y no debe
-// compartir reloj con nada más.
+// TESTIMONIALES: después de responder, con `after()`, corre aquí la búsqueda de
+// momentos del alumno (Haiku, lib/testimonialMomentsStore). Va en ESTA función y
+// no en la del paso 2 a propósito: el análisis con Opus va justo contra su timeout
+// y no debe compartir reloj con nada más. Desde la V5 (07/10/2026) ya no corre la
+// nota de fluidez (lib/fluencyStore): solo la usaban los testimoniales.
 
 import { computeTranscriptVerdict } from '@/lib/transcriptVerdict';
 import {
@@ -19,12 +20,12 @@ import {
 } from '@/lib/transcriptStore';
 import { logUsageEvent } from '@/lib/usageEvents';
 import { after } from 'next/server';
-import { runFluencyInBackground } from '@/lib/fluencyStore';
+import { runMomentsInBackground } from '@/lib/testimonialMomentsStore';
 
 export const runtime = 'nodejs';
 // El guardado son 2-3 consultas a Supabase (unos segundos). El resto del margen es
-// para el análisis de fluidez en after(), que vive dentro de este mismo límite
-// (peor caso 50 s, ver lib/analyzeFluency).
+// para los momentos de testimoniales en after(), que viven dentro de este mismo
+// límite (40 s como mucho, ver lib/testimonialMomentsStore).
 export const maxDuration = 60;
 
 interface Body {
@@ -123,9 +124,9 @@ export async function POST(request: Request): Promise<Response> {
     });
   }
 
-  // También al reemplazar el transcript: la nota anterior era del texto viejo.
+  // También al reemplazar el transcript: los momentos anteriores eran del texto viejo.
   const analysisId = saved.id;
-  after(() => runFluencyInBackground(analysisId, startedAt + 56_000));
+  after(() => runMomentsInBackground(analysisId, startedAt + 56_000));
 
   return Response.json({
     saved: true,

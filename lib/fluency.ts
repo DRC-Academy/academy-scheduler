@@ -184,8 +184,8 @@ export function formatTurnsForAi(prep: Pick<FluencyPrep, 'turns' | 'teacherSpeak
 // ("cerremos el ensayo con el Párrafo 4") y un diálogo leído ("puedes ir
 // leyendo"). Fathom pega el audio y la lectura en el turno de quien comparte la
 // pantalla, y a veces en el del alumno, así que la etiqueta no basta.
-// Este filtro sin IA tira lo evidente; lo demás lo juzga lib/testimonialVerify,
-// que ve el clip con lo que se dijo antes y después.
+// Este filtro sin IA tira lo evidente (lib/testimonialPairs validateMoment); lo
+// demás lo tiene prohibido la IA en sus instrucciones (lib/testimonialMoments).
 
 /** Palabra entera, también con tildes (\b de JavaScript no entiende la "é"). */
 const wholeWords = (alts: string): RegExp => new RegExp(`(?<![\\p{L}\\p{N}])(?:${alts})(?![\\p{L}\\p{N}])`, 'iu');

@@ -45,6 +45,12 @@ export interface TestimonialCandidate {
   adminNotes: string | null;
   /** Un clip malo y uno bueno (las parejas de antes del 07/10/2026, hasta 3). null = aún sin preparar. */
   clips: TestimonialClips | null;
+  /** V5: el profe de la pareja (los dos clips son con él). null en las parejas antiguas. */
+  pairTeacherId: string | null;
+  /** V5: la etiqueta del alumno en Fathom. */
+  studentLabel: string | null;
+  /** V5: la clase del clip malo es posterior a la del bueno. */
+  reverseOrder: boolean;
 }
 
 type Row = Record<string, any>;   // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -69,6 +75,9 @@ function map(r: Row): TestimonialCandidate {
     status: r.status, discardedBy: r.discarded_by ?? null, statusChangedAt: r.status_changed_at,
     adminNotes: r.admin_notes ?? null,
     clips: r.clips && Array.isArray(r.clips.malos) && Array.isArray(r.clips.buenos) ? r.clips : null,
+    pairTeacherId: r.pair_teacher_id ?? null,
+    studentLabel: r.student_label ?? null,
+    reverseOrder: r.reverse_order === true,
   };
 }
 
@@ -88,7 +97,7 @@ export async function dbGetTestimonialCandidates(): Promise<TestimonialCandidate
   return out;
 }
 
-/** Cambio manual de estado y/o notas. "No sirve" (descartado por el admin) bloquea al alumno (ver testimonialStore). */
+/** Cambio manual de estado y/o notas. "No sirve" (descartado por el admin) bloquea a ese alumno con ese profe (ver testimonialMomentsStore syncPairs). */
 export async function dbUpdateTestimonialCandidate(
   id: string, patch: { status?: TestimonialStatus; adminNotes?: string },
 ): Promise<{ error?: string }> {
@@ -101,6 +110,6 @@ export async function dbUpdateTestimonialCandidate(
     row.discarded_by = patch.status === 'descartado' ? 'admin' : null;
   }
   const { error } = await supabase.from('testimonial_candidates').update(row).eq('id', id);
-  if (error?.code === '23505') return { error: 'Este alumno ya tiene otra pareja activa. Descarta esa antes de reactivar esta.' };
+  if (error?.code === '23505') return { error: 'Este alumno ya tiene otra pareja activa con este profe. Descarta esa antes de reactivar esta.' };
   return error ? { error: error.message } : {};
 }

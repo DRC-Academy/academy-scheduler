@@ -16,7 +16,6 @@ import { supabase } from '@/lib/supabase';
 import { normName } from '@/lib/retention';
 import { prepareFluency, formatTurnsForAi, excerptFound, type FluencyPrep } from '@/lib/fluency';
 import { analyzeFluency, FLUENCY_MODEL, type FluencyIA } from '@/lib/analyzeFluency';
-import { detectInBackground } from '@/lib/testimonialStore';
 
 type Row = Record<string, unknown>;
 
@@ -185,25 +184,4 @@ export async function runFluencyFor(
   }
   const studentGroup = (ca.student_id as string | null) ?? String(row.student_key);
   return { analysisId, status, row, prep, ai, error, studentGroup };
-}
-
-/**
- * Para `after()`: nunca lanza. Lo que pase aquí no puede afectar a la clase ni
- * al análisis de riesgo, solo deja constancia en los logs.
- */
-export async function runFluencyInBackground(analysisId: string, deadline: number): Promise<void> {
-  try {
-    const r = await runFluencyFor(analysisId);
-    const extra = r.status === 'skipped' ? ` (${r.row?.skip_reason})`
-                : r.status === 'ready'   ? ` (nota ${r.row?.fluency_score ?? 'no evaluable'})`
-                : r.error ? `: ${r.error}` : '';
-    console.log(`[fluency] ${analysisId}: ${r.status}${extra}`);
-    // Testimoniales: con nota nueva, se busca la pareja antes/después del alumno.
-    // La revisión con IA solo si queda tiempo antes de `deadline`.
-    if (r.status === 'ready' && r.row?.fluency_score != null && r.studentGroup) {
-      await detectInBackground(r.studentGroup, deadline);
-    }
-  } catch (err) {
-    console.error(`[fluency] Error inesperado con ${analysisId}:`, err);
-  }
 }

@@ -1,46 +1,45 @@
-// Pestaña Testimoniales del admin: detección de todos los alumnos y preparación
-// de los clips, de una pareja por petición. Ver lib/testimonialStore.
+// Pestaña Testimoniales del admin (V5): análisis de los transcripts antiguos por
+// tandas y emparejamiento por código. Ver lib/testimonialMomentsStore.
 //
-// Auth del panel en el cliente, igual que el resto de /api/admin (y que
-// fluency-backfill): la ruta es pública, pero solo prepara parejas que aún no lo
-// están, una sola vez cada una, así que lo máximo que se puede gastar es eso.
+// Auth del panel en el cliente, igual que el resto de /api/admin: la ruta es
+// pública, pero solo analiza transcripts PENDIENTES (cada uno una vez, ~1 céntimo)
+// y el emparejamiento no usa IA.
 //
 // Acciones (POST { action }):
-//   · 'detectar' → pasa la regla por todos los alumnos y crea las parejas nuevas (sin IA).
-//   · 'preparar' → comprueba y prepara UNA pareja (Haiku). { retryFailed: true } coge una fallida.
-// Las dos devuelven la cola: { pending, failed }.
+//   · 'estado'     → contadores (y crea las filas 'pending' que falten, sin IA).
+//   · 'tanda'      → analiza hasta 6 transcripts y rehace sus parejas.
+//                    { retryFailed: true } reintenta los fallidos.
+//   · 'emparejar'  → rehace todas las parejas (sin IA).
 
-import { detectAll, prepareNext, prepareQueue } from '@/lib/testimonialStore';
+import { ensureMomentRows, momentsStatus, runMomentsBatch, syncPairs } from '@/lib/testimonialMomentsStore';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-// Una pareja: hasta 6 transcripts leídos, dos llamadas a Haiku en paralelo (25 s
-// como mucho) y la revisión de los clips (14 s). Si no caben, la preparación sale
-// con 'sin_tiempo' y la pareja se vuelve a intentar entera más tarde.
+// Una tanda: 6 llamadas a Haiku en paralelo (40 s como mucho cada una) y sus parejas.
 export const maxDuration = 60;
 
 export async function POST(request: Request): Promise<Response> {
   const startedAt = Date.now();
   let body: { action?: string; retryFailed?: boolean } = {};
-  try { body = await request.json(); } catch { /* cuerpo vacío = solo la cola */ }
+  try { body = await request.json(); } catch { /* cuerpo vacío = estado */ }
 
   try {
     switch (body.action) {
-      case 'detectar': {
-        const { counts } = await detectAll();
-        if (counts.no_table) return Response.json({ error: 'Falta correr supabase-testimoniales-candidatos.sql.' }, { status: 500 });
-        return Response.json({ created: counts.creada, queue: await prepareQueue() });
+      case 'tanda':
+        return Response.json(await runMomentsBatch({ deadline: startedAt + 55_000, retryFailed: !!body.retryFailed }));
+      case 'emparejar': {
+        const r = await syncPairs();
+        return Response.json({ ...r, status: await momentsStatus() });
       }
-      case 'preparar': {
-        const outcome = await prepareNext({ deadline: startedAt + 56_000, retryFailed: !!body.retryFailed });
-        return Response.json({ outcome, queue: await prepareQueue() });
+      default: {
+        const created = await ensureMomentRows();
+        return Response.json({ created, status: await momentsStatus() });
       }
-      default:
-        return Response.json({ queue: await prepareQueue() });
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[testimonial-prepare]', msg);
-    return Response.json({ error: msg }, { status: 500 });
+    const sinTabla = /testimonial_(transcripts|moments)/.test(msg) && /exist|schema cache/i.test(msg);
+    return Response.json({ error: sinTabla ? 'Falta correr supabase-testimoniales-v5.sql en Supabase.' : msg }, { status: 500 });
   }
 }

@@ -7,12 +7,9 @@
 //   npm run fluidez -- --registrar --apply                     les crea la fila 'pending' (sin IA)
 //   npm run fluidez -- --procesar 50                           qué 50 pendientes/fallidas haría
 //   npm run fluidez -- --procesar 50 --apply                   las analiza y guarda (~1 cént. c/u)
-//   npm run fluidez -- --detectar                              alumnos que entrarían con la regla (sin IA)
-//   npm run fluidez -- --detectar --apply                      les crea la pareja (sin IA, aún sin clips)
-//   npm run fluidez -- --revisar --apply                       prepara los clips pendientes con IA (~4 cént. c/u)
 //
-// Las clases nuevas se analizan solas al subir el transcript (after() en
-// save-transcript). Esto es para lo que ya había antes y para los reintentos.
+// Desde la V5 de testimoniales (07/10/2026) la nota de fluidez ya no corre sola al
+// subir un transcript ni alimenta los testimoniales (ver `npm run testimonios`).
 //
 // Requiere ANTHROPIC_API_KEY en .env.local para todo lo que llama a la IA. El
 // `--conditions=react-server` del npm script no es decorativo: lib/anthropic
@@ -28,7 +25,6 @@ for (const line of existsSync('.env.local') ? readFileSync('.env.local', 'utf8')
 
 const { supabase } = await import('@/lib/supabase');
 const { runFluencyFor, resolveStudentKey } = await import('@/lib/fluencyStore');
-const { detectAll, prepareNext } = await import('@/lib/testimonialStore');
 
 const args = process.argv.slice(2);
 const APPLY = args.includes('--apply');
@@ -133,36 +129,9 @@ async function procesar(n: number) {
   console.log('Resumen:', cuenta);
 }
 
-// ── --detectar: la regla sobre todos los alumnos con nota ───────────────────
-async function detectar() {
-  const { counts, created } = await detectAll({ dryRun: !APPLY });
-  for (const { studentGroup, studentName, plan } of created) {
-    console.log(`  ${studentName ?? studentGroup}: ${plan.own.length} clases suyas · ` +
-      `malas posibles ${plan.badOptions.map(c => c.classDay).join(', ')} · buenas posibles ${plan.goodOptions.map(c => c.classDay).join(', ')}`);
-  }
-  console.log('Resumen:', counts);
-  if (!APPLY) console.log('Modo prueba: no se creó nada (añade --apply). Los clips se preparan con --revisar --apply o desde la pestaña.');
-}
-
-// ── --revisar: clips pendientes (o fallidos, con --fallidas) ────────────────
-async function revisar() {
-  if (!APPLY) { console.log('Añade --apply para preparar los clips con IA.'); return; }
-  if (noKey()) { process.exitCode = 1; return; }
-  const cuenta: Record<string, number> = {};
-  for (;;) {
-    const r = await prepareNext({ deadline: Date.now() + 56_000, retryFailed: args.includes('--fallidas') });
-    if (r === 'nada') break;
-    cuenta[r] = (cuenta[r] ?? 0) + 1;
-    console.log(`  ${r}`);
-  }
-  console.log('Resultado:', cuenta);
-}
-
 const id = valueOf('--id');
 const n = Number(valueOf('--procesar'));
 if (id) await una(id);
 else if (args.includes('--registrar')) await registrar();
 else if (args.includes('--procesar') && n > 0) await procesar(n);
-else if (args.includes('--detectar')) await detectar();
-else if (args.includes('--revisar')) await revisar();
-else console.log('Uso: --id <id> | --registrar | --procesar <N> | --detectar | --revisar   (+ --apply para guardar)');
+else console.log('Uso: --id <id> | --registrar | --procesar <N>   (+ --apply para guardar)');

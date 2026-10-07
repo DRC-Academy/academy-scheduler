@@ -32,7 +32,7 @@ import {
 } from '@/lib/transcriptAnalysis';
 import { enqueueAnalysis } from '@/lib/analysisBatch';
 import { after } from 'next/server';
-import { runFluencyInBackground } from '@/lib/fluencyStore';
+import { runMomentsInBackground } from '@/lib/testimonialMomentsStore';
 
 export const runtime = 'nodejs';
 // El análisis con IA puede tardar. Sin esto, la plataforma corta la función a los
@@ -164,11 +164,11 @@ async function handleSaveWithAnalysis(body: Body, studentName: string, startedAt
     return Response.json({ error: saved.error ?? 'No se pudo guardar la clase.' }, { status: 500 });
   }
 
-  // Testimoniales: fluidez del alumno, después de responder. En este modo la
+  // Testimoniales: momentos del alumno, después de responder. En este modo la
   // llamada a Opus ya se hizo en una petición anterior ("solo analizar"), así que
   // no comparte reloj con ella. Nunca lanza.
   const savedId = saved.id;
-  after(() => runFluencyInBackground(savedId, startedAt + 56_000));
+  after(() => runMomentsInBackground(savedId, startedAt + 56_000));
 
   const fieldsErr = await persistAnalysisFields(saved.id, body.analysis);
   if (fieldsErr.error) {

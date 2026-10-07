@@ -11,12 +11,14 @@
 // lleven 2 minutos sin tocarse. Así dos pestañas abiertas, o una subida nueva que
 // se está analizando en ese momento (after() de save-transcript), no se pisan.
 // En el peor caso una fila se analiza dos veces: un céntimo.
+//
+// Desde la V5 de testimoniales (07/10/2026) la nota de fluidez ya no alimenta los
+// testimoniales (lib/testimonialMomentsStore) ni corre sola al subir un transcript.
 
 import 'server-only';
 
 import { supabase } from '@/lib/supabase';
 import { runFluencyFor, resolveStudentKey, type FluencyRunStatus } from '@/lib/fluencyStore';
-import { detectForStudent, prepareNext } from '@/lib/testimonialStore';
 
 /** Transcripts analizados a la vez en cada tanda. */
 export const BATCH_SIZE = 5;
@@ -38,9 +40,6 @@ export interface BackfillStatus {
   pending: number;
   /** Transcripts sin fila todavía (los prepara la acción 'preparar'). */
   missing: number;
-  /** Parejas activas y parejas esperando la revisión de la IA (null: falta la tabla). */
-  candidates: number | null;
-  reviewsPending: number | null;
 }
 
 async function count(table: string, filter?: (q: any) => any): Promise<number | null> {   // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -53,15 +52,13 @@ async function count(table: string, filter?: (q: any) => any): Promise<number | 
 }
 
 export async function backfillStatus(): Promise<BackfillStatus> {
-  const [total, ready, skipped, failed, failedRetryable, pending, candidates, reviewsPending] = await Promise.all([
+  const [total, ready, skipped, failed, failedRetryable, pending] = await Promise.all([
     count('class_analyses'),
     count('transcript_fluency', q => q.eq('status', 'ready')),
     count('transcript_fluency', q => q.eq('status', 'skipped')),
     count('transcript_fluency', q => q.eq('status', 'failed')),
     count('transcript_fluency', q => q.eq('status', 'failed').lt('attempts', MAX_ATTEMPTS)),
     count('transcript_fluency', q => q.eq('status', 'pending')),
-    count('testimonial_candidates', q => q.neq('status', 'descartado')),
-    count('testimonial_candidates', q => q.eq('status', 'detectado').in('ai_review_status', ['pending', 'failed'])),
   ]);
   const t = total ?? 0;
   const have = (ready ?? 0) + (skipped ?? 0) + (failed ?? 0) + (pending ?? 0);
@@ -69,7 +66,6 @@ export async function backfillStatus(): Promise<BackfillStatus> {
     total: t, ready: ready ?? 0, skipped: skipped ?? 0, failed: failed ?? 0,
     failedRetryable: failedRetryable ?? 0, pending: pending ?? 0,
     missing: Math.max(0, t - have),
-    candidates, reviewsPending,
   };
 }
 
@@ -115,12 +111,10 @@ export interface BatchResult {
   /** Filas que esta tanda cogió. 0 = no queda nada libre que hacer. */
   claimed: number;
   outcomes: Partial<Record<FluencyRunStatus, number>>;
-  /** Parejas creadas o reemplazadas en esta tanda. */
-  newPairs: number;
   status: BackfillStatus;
 }
 
-/** Una tanda: hasta BATCH_SIZE transcripts en paralelo, luego la detección de parejas. */
+/** Una tanda: hasta BATCH_SIZE transcripts en paralelo. */
 export async function runBatch(opts: { retryFailed?: boolean; deadline: number }): Promise<BatchResult> {
   const estado = opts.retryFailed ? 'failed' : 'pending';
   const cutoff = new Date(Date.now() - LEASE_MS).toISOString();
@@ -133,7 +127,6 @@ export async function runBatch(opts: { retryFailed?: boolean; deadline: number }
 
   const ids = (libres ?? []).map(r => String(r.analysis_id));
   const outcomes: BatchResult['outcomes'] = {};
-  let newPairs = 0;
 
   if (ids.length > 0) {
     // Reserva: solo cuenta lo que esta tanda consiguió marcar.
@@ -149,23 +142,8 @@ export async function runBatch(opts: { retryFailed?: boolean; deadline: number }
     }))));
     for (const r of results) outcomes[r.status] = (outcomes[r.status] ?? 0) + 1;
 
-    // Detección de parejas de los alumnos que estrenaron nota (sin IA: los clips
-    // se preparan después, en las tandas vacías o desde la pestaña).
-    const groups = [...new Set(results
-      .filter(r => r.status === 'ready' && r.row?.fluency_score != null && r.studentGroup)
-      .map(r => r.studentGroup as string))];
-    for (const g of groups) {
-      try {
-        const d = await detectForStudent(g);
-        if (d.outcome === 'creada') newPairs++;
-      } catch (err) {
-        console.error(`[backfill] Detección fallida para ${g}:`, err);
-      }
-    }
-    return { claimed: mias.length, outcomes, newPairs, status: await backfillStatus() };
+    return { claimed: mias.length, outcomes, status: await backfillStatus() };
   }
 
-  // Nada que analizar: se aprovecha la tanda para preparar los clips de una pareja.
-  await prepareNext({ deadline: opts.deadline });
-  return { claimed: 0, outcomes, newPairs, status: await backfillStatus() };
+  return { claimed: 0, outcomes, status: await backfillStatus() };
 }
