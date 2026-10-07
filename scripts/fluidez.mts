@@ -136,9 +136,8 @@ async function procesar(n: number) {
 // ── --detectar: la regla sobre todos los alumnos con nota ───────────────────
 async function detectar() {
   const { counts, created } = await detectAll({ dryRun: !APPLY });
-  for (const { studentGroup, plan } of created) {
-    const t = plan.trend;
-    console.log(`  ${studentGroup}: media ${t.firstMean.toFixed(2)} → ${t.lastMean.toFixed(2)} (+${t.improvement.toFixed(2)}) · ` +
+  for (const { studentGroup, studentName, plan } of created) {
+    console.log(`  ${studentName ?? studentGroup}: ${plan.own.length} clases suyas · ` +
       `malas posibles ${plan.badOptions.map(c => c.classDay).join(', ')} · buenas posibles ${plan.goodOptions.map(c => c.classDay).join(', ')}`);
   }
   console.log('Resumen:', counts);
