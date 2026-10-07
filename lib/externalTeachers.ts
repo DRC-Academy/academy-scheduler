@@ -21,10 +21,14 @@
 // PARA AÑADIR OTRO: sumá su id acá abajo y listo — lo aplican todos los
 // endpoints externos a la vez.
 
-/** Ids de las cuentas de prueba. Ver el porqué del criterio arriba. */
+/**
+ * Ids de las cuentas de prueba. Ver el porqué del criterio arriba.
+ *
+ * Solo t1. t2 (Mauricio) estuvo aquí hasta el 07/10/2026 por error: es un
+ * profesor REAL con alumnos reales. Ver también lib/perfilDePrueba.ts.
+ */
 export const PROFESORES_DE_PRUEBA: ReadonlySet<string> = new Set([
   't1',   // Sebastian (test)
-  't2',   // Mauricio (test)
 ]);
 
 /** true si ese id es una cuenta de prueba y no debe salir por /api/external/*. */
