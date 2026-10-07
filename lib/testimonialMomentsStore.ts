@@ -31,7 +31,8 @@ import {
 } from '@/lib/testimonialSpeaker';
 import { pickClassMoments, MAX_PER_KIND } from '@/lib/testimonialMoments';
 import {
-  validateMoment, keepBest, bestPairs, pairKey, type Moment, type MomentPair,
+  validateMoment, keepBest, bestPairs, pairKey,
+  type Moment, type MomentPair, type MomentCandidate, type MomentClassContext,
 } from '@/lib/testimonialPairs';
 import { FLUENCY_MODEL } from '@/lib/analyzeFluency';
 import type { TestimonialClip, TestimonialClips } from '@/lib/testimonials';
@@ -47,7 +48,8 @@ const NEVER = '2000-01-01T00:00:00.000Z';
 /** Estados de una pareja que el admin ya marcó "Sirve": nunca se tocan. */
 const SIRVEN = ['listo', 'revisado', 'permiso_alumno'];
 
-export type MomentsRunStatus = 'ready' | 'excluded' | 'failed' | 'missing';
+/** 'pending' solo con `reuseOnly`: no había nada que reaprovechar, falta la IA. */
+export type MomentsRunStatus = 'ready' | 'excluded' | 'failed' | 'missing' | 'pending';
 
 export interface MomentsRunResult {
   analysisId: string;
@@ -74,8 +76,39 @@ const newMomentId = (analysisId: string, i: number): string =>
  * Analiza un transcript: etiqueta del alumno, momentos con IA y comprobación.
  * Con `dryRun` no escribe nada (sí llama a la IA si el transcript es válido).
  */
+/** `model` de los transcripts cuyos momentos salen del análisis de fluidez anterior. */
+export const REUSED_MODEL = 'reutilizado-fluidez';
+
+/**
+ * Las citas mala y buena del análisis de fluidez de esta clase, comprobadas como
+ * un momento nuevo. La puntuación sale de la nota de fluidez de la clase: el malo
+ * de una clase de 3/10 vale 8; el bueno de una de 9/10 vale 9.
+ */
+async function reuseFluencyMoments(ctx: MomentClassContext): Promise<{ moments: Array<Omit<Moment, 'id'>>; rejected: string[] }> {
+  const { data: f } = await supabase.from('transcript_fluency')
+    .select('status, fluency_score, best_excerpt, worst_excerpt')
+    .eq('analysis_id', ctx.analysisId).maybeSingle();
+  const out = { moments: [] as Array<Omit<Moment, 'id'>>, rejected: [] as string[] };
+  const nota = Number(f?.fluency_score);
+  if (!f || f.status !== 'ready' || !(nota >= 1 && nota <= 10)) return out;
+  const candidatos: MomentCandidate[] = [];
+  if (f.worst_excerpt) candidatos.push({
+    tipo: 'malo', intervencion: 0, cita: String(f.worst_excerpt), puntuacion: 11 - nota,
+    porque: `El momento más flojo de una clase con fluidez ${nota}/10.`,
+  });
+  if (f.best_excerpt) candidatos.push({
+    tipo: 'bueno', intervencion: 0, cita: String(f.best_excerpt), puntuacion: nota,
+    porque: `El momento más fluido de una clase con fluidez ${nota}/10.`,
+  });
+  for (const c of candidatos) {
+    const r = validateMoment(ctx, c);
+    if ('error' in r) out.rejected.push(`(reutilizada) ${r.error}`); else out.moments.push(r.moment);
+  }
+  return out;
+}
+
 export async function runMomentsFor(
-  analysisId: string, opts: { dryRun?: boolean; timeoutMs?: number; skipPairs?: boolean } = {},
+  analysisId: string, opts: { dryRun?: boolean; timeoutMs?: number; skipPairs?: boolean; reuseOnly?: boolean } = {},
 ): Promise<MomentsRunResult> {
   // Lectura de UNA fila con su transcript: nunca en listados (ver has_transcript).
   const { data: ca } = await supabase.from('class_analyses')
@@ -136,7 +169,21 @@ export async function runMomentsFor(
   const labels = { student_label: label.studentLabel, teacher_label: label.teacherLabel, exclusion_reason: null };
   let moments: Moment[] = [];
   const rejected: string[] = [];
-  if (text.trim()) {
+  const ctx = { analysisId, studentGroup, teacherId, classDay, studentLabel: label.studentLabel, fathomUrl, turns, interventions };
+
+  // 2a. Antes de gastar: las citas mala y buena que ya sacó el análisis de fluidez
+  // (transcript_fluency, ~2.300 clases pagadas en sep/2026). Pasan por las MISMAS
+  // comprobaciones que las de la IA nueva; si alguna vale, no se llama a la IA.
+  const reused = await reuseFluencyMoments(ctx);
+  rejected.push(...reused.rejected);
+  if (reused.moments.length) {
+    moments = reused.moments.map((m, i) => ({ ...m, id: newMomentId(analysisId, i) }));
+    await save({ ...labels, status: 'ready', moments_count: moments.length, processed_at: now, last_error: null, model: REUSED_MODEL }, moments);
+  } else if (opts.reuseOnly) {
+    // Sin nada que reaprovechar: queda pendiente para la IA, sin momentos viejos.
+    await save({ ...labels, status: 'pending', moments_count: 0, updated_at: NEVER }, []);
+    return { analysisId, status: 'pending', studentGroup, rejected };
+  } else if (text.trim()) {
     const res = await pickClassMoments({ studentName: studentName ?? label.studentLabel, interventionsText: text, timeoutMs: opts.timeoutMs });
     const attempts = Number(prev?.attempts ?? 0) + (res.status === 'skipped' ? 0 : 1);
     if (res.status !== 'ready' || !res.data) {
@@ -147,9 +194,7 @@ export async function runMomentsFor(
     // 3. Comprobación por código de cada cita.
     const valid: Array<Omit<Moment, 'id'>> = [];
     for (const ai of res.data.momentos ?? []) {
-      const r = validateMoment({
-        analysisId, studentGroup, teacherId, classDay, studentLabel: label.studentLabel, fathomUrl, turns, interventions,
-      }, ai);
+      const r = validateMoment(ctx, ai);
       if ('error' in r) rejected.push(r.error); else valid.push(r.moment);
     }
     moments = keepBest(valid, MAX_PER_KIND).map((m, i) => ({ ...m, id: newMomentId(analysisId, i) }));

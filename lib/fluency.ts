@@ -195,6 +195,8 @@ const CUE_BEFORE = wholeWords([
   'listen(?:ing)?', 'podcast', 'audio', 'video', 'track', 'read(?:ing)?', 'aloud', 'repeat(?:ing)?',
   'escuch\\p{L}*', 'leyendo', 'lee(?:r|lo|la|d)?', 'leé', 'lectura', 'repet\\p{L}*', 'repit\\p{L}*',
   'paragraph', 'p[aá]rrafo', 'essay', 'ensayo', 'redacci[oó]n',
+  // Presentaciones y textos que el alumno trae escritos.
+  'presentation', 'presentaci[oó]n', 'script', 'speech', 'pitch', 'prepared', 'preparad[oa]s?',
 ].join('|'));
 
 /** Lo que solo dice un audio o un texto preparado, no un alumno en clase. */

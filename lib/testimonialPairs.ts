@@ -45,6 +45,38 @@ export const MOMENT_MAX_SECONDS = 15;
 /** Palabras de la cita (como cuenta locateExcerpt). */
 export const MOMENT_MIN_WORDS = 6;
 
+// ── Idioma y texto preparado (sin IA) ───────────────────────────────────────
+
+const ES_WORDS = new Set(('que de el la los las es en un una por para con lo mi pero como son estoy '
+  + 'yo eso esto esta este o sea bueno entonces tengo hay muy también tambien porque cuando donde '
+  + 'pues vale ahora nada algo').split(' '));
+const EN_WORDS = new Set(('the and i is to it you in of that was my we they he she have has are '
+  + 'this but with for be do did what so like at on about there can would not because when').split(' '));
+const plainWords = (s: string): string[] =>
+  s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().split(/[^a-zñ']+/).filter(Boolean);
+
+/** ¿La cita está sobre todo en español? (cuenta palabras frecuentes de cada idioma). */
+export function mostlySpanish(text: string): boolean {
+  let es = 0, en = 0;
+  for (const w of plainWords(text)) { if (ES_WORDS.has(w)) es++; if (EN_WORDS.has(w)) en++; }
+  return es > 0 && es >= en;
+}
+
+const FILLERS = /(?<![\p{L}])(?:uh+|um+|e+h+|erm|hmm+|you know|i mean|like|okay|ok|well)(?![\p{L}])/giu;
+
+/**
+ * ¿Suena a texto escrito leído? Al hablar de verdad se dice "uh", "like", "I mean"
+ * o se repite una palabra; un discurso largo sin nada de eso es una lectura o una
+ * presentación preparada (la IA antigua los elegía como "lo más fluido").
+ */
+export function soundsScripted(turnText: string): boolean {
+  const words = plainWords(turnText);
+  if (words.length < 50) return false;
+  const fillers = (turnText.match(FILLERS) ?? []).length;
+  const repeats = words.filter((w, i) => i > 0 && w === words[i - 1]).length;
+  return fillers + repeats < words.length / 50;
+}
+
 /** Lo que devuelve la IA para un momento (lib/testimonialMoments). */
 export interface MomentCandidate {
   tipo: MomentKind;
@@ -90,6 +122,10 @@ export function validateMoment(ctx: MomentClassContext, ai: MomentCandidate): { 
   const loc = { turnIndex: hit.iv.turnIndex, wordsBefore: hit.wordsBefore, turnWords: hit.turnWords };
   const cue = readingCue(ctx.turns, loc.turnIndex);
   if (cue) return { error: `${short}: ${cue}.` };
+  if (mostlySpanish(cita)) return { error: `${short}: está en español.` };
+  if (ai.tipo === 'bueno' && soundsScripted(ctx.turns[loc.turnIndex].text)) {
+    return { error: `${short}: suena a texto preparado o leído (largo y sin ninguna duda).` };
+  }
   if (ai.tipo === 'bueno' && !hit.iv.teacherBefore) {
     return { error: `${short}: el momento bueno no contesta al profe (no hay una frase del profe justo antes).` };
   }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { validateMoment, keepBest, bestPairs, type Moment, type MomentClassContext } from '@/lib/testimonialPairs';
+import { validateMoment, keepBest, bestPairs, mostlySpanish, soundsScripted, type Moment, type MomentClassContext } from '@/lib/testimonialPairs';
 import { studentInterventions } from '@/lib/testimonialSpeaker';
 import type { Turn } from '@/lib/fluency';
 
@@ -54,6 +54,22 @@ describe('validateMoment', () => {
 
   it('rechaza citas demasiado cortas', () => {
     expect(validateMoment(ctx(turns), ai('I went to the'))).toMatchObject({ error: expect.stringMatching(/corta/) });
+  });
+});
+
+describe('idioma y texto preparado', () => {
+  it('detecta citas en español (casos reales)', () => {
+    expect(mostlySpanish('I am going, yo estoy yendo')).toBe(true);
+    expect(mostlySpanish('mi mi mi main, eh, mi main games, eh, es, no es historia, o sea, son como los modo historia')).toBe(true);
+    expect(mostlySpanish('I went to the beach with my family and we ate paella.')).toBe(false);
+  });
+
+  it('un discurso largo sin ninguna duda suena a leído; el habla real no', () => {
+    const leido = 'Hello everyone, I would like to outline our operational workflow for new retail partners. First of all, once an order is placed on our portal, it is immediately registered in our system and verified by our team. Orders are processed within twenty-four hours and carefully packaged in eco-friendly boxes. Regarding production, we get all our garments manufactured in certified local workshops.';
+    const hablado = 'Well, uh, last weekend I went to my, my grandmother house, and, like, we cooked together, you know, a typical dish from my region, and then, um, we watched a film, I mean, an old film, and it was really nice because I had not seen her for a long time.';
+    expect(soundsScripted(leido)).toBe(true);
+    expect(soundsScripted(hablado)).toBe(false);
+    expect(soundsScripted('Short answer without fillers.')).toBe(false);
   });
 });
 

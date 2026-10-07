@@ -25,6 +25,7 @@ describe('nameMatchesStrict', () => {
     expect(nameMatchesStrict('Alba Lopez', 'Alba Coca')).toBe(false);
     expect(nameMatchesStrict('Manuel Sanchez', 'Manuel Movil')).toBe(false);
     expect(nameMatchesStrict('Elena', 'Ana Aparicio')).toBe(false);
+    expect(nameMatchesStrict('Nadir Díaz Gonzalez', 'Cristian Díaz Gonzalez')).toBe(false);
   });
 
   it('rechaza alias que no se pueden confirmar', () => {

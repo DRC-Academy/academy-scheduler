@@ -88,7 +88,13 @@ export function nameMatchesStrict(label: string | null | undefined, studentName:
   const extra = full.length - matched;
   const initialsOk = initials.every(ch => student.some(s => s.startsWith(ch)));
   if (!initialsOk || matched === 0) return false;
-  return extra === 0 || (matched >= 2 && extra <= matched);
+  if (extra === 0) return true;
+  // Con palabras de más en la etiqueta ("José María Negrillo García Muñoz" para
+  // "José María Negrillo"), el nombre de pila del alumno tiene que estar: si solo
+  // cuadran los apellidos es otra persona de la familia ("Nadir Díaz Gonzalez"
+  // no es "Cristian Díaz Gonzalez").
+  const firstMatches = full.some(t => sameName(t, student[0]));
+  return firstMatches && matched >= 2 && extra <= matched;
 }
 
 /** Etiqueta del alumno y del profe en un transcript, o por qué no se puede saber con seguridad. */

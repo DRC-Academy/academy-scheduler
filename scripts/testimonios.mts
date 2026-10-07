@@ -8,6 +8,11 @@
 //   npm run testimonios -- --procesar 100 --apply       analiza 100 pendientes (~1 cént. c/u)
 //   npm run testimonios -- --procesar 100 --apply --fallidas   reintenta fallidos
 //   npm run testimonios -- --emparejar                  rehace todas las parejas (sin IA)
+//   npm run testimonios -- --reutilizar [--apply] [--rehacer]  momentos SIN IA a partir de las citas del
+//                                                       análisis de fluidez anterior (transcript_fluency);
+//                                                       lo que no tenga nada aprovechable queda pendiente;
+//                                                       --rehacer vuelve a pasar lo ya reutilizado y lo excluido
+//                                                       (tras cambiar una regla)
 //
 // Requiere ANTHROPIC_API_KEY en .env.local para todo lo que llama a la IA. El
 // `--conditions=react-server` del npm script no es decorativo: lib/anthropic
@@ -78,9 +83,47 @@ async function procesar(n: number) {
   }
 }
 
+async function reutilizar() {
+  if (APPLY && args.includes('--rehacer')) {
+    const { REUSED_MODEL } = await import('@/lib/testimonialMomentsStore');
+    for (const f of [(q: any) => q.eq('status', 'ready').eq('model', REUSED_MODEL), (q: any) => q.eq('status', 'excluded')]) {   // eslint-disable-line @typescript-eslint/no-explicit-any
+      const { error } = await f(supabase.from('testimonial_transcripts').update({ status: 'pending', updated_at: '2000-01-01T00:00:00Z' }));
+      if (error) throw new Error(error.message);
+    }
+  }
+  const ids: string[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await supabase.from('testimonial_transcripts').select('analysis_id').eq('status', 'pending').order('analysis_id').range(from, from + 999);
+    if (error) throw new Error(error.message);
+    ids.push(...(data ?? []).map(r => String(r.analysis_id)));
+    if ((data ?? []).length < 1000) break;
+  }
+  const cuenta: Record<string, number> = {};
+  const add = (k: string) => { cuenta[k] = (cuenta[k] ?? 0) + 1; };
+  let i = 0;
+  const cola = [...ids];
+  await Promise.all(Array.from({ length: 8 }, async () => {
+    for (let id = cola.shift(); id; id = cola.shift()) {
+      const r = await runMomentsFor(id, { reuseOnly: true, skipPairs: true, dryRun: !APPLY });
+      if (r.status === 'excluded') add(`excluido: ${EXCLUSION_LABEL[r.reason!]}`);
+      else if (r.status === 'pending') add('sin cita aprovechable → queda para la IA');
+      else if (r.status === 'ready') {
+        const kinds = new Set((r.moments ?? []).map(m => m.kind));
+        add(kinds.size === 2 ? 'reutilizado: malo + bueno' : `reutilizado: solo ${[...kinds][0]}`);
+      } else add(r.status);
+      if (++i % 250 === 0) console.log(`  ${i} de ${ids.length}…`);
+    }
+  }));
+  console.log(`Pendientes revisados: ${ids.length}`);
+  for (const [k, n] of Object.entries(cuenta).sort((a, b) => b[1] - a[1])) console.log(`  ${k}: ${n}`);
+  if (APPLY) console.log('Parejas:', await syncPairs(), await momentsStatus());
+  else console.log('Modo prueba: no se guardó nada (añade --apply).');
+}
+
 if (args.includes('--estado')) console.log(await momentsStatus());
 else if (args.includes('--etiquetas')) await etiquetas();
 else if (valueOf('--id')) await una(valueOf('--id')!);
 else if (args.includes('--procesar')) await procesar(Number(valueOf('--procesar')) || 50);
+else if (args.includes('--reutilizar')) await reutilizar();
 else if (args.includes('--emparejar')) console.log(await syncPairs());
-else console.log('Uso: --estado | --etiquetas | --id <id> [--apply] | --procesar <N> --apply [--fallidas] | --emparejar');
+else console.log('Uso: --estado | --etiquetas | --id <id> [--apply] | --procesar <N> --apply [--fallidas] | --emparejar | --reutilizar [--apply]');
