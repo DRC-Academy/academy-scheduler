@@ -167,10 +167,13 @@ function decide(rows: Row[], plan: TestimonialCandidatePlan | null, lastClassDay
 }
 
 /** Crea la fila 'detectado' + 'pending' con la pareja provisional. Devuelve su id, o null si otra ejecución se adelantó. */
-async function insertCandidate(studentGroup: string, studentName: string | null, plan: TestimonialCandidatePlan): Promise<string | null> {
-  // Id del alumno, de su clase más reciente.
-  const { data: ca } = await supabase.from('class_analyses')
-    .select('student_id, student_name').eq('id', plan.own.at(-1)!.analysisId).maybeSingle();
+async function insertCandidate(
+  studentGroup: string, studentName: string | null, plan: TestimonialCandidatePlan,
+  known?: { student_id: string | null; student_name: string | null },
+): Promise<string | null> {
+  // Id del alumno, de su clase más reciente (detectAll ya lo trae leído).
+  const ca = known ?? (await supabase.from('class_analyses')
+    .select('student_id, student_name').eq('id', plan.own.at(-1)!.analysisId).maybeSingle()).data;
   const now = new Date().toISOString();
   const id = `tc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const { error } = await supabase.from('testimonial_candidates').insert({
@@ -231,19 +234,29 @@ export async function detectAll(opts: { dryRun?: boolean } = {}): Promise<{
     byGroup.set(g, [...(byGroup.get(g) ?? []), toClass(r)]);
   }
   // Nombre de cada clase, para saber de quién es cada una (lib/testimonials ownClasses).
-  const nameOf = new Map<string, string | null>();
-  for (const r of await allRows('class_analyses', 'id, student_name')) nameOf.set(String(r.id), (r.student_name as string | null) ?? null);
+  const caOf = new Map<string, { student_id: string | null; student_name: string | null }>();
+  for (const r of await allRows('class_analyses', 'id, student_id, student_name')) {
+    caOf.set(String(r.id), { student_id: (r.student_id as string | null) ?? null, student_name: (r.student_name as string | null) ?? null });
+  }
 
-  const created: Array<{ studentGroup: string; studentName: string | null; plan: TestimonialCandidatePlan }> = [];
+  const toCreate: Array<{ studentGroup: string; studentName: string | null; plan: TestimonialCandidatePlan }> = [];
   for (const [g, classes] of byGroup) {
-    const name = mostCommon(classes.map(c => nameOf.get(c.analysisId)));
+    const name = mostCommon(classes.map(c => caOf.get(c.analysisId)?.student_name));
     const plan = planCandidate(classes, name);
-    let outcome = decide(rowsOf.get(g) ?? [], plan, latestDay(classes));
-    if (outcome === 'creada' && plan) {
-      if (!opts.dryRun && !(await insertCandidate(g, name, plan))) outcome = 'ya_tiene';
-      else created.push({ studentGroup: g, studentName: name, plan });
-    }
-    counts[outcome]++;
+    const outcome = decide(rowsOf.get(g) ?? [], plan, latestDay(classes));
+    if (outcome === 'creada' && plan) toCreate.push({ studentGroup: g, studentName: name, plan });
+    else counts[outcome]++;
+  }
+
+  // De 10 en 10: la primera vez son más de 100 y, de una en una, no cabían en
+  // los 60 s de la función (07/10/2026).
+  const created: typeof toCreate = [];
+  for (let i = 0; i < toCreate.length; i += 10) {
+    await Promise.all(toCreate.slice(i, i + 10).map(async x => {
+      const ok = opts.dryRun || !!(await insertCandidate(x.studentGroup, x.studentName, x.plan, caOf.get(x.plan.own.at(-1)!.analysisId)));
+      if (ok) created.push(x);
+      counts[ok ? 'creada' : 'ya_tiene']++;
+    }));
   }
   return { counts, created };
 }

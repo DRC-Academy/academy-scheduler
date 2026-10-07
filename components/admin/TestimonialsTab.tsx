@@ -93,7 +93,8 @@ export default function TestimonialsTab() {
       await cargar();
       const d = await post({ action: 'detectar' });
       if (!vivo.current) return;
-      if (d.error) { setError(d.error); return; }
+      // Si la detección falla (o se corta), las parejas que ya existan se preparan igual.
+      if (d.error) { setError(d.error); await preparar(false); return; }
       if (d.queue) setQueue(d.queue);
       if (d.queue && d.queue.pending > 0) await preparar(false);
     })();
