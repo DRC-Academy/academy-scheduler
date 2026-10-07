@@ -1,6 +1,7 @@
 'use client';
 import { useState, useMemo, useEffect, type CSSProperties } from 'react';
 import { useTeachers } from '@/lib/TeachersContext';
+import { useAuth } from '@/lib/AuthContext';
 import { isAssignableCell } from '@/lib/cells';
 import { TransferError } from '@/lib/db';
 import { AssignmentEmailModal } from '@/components/AssignmentEmailModal';
@@ -49,6 +50,7 @@ export function CambiarProfesorModal({
   onDone: (msg: string) => void;
 }) {
   const { teachers, assignments, getTeacherGrid, changeStudentTeacher } = useTeachers();
+  const { user } = useAuth();
 
   const fromTeacher = useMemo(
     () => teachers.find(t => t.id === currentAssignment.teacherId),
@@ -136,20 +138,19 @@ export function CambiarProfesorModal({
     setError('');
     const newSlots = sortSlots(selectedSlots);
     try {
-      await changeStudentTeacher({
+      // El resto de datos (profesor de origen, horarios viejos, plan, nivel,
+      // fecha de inicio) los lee el núcleo de la base, no de esta pantalla.
+      const r = await changeStudentTeacher({
         assignmentId: currentAssignment.id,
-        studentName:  currentAssignment.studentName,
-        studentEmail: currentAssignment.studentEmail,
-        weeklyHours,
-        from: { id: fromTeacher.id, name: fromTeacher.name, email: fromTeacher.email },
-        to:   { id: newTeacher.id, name: newTeacher.name, email: newTeacher.email },
-        oldSlots: currentAssignment.slots,
+        toTeacherId:  newTeacher.id,
         newSlots,
         reason,
-        plan:      currentAssignment.plan,
-        level:     currentAssignment.studentLevel,
-        startDate: currentAssignment.startDate,
+        origen: user?.role === 'admin' ? 'admin' : 'setter',
+        actor:  user?.displayName || user?.username || 'panel',
       });
+      if (r.avisos.length || r.efectosFallidos.length) {
+        console.warn('[CambiarProfesorModal] cambio hecho con avisos:', r.avisos, 'efectos fallidos:', r.efectosFallidos);
+      }
       // Paso 2: armar el email de asignación para el NUEVO profesor. El "Para" usa
       // notification_email si existe, si no el email de login. El resto (plan,
       // nivel, objetivo, fecha de inicio) se arrastra de la assignment original.
