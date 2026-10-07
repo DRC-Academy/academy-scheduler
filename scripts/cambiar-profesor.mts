@@ -1,12 +1,17 @@
 // Cambio de profesor de un alumno desde la terminal, con la MISMA lógica que el
-// wizard "Cambiar de profesor" del panel: llama a dbChangeStudentTeacher, así que
-// valida antes de escribir, ocupa el calendario nuevo, reapunta la assignment,
-// libera el viejo y deja los avisos/scoring como best-effort. Duplicar esos pasos
-// a mano es justo lo que dejó a Izaro Gaztañaga a medio camino en julio de 2026.
+// wizard "Cambiar de profesor" del panel: el núcleo de lib/transferencia/core.ts,
+// aquí con la service key (transferirAlumnoServidor). Valida antes de escribir,
+// ocupa el calendario nuevo, reapunta la assignment, libera el viejo (o lo
+// deshace todo si algo falla) y deja avisos, scoring y correos. Queda registrado
+// en transfer_requests con origen 'script'. Duplicar esos pasos a mano es justo
+// lo que dejó a Izaro Gaztañaga a medio camino en julio de 2026.
 //
-//   node --env-file=.env.local --import tsx scripts/cambiar-profesor.mts --alumno "Beñat"
+// --conditions=react-server es OBLIGATORIO: lib/transferencia/server.ts es
+// 'server-only' y sin esa condición lanza al importarlo.
+//
+//   node --env-file=.env.local --conditions=react-server --import tsx scripts/cambiar-profesor.mts --alumno "Beñat"
 //       ← lista los profesores libres en TODOS los horarios del alumno
-//   node --env-file=.env.local --import tsx scripts/cambiar-profesor.mts --alumno "Beñat" --a "Chiara"
+//   ... --alumno "Beñat" --a "Chiara"
 //       ← ENSAYO del cambio: no escribe nada
 //   ... --a "Chiara" --apply            ← lo aplica de verdad
 //   ... --a "Chiara" --apply --motivo alumno
@@ -18,12 +23,12 @@
 // El motivo por defecto es 'reorg' (sin penalización). 'alumno' resta 10 puntos al
 // profesor anterior y 'profesor' resta 20, igual que en el wizard.
 //
-// OJO: el email de Resend al profesor nuevo NO sale desde acá (triggerEmail pega
-// contra /api/emails, que solo existe con la app levantada). La notificación de la
-// campanita sí se inserta. Para mandarle el correo de asignación, abrí la ficha del
-// alumno en el panel y usá "Notificar al profesor".
+// El correo al profesor nuevo y la bienvenida del alumno salen directamente con
+// Resend (antes, desde aquí, el del profesor se perdía).
 
-import { dbGetTeachers, dbGetAssignments, dbChangeStudentTeacher, TransferError } from '@/lib/db';
+import { dbGetTeachers, dbGetAssignments } from '@/lib/db';
+import { transferirAlumnoServidor } from '@/lib/transferencia/server';
+import { TransferenciaError } from '@/lib/transferencia/errors';
 import { esProfesorDePrueba } from '@/lib/externalTeachers';
 import type { AssignedSlot } from '@/types';
 
@@ -137,23 +142,19 @@ if (!APPLY) {
 }
 
 try {
-  await dbChangeStudentTeacher({
+  const r = await transferirAlumnoServidor({
     assignmentId: asg.id,
-    studentName:  asg.studentName,
-    studentEmail: asg.studentEmail,
-    weeklyHours:  asg.weeklyHours || slots.length,
-    from:      { id: from.id, name: from.name, email: from.email },
-    to:        { id: to.id,   name: to.name,   email: to.email },
-    oldSlots:  asg.slots,
-    newSlots:  slots,
-    reason:    MOTIVO,
-    plan:      asg.plan,
-    level:     asg.studentLevel,
-    startDate: asg.startDate,
+    toTeacherId:  to.id,
+    slots,
+    motivo:       MOTIVO,
+    origen:       'script',
+    actor:        `script cambiar-profesor (${process.env.USERNAME ?? process.env.USER ?? 'terminal'})`,
   });
   console.log(`\n✅ ${asg.studentName} quedó asignado a ${to.name} en ${label(slots)}.`);
-  console.log('   Falta el correo de asignación: panel → Alumnos → el alumno → "Notificar al profesor".\n');
+  for (const a of r.avisos) console.log(`   ⚠ ${a}`);
+  if (r.efectosFallidos.length) console.log(`   ⚠ Fallaron (el admin ya tiene un aviso por cada uno): ${r.efectosFallidos.join(', ')}`);
+  console.log('');
 } catch (err) {
-  console.error(`\n❌ ${err instanceof TransferError ? err.userMessage : String(err)}\n`);
+  console.error(`\n❌ ${err instanceof TransferenciaError ? `[${err.codigo}] ${err.userMessage}` : String(err)}\n`);
   process.exit(1);
 }

@@ -27,6 +27,7 @@ import { supabase } from '@/lib/supabase';
 import { dbReadTeacherGrid, dbApplyGridChanges, dbAddScoringEvent, type CalendarActor } from '@/lib/db';
 import type { GridChanges } from '@/lib/gridPatch';
 import { baseCellOf, isPuntualState } from '@/lib/cells';
+import { liveReservationsWith, type LiveReservation } from '@/lib/classRecoveryQueries';
 import { dayNameFromIso, mondayIsoOfIso } from '@/lib/teacherClasses';
 import { hourNum, hourText, nkName } from '@/lib/sessions';
 import { normEmail } from '@/lib/email';
@@ -121,17 +122,8 @@ async function priorCancellationsOf(teacherId: string): Promise<PriorCancellatio
 }
 
 /** Reservas vivas del profesor: propuestas en 'esperando_alumno' que no vencieron. */
-export async function reservationsOf(teacherId: string, nowMs = Date.now()): Promise<Array<{ date: string; hour: string; studentName: string; groupId: string }>> {
-  const { data, error } = await supabase.from('class_recoveries')
-    .select('group_id, student_name, teacher_proposals, status').eq('teacher_id', teacherId).eq('status', 'esperando_alumno');
-  if (error) return [];
-  const out: Array<{ date: string; hour: string; studentName: string; groupId: string }> = [];
-  for (const r of data ?? []) {
-    const props = (r.teacher_proposals ?? []) as Slot[];
-    if (proposalsExpired(props, nowMs)) continue;
-    for (const s of props) for (const h of slotHours(s)) out.push({ ...h, studentName: r.student_name, groupId: r.group_id });
-  }
-  return out;
+export async function reservationsOf(teacherId: string, nowMs = Date.now()): Promise<LiveReservation[]> {
+  return liveReservationsWith(supabase, teacherId, nowMs);
 }
 
 // ── El calendario ─────────────────────────────────────────────────────────────
@@ -144,7 +136,15 @@ function cellOn(grid: Grid, dateIso: string, hour: string): Cell | null {
   return cell;
 }
 
-/** Comprobación de hueco libre: calendario + reservas de otras recuperaciones. */
+/**
+ * Comprobación de hueco libre: calendario + reservas de otras recuperaciones.
+ *
+ * TODO(hueco-libre): solo rechaza 'ocupado', 'bloqueado' y reservas. Trata como
+ * libres 'no_work', 'reprogramada' y las casillas sin pintar dentro del rango, así
+ * que puede proponer una hora en la que el profesor no trabaja. NO se arregla aquí
+ * todavía: el criterio estricto vive en esHuecoLibreParaAlumno (lib/cells.ts) y
+ * es el único que deben usar las operaciones con origen 'lms'.
+ */
 function occupiedChecker(grid: Grid, reservations: Array<{ date: string; hour: string; studentName: string; groupId: string }>, excludeGroup?: string): OccupiedCheck {
   return (date, hour) => {
     const c = cellOn(grid, date, hour);

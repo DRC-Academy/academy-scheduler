@@ -1,12 +1,22 @@
 import { supabase } from './supabase';
 import { triggerEmail } from './emailClient';
-import { baseStateOf, baseStudentOf, withBaseState, assignableCellKeys, puntualCellDates, puntualDateOf, isPuntualState } from './cells';
+import { baseStateOf, baseStudentOf, withBaseState, assignableCellKeys, puntualCellDates, puntualDateOf, isPuntualState, cellIsStudentLoose } from './cells';
 import { minutesLateSpain, getSpainParts } from './spainTime';
 import { EVENT_POINTS } from './scoringConstants';
 import { fetchOpenAlertState } from './interventionsClient';
 import { findContiguityMismatches, type ContiguityMismatch } from './teacherClasses';
-import { triggerWelcomeEmail } from './welcomeEmail';
-import { diffGrids, applyChanges, studentEvents, normLoose, splitCellKey, type GridChanges, type StudentCellEvent } from './gridPatch';
+import { diffGrids, studentEvents, splitCellKey, type GridChanges } from './gridPatch';
+import {
+  readTeacherGridWith, applyCalendarPatchWith, logCalendarChangesWith, reconcileAssignmentStatusWith,
+  syncSlotsFromGridWith, extractOcupadoCells, groupCellsByStudent, CALENDAR_REMOVAL_CLEARED,
+  CalendarReadError, SYSTEM_ACTOR, type CalendarActor, type CalendarOrigin, type StudentLeftGrid,
+} from './calendarStore';
+import {
+  getDropoutCountWith, teacherRetentionWith, recalculateTeacherScoreWith, addScoringEventWith,
+} from './scoringStore';
+import { transferirAlumnoCore, type TransferenciaResultado } from './transferencia/core';
+import { depsNavegador } from './transferencia/navegador';
+import { notifyNewAssignmentWith } from './notificationStore';
 import { findOffCalendar, slotStatusOf, type OffCalendarRow } from './offCalendar';
 import { Teacher, Student, Assignment, AppUser, Grid, TeacherStatus, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, AssignedSlot, EmailPreferences, SalesContactResult, RecoveryCell, TeacherBonus, BonusType } from '@/types';
 import {
@@ -428,40 +438,18 @@ export async function dbGetTeacherGrid(teacherId: string): Promise<Grid> {
   }
 }
 
-/** El calendario no se pudo leer: la pantalla debe avisar y NO dejar editar. */
-export class CalendarReadError extends Error {
-  constructor(teacherId: string, detail: string) {
-    super(`No se pudo leer el calendario (${teacherId}): ${detail}`);
-    this.name = 'CalendarReadError';
-  }
-}
+// Lectura estricta, actor del calendario y patch: viven en lib/calendarStore.ts
+// (cliente inyectado). Aquí se usan con el cliente de siempre.
+export { CalendarReadError, SYSTEM_ACTOR } from './calendarStore';
+export type { CalendarOrigin, CalendarActor, StudentLeftGrid } from './calendarStore';
 
 /**
  * Lectura ESTRICTA. Un profesor sin fila de calendario devuelve {} (es legítimo:
  * todavía no pintó nada); un error de lectura LANZA CalendarReadError.
  */
 export async function dbReadTeacherGrid(teacherId: string): Promise<Grid> {
-  const { data, error } = await supabase
-    .from('teacher_calendars')
-    .select('grid')
-    .eq('teacher_id', teacherId)
-    .maybeSingle();
-  if (error) throw new CalendarReadError(teacherId, error.message);
-  return ((data?.grid as Grid | null) ?? {});
+  return readTeacherGridWith(supabase, teacherId);
 }
-
-/** Desde dónde se tocó el calendario. Va al historial (calendar_changes.origin). */
-export type CalendarOrigin = 'profesor' | 'admin' | 'alumnos' | 'setter' | 'clases' | 'sistema' | 'restauracion';
-
-/** Quién toca el calendario y desde dónde. */
-export interface CalendarActor {
-  role: string;
-  name: string;
-  origin: CalendarOrigin;
-}
-
-/** Operaciones automáticas (cambio de profesor, eliminar alumno, quitar duplicado). */
-export const SYSTEM_ACTOR: CalendarActor = { role: 'sistema', name: 'Sistema', origin: 'sistema' };
 
 export interface GridSaveResult {
   /** El calendario REAL tras guardar, con los cambios de otros incluidos. La pantalla lo adopta. */
@@ -498,40 +486,7 @@ export async function dbApplyGridChanges(
     return { grid: await dbReadTeacherGrid(teacherId), applied: [], conflicts: [], studentsLeft: [] };
   }
 
-  let before: Grid;
-  let after: Grid;
-  let applied: string[];
-  let conflicts: string[];
-
-  const { data, error } = await supabase.rpc('apply_calendar_patch', {
-    p_teacher_id: teacherId,
-    p_changes: changes,
-  });
-
-  if (error) {
-    // Función sin crear (falta supabase-calendar-history.sql): la misma regla
-    // desde acá. No es atómica —hay unos milisegundos entre leer y escribir—
-    // pero ya no pisa lo que otros cambiaron.
-    const missing = error.code === 'PGRST202' || error.code === '42883';
-    if (!missing) throw new Error(`No se pudo guardar el calendario: ${error.message}`);
-    console.warn('[db] apply_calendar_patch no existe: guardado por casillas desde el cliente. Corré supabase-calendar-history.sql.');
-    before = await dbReadTeacherGrid(teacherId);
-    const r = applyChanges(before, changes);
-    after = r.grid; applied = r.applied; conflicts = r.conflicts;
-    if (applied.length > 0) {
-      const { error: upErr } = await supabase.from('teacher_calendars').upsert(
-        { teacher_id: teacherId, grid: after, updated_at: new Date().toISOString() },
-        { onConflict: 'teacher_id' },
-      );
-      if (upErr) throw new Error(`No se pudo guardar el calendario: ${upErr.message}`);
-    }
-  } else {
-    const r = data as { before: Grid | null; grid: Grid | null; applied: string[] | null; conflicts: string[] | null };
-    before = r.before ?? {};
-    after = r.grid ?? {};
-    applied = r.applied ?? [];
-    conflicts = r.conflicts ?? [];
-  }
+  const { before, after, applied, conflicts } = await applyCalendarPatchWith(supabase, teacherId, changes);
 
   if (conflicts.length > 0) {
     console.warn(`[db] Calendario ${teacherId}: ${conflicts.length} casilla(s) cambiadas por otra persona, no se pisaron:`, conflicts);
@@ -555,49 +510,15 @@ async function afterGridChange(
   teacherId: string, before: Grid, after: Grid, appliedKeys: string[], actor: CalendarActor,
 ): Promise<StudentLeftGrid[]> {
   try {
-    await logCalendarChanges(teacherId, studentEvents(before, after, appliedKeys), actor);
+    await logCalendarChangesWith(supabase, teacherId, studentEvents(before, after, appliedKeys), actor);
   } catch (err) {
     console.error('[db] No se pudo registrar el historial del calendario:', err);
   }
   try {
-    return await reconcileAssignmentStatus(teacherId, before, after, actor);
+    return await reconcileAssignmentStatusWith(supabase, teacherId, before, after, actor);
   } catch (err) {
     console.error('[db] No se pudo reconciliar las asignaciones tras guardar el calendario:', err);
     return [];
-  }
-}
-
-/** Escribe los movimientos en calendar_changes. Sin la tabla, avisa y sigue. */
-async function logCalendarChanges(teacherId: string, events: StudentCellEvent[], actor: CalendarActor): Promise<void> {
-  if (events.length === 0) return;
-  const [{ data: t }, assignments] = await Promise.all([
-    supabase.from('teachers').select('name').eq('id', teacherId).maybeSingle(),
-    dbGetAssignmentsByTeacher(teacherId),
-  ]);
-  const asgIdOf = (name: string) =>
-    (assignments.find(a => normKey(a.studentName) === normKey(name))
-      ?? assignments.find(a => normLoose(a.studentName) === normLoose(name)))?.id ?? null;
-
-  const rows = events.map(e => ({
-    teacher_id:    teacherId,
-    teacher_name:  (t as { name?: string } | null)?.name ?? null,
-    student_name:  e.studentName,
-    assignment_id: asgIdOf(e.studentName),
-    day:           e.day,
-    hour:          e.hour,
-    action:        e.action,
-    actor_role:    actor.role,
-    actor_name:    actor.name,
-    origin:        actor.origin,
-    detail:        e.previousName ? { nombre_anterior: e.previousName } : null,
-  }));
-  const { error } = await supabase.from('calendar_changes').insert(rows);
-  if (error) {
-    if (error.code === '42P01' || error.code === 'PGRST205') {
-      console.warn('[db] Falta la tabla calendar_changes: corré supabase-calendar-history.sql.');
-      return;
-    }
-    throw error;
   }
 }
 
@@ -632,19 +553,6 @@ export async function dbGetCalendarChanges(filter: { assignmentId?: string; teac
     assignmentId: r.assignment_id, day: r.day, hour: r.hour, action: r.action,
     actorRole: r.actor_role, actorName: r.actor_name, origin: r.origin, createdAt: r.created_at,
   }));
-}
-
-/**
- * Para las operaciones del sistema que parten de un grid recién leído y lo
- * modifican en memoria (cambio de profesor, eliminar alumno...): guarda solo lo
- * que cambiaron y LANZA si alguna casilla la tocó otra persona entre medio, para
- * no dejar la operación a medias en silencio.
- */
-async function saveTeacherGridOrThrow(teacherId: string, base: Grid, grid: Grid, actor: CalendarActor = SYSTEM_ACTOR): Promise<void> {
-  const r = await dbSaveTeacherGridChanges(teacherId, base, grid, actor);
-  if (r.conflicts.length > 0) {
-    throw new Error(`Otra persona cambió el calendario de ${teacherId} en ${r.conflicts.join(', ')} mientras tanto. Volvé a intentarlo.`);
-  }
 }
 
 // ── FUERA DE CALENDARIO: lista y restauración (pestaña del admin) ─────────────
@@ -786,84 +694,11 @@ export async function dbFixCalendarName(
 }
 
 /**
- * Marca inactivos los assignments cuyo alumno acaba de perder su ÚLTIMA celda, y
- * reactiva los de quien vuelve a tener alguna. Nunca borra: el histórico de
- * clases contadas se conserva.
- *
- * Se compara ANTES vs DESPUÉS a propósito, en vez de desactivar todo lo que no
- * esté en el grid. Un barrido general marcaría inactivos de golpe a los
- * assignments que ya estaban huérfanos de antes (hoy son 22, y 14 son alumnos
- * reales cuyo profesor nunca pintó las celdas). Esto solo reacciona al cambio
- * real: "se liberó la última celda de X".
- *
- * Best-effort: si la columna `status` no está migrada, se avisa y el guardado
- * del calendario sigue su curso.
- */
-const DAY_ORDER_SLOTS = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
-
-/** Clave estable de un horario, para comparar dos listas de slots sin ruido de orden. */
-function slotsKey(slots: AssignedSlot[]): string {
-  return [...slots]
-    .map(s => `${DAY_ORDER_SLOTS.indexOf(s.day)}|${String(parseInt(s.hour, 10)).padStart(2, '0')}`)
-    .sort()
-    .join(',');
-}
-
-/** Slots ordenados (día, hora) tal como se guardan en la ficha. */
-function sortSlots(slots: AssignedSlot[]): AssignedSlot[] {
-  return [...slots].sort((a, b) =>
-    DAY_ORDER_SLOTS.indexOf(a.day) - DAY_ORDER_SLOTS.indexOf(b.day) ||
-    parseInt(a.hour, 10) - parseInt(b.hour, 10));
-}
-
-/**
  * EL CALENDARIO MANDA: copia a la ficha del alumno el horario que dice el grid.
- *
- * El calendario es la prueba real de qué clases existen — si el profesor y el
- * alumno acuerdan otro horario, se refleja ahí — así que `assignments.slots` es
- * un espejo suyo, no una segunda opinión. De `slots` salen la agenda del
- * profesor, las asistencias y, sobre todo, la DURACIÓN de la clase: dos horas
- * seguidas en el grid son una sesión de 2h que se paga doble. Mientras las dos
- * fuentes pudieron discrepar, hubo alumnos cobrando 2 horas con una sola celda
- * ocupada en el calendario.
- *
- * Solo toca a los alumnos que están EN el grid: al que se quedó sin celdas lo
- * gestiona el cambio de `status` (su horario se conserva como histórico). Y solo
- * escribe cuando el horario cambió de verdad, porque esto corre en cada
- * autoguardado del calendario.
+ * La lógica está en lib/calendarStore.ts (syncSlotsFromGridWith).
  */
 async function syncSlotsFromGrid(teacherId: string, grid: Grid, onlyStudent?: string): Promise<number> {
-  const enGrid = groupCellsByStudent(extractOcupadoCells(grid));
-  if (enGrid.size === 0) return 0;
-
-  const assignments = await dbGetAssignmentsByTeacher(teacherId);
-  const objetivo = onlyStudent ? normKey(onlyStudent) : null;
-  let actualizados = 0;
-
-  for (const a of assignments) {
-    if (objetivo && normKey(a.studentName) !== objetivo) continue;
-    const desdeGrid = enGrid.get(normKey(a.studentName));
-    if (!desdeGrid) continue;                                   // no está en el grid → lo ve el status
-    if (slotsKey(desdeGrid.slots) === slotsKey(a.slots ?? [])) continue;   // ya coinciden
-
-    const slots = sortSlots(desdeGrid.slots);
-    const { error } = await supabase.from('assignments').update({
-      slots,
-      weekly_hours: slots.length,
-      availability: slots.map(s => `${s.day} ${s.hour}`).join(', '),
-    }).eq('id', a.id);
-
-    if (error) {
-      console.error(`[db] No se pudo sincronizar el horario de ${a.studentName} desde el calendario:`, error);
-      continue;
-    }
-    actualizados++;
-    console.log(
-      `[db] ${a.studentName}: horario actualizado desde el calendario ` +
-      `(${(a.slots ?? []).length}h → ${slots.length}h).`,
-    );
-  }
-  return actualizados;
+  return syncSlotsFromGridWith(supabase, teacherId, grid, onlyStudent);
 }
 
 /**
@@ -876,100 +711,6 @@ async function syncSlotsFromGrid(teacherId: string, grid: Grid, onlyStudent?: st
 export async function dbSyncSlotsFromCalendar(teacherId: string, studentName?: string): Promise<number> {
   const grid = await dbGetTeacherGrid(teacherId);
   return syncSlotsFromGrid(teacherId, grid, studentName);
-}
-
-/** Alumno que acaba de quedarse SIN ninguna celda en el calendario del profesor. */
-export interface StudentLeftGrid {
-  assignmentId: string;
-  studentId: string;
-  studentName: string;
-  studentEmail: string;
-}
-
-/**
- * Quita del calendario: los datos que se guardan en la asignación al perder su
- * última casilla. "Manual" = la quitó una persona desde un calendario (profesor,
- * admin, setter...); las operaciones del sistema (cambio de profesor, eliminar
- * alumno, quitar duplicado) no cuentan como quita manual.
- */
-function calendarRemovalFields(actor: CalendarActor): Record<string, unknown> {
-  return {
-    calendar_removed_at:     new Date().toISOString(),
-    calendar_removed_manual: actor.origin !== 'sistema',
-    calendar_removed_by:     actor.name,
-    calendar_removed_role:   actor.role,
-  };
-}
-
-const CALENDAR_REMOVAL_CLEARED = {
-  calendar_removed_at: null, calendar_removed_manual: null,
-  calendar_removed_by: null, calendar_removed_role: null,
-};
-
-async function reconcileAssignmentStatus(
-  teacherId: string, before: Grid, after: Grid, actor: CalendarActor,
-): Promise<StudentLeftGrid[]> {
-  const namesOf = (g: Grid) => new Set(extractOcupadoCells(g).map(c => normKey(c.student)));
-  const antes   = namesOf(before);
-  const despues = namesOf(after);
-
-  const liberados = [...antes].filter(n => !despues.has(n));     // perdió su última celda
-  const recuperados = [...despues].filter(n => !antes.has(n));   // volvió al grid
-
-  // El horario de los que SIGUEN en el grid también se reconcilia: ver
-  // syncSlotsFromGrid. Antes solo se miraba el alta/baja completa, así que un
-  // alumno que pasaba de dos horas seguidas a una conservaba las dos en su ficha
-  // para siempre — y la agenda y finanzas seguían tratándolo como clase de 2h.
-  await syncSlotsFromGrid(teacherId, after);
-
-  if (liberados.length === 0 && recuperados.length === 0) return [];
-
-  const assignments = await dbGetAssignmentsByTeacher(teacherId);
-  const idsOf = (names: string[]) => {
-    const set = new Set(names);
-    return assignments.filter(a => set.has(normKey(a.studentName))).map(a => a.id);
-  };
-
-  const cambios: Array<{ ids: string[]; status: string; extra: Record<string, unknown> }> = [
-    { ids: idsOf(liberados),   status: 'inactive', extra: calendarRemovalFields(actor) },
-    { ids: idsOf(recuperados), status: 'active',   extra: CALENDAR_REMOVAL_CLEARED },
-  ].filter(c => c.ids.length > 0);
-
-  for (const { ids, status, extra } of cambios) {
-    let { error } = await supabase.from('assignments').update({ status, ...extra }).in('id', ids);
-    // Sin las columnas calendar_removed_* (SQL sin correr): al menos el status.
-    if (error && (error.code === '42703' || error.code === 'PGRST204') && /calendar_removed/.test(error.message)) {
-      console.warn('[db] Faltan las columnas calendar_removed_*: corré supabase-calendar-history.sql.');
-      ({ error } = await supabase.from('assignments').update({ status }).in('id', ids));
-    }
-    if (error) {
-      if (error.code === '42703' || error.code === 'PGRST204') {
-        console.warn(
-          '[db] La columna assignments.status no existe todavía. ' +
-          'Corré supabase-assignment-status.sql para que el calendario pueda retirar alumnos sin borrarlos.',
-        );
-        break;   // sin columna no hay status que reconciliar; el resto sigue igual
-      }
-      console.error('[db] No se pudo actualizar el status de los assignments:', error);
-      break;
-    }
-    console.log(`[db] ${ids.length} assignment(s) de ${teacherId} marcados '${status}'.`);
-  }
-
-  // Quiénes se quedaron sin horario. El llamador decide qué hacer con ellos: si
-  // su suscripción está CANCELADA se eliminan del sistema, y si no, siguen
-  // asignados al profesor como "actualmente sin tomar clases". Esa decisión NO se
-  // toma acá: necesita consultar WooCommerce y, cuando implica borrar, que una
-  // persona lo confirme.
-  const salidos = new Set(liberados);
-  return assignments
-    .filter(a => salidos.has(normKey(a.studentName)))
-    .map(a => ({
-      assignmentId: a.id,
-      studentId:    a.studentId,
-      studentName:  a.studentName,
-      studentEmail: a.studentEmail,
-    }));
 }
 
 /**
@@ -1343,34 +1084,7 @@ export async function dbRepairAllBrokenLinks(): Promise<number> {
 // (el alumno aparece en el calendario pero no en las tablas). Estas funciones
 // diagnostican y reparan esa desconexión.
 
-interface OcupadoCell { student: string; day: string; hour: string; }
-
-// Extrae las celdas 'ocupado' con nombre de alumno de un grid.
-function extractOcupadoCells(grid: Grid | null | undefined): OcupadoCell[] {
-  const out: OcupadoCell[] = [];
-  for (const [key, cell] of Object.entries(grid ?? {})) {
-    // Alumno RECURRENTE: incluye las celdas tapadas por una recuperación puntual,
-    // que si no quedarían fuera de la auditoría de vínculos.
-    const student = cell ? baseStudentOf(cell)?.trim() : undefined;
-    if (student) {
-      const [day, hour] = key.split('_');
-      out.push({ student, day, hour });
-    }
-  }
-  return out;
-}
-
-// Agrupa las celdas ocupado por nombre de alumno (normalizado), conservando el
-// nombre tal como aparece y todos sus slots.
-function groupCellsByStudent(cells: OcupadoCell[]): Map<string, { name: string; slots: AssignedSlot[] }> {
-  const byName = new Map<string, { name: string; slots: AssignedSlot[] }>();
-  for (const c of cells) {
-    const k = normKey(c.student);
-    if (!byName.has(k)) byName.set(k, { name: c.student, slots: [] });
-    byName.get(k)!.slots.push({ day: c.day, hour: c.hour });
-  }
-  return byName;
-}
+// extractOcupadoCells / groupCellsByStudent viven en lib/calendarStore.ts.
 
 export interface CalendarDiagnosisRow {
   studentNameInGrid: string;
@@ -2704,165 +2418,29 @@ export async function dbUpdateStudent(student: Student): Promise<void> {
 // acá para que los imports existentes sigan funcionando.
 export { EVENT_POINTS, EVENT_EUROS } from './scoringConstants';
 
-// ── RETENTION RATE ────────────────────────────────────────────────────────────
-
-// Ventana (en días) sobre la que se cuentan las bajas para la retención. Una
-// baja fuera de esta ventana ya no penaliza (la retención mira el pasado reciente).
-export const RETENTION_WINDOW_DAYS = 90;
-
-// Fórmula única de retención (churn-aware). `retained` = alumnos activos hoy;
-// `dropouts` = bajas dentro de la ventana. Sin datos (0 y 0) devuelve 100 para
-// no penalizar a un profesor nuevo o sin actividad reciente.
-//   retención = retained / (retained + dropouts) × 100
-export function retentionRateFromCounts(retained: number, dropouts: number): number {
-  const denom = retained + dropouts;
-  if (denom === 0) return 100;
-  return (retained / denom) * 100;
-}
+// ── RETENTION RATE / SCORE ────────────────────────────────────────────────────
+// La lógica vive en lib/scoringStore.ts (cliente inyectado); aquí se usa con el
+// cliente de siempre y se re-exporta lo que ya importaban otras pantallas.
+export { RETENTION_WINDOW_DAYS, retentionRateFromCounts } from './scoringStore';
 
 // Cuenta las bajas de un profesor dentro de la ventana de retención.
 export async function dbGetDropoutCount(teacherId: string): Promise<number> {
-  const since = new Date(Date.now() - RETENTION_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
-  const { count } = await supabase
-    .from('student_dropouts')
-    .select('id', { count: 'exact', head: true })
-    .eq('teacher_id', teacherId)
-    .gte('dropped_at', since);
-  return count ?? 0;
-}
-
-// Alumnos EN PAUSA ahora (pausas abiertas de student_pauses), por id y por
-// nombre normalizado. No son activos (no suman a la retención ni al puntaje) ni
-// bajas (pausar no escribe en student_dropouts). Sin la tabla, vacío: nadie en
-// pausa, como antes.
-async function dbGetOpenPauseKeys(): Promise<Set<string>> {
-  const { data, error } = await supabase.from('student_pauses').select('student_id, student_name').is('ended_on', null);
-  const out = new Set<string>();
-  if (error) return out;
-  for (const r of (data ?? []) as Array<{ student_id?: string | null; student_name?: string | null }>) {
-    if (r.student_id) out.add(r.student_id);
-    const n = (r.student_name ?? '').trim().toLowerCase();
-    if (n) out.add(n);
-  }
-  return out;
-}
-
-function enPausa(paused: Set<string>, studentId?: string | null, studentName?: string | null): boolean {
-  if (paused.size === 0) return false;
-  return (!!studentId && paused.has(studentId)) || paused.has((studentName ?? '').trim().toLowerCase());
+  return getDropoutCountWith(supabase, teacherId);
 }
 
 export async function calcRetentionRate(teacherId: string): Promise<number> {
-  const [{ data }, dropouts, paused] = await Promise.all([
-    supabase.from('assignments').select('id, student_id, student_name').eq('teacher_id', teacherId),
-    dbGetDropoutCount(teacherId),
-    dbGetOpenPauseKeys(),
-  ]);
-  const activeStudents = ((data ?? []) as Array<{ student_id?: string | null; student_name?: string | null }>)
-    .filter(a => !enPausa(paused, a.student_id, a.student_name)).length;
-  return retentionRateFromCounts(activeStudents, dropouts);
+  return (await teacherRetentionWith(supabase, teacherId)).retention;
 }
-
-// ── SCORE RECALCULATION ───────────────────────────────────────────────────────
 
 export async function dbRecalculateTeacherScore(teacherId: string): Promise<void> {
-  const [evRes, asRes, calRes, dropouts, paused] = await Promise.all([
-    supabase.from('scoring_events').select('points, euros').eq('teacher_id', teacherId),
-    supabase.from('assignments').select('id, student_id, student_name').eq('teacher_id', teacherId),
-    supabase.from('teacher_calendars').select('grid').eq('teacher_id', teacherId).single(),
-    dbGetDropoutCount(teacherId),
-    dbGetOpenPauseKeys(),
-  ]);
-
-  const manualPoints = (evRes.data ?? []).reduce((s: number, e: any) => s + (e.points ?? 0), 0);
-  const manualEuros  = (evRes.data ?? []).reduce((s: number, e: any) => s + (e.euros ?? 0), 0);
-
-  // Los EN PAUSA no cuentan: ni como alumno activo ni sus celdas como horas.
-  const as = ((asRes.data ?? []) as Array<{ student_id?: string | null; student_name?: string | null }>)
-    .filter(a => !enPausa(paused, a.student_id, a.student_name));
-  const activeStudents = as.length;
-  const grid = ((calRes.data?.grid ?? {}) as Grid);
-  const ocupado = Object.values(grid)
-    .filter(c => c.state === 'ocupado' && !enPausa(paused, null, c.student)).length;
-  const monthlyHours = ocupado * 4;
-
-  // Retención churn-aware: activos vs. bajas de la ventana (ver retentionRateFromCounts).
-  const ret = retentionRateFromCounts(activeStudents, dropouts);
-
-  let auto = activeStudents * 10 + monthlyHours * 2;
-  if (ret >= 85)                              auto += 50;
-  else if (ret >= 80)                         auto += 25;
-  else if (ret < 65 && activeStudents > 0)    auto -= 30;
-
-  const totalScore   = Math.max(0, manualPoints + auto);
-  const totalEuros   = Math.max(0, manualEuros);
-  const currentLevel = totalScore >= 300 ? 3 : totalScore >= 150 ? 2 : 1;
-  const isBlocked    = activeStudents > 0 && ret < 65;
-
-  await supabase.from('teachers')
-    .update({
-      total_score:    totalScore,
-      total_euros:    totalEuros,
-      current_level:  currentLevel,
-      is_blocked:     isBlocked,
-      retention_rate: Math.round(ret),
-    })
-    .eq('id', teacherId);
+  return recalculateTeacherScoreWith(supabase, teacherId);
 }
 
-/**
- * Guarda un evento de scoring.
- *
- * LANZA si el INSERT falla. Antes se ignoraba el error y se devolvía el objeto
- * como si estuviera guardado: el contexto lo metía en el estado local y en
- * pantalla parecía aplicado hasta recargar. Con las columnas `student_ref` y
- * `quantity` sin migrar, PostgREST rechazaba TODOS los inserts (PGRST204) y no
- * se guardó ni un solo evento durante semanas sin que nadie lo notara.
- */
-/**
- * `opts.id` fija el id del evento. Lo usa la penalización por enlace tardío
- * (se_enlace_tardio_<asignación>_<profe>) para que la clave primaria impida
- * aplicarla dos veces: un duplicado lanza con el código 23505 de Postgres.
- */
+/** Guarda un evento de scoring y recalcula el score. LANZA si el INSERT falla. Ver lib/scoringStore.ts. */
 export async function dbAddScoringEvent(
   event: Omit<ScoringEvent, 'id' | 'createdAt'>, opts: { id?: string } = {},
 ): Promise<ScoringEvent> {
-  const id        = opts.id ?? `se_${Date.now()}`;
-  const createdAt = new Date().toISOString();
-
-  const row = {
-    id,
-    teacher_id:   event.teacherId,
-    teacher_name: event.teacherName,
-    event_type:   event.eventType,
-    points:       event.points,
-    euros:        event.euros,
-    note:         event.note,
-    created_by:   event.createdBy,
-    student_ref:  event.studentRef ?? null,
-    quantity:     event.quantity ?? null,
-    created_at:   createdAt,
-  };
-
-  let { error } = await supabase.from('scoring_events').insert(row);
-
-  // Si faltan las columnas opcionales (migración sin correr), se reintenta sin
-  // ellas para no perder el evento: mejor guardarlo sin el alumno que no
-  // guardarlo. Se avisa por consola para que se corra supabase-scoring-columns.sql.
-  if (error && (error.code === 'PGRST204' || error.code === '42703')) {
-    console.warn('[dbAddScoringEvent] Faltan columnas en scoring_events (student_ref/quantity). Corré supabase-scoring-columns.sql. Se guarda sin ellas.');
-    const { student_ref, quantity, ...base } = row;
-    void student_ref; void quantity;
-    ({ error } = await supabase.from('scoring_events').insert(base));
-  }
-
-  if (error) {
-    console.error('[dbAddScoringEvent] No se pudo guardar el evento:', error);
-    throw Object.assign(new Error(`No se pudo guardar el evento de scoring: ${error.message}`), { code: error.code });
-  }
-
-  await dbRecalculateTeacherScore(event.teacherId);
-  return { ...event, id, createdAt };
+  return addScoringEventWith(supabase, event, opts);
 }
 
 // ── PENALIZACIONES POR FALTA (Bloque 4) ─────────────────────────────────────────
@@ -3906,17 +3484,11 @@ export async function dbNotifyNewAssignment(
   studentEmail: string,
   details?: { plan?: string | null; level?: string | null; slots?: Array<{ day: string; hour: string }> | null; startDate?: string | null },
 ): Promise<void> {
-  await supabase.from('notifications').insert({
-    id:          `notif_newasgn_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-    target_user: teacherId,
-    target_role: null,
-    title:       '📚 Nuevo alumno asignado',
-    body:        `Se te asignó ${studentName}. Recordá presentarte por correo electrónico (${studentEmail || 'sin email'}) antes de la primera clase.`,
-    type:        'new_assignment',
-    read_by:     [],
-    created_at:  new Date().toISOString(),
-    created_by:  'sistema',
-  });
+  try {
+    await notifyNewAssignmentWith(supabase, teacherId, studentName, studentEmail);
+  } catch (err) {
+    console.error('[db] No se pudo guardar el aviso de alumno nuevo:', err);
+  }
 
   await triggerEmail({
     type: 'new_student',
@@ -4910,241 +4482,48 @@ export async function dbAddRecoveryClass(p: {
 
 const _nk = (x: unknown): string => String(x ?? '').trim().toLowerCase();
 
-// ¿La celda 'ocupado' pertenece a este alumno? (match tolerante por nombre/first name).
-function _cellIsStudent(cellStudent: string | undefined, studentName: string): boolean {
-  const cs = _nk(cellStudent);
-  if (!cs) return false;
-  const full  = _nk(studentName);
-  const first = _nk(studentName.split(' ')[0]);
-  return cs === full || cs === first || full.startsWith(cs) || cs.startsWith(first);
-}
+// ¿La celda 'ocupado' pertenece a este alumno? Regla en lib/cells.ts (cellIsStudentLoose).
+const _cellIsStudent = cellIsStudentLoose;
 
 export interface ChangeTeacherParams {
   assignmentId: string;
-  studentName: string;
-  studentEmail: string;
-  weeklyHours: number;
-  from: { id: string; name: string; email: string };
-  to:   { id: string; name: string; email: string };
-  oldSlots: AssignedSlot[];
+  toTeacherId: string;
+  /** Horarios con el profesor nuevo. Su cantidad pasa a ser weekly_hours (el modal deja elegir de 1 a 5). */
   newSlots: AssignedSlot[];
   reason: 'alumno' | 'profesor' | 'reorg';
-  // Datos del alumno arrastrados desde la assignment, para el aviso por email al
-  // nuevo profesor (Resend) — mismo contenido que una asignación nueva.
-  plan?: string | null;
-  level?: string | null;
-  startDate?: string | null;
+  /** Quién abre el modal: un admin o un setter. */
+  origen: 'admin' | 'setter';
+  /** Nombre de quien lo hace (va al historial del calendario). */
+  actor: string;
 }
 
-/**
- * Fallo de una transferencia, con el detalle de QUÉ alcanzó a hacerse.
- *
- * Sin esto el usuario solo veía "algo falló" y no había forma de saber si el
- * alumno quedó con el profesor viejo, con el nuevo, o a medio camino.
- */
-export class TransferError extends Error {
-  /** Pasos que SÍ se completaron, en orden. */
-  readonly completed: string[];
-  /** Paso que falló. */
-  readonly failedStep: string;
-
-  constructor(failedStep: string, completed: string[], cause: unknown) {
-    const detail = cause instanceof Error ? cause.message : String(cause);
-    super(`Falló en "${failedStep}": ${detail}`);
-    this.name = 'TransferError';
-    this.failedStep = failedStep;
-    this.completed = completed;
-  }
-
-  /** Mensaje listo para mostrarle al usuario, con el estado real del sistema. */
-  get userMessage(): string {
-    const hecho = this.completed.length
-      ? `Lo que SÍ se hizo: ${this.completed.join('; ')}.`
-      : 'No se llegó a modificar nada.';
-    return `El cambio de profesor no se completó (falló en: ${this.failedStep}). ${hecho} `
-         + 'Revisá "Auditoría de vínculos" en el panel de admin para completarlo.';
-  }
-}
+// Fallo de una transferencia: el TransferenciaError del núcleo, con el nombre de
+// siempre para el modal y el script (userMessage, failedStep, completed).
+export { TransferenciaError as TransferError } from './transferencia/errors';
 
 /**
- * Transfiere un alumno de un profesor a otro (punto 1).
+ * Cambio de profesor desde el modal del panel (admin, setter, Alumnos).
  *
- * ORDEN DE ESCRITURA — importa, y no es el orden "natural":
- *   1. Validar TODO antes de escribir nada.
- *   2. Ocupar las celdas del profesor NUEVO.
- *   3. Reapuntar la assignment  ← esta escritura es la que CONFIRMA el cambio.
- *   4. Liberar las celdas del profesor ANTERIOR.
- *   5. Scoring y notificaciones (best-effort: si fallan, el cambio ya está hecho).
+ * Envoltorio fino: toda la lógica (validaciones, orden de escritura,
+ * compensación, avisos y correos) está en lib/transferencia/core.ts. Aquí solo
+ * se elige el cliente (anon, el del navegador) y cómo salen los correos (por las
+ * rutas /api/emails y welcome-email).
  *
- * Antes se liberaba primero al profesor anterior y la assignment se actualizaba
- * en tercer lugar, sin comprobar el error de ninguna escritura. Si la assignment
- * fallaba, el alumno quedaba fuera del calendario viejo, dentro del nuevo, y
- * asignado al profesor viejo — sin ningún aviso. Eso es lo que le pasó a Izaro
- * Gaztañaga (julio 2026).
- *
- * Con el orden nuevo, un fallo antes del paso 3 deja el sistema COHERENTE: el
- * alumno sigue con su profesor de siempre y lo único que queda es una celda de
- * más en el calendario del profesor nuevo, que se ve y se corrige a mano.
+ * TODO(login-real): con la anon key estas transferencias NO quedan en
+ * transfer_requests (RLS sin políticas: solo el service role escribe) y la
+ * validación corre en el navegador, donde se puede saltar. Cuando exista el login
+ * real, el modal tiene que llamar a una ruta de servidor que autentique al admin
+ * o setter y use transferirAlumnoServidor (lib/transferencia/server.ts).
  */
-export async function dbChangeStudentTeacher(p: ChangeTeacherParams): Promise<void> {
-  const completed: string[] = [];
-  const log = (msg: string) => console.log(`[transfer ${p.studentName}] ${msg}`);
-
-  // ── 1) Validaciones previas: nada se escribe hasta que todo esto pase ───────
-  if (!p.newSlots.length) {
-    throw new TransferError('validación', [], new Error('no se indicó ningún horario para el profesor nuevo'));
-  }
-  if (p.from.id === p.to.id) {
-    throw new TransferError('validación', [], new Error('el profesor de origen y el de destino son el mismo'));
-  }
-
-  // Lectura estricta: con un calendario ilegible NO se transfiere (antes se
-  // tomaba como vacío y se guardaba encima).
-  const [asgRow, newGrid, oldGrid] = await Promise.all([
-    supabase.from('assignments').select('id').eq('id', p.assignmentId).maybeSingle(),
-    dbReadTeacherGrid(p.to.id),
-    dbReadTeacherGrid(p.from.id),
-  ]).catch(err => { throw new TransferError('validación', [], err); });
-  if (asgRow.error || !asgRow.data) {
-    throw new TransferError('validación', [], new Error(`la assignment ${p.assignmentId} ya no existe`));
-  }
-
-  // Ninguna celda destino puede tener YA un alumno recurrente distinto: pisarla
-  // borraría a ese alumno de su horario sin dejar rastro.
-  const ocupadas = p.newSlots
-    .map(s => ({ key: `${s.day}_${s.hour}`, owner: baseStudentOf(newGrid[`${s.day}_${s.hour}`]) }))
-    .filter(x => x.owner && !_cellIsStudent(x.owner, p.studentName));
-  if (ocupadas.length) {
-    const detalle = ocupadas.map(x => `${x.key} (${x.owner})`).join(', ');
-    throw new TransferError('validación', [], new Error(`${p.to.name} ya tiene alumno en ${detalle}`));
-  }
-  log('validaciones OK');
-
-  // ── 2) Ocupar las celdas del profesor NUEVO ────────────────────────────────
-  const updatedNew: Grid = { ...newGrid };
-  for (const s of p.newSlots) {
-    updatedNew[`${s.day}_${s.hour}`] = withBaseState(updatedNew[`${s.day}_${s.hour}`], 'ocupado', p.studentName);
-  }
-  try {
-    await saveTeacherGridOrThrow(p.to.id, newGrid, updatedNew);
-    completed.push(`se ocuparon los horarios en el calendario de ${p.to.name}`);
-    log(`calendario de ${p.to.name} ocupado`);
-  } catch (err) {
-    throw new TransferError(`ocupar el calendario de ${p.to.name}`, completed, err);
-  }
-
-  // ── 3) Reapuntar la assignment — ESTA es la que confirma el cambio ─────────
-  //    Se reinicia el plazo del enlace de clase: created_at = ahora (el contador
-  //    de 24 h se ancla en created_at, ver lib/meetLinkStatus), el enlace del
-  //    anterior se borra y los recordatorios vuelven a cero. Así el NUEVO
-  //    profesor tiene sus 24 h completas, sus recordatorios, y la penalización
-  //    'enlace_tardio' se evalúa para él al definir su enlace por primera vez.
-  const { error: asgError } = await supabase.from('assignments').update({
-    teacher_id:   p.to.id,
-    teacher_name: p.to.name,
-    teacher_email: p.to.email,
+export async function dbChangeStudentTeacher(p: ChangeTeacherParams): Promise<TransferenciaResultado> {
+  return transferirAlumnoCore(supabase, {
+    assignmentId: p.assignmentId,
+    toTeacherId:  p.toTeacherId,
     slots:        p.newSlots,
-    weekly_hours: p.weeklyHours,
-    availability: p.newSlots.map(s => `${s.day} ${s.hour}`).join(', '),
-    presentation_email_sent:    false,
-    presentation_email_sent_at: null,
-    // Recordatorios del enlace (cron check-presentation-emails): el profesor
-    // nuevo tiene los suyos. Sus avisos y reservas llevan su id, así que no
-    // chocan con los que recibió el anterior.
-    presentation_reminder_4h_sent:  false,
-    presentation_reminder_12h_sent: false,
-    presentation_reminder_24h_sent: false,
-    created_at:                 new Date().toISOString(),
-    // El enlace de la clase es la sala del profesor ANTERIOR: se borra para que
-    // el nuevo defina la suya (y el alumno no entre a la sala equivocada).
-    meet_link:                  null,
-    meet_link_set_at:           null,
-    // Reloj del bono de retención: seis meses CON EL PROFESOR ACTUAL. El que
-    // hereda al alumno empieza de cero; start_date no se toca (es la fecha de
-    // alta del alumno en la academia y la usan otras pantallas).
-    teacher_since:              spainToday(),
-  }).eq('id', p.assignmentId);
-  if (asgError) {
-    throw new TransferError('reapuntar la ficha del alumno al profesor nuevo', completed, asgError);
-  }
-  completed.push(`el alumno quedó asignado a ${p.to.name}`);
-  log(`assignment reapuntada a ${p.to.name}`);
-
-  // ── 4) Liberar las celdas del profesor ANTERIOR ────────────────────────────
-  const updatedOld: Grid = { ...oldGrid };
-  const oldKeys = new Set(p.oldSlots.map(s => `${s.day}_${s.hour}`));
-  let cleared = 0;
-  for (const key of Object.keys(updatedOld)) {
-    const cell = updatedOld[key];
-    // Se mira el alumno RECURRENTE: una celda con una recuperación encima sigue
-    // siendo el horario fijo del alumno que se transfiere, y hay que liberarla.
-    const recurring = baseStudentOf(cell);
-    if (!recurring) continue;
-    if (oldKeys.has(key) || _cellIsStudent(recurring, p.studentName)) {
-      updatedOld[key] = withBaseState(cell, 'libre');
-      cleared++;
-    }
-  }
-  if (cleared > 0) {
-    try {
-      await saveTeacherGridOrThrow(p.from.id, oldGrid, updatedOld);
-      completed.push(`se liberaron ${cleared} horario(s) de ${p.from.name}`);
-      log(`calendario de ${p.from.name}: ${cleared} celda(s) liberadas`);
-    } catch (err) {
-      throw new TransferError(`liberar el calendario de ${p.from.name}`, completed, err);
-    }
-  }
-
-  // ── 5) Scoring y notificaciones: BEST-EFFORT ───────────────────────────────
-  // El cambio ya está hecho y es coherente. Un fallo acá no puede tirar abajo la
-  // operación ni mostrarle un error al usuario: solo se registra para los logs.
-  try {
-    if (p.reason !== 'reorg') {
-      const eventType = p.reason === 'alumno' ? 'cambio_por_alumno' : 'cambio_por_profesor';
-      await dbAddScoringEvent({
-        teacherId:   p.from.id,
-        teacherName: p.from.name,
-        eventType:   eventType as ScoringEvent['eventType'],
-        points:      EVENT_POINTS[eventType],
-        euros:       0,
-        note:        `Cambio de profesor — ${p.studentName} transferido a ${p.to.name}`,
-        createdBy:   'sistema',
-        studentRef:  p.studentName,
-      });
-    }
-
-    // Notificar al profesor NUEVO (misma notificación + email Resend que una
-    // asignación nueva), con los datos del alumno y los horarios recién asignados.
-    await dbNotifyNewAssignment(p.to.id, p.studentName, p.studentEmail, {
-      plan: p.plan, level: p.level, slots: p.newSlots, startDate: p.startDate,
-    });
-
-    // Notificar al profesor ANTERIOR.
-    await supabase.from('notifications').insert({
-      id:          `notif_transfer_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-      target_user: p.from.id,
-      target_role: null,
-      title:       'ℹ️ Alumno transferido',
-      body:        `${p.studentName} fue transferido a otro profesor.`,
-      type:        'student_transferred',
-      read_by:     [],
-      created_at:  new Date().toISOString(),
-      created_by:  'sistema',
-    });
-
-    // Recalcular el score/retención de ambos (el anterior perdió, el nuevo ganó).
-    await Promise.all([dbRecalculateTeacherScore(p.from.id), dbRecalculateTeacherScore(p.to.id)]);
-    log('scoring y notificaciones OK');
-  } catch (err) {
-    console.error(`[transfer ${p.studentName}] el cambio se completó, pero fallaron los avisos/scoring:`, err);
-  }
-
-  // ── 6) Email al alumno con su nuevo profesor: BEST-EFFORT ───────────────────
-  // Fuera del try anterior a propósito: un fallo del scoring no debe quedarse
-  // también sin email. triggerWelcomeEmail nunca lanza, tiene tope de tiempo y,
-  // fuera del navegador (scripts/cambiar-profesor.mts) sin NEXT_PUBLIC_APP_URL,
-  // lo omite con un aviso. La ruta decide si se envía (interruptor, ventana…).
-  await triggerWelcomeEmail(p.assignmentId, 'cambio_profesor');
+    motivo:       p.reason,
+    origen:       p.origen,
+    actor:        p.actor,
+  }, depsNavegador);
 }
 
 // Elimina una assignment y libera las celdas del alumno en el grid del profesor.

@@ -26,6 +26,7 @@ import {
   dbGetTeacherBonuses, dbClaimRetentionBonus, dbMarkBonusPaid, dbAddUpsellBonuses, dbUpdateAssignmentTeacherSince,
 } from '@/lib/db';
 import type { AffectedTeacher, ChangeTeacherParams, ArchiveTeacherResult, CalendarOrigin, GridSaveResult } from '@/lib/db';
+import type { TransferenciaResultado } from '@/lib/transferencia/core';
 import type { AssignedSlot } from '@/types';
 import { calculateTeacherFinance, canMarkStudentLostClass, LOST_CLASS_CAP_MESSAGE, type ClassTranscriptRef } from '@/lib/finance';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
@@ -113,7 +114,7 @@ interface TeachersContextType {
   revertStudentAbsence: (recordId: string, adminName: string) => Promise<void>;
   approveReviewClass: (teacherId: string, studentName: string, date: string, approvedBy?: string) => Promise<void>;
   approveExceedLimitClass: (teacherId: string, studentName: string, date: string, approvedBy?: string) => Promise<void>;
-  changeStudentTeacher: (params: ChangeTeacherParams) => Promise<void>;
+  changeStudentTeacher: (params: ChangeTeacherParams) => Promise<TransferenciaResultado>;
   removeAssignment: (assignmentId: string, teacherId: string, studentName: string, slots: AssignedSlot[]) => Promise<void>;
   addRescheduleRecord: (p: { teacherId: string; teacherName: string; studentName: string; originalDate: string; originalTime?: string; newDate: string; newTime?: string; classType: 'reprogramada' | 'cancelacion_hora'; comment: string; lostHours?: number }) => Promise<void>;
   /** Reprograma una clase de 2 h en DOS días: las tres constancias en un solo insert. Devuelve sus ids, para poder revertir. */
@@ -174,7 +175,7 @@ const TeachersContext = createContext<TeachersContextType>({
   revertStudentAbsence:       async () => {},
   approveReviewClass:         async () => {},
   approveExceedLimitClass:    async () => {},
-  changeStudentTeacher:       async () => {},
+  changeStudentTeacher:       async () => { throw new Error('TeachersProvider sin montar'); },
   removeAssignment:           async () => {},
   addRescheduleRecord:        async () => {},
   addRescheduleSplit:         async () => [],
@@ -803,8 +804,9 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   // Cambio de profesor (punto 1): delega en la BD y refresca todo el estado
   // (teachers/students/assignments/grids) para reflejar la transferencia.
   async function changeStudentTeacher(params: ChangeTeacherParams) {
-    await dbChangeStudentTeacher(params);
+    const r = await dbChangeStudentTeacher(params);
     await reloadAll();
+    return r;
   }
 
   // Elimina una assignment y libera su grid (resoluciÃ³n de duplicados, punto 4).
