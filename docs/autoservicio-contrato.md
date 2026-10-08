@@ -379,8 +379,16 @@ huecos para la duración de la **primera** sesión del alumno.
 - Cada hueco es un horario **fijo** semanal; `fecha_primera_clase` es la primera
   clase con él, siempre a más de 24 h.
 - `dia`: filtra por día (`Lunes`… `Sábado`, con tilde).
-- `franja`: por hora de inicio (España): `manana` (antes de las 14:00), `tarde`
-  (14:00–19:59) o `noche` (desde las 20:00).
+- `franja`: por hora de **inicio** (España), las mismas franjas que el LMS:
+
+  | `franja` | Horas de inicio |
+  |---|---|
+  | `manana` | 06:00–11:59 |
+  | `mediodia` | 12:00–14:59 |
+  | `tarde` | 15:00–19:59 |
+  | `noche` | 20:00–23:59 y la madrugada (00:00–05:59) |
+
+  Otro valor → 422 `DATOS_INVALIDOS`. Vale también con `profesor_id`.
 
 **b) Con `profesor_id`: los huecos de ese profesor para CADA sesión**, para que
 el alumno elija los de sus sesiones restantes (la primera también viene, por si
