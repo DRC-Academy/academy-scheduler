@@ -1,7 +1,7 @@
 // Respuestas HTTP del autoservicio del LMS (/api/lms/autoservicio/*). Módulo
 // puro. Contrato: docs/autoservicio-contrato.md.
 //
-// Error: { ok: false, codigo, mensaje[, detalle_no_elegible] }. `mensaje` está
+// Error: { ok: false, codigo, mensaje[, detalle_no_elegible][, a_medias] }. `mensaje` está
 // listo para enseñárselo al alumno (español de España, tú). El LMS decide SOLO
 // por `ok`: un cambio cuenta como hecho únicamente con `ok: true`.
 
@@ -64,6 +64,12 @@ export interface CuerpoError {
   codigo: CodigoAutoservicio;
   mensaje: string;
   detalle_no_elegible?: string;
+  /**
+   * true si el cambio quedó A MEDIAS (falló al guardar y no se pudo deshacer
+   * todo; compensada === false): no se reintenta, el equipo ya tiene el aviso.
+   * Solo aparece en ese caso. El LMS decide con este campo, no con el mensaje.
+   */
+  a_medias?: true;
 }
 
 const SIN_CACHE = { 'Cache-Control': 'no-store' };
@@ -92,7 +98,7 @@ export function respuestaError(err: unknown, etiqueta: string): Response {
   if (err instanceof CambioHorarioError) {
     if (ESTADO_HTTP[err.codigo] >= 500) console.error(`[${etiqueta}] ${err.codigo}:`, err.message);
     return respuestaCodigo(err.codigo, {
-      ...(err.compensada === false ? { mensaje: MENSAJE_A_MEDIAS } : {}),
+      ...(err.compensada === false ? { mensaje: MENSAJE_A_MEDIAS, a_medias: true as const } : {}),
       ...(err.detalleNoElegible ? { detalle_no_elegible: err.detalleNoElegible } : {}),
     });
   }
