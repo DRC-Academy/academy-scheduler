@@ -61,14 +61,14 @@ export async function captureChurnSnapshot(args: {
   // 1) Reunir el historial reciente. class_records/join_logs se filtran por nombre;
   //    los análisis por student_id si lo hay (más fiable) y por nombre si no.
   const [recRes, logRes, anaRes] = await Promise.all([
-    supabase.from('class_records').select('student_name, class_date, class_type, rescheduled_to').ilike('student_name', studentName).order('class_date', { ascending: false }).limit(40),
+    supabase.from('class_records').select('student_name, class_date, class_type').ilike('student_name', studentName).order('class_date', { ascending: false }).limit(40),
     supabase.from('class_join_logs').select('student_name, scheduled_date, punctuality').ilike('student_name', studentName).order('scheduled_date', { ascending: false }).limit(40),
     (args.studentId
       ? supabase.from('class_analyses').select('student_name, class_date, analyzed_at, risk_signal, transcript').eq('student_id', args.studentId).order('analyzed_at', { ascending: false }).limit(WINDOW)
       : supabase.from('class_analyses').select('student_name, class_date, analyzed_at, risk_signal, transcript').ilike('student_name', studentName).order('analyzed_at', { ascending: false }).limit(WINDOW)),
   ]);
 
-  const records  = (recRes.data ?? []) as Array<{ student_name: string; class_date: string | null; class_type: string | null; rescheduled_to: string | null }>;
+  const records  = (recRes.data ?? []) as Array<{ student_name: string; class_date: string | null; class_type: string | null }>;
   const logs     = (logRes.data ?? []) as Array<{ student_name: string; scheduled_date: string | null; punctuality?: string | null }>;
   const analyses = (anaRes.data ?? []) as Array<{ student_name: string; class_date?: string | null; analyzed_at?: string | null; risk_signal?: string | null; transcript?: string | null }>;
 

@@ -20,8 +20,7 @@ import {
 import { studentLostDatesInMonth, LOST_CLASS_MONTHLY_CAP, durationBadge, estimateClassAmount } from '@/lib/finance';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { findStartDateMismatches } from '@/lib/studentPeriod';
-import { dbGetStudentPauses, type StudentPause } from '@/lib/studentPauses';
-import { dbGetAllTeacherAssignments, dbGetTranscriptForReview, type TranscriptForReview } from '@/lib/db';
+import { getTeacherAssignments, dbGetTranscriptForReview, type TranscriptForReview } from '@/lib/db';
 import { getSpainParts } from '@/components/VisualCalendar';
 import { flagLabel } from '@/lib/transcriptValidation';
 import type { Assignment, ClassReviewRequest, ReviewResolvedType } from '@/types';
@@ -66,50 +65,28 @@ type Filtro = 'pendiente' | 'resueltas' | 'todas';
  * al profesor, no para esconderle información al admin.
  */
 function ClasesSinIngreso() {
-  const { teachers, students, assignments, classJoinLogs, classRecords, classAnalyses } = useTeachers();
+  const { teachers, classJoinLogs, classRecords, classAnalyses } = useTeachers();
   const spain = getSpainParts(new Date());
 
   const [monthYear, setMonthYear] = useState(spain.dateStr.slice(0, 7));
   const [conSeñalSolo, setConSeñalSolo] = useState(true);
   const [asgsByTeacher, setAsgsByTeacher] = useState<Record<string, Assignment[]>>({});
-  // Los días en pausa no tocaban clase: no son "sin ingreso".
-  const [pauses, setPauses] = useState<StudentPause[]>([]);
-  useEffect(() => { dbGetStudentPauses().then(setPauses).catch(() => {}); }, []);
   const [cargando, setCargando] = useState(true);
   const [abierto, setAbierto] = useState<string | null>(null);
 
   // Los alumnos y sus horarios salen del GRID, igual que en la pantalla del
   // profesor. Filtrar `assignments` por teacherId daría el horario de la ficha,
   // que incluye a alumnos que ya no están en el calendario.
-  //
-  // UNA consulta (los calendarios) con lo que ya trae el contexto, y UNA vez.
-  // Antes era getTeacherAssignments por profesor: la tabla de alumnos entera +
-  // asignaciones + calendario POR CADA UNO (~105 peticiones con 35 profesores), y
-  // relanzada cada 60 s porque reloadAll reemplaza el array `teachers`. Con la
-  // base saturada (08/10/2026) era una de las ráfagas que la ahogaban.
-  const pedido = useRef(false);
   useEffect(() => {
-    if (pedido.current || teachers.length === 0) return;
-    pedido.current = true;
     let cancelled = false;
-    // Vacío = el contexto todavía no los tiene (o falló su carga): se piden, en
-    // vez de armar los horarios sin fichas ni asignaciones.
-    dbGetAllTeacherAssignments({
-      teachers,
-      students: students.length ? students : undefined,
-      assignments: assignments.length ? assignments : undefined,
-    })
-      .then(porProfesor => {
-        if (cancelled) return;
-        setAsgsByTeacher(Object.fromEntries(porProfesor));
-        setCargando(false);
-      })
-      .catch(err => {
-        console.error('[admin] No se pudieron leer los horarios:', err);
-        pedido.current = false;   // que un fallo de red no lo deje muerto
-      });
+    (async () => {
+      const pares = await Promise.all(teachers.map(async t => [t.id, await getTeacherAssignments(t)] as const));
+      if (cancelled) return;
+      setAsgsByTeacher(Object.fromEntries(pares));
+      setCargando(false);
+    })().catch(err => console.error('[admin] No se pudieron leer los horarios:', err));
     return () => { cancelled = true; };
-  }, [teachers, students, assignments]);
+  }, [teachers]);
 
   const porProfesor = useMemo(() => {
     const { from, to } = monthRange(monthYear);
@@ -119,7 +96,7 @@ function ClasesSinIngreso() {
       if (!asgs) continue;
       const clases = buildMissingJoinClasses({
         assignments: asgs, joinLogs: classJoinLogs, classRecords, requests: [],
-        analyses: classAnalyses, pauses, teacherId: t.id,
+        analyses: classAnalyses, teacherId: t.id,
         fromDate: from, toDate: to,
         todayIso: spain.dateStr, nowMinutes: spain.hour * 60 + spain.minute,
         gridOccupancy: gridOccupancyOfTeacher(t),
@@ -129,7 +106,7 @@ function ClasesSinIngreso() {
     }
     return out.sort((a, b) => b.clases.length - a.clases.length);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [teachers, asgsByTeacher, classJoinLogs, classRecords, classAnalyses, pauses, monthYear, conSeñalSolo]);
+  }, [teachers, asgsByTeacher, classJoinLogs, classRecords, classAnalyses, monthYear, conSeñalSolo]);
 
   const total = porProfesor.reduce((s, p) => s + p.clases.length, 0);
 

@@ -8,8 +8,6 @@
 //   · `woocommerce` — foto cruda por estado, contando SUSCRIPCIONES.
 //   · `alumnos`     — activos reales contando PERSONAS, con la regla única de
 //                     lib/subscriptionAccess (Woo OR manual OR Oritalk).
-// Los EN PAUSA (variación "Pausa" de Woo) van aparte en los dos bloques
-// (`woocommerce.en_pausa`, `alumnos.en_pausa`): ni dan acceso ni son activos.
 //
 // Todo el trabajo vive en lib/externalSubscriptions; acá solo se autoriza y se
 // envuelve. Mismo patrón que /api/external/payouts.

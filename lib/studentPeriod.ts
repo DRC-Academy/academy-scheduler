@@ -1,5 +1,3 @@
-import { pauseCovers, pauseIndex, type StudentPause } from '@/lib/studentPauses';
-
 // ── ¿Existe esta clase en esta fecha? ────────────────────────────────────────
 //
 // EL PROBLEMA. El calendario del profesor es un horario RECURRENTE sin fechas:
@@ -46,13 +44,6 @@ export interface StudentPeriod {
   from: string;
   /** 'YYYY-MM-DD' de la baja, o null si sigue activo. */
   to: string | null;
-  /**
-   * Huecos dentro del período: las PAUSAS del alumno (variación "Pausa" de Woo,
-   * tabla student_pauses). Cada una cubre [from, to): el día de la reactivación
-   * ya tiene clase. Mismo contrato que el resto: filtran clases PROYECTADAS,
-   * nunca hechos.
-   */
-  pauses?: Array<{ from: string; to: string | null }>;
 }
 
 /** Lo mínimo que hace falta de una asignación para saber cuándo empezó. */
@@ -101,7 +92,6 @@ export function periodOf(assignment: PeriodSource, dropout?: DropoutSource | nul
 export function classExistsOn(period: StudentPeriod, dateIso: string): boolean {
   if (dateIso < period.from) return false;
   if (period.to && dateIso > period.to) return false;
-  if (period.pauses?.some(p => pauseCovers(p, dateIso))) return false;
   return true;
 }
 
@@ -114,11 +104,9 @@ export function classExistsOn(period: StudentPeriod, dateIso: string): boolean {
  * que es la que no recorta nada.
  */
 export function periodIndex(
-  assignments: Array<PeriodSource & { teacherId: string; studentName: string; studentId?: string }>,
+  assignments: Array<PeriodSource & { teacherId: string; studentName: string }>,
   dropouts: Array<{ teacherId: string; studentName: string; droppedAt?: string }>,
   teacherId: string,
-  /** Pausas del alumno (dbGetStudentPauses). Valen con cualquier profesor. */
-  pauses: StudentPause[] = [],
 ): Map<string, StudentPeriod> {
   const nk = (s: string) => (s ?? '').trim().toLowerCase();
 
@@ -133,15 +121,11 @@ export function periodIndex(
     if (!prev || iso > prev) bajaPor.set(k, iso);
   }
 
-  const pausas = pauseIndex(pauses);
-
   const out = new Map<string, StudentPeriod>();
   for (const a of assignments) {
     if (a.teacherId !== teacherId) continue;
     const k = nk(a.studentName);
     const p = periodOf(a, { droppedAt: bajaPor.get(k) });
-    const suyas = [...(pausas.get(k) ?? []), ...(a.studentId ? pausas.get(`id:${a.studentId}`) ?? [] : [])];
-    if (suyas.length) p.pauses = suyas.map(x => ({ from: x.from, to: x.to }));
     const prev = out.get(k);
     if (!prev || p.from < prev.from) out.set(k, p);
   }

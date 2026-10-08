@@ -40,7 +40,7 @@ import { classifyPlan, classifyFor, planBadgeStyle, type PlanClassification } fr
 import { contiguousRunLength, hourNum, hourText, nkName, runStartHour, sessionRangeLabel } from '@/lib/sessions';
 // Qué estado de suscripción da acceso (y cómo se llama) es UNA sola decisión,
 // compartida con el badge de los alumnos y con el popup de ingreso.
-import { WOO_STATUS, isActiveWooStatus, wooStatusMeta, PAUSED_STATUS, PAUSED_META } from '@/lib/subscriptionAccess';
+import { WOO_STATUS, isActiveWooStatus, wooStatusMeta } from '@/lib/subscriptionAccess';
 // Solo el TIPO: teacherClasses importa a su vez el tipo ClassTranscriptRef de acá,
 // y los `import type` se borran al compilar, así que no hay ciclo en runtime.
 import type { GridOccupancy } from '@/lib/teacherClasses';
@@ -1440,7 +1440,6 @@ export function lostClassBreakdownLabel(
 // en el join log y el admin filtra por ellos.
 export const SUBSCRIPTION_STATUS_OPTIONS = [
   ...Object.entries(WOO_STATUS).map(([value, m]) => ({ value, label: m.label })),
-  { value: PAUSED_STATUS,     label: PAUSED_META.label },
   { value: 'oritalk',         label: 'Oritalk' },
   { value: 'manual_override', label: 'Activa (manual)' },
   { value: 'not_found',       label: 'No encontrada' },
@@ -1458,9 +1457,7 @@ export function subscriptionBadge(status?: string):
     return { label: '✅ Activa (manual)', color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)' };
   }
   const m = wooStatusMeta(status);
-  // 'paused' (variación Pausa de Woo) no está en WOO_STATUS a propósito, pero es
-  // un estado conocido: sin esto salía "⏸️ No verificado".
-  const known = status && (status in WOO_STATUS || status === 'not_found' || status === PAUSED_STATUS);
+  const known = status && (status in WOO_STATUS || status === 'not_found');
   // El icono sale del mapa (lib/subscriptionAccess), igual que el nombre y el
   // color. Antes se reconstruía acá con un ternario propio que solo conocía los
   // cinco estados de entonces, así que uno nuevo salía siempre con "❓" aunque

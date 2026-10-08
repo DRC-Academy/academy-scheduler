@@ -39,7 +39,6 @@ import type { ClassTranscriptRef, TeacherFinanceResult, ClassFinanceRow } from '
 import type { GridOccupancy } from '@/lib/teacherClasses';
 import { buildMissingJoinClasses, type MissingJoinClass } from '@/lib/reviewRequests';
 import { type StudentDropout } from '@/lib/studentPeriod';
-import type { StudentPause } from '@/lib/studentPauses';
 import { scheduledIndex, originOf, OUT_ORIGINS } from '@/lib/outOfCalendar';
 
 
@@ -141,8 +140,6 @@ export function buildClassFunnel(opts: {
   analyses: ClassTranscriptRef[];
   requests: ClassReviewRequest[];
   dropouts: StudentDropout[];
-  /** Pausas del alumno (lib/studentPauses): sus días no tocaban clase. */
-  pauses?: StudentPause[];
   gridOccupancy: GridOccupancy;
   finance: TeacherFinanceResult;
   todayIso: string;
@@ -160,7 +157,6 @@ export function buildClassFunnel(opts: {
     requests: opts.requests,
     analyses: opts.analyses,
     dropouts: opts.dropouts,
-    pauses: opts.pauses,
     teacherId,
     fromDate: `${monthYear}-01`,
     toDate: `${monthYear}-${String(ultimo).padStart(2, '0')}`,
@@ -188,7 +184,7 @@ export function buildClassFunnel(opts: {
   // las dos ramas. Así se perdían 5 clases pagables de Sol y 2 de Florencia, y el
   // embudo "sumaba" solo porque el total se definía como la suma de sus partes.
   const sched = scheduledIndex({
-    assignments: opts.assignments, dropouts: opts.dropouts, pauses: opts.pauses, teacherId, monthYear,
+    assignments: opts.assignments, dropouts: opts.dropouts, teacherId, monthYear,
   });
   const esAgendada = (r: { studentName: string; date: string }) => sched.has(r.studentName, r.date);
 

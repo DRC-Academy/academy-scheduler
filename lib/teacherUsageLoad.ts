@@ -16,7 +16,6 @@ import 'server-only';
 import { supabase } from '@/lib/supabase';
 import { dbGetTeachers, fetchAllPages } from '@/lib/db';
 import { dbGetStudentDropouts, periodIndex, type StudentPeriod } from '@/lib/studentPeriod';
-import { dbGetStudentPauses, type StudentPause } from '@/lib/studentPauses';
 import { construirSeguimiento } from '@/lib/levelTestSeguimiento';
 import { studentKeyOf, type FormTokenRow, type StudentRow, type DropoutRow } from '@/lib/formReminders';
 import type { LevelTestInfo } from '@/lib/levelTestClient';
@@ -57,12 +56,11 @@ export async function cargarInformeUso(opts: { semanas: number; now?: number }):
   const errores: string[] = [];
 
   const [
-    teachers, dropouts, pausas, asignaciones, tokens, sesiones, alumnos, bajas, perfiles,
+    teachers, dropouts, asignaciones, tokens, sesiones, alumnos, bajas, perfiles,
     generaciones, logsRaw, recordsRaw, analysesRaw, eventosRaw, fotosRaw, alertasRaw,
   ] = await Promise.all([
     dbGetTeachers(),
     dbGetStudentDropouts(),
-    dbGetStudentPauses(),
     leer('assignments', (f, t) => supabase.from('assignments')
       .select('id, teacher_id, student_id, student_name, start_date, created_at').order('id').range(f, t), errores),
     leer('form_tokens', (f, t) => supabase.from('form_tokens')
@@ -175,7 +173,7 @@ export async function cargarInformeUso(opts: { semanas: number; now?: number }):
   const fechasConFoto = new Set(fotos.map(f => f.date));
   const fechasSinFoto: string[] = [];
   for (let d = desde; d <= hoy; d = addDaysIso(d, 1)) if (!fechasConFoto.has(d)) fechasSinFoto.push(d);
-  const periodos = periodosPorProfe(profesores.map(p => p.id), asignaciones, dropouts, pausas);
+  const periodos = periodosPorProfe(profesores.map(p => p.id), asignaciones, dropouts);
   const programadas = [...fotos, ...proyectarCalendario(profesores, fechasSinFoto, periodos)];
 
   const informe = construirInformeUso({
@@ -198,17 +196,16 @@ export async function cargarInformeUso(opts: { semanas: number; now?: number }):
   return { ...informe, avisos };
 }
 
-/** Período de cada alumno por profesor (inicio de clases → baja, sin las pausas), para no proyectar clases que no existieron. */
+/** Período de cada alumno por profesor (inicio de clases → baja), para no proyectar clases que no existieron. */
 function periodosPorProfe(
   teacherIds: string[], asignaciones: Fila[], dropouts: Array<{ teacherId: string; studentName: string; droppedAt?: string }>,
-  pausas: StudentPause[] = [],
 ): Map<string, Map<string, StudentPeriod>> {
   const rows = asignaciones.map(a => ({
-    teacherId: s(a.teacher_id), studentName: s(a.student_name), studentId: sn(a.student_id) ?? undefined,
+    teacherId: s(a.teacher_id), studentName: s(a.student_name),
     startDate: sn(a.start_date) ?? undefined, createdAt: sn(a.created_at) ?? undefined,
   }));
   const out = new Map<string, Map<string, StudentPeriod>>();
-  for (const id of teacherIds) out.set(id, periodIndex(rows, dropouts, id, pausas));
+  for (const id of teacherIds) out.set(id, periodIndex(rows, dropouts, id));
   return out;
 }
 
@@ -218,13 +215,12 @@ function periodosPorProfe(
  */
 export async function clasesProgramadasDe(fecha: string): Promise<ClaseProgramada[]> {
   const errores: string[] = [];
-  const [teachers, dropouts, pausas, asignaciones] = await Promise.all([
+  const [teachers, dropouts, asignaciones] = await Promise.all([
     dbGetTeachers(),
     dbGetStudentDropouts(),
-    dbGetStudentPauses(),
     leer('assignments', (f, t) => supabase.from('assignments')
-      .select('id, teacher_id, student_id, student_name, start_date, created_at').order('id').range(f, t), errores),
+      .select('id, teacher_id, student_name, start_date, created_at').order('id').range(f, t), errores),
   ]);
   const profesores = teachers.filter(t => !PROFESORES_DE_PRUEBA.has(t.id));
-  return proyectarCalendario(profesores, [fecha], periodosPorProfe(profesores.map(p => p.id), asignaciones, dropouts, pausas));
+  return proyectarCalendario(profesores, [fecha], periodosPorProfe(profesores.map(p => p.id), asignaciones, dropouts));
 }

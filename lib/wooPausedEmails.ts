@@ -24,13 +24,13 @@ const PER_PAGE = 100;
 const MAX_PAGES = 20;
 const TIMEOUT_MS = 15_000;
 
-export interface WooSub extends WooSubLike {
+interface WooSub extends WooSubLike {
   start_date?: unknown;
   date_created?: unknown;
   billing?: { email?: unknown } | null;
 }
 
-export function wcCreds(): { base: string; ck: string; cs: string } | null {
+function wcCreds(): { base: string; ck: string; cs: string } | null {
   const base = process.env.WOOCOMMERCE_URL;
   const ck   = process.env.WOOCOMMERCE_CONSUMER_KEY;
   const cs   = process.env.WOOCOMMERCE_CONSUMER_SECRET;
@@ -107,43 +107,4 @@ export async function pausedEmailsOrEmpty(label: string): Promise<Set<string>> {
     console.error(`[${label}] No se pudo saber quién está en pausa; se sigue sin excluir a nadie:`, err instanceof Error ? err.message : err);
     return new Set();
   }
-}
-
-// ── Lecturas por alumno (pausas y webhook de cancelación) ────────────────────
-
-async function getJson(url: string): Promise<unknown[]> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-  try {
-    const res = await fetch(url, { headers: { Accept: 'application/json' }, cache: 'no-store', signal: controller.signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    return Array.isArray(data) ? data : [];
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/** Suscripciones de un email (todas, más reciente primero). Lanza si Woo falla. */
-export async function fetchSubscriptionsByEmail(email: string): Promise<WooSub[]> {
-  const c = wcCreds();
-  if (!c) throw new Error('WooCommerce no configurado');
-  const url =
-    `${c.base}/wp-json/wc/v3/subscriptions?search=${encodeURIComponent(email)}&per_page=50` +
-    `&consumer_key=${encodeURIComponent(c.ck)}&consumer_secret=${encodeURIComponent(c.cs)}`;
-  const subs = (await getJson(url)) as WooSub[];
-  // search= busca en varios campos: nos quedamos con las de ESE email de facturación.
-  const mine = subs.filter(s => nkEmail(s.billing?.email) === nkEmail(email));
-  return mine.sort((a, b) => time(b.start_date ?? b.date_created) - time(a.start_date ?? a.date_created));
-}
-
-/** Pedidos de un email, del más reciente al más antiguo (hasta 30). Lanza si Woo falla. */
-export async function fetchRecentOrdersByEmail(email: string): Promise<Array<{ line_items?: unknown; date_created?: unknown; date_paid?: unknown; billing?: { email?: unknown } | null }>> {
-  const c = wcCreds();
-  if (!c) throw new Error('WooCommerce no configurado');
-  const url =
-    `${c.base}/wp-json/wc/v3/orders?search=${encodeURIComponent(email)}&per_page=30&orderby=date&order=desc` +
-    `&consumer_key=${encodeURIComponent(c.ck)}&consumer_secret=${encodeURIComponent(c.cs)}`;
-  const orders = (await getJson(url)) as Array<{ line_items?: unknown; date_created?: unknown; date_paid?: unknown; billing?: { email?: unknown } | null }>;
-  return orders.filter(o => nkEmail(o.billing?.email) === nkEmail(email));
 }

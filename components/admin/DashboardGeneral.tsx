@@ -47,9 +47,8 @@ import {
   clasesEnRango, clasesProgramadasSemana, faltasProfesorDelMes,
   transcriptsPendientes, filasProfesores,
   // Los dos números que solo ve el teléfono (reglas provisionales, ver ahí).
-  origenDeActivos, movimientoMensual, pausedKeysOf,
+  origenDeActivos, movimientoMensual,
 } from '@/lib/dashboardMetrics';
-import { dbGetStudentPauses } from '@/lib/studentPauses';
 // Y las cinco lecturas que no están en memoria.
 import {
   loadDashboardExtras, riesgoResumen, esRiesgoRojo, bajasDelMes,
@@ -1175,16 +1174,6 @@ export default function DashboardGeneral() {
     return () => { cancelado = true; };
   }, []);
 
-  // Alumnos EN PAUSA (pausas abiertas de student_pauses): no cuentan como
-  // activos ni como clases programadas; tienen su propia cifra. Hasta que llega
-  // la lectura, nadie está en pausa (los números de siempre).
-  const [pausados, setPausados] = useState<ReadonlySet<string>>(VACIO_IDS);
-  useEffect(() => {
-    let cancelado = false;
-    dbGetStudentPauses().then(p => { if (!cancelado) setPausados(pausedKeysOf(p)); }).catch(() => {});
-    return () => { cancelado = true; };
-  }, []);
-
   // El "ahora" se congela al montar. Leerlo en cada render haría que las fechas
   // se movieran solas entre renders, y el linter de pureza lo prohíbe con razón.
   // Cancelaciones del flujo nuevo ("No puedo dar esta clase"), para el contador.
@@ -1196,11 +1185,11 @@ export default function DashboardGeneral() {
 
   // ── Los números ────────────────────────────────────────────────────────────
   // Todo esto sale de lo que el contexto ya tiene cargado. Ni una consulta.
-  const alumnos = alumnosResumen(students, assignments, pausados);
+  const alumnos = alumnosResumen(students, assignments);
   const ocup = ocupacionDe(teachers);
   const op = operacionDelMes(classRecords, mes);
   const clasesSemana = clasesEnRango(classRecords, semana);
-  const programadas = clasesProgramadasSemana(assignments, pausados);
+  const programadas = clasesProgramadasSemana(assignments);
   const faltasProfe = faltasProfesorDelMes(scoringEvents, mes, recRows);
   const profesActivos = teachers.filter(t => t.status !== 'vacation').length;
 
@@ -1256,7 +1245,7 @@ export default function DashboardGeneral() {
   const tonoOc = tonoOcupacion(ocup.pct);
 
   const kpis = [
-    { label: 'Alumnos con clase', valor: String(alumnos.conClase), pie: `de ${alumnos.total} en la base${alumnos.enPausa ? ` · ${alumnos.enPausa} en pausa` : ''}` },
+    { label: 'Alumnos con clase', valor: String(alumnos.conClase), pie: `de ${alumnos.total} en la base` },
     { label: 'Profesores activos', valor: String(profesActivos), pie: `de ${teachers.length}` },
     { label: 'Clases esta semana', valor: String(clasesSemana), pie: `${programadas} programadas · ${pctSemana}%` },
     { label: 'Coste profesores', valor: eur(finanzas.total), pie: `del mes en curso` },
@@ -1275,8 +1264,8 @@ export default function DashboardGeneral() {
   // Las colas de "Requiere acción" NO van al teléfono (pedido del admin).
   const datos: DashboardDatos = {
     ahora, cargandoExtras,
-    alumnos: { conClase: alumnos.conClase, total: alumnos.total, enPausa: alumnos.enPausa },
-    origen: origenDeActivos(students, assignments, hoyIso, pausados),
+    alumnos: { conClase: alumnos.conClase, total: alumnos.total },
+    origen: origenDeActivos(students, assignments, hoyIso),
     movimiento: movimientoMensual(assignments, extras?.dropouts ?? [], mes),
     finanzas: { total: finanzas.total, pagable: finanzas.pagable, pendiente: finanzas.aRevisar + finanzas.retenido },
     semana, clasesSemana, programadas,

@@ -17,10 +17,9 @@ import {
 import { transferirAlumnoCore, type TransferenciaResultado } from './transferencia/core';
 import { depsNavegador } from './transferencia/navegador';
 import { notifyNewAssignmentWith } from './notificationStore';
-import { changesOfStudent } from './slotHistory';
 import { insertClassRecordsWith, deleteClassRecordsWith, addRescheduleRecordWith, type RescheduleRecordInput } from './classRecordStore';
 import { findOffCalendar, slotStatusOf, type OffCalendarRow } from './offCalendar';
-import { Teacher, Student, Assignment, AppUser, Grid, TeacherStatus, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, AssignedSlot, EmailPreferences, SalesContactResult, RecoveryCell, TeacherBonus, BonusType, SlotChange } from '@/types';
+import { Teacher, Student, Assignment, AppUser, Grid, TeacherStatus, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, AssignedSlot, EmailPreferences, SalesContactResult, RecoveryCell, TeacherBonus, BonusType } from '@/types';
 import {
   bonusClaimEnabledFor, RETENTION_UPCOMING_DAYS, isActiveAssignmentLike, retentionBonusFor, retentionDaysLeft,
 } from './retention';
@@ -555,26 +554,6 @@ export async function dbGetCalendarChanges(filter: { assignmentId?: string; teac
     assignmentId: r.assignment_id, day: r.day, hour: r.hour, action: r.action,
     actorRole: r.actor_role, actorName: r.actor_name, origin: r.origin, createdAt: r.created_at,
   }));
-}
-
-/**
- * Altas y bajas de casillas de TODOS los profesores desde `sinceIso`, por
- * profesor. Solo las columnas que usa lib/slotHistory para reconstruir el
- * horario de una fecha pasada. Ante un error (o sin la tabla) devuelve {}: se
- * proyecta el horario de hoy, como antes.
- */
-export async function dbGetSlotChanges(sinceIso: string): Promise<Record<string, SlotChange[]>> {
-  type Row = { teacher_id: string; student_name: string; day: string; hour: string; action: SlotChange['action']; created_at: string };
-  const { rows, error } = await fetchAllPages<Row>('calendar_changes', (from, to) => supabase.from('calendar_changes')
-    .select('teacher_id, student_name, day, hour, action, created_at')
-    .gte('created_at', sinceIso).in('action', ['agregado', 'quitado'])
-    .order('created_at', { ascending: true }).range(from, to));
-  if (error) { console.warn('[db] No se pudo leer el historial de horarios:', error.message); return {}; }
-  const out: Record<string, SlotChange[]> = {};
-  for (const r of rows) {
-    (out[r.teacher_id] ??= []).push({ studentName: r.student_name, day: r.day, hour: r.hour, action: r.action, createdAt: r.created_at });
-  }
-  return out;
 }
 
 // ── FUERA DE CALENDARIO: lista y restauración (pestaña del admin) ─────────────
@@ -1273,13 +1252,13 @@ export async function dbGetAllTeacherAssignments(
     }
     // Asignados sin horario: van sin slots, igual que en getStudentsForTeacher.
     for (const [k, a] of porNombre) if (!enGrid.has(k)) lista.push({ ...a, slots: [] });
-    out.set(t.id, lista.map(a => conHistorial(t, a)));
+    out.set(t.id, lista);
   }
 
   // Profesores sin fila en teacher_calendars: solo lo que diga la ficha.
   for (const t of teachers) {
     if ((out.get(t.id) ?? []).length > 0) continue;
-    out.set(t.id, [...(asgByTeacher.get(t.id)?.values() ?? [])].map(a => conHistorial(t, { ...a, slots: [] })));
+    out.set(t.id, [...(asgByTeacher.get(t.id)?.values() ?? [])].map(a => ({ ...a, slots: [] })));
   }
   return out;
 }
@@ -1385,20 +1364,9 @@ export async function getStudentsForTeacher(teacherId: string): Promise<TeacherS
  */
 export async function getTeacherAssignments(teacher: Teacher): Promise<Assignment[]> {
   const rows = await getStudentsForTeacher(teacher.id);
-  return rows.map(ts => conHistorial(teacher, ts.assignment
+  return rows.map(ts => ts.assignment
     ? { ...ts.assignment, slots: ts.slots }
-    : assignmentFromGrid(teacher, ts)));
-}
-
-/**
- * Le pone a la asignación su historial de horarios, si el profesor lo trae
- * (TeachersContext lo carga): con él, quien proyecte el horario hacia atrás sabe
- * qué horario tenía en cada fecha. Ver lib/slotHistory.
- */
-function conHistorial(teacher: Pick<Teacher, 'slotChanges'>, a: Assignment): Assignment {
-  if (!teacher.slotChanges?.length) return a;
-  const cambios = changesOfStudent(teacher.slotChanges, a.studentName);
-  return cambios.length ? { ...a, slotChanges: cambios } : a;
+    : assignmentFromGrid(teacher, ts));
 }
 
 /**

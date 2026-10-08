@@ -31,14 +31,3 @@ export function isStudentAbsence(classType: ClassRecordType | string | undefined
 export function isStudentLostClass(classType: ClassRecordType | string | undefined): boolean {
   return isStudentAbsence(classType) || classType === 'cancelacion_hora';
 }
-
-/**
- * ¿Es una clase MOVIDA a otra fecha? Constancia 'reprogramada' con destino
- * (`rescheduledTo`). La pongan el profesor ("Reprogramar") o el alumno desde el
- * LMS (autoservicio), es la misma clase en otro día: ni se perdió, ni es una
- * falta, ni una cancelación. Una 'reprogramada' sin destino (filas viejas) no
- * entra aquí y se sigue tratando como antes.
- */
-export function isMovedClass(r: { classType?: ClassRecordType | string | null; rescheduledTo?: string | null }): boolean {
-  return r.classType === 'reprogramada' && !!r.rescheduledTo;
-}

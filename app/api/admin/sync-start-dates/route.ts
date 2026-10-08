@@ -17,7 +17,6 @@
 // asignación del lote para la que obtenga una fecha.
 
 import { supabase } from '@/lib/supabase';
-import { hasPauseItem } from '@/lib/subscriptions/pause';
 
 const TIMEOUT_MS = 10_000;
 
@@ -76,24 +75,17 @@ async function fetchStartDate(c: { base: string; ck: string; cs: string }, email
       const db = parseWcDate(b?.start_date)?.getTime() ?? 0;
       return db - da;
     });
-    // EN PAUSA: una suscripción NUEVA de la variación Pausa traería la fecha de
-    // la pausa, no la del inicio de clases. Se prefieren las normales; solo si no
-    // hay ninguna (la Pausa se cambió dentro de la misma suscripción, que conserva
-    // su start_date original) se usa la de Pausa, como antes.
-    const normales = byRecent.filter(s => !hasPauseItem(s?.line_items));
-    const pool = normales.length ? normales : byRecent;
-    const chosen = pool.find(s => s?.status === 'active') ?? pool[0];
+    const chosen = byRecent.find(s => s?.status === 'active') ?? byRecent[0];
     const startDate = toDateStr(firstNonEmpty(chosen?.start_date, chosen?.date_created));
     if (startDate) return startDate;
   }
 
-  // 2) Pago único (o suscripción sin start_date): último pedido completado que
-  //    NO sea de la Pausa (sus renovaciones mensuales son los pedidos más nuevos).
+  // 2) Pago único (o suscripción sin start_date): último pedido completado.
   const orders = await wooGet(
-    `${c.base}/wp-json/wc/v3/orders?search=${encodeURIComponent(email)}&per_page=20&orderby=date&order=desc&status=completed&${creds}`,
+    `${c.base}/wp-json/wc/v3/orders?search=${encodeURIComponent(email)}&per_page=1&orderby=date&order=desc&status=completed&${creds}`,
   );
   if (orders === null) throw new Error('woo orders failed');
-  const order = orders.find(o => !hasPauseItem(o?.line_items));
+  const order = orders[0];
   return toDateStr(firstNonEmpty(order?.date_completed, order?.date_paid, order?.date_created));
 }
 

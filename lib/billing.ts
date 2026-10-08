@@ -23,7 +23,6 @@
 
 import type { Student, ProductPrice } from '@/types';
 import { addCalendarMonths } from '@/lib/productUtils';
-import { PAUSE_MONTHLY_PRICE_EUR } from '@/lib/subscriptions/pause';
 
 // ── Emparejado alumno → fila de precio ───────────────────────────────────────
 
@@ -104,17 +103,7 @@ export type BillingKind = 'recurrente' | 'pago_unico' | null;
  */
 export type BillableStudent =
   Pick<Student, 'productName' | 'manualActiveUntil' | 'companyPlanMonths' | 'companyPlanStart'>
-  & {
-    plan?: string; createdAt?: string;
-    /**
-     * EN PAUSA ese mes (variación "Pausa" de Woo): factura la Pausa
-     * (PAUSE_MONTHLY_PRICE_EUR), no su plan. `productName` sigue siendo el plan
-     * de antes: el pedido de la Pausa nunca lo pisa (check-subscription), así
-     * que sin esta marca se le facturaría el plan completo. Quién lo decide y
-     * para qué mes: lib/externalPayouts.
-     */
-    enPausa?: boolean;
-  };
+  & { plan?: string; createdAt?: string };
 
 /** De dónde salió la fecha de inicio del pago único, por orden de confianza. */
 export type AnchorSource =
@@ -265,15 +254,6 @@ export function facturacionMensualDe(
   prices: ProductPrice[],
 ): BillingResult {
   if (!MONTH_RE.test((monthYear ?? '').slice(0, 7))) return unknown(`mes inválido: ${monthYear}`);
-
-  // En pausa: paga la Pausa, sea cual sea su plan. Va antes del match de
-  // precios porque su producto guardado es el plan que tenía antes de pausar.
-  if (student.enPausa) {
-    return {
-      eur: PAUSE_MONTHLY_PRICE_EUR, kind: 'recurrente', reason: `en pausa · ${PAUSE_MONTHLY_PRICE_EUR} €/mes`,
-      matched: null, window: null, anchor: null, warning: null,
-    };
-  }
 
   // `product_name` es lo que escribe check-subscription; `plan` es el respaldo de
   // los alumnos cargados a mano, que no tienen producto de Woo.

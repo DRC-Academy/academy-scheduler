@@ -27,7 +27,6 @@ import type {
 } from '@/types';
 import type { ClassTranscriptRef } from '@/lib/finance';
 import { periodIndex, existsForStudent } from '@/lib/studentPeriod';
-import type { StudentPause } from '@/lib/studentPauses';
 import { isRecoveryBetaTeacher } from '@/lib/classRecoveries';
 
 const nk = (s: string | null | undefined): string => (s ?? '').trim().toLowerCase();
@@ -213,8 +212,6 @@ export function buildMissingJoinClasses(opts: {
   analyses?: ClassTranscriptRef[];
   /** Bajas registradas: cierran el período del alumno (ver lib/studentPeriod). */
   dropouts?: Array<{ teacherId: string; studentName: string; droppedAt?: string }>;
-  /** Pausas del alumno: sus días no tienen clase (ver lib/studentPauses). */
-  pauses?: StudentPause[];
   teacherId: string;
   fromDate: string;
   toDate: string;
@@ -239,7 +236,7 @@ export function buildMissingJoinClasses(opts: {
   // Período del alumno (inicio y baja). Reemplaza al filtro propio que solo
   // miraba `startDate`: ahora es la misma regla que usan asistencias y la agenda,
   // y de paso cubre el lado de la baja. Ver el contrato en lib/studentPeriod.ts.
-  const periodos = periodIndex(assignments, dropouts ?? [], teacherId, opts.pauses ?? []);
+  const periodos = periodIndex(assignments, dropouts ?? [], teacherId);
 
   // Por alumno + fecha + HORA, que es la clave del índice único de la tabla: un
   // alumno puede tener dos clases sueltas el mismo día (14:00 y 18:00) y son dos

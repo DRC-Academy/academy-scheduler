@@ -9,10 +9,6 @@
       "schedule": "0 12 * * *"
     },
     {
-      "path": "/api/cron/sync-pausas",
-      "schedule": "30 5 * * *"
-    },
-    {
       "path": "/api/cron/followups-nivel",
       "schedule": "0 8 * * *"
     },

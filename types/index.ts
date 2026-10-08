@@ -24,19 +24,6 @@ export interface RecoveryCell {
   recoveryFor?: string;   // fecha de la clase original que se recupera
 }
 
-/**
- * Un alta o una baja de una casilla RECURRENTE de un alumno (una fila de
- * calendar_changes). Sirve para reconstruir el horario que tenía en una fecha
- * pasada: ver lib/slotHistory.
- */
-export interface SlotChange {
-  studentName: string;
-  day: string;            // 'Lunes' … 'Sábado'
-  hour: string;           // 'HH:00'
-  action: 'agregado' | 'quitado' | 'renombrado';
-  createdAt: string;      // instante ISO del cambio
-}
-
 export interface Vacation {
   from: string;
   to: string;
@@ -117,13 +104,6 @@ export interface Teacher {
    * de las dos. Ver lib/teacherClasses.gridOccupancyOfTeacher.
    */
   recoveryCells?: RecoveryCell[];
-  /**
-   * Altas y bajas de casillas del calendario (calendar_changes) de los últimos
-   * días, para saber qué horario tenía cada alumno en una fecha PASADA (ver
-   * lib/slotHistory). No lo trae dbGetTeachers: lo pone TeachersContext, que lo
-   * carga aparte.
-   */
-  slotChanges?: SlotChange[];
   internalRating?: number;
   createdAt?: string;
   /**
@@ -208,13 +188,6 @@ export interface Assignment {
   studentEmail: string;
   studentLevel: string;
   slots: AssignedSlot[];         // all assigned day+hour combinations
-  /**
-   * Altas y bajas de sus casillas (calendar_changes), del más nuevo al más viejo,
-   * para saber qué horario tenía en una fecha PASADA (lib/slotHistory). Lo ponen
-   * getTeacherAssignments / dbGetAllTeacherAssignments si el profesor trae su
-   * historial; sin él, `slots` vale para todas las fechas, como siempre.
-   */
-  slotChanges?: SlotChange[];
   objetivo: string;
   plan: string;
   weeklyHours: number;

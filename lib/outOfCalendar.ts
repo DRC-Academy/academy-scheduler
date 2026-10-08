@@ -30,10 +30,8 @@
 // no tiene una línea "añadidas a mano": estaría siempre en cero.
 
 import type { Assignment } from '@/types';
-import { slotsOnDate } from '@/lib/slotHistory';
 import type { ClassFinanceRow } from '@/lib/finance';
 import { periodIndex, existsForStudent, type StudentDropout } from '@/lib/studentPeriod';
-import type { StudentPause } from '@/lib/studentPauses';
 
 const nk = (s: string | null | undefined): string => (s ?? '').trim().toLowerCase();
 const DIAS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
@@ -123,32 +121,24 @@ export interface ScheduledIndex {
 export function scheduledIndex(opts: {
   assignments: Assignment[];
   dropouts: StudentDropout[];
-  /** Pausas del alumno: sus días no cuentan como agendados. */
-  pauses?: StudentPause[];
   teacherId: string;
   monthYear: string;
 }): ScheduledIndex {
   const { assignments, dropouts, teacherId, monthYear } = opts;
   const [y, m] = monthYear.split('-').map(Number);
   const ultimo = new Date(y, m, 0).getDate();
-  const periodos = periodIndex(assignments, dropouts, teacherId, opts.pauses ?? []);
+  const periodos = periodIndex(assignments, dropouts, teacherId);
 
   const celdas = new Set<string>();
   const dias = new Map<string, Set<string>>();
   for (const a of assignments) {
     if (a.teacherId !== teacherId) continue;
     const suyos = new Set((a.slots ?? []).map(s => s.day));
-    // Con historial (lib/slotHistory), una fecha anterior a un cambio de horario
-    // usa los días que tenía entonces: tras pasar de los martes a los jueves, los
-    // martes ya dados siguen agendados y los jueves anteriores no.
-    const cambios = a.slotChanges ?? [];
-    if (suyos.size === 0 && cambios.length === 0) continue;
-    if (suyos.size > 0) dias.set(nk(a.studentName), suyos);
+    if (suyos.size === 0) continue;
+    dias.set(nk(a.studentName), suyos);
     for (let d = 1; d <= ultimo; d++) {
       const iso = `${monthYear}-${String(d).padStart(2, '0')}`;
-      const antes = cambios.length ? slotsOnDate(a.slots ?? [], cambios, iso) : null;
-      const diasDeEseDia = antes ? new Set(antes.map(s => s.day)) : suyos;
-      if (!diasDeEseDia.has(DIAS[new Date(iso + 'T00:00:00').getDay()])) continue;
+      if (!suyos.has(DIAS[new Date(iso + 'T00:00:00').getDay()])) continue;
       // El período del alumno (alta → baja) recorta la proyección; los HECHOS
       // no se filtran nunca (ver el contrato de lib/studentPeriod).
       if (!existsForStudent(periodos, a.studentName, iso)) continue;
@@ -248,7 +238,6 @@ export interface DriftStudent {
 export function buildDriftReport(opts: {
   monthYear: string;
   dropouts: StudentDropout[];
-  pauses?: StudentPause[];
   teachers: Array<{
     teacherId: string;
     teacherName: string;
@@ -262,7 +251,7 @@ export function buildDriftReport(opts: {
 
   for (const t of opts.teachers) {
     const sched = scheduledIndex({
-      assignments: t.assignments, dropouts: opts.dropouts, pauses: opts.pauses,
+      assignments: t.assignments, dropouts: opts.dropouts,
       teacherId: t.teacherId, monthYear: opts.monthYear,
     });
     for (const r of t.rows) {

@@ -4,8 +4,6 @@
 // ante un error de conexión devuelve { active: null } para que el profesor decida.
 
 import { supabase } from '@/lib/supabase';
-import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
-import { recordPauseState } from '@/lib/studentPausesServer';
 import {
   parseHoursFromText, parseHoursFromMeta, detectLevel,
   detectCompanyPlan, resolveCompanyPlanUpdate, isCompanyProduct,
@@ -14,7 +12,7 @@ import {
 // La regla de "activo" (Woo OR manual OR Oritalk) vive en un módulo puro para
 // que exista una sola definición. Ver lib/subscriptionAccess.ts.
 import {
-  accessOverrideOf, isActiveWooStatus, madridToday, resolveWooSubscriptions, hasPauseItem, isPausedStatus,
+  accessOverrideOf, isActiveWooStatus, madridToday, resolveWooSubscriptions, hasPauseItem,
 } from '@/lib/subscriptionAccess';
 
 // La lista de productos de PAGO ÚNICO vive en lib/productUtils.isOneTimeProduct:
@@ -49,8 +47,6 @@ interface SubResult {
   billingName: string | null;            // nombre del cliente (billing) para autocompletar
   subscriptionStartDate: string | null;  // 'YYYY-MM-DD' — inicio de la suscripción / compra
   detectedLevel: string | null;          // nivel A1–C2 detectado del producto/meta
-  /** 'YYYY-MM-DD' desde el que está en pausa (tabla student_pauses), o null. */
-  pausedSince: string | null;
 }
 
 interface RichProduct {
@@ -79,7 +75,6 @@ const ERROR_RESULT: SubResult = {
   companyPlanMonths: null, companyPlanStart: null,
   metaData: [], phone: null,
   billingName: null, subscriptionStartDate: null, detectedLevel: null,
-  pausedSince: null,
 };
 
 // Convierte una fecha WooCommerce (ISO / 'YYYY-MM-DD HH:mm:ss') a 'YYYY-MM-DD'.
@@ -100,26 +95,6 @@ function billingNameFrom(billing: any): string | null {
 // Cache en memoria (por instancia serverless): 5 min por email.
 const TTL_MS = 5 * 60 * 1000;
 const productCache = new Map<string, { product: RichProduct; ts: number }>();
-// Registro de fechas de la pausa (student_pauses). Cada verificación deja la
-// tabla al día (abre o cierra la pausa); para no leer la base en cada una de las
-// cientos de verificaciones de la lista de alumnos, se recuerda el último estado
-// registrado por alumno durante el mismo TTL.
-const pauseMemo = new Map<string, { paused: boolean; since: string | null; ts: number }>();
-
-async function syncPause(
-  studentRow: { id?: string; name?: string | null } | null, email: string, paused: boolean,
-): Promise<string | null> {
-  if (!studentRow?.id) return null;
-  const memo = pauseMemo.get(studentRow.id);
-  if (memo && memo.paused === paused && Date.now() - memo.ts < TTL_MS) return memo.since;
-  const open = await recordPauseState(getSupabaseAdmin() ?? supabase, {
-    studentId: studentRow.id, studentName: studentRow.name ?? email, email,
-  }, paused, madridToday());
-  const since = paused ? open?.from ?? null : null;
-  pauseMemo.set(studentRow.id, { paused, since, ts: Date.now() });
-  return since;
-}
-
 const subCache     = new Map<string, { result: { active: boolean; status: string; endDate: string | null; daysRemaining: number | null; phone: string | null; planName: string | null; startDate: string | null }; ts: number }>();
 
 const MAX_ATTEMPTS = 3;
@@ -485,7 +460,7 @@ export async function GET(request: Request): Promise<Response> {
     planName: productName, productName, productVariation, productFullName,
     productType, hoursFromApi, manualActiveUntil: null, oritalkUntil,
     companyPlanMonths, companyPlanStart, metaData, phone: null,
-    billingName, subscriptionStartDate: orderDate, detectedLevel, pausedSince: null,
+    billingName, subscriptionStartDate: orderDate, detectedLevel,
     ...o,
   });
 
@@ -518,11 +493,7 @@ export async function GET(request: Request): Promise<Response> {
   }
 
   // 7) SUSCRIPCIÓN. La activación manual sigue teniendo prioridad (override).
-  //    Gana también sobre la Pausa, así que una pausa abierta se cierra.
-  if (override?.kind === 'manual') {
-    await syncPause(student as { id?: string; name?: string | null } | null, email, false);
-    return Response.json(overrideResult('manual', override.until));
-  }
+  if (override?.kind === 'manual') return Response.json(overrideResult('manual', override.until));
 
   if (!creds) return Response.json(make({ active: null, status: 'error' }));
 
@@ -536,13 +507,8 @@ export async function GET(request: Request): Promise<Response> {
     }
   }
 
-  // EN PAUSA: se abre o se cierra su fila en student_pauses (fecha del badge y
-  // de las asistencias). La reactivación la cierra sola en la verificación
-  // siguiente, o esa noche en el cron sync-pausas.
-  const pausedSince = await syncPause(student as { id?: string; name?: string | null } | null, email, isPausedStatus(sub.status));
-
   return Response.json(make({
     active: sub.active, status: sub.status, endDate: sub.endDate, daysRemaining: sub.daysRemaining, phone: sub.phone,
-    subscriptionStartDate: sub.startDate ?? orderDate, pausedSince,
+    subscriptionStartDate: sub.startDate ?? orderDate,
   }));
 }

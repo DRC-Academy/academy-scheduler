@@ -8,19 +8,11 @@
 // bajas) la predicción no es fiable; el valor está en registrar estas señales en
 // cada baja real para tener dataset en ~3 meses.
 
-import { isMovedClass } from '@/lib/classTypes';
-
-export interface ChurnRecordLite {
-  student_name: string; class_date: string | null; class_type: string | null;
-  /** 'reprogramada' con destino = clase MOVIDA: no es una ausencia (ver isMovedClass). */
-  rescheduled_to?: string | null;
-}
+export interface ChurnRecordLite { student_name: string; class_date: string | null; class_type: string | null; }
 export interface ChurnJoinLite   { student_name: string; scheduled_date: string | null; punctuality?: string | null; }
 export interface ChurnAnalysisLite { student_name: string; class_date?: string | null; analyzed_at?: string | null; risk_signal?: string | null; transcript?: string | null; }
 
 // Tipos de clase que cuentan como "cancelación/ausencia" (señal de desenganche).
-// Una 'reprogramada' CON destino no: es la misma clase en otro día, la mueva el
-// profesor o el alumno desde el LMS. Solo la vieja, sin destino, sigue contando.
 const CANCEL_TYPES = new Set([
   'falta_sin_aviso', 'cancelacion_hora', 'falta_con_aviso', 'reprogramada', 'cancelada_con_preaviso',
   'cancelada_por_profesor',
@@ -128,8 +120,7 @@ export function computeChurnSignals(input: {
     .sort((a, b) => (b.class_date ?? b.analyzed_at ?? '').localeCompare(a.class_date ?? a.analyzed_at ?? ''))
     .slice(0, window);
 
-  const cancellations = myRecords.filter(r =>
-    CANCEL_TYPES.has(r.class_type ?? '') && !isMovedClass({ classType: r.class_type, rescheduledTo: r.rescheduled_to })).length;
+  const cancellations = myRecords.filter(r => CANCEL_TYPES.has(r.class_type ?? '')).length;
   const lateCount = myLogs.filter(l => l.punctuality === 'late' || l.punctuality === 'very_late').length;
   // Cuenta también los 'amarillo' HISTÓRICOS a propósito: esto alimenta el
   // dataset de predicción de bajas, que mira hacia atrás. El nivel ya no se

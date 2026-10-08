@@ -113,20 +113,6 @@ describe('entró con el link', () => {
     expect(r.global.ingreso[0]).toEqual({ num: 1, den: 2 });
   });
 
-  it('una clase movida (profesor o alumno) no cuenta como programada sin ingreso; su destino sí cuenta', () => {
-    // Martes 22/09 17-19 movida al jueves 24/09 10-12 (casilla de recuperación), donde se entró.
-    const r = construirInformeUso(entrada({
-      programadas: [
-        prog({ durationHours: 2 }),
-        prog({ date: '2026-09-24', startHour: 10, durationHours: 2, isRecovery: true }),
-      ],
-      joinLogs: [log({ id: 'j1', scheduledDate: '2026-09-24', scheduledTime: '10:00' })],
-      records: [{ id: 'r1', teacherId: 'tA', studentName: 'Luis', classDate: '2026-09-22', classTime: '17:00',
-        classType: 'reprogramada', rescheduledTo: '2026-09-24' } as ClassRecord],
-    }));
-    expect(r.global.ingreso[0]).toEqual({ num: 1, den: 1 });
-  });
-
   it('un clic a otra hora el mismo día cubre la clase (no cuenta dos)', () => {
     const r = construirInformeUso(entrada({
       programadas: [prog({})],

@@ -44,11 +44,6 @@ export interface SubscriptionInfo {
    * El endpoint ya lo devolvía; sin traerlo hasta acá el badge no podía decirlo.
    */
   subscriptionStartDate: string | null;
-  /**
-   * EN PAUSA: día ('YYYY-MM-DD') desde el que está en pausa, de la tabla
-   * student_pauses. null si no está en pausa o si la fecha no se conoce.
-   */
-  pausedSince: string | null;
   fetchedAt: number;
 }
 
@@ -70,7 +65,7 @@ const NO_EMAIL: SubscriptionInfo = {
   active: null, status: 'no_email', daysRemaining: null, endDate: null,
   productType: null, productName: null, manualActiveUntil: null, oritalkUntil: null,
   companyPlanMonths: null, companyPlanStart: null,
-  subscriptionStartDate: null, pausedSince: null, fetchedAt: 0,
+  subscriptionStartDate: null, fetchedAt: 0,
 };
 
 // Verifica la suscripción de un email. Usa cache (5 min) salvo `force`.
@@ -101,13 +96,12 @@ export async function checkSubscription(email?: string | null, force = false): P
       companyPlanMonths: data.companyPlanMonths ?? null,
       companyPlanStart:  data.companyPlanStart ?? null,
       subscriptionStartDate: data.subscriptionStartDate ?? null,
-      pausedSince:       data.pausedSince ?? null,
       fetchedAt:         Date.now(),
     };
     subscriptionCache.set(e, info);
     return info;
   } catch {
-    return { active: null, status: 'error', daysRemaining: null, endDate: null, productType: null, productName: null, manualActiveUntil: null, oritalkUntil: null, companyPlanMonths: null, companyPlanStart: null, subscriptionStartDate: null, pausedSince: null, fetchedAt: Date.now() };
+    return { active: null, status: 'error', daysRemaining: null, endDate: null, productType: null, productName: null, manualActiveUntil: null, oritalkUntil: null, companyPlanMonths: null, companyPlanStart: null, subscriptionStartDate: null, fetchedAt: Date.now() };
   }
 }
 
@@ -206,8 +200,7 @@ export function subBadge(info: SubscriptionInfo | undefined): { label: string; c
 
   // EN PAUSA: amarillo de marca con texto oscuro (lib/subscriptionAccess).
   if (isPausedStatus(info.status)) {
-    const desde = shortDate(info.pausedSince);
-    return { label: `${PAUSED_META.icon} ${PAUSED_META.label}${desde ? ` desde ${desde}` : ''}`, color: PAUSED_META.color, bg: PAUSED_META.bg };
+    return { label: `${PAUSED_META.icon} ${PAUSED_META.label}`, color: PAUSED_META.color, bg: PAUSED_META.bg };
   }
 
   // SUSCRIPCIÓN (y desconocido)

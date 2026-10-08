@@ -12,24 +12,21 @@ import { PullToRefresh } from '@/components/PullToRefresh';
 import { getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
-import { buildAttendanceRows, attachTranscriptStatus, markMovedClasses, isoDate, type LogRow } from '@/lib/attendance';
+import { buildAttendanceRows, attachTranscriptStatus, isoDate, type LogRow } from '@/lib/attendance';
 import { transcriptDeadlineBadge, type TranscriptStatusResult } from '@/lib/transcriptDeadline';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { getTeacherAssignments } from '@/lib/db';
 import { periodIndex, dbGetStudentDropouts, type StudentDropout } from '@/lib/studentPeriod';
-import { dbGetStudentPauses, type StudentPause } from '@/lib/studentPauses';
 import type { Assignment } from '@/types';
 import { checkSubscription, subBadge, resolveSubscriptionEmail, type SubscriptionInfo } from '@/lib/useSubscriptionStatus';
 import { HelpTooltip } from '@/components/ui';
 import type { HelpTooltipKey } from '@/lib/help-tooltips';
 
 // ── Modelo de la pantalla ─────────────────────────────────────────────────────
-type Estado = 'no' | 'proxima' | 'ingreso' | 'movida';
+type Estado = 'no' | 'proxima' | 'ingreso';
 interface ClassRow {
   id: string; date: string; time: string; alumno: string;
   sinEnlace: boolean; estado: Estado; horaIngreso: string;
-  /** 'movida': fecha a la que se movió. Con ingreso: fecha original si es el destino de una clase movida. */
-  movidaA?: string; movidaDe?: string;
   /** Transcript frente al plazo de 24 h (solo con ingreso). Fuente única: lib/transcriptDeadline. */
   transcript?: TranscriptStatusResult;
 }
@@ -41,14 +38,12 @@ const ESTADO_PILL: Record<Estado, { text: string; bg: string; border: string; do
   no:      { text: '#b42318', bg: '#fef3f2', border: '#fecdca', dot: '#f04438', label: 'No ingresó' },
   proxima: { text: '#175cd3', bg: '#eff4ff', border: '#b2ccff', dot: '#2e90fa', label: 'Próxima' },
   ingreso: { text: '#067647', bg: '#ecfdf3', border: '#a6f4c5', dot: '#12b76a', label: 'Ingresó' },
-  movida:  { text: '#475467', bg: '#f2f4f7', border: '#d0d5dd', dot: '#98a2b3', label: 'Reprogramada' },
 };
 
 // LogRow (attendance) → estado de acceso de la pantalla.
 function toEstado(s: LogRow['status']): Estado {
   if (s === 'missed') return 'no';
   if (s === 'pending' || s === 'upcoming') return 'proxima';
-  if (s === 'rescheduled') return 'movida';   // la mueva el profesor o el alumno: no es una falta
   return 'ingreso';   // on_time | late | very_late
 }
 
@@ -79,16 +74,12 @@ function fmtHour(h: string): string {
 }
 
 // ── Pills ─────────────────────────────────────────────────────────────────────
-/** '2026-10-22' → '22/10'. */
-const diaMes = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
-
-function EstadoPill({ e, movidaA, movidaDe }: { e: Estado; movidaA?: string; movidaDe?: string }) {
+function EstadoPill({ e }: { e: Estado }) {
   const p = ESTADO_PILL[e];
-  const extra = e === 'movida' && movidaA ? ` al ${diaMes(movidaA)}` : movidaDe ? ` · movida del ${diaMes(movidaDe)}` : '';
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 999, background: p.bg, border: `1px solid ${p.border}`, color: p.text, fontSize: 12.5, fontWeight: 600, whiteSpace: 'nowrap' }}>
       <span style={{ width: 7, height: 7, borderRadius: 999, background: p.dot }} />
-      {p.label}{extra}
+      {p.label}
     </span>
   );
 }
@@ -160,8 +151,6 @@ function AsistenciasContent() {
   // Bajas: cierran el período del alumno (ver lib/studentPeriod).
   const [dropouts, setDropouts] = useState<StudentDropout[]>([]);
   useEffect(() => { dbGetStudentDropouts().then(setDropouts).catch(() => {}); }, []);
-  const [pauses, setPauses] = useState<StudentPause[]>([]);
-  useEffect(() => { dbGetStudentPauses().then(setPauses).catch(() => {}); }, []);
   useEffect(() => {
     if (!teacher) return;
     let cancelled = false;
@@ -185,9 +174,9 @@ function AsistenciasContent() {
       // El horario recurrente no tiene fechas: sin el período, un alumno que
       // empieza el mes que viene ya figura con clases perdidas de este, y uno
       // dado de baja seguiría acumulando "no ingresó" cada semana.
-      periodsByTeacher: { [teacher.id]: periodIndex(myAssignments, dropouts, teacher.id, pauses) },
+      periodsByTeacher: { [teacher.id]: periodIndex(myAssignments, dropouts, teacher.id) },
     }).sort((x, y) => x.date.localeCompare(y.date) || (parseInt(x.hour) - parseInt(y.hour)));
-  }, [teacher, myAssignments, dropouts, pauses, classJoinLogs, fromDate, toDate, todayIso, nowMinutes]);
+  }, [teacher, myAssignments, dropouts, classJoinLogs, fromDate, toDate, todayIso, nowMinutes]);
 
   // Estado del transcript de cada clase CON ingreso, con la misma regla que Mis
   // clases, la ficha y Finanzas (lib/transcriptDeadline). Antes esta pantalla no
@@ -195,8 +184,7 @@ function AsistenciasContent() {
   // El reloj se fija al montar (como `nowSpain`): la cuenta regresiva de esta
   // pantalla no necesita refrescarse sola, se recarga al navegar.
   const [nowMs] = useState(() => Date.now());
-  // Las clases movidas salen "Reprogramada al …", no "No ingresó".
-  const rowsConTranscript = useMemo<LogRow[]>(() => attachTranscriptStatus(markMovedClasses(rows, classRecords), {
+  const rowsConTranscript = useMemo<LogRow[]>(() => attachTranscriptStatus(rows, {
     joinLogs: classJoinLogs, analyses: classAnalyses, classRecords, now: nowMs,
   }), [rows, classJoinLogs, classAnalyses, classRecords, nowMs]);
 
@@ -204,7 +192,7 @@ function AsistenciasContent() {
     // hoursLabel ya trae el rango de la sesión ("12:00 - 14:00" en una clase de
     // 2h); fmtHour cubre las filas sueltas de logs viejos con la hora a secas.
     id: r.id, date: r.date, time: fmtHour(r.hoursLabel || r.hour), alumno: r.studentName,
-    sinEnlace: !r.hasLink, estado: toEstado(r.status), movidaA: r.rescheduledTo, movidaDe: r.rescheduledFrom,
+    sinEnlace: !r.hasLink, estado: toEstado(r.status),
     horaIngreso: r.joinedAt ? new Date(r.joinedAt).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }) : '',
     transcript: r.transcript,
   })), [rowsConTranscript]);
@@ -245,7 +233,7 @@ function AsistenciasContent() {
   const proxCount    = allClasses.filter(c => c.estado === 'proxima').length;
   const onTimeCount  = rows.filter(r => r.status === 'on_time').length;
   const punct        = ingresoCount > 0 ? Math.round((onTimeCount / ingresoCount) * 100) : 0;
-  const total        = allClasses.filter(c => c.estado !== 'movida').length || 1;
+  const total        = allClasses.length || 1;
 
   // Filtro + búsqueda combinados (AND). Días sin clases tras filtrar se ocultan.
   const q = query.trim().toLowerCase();
@@ -398,7 +386,7 @@ function AsistenciasContent() {
                             <div className="asis-mcard-top">
                               <span className="asis-mcard-time">{c.time}</span>
                               <span className="asis-mcard-name">{c.alumno}</span>
-                              <EstadoPill e={c.estado} movidaA={c.movidaA} movidaDe={c.movidaDe} />
+                              <EstadoPill e={c.estado} />
                             </div>
                             <div className="asis-mcard-bot">
                               <span>Ingreso: {c.horaIngreso || '—'}</span>
@@ -451,7 +439,7 @@ function DayGroupRows({ day, subFor }: {
             </span>
           </td>
           <td style={{ color: c.horaIngreso ? 'var(--text-secondary)' : 'var(--text-muted)', whiteSpace: 'nowrap' }}>{c.horaIngreso || '—'}</td>
-          <td><EstadoPill e={c.estado} movidaA={c.movidaA} movidaDe={c.movidaDe} /></td>
+          <td><EstadoPill e={c.estado} /></td>
           <td><TranscriptPill t={c.transcript} /></td>
           <td><SubBadgePill info={subFor(c.alumno)} /></td>
         </tr>

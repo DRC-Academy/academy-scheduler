@@ -11,9 +11,6 @@ import { dbDeleteStudent } from '@/lib/db';
 import { sendCancellationEmail } from '@/lib/notifications-email';
 import { captureChurnSnapshot } from '@/lib/churnSnapshot';
 import { flagChurnWithOpenAlert } from '@/lib/interventionStore';
-import { fetchSubscriptionsByEmail } from '@/lib/wooPausedEmails';
-import { isActiveWooStatus } from '@/lib/subscriptionAccess';
-import { hasPauseItem } from '@/lib/subscriptions/pause';
 
 export const runtime = 'nodejs';
 
@@ -25,52 +22,6 @@ function verifySignature(rawBody: string, signature: string | null, secret: stri
   const b = Buffer.from(signature);
   if (a.length !== b.length) return false;
   return crypto.timingSafeEqual(a, b);
-}
-
-/** Estados de la suscripción del aviso con los que SÍ se da de baja al alumno. */
-const CANCEL_STATUSES = new Set(['cancelled', 'expired']);
-
-/**
- * Motivo para NO borrar al alumno, o null si la baja sigue. `processed: false` +
- * `notify` cuando no se pudo comprobar (Woo caído): queda pendiente de revisar.
- */
-async function cancellationSkipReason(
-  payload: any, email: string,
-): Promise<{ reason: string; processed: boolean; notify: boolean } | null> {
-  const status = typeof payload?.status === 'string' ? payload.status.trim().toLowerCase() : '';
-  if (status && !CANCEL_STATUSES.has(status)) {
-    return { reason: `omitido: el aviso trae estado '${status}', no es una cancelación`, processed: true, notify: false };
-  }
-  let subs: Array<{ id?: unknown; status?: unknown; line_items?: unknown }>;
-  try {
-    subs = await fetchSubscriptionsByEmail(email);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { reason: `omitido: no se pudo verificar en Woo si tiene otra suscripción activa (${msg})`, processed: false, notify: true };
-  }
-  const cancelledId = String(payload?.id ?? '');
-  const otra = subs.find(s => String(s.id ?? '') !== cancelledId && isActiveWooStatus(String(s.status ?? '')));
-  if (otra) {
-    const tipo = hasPauseItem(otra.line_items) ? 'de Pausa' : 'normal';
-    return { reason: `omitido: tiene otra suscripción ${tipo} activa (#${String(otra.id ?? '?')})`, processed: true, notify: false };
-  }
-  return null;
-}
-
-/** Aviso al admin (id fijo por evento: no se duplica si Woo reintenta). */
-async function notifyAdminCancelSkipped(logId: string, email: string, name: string, reason: string): Promise<void> {
-  const { error } = await supabase.from('notifications').upsert({
-    id:          `webhook_cancel_skipped_${logId}`,
-    target_user: null,
-    target_role: 'admin',
-    title:       '⚠️ Baja de WooCommerce sin procesar',
-    body:        `Llegó la cancelación de ${name || email} (${email}) pero no se dio de baja: ${reason}. Revisa en WooCommerce si sigue activo y, si no, dalo de baja a mano.`,
-    type:        'webhook_cancel_skipped',
-    read_by:     [],
-    created_at:  new Date().toISOString(),
-    created_by:  'sistema',
-  }, { onConflict: 'id', ignoreDuplicates: true });
-  if (error) console.error('[webhook cancelled] No se pudo crear el aviso al admin:', error.message);
 }
 
 export async function POST(req: Request): Promise<Response> {
@@ -112,22 +63,6 @@ export async function POST(req: Request): Promise<Response> {
 
     if (!email) {
       await supabase.from('webhook_logs').update({ processed: true, error: 'no billing email in payload' }).eq('id', logId);
-      return new Response('ok', { status: 200 });
-    }
-
-    // 4.5) SEGURO ANTES DE BORRAR. Lo de abajo elimina al alumno entero (grid,
-    //      asignaciones, ficha) y no se deshace. Solo se sigue si:
-    //        a) el aviso es de verdad una cancelación (cancelled / expired);
-    //        b) el alumno NO tiene OTRA suscripción que le dé acceso, normal o
-    //           de Pausa. Si pasar a la Pausa cancelara la suscripción vieja y
-    //           creara otra, sin esto el alumno pausado se borraría.
-    //      Si Woo no contesta, NO se borra: se avisa al admin para revisarlo.
-    const skip = await cancellationSkipReason(payload, email);
-    if (skip) {
-      await supabase.from('webhook_logs')
-        .update({ processed: skip.processed, error: skip.reason }).eq('id', logId);
-      console.warn(`[webhook cancelled] ${email}: ${skip.reason}`);
-      if (skip.notify) await notifyAdminCancelSkipped(logId, email, fullName, skip.reason);
       return new Response('ok', { status: 200 });
     }
 

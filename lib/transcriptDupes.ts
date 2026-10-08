@@ -75,9 +75,6 @@ export type DupeCheck =
   /** Ya hay transcript de esta clase, pero con otro texto → ofrecer reemplazo. */
   | { kind: 'replace'; row: DupeRow };
 
-/** Plazo de la comprobación de duplicados antes de guardar igual. */
-export const DUPES_TIMEOUT_MS = 8_000;
-
 const sameName = (a: string, b: string) =>
   a.trim().toLowerCase() === b.trim().toLowerCase();
 
@@ -100,43 +97,15 @@ export async function checkTranscriptDuplicates(args: {
   classDate: string;
   hash: string;
 }): Promise<DupeCheck> {
-  // Límite propio de DUPES_TIMEOUT_MS para toda la comprobación (todas las
-  // páginas). Es solo un aviso: si Supabase no contesta a tiempo se guarda igual.
-  // Incidente 08/10/2026: sin límite, el botón se quedaba en "Verificando..."
-  // para siempre y el profesor no podía subir el transcript.
-  const corte = new AbortController();
-  const timer = setTimeout(() => corte.abort(), DUPES_TIMEOUT_MS);
-
   // Paginada: son TODAS las transcripciones del profesor y crecen con cada clase.
   // Truncada, el detector de duplicados dejaría de ver las viejas y volvería a
   // aceptar como nuevo un texto ya subido.
-  const consulta = fetchAllPages('class_analyses (duplicados)', (from, to) =>
+  const { rows: data, error } = await fetchAllPages('class_analyses (duplicados)', (from, to) =>
     supabase.from('class_analyses')
       .select('id, student_name, class_date, analyzed_at, transcript_hash')
       .eq('teacher_id', args.teacherId)
       .order('analyzed_at', { ascending: false }).order('id', { ascending: false })
-      .range(from, to)
-      .abortSignal(corte.signal));
-  // La carrera es el seguro: aunque una petición ignorara la señal, el botón se
-  // libera igual al vencer el plazo.
-  const plazo = new Promise<'timeout'>(resolve =>
-    corte.signal.addEventListener('abort', () => resolve('timeout'), { once: true }));
-
-  let resultado: Awaited<typeof consulta> | 'timeout';
-  try {
-    resultado = await Promise.race([consulta, plazo]);
-  } finally {
-    clearTimeout(timer);
-  }
-
-  if (resultado === 'timeout' || corte.signal.aborted) {
-    console.warn(
-      `[transcriptDupes] Comprobación de duplicados SALTADA por timeout (${DUPES_TIMEOUT_MS / 1000} s): ` +
-      'se guarda sin verificar.',
-    );
-    return { kind: 'none' };
-  }
-  const { rows: data, error } = resultado;
+      .range(from, to));
 
   // Si la consulta falla (p. ej. falta la columna transcript_hash), se degrada a
   // "sin duplicados": la verificación nunca debe impedir guardar una clase.

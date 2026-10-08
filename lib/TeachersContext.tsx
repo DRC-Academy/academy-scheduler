@@ -1,7 +1,7 @@
 ﻿'use client';
-import { createContext, useContext, useState, useEffect, useMemo, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { useAuth } from '@/lib/AuthContext';
-import { Teacher, Student, Assignment, Grid, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, ClassRecord, ClassRecordType, FinanceRate, FinancePayment, FinanceManualApproval, EmailPreferences, SalesContactResult, TeacherBonus, SlotChange } from '@/types';
+import { Teacher, Student, Assignment, Grid, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, ClassRecord, ClassRecordType, FinanceRate, FinancePayment, FinanceManualApproval, EmailPreferences, SalesContactResult, TeacherBonus } from '@/types';
 import {
   dbGetTeachers, dbAddTeacher, dbArchiveTeacher,
   dbGetStudents, dbUpsertStudent, dbDeleteStudent, dbUpdateStudent,
@@ -24,9 +24,7 @@ import {
   dbSetSalesContact,
   dbApplyFaltaSideEffects, dbRevertStudentAbsence, dbFindStudentAbsence,
   dbGetTeacherBonuses, dbClaimRetentionBonus, dbMarkBonusPaid, dbAddUpsellBonuses, dbUpdateAssignmentTeacherSince,
-  dbGetSlotChanges,
 } from '@/lib/db';
-import { SLOT_CHANGES_DIAS } from '@/lib/slotHistory';
 import type { AffectedTeacher, ChangeTeacherParams, ArchiveTeacherResult, CalendarOrigin, GridSaveResult } from '@/lib/db';
 import type { TransferenciaResultado } from '@/lib/transferencia/core';
 import type { AssignedSlot } from '@/types';
@@ -215,11 +213,6 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [unassignedStudents, setUnassignedStudents] = useState<Student[]>([]);
   const [classJoinLogs, setClassJoinLogs] = useState<ClassJoinLog[]>([]);
-  // Historial de horarios (calendar_changes) por profesor: con él, asistencias,
-  // revisiones y el embudo saben qué horario tenía cada alumno en una fecha
-  // PASADA (lib/slotHistory). Se carga junto a los ingresos, NO en el refresco de
-  // 60 s: cambia poco y solo lo usan las vistas que también cargan ingresos.
-  const [slotChangesByTeacher, setSlotChangesByTeacher] = useState<Record<string, SlotChange[]>>({});
   const [classRecords, setClassRecords] = useState<ClassRecord[]>([]);
   const [classAnalyses, setClassAnalyses] = useState<ClassTranscriptRef[]>([]);
   const [financeRates, setFinanceRates] = useState<FinanceRate[]>([]);
@@ -591,13 +584,8 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   }
 
   async function loadClassJoinLogs() {
-    const [logs] = await Promise.all([dbGetClassJoinLogs(), loadSlotChanges()]);
+    const logs = await dbGetClassJoinLogs();
     setClassJoinLogs(logs);
-  }
-
-  async function loadSlotChanges() {
-    const since = new Date(Date.now() - SLOT_CHANGES_DIAS * 86_400_000).toISOString();
-    setSlotChangesByTeacher(await dbGetSlotChanges(since));
   }
 
   async function loadClassRecords() {
@@ -614,7 +602,6 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
       dbGetManualApprovals(),
       dbGetClassTranscripts(),
       dbGetTeacherBonuses(),
-      loadSlotChanges(),
     ]);
     setFinanceRates(rates);
     setFinancePayments(payments);
@@ -849,16 +836,9 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     setClassRecords(prev => [record, ...prev]);
   }
 
-  // Cada profesor lleva su historial de horarios; gridOccupancyOfTeacher lo
-  // pasa a lib/attendance sin que las pantallas tengan que hacer nada.
-  const teachersConHistorial = useMemo(
-    () => teachers.map(t => (slotChangesByTeacher[t.id] ? { ...t, slotChanges: slotChangesByTeacher[t.id] } : t)),
-    [teachers, slotChangesByTeacher],
-  );
-
   return (
     <TeachersContext.Provider value={{
-      teachers: teachersConHistorial, students, assignments, teacherGrids, loadingTeachers,
+      teachers, students, assignments, teacherGrids, loadingTeachers,
       scoringEvents, classCounts, notifications, unassignedStudents, classJoinLogs,
       classRecords, classAnalyses, financeRates, financePayments, manualApprovals, teacherBonuses, lastUpdated,
       addTeacher, archiveTeacher, addStudent, deleteStudent, updateStudent, markSalesContact, addAssignment,

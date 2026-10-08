@@ -58,8 +58,6 @@ seguidas.
 - `codigo` es **estable**: el LMS puede decidir con él.
 - `mensaje` está listo para enseñárselo al alumno (español de España, tú).
 - Con `NO_ELEGIBLE` llega además `detalle_no_elegible`.
-- Si el cambio quedó **a medias**, llega además `"a_medias": true` (ver más
-  abajo). En cualquier otro error el campo no aparece.
 
 **Regla de oro: un cambio solo está hecho si la respuesta trae `"ok": true`.**
 El código HTTP acompaña (tabla de abajo), pero el LMS decide por `ok`. Ante un
@@ -90,26 +88,9 @@ y se repite con la **misma** `idempotency_key` (ver el endpoint 3).
 | 500 | `ERROR_ESCRITURA` | La base rechazó una escritura |
 | 500 | `ERROR_INTERNO` | Error inesperado |
 
-### Cambio a medias: `a_medias`
-
-Muy raro: el cambio falló al guardarse y Gestión no pudo deshacer todo lo que
-ya había escrito. El equipo ya recibió un aviso y lo arregla a mano. El error
-llega con su `codigo` (el del fallo, por ejemplo `HUECO_YA_OCUPADO` o
-`ERROR_ESCRITURA`) y **además** con `"a_medias": true`:
-
-```json
-{
-  "ok": false,
-  "codigo": "HUECO_YA_OCUPADO",
-  "mensaje": "Ha habido un problema al guardar el cambio y el equipo ya está avisado. No lo intentes de nuevo: te escribiremos.",
-  "a_medias": true
-}
-```
-
-Con `a_medias: true` el LMS **no** reintenta (ni con la misma
-`idempotency_key` ni con otra) y no ofrece repetir el cambio. El cambio no
-cuenta como hecho, porque no hay `ok: true`. Decide con este campo, no con el
-texto del `mensaje`, que puede cambiar.
+Si un cambio queda **a medias** (muy raro: falló al guardar y no se pudo deshacer
+todo), el error llega con su código y un `mensaje` que pide **no** reintentar;
+el equipo ya recibió un aviso.
 
 ### `detalle_no_elegible`
 

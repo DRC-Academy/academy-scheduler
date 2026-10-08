@@ -28,7 +28,6 @@ import { useTeachers } from '@/lib/TeachersContext';
 import { getSpainParts } from '@/lib/spainTime';
 import { buildAttendanceRows, attachTranscriptStatus, type LogRow } from '@/lib/attendance';
 import { periodIndex, dbGetStudentDropouts, type StudentDropout } from '@/lib/studentPeriod';
-import { dbGetStudentPauses, type StudentPause } from '@/lib/studentPauses';
 import { gridOccupancyOfTeacher, applyGridSlots } from '@/lib/teacherClasses';
 import { transcriptCell, uploadDelayLabel, uploadedAtLabel } from '@/lib/transcriptDeadline';
 import { dbGetTranscriptForReview, type TranscriptForReview } from '@/lib/db';
@@ -121,11 +120,9 @@ export default function TranscriptsTab() {
 
   const [dropouts, setDropouts] = useState<StudentDropout[]>([]);
   useEffect(() => { dbGetStudentDropouts().then(setDropouts).catch(() => {}); }, []);
-  const [pauses, setPauses] = useState<StudentPause[]>([]);
-  useEffect(() => { dbGetStudentPauses().then(setPauses).catch(() => {}); }, []);
   const periodsByTeacher = useMemo(
-    () => Object.fromEntries(teachers.map(t => [t.id, periodIndex(assignments, dropouts, t.id, pauses)])),
-    [teachers, assignments, dropouts, pauses],
+    () => Object.fromEntries(teachers.map(t => [t.id, periodIndex(assignments, dropouts, t.id)])),
+    [teachers, assignments, dropouts],
   );
 
   // Las clases del rango, con su estado de transcript. Una sesión de 2 h es UNA

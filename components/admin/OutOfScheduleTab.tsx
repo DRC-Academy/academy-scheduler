@@ -23,7 +23,6 @@ import { calculateTeacherFinance } from '@/lib/finance';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { dbGetAllTeacherAssignments } from '@/lib/db';
 import { dbGetStudentDropouts, type StudentDropout } from '@/lib/studentPeriod';
-import { dbGetStudentPauses, type StudentPause } from '@/lib/studentPauses';
 import { buildDriftReport, DRIFT_KINDS, type DriftKind, type DriftStudent } from '@/lib/outOfCalendar';
 import type { Assignment } from '@/types';
 
@@ -52,7 +51,7 @@ export default function OutOfScheduleTab({ monthYear, monthLabel }: {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   // Cargado para el mes que se pidió: si se cambia de mes, se vuelve a pedir.
-  const [datos, setDatos] = useState<{ grids: Map<string, Assignment[]>; dropouts: StudentDropout[]; pauses: StudentPause[] } | null>(null);
+  const [datos, setDatos] = useState<{ grids: Map<string, Assignment[]>; dropouts: StudentDropout[] } | null>(null);
   const [abierto, setAbierto] = useState<string | null>(null);
 
   async function abrir() {
@@ -60,14 +59,13 @@ export default function OutOfScheduleTab({ monthYear, monthLabel }: {
     if (datos || loading) return;
     setLoading(true); setError('');
     try {
-      const [grids, dropouts, pauses] = await Promise.all([
+      const [grids, dropouts] = await Promise.all([
         // Los alumnos y las assignments ya están en el contexto: pasárselos deja
         // esto en una sola consulta, la de los calendarios.
         dbGetAllTeacherAssignments({ teachers, students, assignments }),
         dbGetStudentDropouts(),
-        dbGetStudentPauses(),
       ]);
-      setDatos({ grids, dropouts, pauses });
+      setDatos({ grids, dropouts });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo cargar el diagnóstico.');
     } finally {
@@ -80,7 +78,6 @@ export default function OutOfScheduleTab({ monthYear, monthLabel }: {
     return buildDriftReport({
       monthYear,
       dropouts: datos.dropouts,
-      pauses: datos.pauses,
       teachers: teachers.map(t => ({
         teacherId: t.id,
         teacherName: t.name,
