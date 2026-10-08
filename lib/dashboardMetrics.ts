@@ -21,6 +21,7 @@ import { hourNum } from '@/lib/sessions';
 // recuperación. Una falta sin aviso o una cancelación sobre la hora se le
 // cobraron al alumno, así que no están pendientes de nada.
 import { RECUPERABLES } from '@/lib/recovery';
+import { isMovedClass } from '@/lib/classTypes';
 // Para los tres números que solo ve el teléfono (al final del archivo): el
 // origen del acceso y los planes que terminan, con las mismas reglas que el
 // resto de la app.
@@ -94,7 +95,11 @@ export interface OperacionMes {
   dadas: number;
   /** Faltas del alumno sin aviso, descontando las que el admin revirtió. */
   faltasSinAviso: number;
-  /** Todo lo que no se dio: faltas, cancelaciones y reprogramaciones. */
+  /**
+   * Todo lo que no se dio: faltas y cancelaciones. Una clase MOVIDA a otra fecha
+   * (reprogramada con destino, la mueva el profesor o el alumno) no cuenta: se da
+   * en su fecha nueva.
+   */
   noDadas: number;
   /** Clases marcadas como recuperación de otra anterior. */
   recuperaciones: number;
@@ -129,6 +134,10 @@ export function operacionDelMes(records: readonly ClassRecord[], mes: string): O
     if (esClaseDada(r)) dadas += 1;
     if (tipo === 'recuperacion') recuperaciones += 1;
     if (tipo === 'falta_sin_aviso') faltasSinAviso += 1;
+
+    // Una clase movida (reprogramada con destino) no es una clase perdida ni
+    // queda pendiente de recuperar: ya tiene su fecha nueva.
+    if (isMovedClass(r)) continue;
 
     // La marca de una falta revertida no es una clase: la fila se conserva solo
     // para dejar rastro de quién la deshizo.
