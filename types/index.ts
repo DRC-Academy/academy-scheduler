@@ -208,6 +208,13 @@ export interface Assignment {
   studentEmail: string;
   studentLevel: string;
   slots: AssignedSlot[];         // all assigned day+hour combinations
+  /**
+   * Altas y bajas de sus casillas (calendar_changes), del más nuevo al más viejo,
+   * para saber qué horario tenía en una fecha PASADA (lib/slotHistory). Lo ponen
+   * getTeacherAssignments / dbGetAllTeacherAssignments si el profesor trae su
+   * historial; sin él, `slots` vale para todas las fechas, como siempre.
+   */
+  slotChanges?: SlotChange[];
   objetivo: string;
   plan: string;
   weeklyHours: number;

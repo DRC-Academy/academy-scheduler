@@ -146,3 +146,22 @@ describe('FIJO: el horario nuevo no se proyecta hacia atrás', () => {
     expect(lista.map(c => c.date)).toEqual(['2026-10-15']);
   });
 });
+
+describe('FIJO: "fuera de calendario" y embudo (scheduledIndex)', () => {
+  it('tras pasar de los martes a los jueves, los martes ya dados siguen agendados y los jueves anteriores no', async () => {
+    const { scheduledIndex } = await import('@/lib/outOfCalendar');
+    const cambio: SlotChange[] = [
+      { studentName: 'Lucía Pérez', day: 'Martes', hour: '15:00', action: 'quitado', createdAt: '2026-10-12T08:00:00Z' },
+      { studentName: 'Lucía Pérez', day: 'Jueves', hour: '10:00', action: 'agregado', createdAt: '2026-10-12T08:00:00Z' },
+    ];
+    const a = { ...asg([['Jueves', '10:00']]), slotChanges: changesOfStudent(cambio, 'Lucía Pérez') };
+    const sched = scheduledIndex({ assignments: [a], dropouts: [], teacherId: 'tB', monthYear: '2026-10' });
+    expect(sched.has('Lucía Pérez', '2026-10-06')).toBe(true);    // martes viejo
+    expect(sched.has('Lucía Pérez', '2026-10-08')).toBe(false);   // jueves antes del cambio
+    expect(sched.has('Lucía Pérez', '2026-10-13')).toBe(false);   // martes después
+    expect(sched.has('Lucía Pérez', '2026-10-15')).toBe(true);    // jueves nuevo
+    // Sin historial, lo de antes: todo jueves y ningún martes.
+    const sin = scheduledIndex({ assignments: [asg([['Jueves', '10:00']])], dropouts: [], teacherId: 'tB', monthYear: '2026-10' });
+    expect([sin.has('Lucía Pérez', '2026-10-06'), sin.has('Lucía Pérez', '2026-10-08')]).toEqual([false, true]);
+  });
+});

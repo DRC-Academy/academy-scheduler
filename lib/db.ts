@@ -17,6 +17,7 @@ import {
 import { transferirAlumnoCore, type TransferenciaResultado } from './transferencia/core';
 import { depsNavegador } from './transferencia/navegador';
 import { notifyNewAssignmentWith } from './notificationStore';
+import { changesOfStudent } from './slotHistory';
 import { insertClassRecordsWith, deleteClassRecordsWith, addRescheduleRecordWith, type RescheduleRecordInput } from './classRecordStore';
 import { findOffCalendar, slotStatusOf, type OffCalendarRow } from './offCalendar';
 import { Teacher, Student, Assignment, AppUser, Grid, TeacherStatus, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, AssignedSlot, EmailPreferences, SalesContactResult, RecoveryCell, TeacherBonus, BonusType, SlotChange } from '@/types';
@@ -1272,13 +1273,13 @@ export async function dbGetAllTeacherAssignments(
     }
     // Asignados sin horario: van sin slots, igual que en getStudentsForTeacher.
     for (const [k, a] of porNombre) if (!enGrid.has(k)) lista.push({ ...a, slots: [] });
-    out.set(t.id, lista);
+    out.set(t.id, lista.map(a => conHistorial(t, a)));
   }
 
   // Profesores sin fila en teacher_calendars: solo lo que diga la ficha.
   for (const t of teachers) {
     if ((out.get(t.id) ?? []).length > 0) continue;
-    out.set(t.id, [...(asgByTeacher.get(t.id)?.values() ?? [])].map(a => ({ ...a, slots: [] })));
+    out.set(t.id, [...(asgByTeacher.get(t.id)?.values() ?? [])].map(a => conHistorial(t, { ...a, slots: [] })));
   }
   return out;
 }
@@ -1384,9 +1385,20 @@ export async function getStudentsForTeacher(teacherId: string): Promise<TeacherS
  */
 export async function getTeacherAssignments(teacher: Teacher): Promise<Assignment[]> {
   const rows = await getStudentsForTeacher(teacher.id);
-  return rows.map(ts => ts.assignment
+  return rows.map(ts => conHistorial(teacher, ts.assignment
     ? { ...ts.assignment, slots: ts.slots }
-    : assignmentFromGrid(teacher, ts));
+    : assignmentFromGrid(teacher, ts)));
+}
+
+/**
+ * Le pone a la asignación su historial de horarios, si el profesor lo trae
+ * (TeachersContext lo carga): con él, quien proyecte el horario hacia atrás sabe
+ * qué horario tenía en cada fecha. Ver lib/slotHistory.
+ */
+function conHistorial(teacher: Pick<Teacher, 'slotChanges'>, a: Assignment): Assignment {
+  if (!teacher.slotChanges?.length) return a;
+  const cambios = changesOfStudent(teacher.slotChanges, a.studentName);
+  return cambios.length ? { ...a, slotChanges: cambios } : a;
 }
 
 /**

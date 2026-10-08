@@ -203,7 +203,7 @@ export function buildAttendanceRows(opts: {
     // un cambio vale el horario que tenía entonces, no el de hoy. Ver
     // lib/slotHistory. Un horario reconstruido se agrupa por contigüidad propia:
     // la ocupación del calendario es la de HOY y no sabe de él.
-    const cambios = changesOfStudent(occ?.slotChanges, a.studentName);
+    const cambios = a.slotChanges ?? changesOfStudent(occ?.slotChanges, a.studentName);
 
     const cursor = new Date(start);
     let dayCount = 0;

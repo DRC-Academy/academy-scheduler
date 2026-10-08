@@ -30,6 +30,7 @@
 // no tiene una línea "añadidas a mano": estaría siempre en cero.
 
 import type { Assignment } from '@/types';
+import { slotsOnDate } from '@/lib/slotHistory';
 import type { ClassFinanceRow } from '@/lib/finance';
 import { periodIndex, existsForStudent, type StudentDropout } from '@/lib/studentPeriod';
 
@@ -134,11 +135,17 @@ export function scheduledIndex(opts: {
   for (const a of assignments) {
     if (a.teacherId !== teacherId) continue;
     const suyos = new Set((a.slots ?? []).map(s => s.day));
-    if (suyos.size === 0) continue;
-    dias.set(nk(a.studentName), suyos);
+    // Con historial (lib/slotHistory), una fecha anterior a un cambio de horario
+    // usa los días que tenía entonces: tras pasar de los martes a los jueves, los
+    // martes ya dados siguen agendados y los jueves anteriores no.
+    const cambios = a.slotChanges ?? [];
+    if (suyos.size === 0 && cambios.length === 0) continue;
+    if (suyos.size > 0) dias.set(nk(a.studentName), suyos);
     for (let d = 1; d <= ultimo; d++) {
       const iso = `${monthYear}-${String(d).padStart(2, '0')}`;
-      if (!suyos.has(DIAS[new Date(iso + 'T00:00:00').getDay()])) continue;
+      const antes = cambios.length ? slotsOnDate(a.slots ?? [], cambios, iso) : null;
+      const diasDeEseDia = antes ? new Set(antes.map(s => s.day)) : suyos;
+      if (!diasDeEseDia.has(DIAS[new Date(iso + 'T00:00:00').getDay()])) continue;
       // El período del alumno (alta → baja) recorta la proyección; los HECHOS
       // no se filtran nunca (ver el contrato de lib/studentPeriod).
       if (!existsForStudent(periodos, a.studentName, iso)) continue;
