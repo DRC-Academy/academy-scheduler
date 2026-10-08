@@ -12,14 +12,24 @@ export interface LiveReservation { date: string; hour: string; studentName: stri
 
 /** Reservas vivas del profesor: propuestas en 'esperando_alumno' que no vencieron, una por hora. */
 export async function liveReservationsWith(db: Db, teacherId: string, nowMs = Date.now()): Promise<LiveReservation[]> {
+  return (await liveReservationsOfTeachersWith(db, [teacherId], nowMs)).get(teacherId) ?? [];
+}
+
+/** liveReservationsWith para VARIOS profesores en UNA consulta, por profesor. */
+export async function liveReservationsOfTeachersWith(
+  db: Db, teacherIds: string[], nowMs = Date.now(),
+): Promise<Map<string, LiveReservation[]>> {
+  const out = new Map<string, LiveReservation[]>(teacherIds.map(id => [id, []]));
+  if (teacherIds.length === 0) return out;
   const { data, error } = await db.from('class_recoveries')
-    .select('group_id, student_name, teacher_proposals, status').eq('teacher_id', teacherId).eq('status', 'esperando_alumno');
-  if (error) return [];
-  const out: LiveReservation[] = [];
+    .select('teacher_id, group_id, student_name, teacher_proposals, status').in('teacher_id', teacherIds).eq('status', 'esperando_alumno');
+  if (error) return out;
   for (const r of data ?? []) {
     const props = (r.teacher_proposals ?? []) as Slot[];
     if (proposalsExpired(props, nowMs)) continue;
-    for (const s of props) for (const h of slotHours(s)) out.push({ ...h, studentName: r.student_name, groupId: r.group_id });
+    const lista = out.get(r.teacher_id);
+    if (!lista) continue;
+    for (const s of props) for (const h of slotHours(s)) lista.push({ ...h, studentName: r.student_name, groupId: r.group_id });
   }
   return out;
 }
