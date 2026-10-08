@@ -28,6 +28,30 @@ import { hourNum, hourText, nkName } from '@/lib/sessions';
 
 /** Días de historial que carga TeachersContext. */
 export const SLOT_CHANGES_DIAS = 100;
+/** Tiempo máximo de la carga del historial: pasado esto se sigue sin él. */
+export const SLOT_CHANGES_TIMEOUT_MS = 8_000;
+/** Cada cuánto se vuelve a cargar como mucho (cambia poco). */
+export const SLOT_CHANGES_REFRESCO_MS = 10 * 60_000;
+
+/**
+ * Corre `carga` sin que pueda colgar ni romper a quien la llama: si lanza o si
+ * tarda más de `ms`, devuelve null. El historial es un EXTRA: sin él cada vista
+ * proyecta el horario de hoy, que es lo que hacía antes de existir.
+ */
+export async function cargarSinBloquear<T>(carga: () => Promise<T>, ms: number): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      carga(),
+      new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), ms); }),
+    ]);
+  } catch (err) {
+    console.warn('[slotHistory] No se pudo cargar el historial de horarios; se sigue sin él:', err);
+    return null;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 const clave = (day: string, hour: string | number) => `${day}|${hourNum(hour)}`;
 

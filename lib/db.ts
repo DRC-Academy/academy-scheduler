@@ -563,12 +563,16 @@ export async function dbGetCalendarChanges(filter: { assignmentId?: string; teac
  * horario de una fecha pasada. Ante un error (o sin la tabla) devuelve {}: se
  * proyecta el horario de hoy, como antes.
  */
-export async function dbGetSlotChanges(sinceIso: string): Promise<Record<string, SlotChange[]>> {
+export async function dbGetSlotChanges(sinceIso: string, signal?: AbortSignal): Promise<Record<string, SlotChange[]>> {
   type Row = { teacher_id: string; student_name: string; day: string; hour: string; action: SlotChange['action']; created_at: string };
-  const { rows, error } = await fetchAllPages<Row>('calendar_changes', (from, to) => supabase.from('calendar_changes')
-    .select('teacher_id, student_name, day, hour, action, created_at')
-    .gte('created_at', sinceIso).in('action', ['agregado', 'quitado'])
-    .order('created_at', { ascending: true }).range(from, to));
+  const { rows, error } = await fetchAllPages<Row>('calendar_changes', (from, to) => {
+    const q = supabase.from('calendar_changes')
+      .select('teacher_id, student_name, day, hour, action, created_at')
+      .gte('created_at', sinceIso).in('action', ['agregado', 'quitado'])
+      .order('created_at', { ascending: true }).range(from, to);
+    // Con el tiempo agotado se corta la petición: no se deja trabajando a la base.
+    return signal ? q.abortSignal(signal) : q;
+  });
   if (error) { console.warn('[db] No se pudo leer el historial de horarios:', error.message); return {}; }
   const out: Record<string, SlotChange[]> = {};
   for (const r of rows) {

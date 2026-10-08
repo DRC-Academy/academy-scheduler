@@ -1,5 +1,5 @@
 ﻿'use client';
-import { createContext, useContext, useState, useEffect, useMemo, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useMemo, useRef, ReactNode } from 'react';
 import { useAuth } from '@/lib/AuthContext';
 import { Teacher, Student, Assignment, Grid, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, ClassRecord, ClassRecordType, FinanceRate, FinancePayment, FinanceManualApproval, EmailPreferences, SalesContactResult, TeacherBonus, SlotChange } from '@/types';
 import {
@@ -26,7 +26,7 @@ import {
   dbGetTeacherBonuses, dbClaimRetentionBonus, dbMarkBonusPaid, dbAddUpsellBonuses, dbUpdateAssignmentTeacherSince,
   dbGetSlotChanges,
 } from '@/lib/db';
-import { SLOT_CHANGES_DIAS } from '@/lib/slotHistory';
+import { SLOT_CHANGES_DIAS, SLOT_CHANGES_REFRESCO_MS, SLOT_CHANGES_TIMEOUT_MS, cargarSinBloquear } from '@/lib/slotHistory';
 import type { AffectedTeacher, ChangeTeacherParams, ArchiveTeacherResult, CalendarOrigin, GridSaveResult } from '@/lib/db';
 import type { TransferenciaResultado } from '@/lib/transferencia/core';
 import type { AssignedSlot } from '@/types';
@@ -217,9 +217,11 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   const [classJoinLogs, setClassJoinLogs] = useState<ClassJoinLog[]>([]);
   // Historial de horarios (calendar_changes) por profesor: con él, asistencias,
   // revisiones y el embudo saben qué horario tenía cada alumno en una fecha
-  // PASADA (lib/slotHistory). Se carga junto a los ingresos, NO en el refresco de
-  // 60 s: cambia poco y solo lo usan las vistas que también cargan ingresos.
+  // PASADA (lib/slotHistory). Es un EXTRA y NUNCA se espera: se pide aparte, con
+  // tiempo máximo, como mucho cada 10 minutos, y si falla o tarda cada vista
+  // proyecta el horario de hoy, como antes. Ver refrescarHistorial.
   const [slotChangesByTeacher, setSlotChangesByTeacher] = useState<Record<string, SlotChange[]>>({});
+  const ultimoHistorial = useRef(0);
   const [classRecords, setClassRecords] = useState<ClassRecord[]>([]);
   const [classAnalyses, setClassAnalyses] = useState<ClassTranscriptRef[]>([]);
   const [financeRates, setFinanceRates] = useState<FinanceRate[]>([]);
@@ -591,13 +593,30 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   }
 
   async function loadClassJoinLogs() {
-    const [logs] = await Promise.all([dbGetClassJoinLogs(), loadSlotChanges()]);
+    refrescarHistorial();
+    const logs = await dbGetClassJoinLogs();
     setClassJoinLogs(logs);
   }
 
-  async function loadSlotChanges() {
+  /**
+   * Pide el historial de horarios SIN esperarlo: no devuelve nada a propósito,
+   * para que ninguna carga (ingresos, finanzas) dependa de él. Con error o
+   * pasado SLOT_CHANGES_TIMEOUT_MS se corta la petición y se sigue sin él; el
+   * siguiente intento será en la próxima carga.
+   */
+  function refrescarHistorial(): void {
+    if (Date.now() - ultimoHistorial.current < SLOT_CHANGES_REFRESCO_MS) return;
+    ultimoHistorial.current = Date.now();
     const since = new Date(Date.now() - SLOT_CHANGES_DIAS * 86_400_000).toISOString();
-    setSlotChangesByTeacher(await dbGetSlotChanges(since));
+    const corte = new AbortController();
+    void cargarSinBloquear(() => dbGetSlotChanges(since, corte.signal), SLOT_CHANGES_TIMEOUT_MS).then(r => {
+      if (r === null) {
+        corte.abort();
+        ultimoHistorial.current = 0;   // reintentar en la próxima carga
+        return;
+      }
+      setSlotChangesByTeacher(r);
+    });
   }
 
   async function loadClassRecords() {
@@ -606,6 +625,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   }
 
   async function loadFinanceData() {
+    refrescarHistorial();   // aparte y sin esperarlo: nunca retrasa a finanzas
     const [rates, payments, records, logs, approvals, analyses, bonuses] = await Promise.all([
       dbGetFinanceRates(),
       dbGetFinancePayments(),
@@ -614,7 +634,6 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
       dbGetManualApprovals(),
       dbGetClassTranscripts(),
       dbGetTeacherBonuses(),
-      loadSlotChanges(),
     ]);
     setFinanceRates(rates);
     setFinancePayments(payments);
