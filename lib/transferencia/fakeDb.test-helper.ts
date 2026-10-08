@@ -55,9 +55,15 @@ export class FakeDb {
 function parseOr(expr: string): Filter {
   const parts = expr.split(',').map(p => {
     const [col, op, ...rest] = p.split('.');
-    const val = rest.join('.');
+    // PostgREST admite el valor entre comillas dobles ("t1").
+    const val = rest.join('.').replace(/^"(.*)"$/, '$1');
     if (op === 'eq') return (r: Row) => String(r[col]) === val;
+    if (op === 'neq') return (r: Row) => r[col] != null && String(r[col]) !== val;
     if (op === 'is' && val === 'null') return (r: Row) => r[col] == null;
+    if (op === 'ilike') {
+      const re = new RegExp(`^${val.split('%').map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`, 'i');
+      return (r: Row) => re.test(String(r[col] ?? ''));
+    }
     throw new Error(`or() no soportado: ${p}`);
   });
   return r => parts.some(f => f(r));
@@ -89,6 +95,13 @@ class Query implements PromiseLike<{ data: unknown; error: unknown; count?: numb
   in(c: string, vs: unknown[]) { this.filters.push(r => vs.includes(r[c])); return this; }
   is(c: string, v: null) { this.filters.push(r => r[c] == v); return this; }
   gte(c: string, v: string) { this.filters.push(r => String(r[c] ?? '') >= v); return this; }
+  /** Sin distinguir mayúsculas; % es comodín. */
+  ilike(c: string, patron: string) {
+    const escapado = patron.split('%').map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*');
+    const re = new RegExp(`^${escapado}$`, 'i');
+    this.filters.push(r => re.test(String(r[c] ?? '')));
+    return this;
+  }
   or(expr: string) { this.filters.push(parseOr(expr)); return this; }
   order() { return this; }
   limit(n: number) { this.lim = n; return this; }

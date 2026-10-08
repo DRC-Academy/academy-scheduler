@@ -88,6 +88,7 @@ describe('GET estado', () => {
     const db = baseDb(); db.rows('students')[0].company_plan_months = 6;
     expect(await estadoAutoservicioWith(db.client(), 's1', AHORA)).toEqual({
       ok: true, elegible: false, motivo_no_elegible: 'NO_ELEGIBLE', detalle_no_elegible: 'EMPRESA', profesor: { nombre: 'Berta' }, sesiones: [],
+      puede_cambiar_profesor: { puede: false, motivo: 'NO_ELEGIBLE', detalle_no_elegible: 'EMPRESA', disponible_desde: null },
     });
   });
 

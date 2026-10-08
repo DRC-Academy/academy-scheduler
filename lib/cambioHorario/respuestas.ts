@@ -6,11 +6,12 @@
 // por `ok`: un cambio cuenta como hecho únicamente con `ok: true`.
 
 import { CambioHorarioError, type CodigoCambioHorario } from '@/lib/cambioHorario/errors';
+import { TransferenciaError, type CodigoTransferencia } from '@/lib/transferencia/errors';
 import { requireLmsSecret } from '@/lib/lmsAuth';
 
 /** Códigos de la capa HTTP que no vienen del núcleo. */
 export type CodigoHttp = 'NO_AUTORIZADO' | 'NO_CONFIGURADO' | 'ERROR_INTERNO';
-export type CodigoAutoservicio = CodigoCambioHorario | CodigoHttp;
+export type CodigoAutoservicio = CodigoCambioHorario | CodigoTransferencia | CodigoHttp;
 
 export const ESTADO_HTTP: Record<CodigoAutoservicio, number> = {
   DATOS_INVALIDOS: 422,
@@ -32,6 +33,15 @@ export const ESTADO_HTTP: Record<CodigoAutoservicio, number> = {
   NO_AUTORIZADO: 401,
   NO_CONFIGURADO: 503,
   ERROR_INTERNO: 500,
+  // Cambio de profesor (núcleo de transferencia).
+  ASIGNACION_NO_EXISTE: 404,
+  ASIGNACION_INACTIVA: 409,
+  ASIGNACION_CAMBIADA: 409,
+  MISMO_PROFESOR: 422,
+  PROFESOR_NO_EXISTE: 404,
+  PROFESOR_ARCHIVADO: 409,
+  PROFESOR_DE_PRUEBA: 422,
+  HORAS_NO_COINCIDEN: 422,
 };
 
 export const MENSAJE: Record<CodigoAutoservicio, string> = {
@@ -54,6 +64,14 @@ export const MENSAJE: Record<CodigoAutoservicio, string> = {
   NO_AUTORIZADO: 'Petición no autorizada.',
   NO_CONFIGURADO: 'El servicio no está disponible ahora mismo.',
   ERROR_INTERNO: 'Ha habido un problema. Inténtalo de nuevo en unos minutos.',
+  ASIGNACION_NO_EXISTE: 'No encontramos tu plan de clases. Escríbenos y lo revisamos.',
+  ASIGNACION_INACTIVA: 'Tu plan de clases no está activo. Escríbenos y lo revisamos.',
+  ASIGNACION_CAMBIADA: 'Tu horario ha cambiado hace un momento. Recarga la página e inténtalo de nuevo.',
+  MISMO_PROFESOR: 'Ese ya es tu profesor. Elige otro.',
+  PROFESOR_NO_EXISTE: 'Ese profesor ya no está disponible. Elige otro.',
+  PROFESOR_ARCHIVADO: 'Ese profesor ya no está disponible. Elige otro.',
+  PROFESOR_DE_PRUEBA: 'Ese profesor no está disponible. Elige otro.',
+  HORAS_NO_COINCIDEN: 'Tienes que elegir horario para todas tus horas de clase de la semana.',
 };
 
 /** Un cambio que quedó a medias: no se reintenta, el equipo ya tiene el aviso. */
@@ -64,6 +82,8 @@ export interface CuerpoError {
   codigo: CodigoAutoservicio;
   mensaje: string;
   detalle_no_elegible?: string;
+  /** Con ANTELACION_INSUFICIENTE, si se sabe: cuándo se podrá hacer (España peninsular). */
+  disponible_desde?: { fecha: string; hora: string };
   /**
    * true si el cambio quedó A MEDIAS (falló al guardar y no se pudo deshacer
    * todo; compensada === false): no se reintenta, el equipo ya tiene el aviso.
@@ -100,7 +120,13 @@ export function respuestaError(err: unknown, etiqueta: string): Response {
     return respuestaCodigo(err.codigo, {
       ...(err.compensada === false ? { mensaje: MENSAJE_A_MEDIAS, a_medias: true as const } : {}),
       ...(err.detalleNoElegible ? { detalle_no_elegible: err.detalleNoElegible } : {}),
+      ...(err.disponibleDesde ? { disponible_desde: err.disponibleDesde } : {}),
     });
+  }
+  // Cambio de profesor: los errores del núcleo de transferencia, con a_medias igual.
+  if (err instanceof TransferenciaError) {
+    if (ESTADO_HTTP[err.codigo] >= 500) console.error(`[${etiqueta}] ${err.codigo}:`, err.message);
+    return respuestaCodigo(err.codigo, err.compensada === false ? { mensaje: MENSAJE_A_MEDIAS, a_medias: true } : {});
   }
   console.error(`[${etiqueta}]`, err);
   return respuestaCodigo('ERROR_INTERNO');
