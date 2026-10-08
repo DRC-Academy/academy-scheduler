@@ -35,7 +35,8 @@ import type { RiesgoResumen } from '@/lib/dashboardExtras';
 export interface DashboardDatos {
   ahora: Date;
   cargandoExtras: boolean;
-  alumnos: { conClase: number; total: number };
+  /** `enPausa`: con profesor pero en pausa (fuera de `conClase`). */
+  alumnos: { conClase: number; total: number; enPausa: number };
   origen: OrigenActivos;
   /** Seis meses, el actual al final. Las bajas llegan con los extras. */
   movimiento: MovimientoMes[];
@@ -126,6 +127,12 @@ function AlumnosActivos({ d }: { d: DashboardDatos }) {
               sub={total > 0 ? `${Math.round((p.n / total) * 100)} %` : undefined} />
           ))}
         </ul>
+        {/* En pausa: fuera de la barra a propósito, no son activos de ningún origen. */}
+        {d.alumnos.enPausa > 0 && (
+          <ul className="dpm-filas">
+            <Fila color="#9ca3af" label="En pausa" n={d.alumnos.enPausa} sub="aparte, sin clases" />
+          </ul>
+        )}
         <p className="dpm-nota">Por origen del acceso: Oritalk o activación manual vigentes; el resto, suscripción.</p>
       </div>
     </Bloque>

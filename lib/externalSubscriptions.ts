@@ -24,15 +24,21 @@
 //     periodo pagado sigue vivo). Por eso `dan_acceso` ≠ `por_estado.active`.
 //   · 'scheduled' NO cuenta (pagada, pero empieza en el futuro).
 //
+// EN PAUSA (oct/2026): una suscripción 'active' cuya línea es la variación
+// "Pausa" (lib/subscriptions/pause.ts) NO da acceso: va a `en_pausa`, aparte de
+// `dan_acceso`. Por persona, la precedencia es la de resolveWooSubscriptions:
+// una normal con acceso gana a la Pausa, y un override (Oritalk/manual) a las dos.
+//
 // COSTE / EGRESS: una sola pasada paginada por WooCommerce pidiendo únicamente
-// `status` y `billing.email` (vía `_fields`, que WordPress aplica en SU lado, así
-// que los `line_items` ni viajan), y un SELECT de 6 columnas a Supabase — nunca
+// `status`, `billing.email` y `line_items` (vía `_fields`, que WordPress aplica en
+// SU lado; las líneas hacen falta para reconocer la Pausa), y un SELECT de 6 columnas a Supabase — nunca
 // `dbGetStudents()`, que hace `select('*')` y traería notas, planes y teléfonos
 // que acá no se miran. El resultado se cachea 60 s en memoria para que varias
 // tarjetas del dashboard no golpeen WooCommerce en cadena.
 
 import { supabase } from '@/lib/supabase';
 import { accessOverrideOf, isActiveWooStatus, madridToday, WOO_STATUS } from '@/lib/subscriptionAccess';
+import { hasPauseItem } from '@/lib/subscriptions/pause';
 
 // ── WooCommerce ──────────────────────────────────────────────────────────────
 
@@ -57,10 +63,9 @@ function wcCreds(): { base: string; ck: string; cs: string } | null {
   return { base: base.replace(/\/$/, ''), ck, cs };
 }
 
-/** Lo ÚNICO que se pide de cada suscripción. Todo lo demás (line_items, notas,
- *  direcciones) no hace falta para contar y multiplicaría el tamaño de cada
- *  página por veinte. */
-interface WooSub { status?: unknown; billing?: { email?: unknown } | null }
+/** Lo ÚNICO que se pide de cada suscripción. Las líneas, solo para reconocer la
+ *  Pausa; notas, direcciones y demás no hacen falta para contar. */
+interface WooSub { status?: unknown; billing?: { email?: unknown } | null; line_items?: unknown }
 
 const nkEmail = (v: unknown): string => (typeof v === 'string' ? v.trim().toLowerCase() : '');
 
@@ -77,7 +82,7 @@ async function fetchPage(
   const url =
     `${c.base}/wp-json/wc/v3/subscriptions?per_page=${PER_PAGE}&page=${page}` +
     `&orderby=id&order=asc` +
-    `&_fields=${encodeURIComponent('status,billing.email')}` +
+    `&_fields=${encodeURIComponent('status,billing.email,line_items')}` +
     `&consumer_key=${encodeURIComponent(c.ck)}&consumer_secret=${encodeURIComponent(c.cs)}`;
 
   let lastErr = 'error desconocido';
@@ -155,8 +160,11 @@ export interface WooCount {
   por_estado: Record<string, number>;
   /** Estados que la app no mapea ('switched'…). Vacío lo normal. */
   otros_estados: Record<string, number>;
-  /** Suscripciones que DAN ACCESO: active + pending-cancel (isActiveWooStatus). */
+  /** Suscripciones que DAN ACCESO: active + pending-cancel (isActiveWooStatus),
+   *  SIN las de la variación Pausa. */
   dan_acceso: number;
+  /** Suscripciones active / pending-cancel de la variación Pausa (no dan acceso). */
+  en_pausa: number;
   /**
    * Emails DISTINTOS entre las suscripciones que dan acceso. Junto a `dan_acceso`
    * es lo que mide cuánta gente tiene MÁS DE UNA suscripción activa a la vez:
@@ -175,16 +183,19 @@ interface WooResult {
   accesoPorEmail: Map<string, number>;
   /** Suscripciones con acceso y sin email: no hay forma de cruzarlas. */
   conAccesoSinEmail: number;
+  /** Emails con una suscripción de Pausa vigente. */
+  pausaPorEmail: Set<string>;
 }
 
 const WOO_CAIDO = (msg: string): WooResult => ({
   conteo: {
     ok: false, total: 0,
     por_estado: Object.fromEntries(Object.keys(WOO_STATUS).map(k => [k, 0])),
-    otros_estados: {}, dan_acceso: 0, emails_con_acceso: 0, paginas_leidas: 0, error: msg,
+    otros_estados: {}, dan_acceso: 0, en_pausa: 0, emails_con_acceso: 0, paginas_leidas: 0, error: msg,
   },
   accesoPorEmail: new Map(),
   conAccesoSinEmail: 0,
+  pausaPorEmail: new Set(),
 });
 
 async function contarWoo(): Promise<WooResult> {
@@ -210,7 +221,9 @@ async function contarWoo(): Promise<WooResult> {
   const porEstado: Record<string, number> = Object.fromEntries(Object.keys(WOO_STATUS).map(k => [k, 0]));
   const otros: Record<string, number> = {};
   const accesoPorEmail = new Map<string, number>();
+  const pausaPorEmail = new Set<string>();
   let danAcceso = 0;
+  let enPausa = 0;
   let conAccesoSinEmail = 0;
 
   for (const s of rows) {
@@ -223,8 +236,13 @@ async function contarWoo(): Promise<WooResult> {
     else otros[status || 'sin_estado'] = (otros[status || 'sin_estado'] ?? 0) + 1;
 
     if (!isActiveWooStatus(status)) continue;
-    danAcceso++;
     const email = nkEmail(s?.billing?.email);
+    if (hasPauseItem(s?.line_items)) {
+      enPausa++;
+      if (email) pausaPorEmail.add(email);
+      continue;
+    }
+    danAcceso++;
     if (!email) { conAccesoSinEmail++; continue; }
     accesoPorEmail.set(email, (accesoPorEmail.get(email) ?? 0) + 1);
   }
@@ -232,11 +250,12 @@ async function contarWoo(): Promise<WooResult> {
   return {
     conteo: {
       ok: true, total: rows.length, por_estado: porEstado, otros_estados: otros,
-      dan_acceso: danAcceso, emails_con_acceso: accesoPorEmail.size,
+      dan_acceso: danAcceso, en_pausa: enPausa, emails_con_acceso: accesoPorEmail.size,
       paginas_leidas: paginas, error: null,
     },
     accesoPorEmail,
     conAccesoSinEmail,
+    pausaPorEmail,
   };
 }
 
@@ -307,7 +326,13 @@ export interface SubscriptionsSnapshot {
      * null explícito y NUNCA 0 para que un gráfico no dibuje una caída inventada.
      */
     activos: number | null;
+    /** en_base − activos − en_pausa (desde oct/2026 el pausado ya no es inactivo). */
     inactivos: number | null;
+    /**
+     * EN PAUSA: sin override y sin otra suscripción con acceso, pero con una de la
+     * variación Pausa vigente. Ni activos ni inactivos. null con Woo caído.
+     */
+    en_pausa: number | null;
     /** Excluyentes por precedencia oritalk > manual > woo: suman `activos`. */
     por_origen: {
       suscripcion: number | null;
@@ -376,6 +401,7 @@ export async function loadSubscriptionsSnapshot(force = false): Promise<Subscrip
   let oritalk = 0;
   let sinEmail = 0;
   let overrideConSuscripcion = 0;
+  let pausados = 0;
   const emailsEnBase = new Set<string>();
 
   for (const a of alumnos) {
@@ -410,7 +436,9 @@ export async function loadSubscriptionsSnapshot(force = false): Promise<Subscrip
       continue;
     }
     // Sin override: manda WooCommerce. Sin email no hay forma de preguntarle.
+    // Una normal con acceso gana a la Pausa (resolveWooSubscriptions).
     if (tieneSuscripcionConAcceso) porSuscripcion++;
+    else if (woo.conteo.ok && !!email && woo.pausaPorEmail.has(email)) pausados++;
   }
 
   const manualTotal = manualEmpresa + manualAMano;
@@ -430,7 +458,8 @@ export async function loadSubscriptionsSnapshot(force = false): Promise<Subscrip
     alumnos: {
       en_base: alumnos.length,
       activos,
-      inactivos: activos === null ? null : alumnos.length - activos,
+      inactivos: activos === null ? null : alumnos.length - activos - pausados,
+      en_pausa: woo.conteo.ok ? pausados : null,
       por_origen: {
         suscripcion: woo.conteo.ok ? porSuscripcion : null,
         manual: { total: manualTotal, plan_empresa: manualEmpresa, a_mano: manualAMano },

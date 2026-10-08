@@ -20,6 +20,7 @@ import { quickTranscriptCheck } from '@/lib/transcriptValidation';
 import { canMarkStudentLostClass, LOST_CLASS_MONTHLY_CAP, LOST_CLASS_CAP_MESSAGE } from '@/lib/finance';
 import { deadlineLabel, hoursLeftLabel, type TranscriptStatusResult } from '@/lib/transcriptDeadline';
 import { TranscriptDeadlineBanner } from '@/components/TranscriptDeadlineBanner';
+import { dbGetStudentPauses, isPausedOn, pauseIndex, type StudentPause } from '@/lib/studentPauses';
 import type { Teacher, Assignment, ClassRecord, ClassRecordType } from '@/types';
 
 // Opciones del selector "Tipo de clase".
@@ -313,6 +314,19 @@ export function AddClassModal({
   }, [classRecords, teacher.id, studentName, isFaltaType, date]);
   const limitReached = isFaltaType && typeCount >= LOST_CLASS_MONTHLY_CAP;
 
+  // EN PAUSA (variación "Pausa" de Woo, fechas en student_pauses): ese día el
+  // alumno no tiene clases por contrato, así que no se registra nada — ni clase
+  // ni falta ni cancelación (las dos últimas cobrarían sin clase). Sin la tabla
+  // (SQL sin correr) la lista llega vacía y no se bloquea nada.
+  const [pauses, setPauses] = useState<StudentPause[]>([]);
+  useEffect(() => { dbGetStudentPauses().then(setPauses).catch(() => {}); }, []);
+  const pausedThatDay = useMemo(() => {
+    if (!studentName || !date || pauses.length === 0) return false;
+    const idx = pauseIndex(pauses);
+    const ids = myAssignments.filter(a => a.studentName === studentName).map(a => a.studentId);
+    return isPausedOn(idx, { name: studentName }, date) || ids.some(id => isPausedOn(idx, { id }, date));
+  }, [pauses, studentName, date, myAssignments]);
+
   // Auto-rellenar la hora con el slot recurrente del alumno si el día coincide.
   // Depende solo de alumno+fecha para no pisar una hora editada a mano. Si el
   // llamador ya pasó la hora de la clase concreta, no hay nada que adivinar.
@@ -338,7 +352,7 @@ export function AddClassModal({
   // Normal/recuperación: TRANSCRIPT obligatorio (segundo factor de verificación).
   // Falta/cancelación: comentario obligatorio y bloqueado al llegar a 2 de ese tipo.
   const words = transcript.trim() ? transcript.trim().split(/\s+/).length : 0;
-  const canSave = !!studentName && !!date && !saving && !limitReached &&
+  const canSave = !!studentName && !!date && !saving && !limitReached && !pausedThatDay &&
     (needsTranscript ? words >= 30 : !!comment.trim());
 
   // Guardado real. `replaceId` llega solo cuando el profesor confirmó reemplazar
@@ -522,6 +536,12 @@ export function AddClassModal({
                   placeholder={needsTranscript ? 'Ej: el alumno llegó tarde...' : 'Detallá el motivo (obligatorio)'}
                   style={{ ...inputStyle, resize: 'vertical' }} />
               </div>
+              {pausedThatDay && (
+                <div style={{ fontSize: 12.5, color: '#3d2e00', background: '#FFF4BF', border: '1px solid #FFC400', borderRadius: 8, padding: '9px 12px', lineHeight: 1.5 }}>
+                  <b>⏸️ Este alumno está en pausa</b> ese día: no tiene clases, así que no se puede registrar
+                  una clase, una falta ni una cancelación. Si crees que es un error, avisa al equipo.
+                </div>
+              )}
               {error && <div style={{ fontSize: 12, color: '#ef4444' }}>{error}</div>}
               <div style={{ display: 'flex', gap: 10, marginTop: 2 }}>
                 <button onClick={onClose} disabled={saving} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#6b7280', cursor: saving ? 'not-allowed' : 'pointer', fontSize: 14, fontFamily: 'inherit' }}>Cancelar</button>

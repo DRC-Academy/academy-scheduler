@@ -22,6 +22,7 @@ import { lostClassHours, recoveryLedgerOf, type RecoveryLedger } from '@/lib/rec
 import { sessionRangeLabel } from '@/lib/sessions';
 import { isoDateLocal, classesForDate, groupContiguousClasses, sessionHoursLabel, gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { periodIndex, dbGetStudentDropouts, type StudentDropout } from '@/lib/studentPeriod';
+import { dbGetStudentPauses, type StudentPause } from '@/lib/studentPauses';
 import { StudentAutofillCard } from '@/components/StudentAutofillCard';
 import { useStudentAutofill } from '@/lib/useStudentAutofill';
 import { linkBtnStyle, MeetLinkBadge, PendingTasksCard, useNivelesSinValidar } from '@/components/teacherPanelUi';
@@ -1326,6 +1327,8 @@ function TeacherContent() {
   // Bajas, para cerrar el período de cada alumno (ver lib/studentPeriod).
   const [headerDropouts, setHeaderDropouts] = useState<StudentDropout[]>([]);
   useEffect(() => { dbGetStudentDropouts().then(setHeaderDropouts).catch(() => {}); }, []);
+  const [headerPauses, setHeaderPauses] = useState<StudentPause[]>([]);
+  useEffect(() => { dbGetStudentPauses().then(setHeaderPauses).catch(() => {}); }, []);
 
   // Alumnos SIN suscripción activa, resueltos EN VIVO contra WooCommerce (la
   // misma `checkSubscription` que el badge de Alumnos, con su caché de 5 min
@@ -1779,7 +1782,7 @@ function TeacherContent() {
   const spainHeader = getSpainParts(new Date());
   // Período de cada alumno: sin esto "Próxima clase" podía anunciar la de un
   // alumno que todavía no empezó (ver lib/studentPeriod).
-  const periodosHeader = periodIndex(myAssignments, headerDropouts, teacher?.id ?? '');
+  const periodosHeader = periodIndex(myAssignments, headerDropouts, teacher?.id ?? '', headerPauses);
   // Agrupada como en el resto de la app: una sesión de 2h es UNA clase que sigue
   // en curso hasta su hora de fin (endHourNum), no hasta la hora siguiente.
   // Los alumnos EN PAUSA no tienen clases: no se anuncian como próxima clase.

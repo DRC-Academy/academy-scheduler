@@ -3,7 +3,7 @@ import {
   weekRange, monthKey, previousMonth, madridDateString, diasEntre,
   esClaseDada, operacionDelMes, clasesEnRango, clasesProgramadasSemana,
   transcriptsPendientes, ocupacionDe, tonoOcupacion, filasProfesores,
-  faltasProfesorDelMes, alumnosResumen,
+  faltasProfesorDelMes, alumnosResumen, pausedKeysOf,
   origenDeActivos, movimientoMensual, proximosSinContactar,
 } from './dashboardMetrics';
 import type { ClassRecord, ClassJoinLog, ScoringEvent, Teacher, Assignment } from '@/types';
@@ -391,6 +391,23 @@ describe('alumnosResumen', () => {
     expect(r.total).toBe(3);
     expect(r.conClase).toBe(2);
     expect(r.sinProfesor).toBe(1);   // Cris
+    expect(r.enPausa).toBe(0);
+  });
+
+  it('el alumno EN PAUSA sale de "con clase" y tiene cifra propia (sigue con profesor)', () => {
+    const students = [{ id: 's1', name: 'Ana' }, { id: 's2', name: 'Bea' }];
+    const assignments = [
+      { studentId: 's1', studentName: 'Ana', slots: [{ day: 'Lunes', hour: '10:00' }] },
+      { studentId: 's2', studentName: 'Bea', slots: [{ day: 'Martes', hour: '10:00' }, { day: 'Jueves', hour: '10:00' }] },
+    ] as unknown as Assignment[];
+    const paused = pausedKeysOf([
+      { studentId: 's2', studentName: 'Bea', to: null },
+      { studentId: 's1', studentName: 'Ana', to: '2026-09-01' },   // pausa ya cerrada: no cuenta
+    ]);
+    const r = alumnosResumen(students, assignments, paused);
+    expect(r).toEqual({ conClase: 1, total: 2, sinProfesor: 0, enPausa: 1 });
+    expect(clasesProgramadasSemana(assignments, paused)).toBe(1);
+    expect(origenDeActivos(students, assignments, '2026-10-06', paused)).toEqual({ suscripcion: 1, manual: 0, oritalk: 0 });
   });
 });
 

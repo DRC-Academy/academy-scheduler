@@ -33,6 +33,7 @@ import type { Assignment } from '@/types';
 import { slotsOnDate } from '@/lib/slotHistory';
 import type { ClassFinanceRow } from '@/lib/finance';
 import { periodIndex, existsForStudent, type StudentDropout } from '@/lib/studentPeriod';
+import type { StudentPause } from '@/lib/studentPauses';
 
 const nk = (s: string | null | undefined): string => (s ?? '').trim().toLowerCase();
 const DIAS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
@@ -122,13 +123,15 @@ export interface ScheduledIndex {
 export function scheduledIndex(opts: {
   assignments: Assignment[];
   dropouts: StudentDropout[];
+  /** Pausas del alumno: sus días no cuentan como agendados. */
+  pauses?: StudentPause[];
   teacherId: string;
   monthYear: string;
 }): ScheduledIndex {
   const { assignments, dropouts, teacherId, monthYear } = opts;
   const [y, m] = monthYear.split('-').map(Number);
   const ultimo = new Date(y, m, 0).getDate();
-  const periodos = periodIndex(assignments, dropouts, teacherId);
+  const periodos = periodIndex(assignments, dropouts, teacherId, opts.pauses ?? []);
 
   const celdas = new Set<string>();
   const dias = new Map<string, Set<string>>();
@@ -245,6 +248,7 @@ export interface DriftStudent {
 export function buildDriftReport(opts: {
   monthYear: string;
   dropouts: StudentDropout[];
+  pauses?: StudentPause[];
   teachers: Array<{
     teacherId: string;
     teacherName: string;
@@ -258,7 +262,7 @@ export function buildDriftReport(opts: {
 
   for (const t of opts.teachers) {
     const sched = scheduledIndex({
-      assignments: t.assignments, dropouts: opts.dropouts,
+      assignments: t.assignments, dropouts: opts.dropouts, pauses: opts.pauses,
       teacherId: t.teacherId, monthYear: opts.monthYear,
     });
     for (const r of t.rows) {

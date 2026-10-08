@@ -186,3 +186,48 @@ describe('findStartDateMismatches', () => {
     expect(out).toHaveLength(0);
   });
 });
+
+describe('pausas (student_pauses)', () => {
+  const pausa = (o: Partial<{ studentId: string; studentName: string; from: string; to: string | null }>) => ({
+    studentId: 's_x', studentName: 'Otro', studentEmail: 'x@x.com', from: '2026-10-05', to: null, ...o,
+  });
+
+  it('classExistsOn: la pausa tapa [from, to) y el día de la reactivación ya tiene clase', () => {
+    const p = { from: '2026-09-01', to: null, pauses: [{ from: '2026-10-05', to: '2026-10-12' }] };
+    expect(classExistsOn(p, '2026-10-04')).toBe(true);
+    expect(classExistsOn(p, '2026-10-05')).toBe(false);
+    expect(classExistsOn(p, '2026-10-11')).toBe(false);
+    expect(classExistsOn(p, '2026-10-12')).toBe(true);
+  });
+
+  it('classExistsOn: una pausa abierta tapa todo desde su inicio', () => {
+    const p = { from: '2026-09-01', to: null, pauses: [{ from: '2026-10-05', to: null }] };
+    expect(classExistsOn(p, '2026-10-04')).toBe(true);
+    expect(classExistsOn(p, '2027-01-01')).toBe(false);
+  });
+
+  it('periodIndex: aplica la pausa por nombre (sin mirar el profesor)', () => {
+    const idx = periodIndex(
+      [{ teacherId: T, studentName: 'Ana López', startDate: '2026-09-01' }],
+      [], T, [pausa({ studentName: '  ana lópez ' })],
+    );
+    expect(existsForStudent(idx, 'Ana López', '2026-10-04')).toBe(true);
+    expect(existsForStudent(idx, 'Ana López', '2026-10-06')).toBe(false);
+  });
+
+  it('periodIndex: aplica la pausa por studentId aunque el nombre difiera', () => {
+    const idx = periodIndex(
+      [{ teacherId: T, studentName: 'Ana L.', studentId: 's_ana', startDate: '2026-09-01' }],
+      [], T, [pausa({ studentId: 's_ana', studentName: 'Ana López' })],
+    );
+    expect(existsForStudent(idx, 'Ana L.', '2026-10-06')).toBe(false);
+  });
+
+  it('periodIndex: la pausa de otro alumno no toca a este', () => {
+    const idx = periodIndex(
+      [{ teacherId: T, studentName: 'Ana López', studentId: 's_ana', startDate: '2026-09-01' }],
+      [], T, [pausa({})],
+    );
+    expect(existsForStudent(idx, 'Ana López', '2026-10-06')).toBe(true);
+  });
+});

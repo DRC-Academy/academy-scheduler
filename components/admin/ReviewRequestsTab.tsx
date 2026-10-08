@@ -20,6 +20,7 @@ import {
 import { studentLostDatesInMonth, LOST_CLASS_MONTHLY_CAP, durationBadge, estimateClassAmount } from '@/lib/finance';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { findStartDateMismatches } from '@/lib/studentPeriod';
+import { dbGetStudentPauses, type StudentPause } from '@/lib/studentPauses';
 import { getTeacherAssignments, dbGetTranscriptForReview, type TranscriptForReview } from '@/lib/db';
 import { getSpainParts } from '@/components/VisualCalendar';
 import { flagLabel } from '@/lib/transcriptValidation';
@@ -71,6 +72,9 @@ function ClasesSinIngreso() {
   const [monthYear, setMonthYear] = useState(spain.dateStr.slice(0, 7));
   const [conSeñalSolo, setConSeñalSolo] = useState(true);
   const [asgsByTeacher, setAsgsByTeacher] = useState<Record<string, Assignment[]>>({});
+  // Los días en pausa no tocaban clase: no son "sin ingreso".
+  const [pauses, setPauses] = useState<StudentPause[]>([]);
+  useEffect(() => { dbGetStudentPauses().then(setPauses).catch(() => {}); }, []);
   const [cargando, setCargando] = useState(true);
   const [abierto, setAbierto] = useState<string | null>(null);
 
@@ -96,7 +100,7 @@ function ClasesSinIngreso() {
       if (!asgs) continue;
       const clases = buildMissingJoinClasses({
         assignments: asgs, joinLogs: classJoinLogs, classRecords, requests: [],
-        analyses: classAnalyses, teacherId: t.id,
+        analyses: classAnalyses, pauses, teacherId: t.id,
         fromDate: from, toDate: to,
         todayIso: spain.dateStr, nowMinutes: spain.hour * 60 + spain.minute,
         gridOccupancy: gridOccupancyOfTeacher(t),
@@ -106,7 +110,7 @@ function ClasesSinIngreso() {
     }
     return out.sort((a, b) => b.clases.length - a.clases.length);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [teachers, asgsByTeacher, classJoinLogs, classRecords, classAnalyses, monthYear, conSeñalSolo]);
+  }, [teachers, asgsByTeacher, classJoinLogs, classRecords, classAnalyses, pauses, monthYear, conSeñalSolo]);
 
   const total = porProfesor.reduce((s, p) => s + p.clases.length, 0);
 

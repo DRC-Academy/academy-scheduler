@@ -72,6 +72,15 @@ describe('recurrente', () => {
     const r = facturacionMensualDe({ productName: 'Matricula DRC Academy - Inglés General' }, '2026-08', PRICES);
     expect(r.eur).toBeNull();
   });
+
+  it('en pausa factura la Pausa (20 €), no su plan', () => {
+    const plan = { productName: 'Curso de inglés general - 2h semanales, B1', createdAt: '2026-01-15' };
+    const r = facturacionMensualDe({ ...plan, enPausa: true }, '2026-10', PRICES);
+    expect(r.eur).toBe(20);
+    expect(r.kind).toBe('recurrente');
+    // Al reactivar (sin la marca) vuelve su plan.
+    expect(facturacionMensualDe(plan, '2026-11', PRICES).eur).toBe(104);
+  });
 });
 
 // ── LOS TRES QUE FACTURABAN 0 € DANDO CLASE ─────────────────────────────────

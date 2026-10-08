@@ -52,6 +52,7 @@ import { registerTourBridge } from '@/lib/tourBridge';
 import { fetchRiskBriefings, briefingFor, type RiskBriefingIndex } from '@/lib/interventionsClient';
 import { AddClassModal, saveTeacherClass, ANALYSIS_FAILED_NOTICE } from '@/components/AddClassModal';
 import { periodIndex, dbGetStudentDropouts, type StudentDropout } from '@/lib/studentPeriod';
+import { dbGetStudentPauses, type StudentPause } from '@/lib/studentPauses';
 import FormStatusBadge from '@/components/FormStatusBadge';
 import { lookupToken, formStateOf, type FormTokenInfo } from '@/lib/formClient';
 import { stripProtocol, MeetLinkBadge } from '@/components/teacherPanelUi';
@@ -726,9 +727,13 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
   // viene ya aparece en la agenda de esta semana. Ver lib/studentPeriod.
   const [dropouts, setDropouts] = useState<StudentDropout[]>([]);
   useEffect(() => { dbGetStudentDropouts().then(setDropouts).catch(() => {}); }, []);
+  // Pausas con fecha: tapan también los días PASADOS en pausa (el chequeo en
+  // vivo de más abajo solo sabe de hoy en adelante).
+  const [pauses, setPauses] = useState<StudentPause[]>([]);
+  useEffect(() => { dbGetStudentPauses().then(setPauses).catch(() => {}); }, []);
   const periodos = useMemo(
-    () => periodIndex(myAssignments, dropouts, teacher.id),
-    [myAssignments, dropouts, teacher.id],
+    () => periodIndex(myAssignments, dropouts, teacher.id, pauses),
+    [myAssignments, dropouts, pauses, teacher.id],
   );
 
   // ── Días con sus clases, ya filtrados ────────────────────────────────────────

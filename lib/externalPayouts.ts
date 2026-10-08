@@ -36,6 +36,7 @@ import { margenDe } from '@/lib/billing';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { madridToday } from '@/lib/subscriptionAccess';
 import { esProfesorDePrueba, sinProfesoresDePrueba } from '@/lib/externalTeachers';
+import { dbGetStudentPauses, pauseIndex, isPausedOn, openPauseOf, type StudentPause } from '@/lib/studentPauses';
 import type {
   Teacher, Student, Assignment, ScoringEvent, FinanceRate, FinancePayment,
   ClassRecord, ClassJoinLog, FinanceManualApproval, ProductPrice, TeacherBonus,
@@ -69,6 +70,11 @@ import type {
 // dan hoy 25 profesores activos de 27. Si algún día hace falta exactitud
 // absoluta habría que consultar Woo por alumno, con el coste de latencia que
 // eso implica; se decidió que no compensa para un gráfico de tendencia.
+//
+// EN PAUSA (oct/2026, variación "Pausa" de Woo): la base SÍ lo sabe, por las
+// pausas abiertas de `student_pauses`. Un alumno en pausa NO es activo: no hace
+// activo a su profesor. Sigue en `rosterByTeacher` porque sigue pagando, pero
+// factura la Pausa (20 €) y no su plan, ver `computeMonth`.
 const VENCIDOS_CONOCIDOS = new Set(['manual_vencido', 'oritalk_vencido', 'one_time_sin_activar']);
 
 type AccesoConocido =
@@ -106,8 +112,11 @@ export interface PayoutDataset {
   activeTeacherIds: Set<string>;
   /** Precios cargados a mano. [] si la tabla aún no existe: el gasto no depende de ellos. */
   productPrices: ProductPrice[];
-  /** Alumnos activos de cada profesor, para la facturación. teacherId → alumnos. */
+  /** Alumnos activos de cada profesor, para la facturación. teacherId → alumnos.
+   *  Incluye a los EN PAUSA: siguen pagando (la Pausa). */
   rosterByTeacher: Map<string, Student[]>;
+  /** Pausas de los alumnos (student_pauses). [] si la tabla aún no existe. */
+  pauses: StudentPause[];
   loadedAt: number;
 }
 
@@ -124,7 +133,7 @@ export async function loadPayoutDataset(force = false): Promise<PayoutDataset> {
   const [
     todosLosTeachers, students, assignments, scoringEvents,
     rates, payments, classRecords, joinLogs, manualApprovals, classAnalyses,
-    productPrices, teacherBonuses,
+    productPrices, teacherBonuses, pauses,
   ] = await Promise.all([
     // CON los archivados: un profesor que se fue en agosto siguió costando lo que
     // costó en julio. Si el dataset dejara de verlo, el gasto de un mes ya cerrado
@@ -134,8 +143,9 @@ export async function loadPayoutDataset(force = false): Promise<PayoutDataset> {
     dbGetStudents(), dbGetAssignments(), dbGetScoringEvents(),
     dbGetFinanceRates(), dbGetFinancePayments(), dbGetClassRecords(), dbGetClassJoinLogs(),
     dbGetManualApprovals(), dbGetClassTranscripts(), dbGetProductPrices(),
-    dbGetTeacherBonuses(),
+    dbGetTeacherBonuses(), dbGetStudentPauses(),
   ]);
+  const pausas = pauseIndex(pauses);
 
   // Las cuentas de prueba se quitan ACÁ, en el dataset, y no al construir la
   // respuesta: así no hay ninguna vista de este módulo —ni las que se escriban
@@ -177,7 +187,8 @@ export async function loadPayoutDataset(force = false): Promise<PayoutDataset> {
     const s = byId.get(a.studentId) ?? byEmail.get(nk(a.studentEmail)) ?? byName.get(nk(a.studentName));
     if (!s) continue;
     if (VENCIDOS_CONOCIDOS.has(accesoConocidoDe(s, hoy))) continue;
-    activeTeacherIds.add(a.teacherId);
+    // En pausa: no hace activo al profesor, pero sí entra en su facturación.
+    if (!openPauseOf(pausas, { name: s.name, id: s.id })) activeTeacherIds.add(a.teacherId);
 
     const vistos = seenPorProfesor.get(a.teacherId) ?? new Set<string>();
     if (vistos.has(s.id)) continue;
@@ -192,7 +203,7 @@ export async function loadPayoutDataset(force = false): Promise<PayoutDataset> {
   cached = {
     teachers, students, assignments, scoringEvents, teacherBonuses, rates, payments,
     classRecords, joinLogs, manualApprovals, classAnalyses,
-    activeTeacherIds, productPrices, rosterByTeacher, loadedAt: Date.now(),
+    activeTeacherIds, productPrices, rosterByTeacher, pauses, loadedAt: Date.now(),
   };
   return cached;
 }
@@ -245,6 +256,11 @@ export interface TeacherPayout {
    * del admin, que es donde se arregla el dato.
    */
   ventanas_dudosas_detalle: Array<{ student_name: string; motivo: string }>;
+  /**
+   * Alumnos de su cartera EN PAUSA ese mes (añadido oct/2026). Están dentro de
+   * `alumnos_totales` y facturan la Pausa (20 €), no su plan.
+   */
+  alumnos_en_pausa: number;
 }
 
 export interface MonthPayouts {
@@ -285,6 +301,8 @@ export interface MonthPayouts {
   facturacion_parcial: boolean;
   /** Suma de `ventanas_dudosas` de todos los profesores. */
   ventanas_dudosas_total: number;
+  /** Suma de `alumnos_en_pausa` de todos los profesores (añadido oct/2026). */
+  alumnos_en_pausa_total: number;
 
   teachers: TeacherPayout[];
 }
@@ -296,9 +314,22 @@ export function currentMonthYear(): string {
 
 const round2 = (n: number): number => Math.round(n * 100) / 100;
 
+/** 'YYYY-MM-DD' del último día de un 'YYYY-MM'. */
+function lastDayOf(monthYear: string): string {
+  const [y, m] = monthYear.split('-').map(Number);
+  const d = new Date(Date.UTC(y, m, 0));
+  return d.toISOString().slice(0, 10);
+}
+
 /** Liquidación de TODOS los profesores para un mes. Función pura sobre el dataset. */
 export function computeMonth(ds: PayoutDataset, monthYear: string): MonthPayouts {
   const isCurrent = monthYear === currentMonthYear();
+
+  // ¿Qué alumnos facturan la Pausa este mes? Los que estaban en pausa el DÍA DE
+  // REFERENCIA: hoy en el mes en curso, el último día en un mes cerrado. Un mes
+  // se factura entero de una forma o de la otra, como cobra Woo en la renovación.
+  const pausas = pauseIndex(ds.pauses);
+  const diaRef = isCurrent ? madridToday() : lastDayOf(monthYear);
 
   const teachers: TeacherPayout[] = ds.teachers.map(t => {
     const payment = ds.payments.find(p => p.teacherId === t.id && p.monthYear === monthYear) ?? null;
@@ -331,7 +362,9 @@ export function computeMonth(ds: PayoutDataset, monthYear: string): MonthPayouts
     // una serie histórica, y el margen de meses ya cerrados cambiaría solo porque
     // el profesor sumó alumnos después.
     const roster = (ds.rosterByTeacher.get(t.id) ?? [])
-      .filter(s => !s.createdAt || s.createdAt.slice(0, 7) <= monthYear);
+      .filter(s => !s.createdAt || s.createdAt.slice(0, 7) <= monthYear)
+      .map(s => ({ ...s, enPausa: isPausedOn(pausas, { name: s.name, id: s.id }, diaRef) }));
+    const enPausa = roster.filter(s => s.enPausa).length;
 
     const m = margenDe({
       students: roster,
@@ -357,6 +390,7 @@ export function computeMonth(ds: PayoutDataset, monthYear: string): MonthPayouts
       ventanas_dudosas_detalle: m.detalle
         .filter(d => d.warning)
         .map(d => ({ student_name: d.studentName, motivo: d.warning! })),
+      alumnos_en_pausa: enPausa,
     };
   });
 
@@ -388,6 +422,7 @@ export function computeMonth(ds: PayoutDataset, monthYear: string): MonthPayouts
     margen_total: algunPrecio ? round2(facturacionTotal - totalAmount) : null,
     facturacion_parcial: visibles.some(t => t.facturacion_parcial),
     ventanas_dudosas_total: visibles.reduce((s, t) => s + t.ventanas_dudosas, 0),
+    alumnos_en_pausa_total: visibles.reduce((s, t) => s + t.alumnos_en_pausa, 0),
     teachers: visibles.sort((a, b) => b.total_amount - a.total_amount || a.teacher_name.localeCompare(b.teacher_name, 'es')),
   };
 }

@@ -38,6 +38,7 @@ import { hoursLeftLabel, deadlineLabel, TRANSCRIPT_REOPEN_HOURS } from '@/lib/tr
 import { buildClassFunnel, type ClassFunnel, type FunnelBranch } from '@/lib/classFunnel';
 import { dbGetReviewRequests } from '@/lib/reviewRequests';
 import { dbGetStudentDropouts, type StudentDropout } from '@/lib/studentPeriod';
+import { dbGetStudentPauses, type StudentPause } from '@/lib/studentPauses';
 import ReviewRequestsTab from '@/components/admin/ReviewRequestsTab';
 import OutOfScheduleTab from '@/components/admin/OutOfScheduleTab';
 import { Assignment, ScoringEvent, FinanceManualApproval, Teacher, ClassReviewRequest } from '@/types';
@@ -124,6 +125,7 @@ function useFunnelData(enabled: boolean) {
   const [data, setData] = useState<{
     grids: Map<string, Assignment[]>;
     dropouts: StudentDropout[];
+    pauses: StudentPause[];
     requests: ClassReviewRequest[];
   } | null>(null);
   const pedido = useRef(false);
@@ -136,8 +138,9 @@ function useFunnelData(enabled: boolean) {
       dbGetAllTeacherAssignments({ teachers, students, assignments }),
       dbGetStudentDropouts(),
       dbGetReviewRequests(),
+      dbGetStudentPauses(),
     ])
-      .then(([grids, dropouts, requests]) => { if (!cancelled) setData({ grids, dropouts, requests }); })
+      .then(([grids, dropouts, requests, pauses]) => { if (!cancelled) setData({ grids, dropouts, pauses, requests }); })
       .catch(err => {
         console.error('[finanzas] No se pudieron cargar los datos del embudo:', err);
         pedido.current = false;   // que un fallo de red no lo deje muerto
@@ -582,6 +585,7 @@ function DetalleProfesor({ r, teacher, extras, penalties, funnelData, monthYear,
     monthYear, teacherId: teacher.id, assignments: asgs,
     joinLogs: classJoinLogs, classRecords, analyses: classAnalyses,
     requests: funnelData.requests.filter(q => q.teacherId === teacher.id), dropouts: funnelData.dropouts,
+    pauses: funnelData.pauses,
     gridOccupancy: gridOccupancyOfTeacher(teacher), finance: r,
     todayIso: spain.dateStr, nowMinutes: spain.hour * 60 + spain.minute,
   // eslint-disable-next-line react-hooks/exhaustive-deps

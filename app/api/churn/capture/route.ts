@@ -14,6 +14,7 @@
 
 import { captureChurnSnapshot } from '@/lib/churnSnapshot';
 import { flagChurnWithOpenAlert } from '@/lib/interventionStore';
+import { dbGetStudentPauses, openPauseOf, pauseIndex } from '@/lib/studentPauses';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -43,6 +44,17 @@ export async function POST(request: Request): Promise<Response> {
   const studentName = body.studentName?.trim();
   if (!studentName) {
     return Response.json({ captured: false, error: 'Falta studentName.' }, { status: 400 });
+  }
+
+  // EN PAUSA: una foto "activa" (a demanda) de un alumno en pausa mediría como
+  // inactividad semanas en las que no tiene clases por contrato, y ensuciaría los
+  // ejemplos de alumnos que siguen. No se toma. Una BAJA (churned) sí se
+  // registra aunque estuviera en pausa: es una baja real.
+  if ((body.label ?? 'churned') === 'active') {
+    const pausas = pauseIndex(await dbGetStudentPauses());
+    if (openPauseOf(pausas, { name: studentName, id: body.studentId ?? null })) {
+      return Response.json({ captured: false, reason: 'en_pausa' });
+    }
   }
 
   // ¿Se va con una alerta de riesgo pendiente de atender? Se marca ANTES de que

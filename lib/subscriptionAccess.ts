@@ -250,52 +250,14 @@ export function isPausedStatus(status: string | null | undefined): boolean {
   return status === PAUSED_STATUS;
 }
 
-/** Texto comparable: sin tildes, en minúsculas. */
-const plain = (s: string): string => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-
-/** ¿Este valor de atributo de variación es la "Pausa"? Sin mayúsculas ni tildes. */
-export function isPauseVariationText(text: string | null | undefined): boolean {
-  return !!text && plain(text).includes('pausa');
-}
-
-/**
- * IDs de WooCommerce de la Pausa (producto o variación: se mira en los dos campos
- * de la línea). Dato de Facundo, 06/10/2026: #35634. Va junto a la detección por
- * nombre del atributo: con el ID no depende de cómo se escriba la variación, y con
- * el nombre no hace falta tocar el código si se crea la Pausa en otro producto.
- */
-export const PAUSE_WOO_IDS: readonly number[] = [35634];
-
-/** Línea de producto de una suscripción o pedido de Woo (lo que se usa de ella). */
-export interface WooLineItem {
-  name?: unknown;
-  product_id?: unknown;
-  variation_id?: unknown;
-  meta_data?: Array<{ key?: unknown; value?: unknown; display_key?: unknown; display_value?: unknown }> | unknown;
-}
-
-/**
- * ¿La línea es la variación "Pausa"? Por ID (PAUSE_WOO_IDS) o por el atributo de
- * la variación. Del texto se mira SOLO el atributo de la variación
- * (las metas sin "_" delante, que es como Woo guarda los atributos elegidos), no
- * el nombre del producto: así un producto que llevara "pausa" en el nombre por
- * otro motivo no se confunde.
- */
-export function isPauseLineItem(li: WooLineItem | null | undefined): boolean {
-  if (PAUSE_WOO_IDS.includes(Number(li?.product_id)) || PAUSE_WOO_IDS.includes(Number(li?.variation_id))) return true;
-  const meta = Array.isArray(li?.meta_data) ? li!.meta_data as Array<Record<string, unknown>> : [];
-  return meta.some(m => {
-    const key = String(m?.key ?? '');
-    if (key.startsWith('_')) return false;
-    const v = m?.display_value ?? m?.value;
-    return typeof v === 'string' && isPauseVariationText(v);
-  });
-}
-
-/** ¿Alguna línea de esta suscripción (o pedido) es la variación Pausa? */
-export function hasPauseItem(lineItems: unknown): boolean {
-  return Array.isArray(lineItems) && lineItems.some(li => isPauseLineItem(li as WooLineItem));
-}
+// La detección de la línea de Pausa (IDs + atributo) vive en
+// lib/subscriptions/pause.ts, la única lista de IDs. Se reexporta para que los
+// imports de siempre sigan funcionando.
+import { hasPauseItem } from '@/lib/subscriptions/pause';
+export {
+  PAUSE_VARIATION_IDS, PAUSE_MONTHLY_PRICE_EUR, isPauseVariationText, isPauseLineItem,
+  hasPauseItem, isPausedSubscription, type WooLineItem,
+} from '@/lib/subscriptions/pause';
 
 /** Lo que se necesita de cada suscripción para decidir el estado. */
 export interface WooSubLike {

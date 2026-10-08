@@ -161,8 +161,40 @@ export function clasesEnRango(records: readonly ClassRecord[], r: DateRange): nu
  * Sale de los horarios de las asignaciones (`slots`), no de los registros: es lo
  * que estaba previsto, contra lo que se compara lo que efectivamente se dio.
  */
-export function clasesProgramadasSemana(assignments: readonly Assignment[]): number {
-  return assignments.reduce((s, a) => s + (a.slots?.length ?? 0), 0);
+export function clasesProgramadasSemana(
+  assignments: readonly Assignment[],
+  /** Alumnos EN PAUSA (pausedKeysOf): no tienen clases mientras dure. */
+  paused: ReadonlySet<string> = SIN_PAUSAS,
+): number {
+  return assignments
+    .filter(a => !assignmentPaused(a, paused))
+    .reduce((s, a) => s + (a.slots?.length ?? 0), 0);
+}
+
+// ── Alumnos en pausa ─────────────────────────────────────────────────────────
+//
+// La variación "Pausa" de Woo (lib/subscriptions/pause.ts): el alumno sigue con
+// su profesor y su hueco, pero no tiene clases. No es activo ni es baja: tiene
+// cifra propia. Se identifica por las pausas ABIERTAS de student_pauses, que es
+// lo que la base sabe sin preguntarle a WooCommerce.
+
+const SIN_PAUSAS: ReadonlySet<string> = new Set();
+
+/** Claves (id y nombre normalizado) de los alumnos con una pausa abierta. */
+export function pausedKeysOf(
+  pauses: readonly { studentId: string; studentName: string; to: string | null }[],
+): Set<string> {
+  const out = new Set<string>();
+  for (const p of pauses) {
+    if (p.to !== null) continue;
+    if (p.studentId) out.add(p.studentId);
+    if (norm(p.studentName)) out.add(norm(p.studentName));
+  }
+  return out;
+}
+
+function assignmentPaused(a: Assignment, paused: ReadonlySet<string>): boolean {
+  return paused.size > 0 && ((!!a.studentId && paused.has(a.studentId)) || paused.has(norm(a.studentName)));
 }
 
 // ── Transcripts pendientes ───────────────────────────────────────────────────
@@ -382,7 +414,11 @@ export function faltasProfesorDelMes(
 
 // ── Alumnos ──────────────────────────────────────────────────────────────────
 
-export interface AlumnosResumen { conClase: number; total: number; sinProfesor: number }
+export interface AlumnosResumen {
+  conClase: number; total: number; sinProfesor: number;
+  /** Con profesor pero EN PAUSA: fuera de `conClase`, con cifra propia. */
+  enPausa: number;
+}
 
 /**
  * Alumnos que hoy tienen clase con alguien.
@@ -395,15 +431,19 @@ export interface AlumnosResumen { conClase: number; total: number; sinProfesor: 
 export function alumnosResumen(
   students: readonly { id: string; name: string }[],
   assignments: readonly Assignment[],
+  paused: ReadonlySet<string> = SIN_PAUSAS,
 ): AlumnosResumen {
   const conAsignacion = new Set<string>();
+  const enPausa = new Set<string>();
   for (const a of assignments) {
-    conAsignacion.add(a.studentId || norm(a.studentName));
+    const k = a.studentId || norm(a.studentName);
+    conAsignacion.add(k);
+    if (assignmentPaused(a, paused)) enPausa.add(k);
   }
   const sinProfesor = students.filter(s =>
     !conAsignacion.has(s.id) && !conAsignacion.has(norm(s.name)),
   ).length;
-  return { conClase: conAsignacion.size, total: students.length, sinProfesor };
+  return { conClase: conAsignacion.size - enPausa.size, total: students.length, sinProfesor, enPausa: enPausa.size };
 }
 
 // ── Lo que ve el teléfono ────────────────────────────────────────────────────
@@ -429,6 +469,8 @@ export function origenDeActivos(
   students: readonly { id: string; name: string; manualActiveUntil?: string | null; isOritalk?: boolean | null; oritalkUntil?: string | null }[],
   assignments: readonly Assignment[],
   today: string,
+  /** Alumnos EN PAUSA: no son activos de ningún origen. */
+  paused: ReadonlySet<string> = SIN_PAUSAS,
 ): OrigenActivos {
   const conAsignacion = new Set<string>();
   for (const a of assignments) conAsignacion.add(a.studentId || norm(a.studentName));
@@ -436,6 +478,7 @@ export function origenDeActivos(
   const out: OrigenActivos = { suscripcion: 0, manual: 0, oritalk: 0 };
   for (const s of students) {
     if (!conAsignacion.has(s.id) && !conAsignacion.has(norm(s.name))) continue;
+    if (paused.has(s.id) || paused.has(norm(s.name))) continue;
     const override = accessOverrideOf({
       manual_active_until: s.manualActiveUntil ?? null,
       is_oritalk: s.isOritalk ?? null,

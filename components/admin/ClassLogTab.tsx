@@ -31,6 +31,7 @@ import { useTeachers } from '@/lib/TeachersContext';
 import { getSpainParts } from '@/lib/spainTime';
 import { buildAttendanceRows, attachTranscriptStatus, markMovedClasses, attendanceSubBadge, minutesLate, isoDate, type LogRow, type AttendanceStatus } from '@/lib/attendance';
 import { periodIndex, dbGetStudentDropouts, type StudentDropout } from '@/lib/studentPeriod';
+import { dbGetStudentPauses, type StudentPause } from '@/lib/studentPauses';
 import { gridOccupancyOfTeacher, applyGridSlots } from '@/lib/teacherClasses';
 import { transcriptCell } from '@/lib/transcriptDeadline';
 import { HelpTooltip } from '@/components/ui';
@@ -170,9 +171,11 @@ export default function ClassLogTab() {
   // contrato en lib/studentPeriod: filtra lo PROYECTADO, nunca los hechos.
   const [dropouts, setDropouts] = useState<StudentDropout[]>([]);
   useEffect(() => { dbGetStudentDropouts().then(setDropouts).catch(() => {}); }, []);
+  const [pauses, setPauses] = useState<StudentPause[]>([]);
+  useEffect(() => { dbGetStudentPauses().then(setPauses).catch(() => {}); }, []);
   const periodsByTeacher = useMemo(
-    () => Object.fromEntries(teachers.map(t => [t.id, periodIndex(assignments, dropouts, t.id)])),
-    [teachers, assignments, dropouts],
+    () => Object.fromEntries(teachers.map(t => [t.id, periodIndex(assignments, dropouts, t.id, pauses)])),
+    [teachers, assignments, dropouts, pauses],
   );
 
   // Filas de asistencia (fuente única: lib/attendance). Todos los profes (o el
