@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { huecosEntreProfesores, ordenEstable, candidatosWith } from '@/lib/cambioProfesor/huecos';
+import { huecosEntreProfesores, ordenEstable, candidatosWith, franjaDeHora } from '@/lib/cambioProfesor/huecos';
 import { CambioHorarioError } from '@/lib/cambioHorario/errors';
 import { TransferenciaError } from '@/lib/transferencia/errors';
 import { AHORA, dbFase2, hace } from '@/lib/cambioProfesor/fixtures.test-helper';
@@ -52,11 +52,25 @@ describe('huecosEntreProfesores', () => {
     expect([...new Set((r2 as typeof r).huecos.map(h => h.profesor.id))]).toEqual(orden);
   });
 
+  it('franjas del LMS por hora de inicio (la madrugada es noche)', () => {
+    const por = (hs: number[]) => hs.map(h => `${h}:${franjaDeHora(h)}`);
+    expect(por([0, 5, 6, 11, 12, 14, 15, 19, 20, 23])).toEqual([
+      '0:noche', '5:noche', '6:manana', '11:manana', '12:mediodia', '14:mediodia', '15:tarde', '19:tarde', '20:noche', '23:noche',
+    ]);
+  });
+
   it('filtros por día y franja', async () => {
     const dia = await huecosEntreProfesores({ client: dbFase2().client(), alumno: 's1', dia: 'Lunes', ahora: AHORA });
     expect((dia as { huecos: unknown[] }).huecos.map(etiq as never)).toEqual(['tB Lunes 10:00 2h 2026-10-12']);
     const tarde = await huecosEntreProfesores({ client: dbFase2().client(), alumno: 's1', franja: 'tarde', ahora: AHORA });
     expect((tarde as { huecos: unknown[] }).huecos.map(etiq as never)).toEqual(['tB Martes 19:00 2h 2026-10-13']);
+    const manana = await huecosEntreProfesores({ client: dbFase2().client(), alumno: 's1', franja: 'manana', ahora: AHORA });
+    expect((manana as { huecos: unknown[] }).huecos.map(etiq as never).sort()).toEqual(['tB Lunes 10:00 2h 2026-10-12', 'tE Viernes 09:00 2h 2026-10-16']);
+    // Con profesor fijado: la sesión de 1 h en mediodía (12–14:59) y en noche (20:00).
+    const fij = await huecosEntreProfesores({ client: dbFase2().client(), alumno: 's1', profesorFijado: 'tB', franja: 'noche', ahora: AHORA });
+    expect((fij as { sesiones: Array<{ huecos: unknown[] }> }).sesiones[1].huecos.map(etiq as never)).toEqual(['tB Martes 20:00 1h 2026-10-13']);
+    const mediodia = await huecosEntreProfesores({ client: dbFase2().client(), alumno: 's1', profesorFijado: 'tB', franja: 'mediodia', ahora: AHORA });
+    expect((mediodia as { sesiones: Array<{ huecos: unknown[] }> }).sesiones[1].huecos).toEqual([]);   // 12:00 ocupado
     expect(await codigoDe(huecosEntreProfesores({ client: dbFase2().client(), alumno: 's1', franja: 'madrugada', ahora: AHORA }))).toBe('DATOS_INVALIDOS');
   });
 

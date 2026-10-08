@@ -30,13 +30,22 @@ type Db = SupabaseClient;
 
 const DIAS = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 
-/** Franjas por hora de INICIO, en España. */
-export const FRANJAS = {
-  manana: { desde: 0, hasta: 14 },    // antes de las 14:00
-  tarde:  { desde: 14, hasta: 20 },   // de 14:00 a 19:59
-  noche:  { desde: 20, hasta: 24 },   // de 20:00 en adelante
-} as const;
-export type Franja = keyof typeof FRANJAS;
+/**
+ * Franjas por hora de INICIO, en España. Las MISMAS que el LMS:
+ *   manana   06:00–11:59
+ *   mediodia 12:00–14:59
+ *   tarde    15:00–19:59
+ *   noche    20:00–23:59 y la madrugada (00:00–05:59)
+ */
+export const FRANJAS = ['manana', 'mediodia', 'tarde', 'noche'] as const;
+export type Franja = typeof FRANJAS[number];
+
+export function franjaDeHora(h: number): Franja {
+  if (h >= 6 && h < 12) return 'manana';
+  if (h >= 12 && h < 15) return 'mediodia';
+  if (h >= 15 && h < 20) return 'tarde';
+  return 'noche';   // 20:00 en adelante y la madrugada
+}
 
 export interface ProfesorCandidato {
   id: string;
@@ -217,11 +226,7 @@ export async function candidatosWith(
 
 // ── Huecos ────────────────────────────────────────────────────────────────────
 
-const enFranja = (b: BloqueLibre, f?: Franja | null) => {
-  if (!f) return true;
-  const h = Number(b.horaInicio.slice(0, 2));
-  return h >= FRANJAS[f].desde && h < FRANJAS[f].hasta;
-};
+const enFranja = (b: BloqueLibre, f?: Franja | null) => !f || franjaDeHora(Number(b.horaInicio.slice(0, 2))) === f;
 
 /** Bloques FIJOS libres de un profesor candidato para una duración. */
 export function bloquesDeProfesor(c: Candidatos, p: ProfesorCandidato, duracion: number, ahora: number): BloqueLibre[] {
@@ -259,7 +264,7 @@ export type HuecosEntreProfesores =
 export async function huecosEntreProfesores(p: HuecosEntreProfesoresParams): Promise<HuecosEntreProfesores> {
   const ahora = p.ahora ?? Date.now();
   if (p.dia && !DIAS.includes(p.dia)) falla('DATOS_INVALIDOS', `día desconocido: ${p.dia}`);
-  if (p.franja && !(p.franja in FRANJAS)) falla('DATOS_INVALIDOS', `franja desconocida: ${p.franja} (manana, tarde o noche)`);
+  if (p.franja && !(FRANJAS as readonly string[]).includes(p.franja)) falla('DATOS_INVALIDOS', `franja desconocida: ${p.franja} (${FRANJAS.join(', ')})`);
   const franja = (p.franja || null) as Franja | null;
   const filtra = (bs: BloqueLibre[]) => bs.filter(b => (!p.dia || b.dia === p.dia) && enFranja(b, franja));
 
