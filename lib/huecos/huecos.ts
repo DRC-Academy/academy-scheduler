@@ -259,8 +259,44 @@ export async function estadoCalendarioWith(db: Db, teacherId: string, ahora: num
   if (cal.error) throw new HuecosError('CALENDARIO_ILEGIBLE', cal.error.message);
   const ultimoCambioHumano = cambios.error ? null : ((cambios.data ?? [])[0] as { created_at?: string } | undefined)?.created_at ?? null;
   const updatedAt = (cal.data as { updated_at?: string | null } | null)?.updated_at ?? null;
-  const updatedViejo = !updatedAt || Date.parse(updatedAt) < Date.parse(limite);
-  return { actualizado: !(ultimoCambioHumano === null && updatedViejo), ultimoCambioHumano, updatedAt };
+  return calendarioAlDia(ultimoCambioHumano, updatedAt, ahora);
+}
+
+/**
+ * La regla de estadoCalendarioWith, PURA: sin cambio humano en los últimos 30
+ * días Y con updated_at de hace más de 30 días → sin actualizar. La usan la
+ * versión de un profesor y la de todos a la vez (estadoCalendariosWith).
+ */
+export function calendarioAlDia(ultimoCambioHumano: string | null, updatedAt: string | null, ahora: number): EstadoCalendario {
+  const limite = ahora - DIAS_CALENDARIO_VIGENTE * 86_400_000;
+  const updatedViejo = !updatedAt || Date.parse(updatedAt) < limite;
+  const humanoReciente = !!ultimoCambioHumano && Date.parse(ultimoCambioHumano) >= limite;
+  return { actualizado: humanoReciente || !updatedViejo, ultimoCambioHumano, updatedAt };
+}
+
+/**
+ * estadoCalendarioWith para VARIOS profesores en dos consultas (no dos por
+ * profesor). `updatedAtPorProfesor` es teacher_calendars.updated_at, que quien
+ * llama ya leyó junto con los grids.
+ */
+export async function estadoCalendariosWith(
+  db: Db, updatedAtPorProfesor: Map<string, string | null>, ahora: number,
+): Promise<Map<string, EstadoCalendario>> {
+  const ids = [...updatedAtPorProfesor.keys()];
+  const limite = new Date(ahora - DIAS_CALENDARIO_VIGENTE * 86_400_000).toISOString();
+  const ultimo = new Map<string, string>();
+  if (ids.length) {
+    const { data, error } = await db.from('calendar_changes').select('teacher_id, created_at')
+      .in('teacher_id', ids).neq('origin', 'sistema').gte('created_at', limite);
+    // Sin la tabla o con error, como en la versión de uno: manda updated_at.
+    if (!error) {
+      for (const r of (data ?? []) as Array<{ teacher_id: string; created_at: string }>) {
+        const prev = ultimo.get(r.teacher_id);
+        if (!prev || r.created_at > prev) ultimo.set(r.teacher_id, r.created_at);
+      }
+    }
+  }
+  return new Map(ids.map(id => [id, calendarioAlDia(ultimo.get(id) ?? null, updatedAtPorProfesor.get(id) ?? null, ahora)]));
 }
 
 export interface HuecosParams {
