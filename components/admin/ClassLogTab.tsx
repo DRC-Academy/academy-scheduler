@@ -29,7 +29,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { CalendarDays, CheckCircle2, Link2, Search, X } from 'lucide-react';
 import { useTeachers } from '@/lib/TeachersContext';
 import { getSpainParts } from '@/lib/spainTime';
-import { buildAttendanceRows, attachTranscriptStatus, attendanceSubBadge, minutesLate, isoDate, type LogRow, type AttendanceStatus } from '@/lib/attendance';
+import { buildAttendanceRows, attachTranscriptStatus, markMovedClasses, attendanceSubBadge, minutesLate, isoDate, type LogRow, type AttendanceStatus } from '@/lib/attendance';
 import { periodIndex, dbGetStudentDropouts, type StudentDropout } from '@/lib/studentPeriod';
 import { gridOccupancyOfTeacher, applyGridSlots } from '@/lib/teacherClasses';
 import { transcriptCell } from '@/lib/transcriptDeadline';
@@ -102,13 +102,20 @@ const ETIQUETA: Record<AttendanceStatus, { label: string; cls: string }> = {
   missed:    { label: 'No ingresó', cls: 'no' },
   pending:   { label: 'Pendiente', cls: 'pend' },
   upcoming:  { label: 'Próxima',   cls: 'pend' },
+  rescheduled: { label: 'Reprogramada', cls: 'pend' },
 };
+
+/** '2026-10-22' → '22/10'. */
+const diaMes = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
 
 function Etiqueta({ r }: { r: LogRow }) {
   const e = ETIQUETA[r.status] ?? { label: 'Sin dato', cls: 'pend' };
   const min = (r.status === 'late' || r.status === 'very_late') && r.joinedAt
     ? Math.max(0, Math.round(minutesLate(r.date, r.hour, r.joinedAt))) : 0;
-  return <span className={`rc-tag ${e.cls}`}>{e.label}{min > 0 ? ` · ${min} min` : ''}</span>;
+  // Clase movida (la mueva el profesor o el alumno): no es una falta.
+  const movida = r.status === 'rescheduled' && r.rescheduledTo ? ` al ${diaMes(r.rescheduledTo)}` : '';
+  const desde = r.rescheduledFrom ? ` · movida del ${diaMes(r.rescheduledFrom)}` : '';
+  return <span className={`rc-tag ${e.cls}`}>{e.label}{movida}{min > 0 ? ` · ${min} min` : ''}{desde}</span>;
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -188,15 +195,16 @@ export default function ClassLogTab() {
     // Mis clases, la ficha del alumno, Asistencias y el plazo de Finanzas
     // (lib/transcriptDeadline). Una sesión de 2 h es una sola fila y lleva un
     // solo transcript, así que se resuelve una sola vez.
-    return attachTranscriptStatus(filas, {
+    // Las clases movidas salen "Reprogramada al …", no "No ingresó".
+    return attachTranscriptStatus(markMovedClasses(filas, classRecords), {
       joinLogs: classJoinLogs, analyses: classAnalyses, classRecords, now: nowMs,
     });
   },
   [assignments, classJoinLogs, classAnalyses, classRecords, nowMs, teacherFilter, rango.desde, rango.hasta, todayIso, nowMinutes, occupancyByTeacher, periodsByTeacher]);
 
   // Cifras. Las "Pendiente" (hoy, aún sin pasar) no cuentan como registradas ni
-  // como perdidas.
-  const registradas = baseRows.filter(r => r.status !== 'missed' && r.status !== 'pending');
+  // como perdidas, y las reprogramadas tampoco: se cuentan en su fecha nueva.
+  const registradas = baseRows.filter(r => r.status !== 'missed' && r.status !== 'pending' && r.status !== 'rescheduled');
   const aTiempo = baseRows.filter(r => r.status === 'on_time').length;
   const tarde = baseRows.filter(r => r.status === 'late' || r.status === 'very_late').length;
   const perdidas = baseRows.filter(r => r.status === 'missed').length;
