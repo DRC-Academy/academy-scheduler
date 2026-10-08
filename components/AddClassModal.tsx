@@ -385,8 +385,11 @@ export function AddClassModal({
       result = await checkTranscriptDuplicates({
         teacherId: teacher.id, studentName, classDate: date, hash,
       });
-    } catch {
-      result = { kind: 'none' };   // la verificación nunca debe impedir guardar
+    } catch (e) {
+      // La verificación nunca debe impedir guardar. El timeout de 8 s vive en
+      // checkTranscriptDuplicates, que ya devuelve 'none' sin lanzar.
+      console.warn('[AddClassModal] Comprobación de duplicados saltada por error; se guarda igual:', e);
+      result = { kind: 'none' };
     } finally {
       setChecking(false);
     }
