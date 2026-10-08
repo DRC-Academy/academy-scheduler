@@ -20,6 +20,7 @@ import type { RiskSignal } from '@/lib/aiTypes';
 import type { ClassAnalysisRow } from '@/lib/aiTypes';
 import type { InterventionAuditRow, ActiveIntervention } from '@/lib/interventions';
 import type { ClassRecord } from '@/types';
+import { isMovedClass } from '@/lib/classTypes';
 
 // ── Severidad ────────────────────────────────────────────────────────────────
 //
@@ -153,7 +154,9 @@ const DAY = 86_400_000;
  * "N de M clases" en la ventana de 30 días, contando SOLO los registros de
  * class_records del alumno. M son todas las clases registradas (incluidas faltas
  * y cancelaciones) y N las que cuentan como dadas (normal/recuperación), que es
- * el mismo criterio que usa el conteo de progreso.
+ * el mismo criterio que usa el conteo de progreso. Una clase MOVIDA a otra fecha
+ * (reprogramada con destino, la mueva el profesor o el alumno) no entra en M: no
+ * es una clase perdida, se cuenta en su fecha nueva.
  *
  * Sin registros devuelve null: "0 de 0" leería como abandono cuando en realidad
  * es que ese alumno no registra clases por aquí.
@@ -166,6 +169,7 @@ export function attendance30d(records: ClassRecord[], studentName: string, nowMs
     if (norm(r.studentName) !== target) continue;
     const t = r.classDate ? new Date(`${r.classDate}T00:00:00`).getTime() : 0;
     if (!t || t < from || t > nowMs) continue;
+    if (isMovedClass(r)) continue;
     total++;
     const ct = r.classType;
     if (ct == null || ct === 'normal' || ct === 'recuperacion') given++;
