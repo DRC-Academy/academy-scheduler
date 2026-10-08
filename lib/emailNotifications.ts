@@ -361,6 +361,24 @@ export async function sendRecoveryStudentProposedEmail(
   return send('sendRecoveryStudentProposedEmail', teacher, info.title, html);
 }
 
+// ═══ A.7) El alumno cambió su horario desde el LMS (autoservicio) ═════════════
+//
+// Cambio FIJO (todas sus clases) o PUNTUAL (una sola). Mismo texto que la
+// campanita (lib/cambioHorario/textos.ts), con botón a su calendario.
+export async function sendStudentScheduleChangedEmail(
+  teacher: TeacherLike,
+  info: { title: string; body: string },
+): Promise<boolean> {
+  const html = baseEmailTemplate(
+    p(`Hola ${esc(teacher.name)},`) +
+    p(esc(info.body)) +
+    p('No tienes que hacer nada: el cambio ya está aplicado. Puedes revisarlo en tu calendario.') +
+    ctaButton('Ver mi calendario', `${APP_URL}/teacher`),
+    info.title,
+  );
+  return send('sendStudentScheduleChangedEmail', teacher, info.title, html);
+}
+
 // ═══ B) Formulario completado ═════════════════════════════════════════════════
 export async function sendFormCompletedEmail(teacher: TeacherLike, studentName: string): Promise<boolean> {
   const subject = `${studentName} completó el formulario inicial`;

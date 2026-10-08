@@ -56,3 +56,15 @@ export function notifyAdminWith(db: Db, n: { title: string; body: string; type: 
     type:        n.type,
   });
 }
+
+/** Aviso al profesor de que su alumno cambió de horario (autoservicio del LMS). */
+export function notifyStudentScheduleChangedWith(db: Db, teacherId: string, title: string, body: string): Promise<void> {
+  return insertNotification(db, {
+    id:          `notif_horario_${Date.now()}_${randomSuffix()}`,
+    target_user: teacherId,
+    target_role: null,
+    title,
+    body,
+    type:        'student_schedule_changed',
+  });
+}
