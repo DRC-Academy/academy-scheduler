@@ -18,6 +18,7 @@ import { cargarElegibilidadWith } from '@/lib/cambioHorario/elegibilidad';
 import { sesionesDelAlumno, type Sesion } from '@/lib/cambioHorario/sesiones';
 import { evaluarOrigen, type MomentoEspana } from '@/lib/cambioHorario/origen';
 import { CambioHorarioError, type CodigoCambioHorario, type DetalleNoElegible } from '@/lib/cambioHorario/errors';
+import { puedeCambiarProfesorWith, type PuedeCambiarProfesorDto } from '@/lib/cambioProfesor/core';
 
 type Db = SupabaseClient;
 
@@ -54,6 +55,8 @@ export interface EstadoDto {
   detalle_no_elegible: DetalleNoElegible | null;
   profesor: { nombre: string } | null;
   sesiones: SesionEstadoDto[];
+  /** Fase 2: si puede pedir cambio de profesor ahora, y si no, por qué y desde cuándo. */
+  puede_cambiar_profesor: PuedeCambiarProfesorDto;
 }
 
 export interface HuecoDto { dia: string; hora: string; duracion: number; fecha: string }
@@ -149,15 +152,16 @@ function proximasFechas(s: Sesion, ahora: number): string[] {
 
 export async function estadoAutoservicioWith(db: Db, studentId: string, ahora: number = Date.now()): Promise<EstadoDto> {
   const c = await cargar(db, studentId, ahora);
+  const puede_cambiar_profesor = await puedeCambiarProfesorWith(db, studentId, ahora);
   if (c.tipo === 'bloqueado') {
     return {
       ok: true, elegible: false, motivo_no_elegible: c.motivo, detalle_no_elegible: c.detalle,
-      profesor: c.profesor ? { nombre: c.profesor } : null, sesiones: [],
+      profesor: c.profesor ? { nombre: c.profesor } : null, sesiones: [], puede_cambiar_profesor,
     };
   }
   const { ctx } = c;
   return {
-    ok: true, elegible: true, motivo_no_elegible: null, detalle_no_elegible: null,
+    ok: true, elegible: true, motivo_no_elegible: null, detalle_no_elegible: null, puede_cambiar_profesor,
     profesor: { nombre: ctx.profe.name },
     sesiones: ctx.sesiones.map(s => ({
       id: idDeSesion(s), dia: s.dia, hora: s.hora, duracion: s.duracion,

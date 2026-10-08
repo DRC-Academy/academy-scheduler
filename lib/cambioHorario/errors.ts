@@ -37,11 +37,13 @@ export class CambioHorarioError extends Error {
   readonly compensada: boolean | null;
   readonly detalles: string[];
   readonly detalleNoElegible: DetalleNoElegible | null;
+  /** Cuándo deja de aplicar el motivo (España peninsular), si se sabe. Va al LMS como disponible_desde. */
+  readonly disponibleDesde: { fecha: string; hora: string } | null;
 
   constructor(args: {
     codigo: CodigoCambioHorario; paso: string; mensaje: string;
     completado?: string[]; compensada?: boolean | null; detalles?: string[];
-    detalleNoElegible?: DetalleNoElegible | null; cause?: unknown;
+    detalleNoElegible?: DetalleNoElegible | null; disponibleDesde?: { fecha: string; hora: string } | null; cause?: unknown;
   }) {
     super(`[${args.codigo}] ${args.mensaje}`, args.cause !== undefined ? { cause: args.cause } : undefined);
     this.name = 'CambioHorarioError';
@@ -51,6 +53,7 @@ export class CambioHorarioError extends Error {
     this.compensada = args.compensada ?? null;
     this.detalles = args.detalles ?? [];
     this.detalleNoElegible = args.detalleNoElegible ?? null;
+    this.disponibleDesde = args.disponibleDesde ?? null;
   }
 
   /** El mensaje sin el prefijo del código. */
