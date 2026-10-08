@@ -76,11 +76,22 @@ export function pauseFromRow(r: Record<string, unknown>): StudentPause {
   };
 }
 
+/** ¿El error es "la tabla no existe"? (SQL sin correr: PostgREST da PGRST205; Postgres, 42P01). */
+export function esTablaAusente(error: { code?: string | null } | null | undefined): boolean {
+  return error?.code === 'PGRST205' || error?.code === '42P01';
+}
+
+// Sin la tabla, se recuerda durante la sesión (o la vida del proceso): ninguna
+// pantalla vuelve a pedirla ni a llenar la consola de avisos en cada carga.
+let tablaAusente = false;
+
 /**
  * Todas las pausas (cliente o servidor, con el cliente de siempre). Se pagina por
- * el techo de 1000 filas de PostgREST. Si la tabla no existe, vacío.
+ * el techo de 1000 filas de PostgREST. Si la tabla no existe, vacío: las
+ * pantallas funcionan igual que antes de "En pausa" (nadie en pausa).
  */
 export async function dbGetStudentPauses(): Promise<StudentPause[]> {
+  if (tablaAusente) return [];
   const { supabase } = await import('@/lib/supabase');
   const { fetchAllPages } = await import('@/lib/db');
   const { rows, error } = await fetchAllPages('student_pauses', (from, to) =>
@@ -89,6 +100,11 @@ export async function dbGetStudentPauses(): Promise<StudentPause[]> {
       .order('started_on', { ascending: false }).order('id', { ascending: false })
       .range(from, to));
   if (error) {
+    if (esTablaAusente(error)) {
+      tablaAusente = true;
+      console.info('[studentPauses] La tabla student_pauses no existe (supabase-student-pauses.sql sin correr): se sigue sin pausas.');
+      return [];
+    }
     console.warn('[studentPauses] No se pudieron leer las pausas:', error.message);
     return [];
   }

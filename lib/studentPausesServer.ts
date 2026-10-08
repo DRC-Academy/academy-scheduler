@@ -13,7 +13,7 @@ import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { hasPauseItem } from '@/lib/subscriptions/pause';
 import { fetchRecentOrdersByEmail } from '@/lib/wooPausedEmails';
-import { pauseFromRow, type StudentPause } from '@/lib/studentPauses';
+import { esTablaAusente, pauseFromRow, type StudentPause } from '@/lib/studentPauses';
 
 /** 'YYYY-MM-DD' en hora de Madrid de una fecha de Woo ('2026-10-06T10:00:00'). */
 function madridDateOf(raw: unknown): string | null {
@@ -65,8 +65,8 @@ export async function recordPauseState(
     const { data: openRows, error } = await db.from('student_pauses')
       .select('*').eq('student_id', s.studentId).is('ended_on', null).limit(1);
     if (error) {
-      // 42P01 = la tabla no existe (SQL sin correr): se sigue sin fechas.
-      if (error.code !== '42P01') console.warn(`[pausas] ${s.studentName}: no se pudo leer la pausa:`, error.message);
+      // La tabla no existe (SQL sin correr; PostgREST da PGRST205): se sigue sin fechas, sin avisar.
+      if (!esTablaAusente(error)) console.warn(`[pausas] ${s.studentName}: no se pudo leer la pausa:`, error.message);
       return null;
     }
     const open = openRows?.[0] as Record<string, unknown> | undefined;

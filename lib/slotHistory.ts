@@ -88,3 +88,52 @@ export function slotsOnDate(current: readonly AssignedSlot[], changes: readonly 
   const igual = out.length === current.length && current.every(s => set.has(clave(s.day, s.hour)));
   return igual ? null : out;
 }
+
+// ── Carga del historial en TeachersContext (testeable sin React) ─────────────
+
+export interface RefrescoHistorialDeps {
+  /** Lee calendar_changes desde `sinceIso` (dbGetSlotChanges). */
+  leer: (sinceIso: string, signal: AbortSignal) => Promise<Record<string, SlotChange[]>>;
+  /** Guarda el resultado (setSlotChangesByTeacher). */
+  guardar: (r: Record<string, SlotChange[]>) => void;
+  ahora?: () => number;
+  timeoutMs?: number;
+  refrescoMs?: number;
+}
+
+/**
+ * La función refrescarHistorial del contexto. Pide el historial SIN que nadie
+ * lo espere (devuelve void a propósito): como mucho cada `refrescoMs`, con
+ * tiempo máximo y la petición cortada si se agota. Con error o sin respuesta
+ * no guarda nada (cada vista proyecta el horario de hoy, como antes) y el
+ * siguiente intento será en la próxima carga.
+ */
+export function crearRefrescoHistorial(d: RefrescoHistorialDeps): () => void {
+  const ahora = d.ahora ?? Date.now;
+  let ultimo = 0;
+  return () => {
+    if (ahora() - ultimo < (d.refrescoMs ?? SLOT_CHANGES_REFRESCO_MS)) return;
+    ultimo = ahora();
+    const since = new Date(ahora() - SLOT_CHANGES_DIAS * 86_400_000).toISOString();
+    const corte = new AbortController();
+    void cargarSinBloquear(() => d.leer(since, corte.signal), d.timeoutMs ?? SLOT_CHANGES_TIMEOUT_MS).then(r => {
+      if (r === null) {
+        corte.abort();
+        ultimo = 0;   // reintentar en la próxima carga
+        return;
+      }
+      d.guardar(r);
+    });
+  };
+}
+
+/**
+ * El contrato de las cargas del contexto (ingresos, finanzas): lanzan el
+ * refresco del historial y hacen SU carga sin esperarlo. Antes del arreglo
+ * hacían Promise.all([carga, historial]) y, con el historial colgado,
+ * /asistencias se quedaba cargando para siempre.
+ */
+export function cargarSinEsperarHistorial<T>(refrescarHistorial: () => void, carga: () => Promise<T>): Promise<T> {
+  refrescarHistorial();
+  return carga();
+}
