@@ -163,10 +163,21 @@ describe('respuestas HTTP', () => {
     expect(await r.json()).toEqual({ ok: false, codigo: 'NO_ELEGIBLE', mensaje: MENSAJE.NO_ELEGIBLE, detalle_no_elegible: 'EMPRESA' });
   });
 
-  it('cambio a medias: mensaje propio para no reintentar', async () => {
+  it('cambio a medias: a_medias: true y mensaje propio para no reintentar', async () => {
     const r = respuestaError(new CambioHorarioError({ codigo: 'HUECO_YA_OCUPADO', paso: 'x', mensaje: 'y', compensada: false }), 't');
     expect(r.status).toBe(409);
-    expect((await r.json()).mensaje).toContain('No lo intentes de nuevo');
+    const cuerpo = await r.json();
+    expect(cuerpo).toMatchObject({ ok: false, codigo: 'HUECO_YA_OCUPADO', a_medias: true });
+    expect(cuerpo.mensaje).toContain('No lo intentes de nuevo');
+  });
+
+  it('sin quedar a medias (compensada null o true) no lleva a_medias', async () => {
+    for (const compensada of [null, true]) {
+      const r = respuestaError(new CambioHorarioError({ codigo: 'HUECO_YA_OCUPADO', paso: 'x', mensaje: 'y', compensada }), 't');
+      const cuerpo = await r.json();
+      expect('a_medias' in cuerpo).toBe(false);
+      expect(cuerpo.mensaje).toBe(MENSAJE.HUECO_YA_OCUPADO);
+    }
   });
 
   it('error inesperado → ERROR_INTERNO 500', async () => {
