@@ -10,7 +10,7 @@
 // por parámetro.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { AssignedSlot, Grid } from '@/types';
+import type { AssignedSlot, Cell, Grid } from '@/types';
 import { baseStudentOf } from '@/lib/cells';
 import { applyChanges, normLoose, type GridChanges, type StudentCellEvent } from '@/lib/gridPatch';
 
@@ -105,6 +105,53 @@ export async function applyCalendarPatchWith(db: Db, teacherId: string, changes:
 
   const r = data as { before: Grid | null; grid: Grid | null; applied: string[] | null; conflicts: string[] | null };
   return { before: r.before ?? {}, after: r.grid ?? {}, applied: r.applied ?? [], conflicts: r.conflicts ?? [] };
+}
+
+// ── Patch TODO O NADA ─────────────────────────────────────────────────────────
+//
+// apply_calendar_patch no es todo o nada: aplica lo que coincide y devuelve el
+// resto como conflicto. Las operaciones que necesitan todo o nada (transferencia,
+// cambio de horario) usan esto: con cualquier conflicto se deshace lo que entró
+// con el patch inverso (expected = lo que se acaba de poner, next = lo que había
+// según `before`). Si deshacer también choca, se informa qué casillas quedaron.
+
+export interface AppliedPatch { teacherId: string; changes: GridChanges; result: CalendarPatchResult }
+
+/** El patch que deja las casillas `applied` como estaban según `before`. */
+export function inversePatch(p: AppliedPatch): GridChanges {
+  const inv: GridChanges = {};
+  for (const key of p.result.applied) {
+    const puesto = p.changes[key]?.next ?? null;
+    const habia = (p.result.before[key] as Cell | undefined) ?? null;
+    inv[key] = { expected: puesto, next: habia ? (JSON.parse(JSON.stringify(habia)) as Cell) : null };
+  }
+  return inv;
+}
+
+/** Deshace un patch ya aplicado. Devuelve las casillas que NO se pudieron devolver. */
+export async function undoPatch(db: Db, p: AppliedPatch): Promise<string[]> {
+  if (p.result.applied.length === 0) return [];
+  try {
+    const r = await applyCalendarPatchWith(db, p.teacherId, inversePatch(p));
+    return r.conflicts;
+  } catch (err) {
+    console.error(`[calendario] No se pudo deshacer el patch de ${p.teacherId}:`, err);
+    return p.result.applied;
+  }
+}
+
+export type StrictPatchOutcome =
+  | { ok: true; patch: AppliedPatch }
+  /** Hubo conflicto; lo aplicado se deshizo salvo `leftover` (casillas que quedaron cambiadas). */
+  | { ok: false; conflicts: string[]; leftover: string[] };
+
+/** Aplica un patch entero o nada. LANZA solo si la base rechaza la escritura. */
+export async function applyCalendarPatchAllOrNothing(db: Db, teacherId: string, changes: GridChanges): Promise<StrictPatchOutcome> {
+  const result = await applyCalendarPatchWith(db, teacherId, changes);
+  const patch: AppliedPatch = { teacherId, changes, result };
+  if (result.conflicts.length === 0) return { ok: true, patch };
+  const leftover = await undoPatch(db, patch);
+  return { ok: false, conflicts: result.conflicts, leftover };
 }
 
 // ── Asignaciones de un profesor (lo mínimo que necesitan historial y reconciliación) ──

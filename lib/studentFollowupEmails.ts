@@ -14,6 +14,7 @@
 
 import { resend } from '@/lib/resend';
 import { esc } from '@/lib/emailNotifications';
+import { primerNombre } from '@/lib/nombres';
 import { etapaDe, stepLabel, type Sequence, type CopyVariant } from '@/lib/formReminders';
 
 export const FROM = 'DRC Academy <notificaciones@drcacademy.com>';
@@ -106,16 +107,8 @@ export interface FollowupEmailInput {
 
 interface Copy { subject: string; html: string }
 
-/** Nombre de pila: los nombres llegan completos y en el saludo quedan fríos. */
-export function primerNombre(nombre: string): string {
-  const limpio = (nombre ?? '').trim().replace(/\s+/g, ' ');
-  if (!limpio) return '';
-  const primera = limpio.split(' ')[0];
-  // Hay nombres cargados EN MAYÚSCULAS. "JOSÉ" en el saludo parece un grito.
-  return primera === primera.toUpperCase() && primera.length > 1
-    ? primera.charAt(0) + primera.slice(1).toLowerCase()
-    : primera;
-}
+/** Nombre de pila: vive en lib/nombres.ts (puro); se reexporta para los imports de siempre. */
+export { primerNombre };
 
 // ── Los tres textos, por etapa ────────────────────────────────────────────────
 //

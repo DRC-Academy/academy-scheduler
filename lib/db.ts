@@ -17,6 +17,7 @@ import {
 import { transferirAlumnoCore, type TransferenciaResultado } from './transferencia/core';
 import { depsNavegador } from './transferencia/navegador';
 import { notifyNewAssignmentWith } from './notificationStore';
+import { insertClassRecordsWith, deleteClassRecordsWith, addRescheduleRecordWith, type RescheduleRecordInput } from './classRecordStore';
 import { findOffCalendar, slotStatusOf, type OffCalendarRow } from './offCalendar';
 import { Teacher, Student, Assignment, AppUser, Grid, TeacherStatus, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, AssignedSlot, EmailPreferences, SalesContactResult, RecoveryCell, TeacherBonus, BonusType } from '@/types';
 import {
@@ -4350,51 +4351,17 @@ export async function dbFindStudentAbsence(
 async function insertClassRecordsTolerandoLostHours(
   rows: Array<Record<string, unknown>>,
 ): Promise<void> {
-  const { error } = await supabase.from('class_records').insert(rows);
-  if (!error) return;
-  if (!String(error.message ?? '').includes('lost_hours')) {
-    throw new Error(`No se pudo guardar la constancia de clase: ${error.message}`);
-  }
-  console.warn('[db] La columna class_records.lost_hours no existe: se guarda sin sellar el crédito. Correr supabase-reschedule-split.sql.');
-  const sinLostHours = rows.map(row => {
-    const copia = { ...row };
-    delete copia.lost_hours;
-    return copia;
-  });
-  const retry = await supabase.from('class_records').insert(sinLostHours);
-  if (retry.error) throw new Error(`No se pudo guardar la constancia de clase: ${retry.error.message}`);
+  return insertClassRecordsWith(supabase, rows);
 }
 
 /** Borra constancias por id. Es la reversión de `dbAddRescheduleSplit`. */
 export async function dbDeleteClassRecordsByIds(ids: string[]): Promise<void> {
-  if (ids.length === 0) return;
-  const { error } = await supabase.from('class_records').delete().in('id', ids);
-  if (error) throw new Error(`No se pudieron borrar las constancias ${ids.join(', ')}: ${error.message}`);
+  return deleteClassRecordsWith(supabase, ids);
 }
 
-export async function dbAddRescheduleRecord(p: {
-  teacherId: string; teacherName: string; studentName: string;
-  originalDate: string; originalTime?: string;
-  newDate: string; newTime?: string;
-  classType: 'reprogramada' | 'cancelacion_hora';
-  comment: string;
-  /** Horas que valía la clase al perderse: el crédito que abre. Ver lib/rescheduleSplit. */
-  lostHours?: number;
-}): Promise<import('@/types').ClassRecord> {
-  const id        = `cr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-  const createdAt = new Date().toISOString();
-  await insertClassRecordsTolerandoLostHours([{
-    id, teacher_id: p.teacherId, teacher_name: p.teacherName, student_name: p.studentName,
-    class_date: p.originalDate, class_time: p.originalTime ?? null,
-    screenshot_url: '', class_type: p.classType, comment: p.comment, created_at: createdAt,
-    original_date: p.originalDate, rescheduled_to: p.newDate,
-    lost_hours: p.lostHours ?? null,
-  }]);
-  return {
-    id, teacherId: p.teacherId, teacherName: p.teacherName, studentName: p.studentName,
-    classDate: p.originalDate, classTime: p.originalTime, screenshotUrl: '', classType: p.classType,
-    comment: p.comment, originalDate: p.originalDate, rescheduledTo: p.newDate, createdAt,
-  };
+/** Constancia de una clase reprogramada. La lógica está en lib/classRecordStore.ts. */
+export async function dbAddRescheduleRecord(p: RescheduleRecordInput): Promise<import('@/types').ClassRecord> {
+  return addRescheduleRecordWith(supabase, p);
 }
 
 /**

@@ -14,7 +14,7 @@ export interface FakeDbHooks {
   /** Se llama antes de cada RPC apply_calendar_patch (n = número de llamada, desde 1). */
   beforePatch?: (n: number, teacherId: string, db: FakeDb) => void;
   /** Devuelve un error para forzar el fallo de una operación. */
-  failWrite?: (table: string, op: 'insert' | 'update' | 'upsert', values: Row | Row[]) => { message: string; code?: string } | null;
+  failWrite?: (table: string, op: 'insert' | 'update' | 'upsert' | 'delete', values: Row | Row[]) => { message: string; code?: string } | null;
   /** Devuelve un error para forzar el fallo de una lectura. */
   failRead?: (table: string) => { message: string; code?: string } | null;
 }
@@ -65,7 +65,7 @@ function parseOr(expr: string): Filter {
 
 class Query implements PromiseLike<{ data: unknown; error: unknown; count?: number }> {
   private filters: Filter[] = [];
-  private op: 'select' | 'insert' | 'update' | 'upsert' = 'select';
+  private op: 'select' | 'insert' | 'update' | 'upsert' | 'delete' = 'select';
   private values: Row | Row[] | null = null;
   private returning = false;
   private singleMode: 'maybe' | 'one' | null = null;
@@ -82,7 +82,9 @@ class Query implements PromiseLike<{ data: unknown; error: unknown; count?: numb
   insert(v: Row | Row[]) { this.op = 'insert'; this.values = v; return this; }
   update(v: Row) { this.op = 'update'; this.values = v; return this; }
   upsert(v: Row | Row[]) { this.op = 'upsert'; this.values = v; return this; }
+  delete() { this.op = 'delete'; return this; }
   eq(c: string, v: unknown) { this.filters.push(r => r[c] === v); return this; }
+  neq(c: string, v: unknown) { this.filters.push(r => r[c] !== v); return this; }
   in(c: string, vs: unknown[]) { this.filters.push(r => vs.includes(r[c])); return this; }
   is(c: string, v: null) { this.filters.push(r => r[c] == v); return this; }
   gte(c: string, v: string) { this.filters.push(r => String(r[c] ?? '') >= v); return this; }
@@ -100,12 +102,12 @@ class Query implements PromiseLike<{ data: unknown; error: unknown; count?: numb
     const rows = this.db.rows(this.table);
     const match = () => rows.filter(r => this.filters.every(f => f(r)));
     if (this.op !== 'select') {
-      const err = this.db.hooks.failWrite?.(this.table, this.op, this.values as Row);
+      const err = this.db.hooks.failWrite?.(this.table, this.op, (this.values ?? {}) as Row);
       if (err) return { data: null, error: err };
     }
     if (this.op === 'insert') {
       const list = (Array.isArray(this.values) ? this.values : [this.values as Row])
-        .map(v => (this.table === 'transfer_requests' ? { id: `tr_${rows.length + 1}`, ...v } : v));
+        .map((v, i) => (v.id === undefined ? { id: `${this.table}_${rows.length + i + 1}`, ...v } : v));
       for (const v of list) {
         const k = v.idempotency_key;
         if (k != null && rows.some(r => r.idempotency_key === k)) return { data: null, error: { message: 'duplicate key', code: '23505' } };
@@ -119,6 +121,11 @@ class Query implements PromiseLike<{ data: unknown; error: unknown; count?: numb
         const i = rows.findIndex(r => r.teacher_id === v.teacher_id && r.id === v.id);
         if (i >= 0) rows[i] = { ...rows[i], ...structuredClone(v) }; else rows.push(structuredClone(v));
       }
+      return { data: null, error: null };
+    }
+    if (this.op === 'delete') {
+      const quitar = new Set(match());
+      this.db.tables[this.table] = rows.filter(r => !quitar.has(r));
       return { data: null, error: null };
     }
     if (this.op === 'update') {

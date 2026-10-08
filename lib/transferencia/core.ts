@@ -46,12 +46,13 @@
 // lo que quedó hecho, y el error lanzado lleva compensada=false.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { AssignedSlot, Cell, Grid } from '@/types';
+import type { AssignedSlot, Grid } from '@/types';
 import { baseStudentOf, cellIsStudentLoose, esHuecoLibreParaAlumno, isAssignableCell, withBaseState } from '@/lib/cells';
 import { diffGrids, studentEvents, type GridChanges } from '@/lib/gridPatch';
 import {
-  readTeacherGridWith, applyCalendarPatchWith, logCalendarChangesWith, reconcileAssignmentStatusWith, sortSlots,
-  type CalendarActor, type CalendarPatchResult,
+  readTeacherGridWith, logCalendarChangesWith, reconcileAssignmentStatusWith, sortSlots,
+  applyCalendarPatchAllOrNothing, undoPatch,
+  type CalendarActor, type AppliedPatch, type StrictPatchOutcome,
 } from '@/lib/calendarStore';
 import { addScoringEventWith, recalculateTeacherScoreWith } from '@/lib/scoringStore';
 import { liveReservationsWith, openRecoveriesOfStudentWith } from '@/lib/classRecoveryQueries';
@@ -168,69 +169,35 @@ const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(
 
 // ── Patch todo o nada ─────────────────────────────────────────────────────────
 
-interface ParcheAplicado { teacherId: string; changes: GridChanges; result: CalendarPatchResult }
-
-/** El patch que deja las casillas `applied` como estaban según `before`. */
-function parcheInverso(p: ParcheAplicado): GridChanges {
-  const inv: GridChanges = {};
-  for (const key of p.result.applied) {
-    const puesto = p.changes[key]?.next ?? null;
-    const habia = (p.result.before[key] as Cell | undefined) ?? null;
-    inv[key] = { expected: puesto, next: habia ? (JSON.parse(JSON.stringify(habia)) as Cell) : null };
-  }
-  return inv;
-}
+type ParcheAplicado = AppliedPatch;
 
 /**
- * Aplica un patch y exige que entre ENTERO. Con cualquier conflicto deshace lo
- * aplicado y lanza HUECO_YA_OCUPADO. Si deshacerlo también choca, lanza igual
- * pero con compensada=false y el detalle de las casillas que quedaron.
+ * Aplica un patch y exige que entre ENTERO (applyCalendarPatchAllOrNothing). Con
+ * cualquier conflicto lo aplicado ya se deshizo y se lanza HUECO_YA_OCUPADO; si
+ * deshacerlo también chocó, compensada=false y el detalle de lo que quedó.
  */
 async function aplicarParcheTodoONada(
   db: Db, teacherId: string, changes: GridChanges, paso: string, completado: string[],
 ): Promise<ParcheAplicado> {
-  let result: CalendarPatchResult;
+  let r: StrictPatchOutcome;
   try {
-    result = await applyCalendarPatchWith(db, teacherId, changes);
+    r = await applyCalendarPatchAllOrNothing(db, teacherId, changes);
   } catch (err) {
     throw new TransferenciaError({ codigo: 'ERROR_ESCRITURA', paso, mensaje: errMsg(err), completado, compensada: completado.length ? false : null, cause: err });
   }
-  const aplicado: ParcheAplicado = { teacherId, changes, result };
-  if (result.conflicts.length === 0) return aplicado;
-
-  // Fallo completo: fuera lo que sí entró.
-  let quedan: string[] = [];
-  if (result.applied.length > 0) {
-    try {
-      const inv = await applyCalendarPatchWith(db, teacherId, parcheInverso(aplicado));
-      quedan = inv.conflicts;
-    } catch (err) {
-      quedan = result.applied;
-      console.error(`[transferencia] No se pudo deshacer el patch parcial de ${teacherId}:`, err);
-    }
-  }
+  if (r.ok) return r.patch;
   throw new TransferenciaError({
     codigo: 'HUECO_YA_OCUPADO', paso,
-    mensaje: `otra persona cambió ${result.conflicts.join(', ')} mientras tanto`,
-    detalles: result.conflicts,
+    mensaje: `otra persona cambió ${r.conflicts.join(', ')} mientras tanto`,
+    detalles: r.conflicts,
     // `completado` lleva lo de los pasos anteriores (los deshace quien llama) y,
     // si este mismo patch no se pudo deshacer entero, las casillas que quedaron.
-    completado: quedan.length ? [...completado, `${SIN_DESHACER} ${teacherId}: ${quedan.join(', ')}`] : completado,
-    compensada: quedan.length ? false : null,
+    completado: r.leftover.length ? [...completado, `${SIN_DESHACER} ${teacherId}: ${r.leftover.join(', ')}`] : completado,
+    compensada: r.leftover.length ? false : null,
   });
 }
 
-/** Deshace un patch completo ya aplicado. Devuelve las casillas que no se pudieron devolver. */
-async function deshacerParche(db: Db, p: ParcheAplicado): Promise<string[]> {
-  if (p.result.applied.length === 0) return [];
-  try {
-    const r = await applyCalendarPatchWith(db, p.teacherId, parcheInverso(p));
-    return r.conflicts;
-  } catch (err) {
-    console.error(`[transferencia] No se pudo deshacer el patch de ${p.teacherId}:`, err);
-    return p.result.applied;
-  }
-}
+const deshacerParche = undoPatch;
 
 // ── Núcleo ────────────────────────────────────────────────────────────────────
 

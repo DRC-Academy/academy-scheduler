@@ -28,12 +28,12 @@ import {
 } from '@/lib/transcriptDeadline';
 import { TranscriptDeadlineBanner } from '@/components/TranscriptDeadlineBanner';
 import { planFieldsOf } from '@/lib/productUtils';
-import { baseCellOf } from '@/lib/cells';
+import { marcasDeReprogramacion } from '@/lib/reprogramacion';
 import { checkSubscription, subBadge, type SubscriptionInfo } from '@/lib/useSubscriptionStatus';
 import { isPausedStatus } from '@/lib/subscriptionAccess';
 import { isMilestone, getMilestoneSlides, MILESTONES, MILESTONE_SLIDES, MILESTONE_TITLES } from '@/lib/milestones';
 import {
-  classesForDate, recoveriesForDate, addDaysIso, isoDateLocal, dayNameFromDate, mondayIsoOf,
+  classesForDate, recoveriesForDate, addDaysIso, isoDateLocal,
   rescheduledTargetFor, cancellationFor, cancellationLabel, transcriptForClass, hourLabel, fmtDateDMY,
   weekDaysOf, weekRangeLabel, dayHeadingLabel,
   groupContiguousClasses, sessionHoursLabel, gridOccupancyOfTeacher,
@@ -41,7 +41,7 @@ import {
   // contiguas del mismo alumno llegan acá como una sola clase de 2h.
   type TeacherSession as TodayClass,
 } from '@/lib/teacherClasses';
-import { durationBadgeLabel, hourNum, nkName } from '@/lib/sessions';
+import { durationBadgeLabel, hourNum } from '@/lib/sessions';
 import {
   planRescheduleSplit, splitSummaryText, splitRescheduleComment, canSplitReschedule,
   type SplitSlot, type SplitResult,
@@ -1056,48 +1056,17 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
       // normal y en el destino solo se reponía 1 h de las 2, así que el profesor
       // perdía una hora de pago en cada reprogramación de una clase larga.
       try {
-        const origDate = new Date(date + 'T00:00:00');
-        const newDate  = new Date(data.newDate + 'T00:00:00');
-        const newHour  = `${(data.newTime || c.hour).slice(0, 2)}:00`;
-        if (!isNaN(origDate.getTime()) && !isNaN(newDate.getTime())) {
-          const horas = Math.max(1, Math.min(Math.round(c.durationHours || 1), 4));
-          const origStart = parseInt(c.hour, 10);
-          const newStart  = parseInt(newHour, 10);
-          const hh = (n: number) => `${String(n).padStart(2, '0')}:00`;
-          const origDay = dayNameFromDate(origDate);
-          const newDay  = dayNameFromDate(newDate);
-          const next: Grid = { ...grid };
-
-          for (let i = 0; i < horas; i++) {
-            const origKey = cellKey(origDay, Number.isFinite(origStart) && i > 0 ? hh(origStart + i) : c.hour);
-            const newKey  = cellKey(newDay,  Number.isFinite(newStart)  && i > 0 ? hh(newStart + i)  : newHour);
-            // baseCellOf: el fondo de la celda (nunca otra marca puntual), con su
-            // alumno recurrente, que puede no ser el de la clase que se mueve.
-            const baseOrig = next[origKey] ? baseCellOf(next[origKey]) : null;
-            // Solo se tacha la hora que era de este alumno: si la sesión de 2 h
-            // ya no existe en el calendario, la segunda celda se deja como está.
-            if (i === 0 || (baseOrig && nkName(baseOrig.student) === nkName(c.studentName))) {
-              next[origKey] = {
-                state: 'reprogramada', student: c.studentName,
-                weekDate: mondayIsoOf(origDate),
-                baseState: baseOrig ? baseOrig.state : 'ocupado',
-                baseStudent: baseOrig ? baseOrig.student : c.studentName,
-                rescheduledTo: data.newDate,
-              };
-            }
-            const baseNew = next[newKey] ? baseCellOf(next[newKey]) : null;
-            // No pisar una clase recurrente real en la nueva celda.
-            if (!baseNew || baseNew.state !== 'ocupado') {
-              next[newKey] = {
-                state: 'bloqueado', student: c.studentName,
-                weekDate: mondayIsoOf(newDate),
-                baseState: baseNew ? baseNew.state : 'libre',
-                recoveryFor: date,
-              };
-            }
-          }
-          await onGridChange(next);
-        }
+        const newHour = `${(data.newTime || c.hour).slice(0, 2)}:00`;
+        // Las marcas (original 'reprogramada', destino 'bloqueado', las dos horas
+        // de una sesión de 2 h) las calcula lib/reprogramacion.ts: es la misma
+        // función que usa el cambio de horario pedido por el alumno desde el LMS.
+        const next = marcasDeReprogramacion(grid, {
+          studentName: c.studentName,
+          originalDate: date, originalHour: c.hour,
+          durationHours: c.durationHours,
+          newDate: data.newDate, newHour,
+        });
+        if (next !== grid) await onGridChange(next);
       } catch { /* el grid es secundario; la constancia ya quedó registrada */ }
 
       setRescheduleModal(null);
