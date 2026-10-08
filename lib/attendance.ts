@@ -7,7 +7,8 @@
 import type { Assignment, ClassJoinLog } from '@/types';
 import { minutesLateSpain } from '@/lib/spainTime';
 import { contiguousRunLength, groupByContiguousHour, hourNum, hourText, nkName, sessionRangeLabel } from '@/lib/sessions';
-import type { GridOccupancy } from '@/lib/teacherClasses';
+import { rescheduledTargetFor, type GridOccupancy } from '@/lib/teacherClasses';
+import { changesOfStudent, slotsOnDate } from '@/lib/slotHistory';
 import { existsForStudent, type StudentPeriod } from '@/lib/studentPeriod';
 // Mismo badge de suscripción que finanzas y que el panel de alumnos.
 import { subscriptionBadge } from '@/lib/finance';
@@ -17,14 +18,15 @@ import {
   findTranscriptFor, getTranscriptStatus, reopenedDeadlineFor,
   type ClassTranscriptRef, type TranscriptStatusResult, type TranscriptExclusions,
 } from '@/lib/transcriptDeadline';
-import { isStudentLostClass } from '@/lib/classTypes';
+import { isMovedClass, isStudentLostClass } from '@/lib/classTypes';
 import type { ClassRecord } from '@/types';
 
 export type AttendanceStatus =
   | 'on_time' | 'late' | 'very_late'   // ingresó (según puntualidad del log)
   | 'missed'                            // clase pasada sin ingreso
   | 'pending'                           // hoy, la hora aún no llegó
-  | 'upcoming';                         // fecha futura (solo si includeFuture)
+  | 'upcoming'                          // fecha futura (solo si includeFuture)
+  | 'rescheduled';                      // movida a otra fecha (markMovedClasses): no es una falta
 
 export interface LogRow {
   id: string;
@@ -40,6 +42,10 @@ export interface LogRow {
   studentName: string;
   joinedAt?: string;
   status: AttendanceStatus;
+  /** 'rescheduled': fecha a la que se movió esta clase. */
+  rescheduledTo?: string;
+  /** Fila con ingreso que es el DESTINO de una clase movida: fecha de la clase original. */
+  rescheduledFrom?: string;
   hasLink: boolean;
   subscriptionStatus?: string;
   enteredWithoutActive?: boolean;
@@ -59,6 +65,7 @@ export const PUNCT_STYLE: Record<AttendanceStatus, { label: string; color: strin
   missed:    { label: '🔴 No ingresó', color: '#dc2626', bg: 'rgba(239,68,68,0.1)' },
   pending:   { label: '⏳ Pendiente',  color: 'var(--text-muted)', bg: 'var(--bg-surface-3)' },
   upcoming:  { label: '🗓️ Próxima',   color: '#2563eb', bg: 'rgba(37,99,235,0.1)' },
+  rescheduled: { label: '↪ Reprogramada', color: 'var(--text-muted)', bg: 'var(--bg-surface-3)' },
 };
 
 /**
@@ -192,12 +199,25 @@ export function buildAttendanceRows(opts: {
       sessionsByDay.set(day, groupByContiguousHour(hours, h => h, chain));
     }
 
+    // Cambios de horario del alumno (calendar_changes): en una fecha anterior a
+    // un cambio vale el horario que tenía entonces, no el de hoy. Ver
+    // lib/slotHistory. Un horario reconstruido se agrupa por contigüidad propia:
+    // la ocupación del calendario es la de HOY y no sabe de él.
+    const cambios = changesOfStudent(occ?.slotChanges, a.studentName);
+
     const cursor = new Date(start);
     let dayCount = 0;
     while (cursor <= end && dayCount <= maxDays) {
       const dayName = DAY_NAMES_BY_JSDAY[cursor.getDay()];
-      for (const run of sessionsByDay.get(dayName) ?? []) {
-        const dateIso = isoDate(cursor);
+      const fechaIso = isoDate(cursor);
+      const antes = cambios.length ? slotsOnDate(a.slots ?? [], cambios, fechaIso) : null;
+      const runsDelDia = antes
+        ? groupByContiguousHour(
+          antes.filter(s => s.day === dayName).map(s => hourNum(s.hour)).filter(Number.isFinite),
+          h => h, () => true)
+        : sessionsByDay.get(dayName) ?? [];
+      for (const run of runsDelDia) {
+        const dateIso = fechaIso;
         // Fuera del período del alumno: esta clase no existió. Se salta ANTES de
         // consumir el ingreso, para que si por algún motivo hubiera uno, salga
         // igual entre los leftovers de abajo (ver el contrato de studentPeriod).
@@ -286,6 +306,40 @@ export function buildAttendanceRows(opts: {
     }
   }
 
+  return rows;
+}
+
+/**
+ * Clases MOVIDAS a otra fecha (constancia 'reprogramada' con destino, la ponga
+ * el profesor o el alumno desde el LMS):
+ *   · la fila de la fecha original sin ingreso pasa a 'rescheduled' con
+ *     `rescheduledTo`: "↪ Reprogramada al 22/10", nunca "🔴 No ingresó";
+ *   · la fila CON ingreso de la fecha nueva lleva `rescheduledFrom` (la fecha
+ *     original): ese ingreso es el de la clase movida.
+ * Si en la fecha original hubo ingreso igualmente, manda el ingreso: pasó.
+ *
+ * Va aparte de buildAttendanceRows para encadenarla donde ya están las
+ * constancias (junto a attachTranscriptStatus). Muta y devuelve las mismas filas.
+ */
+export function markMovedClasses(rows: LogRow[], classRecords: readonly ClassRecord[]): LogRow[] {
+  const movidas = classRecords.filter(isMovedClass);
+  if (movidas.length === 0) return rows;
+  for (const r of rows) {
+    if (r.joinedAt) {
+      const origen = movidas.find(c =>
+        c.teacherId === r.teacherId && nkName(c.studentName) === nkName(r.studentName) && c.rescheduledTo === r.date);
+      if (origen) r.rescheduledFrom = origen.classDate;
+      continue;
+    }
+    if (r.status !== 'missed' && r.status !== 'pending' && r.status !== 'upcoming') continue;
+    const start = hourNum(r.hour);
+    const destino = rescheduledTargetFor(movidas as ClassRecord[], r.teacherId, r.studentName, r.date,
+      Number.isFinite(start) ? { start, end: start + r.durationHours } : undefined);
+    if (destino) {
+      r.status = 'rescheduled';
+      r.rescheduledTo = destino;
+    }
+  }
   return rows;
 }
 

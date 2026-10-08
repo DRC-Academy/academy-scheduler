@@ -16,7 +16,7 @@
 // profesores en España y en Argentina (ver lib/spainTime.ts). Lo mismo vale para
 // "¿esta clase ya pasó?": se decide con la hora de España que pase el llamador.
 
-import type { Assignment, AssignedSlot, ClassRecord, ClassRecordType, Grid } from '@/types';
+import type { Assignment, AssignedSlot, ClassRecord, ClassRecordType, Grid, SlotChange } from '@/types';
 import { findTranscriptFor, type ClassTranscriptRef } from '@/lib/transcriptDeadline';
 import { baseStateOf, baseStudentOf } from '@/lib/cells';
 import { existsForStudent, type StudentPeriod } from '@/lib/studentPeriod';
@@ -277,12 +277,19 @@ export interface GridOccupancy {
    * contara como sesión de 2h todas las semanas del año.
    */
   recoveries: Map<string, RecoveryHour[]>;
+  /**
+   * Altas y bajas de casillas (calendar_changes) del profesor, si se cargaron:
+   * con ellas lib/attendance reconstruye el horario de las fechas PASADAS (ver
+   * lib/slotHistory). Sin ellas se proyecta el horario de hoy, como siempre.
+   */
+  slotChanges?: SlotChange[];
 }
 
 export function gridOccupancyOfTeacher(
   teacher: {
     upcomingClasses?: Array<{ studentName: string; day: string; time: string }>;
     recoveryCells?: Array<{ studentName: string; hour: string; date: string; recoveryFor?: string }>;
+    slotChanges?: SlotChange[];
   } | null | undefined,
 ): GridOccupancy {
   const hours = new Map<string, number[]>();
@@ -302,7 +309,7 @@ export function gridOccupancyOfTeacher(
     if (arr) arr.push({ hour: h, recoveryFor: r.recoveryFor });
     else recoveries.set(k, [{ hour: h, recoveryFor: r.recoveryFor }]);
   }
-  return { hours, recoveries };
+  return { hours, recoveries, slotChanges: teacher?.slotChanges };
 }
 
 /** Ocupación vacía: para los llamadores que aún no tienen el calendario a mano. */
