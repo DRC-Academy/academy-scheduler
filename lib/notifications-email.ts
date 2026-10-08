@@ -26,7 +26,6 @@ export async function sendCancellationEmail(
     subject,
     from: FROM,
     resendKeyExists: Boolean(key),
-    resendKeyPrefix: key?.substring(0, 10),
     usingPlaceholder: !hasResendKey(),
   });
 

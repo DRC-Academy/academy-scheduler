@@ -181,7 +181,6 @@ async function sendToAddress(label: string, to: string, subject: string, html: s
     subject,
     from: FROM,
     resendKeyExists: Boolean(key),
-    resendKeyPrefix: key?.substring(0, 10),
     usingPlaceholder: !hasResendKey(),
   });
 

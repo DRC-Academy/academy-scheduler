@@ -132,7 +132,11 @@ function StudentPageContent() {
   }, [teacher, myAssignments]);
 
   // Los ingresos son la fuente de las clases pendientes de transcript.
-  useEffect(() => { loadClassJoinLogs(); }, [loadClassJoinLogs]);
+  // UNA vez al montar. Con [loadClassJoinLogs] era un bucle infinito: el
+  // provider no memoiza sus funciones, así que cada carga re-renderizaba, la
+  // función cambiaba de identidad y el efecto volvía a lanzar la carga, sin
+  // fin, mientras la ficha estuviera abierta (incidente 08/10/2026).
+  useEffect(() => { loadClassJoinLogs(); }, []);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // Lista alfabética: es la que ordena la navegación anterior/siguiente.
   const ordered = useMemo(
