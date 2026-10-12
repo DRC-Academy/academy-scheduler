@@ -248,6 +248,9 @@ después. Por eso hay que volver a consultar el estado.
 - El calendario sin actualizar de su profesor **actual** no impide cambiar de
   profesor (sí impide cambiar de horario con él): puede salir
   `elegible: false` con `CALENDARIO_SIN_ACTUALIZAR` y `puede_cambiar_profesor.puede: true`.
+  **Decisión cerrada (12/10/2026):** se queda así a propósito; el alumno se va de
+  ese profesor, así que su calendario no cuenta. Solo cuenta el del profesor
+  ELEGIDO (`CALENDARIO_SIN_ACTUALIZAR` en `cambiar-profesor`).
 
 ## 2. Huecos
 
