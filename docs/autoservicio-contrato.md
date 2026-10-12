@@ -40,7 +40,7 @@ Igual que las recuperaciones (`docs/recuperaciones-contrato.md`):
 |---|---|---|
 | `dia` | Igual que en las claves del calendario, **con tilde** | `"Lunes"`, `"Miércoles"`, `"Sábado"` |
 | `hora` | `"HH:MM"`, hora de **España peninsular**. Siempre en punto (`MM` = `00`) | `"15:00"` |
-| `duracion` | Entero, en horas (de 1 a 4) | `2` |
+| `duracion` | Entero, en horas (de 1 a 5) | `2` |
 | `fecha` | `"YYYY-MM-DD"`, fecha de España peninsular | `"2026-10-20"` |
 | momento (`disponible_desde`) | `{ "fecha": "YYYY-MM-DD", "hora": "HH:MM" }`, España peninsular | `{ "fecha": "2026-10-13", "hora": "17:00" }` |
 
@@ -97,6 +97,7 @@ Además, en el **cambio de profesor**:
 
 | HTTP | `codigo` | Cuándo |
 |---|---|---|
+| 422 | `SESIONES_NO_COINCIDEN` | Los `destinos` no son uno por cada sesión actual con su misma duración: falta alguna, sobra alguna o una duración no coincide (también con `destinos: []`) |
 | 422 | `MISMO_PROFESOR` | El profesor elegido es el que ya tiene |
 | 404 | `PROFESOR_NO_EXISTE` | No existe ese profesor |
 | 409 | `PROFESOR_ARCHIVADO` | Ya no está en la academia |
@@ -437,7 +438,11 @@ la quiere cambiar).
 ```
 
 - `destinos`: uno por cada sesión actual, **con las mismas duraciones** (en
-  cualquier orden), tomados de los huecos del endpoint 4. Sin solaparse.
+  cualquier orden), tomados de los huecos del endpoint 4. Si falta alguna, sobra
+  alguna o una duración no coincide: 422 `SESIONES_NO_COINCIDEN`. Sin solaparse
+  entre ellos: dos destinos que comparten alguna casilla, 422 `DATOS_INVALIDOS`.
+  Vale para cualquier reparto de 1 a 5 h semanales (p. ej. 4 h = 4, 3+1, 2+2,
+  2+1+1 o 1+1+1+1); una sesión de 2 h son 2 casillas seguidas.
 - `idempotency_key`: igual que en el cambio de horario (UUID por intento,
   reutilizado en sus reintentos; también vale la cabecera `Idempotency-Key`).
   Un reintento de un cambio ya hecho devuelve 200 con el mismo resultado.

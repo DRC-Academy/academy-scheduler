@@ -23,7 +23,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { AssignedSlot } from '@/types';
-import { clavesDeBloque, evaluarBloque } from '@/lib/huecos/huecos';
+import { DURACION_MAX_HORAS, clavesDeBloque, evaluarBloque } from '@/lib/huecos/huecos';
 import { evaluarOrigen, type MomentoEspana } from '@/lib/cambioHorario/origen';
 import { CambioHorarioError, type CodigoCambioHorario } from '@/lib/cambioHorario/errors';
 import { TransferenciaError } from '@/lib/transferencia/errors';
@@ -97,9 +97,9 @@ export async function cambiarProfesorCore(
   // ── Datos ─────────────────────────────────────────────────────────────────
   const profesorId = (p.profesorId ?? '').trim();
   if (!profesorId) falla('DATOS_INVALIDOS', 'falta profesor_id');
-  if (!Array.isArray(p.destinos) || p.destinos.length === 0) falla('DATOS_INVALIDOS', 'faltan los destinos');
+  if (!Array.isArray(p.destinos)) falla('DATOS_INVALIDOS', 'faltan los destinos');
   for (const d of p.destinos) {
-    if (!d || !DIAS.includes(d.dia) || !/^\d{2}:00$/.test(d.hora ?? '') || !Number.isInteger(d.duracion) || d.duracion < 1 || d.duracion > 4) {
+    if (!d || !DIAS.includes(d.dia) || !/^\d{2}:00$/.test(d.hora ?? '') || !Number.isInteger(d.duracion) || d.duracion < 1 || d.duracion > DURACION_MAX_HORAS) {
       falla('DATOS_INVALIDOS', `destino mal formado: ${JSON.stringify(d)}`);
     }
   }
@@ -110,11 +110,14 @@ export async function cambiarProfesorCore(
   // ── Alumno: elegibilidad, recuperaciones y sesiones actuales ───────────────
   const alumno = await cargarAlumnoWith(db, p.studentId);
 
-  // Todas sus sesiones, con las mismas duraciones (y por tanto las mismas horas).
-  const actuales = alumno.sesiones.map(s => s.duracion).sort();
-  const pedidas = p.destinos.map(d => d.duracion).sort();
+  // Todas sus sesiones, con las mismas duraciones (y por tanto las mismas horas):
+  // si falta una, sobra una o una duración no coincide, SESIONES_NO_COINCIDEN.
+  const actuales = alumno.sesiones.map(s => s.duracion).sort((a, b) => a - b);
+  const pedidas = p.destinos.map(d => d.duracion).sort((a, b) => a - b);
   if (actuales.join() !== pedidas.join()) {
-    falla('DATOS_INVALIDOS', `los destinos tienen que cubrir sus ${actuales.length} sesión(es) con las mismas duraciones (${actuales.join(', ')} h); llegaron ${pedidas.join(', ') || 'ninguna'} h`);
+    const que = pedidas.length < actuales.length ? 'falta alguna sesión'
+      : pedidas.length > actuales.length ? 'sobra alguna sesión' : 'alguna duración no coincide';
+    falla('SESIONES_NO_COINCIDEN', `${que}: tiene ${actuales.length} sesión(es) de ${actuales.join(', ')} h y llegaron ${pedidas.join(', ') || 'ninguna'} h`);
   }
 
   // Antelación de la clase ACTUAL.

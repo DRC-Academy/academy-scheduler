@@ -73,11 +73,11 @@ describe('cambiarProfesorCore · caso feliz', () => {
 
 describe('cambiarProfesorCore · rechazos, sin escribir nada', () => {
   const casos: Array<[string, (db: FakeDb) => void, Partial<CambioProfesorParams>, number?]> = [
-    ['DATOS_INVALIDOS', () => {}, { destinos: [] }],
+    ['SESIONES_NO_COINCIDEN', () => {}, { destinos: [] }],
     ['DATOS_INVALIDOS', () => {}, { destinos: [{ dia: 'Lunes', hora: '10:30', duracion: 2 }, { dia: 'Miércoles', hora: '18:00', duracion: 1 }] }],
     // No cubre todas sus sesiones / duraciones distintas.
-    ['DATOS_INVALIDOS', () => {}, { destinos: [{ dia: 'Lunes', hora: '10:00', duracion: 2 }] }],
-    ['DATOS_INVALIDOS', () => {}, { destinos: [{ dia: 'Lunes', hora: '10:00', duracion: 1 }, { dia: 'Lunes', hora: '11:00', duracion: 1 }, { dia: 'Miércoles', hora: '18:00', duracion: 1 }] }],
+    ['SESIONES_NO_COINCIDEN', () => {}, { destinos: [{ dia: 'Lunes', hora: '10:00', duracion: 2 }] }],
+    ['SESIONES_NO_COINCIDEN', () => {}, { destinos: [{ dia: 'Lunes', hora: '10:00', duracion: 1 }, { dia: 'Lunes', hora: '11:00', duracion: 1 }, { dia: 'Miércoles', hora: '18:00', duracion: 1 }] }],
     // Dos destinos que se solapan.
     ['DATOS_INVALIDOS', () => {}, { destinos: [{ dia: 'Lunes', hora: '10:00', duracion: 2 }, { dia: 'Lunes', hora: '11:00', duracion: 1 }] }],
     ['NO_ELEGIBLE', db => { db.rows('students')[0].company_plan_months = 3; }, {}],

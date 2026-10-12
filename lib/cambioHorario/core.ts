@@ -35,7 +35,7 @@ import { liveReservationsWith, openRecoveriesOfStudentWith } from '@/lib/classRe
 import { notifyAdminWith, notifyStudentScheduleChangedWith } from '@/lib/notificationStore';
 import { addRescheduleRecordWith, deleteClassRecordsWith } from '@/lib/classRecordStore';
 import { marcasDeReprogramacion } from '@/lib/reprogramacion';
-import { estadoCalendarioWith, evaluarBloque } from '@/lib/huecos/huecos';
+import { DURACION_MAX_HORAS, estadoCalendarioWith, evaluarBloque } from '@/lib/huecos/huecos';
 import { cargarElegibilidadWith } from '@/lib/cambioHorario/elegibilidad';
 import { evaluarOrigen } from '@/lib/cambioHorario/origen';
 import { sesionesDelAlumno } from '@/lib/cambioHorario/sesiones';
@@ -121,7 +121,7 @@ function validarDatos(p: CambioHorarioParams): void {
   for (const [n, s] of [['sesion_origen', p.sesionOrigen], ['destino', p.destino]] as const) {
     if (!s || typeof s.dia !== 'string' || typeof s.hora !== 'string') mal(`falta ${n}`);
     if (!HORA_RE.test(s.hora)) mal(`${n}.hora tiene que ser "HH:00" (llegó "${s.hora}")`);
-    if (!Number.isInteger(s.duracion) || s.duracion < 1 || s.duracion > 4) mal(`${n}.duracion tiene que ser un entero de 1 a 4`);
+    if (!Number.isInteger(s.duracion) || s.duracion < 1 || s.duracion > DURACION_MAX_HORAS) mal(`${n}.duracion tiene que ser un entero de 1 a ${DURACION_MAX_HORAS}`);
   }
   if (p.destino.duracion !== p.sesionOrigen.duracion) mal('el destino tiene que durar lo mismo que la sesión que se mueve');
   if (p.modo === 'puntual') {

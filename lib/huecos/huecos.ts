@@ -35,6 +35,8 @@ export const ANTELACION_MINIMA_MS = 24 * 3_600_000;
 export const VENTANA_PUNTUAL_DIAS = 42;
 /** Días sin revisión humana del calendario a partir de los que no se ofrecen huecos. */
 export const DIAS_CALENDARIO_VIGENTE = 30;
+/** Duración máxima de una sesión (horas seguidas): los planes llegan a 5 h por semana, y pueden ir en un solo bloque. */
+export const DURACION_MAX_HORAS = 5;
 
 const DIAS = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 
@@ -134,7 +136,7 @@ export function evaluarBloque(
 ): EvaluacionBloque {
   const no = (motivo: MotivoBloque, detalle?: string): EvaluacionBloque => ({ ok: false, motivo, detalle });
   const n = Math.round(o.duracionHoras);
-  if (!(n >= 1 && n <= 4) || !DIAS.includes(b.dia) || !(b.hora >= 0 && b.hora <= 23)) return no('DATOS_INVALIDOS');
+  if (!(n >= 1 && n <= DURACION_MAX_HORAS) || !DIAS.includes(b.dia) || !(b.hora >= 0 && b.hora <= 23)) return no('DATOS_INVALIDOS');
   const claves = clavesDeBloque(b.dia, b.hora, n);
   if (!claves) return no('DATOS_INVALIDOS', 'el bloque pasa de las 23:00');
 
@@ -184,7 +186,7 @@ export function evaluarBloque(
 /** Bloques libres. Función PURA: todo lo que necesita llega por parámetro. */
 export function calcularBloques(grid: Grid, o: OpcionesBloques): BloqueLibre[] {
   const n = Math.round(o.duracionHoras);
-  if (!(n >= 1 && n <= 4)) return [];
+  if (!(n >= 1 && n <= DURACION_MAX_HORAS)) return [];
   const rangoIni = o.horaInicio ?? HORA_INICIO_POR_DEFECTO;
   const rangoFin = o.horaFin ?? HORA_FIN_POR_DEFECTO;
   const out: BloqueLibre[] = [];
@@ -320,7 +322,7 @@ export interface HuecosParams {
  */
 export async function huecosLibres(p: HuecosParams): Promise<BloqueLibre[]> {
   const ahora = p.ahora ?? Date.now();
-  if (!(p.duracionHoras >= 1 && p.duracionHoras <= 4)) throw new HuecosError('DATOS_INVALIDOS', 'la duración tiene que ser de 1 a 4 horas');
+  if (!(p.duracionHoras >= 1 && p.duracionHoras <= DURACION_MAX_HORAS)) throw new HuecosError('DATOS_INVALIDOS', `la duración tiene que ser de 1 a ${DURACION_MAX_HORAS} horas`);
 
   const { data: t, error } = await p.client.from('teachers')
     .select('id, calendar_start_hour, calendar_end_hour').eq('id', p.teacherId).maybeSingle();

@@ -7,6 +7,7 @@ export type CodigoCambioHorario =
   | 'ALUMNO_NO_ENCONTRADO'
   | 'NO_ELEGIBLE'                // ver `detalleNoElegible`
   | 'SESION_NO_ENCONTRADA'       // el alumno no tiene esa sesión en el calendario de su profesor
+  | 'SESIONES_NO_COINCIDEN'      // cambio de profesor: los destinos no son uno por sesión con las mismas duraciones (falta, sobra o no coincide)
   | 'MISMO_HORARIO'              // el destino es la misma sesión (y fecha)
   | 'ANTELACION_INSUFICIENTE'    // la clase original o la nueva empiezan a 24 h o menos
   | 'FUERA_DE_VENTANA'           // PUNTUAL: más allá de 6 semanas
