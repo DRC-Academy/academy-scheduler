@@ -19,6 +19,7 @@ import {
 } from '@/lib/reviewRequests';
 import { studentLostDatesInMonth, LOST_CLASS_MONTHLY_CAP, durationBadge, estimateClassAmount } from '@/lib/finance';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
+import { useProfesoresConHistorial } from '@/lib/HistorialHorariosContext';
 import { findStartDateMismatches } from '@/lib/studentPeriod';
 import { dbGetAllTeacherAssignments, dbGetTranscriptForReview, type TranscriptForReview } from '@/lib/db';
 import { getSpainParts } from '@/components/VisualCalendar';
@@ -66,6 +67,9 @@ type Filtro = 'pendiente' | 'resueltas' | 'todas';
  */
 function ClasesSinIngreso() {
   const { teachers, students, assignments, classJoinLogs, classRecords, classAnalyses } = useTeachers();
+  // Con el historial de horarios (lib/HistorialHorariosContext): una fecha pasada
+  // se proyecta con el horario que tenía ese día. Se pide al montar esta pantalla.
+  const conHistorial = useProfesoresConHistorial(teachers);
   const spain = getSpainParts(new Date());
 
   const [monthYear, setMonthYear] = useState(spain.dateStr.slice(0, 7));
@@ -110,7 +114,7 @@ function ClasesSinIngreso() {
   const porProfesor = useMemo(() => {
     const { from, to } = monthRange(monthYear);
     const out: Array<{ id: string; name: string; clases: MissingJoinClass[] }> = [];
-    for (const t of teachers) {
+    for (const t of conHistorial) {
       const asgs = asgsByTeacher[t.id];
       if (!asgs) continue;
       const clases = buildMissingJoinClasses({
@@ -125,7 +129,7 @@ function ClasesSinIngreso() {
     }
     return out.sort((a, b) => b.clases.length - a.clases.length);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [teachers, asgsByTeacher, classJoinLogs, classRecords, classAnalyses, monthYear, conSeñalSolo]);
+  }, [conHistorial, asgsByTeacher, classJoinLogs, classRecords, classAnalyses, monthYear, conSeñalSolo]);
 
   const total = porProfesor.reduce((s, p) => s + p.clases.length, 0);
 

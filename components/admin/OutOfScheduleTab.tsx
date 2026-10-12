@@ -24,6 +24,8 @@ import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { dbGetAllTeacherAssignments } from '@/lib/db';
 import { dbGetStudentDropouts, type StudentDropout } from '@/lib/studentPeriod';
 import { buildDriftReport, DRIFT_KINDS, type DriftKind, type DriftStudent } from '@/lib/outOfCalendar';
+import { useHistorialHorarios } from '@/lib/HistorialHorariosContext';
+import { asignacionesConHistorial } from '@/lib/slotHistory';
 import type { Assignment } from '@/types';
 
 const MESES_CORTOS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
@@ -46,6 +48,9 @@ export default function OutOfScheduleTab({ monthYear, monthLabel }: {
     teachers, students, assignments, classJoinLogs, classRecords, classAnalyses,
     financeRates, scoringEvents, manualApprovals,
   } = useTeachers();
+  // Con el historial de horarios (lib/HistorialHorariosContext), igual que el
+  // embudo: una fecha pasada con el horario que tenía ese día.
+  const cambios = useHistorialHorarios();
 
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -82,7 +87,7 @@ export default function OutOfScheduleTab({ monthYear, monthLabel }: {
         teacherId: t.id,
         teacherName: t.name,
         // Las del CALENDARIO: las mismas que consume el embudo del profesor.
-        assignments: datos.grids.get(t.id) ?? [],
+        assignments: asignacionesConHistorial(datos.grids.get(t.id) ?? [], cambios),
         // Y las MISMAS entradas de finanzas que el resto del panel, para que las
         // clases que salen acá sean exactamente las de su rama del embudo.
         rows: calculateTeacherFinance({
@@ -95,7 +100,7 @@ export default function OutOfScheduleTab({ monthYear, monthLabel }: {
         }).rows,
       })),
     });
-  }, [datos, monthYear, teachers, assignments, classJoinLogs, classRecords, classAnalyses,
+  }, [datos, cambios, monthYear, teachers, assignments, classJoinLogs, classRecords, classAnalyses,
       financeRates, scoringEvents, students, manualApprovals]);
 
   const totalClases = report.reduce((s, g) => s + g.units, 0);

@@ -32,6 +32,7 @@ import { getSpainParts } from '@/lib/spainTime';
 import { buildAttendanceRows, attachTranscriptStatus, markMovedClasses, attendanceSubBadge, minutesLate, isoDate, type LogRow, type AttendanceStatus } from '@/lib/attendance';
 import { periodIndex, dbGetStudentDropouts, type StudentDropout } from '@/lib/studentPeriod';
 import { gridOccupancyOfTeacher, applyGridSlots } from '@/lib/teacherClasses';
+import { useProfesoresConHistorial } from '@/lib/HistorialHorariosContext';
 import { transcriptCell } from '@/lib/transcriptDeadline';
 import { HelpTooltip } from '@/components/ui';
 import type { HelpTooltipKey } from '@/lib/help-tooltips';
@@ -124,7 +125,10 @@ export default function ClassLogTab() {
   // arrancar la app): la columna "Transcript" no cuesta ninguna consulta nueva, y
   // `classAnalyses` no trae el TEXTO de ninguna transcripción — solo su
   // existencia y su fecha de subida (ver dbGetClassTranscripts).
-  const { teachers, assignments, classJoinLogs, classRecords, classAnalyses, loadClassJoinLogs } = useTeachers();
+  const { teachers: profesores, assignments, classJoinLogs, classRecords, classAnalyses, loadClassJoinLogs } = useTeachers();
+  // Con el historial de horarios (lib/HistorialHorariosContext): una fecha pasada
+  // se proyecta con el horario que tenía ese día. Se pide al montar esta pantalla.
+  const teachers = useProfesoresConHistorial(profesores);
 
   // "Ahora" se calcula SIEMPRE en hora de España (Europe/Madrid), igual que el
   // indicador de hora actual del calendario, no importa dónde esté el admin.

@@ -11,7 +11,7 @@
 // los cambios POSTERIORES a una fecha, sale el horario que tenía ese día.
 //
 // Límites, a propósito:
-//   · calendar_changes existe desde el 29/09/2026 y TeachersContext solo carga
+//   · calendar_changes existe desde el 29/09/2026 y solo se cargan
 //     los últimos días (SLOT_CHANGES_DIAS): antes de eso se proyecta el horario
 //     de hoy, como siempre.
 //   · Granularidad de DÍA: vale el horario que tenía a las 00:00 (España) de esa
@@ -26,7 +26,7 @@ import type { AssignedSlot, SlotChange } from '@/types';
 import { spainWallClockToEpoch } from '@/lib/spainTime';
 import { hourNum, hourText, nkName } from '@/lib/sessions';
 
-/** Días de historial que carga TeachersContext. */
+/** Días de historial que se cargan (lib/HistorialHorariosContext). */
 export const SLOT_CHANGES_DIAS = 100;
 /** Tiempo máximo de la carga del historial: pasado esto se sigue sin él. */
 export const SLOT_CHANGES_TIMEOUT_MS = 8_000;
@@ -89,7 +89,7 @@ export function slotsOnDate(current: readonly AssignedSlot[], changes: readonly 
   return igual ? null : out;
 }
 
-// ── Carga del historial en TeachersContext (testeable sin React) ─────────────
+// ── Carga del historial (lib/HistorialHorariosContext; testeable sin React) ──
 
 export interface RefrescoHistorialDeps {
   /** Lee calendar_changes desde `sinceIso` (dbGetSlotChanges). */
@@ -102,11 +102,11 @@ export interface RefrescoHistorialDeps {
 }
 
 /**
- * La función refrescarHistorial del contexto. Pide el historial SIN que nadie
+ * La función `pedir` de HistorialHorariosContext. Pide el historial SIN que nadie
  * lo espere (devuelve void a propósito): como mucho cada `refrescoMs`, con
  * tiempo máximo y la petición cortada si se agota. Con error o sin respuesta
  * no guarda nada (cada vista proyecta el horario de hoy, como antes) y el
- * siguiente intento será en la próxima carga.
+ * siguiente intento será en la próxima pantalla que lo pida.
  */
 export function crearRefrescoHistorial(d: RefrescoHistorialDeps): () => void {
   const ahora = d.ahora ?? Date.now;
@@ -119,7 +119,7 @@ export function crearRefrescoHistorial(d: RefrescoHistorialDeps): () => void {
     void cargarSinBloquear(() => d.leer(since, corte.signal), d.timeoutMs ?? SLOT_CHANGES_TIMEOUT_MS).then(r => {
       if (r === null) {
         corte.abort();
-        ultimo = 0;   // reintentar en la próxima carga
+        ultimo = 0;   // reintentar en la próxima pantalla que lo pida
         return;
       }
       d.guardar(r);
@@ -127,13 +127,44 @@ export function crearRefrescoHistorial(d: RefrescoHistorialDeps): () => void {
   };
 }
 
+// ── Aplicar el historial al PINTAR ───────────────────────────────────────────
+//
+// El historial vive en su propio contexto (lib/HistorialHorariosContext) y llega
+// cuando llega: las pantallas lo aplican al calcular, sin volver a pedir nada.
+// Las dos funciones devuelven el MISMO array si no hay nada que añadir, para no
+// cambiar identidades (y no relanzar efectos) mientras el historial no esté.
+
+/** Cada profesor con su historial (`slotChanges`), que gridOccupancyOfTeacher pasa a lib/attendance. */
+export function profesoresConHistorial<T extends { id: string; slotChanges?: SlotChange[] }>(
+  teachers: T[], cambios: Readonly<Record<string, SlotChange[]>>,
+): T[] {
+  if (Object.keys(cambios).length === 0) return teachers;
+  let alguno = false;
+  const out = teachers.map(t => {
+    const c = cambios[t.id];
+    if (!c || t.slotChanges === c) return t;
+    alguno = true;
+    return { ...t, slotChanges: c };
+  });
+  return alguno ? out : teachers;
+}
+
 /**
- * El contrato de las cargas del contexto (ingresos, finanzas): lanzan el
- * refresco del historial y hacen SU carga sin esperarlo. Antes del arreglo
- * hacían Promise.all([carga, historial]) y, con el historial colgado,
- * /asistencias se quedaba cargando para siempre.
+ * Cada asignación con los cambios de SU alumno con SU profesor. Para lo que
+ * proyecta desde las asignaciones sin pasar por el profesor (scheduledIndex: el
+ * embudo y "fuera de calendario"). Las que ya traen historial no se tocan.
  */
-export function cargarSinEsperarHistorial<T>(refrescarHistorial: () => void, carga: () => Promise<T>): Promise<T> {
-  refrescarHistorial();
-  return carga();
+export function asignacionesConHistorial<A extends { teacherId: string; studentName: string; slotChanges?: SlotChange[] }>(
+  asgs: A[], cambios: Readonly<Record<string, SlotChange[]>>,
+): A[] {
+  if (Object.keys(cambios).length === 0) return asgs;
+  let alguno = false;
+  const out = asgs.map(a => {
+    if (a.slotChanges) return a;
+    const suyos = changesOfStudent(cambios[a.teacherId], a.studentName);
+    if (suyos.length === 0) return a;
+    alguno = true;
+    return { ...a, slotChanges: suyos };
+  });
+  return alguno ? out : asgs;
 }

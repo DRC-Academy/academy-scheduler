@@ -32,6 +32,8 @@ import { useTeachers } from '@/lib/TeachersContext';
 import { calculateTeacherFinance, estimateClassAmount, TeacherFinanceResult, ClassFinanceRow, classTypeBadge, durationSourceBadge, subscriptionBadge, rowHoursLabel, financeStatusBadge, transcriptStateBadge, lostClassBreakdownLabel, isStudentAbsence, recoveryCreditLabel, studentQuotaOf } from '@/lib/finance';
 import { isActiveWooStatus } from '@/lib/subscriptionAccess';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
+import { useHistorialHorarios } from '@/lib/HistorialHorariosContext';
+import { asignacionesConHistorial } from '@/lib/slotHistory';
 import { dbRevertPenalty, dbGetAllTeacherAssignments, dbReopenTranscriptDeadline } from '@/lib/db';
 // Plazo de 24 h del transcript: cuenta regresiva, reapertura y su etiqueta.
 import { hoursLeftLabel, deadlineLabel, TRANSCRIPT_REOPEN_HOURS } from '@/lib/transcriptDeadline';
@@ -577,7 +579,10 @@ function DetalleProfesor({ r, teacher, extras, penalties, funnelData, monthYear,
 
   // El embudo: misma función que ve el profesor en /mis-clases.
   const spain = getSpainParts(new Date());
-  const asgs = useMemo(() => funnelData?.grids.get(r.teacherId) ?? [], [funnelData, r.teacherId]);
+  // Con el historial de horarios (lib/HistorialHorariosContext), igual que en
+  // /mis-clases: una fecha pasada con el horario que tenía ese día.
+  const cambios = useHistorialHorarios();
+  const asgs = useMemo(() => asignacionesConHistorial(funnelData?.grids.get(r.teacherId) ?? [], cambios), [funnelData, r.teacherId, cambios]);
   const funnel = useMemo(() => teacher && funnelData ? buildClassFunnel({
     monthYear, teacherId: teacher.id, assignments: asgs,
     joinLogs: classJoinLogs, classRecords, analyses: classAnalyses,

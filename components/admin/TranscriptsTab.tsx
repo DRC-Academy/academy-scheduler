@@ -29,6 +29,7 @@ import { getSpainParts } from '@/lib/spainTime';
 import { buildAttendanceRows, attachTranscriptStatus, type LogRow } from '@/lib/attendance';
 import { periodIndex, dbGetStudentDropouts, type StudentDropout } from '@/lib/studentPeriod';
 import { gridOccupancyOfTeacher, applyGridSlots } from '@/lib/teacherClasses';
+import { useProfesoresConHistorial } from '@/lib/HistorialHorariosContext';
 import { transcriptCell, uploadDelayLabel, uploadedAtLabel } from '@/lib/transcriptDeadline';
 import { dbGetTranscriptForReview, type TranscriptForReview } from '@/lib/db';
 
@@ -87,7 +88,10 @@ function fechaCorta(iso: string): string {
 
 // ═════════════════════════════════════════════════════════════════════════════
 export default function TranscriptsTab() {
-  const { teachers, assignments, classJoinLogs, classRecords, classAnalyses, loadClassJoinLogs } = useTeachers();
+  const { teachers: profesores, assignments, classJoinLogs, classRecords, classAnalyses, loadClassJoinLogs } = useTeachers();
+  // Con el historial de horarios (lib/HistorialHorariosContext): una fecha pasada
+  // se proyecta con el horario que tenía ese día. Se pide al montar esta pantalla.
+  const teachers = useProfesoresConHistorial(profesores);
 
   // Todo se mide en hora de España, incluido el corte de mes: el mes del admin
   // (esté donde esté) no decide qué clases entran en "este mes".

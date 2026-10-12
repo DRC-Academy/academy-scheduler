@@ -22,6 +22,7 @@ import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
 import { getTeacherAssignments } from '@/lib/db';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
+import { useProfesoresConHistorial } from '@/lib/HistorialHorariosContext';
 import { registerClassWithTranscript } from '@/lib/aiClient';
 import { canMarkStudentLostClass, LOST_CLASS_MONTHLY_CAP, durationBadge } from '@/lib/finance';
 import {
@@ -199,7 +200,10 @@ function RevisionesContent() {
     teachers, classJoinLogs, classRecords, classAnalyses, financePayments, loadFinanceData, reloadAll,
   } = useTeachers();
 
-  const teacher = teachers.find(t => t.id === user?.teacherId) ?? teachers[0];
+  // Con el historial de horarios (lib/HistorialHorariosContext): una fecha pasada
+  // se proyecta con el horario que tenía ese día. Se pide al montar esta pantalla.
+  const conHistorial = useProfesoresConHistorial(teachers);
+  const teacher = conHistorial.find(t => t.id === user?.teacherId) ?? conHistorial[0];
 
   const spain = getSpainParts(new Date());
   const todayIso = spain.dateStr;

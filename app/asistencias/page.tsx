@@ -12,6 +12,7 @@ import { PullToRefresh } from '@/components/PullToRefresh';
 import { getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
+import { useProfesoresConHistorial } from '@/lib/HistorialHorariosContext';
 import { buildAttendanceRows, attachTranscriptStatus, markMovedClasses, isoDate, type LogRow } from '@/lib/attendance';
 import { transcriptDeadlineBadge, type TranscriptStatusResult } from '@/lib/transcriptDeadline';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
@@ -123,7 +124,10 @@ const SinEnlaceTag = () => (
 // ── Página ────────────────────────────────────────────────────────────────────
 function AsistenciasContent() {
   const { user } = useAuth();
-  const { teachers, students, classJoinLogs, classRecords, classAnalyses, loadClassJoinLogs, reloadAll } = useTeachers();
+  const { teachers: profesores, students, classJoinLogs, classRecords, classAnalyses, loadClassJoinLogs, reloadAll } = useTeachers();
+  // Con el historial de horarios (lib/HistorialHorariosContext): una fecha pasada
+  // se proyecta con el horario que tenía ese día. Se pide al montar esta pantalla.
+  const teachers = useProfesoresConHistorial(profesores);
 
   const teacher = teachers.find(t => t.id === user?.teacherId) ?? teachers[0];
 

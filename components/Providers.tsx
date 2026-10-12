@@ -1,6 +1,7 @@
 'use client';
 import { AuthProvider } from '@/lib/AuthContext';
 import { TeachersProvider } from '@/lib/TeachersContext';
+import { HistorialHorariosProvider } from '@/lib/HistorialHorariosContext';
 import { OnboardingProvider } from '@/lib/OnboardingContext';
 import { OnboardingTour } from '@/components/OnboardingTour';
 
@@ -8,6 +9,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <AuthProvider>
       <TeachersProvider>
+        <HistorialHorariosProvider>
         <OnboardingProvider>
           {children}
           {/* El recorrido se monta UNA vez acá, no dentro del NavBar: así el
@@ -15,6 +17,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
               encima de todo (portal a <body>). */}
           <OnboardingTour />
         </OnboardingProvider>
+        </HistorialHorariosProvider>
       </TeachersProvider>
     </AuthProvider>
   );

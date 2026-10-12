@@ -1,7 +1,7 @@
 ﻿'use client';
-import { createContext, useContext, useState, useEffect, useMemo, useRef, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useLayoutEffect, useMemo, useRef, ReactNode } from 'react';
 import { useAuth } from '@/lib/AuthContext';
-import { Teacher, Student, Assignment, Grid, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, ClassRecord, ClassRecordType, FinanceRate, FinancePayment, FinanceManualApproval, EmailPreferences, SalesContactResult, TeacherBonus, SlotChange } from '@/types';
+import { Teacher, Student, Assignment, Grid, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, ClassRecord, ClassRecordType, FinanceRate, FinancePayment, FinanceManualApproval, EmailPreferences, SalesContactResult, TeacherBonus } from '@/types';
 import {
   dbGetTeachers, dbAddTeacher, dbArchiveTeacher,
   dbGetStudents, dbUpsertStudent, dbDeleteStudent, dbUpdateStudent,
@@ -24,9 +24,8 @@ import {
   dbSetSalesContact,
   dbApplyFaltaSideEffects, dbRevertStudentAbsence, dbFindStudentAbsence,
   dbGetTeacherBonuses, dbClaimRetentionBonus, dbMarkBonusPaid, dbAddUpsellBonuses, dbUpdateAssignmentTeacherSince,
-  dbGetSlotChanges,
 } from '@/lib/db';
-import { crearRefrescoHistorial, cargarSinEsperarHistorial } from '@/lib/slotHistory';
+import { accionesEstables, siCambio } from '@/lib/estable';
 import type { AffectedTeacher, ChangeTeacherParams, ArchiveTeacherResult, CalendarOrigin, GridSaveResult } from '@/lib/db';
 import type { TransferenciaResultado } from '@/lib/transferencia/core';
 import type { AssignedSlot } from '@/types';
@@ -215,17 +214,8 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [unassignedStudents, setUnassignedStudents] = useState<Student[]>([]);
   const [classJoinLogs, setClassJoinLogs] = useState<ClassJoinLog[]>([]);
-  // Historial de horarios (calendar_changes) por profesor: con él, asistencias,
-  // revisiones y el embudo saben qué horario tenía cada alumno en una fecha
-  // PASADA (lib/slotHistory). Es un EXTRA y NUNCA se espera: se pide aparte, con
-  // tiempo máximo, como mucho cada 10 minutos, y si falla o tarda cada vista
-  // proyecta el horario de hoy, como antes. Ver refrescarHistorial.
-  const [slotChangesByTeacher, setSlotChangesByTeacher] = useState<Record<string, SlotChange[]>>({});
-  // Una sola instancia por proveedor: recuerda cuándo se pidió por última vez.
-  const refrescarHistorial = useRef(crearRefrescoHistorial({
-    leer: (since, signal) => dbGetSlotChanges(since, signal),
-    guardar: setSlotChangesByTeacher,
-  })).current;
+  // El historial de horarios (calendar_changes) NO vive aquí: tiene su propio
+  // contexto y solo lo piden las pantallas que lo usan (lib/HistorialHorariosContext).
   const [classRecords, setClassRecords] = useState<ClassRecord[]>([]);
   const [classAnalyses, setClassAnalyses] = useState<ClassTranscriptRef[]>([]);
   const [financeRates, setFinanceRates] = useState<FinanceRate[]>([]);
@@ -250,16 +240,19 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
         dbGetScoringEvents(),
         dbGetUnassignedStudents(),
       ]);
-      setTeachers(prev => t.length > 0 ? t : prev);
-      setStudents(prev => sa.students.length > 0 ? sa.students : prev);
-      setAssignments(prev => sa.assignments.length > 0 ? sa.assignments : prev);
+      // siCambio: si la recarga trae lo mismo se conserva el array anterior. Así
+      // la identidad de teachers/students/assignments solo cambia cuando cambian
+      // los datos, y ningún efecto con [teacher] se relanza cada 60 s.
+      setTeachers(prev => t.length > 0 ? siCambio(prev, t) : prev);
+      setStudents(prev => sa.students.length > 0 ? siCambio(prev, sa.students) : prev);
+      setAssignments(prev => sa.assignments.length > 0 ? siCambio(prev, sa.assignments) : prev);
       // Estas dos NO llevan guarda por longitud: vacío es un estado legítimo
       // ("sin eventos", "nadie sin asignar") y colgarlo al valor anterior las
       // dejaría pegadas para siempre. Ante un fallo real lanzan, y el catch de
       // abajo conserva todo el estado previo.
-      setScoringEvents(ev);
-      setUnassignedStudents(unassigned);
-      setTeacherGrids({});
+      setScoringEvents(prev => siCambio(prev, ev));
+      setUnassignedStudents(prev => siCambio(prev, unassigned));
+      setTeacherGrids(prev => Object.keys(prev).length > 0 ? {} : prev);
       setLastUpdated(new Date());
     } catch (err) {
       // Nunca dejamos la UI en blanco por un error de refresh: se conserva el
@@ -596,19 +589,20 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     setClassJoinLogs(prev => prev.some(l => l.id === log.id) ? prev : [log, ...prev]);
   }
 
-  // El historial de horarios se pide aparte y NUNCA se espera (lib/slotHistory:
-  // crearRefrescoHistorial / cargarSinEsperarHistorial).
   async function loadClassJoinLogs() {
-    await cargarSinEsperarHistorial(refrescarHistorial, async () => setClassJoinLogs(await dbGetClassJoinLogs()));
+    const logs = await dbGetClassJoinLogs();
+    setClassJoinLogs(prev => siCambio(prev, logs));
   }
 
   async function loadClassRecords() {
     const records = await dbGetClassRecords();
-    setClassRecords(records);
+    setClassRecords(prev => siCambio(prev, records));
   }
 
+  // La llaman varias pantallas al montarse: con siCambio, una segunda carga con
+  // los mismos datos no cambia ninguna identidad.
   async function loadFinanceData() {
-    const [rates, payments, records, logs, approvals, analyses, bonuses] = await cargarSinEsperarHistorial(refrescarHistorial, () => Promise.all([
+    const [rates, payments, records, logs, approvals, analyses, bonuses] = await Promise.all([
       dbGetFinanceRates(),
       dbGetFinancePayments(),
       dbGetClassRecords(),
@@ -616,14 +610,14 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
       dbGetManualApprovals(),
       dbGetClassTranscripts(),
       dbGetTeacherBonuses(),
-    ]));
-    setFinanceRates(rates);
-    setFinancePayments(payments);
-    setClassRecords(records);
-    setClassJoinLogs(logs);
-    setManualApprovals(approvals);
-    setClassAnalyses(analyses);
-    setTeacherBonuses(bonuses);
+    ]);
+    setFinanceRates(prev => siCambio(prev, rates));
+    setFinancePayments(prev => siCambio(prev, payments));
+    setClassRecords(prev => siCambio(prev, records));
+    setClassJoinLogs(prev => siCambio(prev, logs));
+    setManualApprovals(prev => siCambio(prev, approvals));
+    setClassAnalyses(prev => siCambio(prev, analyses));
+    setTeacherBonuses(prev => siCambio(prev, bonuses));
   }
 
   async function loadTeacherBonuses() {
@@ -850,33 +844,48 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     setClassRecords(prev => [record, ...prev]);
   }
 
-  // Cada profesor lleva su historial de horarios; gridOccupancyOfTeacher lo
-  // pasa a lib/attendance sin que las pantallas tengan que hacer nada.
-  const teachersConHistorial = useMemo(
-    () => teachers.map(t => (slotChangesByTeacher[t.id] ? { ...t, slotChanges: slotChangesByTeacher[t.id] } : t)),
-    [teachers, slotChangesByTeacher],
-  );
+  // ── Lo que se reparte, con identidad estable ─────────────────────────────────
+  //
+  // Las funciones de arriba nacen de nuevo en cada render (leen el estado de ese
+  // render). Se reparten envueltas: misma identidad toda la vida del proveedor,
+  // y cada llamada va a la versión del último render. Un efecto con
+  // [loadClassJoinLogs] corre UNA vez aunque la carga provoque renders: es lo
+  // que cortó el bucle del 08/10/2026 en la ficha, ahora para todas.
+  const acciones = {
+    addTeacher, archiveTeacher, addStudent, deleteStudent, updateStudent, markSalesContact, addAssignment,
+    getTeacherGrid, saveTeacherGridChanges, updateTeacherRating,
+    updateTeacherSpecialties, updateTeacherInfo, updateTeacherEmailPreferences,
+    addScoringEvent, loadScoringEvents, checkAndRunResets,
+    assignTeacherOfMonth, assignTeacherOfQuarter,
+    forceMonthlyReset, forceQuarterlyReset,
+    reloadAll, loadClassCounts, incrementClassCount,
+    updateAssignmentAdjustment, updateAssignmentStartDate, updateAssignmentSlots,
+    sendNotification, loadNotifications, markNotificationRead, markAllNotificationsRead,
+    updateMeetLink, logClassJoin, loadClassJoinLogs,
+    loadClassRecords, loadFinanceData, registerClassRecord, attachScreenshotToClass,
+    markPaymentAsPaid, markPaymentAsPending, markStudentAbsence, revertStudentAbsence, approveReviewClass, approveExceedLimitClass,
+    loadTeacherBonuses, claimRetentionBonus, markBonusPaid, addUpsellBonuses, updateAssignmentTeacherSince,
+    changeStudentTeacher, removeAssignment, addRescheduleRecord, addRescheduleSplit, addRecoveryClass,
+  };
+  const ultimasAcciones = useRef(acciones);
+  // Antes que cualquier efecto de las pantallas: cuando uno llama a una acción,
+  // ya apunta a la versión de este render.
+  useLayoutEffect(() => { ultimasAcciones.current = acciones; });
+  const [estables] = useState(() => accionesEstables(ultimasAcciones));
+
+  // El valor solo cambia cuando cambia un dato; nunca por un render del proveedor.
+  const value = useMemo<TeachersContextType>(() => ({
+    teachers, students, assignments, teacherGrids, loadingTeachers,
+    scoringEvents, classCounts, notifications, unassignedStudents, classJoinLogs,
+    classRecords, classAnalyses, financeRates, financePayments, manualApprovals, teacherBonuses, lastUpdated,
+    ...estables,
+  }), [teachers, students, assignments, teacherGrids, loadingTeachers,
+    scoringEvents, classCounts, notifications, unassignedStudents, classJoinLogs,
+    classRecords, classAnalyses, financeRates, financePayments, manualApprovals, teacherBonuses, lastUpdated,
+    estables]);
 
   return (
-    <TeachersContext.Provider value={{
-      teachers: teachersConHistorial, students, assignments, teacherGrids, loadingTeachers,
-      scoringEvents, classCounts, notifications, unassignedStudents, classJoinLogs,
-      classRecords, classAnalyses, financeRates, financePayments, manualApprovals, teacherBonuses, lastUpdated,
-      addTeacher, archiveTeacher, addStudent, deleteStudent, updateStudent, markSalesContact, addAssignment,
-      getTeacherGrid, saveTeacherGridChanges, updateTeacherRating,
-      updateTeacherSpecialties, updateTeacherInfo, updateTeacherEmailPreferences,
-      addScoringEvent, loadScoringEvents, checkAndRunResets,
-      assignTeacherOfMonth, assignTeacherOfQuarter,
-      forceMonthlyReset, forceQuarterlyReset,
-      reloadAll, loadClassCounts, incrementClassCount,
-      updateAssignmentAdjustment, updateAssignmentStartDate, updateAssignmentSlots,
-      sendNotification, loadNotifications, markNotificationRead, markAllNotificationsRead,
-      updateMeetLink, logClassJoin, loadClassJoinLogs,
-      loadClassRecords, loadFinanceData, registerClassRecord, attachScreenshotToClass,
-      markPaymentAsPaid, markPaymentAsPending, markStudentAbsence, revertStudentAbsence, approveReviewClass, approveExceedLimitClass,
-      loadTeacherBonuses, claimRetentionBonus, markBonusPaid, addUpsellBonuses, updateAssignmentTeacherSince,
-      changeStudentTeacher, removeAssignment, addRescheduleRecord, addRescheduleSplit, addRecoveryClass,
-    }}>
+    <TeachersContext.Provider value={value}>
       {children}
     </TeachersContext.Provider>
   );

@@ -16,6 +16,8 @@ import { ClassFunnelCard } from '@/components/ClassFunnelCard';
 import { dbGetReviewRequests } from '@/lib/reviewRequests';
 import { dbGetStudentDropouts, type StudentDropout } from '@/lib/studentPeriod';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
+import { useHistorialHorarios } from '@/lib/HistorialHorariosContext';
+import { asignacionesConHistorial } from '@/lib/slotHistory';
 import { maybeSendMilestoneEmail } from '@/lib/milestoneEmails';
 import { AddClassModal, saveTeacherClass, ANALYSIS_FAILED_NOTICE } from '@/components/AddClassModal';
 import { Teacher, Assignment, ClassRecordType, ClassReviewRequest } from '@/types';
@@ -297,15 +299,18 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
   // El EMBUDO: una clase, un lugar, y el total es la suma de las ramas. Sale de
   // las mismas fuentes que /revisiones para que los dos números no puedan
   // separarse (ver lib/classFunnel).
+  // Con el historial de horarios (lib/HistorialHorariosContext), igual que
+  // /revisiones: una fecha pasada con el horario que tenía ese día.
+  const cambios = useHistorialHorarios();
   const funnel = useMemo(() => buildClassFunnel({
     monthYear, teacherId: teacher.id,
-    assignments: gridAssignments,
+    assignments: asignacionesConHistorial(gridAssignments, cambios),
     joinLogs: classJoinLogs, classRecords, analyses: classAnalyses,
     requests: reviewRequests, dropouts,
     gridOccupancy: gridOccupancyOfTeacher(teacher),
     finance,
     todayIso, nowMinutes: spainNow.hour * 60 + spainNow.minute,
-  }), [monthYear, teacher, gridAssignments, classJoinLogs, classRecords, classAnalyses, reviewRequests, dropouts, finance, todayIso, spainNow.hour, spainNow.minute]);
+  }), [monthYear, teacher, gridAssignments, cambios, classJoinLogs, classRecords, classAnalyses, reviewRequests, dropouts, finance, todayIso, spainNow.hour, spainNow.minute]);
 
   /** Lo que el profesor deja de cobrar si no reclama. Tarifa real de cada alumno. */
   const claimAmount = useMemo(() => funnel.missing
