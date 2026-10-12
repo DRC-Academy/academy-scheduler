@@ -16,7 +16,9 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
-    include: ['lib/**/*.test.ts'],
+    // .test.tsx: los que montan pantallas (lib/sinBucles.test.tsx), con jsdom
+    // declarado en el propio fichero; el resto sigue en node.
+    include: ['lib/**/*.test.ts', 'lib/**/*.test.tsx'],
     // lib/supabase.ts crea el cliente al importarse y revienta sin estas
     // variables. Son de mentira a propósito: aquí no se toca la red, solo se
     // prueban funciones puras de módulos que arrastran ese import.
