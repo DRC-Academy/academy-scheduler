@@ -29,6 +29,8 @@ import {
 } from '@/lib/endingPlans';
 import { CambiarProfesorModal } from '@/components/CambiarProfesorModal';
 import { AssignmentEmailModal } from '@/components/AssignmentEmailModal';
+import ProgramaAlumno, { EnlazarProgramaModal } from '@/components/ProgramaAlumno';
+import { useAllPrograms, programsOfStudent } from '@/lib/useStudentPrograms';
 import { Student, Grid, Assignment } from '@/types';
 
 // Detecta viewport mobile (< breakpoint). Alterna tabla (desktop) ↔ cards (mobile).
@@ -644,6 +646,10 @@ function StudentsContent() {
   const [activatingStudent, setActivatingStudent] = useState<DisplayStudent | null>(null);
   const [accessStudent, setAccessStudent] = useState<DisplayStudent | null>(null);
   const [oritalkStudent, setOritalkStudent] = useState<DisplayStudent | null>(null);
+  // Programas de la oferta de oct/2026 (student_programs): una sola petición
+  // para todas las tarjetas. `programLinkStudent` abre el enlace manual.
+  const { programs: allPrograms, reload: reloadPrograms } = useAllPrograms();
+  const [programLinkStudent, setProgramLinkStudent] = useState<DisplayStudent | null>(null);
   // Confirmación breve tras marcar/activar. La página no tenía ninguna: los
   // cambios de estado se aplicaban en silencio y no se sabía si habían entrado.
   const [toast, setToast] = useState<string | null>(null);
@@ -1208,6 +1214,14 @@ function StudentsContent() {
                                   </MenuItem>
                                 ))}
 
+                                {/* Programas de menores: factura el padre con otro email
+                                    y la sincronización no puede enlazarlos sola. */}
+                                {s.inStudentsTable && (
+                                  <MenuItem onClick={() => { setMenuOpenId(null); setProgramLinkStudent(s); }}>
+                                    🎓 Enlazar pedido de programa
+                                  </MenuItem>
+                                )}
+
                                 <MenuItem danger onClick={() => { setMenuOpenId(null); setDeletingStudent(s); }}>🗑️ Eliminar</MenuItem>
                               </div>
                             </>
@@ -1218,6 +1232,9 @@ function StudentsContent() {
 
                     {/* Telefono: suscripcion y acciones de acceso en su propia fila, a lo ancho. */}
                     {isMobile && s.email && <div style={{ marginTop: 10 }}>{renderSubBadge(s)}</div>}
+
+                    {/* Programa (oferta de oct/2026): inicio y fin. Nada si no tiene. */}
+                    <ProgramaAlumno programs={programsOfStudent(allPrograms, s)} showOrder compact />
 
                     {/* Fila secundaria: nivel · plan + clasificación */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', fontSize: 12.5, color: 'var(--text-secondary)', marginTop: 12 }}>
@@ -1335,6 +1352,24 @@ function StudentsContent() {
             await afterAccessChange(s, `Alumno activado manualmente hasta ${longDate(until)}.`);
           }}
           onCancel={() => setActivatingStudent(null)}
+        />
+      )}
+
+      {programLinkStudent && (
+        <EnlazarProgramaModal
+          studentName={programLinkStudent.name}
+          programs={programsOfStudent(allPrograms, programLinkStudent)}
+          admin={{
+            studentId: programLinkStudent.id,
+            by: user?.displayName || user?.username || 'admin',
+            onChanged: async () => {
+              await reloadPrograms();
+              // El acceso puede cambiar (el programa ahora es suyo): re-verificar.
+              clearSubscriptionCache(programLinkStudent.email);
+              await refreshOne(programLinkStudent.email);
+            },
+          }}
+          onClose={() => setProgramLinkStudent(null)}
         />
       )}
 

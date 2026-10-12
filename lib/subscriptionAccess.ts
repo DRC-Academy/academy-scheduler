@@ -199,8 +199,30 @@ export function wooStatusMeta(status: string | null | undefined): WooStatusMeta 
   if (!status) return UNKNOWN_STATUS;
   if (status === 'not_found') return NOT_FOUND_STATUS;
   if (status === PAUSED_STATUS) return PAUSED_META;
-  return WOO_STATUS[status] ?? UNKNOWN_STATUS;
+  return WOO_STATUS[status] ?? PROGRAM_STATUS_META[status] ?? UNKNOWN_STATUS;
 }
+
+// ── PROGRAMAS (oferta de oct/2026) ───────────────────────────────────────────
+//
+// Estados que calcula check-subscription para un programa (lib/programs.ts). NO
+// son de WooCommerce y por eso no van en WOO_STATUS (que el endpoint externo
+// recorre como lista de estados de Woo), pero wooStatusMeta los conoce para que
+// el badge, finanzas y el test de nivel los traten como a cualquier otro. Un
+// programa FRACCIONADO no usa estos: viaja con el estado real de su suscripción.
+export const PROGRAM_STATUS_META: Record<string, WooStatusMeta> = {
+  program_active: {
+    label: 'Programa vigente', countsAsActive: true, icon: '🎓',
+    color: '#1E9E3A', bg: 'rgba(30,158,58,0.1)',
+  },
+  program_ended: {
+    label: 'Programa terminado', countsAsActive: false, icon: '❌',
+    color: '#dc2626', bg: 'rgba(239,68,68,0.1)',
+  },
+  program_cancelled: {
+    label: 'Pedido cancelado o reembolsado', countsAsActive: false, icon: '❌',
+    color: '#dc2626', bg: 'rgba(239,68,68,0.1)',
+  },
+};
 
 /** ¿Este estado de WooCommerce permite tomar clases? active y pending-cancel sí. */
 export function isActiveWooStatus(status: string | null | undefined): boolean {

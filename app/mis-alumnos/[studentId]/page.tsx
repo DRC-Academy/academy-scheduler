@@ -47,6 +47,8 @@ import NivelProfesorCard from '@/components/alumnos/NivelProfesorCard';
 import FormLinkModal, { REGENERATE_ALL_HINT } from '@/components/alumnos/FormLinkModal';
 import ResetProfileModal, { RESET_PROFILE_HINT } from '@/components/alumnos/ResetProfileModal';
 import OnboardingStatusCard from '@/components/alumnos/OnboardingStatusCard';
+import ProgramaAlumno from '@/components/ProgramaAlumno';
+import { useStudentPrograms } from '@/lib/useStudentPrograms';
 import {
   Accordion, BulletList, ClampText, ProgressCompare, toBullets,
 } from '@/components/alumnos/studentPageUi';
@@ -395,6 +397,9 @@ function StudentPageContent() {
               <div className="sp-kpi-value">{mainSlot}</div>
             </div>
           </div>
+
+          {/* Programa (oferta de oct/2026): fecha de inicio y de fin. */}
+          <ProgramaDelAlumno studentId={a.studentId || profile?.student_id || null} email={a.studentEmail || null} />
 
           <OnboardingStatusCard
             studentId={a.studentId || profile?.student_id || null}
@@ -1422,4 +1427,10 @@ export default function StudentPage() {
       </div>
     </AuthGuard>
   );
+}
+
+/** Línea del programa del alumno; no pinta nada si no tiene ninguno. */
+function ProgramaDelAlumno({ studentId, email }: { studentId: string | null; email: string | null }) {
+  const programs = useStudentPrograms(studentId, email);
+  return <ProgramaAlumno programs={programs} />;
 }

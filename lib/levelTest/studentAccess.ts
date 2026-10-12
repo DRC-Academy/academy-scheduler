@@ -93,6 +93,7 @@ function allowedWooReason(status: string | undefined): LevelTestAccessReason {
     case 'manual_override':
     case 'manual_active':
     case 'oritalk':
+    case 'program_active':   // programa de pago único vigente (lib/programs)
       return 'woo_active';
     case 'scheduled': return 'woo_scheduled';
     case 'one_time_no_access': return 'woo_one_time';
@@ -143,8 +144,9 @@ export async function canTakeLevelTest(
   const status = woo.status ?? null;
   // Woo no contestó (active null, status 'error'): no se castiga al alumno.
   if (woo.active == null) return allow('woo_unavailable', status);
-  if (status === 'cancelled') return block('woo_cancelled_no_assignment', status);
-  if (status === 'expired') return block('woo_expired_no_assignment', status);
+  // Los de programa (lib/programs) valen lo mismo que su equivalente de Woo.
+  if (status === 'cancelled' || status === 'program_cancelled') return block('woo_cancelled_no_assignment', status);
+  if (status === 'expired' || status === 'program_ended') return block('woo_expired_no_assignment', status);
   if (status === 'not_found') return block('woo_not_found_no_assignment', status);
   return allow(allowedWooReason(woo.status), status);
 }

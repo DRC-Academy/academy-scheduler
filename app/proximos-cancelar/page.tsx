@@ -43,6 +43,8 @@ import {
   SALES_RESULTS, ENDING_WINDOW_DAYS, ENDING_WARN_DAYS,
   type EndingPlan, type SalesContactResult,
 } from '@/lib/endingPlans';
+import { currentProgramKeys, hasProgramKey } from '@/lib/programs';
+import { useAllPrograms } from '@/lib/useStudentPrograms';
 import { madridToday } from '@/lib/subscriptionAccess';
 
 type FiltroAviso  = 'todos' | 'sin_avisar' | 'urgentes';
@@ -202,10 +204,14 @@ function ProximosCancelarContent() {
   const [filtroVentas, setFiltroVentas] = useState<FiltroVentas>('todos');
 
   const today = madridToday();
+  // Alumnos con un PROGRAMA vigente (oferta de oct/2026): fuera de esta lista,
+  // igual que en el cron. Su fin lo avisa el cron de renovaciones.
+  const { programs } = useAllPrograms();
+  const programKeys = useMemo(() => currentProgramKeys(programs, today), [programs, today]);
 
   const planes = useMemo(
     () => buildEndingPlans({
-      students: students.map(s => ({
+      students: students.filter(s => !hasProgramKey(programKeys, s)).map(s => ({
         id: s.id,
         name: s.name,
         email: s.email,
@@ -225,7 +231,7 @@ function ProximosCancelarContent() {
       today,
       windowDays: ENDING_WINDOW_DAYS,
     }),
-    [students, profiles, today],
+    [students, profiles, today, programKeys],
   );
 
   const estaSemana   = planes.filter(p => p.daysLeft <= ENDING_WARN_DAYS).length;

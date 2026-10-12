@@ -15,7 +15,7 @@
 
 // El mapa de estados de WooCommerce (nombre, color y si dan acceso) es el mismo
 // que usan el endpoint, finanzas y las asistencias. Ver lib/subscriptionAccess.
-import { WOO_STATUS, isScheduledWooStatus, isPausedStatus, PAUSED_META } from '@/lib/subscriptionAccess';
+import { WOO_STATUS, PROGRAM_STATUS_META, isScheduledWooStatus, isPausedStatus, PAUSED_META } from '@/lib/subscriptionAccess';
 import { addCalendarMonths } from '@/lib/productUtils';
 // Una sola regla de normalización de emails para todo el proyecto (lib/email).
 import { normEmail } from '@/lib/email';
@@ -44,6 +44,12 @@ export interface SubscriptionInfo {
    * El endpoint ya lo devolvía; sin traerlo hasta acá el badge no podía decirlo.
    */
   subscriptionStartDate: string | null;
+  /**
+   * PROGRAMA de la oferta de oct/2026 (lib/programs), si el acceso salió de uno:
+   * "Programa Fluidez (fraccionado)" y su fecha de fin. null = no es de programa.
+   */
+  programLabel: string | null;
+  programEndDate: string | null;
   fetchedAt: number;
 }
 
@@ -65,7 +71,7 @@ const NO_EMAIL: SubscriptionInfo = {
   active: null, status: 'no_email', daysRemaining: null, endDate: null,
   productType: null, productName: null, manualActiveUntil: null, oritalkUntil: null,
   companyPlanMonths: null, companyPlanStart: null,
-  subscriptionStartDate: null, fetchedAt: 0,
+  subscriptionStartDate: null, programLabel: null, programEndDate: null, fetchedAt: 0,
 };
 
 // Verifica la suscripción de un email. Usa cache (5 min) salvo `force`.
@@ -96,12 +102,14 @@ export async function checkSubscription(email?: string | null, force = false): P
       companyPlanMonths: data.companyPlanMonths ?? null,
       companyPlanStart:  data.companyPlanStart ?? null,
       subscriptionStartDate: data.subscriptionStartDate ?? null,
+      programLabel:      data.programLabel ?? null,
+      programEndDate:    data.programEndDate ?? null,
       fetchedAt:         Date.now(),
     };
     subscriptionCache.set(e, info);
     return info;
   } catch {
-    return { active: null, status: 'error', daysRemaining: null, endDate: null, productType: null, productName: null, manualActiveUntil: null, oritalkUntil: null, companyPlanMonths: null, companyPlanStart: null, subscriptionStartDate: null, fetchedAt: Date.now() };
+    return { active: null, status: 'error', daysRemaining: null, endDate: null, productType: null, productName: null, manualActiveUntil: null, oritalkUntil: null, companyPlanMonths: null, companyPlanStart: null, subscriptionStartDate: null, programLabel: null, programEndDate: null, fetchedAt: Date.now() };
   }
 }
 
@@ -169,6 +177,17 @@ export function subBadge(info: SubscriptionInfo | undefined): { label: string; c
     return { label: `🔵 Oritalk${tail}`, ...blue };
   }
 
+  // PROGRAMA (lib/programs). Va antes que el pago único porque un programa de
+  // pago único no vive en manual_active_until: su fecha es la del programa.
+  const prog = PROGRAM_STATUS_META[info.status];
+  if (prog) {
+    const nombre = info.programLabel?.replace(/\s*\(.*\)$/, '') ?? 'Programa';
+    const fin = shortDate(info.programEndDate);
+    if (info.status === 'program_active') return { label: `${prog.icon} ${nombre}${fin ? ` hasta ${fin}` : ''}`, color: prog.color, bg: prog.bg };
+    if (info.status === 'program_ended') return { label: `${prog.icon} ${nombre} terminado${fin ? ` ${fin}` : ''}`, color: prog.color, bg: prog.bg };
+    return { label: `${prog.icon} ${prog.label}`, color: prog.color, bg: prog.bg };
+  }
+
   // PAGO ÚNICO
   if (info.productType === 'one_time') {
     // PLAN DE EMPRESA: la fecha no la puso una persona, la calculó el sistema
@@ -219,7 +238,10 @@ export function subBadge(info: SubscriptionInfo | undefined): { label: string; c
     // que aporte algo, así que no se pone.
     const d = info.daysRemaining;
     const desde = isScheduledWooStatus(info.status) ? shortDate(info.subscriptionStartDate) : '';
+    // Programa fraccionado: la suscripción manda el estado, el programa la fecha.
+    const finPrograma = info.programEndDate && woo.countsAsActive ? shortDate(info.programEndDate) : '';
     const tail = desde ? ` (empieza el ${desde})`
+      : finPrograma ? ` (programa hasta ${finPrograma})`
       : info.status === 'pending-cancel' && d != null && d > 0 ? ` (${d} día${d === 1 ? '' : 's'})`
       : '';
     return { label: `${woo.icon} ${woo.label}${tail}`, color: woo.color, bg: woo.bg };

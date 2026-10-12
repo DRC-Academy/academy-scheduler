@@ -28,6 +28,7 @@ import {
   type EndingPlan, type EndingStudentRow, type EndingProfileRow,
 } from '@/lib/endingPlans';
 import { madridToday } from '@/lib/subscriptionAccess';
+import { currentProgramKeys, hasProgramKey, type StudentProgramRow } from '@/lib/programs';
 import { sendEndingPlansDigest } from '@/lib/emailNotifications';
 import {
   sendEndingPlansToZapier, buildEndingPlanPayload, samplePlan,
@@ -109,7 +110,13 @@ export async function GET(request: Request): Promise<Response> {
   //   ventas ya llamó a ese alumno.
   const sales = await readSalesContacts(supabase, today);
 
-  const rows = (res.data ?? []) as unknown as StudentDbRow[];
+  // 1-ter) Alumnos con un PROGRAMA vigente (oferta de oct/2026): fuera. Su fin
+  //   lo avisa /api/cron/renovaciones. Best-effort: sin la tabla no se excluye a
+  //   nadie (hoy ningún alumno de programa tiene manual_active_until).
+  const programKeys = await readProgramKeys(supabase, today);
+
+  const rows = ((res.data ?? []) as unknown as StudentDbRow[])
+    .filter(r => !hasProgramKey(programKeys, r));
   const students: EndingStudentRow[] = rows.map(r => ({
     id: r.id,
     name: r.name,
@@ -279,4 +286,18 @@ async function markNotified(supabase: SupabaseClient, plans: EndingPlan[]): Prom
     }
   }
   return ok;
+}
+
+/** Claves de alumnos con programa vigente (lib/programs). Vacío si la tabla no existe. */
+async function readProgramKeys(supabase: SupabaseClient, today: string): Promise<Set<string>> {
+  const { data, error } = await supabase
+    .from('student_programs')
+    .select('student_id, email, order_status, end_date, payment_mode, subscription_status');
+  if (error) {
+    if (error.code !== '42P01' && error.code !== 'PGRST205') {
+      console.warn('[cron ending-plans] No se pudieron leer los programas:', error.message);
+    }
+    return new Set();
+  }
+  return currentProgramKeys((data ?? []) as unknown as StudentProgramRow[], today);
 }

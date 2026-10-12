@@ -14,6 +14,14 @@ import {
 import {
   accessOverrideOf, isActiveWooStatus, madridToday, resolveWooSubscriptions, hasPauseItem,
 } from '@/lib/subscriptionAccess';
+// PROGRAMAS de la oferta de oct/2026: su acceso no depende del último pedido ni
+// de buscar suscripciones por email (en los de menores factura el padre), sino
+// de su fila en student_programs. Ver lib/programs.ts.
+import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
+import {
+  currentProgram, programAccessOf, programFullLabel, type StudentProgramRow,
+} from '@/lib/programs';
+import { wooCreds as programWooCreds, liveSubscriptionStatus } from '@/lib/programSync';
 
 // La lista de productos de PAGO ÚNICO vive en lib/productUtils.isOneTimeProduct:
 // era una constante local duplicada en sync-student-plans, y las dos copias ya
@@ -47,6 +55,8 @@ interface SubResult {
   billingName: string | null;            // nombre del cliente (billing) para autocompletar
   subscriptionStartDate: string | null;  // 'YYYY-MM-DD' — inicio de la suscripción / compra
   detectedLevel: string | null;          // nivel A1–C2 detectado del producto/meta
+  programLabel: string | null;           // "Programa Fluidez (fraccionado)" si el acceso sale de un programa
+  programEndDate: string | null;         // 'YYYY-MM-DD' — fin de ese programa
 }
 
 interface RichProduct {
@@ -75,6 +85,7 @@ const ERROR_RESULT: SubResult = {
   companyPlanMonths: null, companyPlanStart: null,
   metaData: [], phone: null,
   billingName: null, subscriptionStartDate: null, detectedLevel: null,
+  programLabel: null, programEndDate: null,
 };
 
 // Convierte una fecha WooCommerce (ISO / 'YYYY-MM-DD HH:mm:ss') a 'YYYY-MM-DD'.
@@ -224,6 +235,70 @@ async function fetchSubStatus(c: { base: string; ck: string; cs: string }, email
   };
 }
 
+// Estado de la suscripción de un programa fraccionado, por ID (5 min por instancia).
+const programSubCache = new Map<number, { status: string | null; ts: number }>();
+
+/**
+ * Acceso que da el PROGRAMA del alumno, o null si no tiene ninguno (o si falta
+ * la tabla / la service role key: entonces se sigue con la lógica de siempre).
+ *
+ * Se buscan sus filas por student_id (incluye los enlazados a mano) y, si no
+ * hay alumno o la fila no está enlazada, por email de facturación.
+ */
+async function programAccessFor(
+  studentId: string | null, email: string, today: string,
+): Promise<Partial<SubResult> | null> {
+  const admin = getSupabaseAdmin();
+  if (!admin) return null;
+  const or = [`and(email.eq."${email.replace(/"/g, '')}",student_id.is.null)`];
+  if (studentId) or.push(`student_id.eq."${studentId.replace(/"/g, '')}"`);
+  const { data, error } = await admin.from('student_programs').select('*').or(or.join(','));
+  if (error) {
+    if (error.code !== '42P01' && error.code !== 'PGRST205') console.error('[check-subscription] student_programs:', error.message);
+    return null;
+  }
+  const row = currentProgram((data ?? []) as StudentProgramRow[], today);
+  if (!row) return null;
+
+  // Fraccionado: el estado de la suscripción se lee EN EL MOMENTO. Un on-hold de
+  // esta mañana (cobro fallido) tiene que quitar el acceso ya, no mañana tras la
+  // sincronización. Si Woo no contesta, vale el estado guardado; sin ninguno,
+  // `active: null` (nunca se bloquea por un fallo nuestro).
+  let live: string | null | undefined;
+  let wooFailed = false;
+  if (row.payment_mode === 'fraccionado' && row.subscription_id) {
+    const cached = programSubCache.get(Number(row.subscription_id));
+    if (cached && Date.now() - cached.ts < TTL_MS) live = cached.status;
+    else {
+      const c = programWooCreds();
+      if (c) {
+        try {
+          live = await liveSubscriptionStatus(c, Number(row.subscription_id));
+          programSubCache.set(Number(row.subscription_id), { status: live, ts: Date.now() });
+        } catch { wooFailed = true; }
+      }
+    }
+  }
+  const acc = programAccessOf(row, today, live);
+  const unknown = acc.status === 'not_found' && (wooFailed || !row.subscription_status);
+  const end = acc.endDate ? new Date(acc.endDate + 'T23:59:59') : null;
+  return {
+    active: unknown ? null : acc.active,
+    status: unknown ? 'error' : acc.status,
+    endDate: end ? end.toISOString() : null,
+    daysRemaining: end ? daysFromNow(end) : null,
+    planName: programFullLabel(row),
+    productName: programFullLabel(row),
+    productFullName: programFullLabel(row),
+    productType: row.payment_mode === 'unico' ? 'one_time' : 'subscription',
+    phone: row.billing_phone ?? null,
+    billingName: row.billing_name ?? null,
+    subscriptionStartDate: row.start_date,
+    programLabel: programFullLabel(row),
+    programEndDate: acc.endDate,
+  };
+}
+
 /**
  * Guarda el ancla del pago único: duración detectada (solo empresas) y fecha del
  * pedido. Un `until` no nulo además ACTIVA al alumno — eso sigue siendo exclusivo
@@ -312,6 +387,20 @@ export async function GET(request: Request): Promise<Response> {
       productType:     (student?.product_type as ProductType) ?? null,
       manualActiveUntil: manualUntil,
       oritalkUntil:      override.until,
+      companyPlanMonths, companyPlanStart,
+    } satisfies SubResult);
+  }
+
+  // 2b) PROGRAMA — después de Oritalk y de la activación manual (las dos son
+  //     decisiones explícitas del admin y ganan), antes que todo lo de Woo.
+  //     Sin `full` se responde ya: no hace falta el último pedido para nada.
+  const programa = override ? null : await programAccessFor(student?.id ?? null, email, today);
+  if (programa && !full) {
+    return Response.json({
+      ...ERROR_RESULT,
+      ...programa,
+      manualActiveUntil: manualUntil,
+      oritalkUntil,
       companyPlanMonths, companyPlanStart,
     } satisfies SubResult);
   }
@@ -461,6 +550,7 @@ export async function GET(request: Request): Promise<Response> {
     productType, hoursFromApi, manualActiveUntil: null, oritalkUntil,
     companyPlanMonths, companyPlanStart, metaData, phone: null,
     billingName, subscriptionStartDate: orderDate, detectedLevel,
+    programLabel: null, programEndDate: null,
     ...o,
   });
 
@@ -482,6 +572,16 @@ export async function GET(request: Request): Promise<Response> {
   //    Gana sobre todo lo demás, incluso sobre una suscripción activa: es una
   //    decisión explícita del admin y tiene su propio badge.
   if (override?.kind === 'oritalk') return Response.json(overrideResult('oritalk', override.until));
+
+  // 4b) Programa (con ?full=1; sin él ya se respondió arriba). El producto rico
+  //     del pedido viaja igual para los formularios de asignación.
+  if (programa) {
+    return Response.json(make({
+      ...programa,
+      productName, productFullName, productVariation, productType: programa.productType ?? productType,
+      planName: productName ?? programa.planName ?? null,
+    }));
+  }
 
   // 5) Ningún producto comprado → not_found.
   if (!productType) return Response.json(make({ active: false, status: 'not_found' }));
