@@ -26,7 +26,7 @@ import {
   dbGetTeacherBonuses, dbClaimRetentionBonus, dbMarkBonusPaid, dbAddUpsellBonuses, dbUpdateAssignmentTeacherSince,
   dbGetSlotChanges,
 } from '@/lib/db';
-import { SLOT_CHANGES_DIAS, SLOT_CHANGES_REFRESCO_MS, SLOT_CHANGES_TIMEOUT_MS, cargarSinBloquear } from '@/lib/slotHistory';
+import { crearRefrescoHistorial, cargarSinEsperarHistorial } from '@/lib/slotHistory';
 import type { AffectedTeacher, ChangeTeacherParams, ArchiveTeacherResult, CalendarOrigin, GridSaveResult } from '@/lib/db';
 import type { TransferenciaResultado } from '@/lib/transferencia/core';
 import type { AssignedSlot } from '@/types';
@@ -221,7 +221,11 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   // tiempo máximo, como mucho cada 10 minutos, y si falla o tarda cada vista
   // proyecta el horario de hoy, como antes. Ver refrescarHistorial.
   const [slotChangesByTeacher, setSlotChangesByTeacher] = useState<Record<string, SlotChange[]>>({});
-  const ultimoHistorial = useRef(0);
+  // Una sola instancia por proveedor: recuerda cuándo se pidió por última vez.
+  const refrescarHistorial = useRef(crearRefrescoHistorial({
+    leer: (since, signal) => dbGetSlotChanges(since, signal),
+    guardar: setSlotChangesByTeacher,
+  })).current;
   const [classRecords, setClassRecords] = useState<ClassRecord[]>([]);
   const [classAnalyses, setClassAnalyses] = useState<ClassTranscriptRef[]>([]);
   const [financeRates, setFinanceRates] = useState<FinanceRate[]>([]);
@@ -592,31 +596,10 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     setClassJoinLogs(prev => prev.some(l => l.id === log.id) ? prev : [log, ...prev]);
   }
 
+  // El historial de horarios se pide aparte y NUNCA se espera (lib/slotHistory:
+  // crearRefrescoHistorial / cargarSinEsperarHistorial).
   async function loadClassJoinLogs() {
-    refrescarHistorial();
-    const logs = await dbGetClassJoinLogs();
-    setClassJoinLogs(logs);
-  }
-
-  /**
-   * Pide el historial de horarios SIN esperarlo: no devuelve nada a propósito,
-   * para que ninguna carga (ingresos, finanzas) dependa de él. Con error o
-   * pasado SLOT_CHANGES_TIMEOUT_MS se corta la petición y se sigue sin él; el
-   * siguiente intento será en la próxima carga.
-   */
-  function refrescarHistorial(): void {
-    if (Date.now() - ultimoHistorial.current < SLOT_CHANGES_REFRESCO_MS) return;
-    ultimoHistorial.current = Date.now();
-    const since = new Date(Date.now() - SLOT_CHANGES_DIAS * 86_400_000).toISOString();
-    const corte = new AbortController();
-    void cargarSinBloquear(() => dbGetSlotChanges(since, corte.signal), SLOT_CHANGES_TIMEOUT_MS).then(r => {
-      if (r === null) {
-        corte.abort();
-        ultimoHistorial.current = 0;   // reintentar en la próxima carga
-        return;
-      }
-      setSlotChangesByTeacher(r);
-    });
+    await cargarSinEsperarHistorial(refrescarHistorial, async () => setClassJoinLogs(await dbGetClassJoinLogs()));
   }
 
   async function loadClassRecords() {
@@ -625,8 +608,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   }
 
   async function loadFinanceData() {
-    refrescarHistorial();   // aparte y sin esperarlo: nunca retrasa a finanzas
-    const [rates, payments, records, logs, approvals, analyses, bonuses] = await Promise.all([
+    const [rates, payments, records, logs, approvals, analyses, bonuses] = await cargarSinEsperarHistorial(refrescarHistorial, () => Promise.all([
       dbGetFinanceRates(),
       dbGetFinancePayments(),
       dbGetClassRecords(),
@@ -634,7 +616,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
       dbGetManualApprovals(),
       dbGetClassTranscripts(),
       dbGetTeacherBonuses(),
-    ]);
+    ]));
     setFinanceRates(rates);
     setFinancePayments(payments);
     setClassRecords(records);

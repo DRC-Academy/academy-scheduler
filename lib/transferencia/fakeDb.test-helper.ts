@@ -71,6 +71,7 @@ class Query implements PromiseLike<{ data: unknown; error: unknown; count?: numb
   private singleMode: 'maybe' | 'one' | null = null;
   private head = false;
   private lim: number | null = null;
+  private desde = 0;
 
   constructor(private db: FakeDb, private table: string) {}
 
@@ -91,6 +92,7 @@ class Query implements PromiseLike<{ data: unknown; error: unknown; count?: numb
   or(expr: string) { this.filters.push(parseOr(expr)); return this; }
   order() { return this; }
   limit(n: number) { this.lim = n; return this; }
+  range(from: number, to: number) { this.desde = from; this.lim = to - from + 1; return this; }
   maybeSingle() { this.singleMode = 'maybe'; return this; }
   single() { this.singleMode = 'one'; return this; }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -137,7 +139,7 @@ class Query implements PromiseLike<{ data: unknown; error: unknown; count?: numb
     if (readErr) return { data: null, error: readErr };
     let out = match().map(r => structuredClone(r));
     if (this.head) return { data: null, error: null, count: out.length };
-    if (this.lim != null) out = out.slice(0, this.lim);
+    if (this.lim != null) out = out.slice(this.desde, this.desde + this.lim);
     if (this.singleMode) return { data: out[0] ?? null, error: null };
     return { data: out, error: null };
   }
