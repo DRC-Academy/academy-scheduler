@@ -17,6 +17,7 @@ import {
 import { cleanAiText } from '@/lib/textCleanup';
 import { longDateEs, retentionLine, type EndingPlan } from '@/lib/endingPlans';
 import { PUBLIC_APP_URL as APP_URL } from '@/lib/appUrl';
+import { lineasFicha, type FichaAlumnoNuevo } from '@/lib/fichaAlumnoNuevo';
 
 const FROM = 'DRC Academy <notificaciones@drcacademy.com>';
 const PAGOS_EMAIL = 'pagos@drcacademy.com';
@@ -218,10 +219,47 @@ export interface NewStudentInfo {
   level?: string | null;
   slots?: Array<{ day: string; hour: string }> | null;
   startDate?: string | null;
+  /**
+   * Con un CAMBIO DE PROFESOR: la ficha del alumno (lib/fichaAlumnoNuevo) para
+   * que el profesor que lo recibe tenga contexto para empezar. Sin ella, el
+   * correo de un alta de siempre.
+   */
+  ficha?: FichaAlumnoNuevo | null;
+}
+
+/** Recuadro con título (las secciones de la ficha). Vacío si no hay contenido. */
+function recuadro(titulo: string, contenido: string): string {
+  if (!contenido) return '';
+  return `<div style="margin:0 0 16px; padding:14px 16px; border:1px solid #E0E0DA; border-radius:8px;">
+  <div style="font-size:12px; font-weight:700; color:#1E9E3A; text-transform:uppercase; letter-spacing:0.04em; margin-bottom:8px;">${esc(titulo)}</div>
+${contenido}
+</div>`;
+}
+
+/** Correo de un cambio de profesor: la ficha del alumno, en tono neutro. Sin líneas vacías. */
+export function newStudentFichaHtml(teacher: TeacherLike, f: FichaAlumnoNuevo): string {
+  const l = lineasFicha(f);
+  const perfil = l.perfil
+    .map(([k, v]) => `  <p style="margin:0 0 8px; font-size:14px; line-height:1.55;"><span style="color:#888880;">${esc(k)}:</span> ${esc(v)}</p>`)
+    .join('\n');
+  const clases = l.clases.length
+    ? `  <ul style="margin:0; padding-left:18px; font-size:14px; line-height:1.6;">${l.clases.map(c => `<li style="margin-bottom:4px;">${esc(c)}</li>`).join('')}</ul>`
+    : '';
+  return baseEmailTemplate(
+    p(`Hola ${esc(teacher.name)},`) +
+    p(`Se incorpora a tus clases <strong>${esc(f.nombre)}</strong>. Te dejamos lo que necesitas para empezar.`) +
+    dataRows(l.datos) +
+    recuadro('Su perfil', perfil) +
+    recuadro('Sus últimas clases', clases) +
+    p('El alumno recibe automáticamente las instrucciones para acceder a la plataforma. Lo único que tienes que hacer es definir el enlace de Meet de sus clases en DRC Gestión.') +
+    ctaButton('Ver la ficha del alumno', f.enlace),
+    `${f.nombre} se incorpora a tus clases`,
+  );
 }
 
 export async function sendNewStudentEmail(teacher: TeacherLike, info: NewStudentInfo): Promise<boolean> {
   const subject = `Nuevo alumno asignado: ${info.studentName}`;
+  if (info.ficha) return send('sendNewStudentEmail', teacher, subject, newStudentFichaHtml(teacher, info.ficha));
   const html = baseEmailTemplate(
     p(`Hola ${esc(teacher.name)},`) +
     p('Se te ha asignado un nuevo alumno.') +

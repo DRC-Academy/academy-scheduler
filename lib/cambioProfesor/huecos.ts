@@ -1,5 +1,9 @@
-// Huecos ENTRE PROFESORES para que el alumno cambie de profesor desde el LMS
-// (Fase 2). Solo lee.
+// HORARIOS para que el alumno cambie de profesor desde el LMS (Fase 2, contrato
+// v3). Solo lee.
+//
+// El alumno NO ve profesores: elige un horario para cada una de sus sesiones y
+// Gestión le asigna después el profesor (lib/cambioProfesor/core.ts). Por eso
+// nada de lo que sale de aquí hacia el LMS lleva id ni nombre de profesor.
 //
 // No hay criterios propios: los bloques salen de calcularBloques / evaluarBloque
 // (lib/huecos, que a su vez usa esHuecoLibreParaAlumno) en modo FIJO, la
@@ -7,9 +11,14 @@
 // actualizar" es la misma regla de 30 días (calendarioAlDia).
 //
 // Profesores candidatos: no archivados, ni el perfil de prueba (esPerfilDePrueba)
-// ni el profesor actual del alumno, y con el calendario al día. Sin scoring.
-// Orden: aleatorio pero ESTABLE para el mismo alumno durante el día (semilla =
-// alumno + fecha de España), para que la lista no baile entre recargas.
+// ni el profesor actual del alumno, y con el calendario al día.
+//
+// Paso a paso: el LMS manda los horarios ya elegidos (`elegidos`, uno por cada
+// sesión anterior, en el orden de `sesiones`) y recibe los horarios posibles
+// para la SIGUIENTE sesión: los que tiene libres algún candidato que además
+// tiene libres TODOS los elegidos, sin solaparse ni ir seguidos con ellos (dos
+// bloques seguidos el mismo día serían una sola sesión en el calendario). Así,
+// al terminar, siempre hay al menos un profesor que cubre todo.
 //
 // Consultas: profesores, calendarios, cambios humanos del calendario y reservas,
 // UNA de cada para todos los profesores (más la carga del alumno).
@@ -19,12 +28,10 @@ import type { Grid } from '@/types';
 import { readTeacherGridWith } from '@/lib/calendarStore';
 import { liveReservationsOfTeachersWith, openRecoveriesOfStudentWith } from '@/lib/classRecoveryQueries';
 import { esPerfilDePrueba } from '@/lib/perfilDePrueba';
-import { getSpainParts } from '@/lib/spainTime';
-import { calcularBloques, estadoCalendariosWith, type BloqueLibre } from '@/lib/huecos/huecos';
+import { DURACION_MAX_HORAS, calcularBloques, clavesDeBloque, evaluarBloque, estadoCalendariosWith, type BloqueLibre } from '@/lib/huecos/huecos';
 import { cargarElegibilidadWith } from '@/lib/cambioHorario/elegibilidad';
 import { sesionesDelAlumno, type Sesion } from '@/lib/cambioHorario/sesiones';
 import { CambioHorarioError, type CodigoCambioHorario } from '@/lib/cambioHorario/errors';
-import { TransferenciaError } from '@/lib/transferencia/errors';
 
 type Db = SupabaseClient;
 
@@ -47,56 +54,62 @@ export function franjaDeHora(h: number): Franja {
   return 'noche';   // 20:00 en adelante y la madrugada
 }
 
+/** Uso interno: NUNCA sale hacia el LMS. */
 export interface ProfesorCandidato {
   id: string;
   nombre: string;
   horaInicio: number | null;
   horaFin: number | null;
+  /** teacher_calendars.updated_at (para elegirProfesor). */
+  calendarioActualizadoEn: string | null;
 }
 
-/** Un hueco con un profesor, tal como lo devuelve GET huecos-profesores. */
-export interface HuecoProfesorDto {
-  profesor: { id: string; nombre: string };
-  dia: string;
-  hora: string;
-  duracion: number;
+/** Un horario elegido por el alumno, o pedido como destino. */
+export interface Horario { dia: string; hora: string; duracion: number }
+
+/** Un horario tal como lo devuelve GET huecos-profesores: sin datos del profesor. */
+export interface HorarioDto extends Horario {
   /** Primera clase con este horario (España). */
   fecha_primera_clase: string;
 }
 
-// ── Orden estable ─────────────────────────────────────────────────────────────
+const falla = (codigo: CodigoCambioHorario, mensaje: string, extra: Partial<ConstructorParameters<typeof CambioHorarioError>[0]> = {}): never => {
+  throw new CambioHorarioError({ codigo, paso: 'cambio de profesor', mensaje, ...extra });
+};
+const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
-/** Hash de 32 bits (FNV-1a) de un texto. */
-function hash32(s: string): number {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); }
-  return h >>> 0;
-}
+// ── Horarios ──────────────────────────────────────────────────────────────────
 
-/** Generador pseudoaleatorio con semilla (mulberry32). */
-function rng(seed: number): () => number {
-  let a = seed;
-  return () => {
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
+/** Claves del calendario de un horario. LANZA DATOS_INVALIDOS si está mal formado. */
+export function clavesDeHorario(x: Horario): string[] {
+  const ok = !!x && DIAS.includes(x.dia) && /^\d{2}:00$/.test(x.hora ?? '')
+    && Number.isInteger(x.duracion) && x.duracion >= 1 && x.duracion <= DURACION_MAX_HORAS;
+  const claves = ok ? clavesDeBloque(x.dia, Number(x.hora.slice(0, 2)), x.duracion) : null;
+  if (!claves) return falla('DATOS_INVALIDOS', `horario mal formado: ${JSON.stringify(x)}`);
+  return claves;
 }
 
 /**
- * Baraja estable: el mismo alumno el mismo día (España) ve el mismo orden; otro
- * alumno u otro día, otro. Se ordena por id antes de barajar para no depender del
- * orden en que la base devuelve las filas.
+ * ¿Dos horarios se solapan o van seguidos el mismo día? Seguidos también cuenta:
+ * en el calendario quedarían como UNA sesión más larga (celdas contiguas = una
+ * sesión) y el alumno dejaría de tener las sesiones que tiene.
  */
-export function ordenEstable<T extends { id: string }>(items: T[], alumnoId: string, fecha: string): T[] {
-  const out = [...items].sort((a, b) => a.id.localeCompare(b.id));
-  const r = rng(hash32(`${alumnoId}|${fecha}`));
-  for (let i = out.length - 1; i > 0; i--) {
-    const j = Math.floor(r() * (i + 1));
-    [out[i], out[j]] = [out[j], out[i]];
+export function chocan(a: Horario, b: Horario): boolean {
+  if (a.dia !== b.dia) return false;
+  const ia = Number(a.hora.slice(0, 2)); const ib = Number(b.hora.slice(0, 2));
+  return ia <= ib + b.duracion && ib <= ia + a.duracion;
+}
+
+/** Comprueba la forma de una lista de horarios y que no choquen entre ellos. LANZA DATOS_INVALIDOS. */
+export function validarHorarios(xs: Horario[], que: string): void {
+  xs.forEach(clavesDeHorario);
+  for (let i = 0; i < xs.length; i++) {
+    for (let j = i + 1; j < xs.length; j++) {
+      if (chocan(xs[i], xs[j])) {
+        falla('DATOS_INVALIDOS', `${que}: ${xs[i].dia} ${xs[i].hora} y ${xs[j].dia} ${xs[j].hora} se solapan o van seguidos (serían una sola clase)`);
+      }
+    }
   }
-  return out;
 }
 
 // ── Carga del alumno ──────────────────────────────────────────────────────────
@@ -110,11 +123,6 @@ export interface ContextoAlumno {
   grid: Grid;
   sesiones: Sesion[];
 }
-
-const falla = (codigo: CodigoCambioHorario, mensaje: string, extra: Partial<ConstructorParameters<typeof CambioHorarioError>[0]> = {}): never => {
-  throw new CambioHorarioError({ codigo, paso: 'cambio de profesor', mensaje, ...extra });
-};
-const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 /**
  * Elegibilidad (la de la Fase 1), recuperaciones y sesiones actuales. LANZA
@@ -156,7 +164,7 @@ export async function cargarAlumnoWith(db: Db, studentId: string): Promise<Conte
 // ── Candidatos ────────────────────────────────────────────────────────────────
 
 /** Por qué un profesor no es candidato. Mismos códigos que el núcleo de transferencia. */
-export type MotivoDescarte = 'PROFESOR_NO_EXISTE' | 'PROFESOR_ARCHIVADO' | 'PROFESOR_DE_PRUEBA' | 'MISMO_PROFESOR' | 'CALENDARIO_SIN_ACTUALIZAR';
+export type MotivoDescarte = 'PROFESOR_ARCHIVADO' | 'PROFESOR_DE_PRUEBA' | 'MISMO_PROFESOR' | 'CALENDARIO_SIN_ACTUALIZAR';
 
 export interface Candidatos {
   profesores: ProfesorCandidato[];
@@ -166,34 +174,11 @@ export interface Candidatos {
   descartes: Map<string, MotivoDescarte>;
 }
 
-/**
- * El candidato `id`, o LANZA con el motivo exacto por el que no lo es (el mismo
- * error que daría el núcleo de transferencia, o CALENDARIO_SIN_ACTUALIZAR).
- */
-export function exigirCandidato(c: Candidatos, id: string): ProfesorCandidato {
-  const p = c.profesores.find(x => x.id === id);
-  if (p) return p;
-  const motivo = c.descartes.get(id) ?? 'PROFESOR_NO_EXISTE';
-  if (motivo === 'CALENDARIO_SIN_ACTUALIZAR') {
-    return falla('CALENDARIO_SIN_ACTUALIZAR', `el calendario del profesor ${id} lleva más de 30 días sin revisar`);
-  }
-  throw new TransferenciaError({ codigo: motivo, paso: 'cambio de profesor', mensaje: `el profesor ${id} no es candidato (${motivo})` });
-}
-
-/**
- * Profesores a los que el alumno puede pasarse, ya con calendario y reservas.
- * Sin orden (lo pone quien llama). `soloId`: limita a ese profesor (POST y
- * profesor fijado), con las mismas exclusiones.
- */
-export async function candidatosWith(
-  db: Db, opts: { profesorActual: string; ahora: number; soloId?: string },
-): Promise<Candidatos> {
-  let q = db.from('teachers').select('id, name, archived_at, calendar_start_hour, calendar_end_hour');
-  if (opts.soloId) q = q.eq('id', opts.soloId);
-  const { data: ts, error } = await q;
+/** Profesores a los que el alumno puede pasarse, ya con calendario y reservas. Ordenados por id. */
+export async function candidatosWith(db: Db, opts: { profesorActual: string; ahora: number }): Promise<Candidatos> {
+  const { data: ts, error } = await db.from('teachers').select('id, name, archived_at, calendar_start_hour, calendar_end_hour');
   if (error) return falla('ERROR_LECTURA', `no se pudieron leer los profesores: ${error.message}`);
   const descartes = new Map<string, MotivoDescarte>();
-  if (opts.soloId && !(ts ?? []).length) descartes.set(opts.soloId, 'PROFESOR_NO_EXISTE');
   const vivos = ((ts ?? []) as Array<{ id: string; name: string; archived_at?: string | null; calendar_start_hour?: number | null; calendar_end_hour?: number | null }>)
     .filter(t => {
       const motivo: MotivoDescarte | null = t.archived_at ? 'PROFESOR_ARCHIVADO'
@@ -201,7 +186,8 @@ export async function candidatosWith(
           : t.id === opts.profesorActual ? 'MISMO_PROFESOR' : null;
       if (motivo) descartes.set(t.id, motivo);
       return !motivo;
-    });
+    })
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   if (vivos.length === 0) return { profesores: [], grids: new Map(), reservas: new Map(), descartes };
 
   const ids = vivos.map(t => t.id);
@@ -216,10 +202,14 @@ export async function candidatosWith(
     if (!ok) descartes.set(t.id, 'CALENDARIO_SIN_ACTUALIZAR');
     return ok;
   });
-  const grids = new Map(filas.filter(f => conCalendario.some(t => t.id === f.teacher_id)).map(f => [f.teacher_id, (f.grid ?? {}) as Grid]));
+  const fila = new Map(filas.map(f => [f.teacher_id, f]));
+  const grids = new Map(conCalendario.map(t => [t.id, (fila.get(t.id)?.grid ?? {}) as Grid]));
   const reservas = await liveReservationsOfTeachersWith(db, conCalendario.map(t => t.id), opts.ahora);
   return {
-    profesores: conCalendario.map(t => ({ id: t.id, nombre: t.name, horaInicio: t.calendar_start_hour ?? null, horaFin: t.calendar_end_hour ?? null })),
+    profesores: conCalendario.map(t => ({
+      id: t.id, nombre: t.name, horaInicio: t.calendar_start_hour ?? null, horaFin: t.calendar_end_hour ?? null,
+      calendarioActualizadoEn: fila.get(t.id)?.updated_at ?? null,
+    })),
     grids, reservas, descartes,
   };
 }
@@ -236,8 +226,17 @@ export function bloquesDeProfesor(c: Candidatos, p: ProfesorCandidato, duracion:
   });
 }
 
-const dto = (p: ProfesorCandidato, b: BloqueLibre): HuecoProfesorDto =>
-  ({ profesor: { id: p.id, nombre: p.nombre }, dia: b.dia, hora: b.horaInicio, duracion: b.duracionHoras, fecha_primera_clase: b.fecha });
+/**
+ * ¿El profesor tiene libres TODOS esos horarios? Cada uno con evaluarBloque en
+ * modo FIJO: primera clase a más de 24 h y libre según esHuecoLibreParaAlumno.
+ */
+export function cubreTodos(c: Candidatos, p: ProfesorCandidato, horarios: Horario[], ahora: number): boolean {
+  const grid = c.grids.get(p.id) ?? {};
+  return horarios.every(h => evaluarBloque(grid, { dia: h.dia, hora: Number(h.hora.slice(0, 2)) }, {
+    modo: 'fijo', duracionHoras: h.duracion, horaInicio: p.horaInicio, horaFin: p.horaFin,
+    reservas: c.reservas.get(p.id) ?? [], ahora,
+  }).ok);
+}
 
 export interface HuecosEntreProfesoresParams {
   client: Db;
@@ -245,48 +244,64 @@ export interface HuecosEntreProfesoresParams {
   alumno: string;
   dia?: string | null;
   franja?: string | null;
-  /** Con él: los huecos de ESE profesor para cada sesión del alumno. */
-  profesorFijado?: string | null;
+  /** Horarios ya elegidos para las primeras sesiones, en el orden de `sesiones`. */
+  elegidos?: Horario[] | null;
   ahora?: number;
 }
 
-export type HuecosEntreProfesores =
-  | { tipo: 'lista'; sesiones: Array<{ dia: string; hora: string; duracion: number }>; huecos: HuecoProfesorDto[] }
-  | { tipo: 'profesor'; profesor: { id: string; nombre: string }; sesiones: Array<{ indice: number; dia: string; hora: string; duracion: number; huecos: HuecoProfesorDto[] }> };
+export interface HuecosEntreProfesores {
+  /** Sesiones actuales del alumno, en orden: elegidos[i] es el horario nuevo de sesiones[i]. */
+  sesiones: Horario[];
+  /** La sesión para la que son los horarios (la de índice elegidos.length), o null si ya están todas elegidas. */
+  siguiente: { indice: number; duracion: number } | null;
+  /** false si ningún profesor candidato tiene ya libres todos los elegidos: hay que volver a empezar. */
+  elegidos_disponibles: boolean;
+  /** Horarios posibles para `siguiente`, sin repetir, por día y hora. Sin datos del profesor. */
+  horarios: HorarioDto[];
+}
+
+const ordenHorario = (a: Horario, b: Horario) =>
+  DIAS.indexOf(a.dia) - DIAS.indexOf(b.dia) || a.hora.localeCompare(b.hora) || a.duracion - b.duracion;
 
 /**
- * Sin profesorFijado: para cada candidato (en orden estable), sus bloques FIJOS
- * libres para la duración de la PRIMERA sesión del alumno, filtrados por día y
- * franja. Con profesorFijado: los bloques de ese profesor para CADA sesión del
- * alumno (la primera incluida, por si quiere cambiarla), en el orden de sus
- * sesiones. LANZA CambioHorarioError.
+ * Horarios para la siguiente sesión del alumno (ver la cabecera). LANZA
+ * CambioHorarioError: DATOS_INVALIDOS (filtros o elegidos mal formados o que
+ * chocan entre sí), SESIONES_NO_COINCIDEN (más elegidos que sesiones, o uno con
+ * otra duración que su sesión) y los de la carga del alumno.
  */
 export async function huecosEntreProfesores(p: HuecosEntreProfesoresParams): Promise<HuecosEntreProfesores> {
   const ahora = p.ahora ?? Date.now();
   if (p.dia && !DIAS.includes(p.dia)) falla('DATOS_INVALIDOS', `día desconocido: ${p.dia}`);
   if (p.franja && !(FRANJAS as readonly string[]).includes(p.franja)) falla('DATOS_INVALIDOS', `franja desconocida: ${p.franja} (${FRANJAS.join(', ')})`);
   const franja = (p.franja || null) as Franja | null;
-  const filtra = (bs: BloqueLibre[]) => bs.filter(b => (!p.dia || b.dia === p.dia) && enFranja(b, franja));
+  const elegidos = p.elegidos ?? [];
+  if (!Array.isArray(elegidos)) falla('DATOS_INVALIDOS', 'elegidos tiene que ser una lista');
+  validarHorarios(elegidos, 'elegidos');
 
   const alumno = await cargarAlumnoWith(p.client, p.alumno);
-  const fijado = p.profesorFijado?.trim() || null;
-  const c = await candidatosWith(p.client, { profesorActual: alumno.profesorActual, ahora, soloId: fijado ?? undefined });
-
-  if (fijado) {
-    // Mismo motivo que daría el POST: no existe, archivado, prueba, el actual o sin actualizar.
-    const prof = exigirCandidato(c, fijado);
-    return {
-      tipo: 'profesor', profesor: { id: prof.id, nombre: prof.nombre },
-      sesiones: alumno.sesiones.map((s, indice) => ({
-        indice, dia: s.dia, hora: s.hora, duracion: s.duracion,
-        huecos: filtra(bloquesDeProfesor(c, prof, s.duracion, ahora)).map(b => dto(prof, b)),
-      })),
-    };
+  const sesiones = alumno.sesiones.map(s => ({ dia: s.dia, hora: s.hora, duracion: s.duracion }));
+  if (elegidos.length > sesiones.length) {
+    falla('SESIONES_NO_COINCIDEN', `llegaron ${elegidos.length} horarios elegidos y tiene ${sesiones.length} sesión(es)`);
   }
+  elegidos.forEach((e, i) => {
+    if (e.duracion !== sesiones[i].duracion) {
+      falla('SESIONES_NO_COINCIDEN', `el horario elegido ${i + 1} dura ${e.duracion} h y su sesión ${i + 1} dura ${sesiones[i].duracion} h`);
+    }
+  });
 
-  const fecha = getSpainParts(new Date(ahora)).dateStr;
-  const duracion = alumno.sesiones[0].duracion;
-  const huecos = ordenEstable(c.profesores, p.alumno, fecha)
-    .flatMap(prof => filtra(bloquesDeProfesor(c, prof, duracion, ahora)).map(b => dto(prof, b)));
-  return { tipo: 'lista', sesiones: alumno.sesiones.map(s => ({ dia: s.dia, hora: s.hora, duracion: s.duracion })), huecos };
+  const c = await candidatosWith(p.client, { profesorActual: alumno.profesorActual, ahora });
+  const validos = c.profesores.filter(prof => cubreTodos(c, prof, elegidos, ahora));
+  const siguiente = elegidos.length < sesiones.length ? { indice: elegidos.length, duracion: sesiones[elegidos.length].duracion } : null;
+  if (!siguiente) return { sesiones, siguiente, elegidos_disponibles: validos.length > 0, horarios: [] };
+
+  const vistos = new Map<string, HorarioDto>();
+  for (const prof of validos) {
+    for (const b of bloquesDeProfesor(c, prof, siguiente.duracion, ahora)) {
+      const h: HorarioDto = { dia: b.dia, hora: b.horaInicio, duracion: b.duracionHoras, fecha_primera_clase: b.fecha };
+      if ((p.dia && b.dia !== p.dia) || !enFranja(b, franja) || elegidos.some(e => chocan(e, h))) continue;
+      const k = `${h.dia}|${h.hora}|${h.duracion}`;
+      if (!vistos.has(k)) vistos.set(k, h);
+    }
+  }
+  return { sesiones, siguiente, elegidos_disponibles: validos.length > 0, horarios: [...vistos.values()].sort(ordenHorario) };
 }

@@ -32,7 +32,7 @@ export function depsServidor(admin: SupabaseClient, base: string = PUBLIC_APP_UR
         { id: string; name: string; email: string | null; notification_email: string | null };
       return sendNewStudentEmail(
         { id: t.id, name: t.name, email: t.email, notificationEmail: t.notification_email },
-        { studentName: d.studentName, studentEmail: d.studentEmail, plan: d.plan, level: d.level, slots: d.slots, startDate: d.startDate },
+        { studentName: d.studentName, studentEmail: d.studentEmail, plan: d.plan, level: d.level, slots: d.slots, startDate: d.startDate, ficha: d.ficha },
       );
     },
     async enviarBienvenidaAlumno(assignmentId) {

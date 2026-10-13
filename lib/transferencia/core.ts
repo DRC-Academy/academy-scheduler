@@ -62,6 +62,7 @@ import { EVENT_POINTS } from '@/lib/scoringConstants';
 import { getSpainParts } from '@/lib/spainTime';
 import { TransferenciaError, type CodigoTransferencia } from '@/lib/transferencia/errors';
 import { abrirRegistro, cerrarRegistro, type ContextoRegistro } from '@/lib/transferencia/auditoria';
+import { cargarFichaAlumnoWith, textoCampanita, type FichaAlumnoNuevo } from '@/lib/fichaAlumnoNuevo';
 
 export { TransferenciaError } from '@/lib/transferencia/errors';
 export type { CodigoTransferencia } from '@/lib/transferencia/errors';
@@ -100,6 +101,8 @@ export interface DatosEmailProfeNuevo {
   level: string | null;
   slots: AssignedSlot[];
   startDate: string | null;
+  /** Ficha del alumno para el profesor que lo recibe (lib/fichaAlumnoNuevo). */
+  ficha: FichaAlumnoNuevo;
 }
 
 export interface TransferenciaDeps {
@@ -544,13 +547,21 @@ async function ejecutarTransferencia(
     }));
   }
 
-  // Profesor NUEVO: aviso y correo (mismo contenido que una asignación nueva).
-  await efecto(`aviso a ${destino.name}`, () => notifyNewAssignmentWith(db, destino.id, alumno, asg.student_email ?? ''));
+  // Profesor NUEVO: aviso y correo con la ficha del alumno (nivel, objetivo,
+  // horarios nuevos, perfil y últimas clases), para que tenga contexto para
+  // empezar. Tono neutro y sin el nombre del profesor anterior. La carga nunca
+  // lanza: lo que no se puede leer se omite.
+  const ficha = await cargarFichaAlumnoWith(db, {
+    studentId: asg.student_id, nombre: alumno, email: asg.student_email,
+    nivelAlta: asg.student_level, objetivo: typeof asg.objetivo === 'string' ? asg.objetivo : null,
+    plan: asg.plan, slots: slotsNuevos, profesorAnterior: from.name,
+  });
+  await efecto(`aviso a ${destino.name}`, () => notifyNewAssignmentWith(db, destino.id, alumno, asg.student_email ?? '', textoCampanita(ficha)));
   await efecto(`correo a ${destino.name}`, async () => {
     const ok = await deps.enviarEmailProfeNuevo({
       teacherId: destino.id, teacherName: destino.name, teacherEmail: destino.email,
       studentName: alumno, studentEmail: asg.student_email ?? '',
-      plan: asg.plan ?? null, level: asg.student_level ?? null, slots: slotsNuevos, startDate: asg.start_date ?? null,
+      plan: asg.plan ?? null, level: asg.student_level ?? null, slots: slotsNuevos, startDate: asg.start_date ?? null, ficha,
     });
     if (!ok) throw new Error('el envío no se confirmó');
   });

@@ -1,6 +1,8 @@
 // Disparo de emails desde el cliente, vía /api/emails.
 // Best-effort: nunca lanza — si el email falla, el flujo sigue igual.
 
+import type { FichaAlumnoNuevo } from '@/lib/fichaAlumnoNuevo';
+
 interface EmailPayload {
   type: 'new_student' | 'milestone' | 'circular' | 'bonus';
   /** Obligatorio salvo en la circular a todo el equipo. */
@@ -15,6 +17,8 @@ interface EmailPayload {
   level?: string | null;
   slots?: Array<{ day: string; hour: string }> | null;
   startDate?: string | null;
+  /** new_student de un cambio de profesor: la ficha del alumno (lib/fichaAlumnoNuevo). */
+  ficha?: FichaAlumnoNuevo | null;
   milestone?: number;
   title?: string;
   body?: string;

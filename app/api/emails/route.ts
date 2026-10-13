@@ -13,6 +13,7 @@ import {
   fetchTeacher, normalizePrefs, sendNewStudentEmail, sendMilestoneEmail, sendCircularEmail,
   sendCircularBatch, sendBonusAvailableEmail, type MilestoneNumber, type TeacherLike,
 } from '@/lib/emailNotifications';
+import { fichaRecibida } from '@/lib/fichaAlumnoNuevo';
 
 interface Body {
   type?: 'new_student' | 'milestone' | 'circular' | 'bonus';
@@ -28,6 +29,8 @@ interface Body {
   level?: string | null;
   slots?: Array<{ day: string; hour: string }> | null;
   startDate?: string | null;
+  /** Cambio de profesor (modal del panel): la ficha del alumno. */
+  ficha?: unknown;
   // milestone
   milestone?: number;
   // circular
@@ -81,6 +84,7 @@ export async function POST(request: Request): Promise<Response> {
           level: body.level,
           slots: body.slots,
           startDate: body.startDate,
+          ficha: fichaRecibida(body.ficha),
         });
         break;
 

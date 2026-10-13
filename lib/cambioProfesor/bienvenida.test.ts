@@ -31,7 +31,7 @@ async function cambiar(db: FakeDb) {
   const resultados: WelcomeResult[] = [];
   vi.setSystemTime(AHORA);
   await cambiarProfesorCore(db.client(), {
-    studentId: 's1', profesorId: 'tB',
+    studentId: 's1',
     destinos: [{ dia: 'Lunes', hora: '10:00', duracion: 2 }, { dia: 'Miércoles', hora: '18:00', duracion: 1 }],
   }, tp => transferirAlumnoCore(db.client(), tp, {
     enviarEmailProfeNuevo: async () => true,

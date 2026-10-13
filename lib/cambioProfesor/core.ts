@@ -1,45 +1,59 @@
-// Cambio de PROFESOR pedido por el alumno desde el LMS (Fase 2).
+// Cambio de PROFESOR pedido por el alumno desde el LMS (Fase 2, contrato v3).
 //
-// Valida lo que el núcleo de transferencia no mira y después le pasa el cambio
-// tal cual (lib/transferencia/core.ts, motivo 'autoservicio', origen 'lms': sin
-// scoring y con sus criterios estrictos: HORAS_NO_COINCIDEN, casillas con
+// El alumno elige SOLO horarios (uno por sesión); Gestión elige el profesor en
+// el momento y le pasa el cambio al núcleo de transferencia de siempre
+// (lib/transferencia/core.ts, motivo 'autoservicio', origen 'lms': sin scoring y
+// con sus criterios estrictos: HORAS_NO_COINCIDEN, casillas con
 // esHuecoLibreParaAlumno, archivados, perfil de prueba, recuperaciones). Los
-// efectos (correo y campanita al profesor nuevo, bienvenida 'cambio', campanita
-// al anterior, aviso student_transferred_admin) son los de ese núcleo.
+// efectos (correo con la ficha y campanita al profesor nuevo, bienvenida
+// 'cambio', campanita al anterior, aviso student_transferred_admin) son los de
+// ese núcleo.
 //
 // Lo que se valida aquí, con las funciones de siempre:
 //   · elegibilidad y recuperaciones (Fase 1): cargarAlumnoWith;
-//   · que los destinos cubran TODAS sus sesiones con las mismas duraciones;
-//   · antelación de la clase ACTUAL (evaluarOrigen, FIJO): la próxima clase de
-//     cada sesión tiene que empezar a más de 24 h; si no, ANTELACION_INSUFICIENTE
-//     con disponible_desde = el final de esa clase;
-//   · el profesor destino es candidato (mismas exclusiones que el listado);
-//   · cada destino, con evaluarBloque en modo FIJO (primera clase a más de 24 h y
-//     libre según esHuecoLibreParaAlumno), y sin solaparse entre ellos.
+//   · que los destinos cubran TODAS sus sesiones con las mismas duraciones, sin
+//     solaparse ni ir seguidos entre ellos;
+//   · antelación de la clase ACTUAL (evaluarOrigen, FIJO) y de la NUEVA (cada
+//     destino empieza a más de 24 h);
+//   · candidatos (mismas exclusiones que el listado) que tengan libres TODOS los
+//     destinos (evaluarBloque en modo FIJO).
 //
-// Idempotencia: la de transfer_requests. Antes de validar se mira si la clave ya
-// resolvió un cambio: un reintento de un cambio hecho devuelve lo guardado aunque
-// el alumno ya no esté con el profesor de antes.
+// Elección: elegirProfesor (lib/cambioProfesor/elegirProfesor.ts). Si al
+// transferir alguien ocupó un hueco entre medias (HUECO_YA_OCUPADO o
+// SLOT_NO_DISPONIBLE del núcleo, sin nada a medias), se prueba con el siguiente
+// candidato que cubra todo, hasta MAX_INTENTOS; si no queda ninguno,
+// HUECO_YA_OCUPADO.
+//
+// Idempotencia: la de transfer_requests, con una clave por profesor probado
+// (`<clave>|<profesor>`), porque el núcleo no deja usar la misma clave con dos
+// profesores. Antes de validar se mira si alguna de esas claves ya resolvió el
+// cambio: un reintento de un cambio hecho devuelve lo guardado aunque el alumno
+// ya no esté con el profesor de antes.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { AssignedSlot } from '@/types';
-import { DURACION_MAX_HORAS, clavesDeBloque, evaluarBloque } from '@/lib/huecos/huecos';
+import { ANTELACION_MINIMA_MS, proximaFechaDe } from '@/lib/huecos/huecos';
+import { spainWallClockToEpoch } from '@/lib/spainTime';
 import { evaluarOrigen, type MomentoEspana } from '@/lib/cambioHorario/origen';
 import { CambioHorarioError, type CodigoCambioHorario } from '@/lib/cambioHorario/errors';
 import { TransferenciaError } from '@/lib/transferencia/errors';
 import type { TransferenciaParams, TransferenciaResultado } from '@/lib/transferencia/core';
-import { cargarAlumnoWith, candidatosWith, exigirCandidato, type ContextoAlumno } from '@/lib/cambioProfesor/huecos';
+import {
+  cargarAlumnoWith, candidatosWith, clavesDeHorario, cubreTodos, validarHorarios,
+  type ContextoAlumno, type Horario, type ProfesorCandidato,
+} from '@/lib/cambioProfesor/huecos';
+import { elegirProfesor } from '@/lib/cambioProfesor/elegirProfesor';
 
 type Db = SupabaseClient;
 
-const DIAS = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+export type DestinoProfesorDto = Horario;
 
-export interface DestinoProfesorDto { dia: string; hora: string; duracion: number }
+/** Profesores que se prueban como mucho en un POST (el primero y dos más si alguien ocupa un hueco). */
+export const MAX_INTENTOS = 3;
 
 export interface CambioProfesorParams {
   /** students.id */
   studentId: string;
-  profesorId: string;
   /** Una por sesión del alumno, con las mismas duraciones. */
   destinos: DestinoProfesorDto[];
   idempotencyKey?: string;
@@ -73,38 +87,66 @@ export function bloqueoPorAntelacion(alumno: ContextoAlumno, ahora: number): { c
   };
 }
 
-/** Si la clave ya resolvió un cambio: su resultado ('ok'), EN_CURSO, o null (seguir). */
-async function porClave(db: Db, key: string | undefined, profesorId: string): Promise<TransferenciaResultado | null> {
+/** Clave de idempotencia del intento con un profesor. */
+export const claveDeIntento = (key: string, profesorId: string) => `${key}|${profesorId}`;
+
+/** Si la clave ya resolvió un cambio (con cualquier profesor): su resultado, EN_CURSO, o null (seguir). */
+async function porClave(db: Db, key: string | undefined, studentId: string): Promise<TransferenciaResultado | null> {
   if (!key) return null;
-  const { data, error } = await db.from('transfer_requests').select('estado, resultado, to_teacher_id').eq('idempotency_key', key).maybeSingle();
-  if (error || !data) return null;   // sin la tabla, el núcleo sigue sin registro, como siempre
-  const fila = data as { estado: string; resultado: TransferenciaResultado | null; to_teacher_id: string };
-  if (fila.to_teacher_id !== profesorId) falla('DATOS_INVALIDOS', `la clave ${key} ya se usó para otro cambio`);
-  if (fila.estado === 'ok' && fila.resultado) return fila.resultado;
-  if (fila.estado === 'en_curso') {
+  const { data, error } = await db.from('transfer_requests').select('estado, resultado, assignment_id')
+    .like('idempotency_key', claveDeIntento(key, '%'));
+  if (error || !data?.length) return null;   // sin la tabla, el núcleo sigue sin registro, como siempre
+  const filas = data as Array<{ estado: string; resultado: TransferenciaResultado | null; assignment_id: string }>;
+  const hecha = filas.find(f => f.estado === 'ok' && f.resultado);
+  if (hecha) {
+    const { data: asg } = await db.from('assignments').select('student_id').eq('id', hecha.assignment_id).maybeSingle();
+    const dueño = (asg as { student_id?: string | null } | null)?.student_id;
+    if (dueño && dueño !== studentId) falla('DATOS_INVALIDOS', `la clave ${key} ya se usó para el cambio de otro alumno`);
+    return hecha.resultado;
+  }
+  if (filas.some(f => f.estado === 'en_curso')) {
     throw new TransferenciaError({ codigo: 'EN_CURSO', paso: 'idempotencia', mensaje: `ya hay un cambio de profesor en curso con la clave ${key}` });
   }
   return null;   // 'error' o 'compensada': se puede reintentar con la misma clave
 }
 
+/** Asignaciones activas por profesor (status null cuenta como activa). Si no se pueden leer, todos a 0. */
+async function asignacionesActivasWith(db: Db, ids: string[]): Promise<Map<string, number>> {
+  const n = new Map(ids.map(id => [id, 0]));
+  if (!ids.length) return n;
+  const PAGINA = 1000;
+  for (let desde = 0; ; desde += PAGINA) {
+    const { data, error } = await db.from('assignments').select('teacher_id, status')
+      .in('teacher_id', ids).or('status.is.null,status.eq.active').order('id').range(desde, desde + PAGINA - 1);
+    if (error) {
+      console.error('[cambio de profesor] no se pudieron contar las asignaciones activas; se elige solo por calendario e id:', error.message);
+      return new Map(ids.map(id => [id, 0]));
+    }
+    const filas = (data ?? []) as Array<{ teacher_id: string }>;
+    for (const f of filas) n.set(f.teacher_id, (n.get(f.teacher_id) ?? 0) + 1);
+    if (filas.length < PAGINA) return n;
+  }
+}
+
+/** ¿El núcleo falló porque alguien ocupó un hueco, sin dejar nada a medias? Entonces se prueba con otro profesor. */
+const huecoPerdido = (err: unknown): boolean =>
+  err instanceof TransferenciaError && (err.codigo === 'HUECO_YA_OCUPADO' || err.codigo === 'SLOT_NO_DISPONIBLE') && err.compensada !== false;
+
 /**
- * Cambia de profesor al alumno con todas sus sesiones. LANZA CambioHorarioError
- * (validación de esta capa) o TransferenciaError (núcleo de transferencia).
+ * Cambia de profesor al alumno con todas sus sesiones; el profesor lo elige
+ * Gestión. LANZA CambioHorarioError (validación de esta capa) o
+ * TransferenciaError (núcleo de transferencia).
  */
 export async function cambiarProfesorCore(
   db: Db, p: CambioProfesorParams, transferir: Transferir, ahora: number = Date.now(),
 ): Promise<TransferenciaResultado> {
   // ── Datos ─────────────────────────────────────────────────────────────────
-  const profesorId = (p.profesorId ?? '').trim();
-  if (!profesorId) falla('DATOS_INVALIDOS', 'falta profesor_id');
   if (!Array.isArray(p.destinos)) falla('DATOS_INVALIDOS', 'faltan los destinos');
-  for (const d of p.destinos) {
-    if (!d || !DIAS.includes(d.dia) || !/^\d{2}:00$/.test(d.hora ?? '') || !Number.isInteger(d.duracion) || d.duracion < 1 || d.duracion > DURACION_MAX_HORAS) {
-      falla('DATOS_INVALIDOS', `destino mal formado: ${JSON.stringify(d)}`);
-    }
-  }
+  const key = p.idempotencyKey?.trim() || undefined;
+  if (key && !/^[\w.:-]{1,128}$/.test(key)) falla('DATOS_INVALIDOS', 'idempotency_key: hasta 128 letras, números, guiones, puntos o dos puntos');
+  validarHorarios(p.destinos, 'destinos');
 
-  const repetido = await porClave(db, p.idempotencyKey, profesorId);
+  const repetido = await porClave(db, key, p.studentId);
   if (repetido) return repetido;
 
   // ── Alumno: elegibilidad, recuperaciones y sesiones actuales ───────────────
@@ -124,38 +166,48 @@ export async function cambiarProfesorCore(
   const bloqueo = bloqueoPorAntelacion(alumno, ahora);
   if (bloqueo) falla(bloqueo.codigo, bloqueo.mensaje, { disponibleDesde: bloqueo.disponibleDesde });
 
-  // ── Profesor destino y destinos ───────────────────────────────────────────
-  const c = await candidatosWith(db, { profesorActual: alumno.profesorActual, ahora, soloId: profesorId });
-  const prof = exigirCandidato(c, profesorId);
-  const grid = c.grids.get(prof.id) ?? {};
-
-  const usadas = new Set<string>();
-  const slots: AssignedSlot[] = [];
+  // Antelación de la clase NUEVA: no depende del profesor.
   for (const d of p.destinos) {
-    const claves = clavesDeBloque(d.dia, Number(d.hora.slice(0, 2)), d.duracion);
-    if (!claves) falla('DATOS_INVALIDOS', `el bloque ${d.dia} ${d.hora} de ${d.duracion} h pasa de las 23:00`);
-    const solapadas = claves!.filter(k => usadas.has(k));
-    if (solapadas.length) falla('DATOS_INVALIDOS', `dos destinos se solapan en ${solapadas.join(', ')}`, { detalles: solapadas });
-    claves!.forEach(k => usadas.add(k));
-
-    const ev = evaluarBloque(grid, { dia: d.dia, hora: Number(d.hora.slice(0, 2)) }, {
-      modo: 'fijo', duracionHoras: d.duracion, horaInicio: prof.horaInicio, horaFin: prof.horaFin,
-      reservas: c.reservas.get(prof.id) ?? [], ahora,
-    });
-    if (!ev.ok) falla(ev.motivo, `${prof.nombre}: el hueco ${d.dia} ${d.hora} no se puede usar${ev.detalle ? ` (${ev.detalle})` : ''}`, { detalles: ev.detalle ? [ev.detalle] : [] });
-    for (const k of claves!) slots.push({ day: d.dia, hour: k.slice(k.lastIndexOf('_') + 1) });
+    const h = Number(d.hora.slice(0, 2));
+    if (!(spainWallClockToEpoch(proximaFechaDe(d.dia, h, ahora), h) > ahora + ANTELACION_MINIMA_MS)) {
+      falla('ANTELACION_INSUFICIENTE', `la primera clase de ${d.dia} ${d.hora} empezaría en menos de 24 h`);
+    }
   }
 
-  // ── Transferencia: el núcleo de siempre ───────────────────────────────────
-  return transferir({
-    assignmentId: alumno.assignmentId,
-    toTeacherId: prof.id,
-    slots,
-    motivo: 'autoservicio',
-    origen: 'lms',
-    actor: `alumno:${p.studentId}`,
-    idempotencyKey: p.idempotencyKey,
-  });
+  // ── Profesores que cubren TODOS los destinos ───────────────────────────────
+  const c = await candidatosWith(db, { profesorActual: alumno.profesorActual, ahora });
+  const cubren = c.profesores.filter(prof => cubreTodos(c, prof, p.destinos, ahora));
+  if (!cubren.length) {
+    falla('SLOT_NO_DISPONIBLE', `ningún profesor tiene libres a la vez ${p.destinos.map(d => `${d.dia} ${d.hora} (${d.duracion} h)`).join(', ')}`);
+  }
+  const activas = await asignacionesActivasWith(db, cubren.map(x => x.id));
+  const aElegir = cubren.map(x => ({ ...x, asignacionesActivas: activas.get(x.id) ?? 0 }));
+
+  const slots: AssignedSlot[] = p.destinos.flatMap(d =>
+    clavesDeHorario(d).map(k => ({ day: d.dia, hour: k.slice(k.lastIndexOf('_') + 1) })));
+
+  // ── Transferencia: el núcleo de siempre, con reintento en otro profesor ────
+  const probados: ProfesorCandidato[] = [];
+  for (let intento = 0; intento < MAX_INTENTOS; intento++) {
+    const prof = elegirProfesor(aElegir.filter(x => !probados.some(y => y.id === x.id)));
+    if (!prof) break;
+    probados.push(prof);
+    try {
+      return await transferir({
+        assignmentId: alumno.assignmentId,
+        toTeacherId: prof.id,
+        slots,
+        motivo: 'autoservicio',
+        origen: 'lms',
+        actor: `alumno:${p.studentId}`,
+        idempotencyKey: key ? claveDeIntento(key, prof.id) : undefined,
+      });
+    } catch (err) {
+      if (!huecoPerdido(err)) throw err;
+      console.warn(`[cambio de profesor] ${alumno.alumno}: ${prof.id} ya no tiene libre todo (${(err as Error).message}); se prueba con otro.`);
+    }
+  }
+  return falla('HUECO_YA_OCUPADO', `se probó con ${probados.length} profesor(es) y en todos alguien ocupó antes alguno de esos horarios`);
 }
 
 // ── GET estado ────────────────────────────────────────────────────────────────

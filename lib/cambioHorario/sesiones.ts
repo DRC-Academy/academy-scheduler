@@ -46,3 +46,13 @@ export function sesionesDelAlumno(grid: Grid, alumno: string): Sesion[] {
   }
   return out;
 }
+
+/**
+ * Las mismas sesiones (horas seguidas del mismo día) a partir de una lista de
+ * horarios por hora (assignments.slots), por día de la semana y hora.
+ */
+export function sesionesDeSlots(slots: Array<{ day: string; hour: string }>): Array<{ dia: string; hora: string; duracion: number }> {
+  const grid: Grid = {};
+  for (const s of slots) grid[`${s.day}_${s.hour}`] = { state: 'ocupado', student: '·' };
+  return sesionesDelAlumno(grid, '·').map(({ dia, hora, duracion }) => ({ dia, hora, duracion }));
+}

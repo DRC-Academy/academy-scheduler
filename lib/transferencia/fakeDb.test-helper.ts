@@ -1,6 +1,6 @@
 // Cliente de Supabase FALSO, en memoria, para probar el núcleo de transferencia
 // sin base. Cubre solo lo que usan el núcleo y sus stores: select/insert/update/
-// upsert con eq, in, is, gte, or (eq/is), order, limit, maybeSingle, single,
+// upsert con eq, in, is, gte, like, ilike, or (eq/is), order, limit, maybeSingle, single,
 // count head, y la RPC apply_calendar_patch con la misma regla que la real.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -96,9 +96,12 @@ class Query implements PromiseLike<{ data: unknown; error: unknown; count?: numb
   is(c: string, v: null) { this.filters.push(r => r[c] == v); return this; }
   gte(c: string, v: string) { this.filters.push(r => String(r[c] ?? '') >= v); return this; }
   /** Sin distinguir mayúsculas; % es comodín. */
-  ilike(c: string, patron: string) {
+  ilike(c: string, patron: string) { return this.patron(c, patron, 'i'); }
+  /** Distinguiendo mayúsculas; % es comodín. */
+  like(c: string, patron: string) { return this.patron(c, patron, ''); }
+  private patron(c: string, patron: string, flags: string) {
     const escapado = patron.split('%').map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*');
-    const re = new RegExp(`^${escapado}$`, 'i');
+    const re = new RegExp(`^${escapado}$`, flags);
     this.filters.push(r => re.test(String(r[c] ?? '')));
     return this;
   }

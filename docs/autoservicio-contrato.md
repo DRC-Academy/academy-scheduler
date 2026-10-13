@@ -1,6 +1,6 @@
 # Contrato Gestión ↔ LMS: autoservicio de cambio de horario y de profesor
 
-Versión 2 · octubre de 2026 · implementado en Gestión (academy-scheduler).
+Versión 3 · 13 de octubre de 2026 · implementado en Gestión (academy-scheduler).
 
 El alumno, desde el LMS, cambia el horario de sus clases **con su mismo
 profesor**, de dos formas:
@@ -9,8 +9,29 @@ profesor**, de dos formas:
   hueco. El resto de su horario no cambia.
 - **«Desde ahora»** (`modo: "fijo"`): cambia su horario recurrente.
 
-Y desde la versión 2 también puede **cambiar de profesor** (endpoints 4 y 5):
-pasa TODAS sus sesiones a otro profesor, con las mismas duraciones.
+Y también puede **cambiar de profesor** (endpoints 4 y 5): pasa TODAS sus
+sesiones a otro profesor, con las mismas duraciones. **Desde la versión 3 el
+alumno no ve ni elige profesores**: elige solo horarios, uno por sesión, y
+Gestión le asigna el profesor al confirmar.
+
+### Cambios de la versión 3 (cambio de profesor)
+
+- `GET huecos-profesores` devuelve **horarios sin ningún dato del profesor** (ni
+  id ni nombre), paso a paso con `elegidos`. Ya no existen `profesor_id`, `tipo`,
+  `huecos` ni el orden aleatorio por profesor.
+- `POST cambiar-profesor` ya no lleva `profesor_id` (si llega, se ignora).
+  Gestión elige el profesor y, si alguien ocupa un hueco mientras guarda, prueba
+  con otro.
+- La respuesta 200 trae `profesor: { nombre }` (solo el nombre, para la pantalla
+  final). Ya no trae `profesor_nuevo` ni `profesor_anterior`.
+- El LMS deja de recibir `MISMO_PROFESOR`, `PROFESOR_NO_EXISTE`,
+  `PROFESOR_ARCHIVADO`, `PROFESOR_DE_PRUEBA` y `CALENDARIO_SIN_ACTUALIZAR` en
+  estos dos endpoints. No hay códigos nuevos: «ningún profesor tiene libres a la
+  vez esos horarios» es `SLOT_NO_DISPONIBLE`, y «alguien los ocupó mientras se
+  guardaba, también con los otros profesores» es `HUECO_YA_OCUPADO`.
+- Dos horarios del cambio que van **seguidos** el mismo día (10–12 y 12–13) ya
+  no valen: en el calendario serían una sola clase de 3 h. GET no los ofrece y
+  POST los rechaza con `DATOS_INVALIDOS`, igual que si se solapan.
 
 ## Principio
 
@@ -97,12 +118,9 @@ Además, en el **cambio de profesor**:
 
 | HTTP | `codigo` | Cuándo |
 |---|---|---|
-| 422 | `SESIONES_NO_COINCIDEN` | Los `destinos` no son uno por cada sesión actual con su misma duración: falta alguna, sobra alguna o una duración no coincide (también con `destinos: []`) |
-| 422 | `MISMO_PROFESOR` | El profesor elegido es el que ya tiene |
-| 404 | `PROFESOR_NO_EXISTE` | No existe ese profesor |
-| 409 | `PROFESOR_ARCHIVADO` | Ya no está en la academia |
-| 422 | `PROFESOR_DE_PRUEBA` | Es el perfil de prueba |
-| 409 | `CALENDARIO_SIN_ACTUALIZAR` | El calendario del profesor ELEGIDO lleva más de 30 días sin revisar |
+| 422 | `SESIONES_NO_COINCIDEN` | Los `destinos` (o los `elegidos` de GET) no son uno por cada sesión actual con su misma duración: falta alguna, sobra alguna o una duración no coincide (también con `destinos: []`) |
+| 409 | `SLOT_NO_DISPONIBLE` | Ningún profesor tiene libres **a la vez** todos los destinos (volver a elegir desde GET) |
+| 409 | `HUECO_YA_OCUPADO` | Alguien ocupó un horario mientras se guardaba, con el profesor elegido y con los siguientes que lo cubrían (hasta 3); no se escribió nada |
 | 422 | `HORAS_NO_COINCIDEN` | Los destinos no suman las horas semanales de su plan |
 | 409 | `ASIGNACION_CAMBIADA` | Su asignación cambió mientras se guardaba (no se escribió nada) |
 | 409 | `ASIGNACION_INACTIVA` | Su asignación ya no está activa |
@@ -250,8 +268,11 @@ después. Por eso hay que volver a consultar el estado.
   profesor (sí impide cambiar de horario con él): puede salir
   `elegible: false` con `CALENDARIO_SIN_ACTUALIZAR` y `puede_cambiar_profesor.puede: true`.
   **Decisión cerrada (12/10/2026):** se queda así a propósito; el alumno se va de
-  ese profesor, así que su calendario no cuenta. Solo cuenta el del profesor
-  ELEGIDO (`CALENDARIO_SIN_ACTUALIZAR` en `cambiar-profesor`).
+  ese profesor, así que su calendario no cuenta. Solo cuentan los de los
+  profesores a los que se puede pasar: un profesor con el calendario sin revisar
+  no es candidato (sus horarios no salen en el endpoint 4).
+- En ese caso GET estado llega con `sesiones: []`: las sesiones actuales para el
+  cambio de profesor salen de `sesiones` en el endpoint 4.
 
 ## 2. Huecos
 
@@ -347,43 +368,23 @@ Efectos en Gestión (el LMS no tiene que hacer nada):
 - Si falla un aviso o un email, el cambio **sigue hecho** (`ok: true`) y el
   equipo recibe una alerta.
 
-## 4. Huecos con otros profesores
+## 4. Horarios para cambiar de profesor
 
-`GET /api/lms/autoservicio/huecos-profesores?alumno_id=<id>[&dia=<día>][&franja=<franja>][&profesor_id=<id>]`
+`GET /api/lms/autoservicio/huecos-profesores?alumno_id=<id>[&elegidos=<JSON>][&dia=<día>][&franja=<franja>]`
 
-Para elegir profesor nuevo. Dos usos:
+El alumno **no ve profesores**. Elige un horario para cada una de sus sesiones,
+**de una en una y en el orden de `sesiones`**; en cada paso el LMS manda los que
+ya eligió en `elegidos` y Gestión devuelve los horarios posibles para la
+**siguiente** sesión. Ninguna respuesta lleva datos del profesor (ni id ni
+nombre).
 
-**a) Sin `profesor_id`: la lista de todos los profesores disponibles**, con sus
-huecos para la duración de la **primera** sesión del alumno.
-
-```json
-{
-  "ok": true,
-  "tipo": "lista",
-  "sesiones": [
-    { "dia": "Martes", "hora": "15:00", "duracion": 2 },
-    { "dia": "Jueves", "hora": "10:00", "duracion": 1 }
-  ],
-  "huecos": [
-    { "profesor": { "id": "t15", "nombre": "Carla" }, "dia": "Lunes", "hora": "10:00", "duracion": 2, "fecha_primera_clase": "2026-10-12" },
-    { "profesor": { "id": "t15", "nombre": "Carla" }, "dia": "Martes", "hora": "19:00", "duracion": 2, "fecha_primera_clase": "2026-10-13" },
-    { "profesor": { "id": "t8", "nombre": "Fran" }, "dia": "Viernes", "hora": "09:00", "duracion": 2, "fecha_primera_clase": "2026-10-16" }
-  ]
-}
-```
-
-- `sesiones`: sus sesiones actuales, en orden. El cambio tiene que darles destino
-  a TODAS, con las mismas duraciones.
-- **Profesores**: todos los de la academia excepto el suyo, los que ya no están,
-  el perfil de prueba y los que tienen el calendario sin revisar desde hace más
-  de 30 días. **No se ordenan por puntuación.**
-- **Orden**: aleatorio pero **estable** para el mismo alumno durante el día
-  (hora de España): la lista no cambia entre recargas; mañana, otro orden. Los
-  huecos de cada profesor vienen juntos.
-- Cada hueco es un horario **fijo** semanal; `fecha_primera_clase` es la primera
-  clase con él, siempre a más de 24 h.
-- `dia`: filtra por día (`Lunes`… `Sábado`, con tilde).
-- `franja`: por hora de **inicio** (España), las mismas franjas que el LMS:
+- `elegidos`: lista JSON de `{ "dia", "hora", "duracion" }`, **codificada en la
+  URL** (`encodeURIComponent(JSON.stringify(elegidos))`). `elegidos[i]` es el
+  horario nuevo de `sesiones[i]` y tiene que durar lo mismo. Sin `elegidos` (o
+  `[]`): la primera sesión.
+- `dia` y `franja`: filtros opcionales sobre los horarios devueltos (el LMS
+  también puede filtrar por su cuenta). `franja` va por hora de **inicio**
+  (España), las mismas franjas que el LMS:
 
   | `franja` | Horas de inicio |
   |---|---|
@@ -392,33 +393,74 @@ huecos para la duración de la **primera** sesión del alumno.
   | `tarde` | 15:00–19:59 |
   | `noche` | 20:00–23:59 y la madrugada (00:00–05:59) |
 
-  Otro valor → 422 `DATOS_INVALIDOS`. Vale también con `profesor_id`.
+  Otro valor → 422 `DATOS_INVALIDOS`.
 
-**b) Con `profesor_id`: los huecos de ese profesor para CADA sesión**, para que
-el alumno elija los de sus sesiones restantes (la primera también viene, por si
-la quiere cambiar).
+**Paso 1, sin `elegidos`** (sesiones de 2 h y 1 h):
 
 ```json
 {
   "ok": true,
-  "tipo": "profesor",
-  "profesor": { "id": "t15", "nombre": "Carla" },
   "sesiones": [
-    { "indice": 0, "dia": "Martes", "hora": "15:00", "duracion": 2,
-      "huecos": [ { "profesor": { "id": "t15", "nombre": "Carla" }, "dia": "Lunes", "hora": "10:00", "duracion": 2, "fecha_primera_clase": "2026-10-12" } ] },
-    { "indice": 1, "dia": "Jueves", "hora": "10:00", "duracion": 1,
-      "huecos": [ { "profesor": { "id": "t15", "nombre": "Carla" }, "dia": "Miércoles", "hora": "18:00", "duracion": 1, "fecha_primera_clase": "2026-10-14" } ] }
+    { "dia": "Martes", "hora": "15:00", "duracion": 2 },
+    { "dia": "Jueves", "hora": "10:00", "duracion": 1 }
+  ],
+  "siguiente": { "indice": 0, "duracion": 2 },
+  "elegidos_disponibles": true,
+  "horarios": [
+    { "dia": "Lunes", "hora": "10:00", "duracion": 2, "fecha_primera_clase": "2026-10-12" },
+    { "dia": "Martes", "hora": "19:00", "duracion": 2, "fecha_primera_clase": "2026-10-13" },
+    { "dia": "Viernes", "hora": "09:00", "duracion": 2, "fecha_primera_clase": "2026-10-16" }
   ]
 }
 ```
 
-- Los huecos de cada sesión se calculan por separado: **el LMS no debe dejar
-  elegir dos que se solapen** (Gestión lo rechaza en el POST con
-  `DATOS_INVALIDOS`).
-- Si ese profesor no es elegible, error con el motivo exacto
-  (`PROFESOR_ARCHIVADO`, `PROFESOR_DE_PRUEBA`, `MISMO_PROFESOR`,
-  `PROFESOR_NO_EXISTE` o `CALENDARIO_SIN_ACTUALIZAR`).
-- Si el alumno no puede cambiar de profesor: el mismo error que el POST
+**Paso 2**, con `elegidos=[{"dia":"Lunes","hora":"10:00","duracion":2}]`:
+
+```json
+{
+  "ok": true,
+  "sesiones": [
+    { "dia": "Martes", "hora": "15:00", "duracion": 2 },
+    { "dia": "Jueves", "hora": "10:00", "duracion": 1 }
+  ],
+  "siguiente": { "indice": 1, "duracion": 1 },
+  "elegidos_disponibles": true,
+  "horarios": [
+    { "dia": "Martes", "hora": "19:00", "duracion": 1, "fecha_primera_clase": "2026-10-13" },
+    { "dia": "Martes", "hora": "20:00", "duracion": 1, "fecha_primera_clase": "2026-10-13" },
+    { "dia": "Miércoles", "hora": "18:00", "duracion": 1, "fecha_primera_clase": "2026-10-14" }
+  ]
+}
+```
+
+**Paso 3**, con los dos elegidos: `"siguiente": null`, `"horarios": []`. Toca
+el POST.
+
+- `sesiones`: sus sesiones actuales, en orden (siempre llegan, también cuando GET
+  estado trae `sesiones: []` por `CALENDARIO_SIN_ACTUALIZAR`). El cambio tiene
+  que darles destino a TODAS, con las mismas duraciones.
+- `siguiente`: la sesión para la que son los `horarios` (`indice` =
+  `elegidos.length`) y su duración. `null` cuando ya están todas elegidas.
+- `horarios`: los horarios **fijos** semanales libres para esa sesión **en algún
+  profesor que también tiene libres TODOS los `elegidos`**, sin solaparse ni ir
+  seguidos con ellos. Así, al terminar, siempre hay al menos un profesor que
+  cubre todo (salvo que alguien ocupe un hueco entre medias). **Sin duplicados**
+  (el mismo horario libre con dos profesores sale una vez) y **ordenados por día
+  y hora**. `fecha_primera_clase` es la primera clase con ese horario, siempre a
+  más de 24 h.
+- `elegidos_disponibles: false`: ningún profesor tiene ya libres todos los
+  `elegidos` (alguien ocupó uno). Es un **200 con `horarios: []`**: el LMS
+  vuelve a empezar desde el paso 1.
+- Una lista vacía con `elegidos_disponibles: true` significa que no hay ningún
+  horario para esa sesión compatible con lo elegido: el LMS deja cambiar un
+  elegido anterior.
+- **Profesores candidatos** (Gestión los usa, el LMS no los ve): todos los de la
+  academia excepto el suyo, los que ya no están, el perfil de prueba y los que
+  tienen el calendario sin revisar desde hace más de 30 días.
+- Errores: `elegidos` mal formado (JSON inválido, día u hora inválidos, dos que
+  se solapan o van seguidos) → 422 `DATOS_INVALIDOS`; más `elegidos` que
+  sesiones o uno con otra duración que su sesión → 422 `SESIONES_NO_COINCIDEN`;
+  si el alumno no puede cambiar de profesor, el mismo error que el POST
   (`NO_ELEGIBLE`, `RECUPERACION_PENDIENTE`…).
 
 ## 5. Cambiar de profesor
@@ -428,7 +470,6 @@ la quiere cambiar).
 ```json
 {
   "alumno_id": "<students.id>",
-  "profesor_id": "t15",
   "destinos": [
     { "dia": "Lunes", "hora": "10:00", "duracion": 2 },
     { "dia": "Miércoles", "hora": "18:00", "duracion": 1 }
@@ -437,40 +478,65 @@ la quiere cambiar).
 }
 ```
 
-- `destinos`: uno por cada sesión actual, **con las mismas duraciones** (en
-  cualquier orden), tomados de los huecos del endpoint 4. Si falta alguna, sobra
-  alguna o una duración no coincide: 422 `SESIONES_NO_COINCIDEN`. Sin solaparse
-  entre ellos: dos destinos que comparten alguna casilla, 422 `DATOS_INVALIDOS`.
-  Vale para cualquier reparto de 1 a 5 h semanales (p. ej. 4 h = 4, 3+1, 2+2,
-  2+1+1 o 1+1+1+1); una sesión de 2 h son 2 casillas seguidas.
+- `destinos`: los `elegidos` del endpoint 4, uno por cada sesión actual **con las
+  mismas duraciones**. Si falta alguna, sobra alguna o una duración no coincide:
+  422 `SESIONES_NO_COINCIDEN`. Dos destinos que se solapan o van seguidos el
+  mismo día: 422 `DATOS_INVALIDOS`. Vale para cualquier reparto de 1 a 5 h
+  semanales (p. ej. 3 h = 3, 2+1 o 1+1+1; 4 h = 4, 3+1, 2+2, 2+1+1 o 1+1+1+1);
+  una sesión de 2 h son 2 casillas seguidas.
+- **No lleva `profesor_id`**: si llega, se ignora.
 - `idempotency_key`: igual que en el cambio de horario (UUID por intento,
   reutilizado en sus reintentos; también vale la cabecera `Idempotency-Key`).
-  Un reintento de un cambio ya hecho devuelve 200 con el mismo resultado.
+  Hasta 128 caracteres: letras, números, `-`, `_`, `.` o `:` (otro formato → 422
+  `DATOS_INVALIDOS`). Un reintento de un cambio ya hecho devuelve 200 con el
+  mismo resultado, aunque Gestión hubiera probado con varios profesores. La
+  clave de un cambio de otro alumno → 422 `DATOS_INVALIDOS`.
 
-Gestión revalida todo:
+Gestión revalida todo y elige el profesor en el momento:
 
-- que el alumno pueda (elegibilidad, recuperaciones);
-- **antelación**: la próxima clase de cada sesión actual y la primera de cada
-  sesión nueva, a **más de 24 h**. Si falla por la actual:
-  `ANTELACION_INSUFICIENTE` con `disponible_desde`;
-- que el profesor sea elegible y cada destino esté libre.
+1. que el alumno pueda (elegibilidad, recuperaciones);
+2. **antelación**: la próxima clase de cada sesión actual y la primera de cada
+   sesión nueva, a **más de 24 h**. Si falla por la actual:
+   `ANTELACION_INSUFICIENTE` con `disponible_desde`;
+3. los profesores candidatos que tienen libres **todos** los destinos. Si no hay
+   ninguno: 409 `SLOT_NO_DISPONIBLE` (volver al endpoint 4);
+4. elige el mejor: **menos alumnos activos**; si empatan, el calendario
+   **actualizado más recientemente**; si empatan, el id menor (siempre el mismo
+   para la misma situación);
+5. si al guardar alguien ocupó uno de los horarios con ese profesor, prueba con
+   el siguiente que cubra todo, **hasta 3 profesores**. Si no lo consigue: 409
+   `HUECO_YA_OCUPADO`, sin nada escrito.
 
 Respuesta 200:
 
 ```json
 {
   "ok": true,
-  "profesor_anterior": { "nombre": "Berta" },
-  "profesor_nuevo": { "id": "t15", "nombre": "Carla" },
+  "profesor": { "nombre": "Carla" },
   "sesiones_antes": [ { "dia": "Martes", "hora": "15:00", "duracion": 2 }, { "dia": "Jueves", "hora": "10:00", "duracion": 1 } ],
   "sesiones_despues": [ { "dia": "Lunes", "hora": "10:00", "duracion": 2 }, { "dia": "Miércoles", "hora": "18:00", "duracion": 1 } ]
 }
 ```
 
+- `profesor.nombre`: solo para la pantalla final. No hay id del profesor.
+- `sesiones_antes` y `sesiones_despues` van ordenadas por día y hora.
+
+Errores típicos del POST:
+
+```json
+{ "ok": false, "codigo": "SLOT_NO_DISPONIBLE", "mensaje": "Ese hueco ya no está libre. Elige otro." }
+```
+
+```json
+{ "ok": false, "codigo": "HUECO_YA_OCUPADO", "mensaje": "Alguien acaba de ocupar ese hueco. Elige otro." }
+```
+
 Efectos en Gestión (los del cambio de profesor de siempre):
 
 - el alumno pasa al calendario del profesor nuevo y sale del anterior;
-- correo y campanita al profesor **nuevo**, campanita al **anterior**, aviso al
+- correo y campanita al profesor **nuevo** con la **ficha del alumno** (nivel,
+  objetivo, plan y horas, horarios nuevos, perfil y sus últimas clases), en tono
+  neutro («Se incorpora a tus clases…»); campanita al **anterior**; aviso al
   equipo;
 - **email de bienvenida al alumno** con su profesor nuevo (variante «cambio de
   profesor»), con el enlace al formulario o a la prueba si los tiene pendientes;
@@ -478,7 +544,8 @@ Efectos en Gestión (los del cambio de profesor de siempre):
 - no afecta a la puntuación de ningún profesor.
 
 Si falla un aviso o un email, el cambio **sigue hecho** (`ok: true`). Si queda a
-medias, `a_medias: true` como en el cambio de horario.
+medias, `a_medias: true` como en el cambio de horario (y Gestión no prueba con
+otro profesor).
 
 ## Prueba rápida (curl)
 
@@ -493,16 +560,18 @@ curl -s -X POST "https://<gestion>/api/lms/autoservicio/cambiar-horario" \
   -d '{"alumno_id":"<id>","modo":"fijo","sesion_origen":{"dia":"Martes","hora":"15:00","duracion":2},"destino":{"dia":"Jueves","hora":"10:00","duracion":2,"fecha":"2026-10-15"},"idempotency_key":"<uuid>"}'
 ```
 
-Cambio de profesor:
+Cambio de profesor, paso a paso (`elegidos` codificado en la URL):
 
 ```bash
-curl -s "https://<gestion>/api/lms/autoservicio/huecos-profesores?alumno_id=<id>&franja=tarde" -H "x-lms-secret: $SECRETO"
+curl -s "https://<gestion>/api/lms/autoservicio/huecos-profesores?alumno_id=<id>" -H "x-lms-secret: $SECRETO"
 
-curl -s "https://<gestion>/api/lms/autoservicio/huecos-profesores?alumno_id=<id>&profesor_id=<id>" -H "x-lms-secret: $SECRETO"
+curl -s -G "https://<gestion>/api/lms/autoservicio/huecos-profesores" -H "x-lms-secret: $SECRETO" \
+  --data-urlencode "alumno_id=<id>" \
+  --data-urlencode 'elegidos=[{"dia":"Lunes","hora":"10:00","duracion":2}]'
 
 curl -s -X POST "https://<gestion>/api/lms/autoservicio/cambiar-profesor" \
   -H "x-lms-secret: $SECRETO" -H "Content-Type: application/json" \
-  -d '{"alumno_id":"<id>","profesor_id":"<id>","destinos":[{"dia":"Lunes","hora":"10:00","duracion":1}],"idempotency_key":"<uuid>"}'
+  -d '{"alumno_id":"<id>","destinos":[{"dia":"Lunes","hora":"10:00","duracion":2},{"dia":"Miércoles","hora":"18:00","duracion":1}],"idempotency_key":"<uuid>"}'
 ```
 
 Los GET solo leen. **Los POST cambian datos de verdad**: el de horario, el

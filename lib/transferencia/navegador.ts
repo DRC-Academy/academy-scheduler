@@ -19,6 +19,7 @@ export const depsNavegador: TransferenciaDeps = {
     level:        d.level,
     slots:        d.slots,
     startDate:    d.startDate,
+    ficha:        d.ficha,
   }),
   enviarBienvenidaAlumno: assignmentId => triggerWelcomeEmail(assignmentId, 'cambio_profesor'),
 };

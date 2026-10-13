@@ -22,13 +22,14 @@ async function insertNotification(db: Db, row: {
 }
 
 /** Aviso al profesor de que tiene un alumno nuevo (alta o cambio de profesor). */
-export function notifyNewAssignmentWith(db: Db, teacherId: string, studentName: string, studentEmail: string): Promise<void> {
+export function notifyNewAssignmentWith(db: Db, teacherId: string, studentName: string, studentEmail: string, body?: string): Promise<void> {
   return insertNotification(db, {
     id:          `notif_newasgn_${Date.now()}_${randomSuffix()}`,
     target_user: teacherId,
     target_role: null,
     title:       '📚 Nuevo alumno asignado',
-    body:        `Se te asignó ${studentName}. Recordá presentarte por correo electrónico (${studentEmail || 'sin email'}) antes de la primera clase.`,
+    // Con un cambio de profesor llega el texto de la ficha (lib/fichaAlumnoNuevo.textoCampanita).
+    body:        body ?? `Se te asignó ${studentName}. Recordá presentarte por correo electrónico (${studentEmail || 'sin email'}) antes de la primera clase.`,
     type:        'new_assignment',
   });
 }
