@@ -28,7 +28,7 @@ import {
 import { accionesEstables, siCambio } from '@/lib/estable';
 import type { AffectedTeacher, ChangeTeacherParams, ArchiveTeacherResult, CalendarOrigin, GridSaveResult } from '@/lib/db';
 import type { TransferenciaResultado } from '@/lib/transferencia/core';
-import type { AssignedSlot } from '@/types';
+import type { AssignedSlot, AvisoConstancia } from '@/types';
 import { calculateTeacherFinance, canMarkStudentLostClass, LOST_CLASS_CAP_MESSAGE, type ClassTranscriptRef } from '@/lib/finance';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { checkSubscription } from '@/lib/useSubscriptionStatus';
@@ -98,7 +98,8 @@ interface TeachersContextType {
   loadClassJoinLogs: () => Promise<void>;
   loadClassRecords: () => Promise<void>;
   loadFinanceData: () => Promise<void>;
-  registerClassRecord: (teacherId: string, studentName: string, date: string, time: string | undefined, screenshotFile: File | null, classType?: ClassRecordType, comment?: string, recoveryForDate?: string) => Promise<void>;
+  /** `aviso`: cuándo avisó y quién canceló (lib/avisoAlumno). Solo en las clases perdidas. */
+  registerClassRecord: (teacherId: string, studentName: string, date: string, time: string | undefined, screenshotFile: File | null, classType?: ClassRecordType, comment?: string, recoveryForDate?: string, aviso?: AvisoConstancia) => Promise<void>;
   attachScreenshotToClass: (teacherId: string, studentName: string, date: string, time: string | undefined, screenshotFile: File, comment?: string) => Promise<void>;
   markPaymentAsPaid: (teacherId: string, monthYear: string) => Promise<void>;
   /** Deshace un "Marcar pagado" (el mes vuelve a pendiente y a calcularse en vivo). */
@@ -117,9 +118,9 @@ interface TeachersContextType {
   approveExceedLimitClass: (teacherId: string, studentName: string, date: string, approvedBy?: string) => Promise<void>;
   changeStudentTeacher: (params: ChangeTeacherParams) => Promise<TransferenciaResultado>;
   removeAssignment: (assignmentId: string, teacherId: string, studentName: string, slots: AssignedSlot[]) => Promise<void>;
-  addRescheduleRecord: (p: { teacherId: string; teacherName: string; studentName: string; originalDate: string; originalTime?: string; newDate: string; newTime?: string; classType: 'reprogramada' | 'cancelacion_hora'; comment: string; lostHours?: number }) => Promise<void>;
+  addRescheduleRecord: (p: { teacherId: string; teacherName: string; studentName: string; originalDate: string; originalTime?: string; newDate: string; newTime?: string; classType: 'reprogramada' | 'cancelacion_hora'; comment: string; lostHours?: number } & AvisoConstancia) => Promise<void>;
   /** Reprograma una clase de 2 h en DOS días: las tres constancias en un solo insert. Devuelve sus ids, para poder revertir. */
-  addRescheduleSplit: (p: { teacherId: string; teacherName: string; studentName: string; originalDate: string; originalTime?: string; lostHours: number; comment: string; recuperaciones: Array<{ date: string; hour: string; recoveryFor: string }> }) => Promise<string[]>;
+  addRescheduleSplit: (p: { teacherId: string; teacherName: string; studentName: string; originalDate: string; originalTime?: string; lostHours: number; comment: string; recuperaciones: Array<{ date: string; hour: string; recoveryFor: string }> } & AvisoConstancia) => Promise<string[]>;
   addRecoveryClass: (p: { teacherId: string; teacherName: string; studentName: string; recoveryDate: string; originalDate: string; note?: string; classTime?: string }) => Promise<void>;
 }
 
@@ -639,6 +640,8 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     screenshotFile: File | null, classType: ClassRecordType = 'normal', comment?: string,
     /** Clase perdida que esta salda (sesiones con parte de recuperación). */
     recoveryForDate?: string,
+    /** Cuándo avisó y quién canceló. Sin él, quién se deduce del tipo (lib/db). */
+    aviso?: AvisoConstancia,
   ) {
     const teacherName = teachers.find(t => t.id === teacherId)?.name ?? '';
     // Estado de suscripciÃ³n al momento de registrar (no bloquea si falla).
@@ -650,7 +653,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     }
     // Las faltas/cancelaciones no llevan captura: se guarda screenshot_url vacÃ­o.
     const url = screenshotFile ? await dbUploadClassScreenshot(screenshotFile, teacherId) : '';
-    const record = await dbAddClassRecord(teacherId, teacherName, studentName, date, time, url, classType, comment, subscriptionStatus, recoveryForDate);
+    const record = await dbAddClassRecord(teacherId, teacherName, studentName, date, time, url, classType, comment, subscriptionStatus, recoveryForDate, aviso);
     setClassRecords(prev => [record, ...prev]);
 
     // Efectos de falta. La falta DEL ALUMNO ('falta_sin_aviso') ya no dispara
@@ -824,7 +827,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   }
 
   // Constancia de clase reprogramada (punto 2).
-  async function addRescheduleRecord(p: { teacherId: string; teacherName: string; studentName: string; originalDate: string; originalTime?: string; newDate: string; newTime?: string; classType: 'reprogramada' | 'cancelacion_hora'; comment: string; lostHours?: number }) {
+  async function addRescheduleRecord(p: { teacherId: string; teacherName: string; studentName: string; originalDate: string; originalTime?: string; newDate: string; newTime?: string; classType: 'reprogramada' | 'cancelacion_hora'; comment: string; lostHours?: number } & AvisoConstancia) {
     const record = await dbAddRescheduleRecord(p);
     setClassRecords(prev => [record, ...prev]);
   }
@@ -832,7 +835,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   // Reprogramación PARTIDA: la clase original y las dos recuperaciones de 1 h, en
   // un solo insert (todo o nada). Devuelve los ids para que el llamador pueda
   // revertir si después falla el calendario. Ver lib/rescheduleSplit.
-  async function addRescheduleSplit(p: { teacherId: string; teacherName: string; studentName: string; originalDate: string; originalTime?: string; lostHours: number; comment: string; recuperaciones: Array<{ date: string; hour: string; recoveryFor: string }> }) {
+  async function addRescheduleSplit(p: { teacherId: string; teacherName: string; studentName: string; originalDate: string; originalTime?: string; lostHours: number; comment: string; recuperaciones: Array<{ date: string; hour: string; recoveryFor: string }> } & AvisoConstancia) {
     const records = await dbAddRescheduleSplit(p);
     setClassRecords(prev => [...records, ...prev]);
     return records.map(r => r.id);

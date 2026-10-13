@@ -20,7 +20,7 @@ import { useHistorialHorarios } from '@/lib/HistorialHorariosContext';
 import { asignacionesConHistorial } from '@/lib/slotHistory';
 import { maybeSendMilestoneEmail } from '@/lib/milestoneEmails';
 import { AddClassModal, saveTeacherClass, ANALYSIS_FAILED_NOTICE } from '@/components/AddClassModal';
-import { Teacher, Assignment, ClassRecordType, ClassReviewRequest } from '@/types';
+import { Teacher, Assignment, ClassRecordType, ClassReviewRequest, AvisoConstancia } from '@/types';
 import { HelpTooltip } from '@/components/ui';
 import type { HelpTooltipKey } from '@/lib/help-tooltips';
 // Plazo de 24 h del transcript: cuenta regresiva en las pendientes y aviso de
@@ -471,11 +471,11 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
   async function handleAddClass(
     studentName: string, date: string, time: string | undefined,
     transcript: string, classType: ClassRecordType, comment: string,
-    transcriptHashValue: string, replaceId: string | null,
+    transcriptHashValue: string, replaceId: string | null, aviso?: AvisoConstancia,
   ) {
     const result = await saveTeacherClass({
       teacher, myAssignments, studentName, date, time, transcript, classType, comment,
-      transcriptHash: transcriptHashValue, replaceId, registerClassRecord,
+      transcriptHash: transcriptHashValue, replaceId, registerClassRecord, aviso,
     });
     if (result.notice) setValidationNotice(result.notice);
     // Solo se vuelve a avisar si el informe falla: si sale bien, no hay nada que

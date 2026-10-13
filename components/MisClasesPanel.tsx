@@ -62,7 +62,9 @@ import { isRecoveryBetaTeacher } from '@/lib/classRecoveries';
 import NoPuedoDarClaseModal from '@/components/NoPuedoDarClaseModal';
 import { PendingRecoveriesPanel } from '@/components/RecoveryResponseCard';
 import { useTeacherRecoveries, recoveryLineFor, reservedSlotAt } from '@/lib/useTeacherRecoveries';
-import type { Grid, Teacher, Assignment, Student, ClassRecord, ClassRecordType, ClassJoinLog } from '@/types';
+import { AvisoAlumnoField, useAvisoEnEspana } from '@/components/AvisoAlumnoField';
+import { antelacionDelAviso, instanteDelAviso, fraseAntelacion } from '@/lib/avisoAlumno';
+import type { Grid, Teacher, Assignment, Student, ClassRecord, ClassRecordType, ClassJoinLog, AvisoConstancia } from '@/types';
 
 export type FormIndex = { byId: Map<string, FormTokenInfo>; byName: Map<string, FormTokenInfo> };
 
@@ -196,6 +198,20 @@ const RESCHEDULE_REASONS_BETA: ReadonlyArray<{ id: RescheduleReason; label: stri
   { id: 'alumno_hora',  label: 'El alumno avisó sobre la hora (la clase se pierde, no se recupera)' },
 ];
 
+// Lo que el profesor ELIGE. "Con anticipación" o "sobre la hora" ya no se elige
+// a ojo: el profesor dice cuándo le avisó el alumno y la antelación decide
+// (lib/avisoAlumno, umbral de 24 h). Los motivos de arriba siguen siendo el
+// resultado —y el texto que queda en el comentario de la constancia—.
+type RescheduleChoice = 'alumno' | 'profesor';
+const RESCHEDULE_CHOICES: ReadonlyArray<{ id: RescheduleChoice; label: string }> = [
+  { id: 'alumno',   label: 'El alumno avisó' },
+  { id: 'profesor', label: RESCHEDULE_REASONS[2].label },
+];
+// Beta: lo del profesor va por «No puedo dar esta clase».
+const RESCHEDULE_CHOICES_BETA: ReadonlyArray<{ id: RescheduleChoice; label: string }> = [
+  { id: 'alumno', label: 'El alumno avisó' },
+];
+
 /** 'HH' | 'H:M' | 'HH:MM' → 'HH:MM'. El grid guarda '17' y el input pide '17:00'. */
 function timeInputValue(hour: string): string {
   const [h, m = '00'] = (hour ?? '').split(':');
@@ -215,17 +231,36 @@ function RescheduleModal({ studentName, currentDate, currentHour, durationHours,
     reason: RescheduleReason; reasonLabel: string; newDate: string; newTime: string;
     /** Presente solo en el modo partido: las dos horas elegidas. */
     split?: SplitSlot[];
+    /** Cuándo avisó y quién canceló: va a la constancia. */
+    aviso: AvisoConstancia;
   }) => void;
   onClose: () => void;
 }) {
-  const [reason, setReason] = useState<RescheduleReason>('alumno_antic');
+  const [choice, setChoice] = useState<RescheduleChoice>('alumno');
+  // CUÁNDO avisó el alumno, en hora de España. Por defecto, ahora.
+  const avisoCampo = useAvisoEnEspana();
+  const avisoEs = avisoCampo.aviso;
   const [newDate, setNewDate] = useState('');
   const [newTime, setNewTime] = useState(timeInputValue(currentHour));
   // Modo partido: dos horas de 1 h en días distintos. Solo para clases de 2 h, y
   // destildado por defecto — el comportamiento de siempre es mover el bloque.
   const [split, setSplit] = useState(false);
   const [slots, setSlots] = useState<SplitSlot[]>([{ date: '', time: '' }, { date: '', time: '' }]);
-  const puedePartir = canSplitReschedule(durationHours);
+
+  // El tipo sale de la antelación: < 24 h → 'alumno_hora' (cancelación sobre la
+  // hora), ≥ 24 h → 'alumno_antic' (reprogramada). Mientras el aviso no sea
+  // válido no hay tipo y no se puede confirmar.
+  const problemaAviso = choice === 'alumno' ? avisoCampo.problema : null;
+  const antelacion = choice === 'alumno' && !problemaAviso
+    ? antelacionDelAviso(currentDate, currentHour, instanteDelAviso(avisoEs))
+    : null;
+  const reason: RescheduleReason = choice === 'profesor' ? 'profesor' : antelacion?.tarde ? 'alumno_hora' : 'alumno_antic';
+  const avisoListo = choice === 'profesor' || !!antelacion;
+
+  // Partirla en dos días es MOVERLA: con aviso sobre la hora la clase se pierde
+  // (cancelación sobre la hora), así que no se ofrece. Antes se podía elegir
+  // "sobre la hora" y partirla, y quedaba guardada como reprogramada.
+  const puedePartir = canSplitReschedule(durationHours) && reason !== 'alumno_hora';
   const setSlot = (i: number, patch: Partial<SplitSlot>) =>
     setSlots(prev => prev.map((s, j) => (j === i ? { ...s, ...patch } : s)));
 
@@ -258,7 +293,8 @@ function RescheduleModal({ studentName, currentDate, currentHour, durationHours,
   // Beta + "sobre la hora": no hay fecha nueva que elegir, la clase se pierde.
   const sinFecha = beta && reason === 'alumno_hora';
   const reasons = beta ? RESCHEDULE_REASONS_BETA : RESCHEDULE_REASONS;
-  const canConfirm = saving
+  const choices = beta ? RESCHEDULE_CHOICES_BETA : RESCHEDULE_CHOICES;
+  const canConfirm = saving || !avisoListo
     ? false
     : sinFecha
       ? true
@@ -280,16 +316,28 @@ function RescheduleModal({ studentName, currentDate, currentHour, durationHours,
 
         <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 8 }}>¿Qué pasó con esta clase?</label>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginBottom: 16 }}>
-          {reasons.map(r => (
-            <button key={r.id} onClick={() => setReason(r.id)}
+          {choices.map(r => (
+            <button key={r.id} onClick={() => setChoice(r.id)}
               style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '9px 12px', borderRadius: 9, textAlign: 'left', fontFamily: 'inherit', cursor: 'pointer',
-                border: `1.5px solid ${reason === r.id ? '#1E9E3A' : 'var(--border)'}`,
-                background: reason === r.id ? 'rgba(30,158,58,0.08)' : 'var(--bg-surface-2)',
+                border: `1.5px solid ${choice === r.id ? '#1E9E3A' : 'var(--border)'}`,
+                background: choice === r.id ? 'rgba(30,158,58,0.08)' : 'var(--bg-surface-2)',
                 color: 'var(--text-primary)', fontSize: 13 }}>
-              <span>{reason === r.id ? '🔘' : '⚪'}</span>{r.label}
+              <span>{choice === r.id ? '🔘' : '⚪'}</span>{r.label}
             </button>
           ))}
         </div>
+        {choice === 'alumno' && (
+          <div style={{ marginBottom: 14 }}>
+            <AvisoAlumnoField value={avisoEs} onChange={avisoCampo.setAviso} maxFecha={avisoCampo.hoy} problema={problemaAviso} disabled={saving} />
+            {/* Lo que va a pasar, en vivo, antes de pulsar. */}
+            {antelacion && (
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8, lineHeight: 1.5 }}>
+                {fraseAntelacion(antelacion)}: se registrará como{' '}
+                <b>{antelacion.tarde ? 'cancelación sobre la hora' : 'clase reprogramada'}</b>.
+              </div>
+            )}
+          </div>
+        )}
         {reason === 'alumno_hora' && (
           <div style={{ fontSize: 11.5, color: '#b45309', background: 'rgba(255,196,0,0.12)', border: '1px solid rgba(255,196,0,0.4)', borderRadius: 8, padding: '8px 12px', marginBottom: 14, lineHeight: 1.5 }}>
             ⏰ Se registrará como cancelación sobre la hora (cobrable dentro de las 2 clases perdidas
@@ -390,6 +438,10 @@ function RescheduleModal({ studentName, currentDate, currentHour, durationHours,
               reason, reasonLabel: reasons.find(r => r.id === reason)!.label,
               newDate, newTime,
               ...(split && puedePartir ? { split: slots } : {}),
+              // Del alumno: el instante que dijo el profesor. Del profesor: avisa él, ahora.
+              aviso: choice === 'alumno'
+                ? { avisadoEn: new Date(instanteDelAviso(avisoEs)).toISOString(), canceladoPor: 'alumno' }
+                : { avisadoEn: new Date().toISOString(), canceladoPor: 'profesor' },
             })} disabled={!canConfirm}
             style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: canConfirm ? '#1E9E3A' : 'var(--bg-surface-3)', color: canConfirm ? 'white' : 'var(--text-muted)', cursor: canConfirm ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
             {saving ? 'Guardando...' : sinFecha ? 'Registrar ✓' : split && puedePartir ? 'Reprogramar en dos horas ✓' : 'Reprogramar ✓'}
@@ -469,10 +521,10 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
   onGridChange: (g: Grid) => Promise<void>;
   updateMeetLink: (assignmentId: string, link: string) => Promise<void>;
   logClassJoin: (teacherId: string, teacherName: string, studentName: string, scheduledDate: string, scheduledTime: string, subscriptionStatus?: string, enteredWithoutActive?: boolean, subscriptionDaysRemaining?: number | null) => Promise<void>;
-  addRescheduleRecord: (p: { teacherId: string; teacherName: string; studentName: string; originalDate: string; originalTime?: string; newDate: string; newTime?: string; classType: 'reprogramada' | 'cancelacion_hora'; comment: string; lostHours?: number }) => Promise<void>;
+  addRescheduleRecord: (p: { teacherId: string; teacherName: string; studentName: string; originalDate: string; originalTime?: string; newDate: string; newTime?: string; classType: 'reprogramada' | 'cancelacion_hora'; comment: string; lostHours?: number } & AvisoConstancia) => Promise<void>;
   /** Reprogramación PARTIDA: las tres constancias en un solo insert. Devuelve sus ids. */
-  addRescheduleSplit: (p: { teacherId: string; teacherName: string; studentName: string; originalDate: string; originalTime?: string; lostHours: number; comment: string; recuperaciones: Array<{ date: string; hour: string; recoveryFor: string }> }) => Promise<string[]>;
-  registerClassRecord: (teacherId: string, studentName: string, date: string, time: string | undefined, screenshotFile: File | null, classType?: import('@/types').ClassRecordType, comment?: string, recoveryForDate?: string) => Promise<void>;
+  addRescheduleSplit: (p: { teacherId: string; teacherName: string; studentName: string; originalDate: string; originalTime?: string; lostHours: number; comment: string; recuperaciones: Array<{ date: string; hour: string; recoveryFor: string }> } & AvisoConstancia) => Promise<string[]>;
+  registerClassRecord: (teacherId: string, studentName: string, date: string, time: string | undefined, screenshotFile: File | null, classType?: import('@/types').ClassRecordType, comment?: string, recoveryForDate?: string, aviso?: AvisoConstancia) => Promise<void>;
   formIndex: FormIndex;
   refreshFormIndex: () => void;
 }) {
@@ -954,7 +1006,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
    * (el saldo las lee), mientras unas celdas sin la constancia `reprogramada`
    * dejarían la clase original cobrándose como si se hubiera dado.
    */
-  async function reprogramarPartida(c: TodayClass, date: string, data: { reasonLabel: string; split: SplitSlot[] }) {
+  async function reprogramarPartida(c: TodayClass, date: string, data: { reasonLabel: string; split: SplitSlot[]; aviso: AvisoConstancia }) {
     const result = splitPlanOf(c, date, data.split);
     if (!result.ok) { showToast(`⚠️ ${result.problems[0]}`); return; }
     const { plan } = result;
@@ -966,6 +1018,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
       lostHours: plan.reprogramada.lostHours,
       comment: splitRescheduleComment({ recuperaciones: plan.recuperaciones, reasonLabel: data.reasonLabel }),
       recuperaciones: plan.recuperaciones,
+      ...data.aviso,
     });
 
     try {
@@ -1004,7 +1057,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     }).catch(() => {});
   }
 
-  async function handleRescheduleConfirm(data: { reason: RescheduleReason; reasonLabel: string; newDate: string; newTime: string; split?: SplitSlot[] }) {
+  async function handleRescheduleConfirm(data: { reason: RescheduleReason; reasonLabel: string; newDate: string; newTime: string; split?: SplitSlot[]; aviso: AvisoConstancia }) {
     if (!rescheduleModal) return;
     const { c, date } = rescheduleModal;
     setSavingReschedule(true);
@@ -1013,7 +1066,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
       // recuperable). Antes se guardaba 'cancelacion_hora' Y se creaba una
       // recuperación en la fecha nueva: la misma clase se cobraba dos veces.
       if (beta && data.reason === 'alumno_hora') {
-        await registerClassRecord(teacher.id, c.studentName, date, c.hour, null, 'cancelacion_hora', `Cancelación sobre la hora — ${data.reasonLabel}`);
+        await registerClassRecord(teacher.id, c.studentName, date, c.hour, null, 'cancelacion_hora', `Cancelación sobre la hora — ${data.reasonLabel}`, undefined, data.aviso);
         setRescheduleModal(null);
         showToast('⏰ Registrada como clase perdida del alumno');
         await onDataChanged();
@@ -1030,9 +1083,11 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
       // Modo partido: camino aparte, de todo o nada. El de siempre sigue abajo,
       // sin un solo cambio.
       if (data.split) {
-        await reprogramarPartida(c, date, { reasonLabel: data.reasonLabel, split: data.split });
+        await reprogramarPartida(c, date, { reasonLabel: data.reasonLabel, split: data.split, aviso: data.aviso });
         return;
       }
+      // 'alumno_hora' ya no lo elige el profesor: lo decide la antelación del aviso
+      // en el modal (lib/avisoAlumno). Los dos caminos son los de siempre.
       const classType = data.reason === 'alumno_hora' ? 'cancelacion_hora' : 'reprogramada';
       const comment = `Reprogramada para ${data.newDate}${data.newTime ? ` ${data.newTime}` : ''} — Motivo: ${data.reasonLabel}`;
       await addRescheduleRecord({
@@ -1044,6 +1099,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
         // calendario de hoy, que no guarda historia: un cambio de horario le
         // cambiaba el tamaño a un crédito viejo.
         lostHours: Math.max(1, Math.round(c.durationHours || 1)),
+        ...data.aviso,
       });
 
       // Reflejar el movimiento en el grid (best-effort, no bloquea la constancia):
@@ -1097,7 +1153,9 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
       // decidir el pago: quitar la penalización de la falta del alumno habría hecho
       // cobrable la cancelación de última hora del profesor.
       const classType = withNotice ? 'cancelada_con_preaviso' : 'cancelada_por_profesor';
-      await registerClassRecord(teacher.id, c.studentName, date, c.hour, null, classType, reason);
+      // Avisa el propio profesor, ahora (el email al alumno sale a continuación).
+      await registerClassRecord(teacher.id, c.studentName, date, c.hour, null, classType, reason, undefined,
+        { avisadoEn: new Date().toISOString(), canceladoPor: 'profesor' });
       // Email al alumno + aviso al admin (best-effort). `classDate` es lo que la
       // ruta usa para comprobar que la cancelación existe de verdad.
       fetch('/api/classes/cancel', {
@@ -1132,13 +1190,14 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
   async function handleSaveTranscript(
     studentName: string, date: string, time: string | undefined, transcript: string,
     classType: ClassRecordType, comment: string, hash: string, replaceId: string | null,
+    aviso?: AvisoConstancia,
   ) {
     // La clase a la que pertenece este transcript, capturada ANTES del guardado:
     // el modal se cierra al terminar y `transcriptFor` vuelve a null.
     const claseDelTranscript = transcriptFor;
     const result = await saveTeacherClass({
       teacher, myAssignments, studentName, date, time, transcript, classType, comment,
-      transcriptHash: hash, replaceId, registerClassRecord,
+      transcriptHash: hash, replaceId, registerClassRecord, aviso,
       // Vínculo EXPLÍCITO con el ingreso de esa clase: con él, finanzas empareja
       // transcript e ingreso por id en vez de por proximidad de fechas, así que
       // la clase queda verificada por sus dos factores sin ambigüedad.

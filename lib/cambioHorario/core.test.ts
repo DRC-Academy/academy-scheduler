@@ -103,7 +103,8 @@ describe('cambiarHorarioCore · PUNTUAL', () => {
     const r = await cambiarHorarioCore(db.client(), puntual(), d);
 
     expect(db.rows('class_records')).toMatchObject([{ class_type: 'reprogramada', class_date: '2026-10-13', class_time: '15:00',
-      original_date: '2026-10-13', rescheduled_to: '2026-10-22', lost_hours: 2, student_name: 'Lucía Pérez', teacher_id: 'tB' }]);
+      original_date: '2026-10-13', rescheduled_to: '2026-10-22', lost_hours: 2, student_name: 'Lucía Pérez', teacher_id: 'tB',
+      avisado_en: new Date(AHORA).toISOString(), cancelado_por: 'alumno' }]);
     const g = db.grid('tB');
     expect(g['Martes_15:00']).toEqual({ state: 'reprogramada', student: 'Lucía Pérez', weekDate: '2026-10-12', baseState: 'ocupado', baseStudent: 'Lucía Pérez', rescheduledTo: '2026-10-22' });
     expect(g['Martes_16:00']?.state).toBe('reprogramada');

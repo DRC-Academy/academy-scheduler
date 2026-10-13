@@ -487,6 +487,18 @@ export interface AppNotification {
 // hacía que la falta del alumno arrastrara una penalización que no le tocaba.
 export type ClassRecordType = 'normal' | 'falta_sin_aviso' | 'falta_sin_aviso_revertida' | 'cancelacion_hora' | 'recuperacion' | 'reprogramada' | 'falta_con_aviso' | 'cancelada_con_preaviso' | 'cancelada_por_profesor';
 
+/** Quién canceló una clase perdida. Columna class_records.cancelado_por. */
+export type CanceladoPor = 'alumno' | 'profesor' | 'academia';
+
+/**
+ * El aviso de una clase perdida, tal como se guarda en la constancia. Lo llevan
+ * las inserciones de class_records que pueden saberlo; las demás lo omiten.
+ */
+export interface AvisoConstancia {
+  avisadoEn?: string;
+  canceladoPor?: CanceladoPor;
+}
+
 // Captura de pantalla de una clase dada, subida por el profesor.
 export interface ClassRecord {
   id: string;
@@ -502,6 +514,13 @@ export interface ClassRecord {
   originalDate?: string;       // 'reprogramada'/'cancelacion_hora': fecha original de la clase movida
   rescheduledTo?: string;      // 'reprogramada': nueva fecha a la que se movió la clase
   recoveryForDate?: string;    // 'recuperacion': fecha de la clase original que se recupera
+  // CUÁNDO avisó el alumno de que no iba a la clase (o cuándo avisó el profesor),
+  // y quién la canceló. `createdAt` no sirve para esto: es cuándo se subió la
+  // constancia, a menudo horas después de la clase. Los dos son opcionales:
+  // ausentes = no consta (constancias anteriores a supabase-avisado-en.sql, o
+  // tipos donde no aplica). Ver lib/avisoAlumno.
+  avisadoEn?: string;          // ISO, instante real del aviso
+  canceladoPor?: CanceladoPor;
   createdAt: string;
   // Reversión de una falta del alumno marcada por error (solo admin). La fila NO
   // se borra: se le cambia el class_type a 'falta_sin_aviso_revertida' y queda

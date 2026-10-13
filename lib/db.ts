@@ -18,7 +18,8 @@ import { transferirAlumnoCore, type TransferenciaResultado } from './transferenc
 import { depsNavegador } from './transferencia/navegador';
 import { notifyNewAssignmentWith } from './notificationStore';
 import { changesOfStudent } from './slotHistory';
-import { insertClassRecordsWith, deleteClassRecordsWith, addRescheduleRecordWith, type RescheduleRecordInput } from './classRecordStore';
+import { insertClassRecordsWith, insertClassRecordsTolerante, avisoColumnas, deleteClassRecordsWith, addRescheduleRecordWith, type RescheduleRecordInput } from './classRecordStore';
+import { canceladoPorDelTipo } from './avisoAlumno';
 import { findOffCalendar, slotStatusOf, type OffCalendarRow } from './offCalendar';
 import { Teacher, Student, Assignment, AppUser, Grid, TeacherStatus, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, AssignedSlot, EmailPreferences, SalesContactResult, RecoveryCell, TeacherBonus, BonusType, SlotChange } from '@/types';
 import {
@@ -3692,6 +3693,8 @@ function mapClassRecord(row: any): import('@/types').ClassRecord {
     originalDate:   row.original_date ?? undefined,
     rescheduledTo:  row.rescheduled_to ?? undefined,
     recoveryForDate: row.recovery_for_date ?? undefined,
+    avisadoEn:     row.avisado_en ?? undefined,
+    canceladoPor:  row.cancelado_por ?? undefined,
     createdAt:     row.created_at,
     revertedAt:    row.reverted_at ?? undefined,
     revertedBy:    row.reverted_by ?? undefined,
@@ -4302,9 +4305,20 @@ export async function dbAddClassRecord(
    * historial del alumno.
    */
   recoveryForDate?: string,
+  /**
+   * Cuándo avisó y quién canceló (lib/avisoAlumno). Si no se dice quién, se
+   * deduce del tipo cuando no hay ambigüedad (la falta es del alumno, la
+   * cancelación del profesor es del profesor); el instante del aviso NO se
+   * inventa: sin él queda null, "no consta".
+   */
+  aviso?: import('@/types').AvisoConstancia,
 ): Promise<import('@/types').ClassRecord> {
   const id        = `cr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   const createdAt = new Date().toISOString();
+  const avisoFinal: import('@/types').AvisoConstancia = {
+    avisadoEn:    aviso?.avisadoEn,
+    canceladoPor: aviso?.canceladoPor ?? canceladoPorDelTipo(classType),
+  };
   const base = {
     id,
     teacher_id:     teacherId,
@@ -4318,21 +4332,23 @@ export async function dbAddClassRecord(
     created_at:     createdAt,
   };
   // Resiliente: si la columna subscription_status aún no existe en la BD,
-  // reintenta sin ella para no bloquear el registro de la clase.
-  const { error } = await supabase.from('class_records').insert({
+  // reintenta sin ella para no bloquear el registro de la clase. Las del aviso
+  // (avisado_en, cancelado_por) se quitan solas si faltan: ver classRecordStore.
+  const { error } = await insertClassRecordsTolerante(supabase, [{
     ...base,
     subscription_status: subscriptionStatus ?? null,
     ...(recoveryForDate ? { recovery_for_date: recoveryForDate } : {}),
-  });
+    ...avisoColumnas(avisoFinal),
+  }]);
   // 23505: la base ya tiene esa cancelación del profesor (índice único de
   // supabase-class-recoveries.sql). Antes el error se tragaba y se reintentaba,
   // así que cancelar dos veces la misma clase cobraba dos veces los -5 €.
   if (error?.code === '23505') throw Object.assign(new Error('Esta clase ya está cancelada.'), { code: '23505' });
   if (error) {
-    const { error: e2 } = await supabase.from('class_records').insert(base);
+    const { error: e2 } = await insertClassRecordsTolerante(supabase, [{ ...base, ...avisoColumnas(avisoFinal) }]);
     if (e2?.code === '23505') throw Object.assign(new Error('Esta clase ya está cancelada.'), { code: '23505' });
   }
-  return { id, teacherId, teacherName, studentName, classDate, classTime, screenshotUrl, classType, comment, subscriptionStatus, recoveryForDate, createdAt };
+  return { id, teacherId, teacherName, studentName, classDate, classTime, screenshotUrl, classType, comment, subscriptionStatus, recoveryForDate, ...avisoFinal, createdAt };
 }
 
 /**
@@ -4374,8 +4390,9 @@ export async function dbFindStudentAbsence(
 // columnas original_date/rescheduled_to.
 /**
  * Inserta constancias tolerando que `lost_hours` no exista todavía en la base
- * (supabase-reschedule-split.sql sin correr). Solo se reintenta quitando ESA
- * columna, y el aviso queda en consola: `lost_hours` es una mejora del crédito, no
+ * (supabase-reschedule-split.sql sin correr; lo mismo con avisado_en y
+ * cancelado_por de supabase-avisado-en.sql). Solo se reintenta quitando ESAS
+ * columnas, y el aviso queda en consola: `lost_hours` es una mejora del crédito, no
  * el vínculo de la constancia, así que perderla no rompe nada — pero enterarse
  * importa, porque sin ella el crédito se sigue deduciendo del calendario.
  *
@@ -4420,7 +4437,7 @@ export async function dbAddRescheduleSplit(p: {
   comment: string;
   /** Las dos horas de recuperación, en orden. */
   recuperaciones: Array<{ date: string; hour: string; recoveryFor: string }>;
-}): Promise<import('@/types').ClassRecord[]> {
+} & import('@/types').AvisoConstancia): Promise<import('@/types').ClassRecord[]> {
   const createdAt = new Date().toISOString();
   const nuevoId = (n: number) => `cr_${Date.now()}_${n}_${Math.random().toString(36).slice(2, 7)}`;
   const comun = { teacher_id: p.teacherId, teacher_name: p.teacherName, student_name: p.studentName, screenshot_url: '', created_at: createdAt };
@@ -4433,6 +4450,8 @@ export async function dbAddRescheduleSplit(p: {
     // La PRIMERA de las dos: es la fecha que muestra el badge "Reprogramada → …".
     rescheduled_to: p.recuperaciones[0]?.date ?? null,
     lost_hours: p.lostHours,
+    // El aviso va en la clase PERDIDA; las recuperaciones no se cancelaron.
+    ...avisoColumnas(p),
   };
   const recuperaciones = p.recuperaciones.map((r, i) => ({
     ...comun, id: nuevoId(i + 1),
@@ -4452,6 +4471,7 @@ export async function dbAddRescheduleSplit(p: {
     originalDate: 'original_date' in row ? (row.original_date as string) : undefined,
     rescheduledTo: 'rescheduled_to' in row ? ((row.rescheduled_to as string) ?? undefined) : undefined,
     recoveryForDate: 'recovery_for_date' in row ? (row.recovery_for_date as string) : undefined,
+    ...(row === original ? { avisadoEn: p.avisadoEn, canceladoPor: p.canceladoPor } : {}),
     createdAt,
   }));
 }

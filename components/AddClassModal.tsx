@@ -20,7 +20,9 @@ import { quickTranscriptCheck } from '@/lib/transcriptValidation';
 import { canMarkStudentLostClass, LOST_CLASS_MONTHLY_CAP, LOST_CLASS_CAP_MESSAGE } from '@/lib/finance';
 import { deadlineLabel, hoursLeftLabel, type TranscriptStatusResult } from '@/lib/transcriptDeadline';
 import { TranscriptDeadlineBanner } from '@/components/TranscriptDeadlineBanner';
-import type { Teacher, Assignment, ClassRecord, ClassRecordType } from '@/types';
+import { AvisoAlumnoField, useAvisoEnEspana } from '@/components/AvisoAlumnoField';
+import { antelacionDelAviso, instanteDelAviso, fraseAntelacion } from '@/lib/avisoAlumno';
+import type { Teacher, Assignment, ClassRecord, ClassRecordType, AvisoConstancia } from '@/types';
 
 // Opciones del selector "Tipo de clase".
 const CLASS_TYPE_OPTIONS: Array<{ value: ClassRecordType; label: string; needsTranscript: boolean }> = [
@@ -44,7 +46,7 @@ const DAY_NAMES = ['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','S
 export type RegisterClassRecordFn = (
   teacherId: string, studentName: string, date: string, time: string | undefined,
   screenshotFile: File | null, classType?: ClassRecordType, comment?: string,
-  recoveryForDate?: string,
+  recoveryForDate?: string, aviso?: AvisoConstancia,
 ) => Promise<void>;
 
 export interface SaveClassArgs {
@@ -79,6 +81,8 @@ export interface SaveClassArgs {
    * esté. Ausente en una clase normal: entonces no cambia absolutamente nada.
    */
   recoveryForDate?: string;
+  /** Faltas y cancelaciones: cuándo avisó el alumno y quién canceló (lib/avisoAlumno). */
+  aviso?: AvisoConstancia;
 }
 
 export interface SaveClassResult {
@@ -102,12 +106,12 @@ export interface SaveClassResult {
 export async function saveTeacherClass(args: SaveClassArgs): Promise<SaveClassResult> {
   const {
     teacher, myAssignments, studentName, date, time, transcript, classType, comment,
-    transcriptHash: hash, replaceId, registerClassRecord, joinLogId, durationHours, recoveryForDate,
+    transcriptHash: hash, replaceId, registerClassRecord, joinLogId, durationHours, recoveryForDate, aviso,
   } = args;
 
   // Faltas/cancelaciones (sin transcript): solo la constancia.
   if (!transcript.trim()) {
-    if (!replaceId) await registerClassRecord(teacher.id, studentName, date, time, null, classType, comment, recoveryForDate);
+    if (!replaceId) await registerClassRecord(teacher.id, studentName, date, time, null, classType, comment, recoveryForDate, aviso);
     return { notice: null, analysis: null };
   }
 
@@ -264,6 +268,8 @@ export interface AddClassModalProps {
     studentName: string, date: string, time: string | undefined, transcript: string,
     classType: ClassRecordType, comment: string,
     transcriptHash: string, replaceId: string | null,
+    /** Faltas y cancelaciones: cuándo avisó el alumno y quién canceló. */
+    aviso?: AvisoConstancia,
   ) => Promise<void>;
 }
 
@@ -299,6 +305,11 @@ export function AddClassModal({
   const [checking, setChecking] = useState(false);
   // Duplicado detectado a la espera de decisión del profesor.
   const [dupe, setDupe] = useState<{ check: DupeCheck; hash: string } | null>(null);
+  // Cancelación sobre la hora: CUÁNDO avisó el alumno (hora de España). Por
+  // defecto, ahora. Con la hora de la clase da la antelación, y es la antelación
+  // —no el profesor a ojo— la que dice si de verdad fue sobre la hora.
+  const avisoCampo = useAvisoEnEspana();
+  const avisoEs = avisoCampo.aviso;
 
   const needsTranscript = CLASS_TYPE_OPTIONS.find(o => o.value === classType)?.needsTranscript ?? true;
   const isFaltaType = classType === 'falta_sin_aviso' || classType === 'cancelacion_hora';
@@ -312,6 +323,16 @@ export function AddClassModal({
     return canMarkStudentLostClass(classRecords, teacher.id, studentName, (date || '').slice(0, 7)).count;
   }, [classRecords, teacher.id, studentName, isFaltaType, date]);
   const limitReached = isFaltaType && typeCount >= LOST_CLASS_MONTHLY_CAP;
+
+  // Antelación del aviso (solo 'cancelacion_hora'). Con 24 h o más NO es una
+  // cancelación sobre la hora: es una clase movida con tiempo, y eso se registra
+  // desde "Reprogramar". Sin la hora de la clase no se puede calcular.
+  const pideAviso = classType === 'cancelacion_hora';
+  const problemaAviso = pideAviso ? avisoCampo.problema : null;
+  const antelacion = pideAviso && !problemaAviso && time
+    ? antelacionDelAviso(date, time, instanteDelAviso(avisoEs))
+    : null;
+  const avisoBloquea = pideAviso && (!!problemaAviso || !antelacion || !antelacion.tarde);
 
   // Auto-rellenar la hora con el slot recurrente del alumno si el día coincide.
   // Depende solo de alumno+fecha para no pisar una hora editada a mano. Si el
@@ -338,8 +359,18 @@ export function AddClassModal({
   // Normal/recuperación: TRANSCRIPT obligatorio (segundo factor de verificación).
   // Falta/cancelación: comentario obligatorio y bloqueado al llegar a 2 de ese tipo.
   const words = transcript.trim() ? transcript.trim().split(/\s+/).length : 0;
-  const canSave = !!studentName && !!date && !saving && !limitReached &&
+  const canSave = !!studentName && !!date && !saving && !limitReached && !avisoBloquea &&
     (needsTranscript ? words >= 30 : !!comment.trim());
+
+  // Lo que se guarda del aviso. La falta sin aviso es del alumno y no tiene hora
+  // de aviso (no avisó); la cancelación sobre la hora lleva el instante.
+  function avisoDeLaConstancia(): AvisoConstancia | undefined {
+    if (classType === 'falta_sin_aviso') return { canceladoPor: 'alumno' };
+    if (classType === 'cancelacion_hora') {
+      return { avisadoEn: new Date(instanteDelAviso(avisoEs)).toISOString(), canceladoPor: 'alumno' };
+    }
+    return undefined;
+  }
 
   // Guardado real. `replaceId` llega solo cuando el profesor confirmó reemplazar
   // el transcript de una clase ya registrada.
@@ -349,7 +380,7 @@ export function AddClassModal({
       await onSaved(
         studentName, date, time || undefined,
         needsTranscript ? transcript.trim() : '',
-        classType, comment.trim(), hash, replaceId,
+        classType, comment.trim(), hash, replaceId, avisoDeLaConstancia(),
       );
       onClose();
     } catch (e: unknown) {
@@ -515,6 +546,31 @@ export function AddClassModal({
                   el que faltó fue el alumno. Se cobran hasta {LOST_CLASS_MONTHLY_CAP} clases perdidas <b>por mes</b>
                   {' '}—faltas y cancelaciones sobre la hora juntas—; llevás <b>{typeCount}</b> de {LOST_CLASS_MONTHLY_CAP} este
                   mes, y la clase consume cupo del alumno. No requiere transcript.
+                </div>
+              )}
+              {pideAviso && (
+                <div>
+                  <AvisoAlumnoField
+                    value={avisoEs} onChange={avisoCampo.setAviso} maxFecha={avisoCampo.hoy}
+                    problema={problemaAviso} disabled={saving}
+                    inputStyle={inputStyle} labelStyle={labelStyle}
+                  />
+                  {!problemaAviso && !time && (
+                    <div style={{ fontSize: 11.5, color: '#b45309', marginTop: 6, lineHeight: 1.5 }}>
+                      ⚠️ Indica la hora de la clase para calcular con cuánta antelación avisó.
+                    </div>
+                  )}
+                  {antelacion && antelacion.tarde && (
+                    <div style={{ fontSize: 11.5, color: '#5f6360', marginTop: 6, lineHeight: 1.5 }}>
+                      {fraseAntelacion(antelacion)}: se registrará como <b>cancelación sobre la hora</b>.
+                    </div>
+                  )}
+                  {antelacion && !antelacion.tarde && (
+                    <div style={{ fontSize: 12, color: '#b45309', background: 'rgba(255,196,0,0.12)', border: '1px solid rgba(255,196,0,0.4)', borderRadius: 8, padding: '8px 12px', marginTop: 8, lineHeight: 1.5 }}>
+                      {fraseAntelacion(antelacion)}: con 24 h o más <b>no es una cancelación
+                      sobre la hora</b>. Usa <b>«Reprogramar clase»</b> en Mis clases: allí se registra como clase movida con antelación.
+                    </div>
+                  )}
                 </div>
               )}
               <div>

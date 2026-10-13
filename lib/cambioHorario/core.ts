@@ -292,6 +292,10 @@ async function ejecutarCambio(
         classType: 'reprogramada',
         comment: `Reprogramada para ${bloque.fecha} ${bloque.horaInicio} — Motivo: el alumno la movió desde la plataforma (autoservicio)`,
         lostHours: s.duracion,
+        // El aviso es este mismo cambio: lo hace el alumno, ahora. Con él el LMS
+        // sabe la antelación sin depender de created_at (lib/avisoAlumno).
+        avisadoEn: new Date(ahora).toISOString(),
+        canceladoPor: 'alumno',
       });
       recordId = rec.id;
     } catch (err) {

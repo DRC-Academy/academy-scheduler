@@ -44,6 +44,8 @@ import { findOtherTeacherAssignments, type ExistingAssignmentMatch } from '@/lib
 import { isRecoveryBetaTeacher } from '@/lib/classRecoveries';
 import { useTeacherRecoveries, reservedSlotAt } from '@/lib/useTeacherRecoveries';
 import { PendingRecoveriesPanel } from '@/components/RecoveryResponseCard';
+import { AvisoAlumnoField, useAvisoEnEspana } from '@/components/AvisoAlumnoField';
+import { instanteDelAviso } from '@/lib/avisoAlumno';
 
 // Índice de tokens de formulario (por id/nombre de alumno). Se pasa a los tabs.
 type FormIndex = { byId: Map<string, FormTokenInfo>; byName: Map<string, FormTokenInfo> };
@@ -1073,8 +1075,8 @@ function RecuperacionModal({ day, hour, date, studentNames, verdictOf, ledgerOf,
   ledgerOf: (studentName: string, lostDate: string) => RecoveryLedger;
   /** Horas seguidas libres desde esta celda (incluida): decide si cabe el bloque. */
   freeHours: number;
-  /** Registra la falta con aviso de esa fecha. Es la salida del bloqueo. */
-  onRegisterAbsence: (studentName: string, lostDate: string) => Promise<void>;
+  /** Registra la falta con aviso de esa fecha. Es la salida del bloqueo. `avisadoEn`: ISO. */
+  onRegisterAbsence: (studentName: string, lostDate: string, avisadoEn: string) => Promise<void>;
   onConfirm: (data: RecuperacionData) => void;
   onCancel: () => void;
 }) {
@@ -1085,6 +1087,9 @@ function RecuperacionModal({ day, hour, date, studentNames, verdictOf, ledgerOf,
   const [registrando, setRegistrando] = useState(false);
   const [registrada, setRegistrada] = useState(false);
   const [errorRegistro, setErrorRegistro] = useState('');
+  // CUÁNDO avisó el alumno (hora de España). Por defecto, ahora; el profesor lo
+  // corrige si el aviso llegó antes (lo normal: por WhatsApp, días atrás).
+  const avisoCampo = useAvisoEnEspana();
   // Clase perdida de 2 h: ¿se repone junta (un bloque) o partida en dos días?
   const [juntas, setJuntas] = useState(true);
 
@@ -1103,10 +1108,13 @@ function RecuperacionModal({ day, hour, date, studentNames, verdictOf, ledgerOf,
   const puedeElegir = pendientes > 1 && cabenJuntas > 1;
   const horasAMarcar = puedeElegir && juntas ? cabenJuntas : 1;
 
+  const problemaAviso = avisoCampo.problema;
+
   async function registrarFalta() {
+    if (problemaAviso) return;
     setRegistrando(true); setErrorRegistro('');
     try {
-      await onRegisterAbsence(finalName, recoveryFor);
+      await onRegisterAbsence(finalName, recoveryFor, new Date(instanteDelAviso(avisoCampo.aviso)).toISOString());
       setRegistrada(true);
     } catch (e) {
       setErrorRegistro(e instanceof Error ? e.message : 'No se pudo registrar la falta.');
@@ -1153,10 +1161,16 @@ function RecuperacionModal({ day, hour, date, studentNames, verdictOf, ledgerOf,
 
             {/* LA SALIDA: registrar la falta con aviso y seguir sin salir de acá. */}
             {verdict.offerRegister && !registrada && (
-              <button onClick={registrarFalta} disabled={registrando}
-                style={{ marginTop: 10, width: '100%', padding: '9px', borderRadius: 8, border: 'none', background: registrando ? 'var(--bg-surface-3)' : '#e0912f', color: registrando ? 'var(--text-muted)' : 'white', cursor: registrando ? 'not-allowed' : 'pointer', fontSize: 12.5, fontWeight: 700, fontFamily: 'inherit' }}>
-                {registrando ? 'Registrando…' : `Registrar que el alumno avisó el ${recoveryFor.split('-').reverse().join('/')}`}
-              </button>
+              <>
+                <div style={{ marginTop: 10 }}>
+                  <AvisoAlumnoField label="¿Cuándo te avisó el alumno?" value={avisoCampo.aviso} onChange={avisoCampo.setAviso}
+                    maxFecha={avisoCampo.hoy} problema={problemaAviso} disabled={registrando} />
+                </div>
+                <button onClick={registrarFalta} disabled={registrando || !!problemaAviso}
+                  style={{ marginTop: 10, width: '100%', padding: '9px', borderRadius: 8, border: 'none', background: registrando || problemaAviso ? 'var(--bg-surface-3)' : '#e0912f', color: registrando || problemaAviso ? 'var(--text-muted)' : 'white', cursor: registrando || problemaAviso ? 'not-allowed' : 'pointer', fontSize: 12.5, fontWeight: 700, fontFamily: 'inherit' }}>
+                  {registrando ? 'Registrando…' : `Registrar que el alumno avisó de la clase del ${recoveryFor.split('-').reverse().join('/')}`}
+                </button>
+              </>
             )}
             {errorRegistro && (
               <div style={{ marginTop: 8, fontSize: 12, color: '#c0392b' }}>{errorRegistro}</div>
@@ -1523,11 +1537,14 @@ function TeacherContent() {
    * alumno avisó, que es justo lo que hoy se pierde cuando el aviso llega por
    * WhatsApp y no entra al sistema.
    */
-  async function registrarFaltaConAviso(studentName: string, lostDate: string) {
+  async function registrarFaltaConAviso(studentName: string, lostDate: string, avisadoEn: string) {
     if (!teacher) throw new Error('Sin profesor cargado.');
+    // El tipo NO cambia con la antelación: es la constancia de que avisó. Lo que se
+    // añade es CUÁNDO, para que la garantía del plan (LMS) pueda medirla.
     await registerClassRecord(
       teacher.id, studentName, lostDate, undefined, null, 'falta_con_aviso',
       'Registrada al marcar una recuperación: el alumno había avisado.',
+      undefined, { avisadoEn, canceladoPor: 'alumno' },
     );
   }
 

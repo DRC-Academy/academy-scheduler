@@ -28,6 +28,7 @@ import { dbReadTeacherGrid, dbApplyGridChanges, dbAddScoringEvent, type Calendar
 import type { GridChanges } from '@/lib/gridPatch';
 import { baseCellOf, isPuntualState } from '@/lib/cells';
 import { liveReservationsWith, type LiveReservation } from '@/lib/classRecoveryQueries';
+import { insertClassRecordsTolerante } from '@/lib/classRecordStore';
 import { dayNameFromIso, mondayIsoOfIso } from '@/lib/teacherClasses';
 import { hourNum, hourText, nkName } from '@/lib/sessions';
 import { normEmail } from '@/lib/email';
@@ -403,14 +404,18 @@ export async function cancelClass(input: CancelInput): Promise<CancelResult> {
 
   // 1) La constancia de la clase cancelada: hace que Finanzas NO la pague, que
   //    no gaste cupo y que sea recuperable. Directa, SIN dbApplyFaltaSideEffects.
+  //    El aviso es el propio "No puedo dar esta clase": avisa el profesor, ahora.
+  //    Si la base aún no tiene lost_hours/avisado_en/cancelado_por, se guarda
+  //    sin ellas (lib/classRecordStore) en vez de perder la cancelación.
   const cancelRecordId = nuevoId('cr');
-  const { error: crErr } = await supabase.from('class_records').insert({
+  const { error: crErr } = await insertClassRecordsTolerante(supabase, [{
     id: cancelRecordId, teacher_id: input.teacherId, teacher_name: ctx.teacherName,
     student_name: ctx.studentName, class_date: ctx.date, class_time: ctx.hour,
     screenshot_url: '', class_type: ctx.late ? 'cancelada_por_profesor' : 'cancelada_con_preaviso',
     comment: `No puedo dar esta clase${reason ? ` — ${reason}` : ''}`,
     lost_hours: ctx.sessionHours, created_at: cancelledAt,
-  });
+    avisado_en: cancelledAt, cancelado_por: 'profesor',
+  }]);
   if (crErr?.code === '23505') throw new RecoveryError(409, 'ya_cancelada', 'Esta clase ya está cancelada.');
   if (crErr) throw new RecoveryError(500, 'error', `No se pudo registrar la cancelación: ${crErr.message}`);
 
