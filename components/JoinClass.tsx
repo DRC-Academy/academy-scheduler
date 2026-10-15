@@ -16,13 +16,19 @@
 //   3. Verificación de la suscripción del alumno (fuente única:
 //      lib/useSubscriptionStatus). Si está inactiva, disclaimer con la opción de
 //      entrar igual: el acceso queda marcado como `enteredWithoutActive`.
-//   4. Se abre el Meet y se registra el ingreso en class_join_logs.
+//   4. Se abre el Meet y se registra el ingreso en class_join_logs. Si el
+//      guardado falla, el Meet ya está abierto y el profesor ve un aviso con
+//      "Reintentar": sin ingreso la clase no cuenta para el pago y el chequeo de
+//      ausencias (/api/cron/ausencias) la daría por falta a los 30 minutos.
 //   5. Si el alumno está en riesgo de baja, ANTES de abrir el Meet se le enseña
 //      al profesor el protocolo de esa clase (ver `riskFor`).
 //
-// El acceso se registra SIEMPRE con la fecha de HOY en España (`todayIso`), no
-// con la fecha de la clase que se está mirando: el ingreso ocurre ahora y no se
-// puede antedatar ni postdatar.
+// El acceso se registra con la fecha de la CLASE (`c.date`), no con la del clic.
+// No se puede antedatar ni postdatar porque el botón solo existe mientras la
+// clase está abierta: el día de la clase, desde 15 minutos antes hasta el final
+// (components/MisClasesPanel, `joinWindowOf`). Casi siempre las dos fechas son
+// la misma; la diferencia es la clase de las 00:00 a la que se entra a las 23:50,
+// que antes quedaba con la fecha del día anterior.
 
 import { useState, type ReactNode } from 'react';
 import { calcRegisteredClassNumber } from '@/lib/db';
@@ -39,6 +45,8 @@ import { DefineLinkModal } from '@/components/DefineLinkModal';
 /** Lo mínimo que el flujo necesita de una clase. `TeacherClass` lo cumple. */
 export interface JoinableClass {
   key: string;
+  /** Fecha de la clase, 'YYYY-MM-DD' (hora de España). Es la que se guarda en el ingreso. */
+  date: string;
   assignment: Assignment;
   studentName: string;
   hour: string;
@@ -59,8 +67,6 @@ export interface UseClassJoinArgs {
   teacher: Teacher | null | undefined;
   students: Student[];
   classRecords: ClassRecord[];
-  /** Hoy en hora de España. Es la fecha con la que se registra el ingreso. */
-  todayIso: string;
   logClassJoin: LogClassJoinFn;
   updateMeetLink: (assignmentId: string, link: string) => Promise<void>;
   /** Se avisa tras guardar un enlace (el tutorial lo cuenta como paso cumplido). */
@@ -97,7 +103,7 @@ export interface ClassJoinApi {
 
 export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
   const {
-    teacher, students, classRecords, todayIso,
+    teacher, students, classRecords,
     logClassJoin, updateMeetLink, onLinkSaved, onToast, getCachedSub, onSubResolved, riskFor,
   } = args;
 
@@ -111,6 +117,9 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
   const [avoidOpen, setAvoidOpen] = useState(false);
   // Modal "Definir enlace" (components/DefineLinkModal, el mismo de Mis clases).
   const [linkModal, setLinkModal] = useState<Assignment | null>(null);
+  // El ingreso no se pudo guardar: aviso con "Reintentar" (el Meet ya se abrió).
+  const [saveError, setSaveError] = useState<PendingJoin | null>(null);
+  const [retrying, setRetrying] = useState(false);
 
   const toast = (msg: string, ms?: number) => onToast?.(msg, ms);
 
@@ -137,17 +146,18 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
    * el aviso), y abrir el Meet desde el clic del botón lo mantiene como gesto de
    * usuario, que es lo que impide que el navegador bloquee la pestaña.
    */
-  function doJoin(c: JoinableClass, subscriptionStatus: string, enteredWithoutActive: boolean, daysRemaining: number | null = null) {
+  function doJoin(c: JoinableClass, subscriptionStatus: string, enteredWithoutActive: boolean, daysRemaining: number | null = null, ok?: OkToast) {
     if (!c.meetLink || !teacher) return;
     const briefing = riskFor?.(c.studentName) ?? null;
+    const pending: PendingJoin = { c, subscriptionStatus, enteredWithoutActive, daysRemaining, ok };
 
     if (!briefing) {
       window.open(normalizeUrl(c.meetLink), '_blank', 'noopener,noreferrer');
-      registrarIngreso(c, subscriptionStatus, enteredWithoutActive, daysRemaining);
+      void registrarIngreso(pending);
       return;
     }
 
-    registrarIngreso(c, subscriptionStatus, enteredWithoutActive, daysRemaining);
+    void registrarIngreso(pending);
     setAvoidOpen(false);
     setRiskModal({ c, briefing });
     // Queda constancia de QUÉ vio y CUÁNDO: es contra eso, y solo si consta que
@@ -157,12 +167,37 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
     }
   }
 
-  function registrarIngreso(c: JoinableClass, subscriptionStatus: string, enteredWithoutActive: boolean, daysRemaining: number | null) {
-    if (!teacher) return;
-    // La guarda de doble clic vive en dbLogClassJoin: un segundo clic sobre la
-    // misma clase (misma fecha, hora dentro del tramo) no crea otro ingreso.
-    logClassJoin(teacher.id, teacher.name, c.studentName, todayIso, c.hour, subscriptionStatus, enteredWithoutActive, daysRemaining, c.durationHours ?? 1);
+  /**
+   * Guarda el ingreso. Solo con el guardado CONFIRMADO se da la clase por
+   * ingresada y se muestra el "✅": antes el aviso salía aunque la base hubiera
+   * rechazado la fila, y la clase quedaba como "no ingresó" sin que nadie lo
+   * supiera. Si falla, abre el aviso con "Reintentar".
+   */
+  async function registrarIngreso(p: PendingJoin): Promise<boolean> {
+    if (!teacher) return false;
+    const { c } = p;
+    try {
+      // La guarda de doble clic vive en dbLogClassJoin: un segundo clic sobre la
+      // misma clase (misma fecha, hora dentro del tramo) no crea otro ingreso.
+      await logClassJoin(teacher.id, teacher.name, c.studentName, c.date, c.hour, p.subscriptionStatus, p.enteredWithoutActive, p.daysRemaining, c.durationHours ?? 1);
+    } catch (err) {
+      console.error('[ingreso] No se pudo registrar:', err);
+      setSaveError(p);
+      return false;
+    }
     setJoined(prev => new Set([...prev, c.key]));
+    if (p.ok) toast(p.ok.msg, p.ok.ms);
+    return true;
+  }
+
+  async function reintentarIngreso() {
+    if (!saveError || retrying) return;
+    setRetrying(true);
+    const p = saveError;
+    setSaveError(null);
+    const ok = await registrarIngreso(p);
+    setRetrying(false);
+    if (ok && !p.ok) toast('✅ Ingreso registrado');
   }
 
   /** Botón del pop-up: el ingreso ya está registrado, solo falta abrir el Meet. */
@@ -189,8 +224,7 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
     if (!c.meetLink || checkingKey) return;
     const email = emailFor(c.assignment);
     if (!email) {
-      doJoin(c, 'not_verified', false);
-      toast('No se pudo verificar la suscripción, ingreso permitido', 3000);
+      doJoin(c, 'not_verified', false, null, { msg: 'No se pudo verificar la suscripción, ingreso permitido', ms: 3000 });
       return;
     }
 
@@ -207,35 +241,57 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
       // 'active' y con eso se perdía en el join log —y por tanto en finanzas y en
       // asistencias— si el alumno entró en 'pendiente de cancelación', por
       // Oritalk o por activación manual. Todos dan acceso, pero no son lo mismo.
-      doJoin(c, info.status, false, info.daysRemaining);
       if (info.status === 'pending-cancel') {
         // Aviso informativo: NO bloquea. El alumno pagó hasta el fin del periodo.
         const hasta = info.endDate ? new Date(info.endDate) : null;
         const fecha = hasta && !isNaN(hasta.getTime())
           ? ` el ${String(hasta.getDate()).padStart(2, '0')}/${String(hasta.getMonth() + 1).padStart(2, '0')}`
           : '';
-        toast(`✅ Ingreso registrado · La suscripción se cancelará${fecha}, pero el alumno puede seguir tomando clases hasta entonces`, 6000);
+        doJoin(c, info.status, false, info.daysRemaining,
+          { msg: `✅ Ingreso registrado · La suscripción se cancelará${fecha}, pero el alumno puede seguir tomando clases hasta entonces`, ms: 6000 });
       } else {
-        toast('✅ Ingreso registrado');
+        doJoin(c, info.status, false, info.daysRemaining, { msg: '✅ Ingreso registrado' });
       }
     } else if (info.active === false) {
       setSubModal({ c, status: info.status, daysRemaining: info.daysRemaining, endDate: info.endDate, startDate: info.subscriptionStartDate });
     } else {
-      doJoin(c, 'error', false);
-      toast('No se pudo verificar la suscripción, ingreso permitido', 3000);
+      doJoin(c, 'error', false, null, { msg: 'No se pudo verificar la suscripción, ingreso permitido', ms: 3000 });
     }
   }
 
   // Ingreso confirmado desde el disclaimer de suscripción inactiva.
   function joinAnyway() {
     if (!subModal) return;
-    doJoin(subModal.c, subModal.status, true, subModal.daysRemaining);
+    doJoin(subModal.c, subModal.status, true, subModal.daysRemaining, { msg: '✅ Ingreso registrado' });
     setSubModal(null);
-    toast('✅ Ingreso registrado');
   }
 
   const dialogs = (
     <>
+      {/* El ingreso no se guardó. Va por encima de todo (también del protocolo
+          de riesgo): sin esto el profesor cree que entró y la clase no cuenta. */}
+      {saveError && (
+        <div role="alertdialog" aria-labelledby="ingreso-error-title" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 95, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+          <div style={{ background: '#FFFBEB', border: '2px solid #D97706', borderRadius: 14, padding: 24, width: '100%', maxWidth: 420 }}>
+            <div id="ingreso-error-title" style={{ fontWeight: 700, fontSize: 17, color: '#9a3412', marginBottom: 12 }}>
+              ⚠️ No se pudo registrar tu ingreso
+            </div>
+            <div style={{ fontSize: 14, color: '#374151', marginBottom: 20, lineHeight: 1.6 }}>
+              El Meet ya se abrió, pero tu ingreso a la clase de las {saveError.c.hour} con {saveError.c.studentName} no quedó guardado.
+              Sin él la clase no cuenta para el pago y puede figurar como ausencia. Revisa tu conexión y toca <b>Reintentar</b>.
+            </div>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button onClick={() => setSaveError(null)} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'white', color: '#6b7280', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
+                Cerrar
+              </button>
+              <button onClick={reintentarIngreso} disabled={retrying} autoFocus style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: '#D97706', color: 'white', cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+                {retrying ? 'Guardando…' : 'Reintentar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Protocolo de intervención del alumno en riesgo.
           NO se puede cerrar por el fondo: la única salida es el botón, que es el
           que abre el Meet. El ingreso ya quedó registrado antes de abrirse. */}
@@ -455,6 +511,18 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/** Mensaje que se muestra cuando el ingreso quedó guardado. */
+interface OkToast { msg: string; ms?: number }
+
+/** Un ingreso a guardar (o a reintentar). */
+interface PendingJoin {
+  c: JoinableClass;
+  subscriptionStatus: string;
+  enteredWithoutActive: boolean;
+  daysRemaining: number | null;
+  ok?: OkToast;
+}
 
 export function normalizeUrl(url: string): string {
   const t = url.trim();

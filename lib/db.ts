@@ -157,6 +157,44 @@ export function dbGetWeekDates(offset: number = 0): Date[] {
 // ── TEACHERS ─────────────────────────────────────────────────────────────────
 
 /**
+ * Clases que describe un GRID: el horario recurrente (`upcomingClasses`, con el
+ * alumno fijo de cada celda) y las celdas de recuperación con su fecha real
+ * (`recoveryCells`). Puro: lo usan dbGetTeachers y el chequeo de ausencias del
+ * servidor (lib/teacherAbsenceStore), que así ven las mismas clases.
+ */
+export function gridClassesOf(grid: Grid): { upcomingClasses: Teacher['upcomingClasses']; recoveryCells: RecoveryCell[] } {
+  const upcomingClasses = Object.entries(grid)
+    .map(([key, cell]) => ({ key, student: baseStudentOf(cell) }))
+    .filter((e): e is { key: string; student: string } => !!e.student)
+    .map(({ key, student }) => {
+      const [day, time] = key.split('_');
+      return { id: key, studentName: student, day, time, duration: 1, type: 'Clase' };
+    });
+
+  // Celdas de RECUPERACIÓN ('bloqueado' con alumno y semana), resueltas a su
+  // fecha real. `upcomingClasses` no puede llevarlas: usa `baseStudentOf`, que
+  // devuelve el alumno RECURRENTE y deja fuera al que recupera. Sin esta lista
+  // finanzas no ve que la hora pegada a una clase normal es una recuperación
+  // del mismo alumno, y una sesión de 2h (normal + recuperación) se paga como 1.
+  const recoveryCells: RecoveryCell[] = [];
+  for (const [key, cell] of Object.entries(grid)) {
+    if (!cell || cell.state !== 'bloqueado' || !cell.student) continue;
+    const date = puntualDateOf(key, cell);
+    if (!date) continue;   // sin weekDate no se sabe a qué semana pertenece
+    const usc = key.lastIndexOf('_');
+    if (usc < 0) continue;
+    recoveryCells.push({
+      studentName: cell.student,
+      day:  key.slice(0, usc),
+      hour: key.slice(usc + 1),
+      date,
+      recoveryFor: cell.recoveryFor,
+    });
+  }
+  return { upcomingClasses, recoveryCells };
+}
+
+/**
  * La plantilla de profesores.
  *
  * POR DEFECTO NO TRAE LOS ARCHIVADOS. Un profesor archivado ya no está con la
@@ -200,34 +238,7 @@ export async function dbGetTeachers(
     const grid = gridMap[row.id] ?? {};
     const { status, freeSpots, ocupadoSpots, weeklyLoad } = calcStatusFromGrid(grid);
 
-    const upcomingClasses = Object.entries(grid)
-      .map(([key, cell]) => ({ key, student: baseStudentOf(cell) }))
-      .filter((e): e is { key: string; student: string } => !!e.student)
-      .map(({ key, student }) => {
-        const [day, time] = key.split('_');
-        return { id: key, studentName: student, day, time, duration: 1, type: 'Clase' };
-      });
-
-    // Celdas de RECUPERACIÓN ('bloqueado' con alumno y semana), resueltas a su
-    // fecha real. `upcomingClasses` no puede llevarlas: usa `baseStudentOf`, que
-    // devuelve el alumno RECURRENTE y deja fuera al que recupera. Sin esta lista
-    // finanzas no ve que la hora pegada a una clase normal es una recuperación
-    // del mismo alumno, y una sesión de 2h (normal + recuperación) se paga como 1.
-    const recoveryCells: RecoveryCell[] = [];
-    for (const [key, cell] of Object.entries(grid)) {
-      if (!cell || cell.state !== 'bloqueado' || !cell.student) continue;
-      const date = puntualDateOf(key, cell);
-      if (!date) continue;   // sin weekDate no se sabe a qué semana pertenece
-      const usc = key.lastIndexOf('_');
-      if (usc < 0) continue;
-      recoveryCells.push({
-        studentName: cell.student,
-        day:  key.slice(0, usc),
-        hour: key.slice(usc + 1),
-        date,
-        recoveryFor: cell.recoveryFor,
-      });
-    }
+    const { upcomingClasses, recoveryCells } = gridClassesOf(grid);
 
     // Exact list of free cell keys (`${day}_${hour}`) — the single source of truth
     // for slot availability. Cuentan las celdas cuyo estado RECURRENTE es 'libre':
@@ -1333,7 +1344,16 @@ export async function getStudentsForTeacher(teacherId: string): Promise<TeacherS
     dbGetAssignmentsByTeacher(teacherId),
     dbGetStudents(),
   ]);
+  return teacherStudentsFrom(grid, assignments, students);
+}
 
+/**
+ * La regla de `getStudentsForTeacher` sin la lectura, para quien ya tiene los
+ * datos (el chequeo de ausencias del servidor lee todos los profesores de una
+ * vez). `assignments`: SOLO las de ese profesor, de la más reciente a la más
+ * vieja (como las devuelve dbGetAssignmentsByTeacher).
+ */
+export function teacherStudentsFrom(grid: Grid, assignments: Assignment[], students: Student[]): TeacherStudent[] {
   const studentsByName = new Map(students.map(s => [normKey(s.name), s]));
   const asgByName = new Map<string, Assignment>();
   for (const a of assignments) {
@@ -1388,7 +1408,13 @@ export async function getStudentsForTeacher(teacherId: string): Promise<TeacherS
  * que no existen en el calendario del profesor.
  */
 export async function getTeacherAssignments(teacher: Teacher): Promise<Assignment[]> {
-  const rows = await getStudentsForTeacher(teacher.id);
+  return teacherAssignmentsFrom(teacher, await getStudentsForTeacher(teacher.id));
+}
+
+/** La conversión de `getTeacherAssignments`, sin la lectura (ver teacherStudentsFrom). */
+export function teacherAssignmentsFrom(
+  teacher: Pick<Teacher, 'id' | 'name' | 'email' | 'slotChanges'>, rows: TeacherStudent[],
+): Assignment[] {
   return rows.map(ts => conHistorial(teacher, ts.assignment
     ? { ...ts.assignment, slots: ts.slots }
     : assignmentFromGrid(teacher, ts)));
@@ -1410,7 +1436,7 @@ function conHistorial(teacher: Pick<Teacher, 'slotChanges'>, a: Assignment): Ass
  * tiene celdas, así que pertenece al profesor y este tiene que verlo. Le faltarán
  * meet link, fecha de inicio y contador hasta que se le cree el vínculo.
  */
-function assignmentFromGrid(teacher: Teacher, ts: TeacherStudent): Assignment {
+function assignmentFromGrid(teacher: Pick<Teacher, 'id' | 'name' | 'email'>, ts: TeacherStudent): Assignment {
   return {
     id:            `grid_${teacher.id}_${normKey(ts.studentName).replace(/\s+/g, '_')}`,
     teacherId:     teacher.id,
@@ -3181,7 +3207,11 @@ export async function dbLogClassJoin(
   const punctuality = calcPunctuality(scheduledDate, scheduledTime, clickedAt);
   const id          = `cjl_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
-  await supabase.from('class_join_logs').insert({
+  // El error se LANZA. Antes se ignoraba y el profesor veía "Ingreso registrado"
+  // sin que hubiera nada guardado: la clase quedaba como "no ingresó" (sin pago)
+  // y el chequeo de ausencias la daría por falta. Quien llama (components/JoinClass)
+  // avisa y deja reintentar; el Meet se abre igual.
+  const { error: insertError } = await supabase.from('class_join_logs').insert({
     id,
     teacher_id:                  teacherId,
     teacher_name:                teacherName,
@@ -3194,6 +3224,10 @@ export async function dbLogClassJoin(
     entered_without_active:      enteredWithoutActive ?? false,
     subscription_days_remaining: subscriptionDaysRemaining ?? null,
   });
+  if (insertError) {
+    console.error('[db] No se pudo registrar el ingreso:', insertError);
+    throw new Error(`No se pudo registrar el ingreso: ${insertError.message}`);
+  }
 
   return {
     id, teacherId, teacherName, studentName,

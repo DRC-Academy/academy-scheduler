@@ -84,6 +84,9 @@ const FILTER_TABS: Array<{ id: ClassFilter; label: string }> = [
   { id: 'sin_transcript', label: 'Sin transcript' },
 ];
 
+/** "Ingresar a clase" se abre estos minutos antes del inicio (ver joinWindowOf). */
+const JOIN_OPENS_MINUTES_BEFORE = 15;
+
 // ─── Materiales de clase (diapositivas por hito) ──────────────────────────────
 // Desplegable discreto dentro de "Próximas clases". Cerrado por defecto; su
 // estado se recuerda en localStorage. Pensado para tener los materiales a mano
@@ -590,7 +593,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
   // Se le pasa el cache de suscripciones que este tab ya precargó para los badges,
   // así el botón no vuelve a pedir lo que acaba de verificar.
   const join = useClassJoin({
-    teacher, students, classRecords, todayIso, logClassJoin, updateMeetLink,
+    teacher, students, classRecords, logClassJoin, updateMeetLink,
     // Guardar el enlace es el paso "Define el enlace de tu clase" del tutorial.
     onLinkSaved: () => onboarding.reportAction('define-link'),
     onToast: (msg, ms) => showToast(msg, ms),
@@ -637,6 +640,33 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     if (c.startHourNum <= currentDecimal && c.endHourNum > currentDecimal) return 'inprogress';
     if (c.endHourNum <= currentDecimal) return 'passed';
     return 'future';
+  }
+
+  /**
+   * ¿Se puede pulsar "Ingresar a clase"? Solo el día de la clase, desde 15
+   * minutos antes del inicio hasta el final de la sesión, en hora de España.
+   *
+   * El ingreso se guarda con la fecha de la CLASE (components/JoinClass), y esto
+   * es lo que lo hace seguro: antes el botón salía también en las clases de
+   * otros días (vista semanal) y un clic en la del jueves quedaba guardado como
+   * ingreso de hoy. El jueves la clase figuraba sin ingreso: sin pago y, con el
+   * chequeo de ausencias, como posible falta.
+   *
+   * Por epoch y no por fecha: la clase de las 00:00 se abre a las 23:45 del día
+   * anterior.
+   */
+  function joinWindowOf(c: TodayClass): { open: boolean; label: string } {
+    if (!now) return { open: false, label: 'Ingresar a clase' };
+    const startMs = spainWallClockToEpoch(c.date, c.startHourNum);
+    const openMs = startMs - JOIN_OPENS_MINUTES_BEFORE * 60_000;
+    const endMs = startMs + Math.max(1, c.durationHours) * 3_600_000;
+    const nowMs = now.getTime();
+    if (nowMs >= openMs && nowMs < endMs) return { open: true, label: 'Ingresar a clase' };
+    const abre = getSpainParts(new Date(openMs));
+    const label = abre.dateStr === todayIso
+      ? `Disponible desde las ${String(abre.hour).padStart(2, '0')}:${String(abre.minute).padStart(2, '0')}`
+      : 'Disponible el día de la clase';
+    return { open: false, label };
   }
 
   // Reprogramación / cancelación de una clase puntual. Las dos preguntas se
@@ -1255,6 +1285,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     const showDefineLinkBtn = linkPending && hasLink;
     const showLinkDefined = tracksLink && linkDefined;
 
+    const joinWin = joinWindowOf(c);
     const nextClassNum = calcRegisteredClassNumber(c.assignment, classRecords) + 1;
     const slides = !passed && isMilestone(nextClassNum) ? getMilestoneSlides(nextClassNum) : null;
 
@@ -1384,6 +1415,13 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
                     : tState === 'rejected' ? '📝 Subir el correcto'
                     : 'Reemplazar transcript'}
                   {countdown && needsTranscript && <span className="mc-btn-count">⏱ {countdown}</span>}
+                </button>
+              ) : hasLink && !joinWin.open ? (
+                // Fuera de la ventana del ingreso (ver joinWindowOf): se ve CUÁNDO
+                // se abre, pero no registra nada. Sin ancla del tutorial: el paso
+                // "Ingresa a tu clase" espera al botón de verdad.
+                <button className="mc-btn mc-btn-ghost" disabled title="El ingreso se abre 15 minutos antes de la clase">
+                  {joinWin.label}
                 </button>
               ) : hasLink ? (
                 <button data-onboarding={relojListo ? 'join-class' : undefined} className="mc-btn mc-btn-primary" onClick={() => join.join(c)} disabled={join.checkingKey === c.key}>

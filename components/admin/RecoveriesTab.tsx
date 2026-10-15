@@ -15,6 +15,7 @@ import { useState } from 'react';
 import { useAuth } from '@/lib/AuthContext';
 import { fechaLarga, PENALTY_START_DATE } from '@/lib/classRecoveries';
 import { useAdminRecoveries, type AdminRecovery } from '@/lib/useTeacherRecoveries';
+import { PossibleAbsencesSection } from '@/components/admin/PossibleAbsencesSection';
 
 const AMARILLO = '#FFC400';
 const SUAVE = '#F7F7F5';
@@ -88,6 +89,10 @@ export default function RecoveriesTab() {
         </div>
         <button type="button" className="rt-btn-sec" onClick={() => reload()}>Actualizar</button>
       </div>
+
+      {/* Posibles ausencias del profesor (chequeo de cada 5 minutos). Va arriba
+          porque es lo más reciente y lo que se mira en el día. */}
+      <PossibleAbsencesSection />
 
       <div className="rt-filtros">
         <label>Estado

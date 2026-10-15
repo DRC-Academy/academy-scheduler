@@ -19,12 +19,18 @@ import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 
 const NO_STORE = { 'Cache-Control': 'no-store' };
 
-/** `null` si la petición trae el secreto correcto; si no, la Response de error. */
-export function requireCronSecret(request: Request, label: string): Response | null {
-  const expected = process.env.CRON_SECRET;
+/**
+ * `null` si la petición trae el secreto correcto; si no, la Response de error.
+ *
+ * `envName`: la variable con el secreto. Por defecto CRON_SECRET (la que manda
+ * Vercel); un endpoint que llama otro reloj (p. ej. pg_cron de Supabase para
+ * /api/cron/ausencias) usa la suya, para poder cambiarla sin tocar los demás.
+ */
+export function requireCronSecret(request: Request, label: string, envName = 'CRON_SECRET'): Response | null {
+  const expected = process.env[envName];
   if (!expected) {
-    console.error(`[${label}] Falta CRON_SECRET en el entorno: el endpoint queda cerrado.`);
-    return Response.json({ error: 'CRON_SECRET no configurado' }, { status: 500, headers: NO_STORE });
+    console.error(`[${label}] Falta ${envName} en el entorno: el endpoint queda cerrado.`);
+    return Response.json({ error: `${envName} no configurado` }, { status: 500, headers: NO_STORE });
   }
 
   const header = request.headers.get('authorization') ?? '';
@@ -35,7 +41,7 @@ export function requireCronSecret(request: Request, label: string): Response | n
   const got = bearer || query;
   if (!got || !secretsMatch(got, expected)) {
     return Response.json(
-      { error: 'No autorizado', hint: 'Cabecera Authorization: Bearer <CRON_SECRET> (o ?secret=).' },
+      { error: 'No autorizado', hint: `Cabecera Authorization: Bearer <${envName}> (o ?secret=).` },
       { status: 401, headers: NO_STORE },
     );
   }
