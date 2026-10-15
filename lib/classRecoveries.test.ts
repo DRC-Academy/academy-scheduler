@@ -15,10 +15,10 @@ const late = (groupId: string, cancelledAt: string, status: PriorCancellation['s
 const libre = () => null;
 
 describe('beta', () => {
-  it('solo Sebastián (t1)', () => {
+  it('abierto a todos los profesores', () => {
     expect(isRecoveryBetaTeacher('t1')).toBe(true);
-    expect(isRecoveryBetaTeacher('t2')).toBe(false);
-    expect(isRecoveryBetaTeacher(null)).toBe(false);
+    expect(isRecoveryBetaTeacher('t2')).toBe(true);
+    expect(isRecoveryBetaTeacher('t21')).toBe(true);
   });
 });
 
@@ -76,9 +76,9 @@ describe('comodines', () => {
 
   it(`antes del ${PENALTY_START_DATE}: avisa pero no cobra`, () => {
     const prior = [late('g1', at('2026-10-02', 10)), late('g2', at('2026-10-03', 10))];
-    const antes = wildcardOutcome({ prior, cancelledAt: at('2026-10-14', 23, 30), late: true });
+    const antes = wildcardOutcome({ prior, cancelledAt: at('2026-10-21', 23, 30), late: true });
     expect(antes).toMatchObject({ penaltyApplies: true, chargeNow: false, wouldHavePenalty: true, penaltyEuros: 0 });
-    const desde = wildcardOutcome({ prior, cancelledAt: at('2026-10-15', 0, 10), late: true });
+    const desde = wildcardOutcome({ prior, cancelledAt: at('2026-10-22', 0, 10), late: true });
     expect(desde).toMatchObject({ penaltyApplies: true, chargeNow: true, wouldHavePenalty: false, penaltyEuros: -5 });
   });
 });
@@ -203,8 +203,8 @@ describe('contadores y reclasificación', () => {
     expect(lateCancellationsOfMonth(rows, 't1', '2026-10')).toBe(1);
     expect(lateCancellationsOfMonth(rows, 't1', '2026-09')).toBe(0);
   });
-  it('la reclasificación lleva multa fija desde el 15/10 (fecha de la clase); antes solo se marca', () => {
-    expect(reclassPenalty('2026-10-14')).toEqual({ chargeNow: false, wouldHavePenalty: true, penaltyEuros: 0 });
-    expect(reclassPenalty('2026-10-15')).toEqual({ chargeNow: true, wouldHavePenalty: false, penaltyEuros: -5 });
+  it('la reclasificación lleva multa fija desde el 22/10 (fecha de la clase); antes solo se marca', () => {
+    expect(reclassPenalty('2026-10-21')).toEqual({ chargeNow: false, wouldHavePenalty: true, penaltyEuros: 0 });
+    expect(reclassPenalty('2026-10-22')).toEqual({ chargeNow: true, wouldHavePenalty: false, penaltyEuros: -5 });
   });
 });

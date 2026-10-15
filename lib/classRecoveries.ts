@@ -30,7 +30,7 @@ import { hourNum, hourText } from '@/lib/sessions';
  *
  * PARA ABRIRLO A TODOS: cambiar esta línea por `['*']`.
  */
-export const RECOVERY_BETA_TEACHERS: readonly string[] = ['t1'];
+export const RECOVERY_BETA_TEACHERS: readonly string[] = ['*'];
 
 export function isRecoveryBetaTeacher(teacherId: string | null | undefined): boolean {
   if (RECOVERY_BETA_TEACHERS.includes('*')) return true;
@@ -44,7 +44,7 @@ export function isRecoveryBetaTeacher(teacherId: string | null | undefined): boo
  * Antes se cuenta igual y se avisa "te costaría 5 €", pero no se crea el evento
  * de −5 €: queda `would_have_penalty` para saber cuántas habría habido.
  */
-export const PENALTY_START_DATE = '2026-10-15';
+export const PENALTY_START_DATE = '2026-10-22';
 /** Menos de esto es "sin antelación" y gasta comodín. */
 export const LATE_NOTICE_MINUTES = 24 * 60;
 /** Cancelaciones sin antelación gratis al mes, por profesor y en total. */

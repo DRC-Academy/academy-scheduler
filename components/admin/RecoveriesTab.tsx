@@ -13,7 +13,7 @@
 
 import { useState } from 'react';
 import { useAuth } from '@/lib/AuthContext';
-import { fechaLarga } from '@/lib/classRecoveries';
+import { fechaLarga, PENALTY_START_DATE } from '@/lib/classRecoveries';
 import { useAdminRecoveries, type AdminRecovery } from '@/lib/useTeacherRecoveries';
 
 const AMARILLO = '#FFC400';
@@ -48,11 +48,11 @@ function antelacion(min: number): string {
 function coste(r: AdminRecovery): { texto: string; tono: string } {
   if (r.origin === 'admin_reclasificacion') {
     return r.penaltyEuros < 0 ? { texto: `Multa fija ${Math.abs(r.penaltyEuros)} € (reclasificada)`, tono: 'rojo' }
-      : { texto: 'Multa fija: habría costado 5 € (antes del 15/10)', tono: 'ambar' };
+      : { texto: `Multa fija: habría costado 5 € (antes del ${corta(PENALTY_START_DATE)})`, tono: 'ambar' };
   }
   if (!r.late) return { texto: 'Con antelación: sin coste', tono: 'verde' };
   if (r.penaltyEuros < 0) return { texto: `Multa ${Math.abs(r.penaltyEuros)} €`, tono: 'rojo' };
-  if (r.wouldHavePenalty) return { texto: 'Habría costado 5 € (antes del 15/10)', tono: 'ambar' };
+  if (r.wouldHavePenalty) return { texto: `Habría costado 5 € (antes del ${corta(PENALTY_START_DATE)})`, tono: 'ambar' };
   if (r.usedWildcard) return { texto: 'Usó comodín', tono: 'ambar' };
   return { texto: 'Sin antelación', tono: 'ambar' };
 }
