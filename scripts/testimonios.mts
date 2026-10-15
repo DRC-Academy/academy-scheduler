@@ -1,6 +1,13 @@
-// Testimoniales V5 a mano: quién es el alumno en cada transcript, momentos con IA
-// y parejas. Lo mismo que hace la pestaña del admin, sin el límite de 60 s.
+// Testimoniales a mano. Lo mismo que hace la pestaña del admin, sin el límite de 60 s.
 //
+// V6 (15/10/2026, SIN IA, lo que usa la pestaña):
+//   npm run testimonios -- --v6-estado                 contadores
+//   npm run testimonios -- --v6-procesar --apply       recortes de TODOS los pendientes, por tandas,
+//                                                       y al final rehace todas las parejas
+//   npm run testimonios -- --emparejar                  rehace todas las parejas (regla V6)
+//   npm run testimonios -- --auditoria                  alumnos por resultado y motivo
+//
+// V5 (momentos con IA, ya no lo usa la pestaña; sus parejas se rehacen con la regla V6):
 //   npm run testimonios -- --estado                    contadores
 //   npm run testimonios -- --etiquetas                 válidos y excluidos por motivo (sin IA, no escribe)
 //   npm run testimonios -- --id <id de class_analyses>  momentos de UNA clase, NO guarda
@@ -29,6 +36,7 @@ const { supabase } = await import('@/lib/supabase');
 const { parseTurns } = await import('@/lib/fluency');
 const { resolveStudentLabel, EXCLUSION_LABEL } = await import('@/lib/testimonialSpeaker');
 const { runMomentsFor, runMomentsBatch, momentsStatus, ensureMomentRows, syncPairs } = await import('@/lib/testimonialMomentsStore');
+const V6 = await import('@/lib/testimonialSegmentsStore');
 
 const args = process.argv.slice(2);
 const APPLY = args.includes('--apply');
@@ -120,10 +128,39 @@ async function reutilizar() {
   else console.log('Modo prueba: no se guardó nada (añade --apply).');
 }
 
-if (args.includes('--estado')) console.log(await momentsStatus());
+/** V6: todos los pendientes por tandas (las mismas que la pestaña) y luego todas las parejas. */
+async function v6Procesar() {
+  if (!APPLY) { console.log('Escribe en la base: añade --apply.'); return; }
+  console.log('Filas nuevas:', await V6.ensureTranscriptRows());
+  const total: Record<string, number> = {};
+  for (;;) {
+    const r = await V6.runSegmentsBatch({ deadline: Date.now() + 55_000 });
+    for (const [k, n] of Object.entries(r.outcomes)) total[k] = (total[k] ?? 0) + (n ?? 0);
+    console.log(`  tanda de ${r.claimed} · quedan ${r.status.pending} · parejas ${r.status.pairs}`);
+    if (!r.claimed) break;
+  }
+  console.log('Transcripts:', total);
+  const s = await V6.syncSegmentPairs();
+  console.log('Parejas:', { creadas: s.created, cambiadas: s.updated, borradas: s.deleted });
+  console.log('Alumnos:', s.outcomes, '· sin pareja por motivo:', s.reasons);
+  console.log(await V6.segmentsStatus());
+}
+
+async function auditoria() {
+  const { data, error } = await supabase.from('testimonial_audit').select('outcome, reason');
+  if (error) throw new Error(error.message);
+  const c: Record<string, number> = {};
+  for (const r of data ?? []) { const k = r.reason ? `${r.outcome}: ${r.reason}` : r.outcome; c[k] = (c[k] ?? 0) + 1; }
+  console.log(c);
+}
+
+if (args.includes('--v6-estado')) console.log(await V6.segmentsStatus());
+else if (args.includes('--v6-procesar')) await v6Procesar();
+else if (args.includes('--auditoria')) await auditoria();
+else if (args.includes('--estado')) console.log(await momentsStatus());
 else if (args.includes('--etiquetas')) await etiquetas();
 else if (valueOf('--id')) await una(valueOf('--id')!);
 else if (args.includes('--procesar')) await procesar(Number(valueOf('--procesar')) || 50);
 else if (args.includes('--reutilizar')) await reutilizar();
 else if (args.includes('--emparejar')) console.log(await syncPairs());
-else console.log('Uso: --estado | --etiquetas | --id <id> [--apply] | --procesar <N> --apply [--fallidas] | --emparejar | --reutilizar [--apply]');
+else console.log('Uso: --v6-estado | --v6-procesar --apply | --auditoria | --estado | --etiquetas | --id <id> [--apply] | --procesar <N> --apply [--fallidas] | --emparejar | --reutilizar [--apply]');

@@ -20,7 +20,7 @@ import {
 } from '@/lib/transcriptStore';
 import { logUsageEvent } from '@/lib/usageEvents';
 import { after } from 'next/server';
-import { runMomentsInBackground } from '@/lib/testimonialMomentsStore';
+import { runSegmentsInBackground } from '@/lib/testimonialSegmentsStore';
 
 export const runtime = 'nodejs';
 // El guardado son 2-3 consultas a Supabase (unos segundos). El resto del margen es
@@ -45,8 +45,6 @@ interface Body {
 }
 
 export async function POST(request: Request): Promise<Response> {
-  // Reloj de la función: after() vive dentro del mismo maxDuration.
-  const startedAt = Date.now();
   let body: Body;
   try {
     body = await request.json();
@@ -124,9 +122,10 @@ export async function POST(request: Request): Promise<Response> {
     });
   }
 
-  // También al reemplazar el transcript: los momentos anteriores eran del texto viejo.
+  // Testimoniales (V6, sin IA): recortes del alumno y su pareja, después de responder.
+  // También al reemplazar el transcript: los recortes anteriores eran del texto viejo.
   const analysisId = saved.id;
-  after(() => runMomentsInBackground(analysisId, startedAt + 56_000));
+  after(() => runSegmentsInBackground(analysisId));
 
   return Response.json({
     saved: true,

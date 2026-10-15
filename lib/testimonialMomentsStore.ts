@@ -31,11 +31,11 @@ import {
 } from '@/lib/testimonialSpeaker';
 import { pickClassMoments, MAX_PER_KIND } from '@/lib/testimonialMoments';
 import {
-  validateMoment, keepBest, bestPairs, pairKey,
-  type Moment, type MomentPair, type MomentCandidate, type MomentClassContext,
+  validateMoment, keepBest,
+  type Moment, type MomentCandidate, type MomentClassContext,
 } from '@/lib/testimonialPairs';
 import { FLUENCY_MODEL } from '@/lib/analyzeFluency';
-import type { TestimonialClip, TestimonialClips } from '@/lib/testimonials';
+import { syncSegmentPairs } from '@/lib/testimonialSegmentsStore';
 
 type Row = Record<string, unknown>;
 
@@ -45,8 +45,6 @@ export const BATCH_SIZE = 6;
 export const MAX_ATTEMPTS = 3;
 const LEASE_MS = 2 * 60_000;
 const NEVER = '2000-01-01T00:00:00.000Z';
-/** Estados de una pareja que el admin ya marcó "Sirve": nunca se tocan. */
-const SIRVEN = ['listo', 'revisado', 'permiso_alumno'];
 
 /** 'pending' solo con `reuseOnly`: no había nada que reaprovechar, falta la IA. */
 export type MomentsRunStatus = 'ready' | 'excluded' | 'failed' | 'missing' | 'pending';
@@ -221,21 +219,12 @@ export async function runMomentsInBackground(analysisId: string, deadline: numbe
   }
 }
 
-// ── Parejas (sin IA) ─────────────────────────────────────────────────────────
-
-const toMoment = (r: Row): Moment => ({
-  id: String(r.id), analysisId: String(r.analysis_id), studentGroup: String(r.student_group),
-  teacherId: (r.teacher_id as string | null) ?? null, classDay: String(r.class_day ?? ''),
-  studentLabel: String(r.student_label ?? ''), kind: r.kind as Moment['kind'],
-  start: Number(r.start_s), end: Number(r.end_s), excerpt: String(r.excerpt ?? ''),
-  score: Number(r.score), why: String(r.why ?? ''), fathomUrl: (r.fathom_url as string | null) ?? null,
-});
-
-const toClip = (m: Moment): TestimonialClip => ({
-  analysisId: m.analysisId, classDate: m.classDay, teacherId: m.teacherId,
-  start: m.start, end: m.end, excerpt: m.excerpt, why: m.why, fathomUrl: m.fathomUrl,
-  speakerLabel: m.studentLabel,
-});
+// ── Parejas ──────────────────────────────────────────────────────────────────
+//
+// Desde la V6 (15/10/2026) las parejas las elige SOLO el código a partir de los
+// recortes de lib/testimonialSegmentsStore (una por alumno). Los momentos de IA
+// de esta V5 ya no se emparejan: este flujo queda para el script y, si se usa,
+// rehace las parejas con la regla V6 para no pisarlas con la vieja.
 
 async function pagedRows(table: string, cols: string, order: string, apply?: (q: any) => any): Promise<Row[]> {   // eslint-disable-line @typescript-eslint/no-explicit-any
   const out: Row[] = [];
@@ -250,93 +239,9 @@ async function pagedRows(table: string, cols: string, order: string, apply?: (q:
   return out;
 }
 
-/** Columnas de un lado de la pareja (before = malo, after = bueno). */
-function sideColumns(pre: 'before' | 'after', m: Moment): Row {
-  const at = `${Math.floor(m.start / 60)}:${String(m.start % 60).padStart(2, '0')}`;
-  return {
-    [`${pre}_analysis_id`]: m.analysisId, [`${pre}_teacher_id`]: m.teacherId,
-    [`${pre}_class_number`]: null, [`${pre}_class_date`]: m.classDay || null, [`${pre}_score`]: m.score,
-    [`${pre}_excerpt`]: m.excerpt, [`${pre}_excerpt_at`]: at, [`${pre}_fathom_url`]: m.fathomUrl,
-    [`${pre}_moment_id`]: m.id,
-  };
-}
-
-function pairColumns(p: MomentPair, studentName: string | null): Row {
-  const clips: TestimonialClips = { malos: [toClip(p.malo)], buenos: [toClip(p.bueno)] };
-  return {
-    student_group: p.studentGroup,
-    student_id: p.studentGroup.startsWith('name:') ? null : p.studentGroup,
-    student_name: studentName,
-    pair_teacher_id: p.teacherId,
-    student_label: p.bueno.studentLabel,
-    reverse_order: p.reverse,
-    ...sideColumns('before', p.malo),
-    ...sideColumns('after', p.bueno),
-    clips,
-    improvement: p.bueno.score,
-    ai_review_status: 'ready', ai_is_real: true, ai_error: null, ai_summary: null,
-    ai_reason: `Malo ${p.malo.score}/10 · bueno ${p.bueno.score}/10.`,
-  };
-}
-
-/**
- * Rehace las parejas (de unos alumnos, o de todos sin `groups`). Nunca toca lo
- * que el admin marcó "Sirve", ni vuelve a proponer una combinación alumno + profe
- * que marcó "No sirve". Las de "Por revisar" se actualizan si cambia la mejor
- * combinación y se borran si ya no hay ninguna.
- */
+/** Rehace las parejas con la regla V6 (ver lib/testimonialSegmentsStore). */
 export async function syncPairs(groups?: string[]): Promise<{ created: number; updated: number; deleted: number }> {
-  const filter = (q: any) => (groups ? q.in('student_group', groups) : q);   // eslint-disable-line @typescript-eslint/no-explicit-any
-  const momentRows = groups?.length === 0 ? [] : await pagedRows('testimonial_moments',
-    'id, analysis_id, student_group, teacher_id, class_day, student_label, kind, start_s, end_s, excerpt, score, why, fathom_url', 'id', filter);
-  const pairs = bestPairs(momentRows.map(toMoment));
-  const existing = await pagedRows('testimonial_candidates',
-    'id, student_group, pair_teacher_id, status, discarded_by, before_moment_id, after_moment_id', 'id', filter);
-  const names = new Map<string, string | null>();
-  for (const r of await pagedRows('testimonial_transcripts', 'student_group, student_name', 'analysis_id', filter)) {
-    if (r.student_name) names.set(String(r.student_group), String(r.student_name));
-  }
-
-  const byKey = new Map<string, Row[]>();
-  for (const r of existing) {
-    if (!r.pair_teacher_id) continue;
-    const k = pairKey(String(r.student_group), String(r.pair_teacher_id));
-    byKey.set(k, [...(byKey.get(k) ?? []), r]);
-  }
-
-  let created = 0, updated = 0, deleted = 0;
-  const now = new Date().toISOString();
-  const wanted = new Set<string>();
-  for (const p of pairs) {
-    const k = pairKey(p.studentGroup, p.teacherId);
-    wanted.add(k);
-    const rows = byKey.get(k) ?? [];
-    if (rows.some(r => SIRVEN.includes(String(r.status)))) continue;
-    if (rows.some(r => r.status === 'descartado' && r.discarded_by === 'admin')) continue;
-    const open = rows.find(r => r.status === 'detectado');
-    const cols = pairColumns(p, names.get(p.studentGroup) ?? null);
-    if (open) {
-      if (open.before_moment_id === p.malo.id && open.after_moment_id === p.bueno.id) continue;
-      const { error } = await supabase.from('testimonial_candidates').update({ ...cols, updated_at: now }).eq('id', open.id).eq('status', 'detectado');
-      if (error) throw new Error(`Actualizando pareja: ${error.message}`);
-      updated++;
-    } else {
-      const { error } = await supabase.from('testimonial_candidates').insert({
-        id: `tc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, ...cols,
-        status: 'detectado', status_changed_at: now, updated_at: now,
-      });
-      // 23505: otra ejecución la creó a la vez (índice único). La suya vale.
-      if (error && error.code !== '23505') throw new Error(`Creando pareja: ${error.message}`);
-      if (!error) created++;
-    }
-  }
-  // "Por revisar" que ya no tiene pareja (p. ej. se reanalizó una clase).
-  const stale = existing.filter(r => r.status === 'detectado' && r.pair_teacher_id
-    && !wanted.has(pairKey(String(r.student_group), String(r.pair_teacher_id))));
-  for (const r of stale) {
-    await supabase.from('testimonial_candidates').delete().eq('id', r.id).eq('status', 'detectado');
-    deleted++;
-  }
+  const { created, updated, deleted } = await syncSegmentPairs(groups);
   return { created, updated, deleted };
 }
 

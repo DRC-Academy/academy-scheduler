@@ -1,41 +1,38 @@
 'use client';
 
-// Pestaña admin "Testimoniales" (V5, 07/10/2026): una tarjeta por alumno Y PROFE
-// con dos clips cortos del alumno: uno en que habla mal y otro, de OTRA clase con
-// el mismo profe, en que habla muy bien. Botones: Sirve / No sirve. Cada ▶ abre
-// la grabación de Fathom en el segundo de inicio del clip.
+// Pestaña admin "Testimoniales" (V6, 15/10/2026): una tarjeta por ALUMNO con dos
+// clips suyos con el mismo profe: uno en que se traba (A) y otro, al menos 4
+// semanas después, en que habla con soltura (B). Botones: Sirve / No sirve. Cada
+// ▶ abre la grabación de Fathom en el segundo de inicio del clip.
 //
-// Las parejas las elige el código (lib/testimonialPairs) entre los momentos que
-// Haiku sacó de cada clase SOLO de las intervenciones del alumno, y el alumno de
-// cada clase lo decide el código por su etiqueta de Fathom (lib/testimonialSpeaker).
-// Arriba, el panel del análisis de los transcripts antiguos: se lanza a mano
-// (cuesta dinero); los transcripts nuevos se analizan solos al subirse.
+// Todo lo elige el código, sin IA (lib/testimonialScoring, umbrales en
+// lib/testimonialConfig): quién es el alumno (lib/testimonialSpeaker), los
+// recortes y la pareja. Arriba, el panel para procesar los transcripts antiguos
+// (sin coste); los nuevos se procesan solos al subirse. Abajo, por qué cada
+// alumno sin pareja no sale (tabla testimonial_audit).
 //
-//   Por revisar = 'detectado' de la V5; primero las de orden normal (la clase
-//                 mala antes que la buena), después las de "Orden inverso"
+//   Por revisar = 'detectado'
 //   Sirven      = 'listo' (y los estados antiguos 'revisado' / 'permiso_alumno')
-//   No sirve    = 'descartado' por el admin: oculto, y esa combinación alumno +
-//                 profe no se vuelve a proponer
+//   No sirve    = 'descartado' por el admin: oculto, y esos dos momentos no se
+//                 vuelven a proponer (otros del mismo alumno sí)
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTeachers } from '@/lib/TeachersContext';
 import {
-  dbGetTestimonialCandidates, dbUpdateTestimonialCandidate,
-  type TestimonialCandidate,
+  dbGetTestimonialCandidates, dbUpdateTestimonialCandidate, dbGetTestimonialAudit,
+  type TestimonialCandidate, type TestimonialAuditRow,
 } from '@/lib/testimonialsDb';
 import { clipLabel, type TestimonialClip } from '@/lib/testimonials';
+import { NO_PAIR_LABEL, daysBetween, type NoPairReason } from '@/lib/testimonialScoring';
 
 type Vista = 'revisar' | 'sirven';
 
 interface Estado {
-  total: number; pending: number; ready: number; excluded: number;
-  failed: number; failedRetryable: number; withMoments: number; pairs: number;
+  total: number; pending: number; ready: number; excluded: number; pairs: number; withoutPair: number;
 }
 
-/** Tandas a la vez: cada una es una función de Vercel de hasta 60 s con 6 transcripts. */
+/** Tandas a la vez: cada una es una función de Vercel de hasta 60 s con 20 transcripts. */
 const EN_PARALELO = 3;
-/** Coste aproximado por transcript con Haiku 4.5 (~7.000 tokens de entrada y ~500 de salida). */
-const COSTE_POR_TRANSCRIPT_USD = 0.01;
 
 const SIRVEN = new Set(['listo', 'revisado', 'permiso_alumno']);
 const porRevisar = (c: TestimonialCandidate) => c.status === 'detectado' && !!c.pairTeacherId && c.clips !== null;
@@ -75,12 +72,12 @@ export default function TestimonialsTab() {
     }
   }, []);
 
-  /** Analiza los transcripts pendientes (o los fallidos) por tandas, EN_PARALELO a la vez. */
-  const analizar = useCallback(async (retryFailed: boolean) => {
+  /** Procesa los transcripts pendientes por tandas, EN_PARALELO a la vez. Sin IA. */
+  const analizar = useCallback(async () => {
     setAnalizando(true);
     const trabajador = async () => {
       for (;;) {
-        const r = await post<{ claimed?: number; status?: Estado }>({ action: 'tanda', retryFailed });
+        const r = await post<{ claimed?: number; status?: Estado }>({ action: 'tanda' });
         if (!vivo.current) return;
         if (r.error) { setError(r.error); return; }
         if (r.status) setEstado(r.status);
@@ -90,6 +87,17 @@ export default function TestimonialsTab() {
     };
     await Promise.all(Array.from({ length: EN_PARALELO }, trabajador));
     if (vivo.current) setAnalizando(false);
+  }, [cargar]);
+
+  /** Rehace todas las parejas y la auditoría (tras cambiar un umbral). */
+  const emparejar = useCallback(async () => {
+    setAnalizando(true);
+    const r = await post<{ status?: Estado }>({ action: 'emparejar' });
+    if (!vivo.current) return;
+    if (r.error) setError(r.error);
+    if (r.status) setEstado(r.status);
+    await cargar();
+    setAnalizando(false);
   }, [cargar]);
 
   useEffect(() => {
@@ -139,7 +147,7 @@ export default function TestimonialsTab() {
     <div className="ts">
       <h2 className="ts-title">Testimoniales</h2>
 
-      {estado && <PanelAnalisis estado={estado} analizando={analizando} onAnalizar={analizar} />}
+      {estado && <PanelAnalisis estado={estado} analizando={analizando} onAnalizar={analizar} onEmparejar={emparejar} />}
 
       <div className="ts-tabs" role="tablist">
         <button type="button" role="tab" className="ts-tab" aria-selected={vista === 'revisar'} onClick={() => setVista('revisar')}>
@@ -159,7 +167,7 @@ export default function TestimonialsTab() {
       ) : visibles.length === 0 ? (
         <p className="ts-vacio">
           {vista === 'revisar'
-            ? (estado && estado.pending > 0 ? 'Todavía no hay parejas: analiza los transcripts pendientes.' : 'No hay alumnos por revisar.')
+            ? (estado && estado.pending > 0 ? 'Todavía no hay parejas: procesa los transcripts pendientes.' : 'No hay alumnos por revisar.')
             : 'Todavía no has marcado ninguno como “Sirve”.'}
         </p>
       ) : (
@@ -169,6 +177,8 @@ export default function TestimonialsTab() {
           ))}
         </div>
       )}
+
+      {estado && estado.pending === 0 && <Auditoria version={estado.pairs + estado.withoutPair} />}
 
       {deshacer && (
         <div className="ts-toast" role="status">
@@ -181,35 +191,89 @@ export default function TestimonialsTab() {
   );
 }
 
-function PanelAnalisis({ estado: e, analizando, onAnalizar }: {
-  estado: Estado; analizando: boolean; onAnalizar: (retryFailed: boolean) => void;
+function PanelAnalisis({ estado: e, analizando, onAnalizar, onEmparejar }: {
+  estado: Estado; analizando: boolean; onAnalizar: () => void; onEmparejar: () => void;
 }) {
   const hechos = e.ready + e.excluded;
-  const coste = Math.max(1, Math.round(e.pending * COSTE_POR_TRANSCRIPT_USD));
+  const n = (x: number) => x.toLocaleString('es-ES');
   return (
     <section className="ts-panel">
       <p className="ts-panel-l">
-        Transcripts analizados: <b>{hechos.toLocaleString('es-ES')}</b> de {e.total.toLocaleString('es-ES')}
-        {' · '}válidos {e.ready.toLocaleString('es-ES')} · excluidos {e.excluded.toLocaleString('es-ES')}
-        {e.failed > 0 && <> · fallidos {e.failed}</>}
+        Transcripts procesados: <b>{n(hechos)}</b> de {n(e.total)}
+        {' · '}válidos {n(e.ready)} · excluidos {n(e.excluded)}
+        {' · '}alumnos sin pareja {n(e.withoutPair)}
       </p>
       {analizando ? (
-        <p className="ts-panel-l">Analizando… quedan {e.pending.toLocaleString('es-ES')}. Deja la pestaña abierta.</p>
+        <p className="ts-panel-l">Procesando… quedan {n(e.pending)}. Deja la pestaña abierta.</p>
       ) : (
         <div className="ts-panel-acc">
           {e.pending > 0 && (
-            <button type="button" className="ts-btn ts-si" onClick={() => onAnalizar(false)}>
-              Analizar {e.pending.toLocaleString('es-ES')} pendientes (~{coste} $)
+            <button type="button" className="ts-btn ts-si" onClick={onAnalizar}>
+              Procesar {n(e.pending)} pendientes (sin coste)
             </button>
           )}
-          {e.failedRetryable > 0 && (
-            <button type="button" className="ts-btn ts-no" onClick={() => onAnalizar(true)}>
-              Reintentar {e.failedRetryable} fallidos
+          {e.pending === 0 && (
+            <button type="button" className="ts-btn ts-no" onClick={onEmparejar}
+              title="Vuelve a elegir la pareja de cada alumno con los umbrales actuales. No toca lo marcado Sirve ni No sirve.">
+              Rehacer parejas
             </button>
           )}
         </div>
       )}
     </section>
+  );
+}
+
+const OUTCOME_LABEL: Record<TestimonialAuditRow['outcome'], string> = {
+  pareja: 'Con pareja',
+  sin_pareja: 'Sin pareja',
+  ya_sirve: 'Ya tiene una que Sirve',
+  sin_clases_validas: 'Ninguna clase válida',
+};
+
+/** Por qué cada alumno sale o no sale (testimonial_audit). Se carga al abrirla. */
+function Auditoria({ version }: { version: number }) {
+  const [abierta, setAbierta] = useState(false);
+  const [filas, setFilas] = useState<TestimonialAuditRow[] | null | undefined>(undefined);
+  useEffect(() => {
+    if (!abierta) return;
+    let vivo = true;
+    dbGetTestimonialAudit().then(r => { if (vivo) setFilas(r); }).catch(() => { if (vivo) setFilas(null); });
+    return () => { vivo = false; };
+  }, [abierta, version]);
+
+  const motivo = (f: TestimonialAuditRow) => (f.outcome === 'sin_pareja' && f.reason
+    ? NO_PAIR_LABEL[f.reason as NoPairReason] ?? f.reason
+    : OUTCOME_LABEL[f.outcome]);
+  const sinPareja = (filas ?? []).filter(f => f.outcome !== 'pareja');
+  const cuentas = new Map<string, number>();
+  for (const f of filas ?? []) cuentas.set(motivo(f), (cuentas.get(motivo(f)) ?? 0) + 1);
+
+  return (
+    <details className="ts-audit" onToggle={e => setAbierta((e.target as HTMLDetailsElement).open)}>
+      <summary>¿Por qué un alumno no sale?</summary>
+      {filas === undefined ? <p className="ts-panel-l">Cargando…</p>
+        : filas === null ? <p className="ts-panel-l">Falta correr <code>supabase-testimoniales-v6.sql</code>.</p>
+        : (
+          <>
+            <p className="ts-panel-l">
+              {[...cuentas].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}: ${v}`).join(' · ')}
+            </p>
+            <ul className="ts-audit-l">
+              {sinPareja.map(f => {
+                const d = (f.details ?? {}) as Record<string, number | null | undefined>;
+                return (
+                  <li key={f.studentGroup}>
+                    <b>{f.studentName ?? f.studentGroup}</b> — {motivo(f)}
+                    {d.clases != null && <span className="ts-why"> · {d.clases} clases válidas</span>}
+                    {d.recortesA != null && <span className="ts-why"> · {d.recortesA} momentos A / {d.recortesB ?? 0} B</span>}
+                  </li>
+                );
+              })}
+            </ul>
+          </>
+        )}
+    </details>
   );
 }
 
@@ -223,6 +287,7 @@ function Tarjeta({ c, nombreProfe, onCambiar }: {
   const bueno = c.clips?.buenos[0];
   const v5 = !!c.pairTeacherId;
   const etiquetas = [...new Set([malo?.speakerLabel, bueno?.speakerLabel, c.studentLabel].filter(Boolean))];
+  const semanas = malo && bueno ? Math.floor(daysBetween(malo.classDate, bueno.classDate) / 7) : null;
   return (
     <article className="ts-card">
       <header className="ts-card-h">
@@ -232,6 +297,7 @@ function Tarjeta({ c, nombreProfe, onCambiar }: {
       {v5 && (
         <div className="ts-checks">
           <span className="ts-ok">Mismo alumno ✓ · Mismo profe ✓</span>
+          {semanas != null && semanas > 0 && <span className="ts-fathom">{semanas} semanas entre clases</span>}
           {c.reverseOrder && <span className="ts-inverso">Orden inverso</span>}
           {etiquetas.length > 0 && <span className="ts-fathom">En Fathom: {etiquetas.join(' / ')}</span>}
         </div>
@@ -320,6 +386,10 @@ const ESTILOS = `
 .ts-sin { margin: 0; font-size: 13.5px; font-weight: 600; color: var(--gris); }
 
 .ts-resumen { margin: 0; font-size: 14.5px; line-height: 1.55; color: #333; }
+
+.ts-audit { margin-top: 18px; padding: 12px 14px; border-radius: 12px; background: var(--fondo); }
+.ts-audit summary { cursor: pointer; font-size: 14px; font-weight: 700; min-height: 32px; display: flex; align-items: center; }
+.ts-audit-l { margin: 8px 0 0; padding-left: 18px; display: grid; gap: 4px; font-size: 13.5px; }
 
 .ts-acc { display: flex; gap: 10px; flex-wrap: wrap; }
 .ts-btn { min-height: 44px; padding: 0 18px; border-radius: 10px; font-family: inherit; font-size: 14.5px; font-weight: 700; cursor: pointer; }

@@ -1,45 +1,44 @@
-// Pestaña Testimoniales del admin (V5): análisis de los transcripts antiguos por
-// tandas y emparejamiento por código. Ver lib/testimonialMomentsStore.
+// Pestaña Testimoniales del admin (V6, 15/10/2026): recortes de los transcripts
+// por tandas y UNA pareja por alumno, todo por código (sin IA ni coste). Ver
+// lib/testimonialSegmentsStore.
 //
 // Auth del panel en el cliente, igual que el resto de /api/admin: la ruta es
-// pública, pero solo analiza transcripts PENDIENTES (cada uno una vez, ~1 céntimo)
-// y el emparejamiento no usa IA.
+// pública, pero solo procesa transcripts PENDIENTES y no gasta nada.
 //
 // Acciones (POST { action }):
-//   · 'estado'     → contadores (y crea las filas 'pending' que falten, sin IA).
-//   · 'tanda'      → analiza hasta 6 transcripts y rehace sus parejas.
-//                    { retryFailed: true } reintenta los fallidos.
-//   · 'emparejar'  → rehace todas las parejas (sin IA).
+//   · 'estado'     → contadores (y crea las filas pendientes que falten).
+//   · 'tanda'      → procesa hasta 20 transcripts y rehace las parejas de sus alumnos.
+//   · 'emparejar'  → rehace todas las parejas y la auditoría (tras cambiar un umbral).
 
-import { ensureMomentRows, momentsStatus, runMomentsBatch, syncPairs } from '@/lib/testimonialMomentsStore';
+import { ensureTranscriptRows, segmentsStatus, runSegmentsBatch, syncSegmentPairs } from '@/lib/testimonialSegmentsStore';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-// Una tanda: 6 llamadas a Haiku en paralelo (40 s como mucho cada una) y sus parejas.
+// Plan Hobby: 60 s como mucho. La tanda se para a los 45 s y deja lo que falte.
 export const maxDuration = 60;
 
 export async function POST(request: Request): Promise<Response> {
   const startedAt = Date.now();
-  let body: { action?: string; retryFailed?: boolean } = {};
+  let body: { action?: string } = {};
   try { body = await request.json(); } catch { /* cuerpo vacío = estado */ }
 
   try {
     switch (body.action) {
       case 'tanda':
-        return Response.json(await runMomentsBatch({ deadline: startedAt + 55_000, retryFailed: !!body.retryFailed }));
+        return Response.json(await runSegmentsBatch({ deadline: startedAt + 45_000 }));
       case 'emparejar': {
-        const r = await syncPairs();
-        return Response.json({ ...r, status: await momentsStatus() });
+        const r = await syncSegmentPairs();
+        return Response.json({ ...r, status: await segmentsStatus() });
       }
       default: {
-        const created = await ensureMomentRows();
-        return Response.json({ created, status: await momentsStatus() });
+        const created = await ensureTranscriptRows();
+        return Response.json({ created, status: await segmentsStatus() });
       }
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[testimonial-prepare]', msg);
-    const sinTabla = /testimonial_(transcripts|moments)/.test(msg) && /exist|schema cache/i.test(msg);
-    return Response.json({ error: sinTabla ? 'Falta correr supabase-testimoniales-v5.sql en Supabase.' : msg }, { status: 500 });
+    const sinSql = /testimonial_(segments|audit)|segments_at|segment_stats/.test(msg) && /exist|schema cache|column/i.test(msg);
+    return Response.json({ error: sinSql ? 'Falta correr supabase-testimoniales-v6.sql en Supabase.' : msg }, { status: 500 });
   }
 }

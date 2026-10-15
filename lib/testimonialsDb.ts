@@ -97,7 +97,7 @@ export async function dbGetTestimonialCandidates(): Promise<TestimonialCandidate
   return out;
 }
 
-/** Cambio manual de estado y/o notas. "No sirve" (descartado por el admin) bloquea a ese alumno con ese profe (ver testimonialMomentsStore syncPairs). */
+/** Cambio manual de estado y/o notas. "No sirve" (descartado por el admin) bloquea esos dos momentos (ver testimonialSegmentsStore syncSegmentPairs). */
 export async function dbUpdateTestimonialCandidate(
   id: string, patch: { status?: TestimonialStatus; adminNotes?: string },
 ): Promise<{ error?: string }> {
@@ -112,4 +112,35 @@ export async function dbUpdateTestimonialCandidate(
   const { error } = await supabase.from('testimonial_candidates').update(row).eq('id', id);
   if (error?.code === '23505') return { error: 'Este alumno ya tiene otra pareja activa con este profe. Descarta esa antes de reactivar esta.' };
   return error ? { error: error.message } : {};
+}
+
+// ── Auditoría V6: por qué cada alumno sale o no sale (supabase-testimoniales-v6.sql) ──
+
+export interface TestimonialAuditRow {
+  studentGroup: string;
+  studentName: string | null;
+  outcome: 'pareja' | 'sin_pareja' | 'ya_sirve' | 'sin_clases_validas';
+  /** NoPairReason de lib/testimonialScoring cuando no hay pareja. */
+  reason: string | null;
+  details: Record<string, unknown> | null;
+  updatedAt: string;
+}
+
+/** Toda la auditoría. null = falta la tabla (SQL sin correr). */
+export async function dbGetTestimonialAudit(): Promise<TestimonialAuditRow[] | null> {
+  const out: TestimonialAuditRow[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await supabase.from('testimonial_audit')
+      .select('*').order('student_name').range(from, from + 999);
+    if (error) {
+      if (error.code === '42P01' || error.code === 'PGRST205') return null;
+      throw new Error(error.message);
+    }
+    out.push(...(data ?? []).map((r: Row) => ({
+      studentGroup: r.student_group, studentName: r.student_name ?? null, outcome: r.outcome,
+      reason: r.reason ?? null, details: r.details ?? null, updatedAt: r.updated_at,
+    })));
+    if ((data ?? []).length < 1000) break;
+  }
+  return out;
 }
