@@ -207,6 +207,92 @@ function indexarRecords(records: ClassRecord[]): Map<string, ClassRecord[]> {
   return m;
 }
 
+// ── ¿Se subió a tiempo el transcript de cada clase? ───────────────────────────
+
+/** Una clase con plazo de 24 h que ya se puede juzgar. */
+export interface ClaseTranscriptJuzgada {
+  teacherId: string;
+  studentName: string;
+  /** Fecha de la clase (hora de España). */
+  date: string;
+  /** true = subido dentro del plazo; false = vencido o subido tarde. */
+  aTiempo: boolean;
+}
+
+/**
+ * Juzga el transcript de cada clase con plazo (desde el 22/09/2026 hasta `hoy`).
+ * Es la regla del dashboard de uso y del scoring v2 (lib/teacherScore): una sola
+ * función para que las dos pantallas cuenten lo mismo.
+ *
+ *   · Una clase = profesor + alumno + fecha (una sesión de 2 h tiene dos ingresos).
+ *   · La falta y la cancelación sobre la hora no llevan transcript; la clase que
+ *     canceló el propio profesor tampoco se dio. No se juzgan.
+ *   · Todavía dentro del plazo, o sin forma de juzgarla → no sale.
+ *
+ * `joinLogs` ya viene filtrado por quien llama (ventana y cuentas de prueba).
+ * Devuelve las clases en orden de fecha.
+ */
+export function juzgarTranscriptsDeClases(input: {
+  joinLogs: ClassJoinLog[];
+  records: ClassRecord[];
+  analyses: ClassTranscriptRef[];
+  /** analysisId → ISO de la primera subida (usage_events). */
+  primeraSubida: Map<string, string>;
+  hoy: string;
+  now: number;
+}): ClaseTranscriptJuzgada[] {
+  const recordsPorClave = indexarRecords(input.records);
+  const clases = new Map<string, ClassJoinLog[]>();
+  for (const l of input.joinLogs) {
+    if (l.scheduledDate < TRANSCRIPT_DEADLINE_START_DATE || l.scheduledDate > input.hoy) continue;
+    const k = `${l.teacherId}|${nkName(l.studentName)}|${l.scheduledDate}`;
+    const arr = clases.get(k);
+    if (arr) arr.push(l); else clases.set(k, [l]);
+  }
+  const exclusiones = new Map<string, TranscriptExclusions>();
+  const ordenadas = [...clases.entries()].sort((a, b) => a[1][0].scheduledDate.localeCompare(b[1][0].scheduledDate));
+  const out: ClaseTranscriptJuzgada[] = [];
+  for (const [, logs] of ordenadas) {
+    const first = logs[0];
+
+    // La falta y la cancelación sobre la hora no llevan transcript; la clase
+    // que canceló el propio profesor tampoco se dio.
+    const recs = (recordsPorClave.get(`${first.teacherId}|${first.scheduledDate}`) ?? [])
+      .filter(r => nkName(r.studentName) === nkName(first.studentName));
+    if (recs.some(r => isStudentLostClass(r.classType) || r.classType === 'cancelada_por_profesor')) continue;
+
+    const horas = [...new Set(logs.map(l => hourNum(l.scheduledTime)).filter(Number.isFinite))].sort((a, b) => a - b);
+    const start = horas[0];
+    const duracion = Math.max(
+      Number.isFinite(start) ? contiguousRunLength(horas, start) : 1,
+      ...logs.map(l => l.durationHours ?? 1),
+    );
+
+    const exKey = `${first.teacherId}|${nkName(first.studentName)}`;
+    const exclude = exclusiones.get(exKey) ?? new Set();
+    exclusiones.set(exKey, exclude);
+    const t = findTranscriptFor(input.analyses, {
+      teacherId: first.teacherId, studentName: first.studentName, dateIso: first.scheduledDate,
+      joinLogIds: logs.map(l => l.id), exclude,
+    });
+    // La hora de la PRIMERA subida manda sobre analyzed_at, que se reescribe al
+    // reemplazar el transcript.
+    const primera = t?.id ? input.primeraSubida.get(t.id) : undefined;
+    const tr = t && primera && (!t.analyzed_at || primera < t.analyzed_at) ? { ...t, analyzed_at: primera } : t;
+
+    const st = getTranscriptStatus({
+      date: first.scheduledDate, startHour: Number.isFinite(start) ? start : null, durationHours: duracion,
+      classType: 'normal', transcript: tr, reopenedDeadlineAt: reopenedDeadlineFor(logs), now: input.now,
+    });
+    let aTiempo: boolean;
+    if (st.status === 'vencido') aTiempo = false;
+    else if (st.status === 'subido' && st.uploadedWithinDeadline !== null) aTiempo = st.uploadedWithinDeadline;
+    else continue;   // todavía dentro del plazo, o sin forma de juzgarla
+    out.push({ teacherId: first.teacherId, studentName: first.studentName, date: first.scheduledDate, aTiempo });
+  }
+  return out;
+}
+
 // ── Proyección del calendario ─────────────────────────────────────────────────
 
 /**
@@ -371,64 +457,22 @@ export function construirInformeUso(input: EntradaUso): InformeUso {
   });
 
   // ── transcript ─────────────────────────────────────────────────────────────
+  // La regla vive en juzgarTranscriptsDeClases (la comparte el scoring v2). Las
+  // semanas en null son las anteriores al 22/09, y esas clases ya no salen de ahí.
   const recordsPorClave = indexarRecords(input.records);
   const transcriptProfesSemana = semanas.map(() => new Map<string, { ok: number; total: number }>());
-  {
-    // Una clase = profesor + alumno + fecha (una sesión de 2 h tiene dos ingresos).
-    const clases = new Map<string, ClassJoinLog[]>();
-    for (const l of logsVentana) {
-      if (l.scheduledDate < TRANSCRIPT_DEADLINE_START_DATE || l.scheduledDate > hoy) continue;
-      const k = `${l.teacherId}|${nkName(l.studentName)}|${l.scheduledDate}`;
-      const arr = clases.get(k);
-      if (arr) arr.push(l); else clases.set(k, [l]);
-    }
-    const exclusiones = new Map<string, TranscriptExclusions>();
-    const ordenadas = [...clases.entries()].sort((a, b) => a[1][0].scheduledDate.localeCompare(b[1][0].scheduledDate));
-    for (const [, logs] of ordenadas) {
-      const first = logs[0];
-      const w = indiceSemana(semanas, first.scheduledDate);
-      if (w < 0 || global.transcript[w] === null) continue;
-
-      // La falta y la cancelación sobre la hora no llevan transcript; la clase
-      // que canceló el propio profesor tampoco se dio.
-      const recs = (recordsPorClave.get(`${first.teacherId}|${first.scheduledDate}`) ?? [])
-        .filter(r => nkName(r.studentName) === nkName(first.studentName));
-      if (recs.some(r => isStudentLostClass(r.classType) || r.classType === 'cancelada_por_profesor')) continue;
-
-      const horas = [...new Set(logs.map(l => hourNum(l.scheduledTime)).filter(Number.isFinite))].sort((a, b) => a - b);
-      const start = horas[0];
-      const duracion = Math.max(
-        Number.isFinite(start) ? contiguousRunLength(horas, start) : 1,
-        ...logs.map(l => l.durationHours ?? 1),
-      );
-
-      const exKey = `${first.teacherId}|${nkName(first.studentName)}`;
-      const exclude = exclusiones.get(exKey) ?? new Set();
-      exclusiones.set(exKey, exclude);
-      const t = findTranscriptFor(input.analyses, {
-        teacherId: first.teacherId, studentName: first.studentName, dateIso: first.scheduledDate,
-        joinLogIds: logs.map(l => l.id), exclude,
-      });
-      // La hora de la PRIMERA subida manda sobre analyzed_at, que se reescribe al
-      // reemplazar el transcript.
-      const primera = t?.id ? input.primeraSubida.get(t.id) : undefined;
-      const tr = t && primera && (!t.analyzed_at || primera < t.analyzed_at) ? { ...t, analyzed_at: primera } : t;
-
-      const st = getTranscriptStatus({
-        date: first.scheduledDate, startHour: Number.isFinite(start) ? start : null, durationHours: duracion,
-        classType: 'normal', transcript: tr, reopenedDeadlineAt: reopenedDeadlineFor(logs), now,
-      });
-      let ok: number;
-      if (st.status === 'vencido') ok = 0;
-      else if (st.status === 'subido' && st.uploadedWithinDeadline !== null) ok = st.uploadedWithinDeadline ? 1 : 0;
-      else continue;   // todavía dentro del plazo, o sin forma de juzgarla
-
-      sumar(global.transcript[w], ok, 1);
-      sumar(celdaProfe(first.teacherId, 'transcript', w), ok, 1);
-      const acc = transcriptProfesSemana[w].get(first.teacherId) ?? { ok: 0, total: 0 };
-      acc.ok += ok; acc.total += 1;
-      transcriptProfesSemana[w].set(first.teacherId, acc);
-    }
+  for (const c of juzgarTranscriptsDeClases({
+    joinLogs: logsVentana, records: input.records, analyses: input.analyses,
+    primeraSubida: input.primeraSubida, hoy, now,
+  })) {
+    const w = indiceSemana(semanas, c.date);
+    if (w < 0 || global.transcript[w] === null) continue;
+    const ok = c.aTiempo ? 1 : 0;
+    sumar(global.transcript[w], ok, 1);
+    sumar(celdaProfe(c.teacherId, 'transcript', w), ok, 1);
+    const acc = transcriptProfesSemana[w].get(c.teacherId) ?? { ok: 0, total: 0 };
+    acc.ok += ok; acc.total += 1;
+    transcriptProfesSemana[w].set(c.teacherId, acc);
   }
   const transcriptProfes: Celda[] = semanas.map((_, w) => {
     if (global.transcript[w] === null) return null;

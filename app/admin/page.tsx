@@ -45,6 +45,7 @@ import { RETENTION_BONUS_DAYS, RETENTION_UPCOMING_DAYS, retentionDaysLeft, reten
 import { BONUS_STATE_LABEL } from '@/lib/bonuses';
 import { useAdminRecoveries } from '@/lib/useTeacherRecoveries';
 import BonusesTab from '@/components/admin/BonusesTab';
+import ScoringV2Tab from '@/components/admin/ScoringV2Tab';
 import { buildTestAccountFilter } from '@/lib/testAccounts';
 
 // ─── Edit Teacher Modal ───────────────────────────────────────────────────────
@@ -1376,6 +1377,8 @@ function ScoringTab() {
   // ordena por margen de retención (con dirección desc/asc).
   const [rankSort, setRankSort]                     = useState<'score' | 'retention'>('score');
   const [retDir, setRetDir]                         = useState<'desc' | 'asc'>('desc');
+  // Sub-pestaña: el scoring de siempre o el v2 en beta (en paralelo, sin tocar éste).
+  const [vista, setVista]                           = useState<'actual' | 'v2'>('actual');
 
   const MEDALS = ['🥇', '🥈', '🥉'];
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
@@ -1460,8 +1463,32 @@ function ScoringTab() {
     setResetting(null);
   }
 
+  const selectorVista = (
+    <div role="tablist" style={{ display: 'inline-flex', gap: 4, padding: 4, marginBottom: 16, background: '#F7F7F5', border: '1px solid var(--border)', borderRadius: 10 }}>
+      {([['actual', 'Scoring actual'], ['v2', 'Scoring v2 (beta)']] as const).map(([id, label]) => (
+        <button key={id} role="tab" aria-selected={vista === id} onClick={() => setVista(id)}
+          style={{
+            border: 'none', borderRadius: 7, padding: '7px 14px', fontSize: 13, fontWeight: 700, cursor: 'pointer',
+            background: vista === id ? '#1E9E3A' : 'transparent', color: vista === id ? '#fff' : 'var(--text-secondary)',
+          }}>
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+
+  if (vista === 'v2') {
+    return (
+      <div>
+        {selectorVista}
+        <ScoringV2Tab viejos={scored.map(s => ({ teacherId: s.t.id, score: s.totalScore, level: s.currentLevel, blocked: s.isBlocked }))} />
+      </div>
+    );
+  }
+
   return (
     <div>
+      {selectorVista}
 
       {/* ── Profe del Mes section ── */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 14, marginBottom: 20 }}>

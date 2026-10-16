@@ -22,7 +22,9 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 // Secreto en tiempo constante + cliente ADMIN de Supabase (sin él, 500).
+import { after } from 'next/server';
 import { requireCronSecret, requireAdminClient } from '@/lib/cronAuth';
+import { guardarScoringV2 } from '@/lib/teacherScoreLoad';
 import {
   buildEndingPlans, plansNeedingNotice, ENDING_NOTICE_DAYS,
   type EndingPlan, type EndingStudentRow, type EndingProfileRow,
@@ -73,6 +75,19 @@ export async function GET(request: Request): Promise<Response> {
   // las 22:00. No manda el email interno y NO marca a nadie como avisado, así
   // que se puede repetir las veces que haga falta sin gastar el aviso real.
   const test = new URL(request.url).searchParams.get('test') === '1';
+
+  // Foto diaria del SCORING v2 (teacher_score_snapshots). Va colgada de este
+  // cron para no sumar uno nuevo, y corre DESPUÉS de responder (after): no
+  // demora el aviso ni puede romperlo, salga por donde salga la función.
+  if (!test) {
+    after(async () => {
+      try {
+        await guardarScoringV2();
+      } catch (err) {
+        console.error('[cron ending-plans] No se pudo guardar la foto del scoring v2:', err);
+      }
+    });
+  }
 
   // 1) Alumnos con fecha de fin. El filtro grueso lo hace la base (no traer 184
   //    filas para descartar 155); la ventana exacta la decide lib/endingPlans.
