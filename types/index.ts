@@ -133,6 +133,12 @@ export interface Teacher {
    * lib/db.ts:dbArchiveTeacher y supabase-teacher-archive.sql.
    */
   archivedAt?: string;
+  /**
+   * Cuenta de PRUEBA (teachers.is_test). Sigue funcionando y recibiendo sus
+   * avisos como cualquier profesor; solo se esconde de algunas pantallas del
+   * admin. Ver lib/testAccounts.ts.
+   */
+  isTest?: boolean;
   currentLevel?: number;
   totalScore?: number;
   totalEuros?: number;
@@ -190,6 +196,7 @@ export interface Student {
   salesContactResult?: SalesContactResult;
   salesContactedBy?: string;     // quién lo marcó (nombre de la sesión)
   salesContactForDate?: string;  // 'YYYY-MM-DD' — fin del ciclo gestionado
+  isTest?: boolean;              // alumno de PRUEBA (students.is_test). Ver lib/testAccounts.ts
   createdAt: string;
 }
 

@@ -124,7 +124,10 @@ interface TeacherLite { id: string; name: string }
  * oculta en DRC Gestión": este panel es DRC Gestión.
  *
  * La lista de quién entra la decide quien llama. El admin ya le pasa los
- * profesores sin archivar, que es el denominador que quiere ver.
+ * profesores sin archivar, que es el denominador que quiere ver. Desde el
+ * 16/10/2026 la pestaña saca además las cuentas de prueba (teachers/students.is_test,
+ * lib/testAccounts), pero de la plantilla Y del registro a la vez, antes de
+ * llamar acá: así no se repite el fallo de arriba.
  */
 export function summarizeByTeacher(
   rows: readonly AiGenerationRow[],

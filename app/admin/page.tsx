@@ -38,13 +38,14 @@ import { notificationDirection, notificationTypeInfo, type NotificationDirection
 // Navegación del teléfono: barra inferior con las cuatro secciones más usadas,
 // "Más" para el resto y "Volver". Sus contadores salen de acá.
 import { AdminNavMovil, SECCIONES_OCULTAS } from '@/components/admin/AdminNavMovil';
-import { fetchRiskLite, riesgoResumen } from '@/lib/dashboardExtras';
+import { fetchRiskLite, riesgoResumen, type RiskLite } from '@/lib/dashboardExtras';
 import { proximosSinContactar } from '@/lib/dashboardMetrics';
 import { madridToday } from '@/lib/subscriptionAccess';
 import { RETENTION_BONUS_DAYS, RETENTION_UPCOMING_DAYS, retentionDaysLeft, retentionBonusFor } from '@/lib/retention';
 import { BONUS_STATE_LABEL } from '@/lib/bonuses';
 import { useAdminRecoveries } from '@/lib/useTeacherRecoveries';
 import BonusesTab from '@/components/admin/BonusesTab';
+import { buildTestAccountFilter } from '@/lib/testAccounts';
 
 // ─── Edit Teacher Modal ───────────────────────────────────────────────────────
 function EditTeacherModal({ teacher, onClose, onSave, onArchive }: {
@@ -2475,6 +2476,13 @@ function AdminContent() {
   const [showNewTeacher, setShowNewTeacher] = useState(false);
   const [activeTab, setActiveTab] = useState<AdminTab>('teachers');
 
+  // Cuentas de prueba (teachers/students.is_test): fuera de Enlaces, Riesgo y
+  // Uso de IA, y de sus contadores. El resto del admin las sigue mostrando.
+  const pruebas = useMemo(() => buildTestAccountFilter(teachers, students), [teachers, students]);
+  const assignmentsSinPrueba = useMemo(() => assignments.filter(a => !pruebas.isTestRow({
+    teacherId: a.teacherId, studentId: a.studentId, studentName: a.studentName, studentEmail: a.studentEmail,
+  })), [assignments, pruebas]);
+
   // El campanario del header navega a /admin?tab=notifications. Sincronizamos la
   // pestaña con la URL (sistema externo) para aterrizar en Avisos; la pestaña
   // sigue siendo estado local para que cambiarla no cueste un round-trip de red.
@@ -2520,8 +2528,11 @@ function AdminContent() {
   };
   // Alumnos en rojo, para el contador de Riesgo en la barra. Lectura ligera
   // (sin fichas ni contenidos), una vez por visita.
-  const [riesgoRojo, setRiesgoRojo] = useState<number | null>(null);
-  useEffect(() => { fetchRiskLite().then(rows => setRiesgoRojo(riesgoResumen(rows).rojo)).catch(() => {}); }, []);
+  const [riesgoLite, setRiesgoLite] = useState<RiskLite[] | null>(null);
+  useEffect(() => { fetchRiskLite().then(setRiesgoLite).catch(() => {}); }, []);
+  const riesgoRojo = useMemo(() => riesgoLite && riesgoResumen(riesgoLite.filter(r => !pruebas.isTestRow({
+    teacherId: r.teacher_id, studentName: r.student_name,
+  }))).rojo, [riesgoLite, pruebas]);
 
 
   const [editCalendarTeacher, setEditCalendarTeacher] = useState<Teacher | null>(null);
@@ -2650,7 +2661,7 @@ function AdminContent() {
             validacionUrgente: pendingValidations.oldestDays >= 3,
             riesgo: riesgoRojo,
             // Asignaciones activas sin enlace de clase con más de 24 h (lib/meetLinkStatus).
-            emails: assignments.filter(a => isActiveAssignment(a) && getMeetLinkStatus(a, nowMs).status === 'overdue').length,
+            emails: assignmentsSinPrueba.filter(a => isActiveAssignment(a) && getMeetLinkStatus(a, nowMs).status === 'overdue').length,
             proximosACancelar: proximosSinContactar(students, madridToday()),
           }}>
           {activeTab === 'teachers' && (
@@ -3116,7 +3127,7 @@ function AdminContent() {
               <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)' }}>Enlaces de clase</div>
               <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3 }}>Asignaciones activas: si el profesor definió el enlace de Meet y cuándo salió la bienvenida al alumno. Las que no tienen enlace, con más retraso, arriba.</div>
             </div>
-            <MeetLinksTab assignments={assignments} nowMs={nowMs} initialFilter={emailsFilter} />
+            <MeetLinksTab assignments={assignmentsSinPrueba} nowMs={nowMs} initialFilter={emailsFilter} />
           </div>
         )}
 
@@ -3142,10 +3153,10 @@ function AdminContent() {
         {activeTab === 'validacion' && <TranscriptValidationTab />}
 
         {/* AI & RISK TAB */}
-        {activeTab === 'ai' && <AiRiskTab teachers={teachers} assignments={assignments} />}
+        {activeTab === 'ai' && <AiRiskTab teachers={teachers} assignments={assignments} testFilter={pruebas} />}
 
         {/* Quién usa la generación de clases con IA y quién no. */}
-        {activeTab === 'aiusage' && <AiUsageTab teachers={teachers} />}
+        {activeTab === 'aiusage' && <AiUsageTab teachers={teachers} testFilter={pruebas} />}
 
         {/* CHURN / BAJAS TAB */}
         {activeTab === 'bajas' && <ChurnTab />}

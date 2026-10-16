@@ -300,6 +300,8 @@ export async function dbGetTeachers(
       createdAt:           row.created_at ?? undefined,
       // Sin migrar (columna ausente) → undefined: nadie sale archivado.
       archivedAt:          row.archived_at ?? undefined,
+      // Cuenta de prueba (teachers.is_test). Sin la columna → false.
+      isTest:              row.is_test === true,
       currentLevel:        row.current_level ?? 1,
       totalScore:          row.total_score ?? 0,
       totalEuros:          row.total_euros ?? 0,
@@ -810,6 +812,8 @@ export async function dbGetStudents(): Promise<Student[]> {
     salesContactResult:  row.sales_contact_result ?? undefined,
     salesContactedBy:    row.sales_contacted_by ?? undefined,
     salesContactForDate: row.sales_contact_for_date ?? undefined,
+    // Alumno de prueba (students.is_test). Sin la columna → false.
+    isTest:            row.is_test === true,
     createdAt:         row.created_at,
   }));
 }

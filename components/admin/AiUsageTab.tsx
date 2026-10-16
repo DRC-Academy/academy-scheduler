@@ -16,6 +16,7 @@ import {
   type AiGenerationRow, type TeacherUsage, type UsageSort, type GenerationOrigin,
 } from '@/lib/aiUsage';
 import type { Teacher } from '@/types';
+import type { TestAccountFilter } from '@/lib/testAccounts';
 import AiCreditTestButton from '@/components/admin/AiCreditTestButton';
 
 const VERDE = '#1E9E3A';
@@ -55,8 +56,12 @@ const input: React.CSSProperties = {
   fontSize: 13, fontFamily: 'inherit',
 };
 
-export default function AiUsageTab({ teachers }: { teachers: Teacher[] }) {
-  const [rows, setRows] = useState<AiGenerationRow[]>([]);
+export default function AiUsageTab({ teachers: plantilla, testFilter }: {
+  teachers: Teacher[];
+  /** Cuentas de prueba: fuera del registro Y del denominador. Ver lib/testAccounts. */
+  testFilter?: TestAccountFilter;
+}) {
+  const [todasLasFilas, setRows] = useState<AiGenerationRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [faltaSql, setFaltaSql] = useState(false);
   const [vista, setVista] = useState<Vista>('profesores');
@@ -86,6 +91,22 @@ export default function AiUsageTab({ teachers }: { teachers: Teacher[] }) {
     })();
     return () => { cancelled = true; };
   }, []);
+
+  // Las cuentas de prueba salen de LOS DOS lados a la vez, la plantilla y el
+  // registro. Sacarlas solo de la plantilla fue el fallo de sep/2026: sus
+  // generaciones quedaban huérfanas y el panel decía "0 de 28" (ver lib/aiUsage).
+  const sinPrueba = !testFilter || testFilter.empty ? null : testFilter;
+  const teachers = useMemo(
+    () => sinPrueba ? plantilla.filter(t => !sinPrueba.isTestTeacher(t.id)) : plantilla,
+    [plantilla, sinPrueba],
+  );
+  const rows = useMemo(
+    () => sinPrueba ? todasLasFilas.filter(r => !sinPrueba.isTestRow({
+      teacherId: r.teacher_id, teacherName: r.teacher_name,
+      studentId: r.student_id, studentName: r.student_name,
+    })) : todasLasFilas,
+    [todasLasFilas, sinPrueba],
+  );
 
   const resumen = useMemo(() => summarizeByTeacher(rows, teachers), [rows, teachers]);
   const ordenados = useMemo(() => sortUsage(resumen.perTeacher, sort), [resumen, sort]);

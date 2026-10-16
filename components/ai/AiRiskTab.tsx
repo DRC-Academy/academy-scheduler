@@ -36,10 +36,13 @@ import {
   type Filters, type RiskRow, type Severity, type SortKey,
 } from '@/lib/riskInbox';
 import type { Assignment, Teacher } from '@/types';
+import type { TestAccountFilter } from '@/lib/testAccounts';
 
 interface Props {
   teachers: Teacher[];
   assignments: Assignment[];
+  /** Cuentas de prueba: sus alertas no salen en esta pestaña. Ver lib/testAccounts. */
+  testFilter?: TestAccountFilter;
 }
 
 type InnerTab = 'cola' | 'verif' | 'res';
@@ -61,7 +64,7 @@ const PAGE = 20;   // filas por grupo antes de "Ver N alertas más"
 /** 1 = verde … 3 = rojo. Para el riesgo promedio por profesor. */
 const RISK_SCORE: Record<RiskSignal, number> = { verde: 1, rojo: 2 };
 
-export default function AiRiskTab({ teachers, assignments }: Props) {
+export default function AiRiskTab({ teachers, assignments, testFilter }: Props) {
   const { user } = useAuth();
   const { classRecords } = useTeachers();
 
@@ -230,8 +233,17 @@ export default function AiRiskTab({ teachers, assignments }: Props) {
         active: null,
       });
     }
-    return out;
-  }, [profiles, analyses, latestByStudent, teacherOfStudent, teachers, auditsOf]);
+    // Las cuentas de prueba siguen recibiendo sus alertas en el panel del
+    // profesor; aquí, en la bandeja del admin, no cuentan.
+    if (!testFilter || testFilter.empty) return out;
+    return out.filter(r => !testFilter.isTestRow({
+      teacherId: r.teacherId, studentId: r.studentId, studentName: r.studentName,
+    }));
+  }, [profiles, analyses, latestByStudent, teacherOfStudent, teachers, auditsOf, testFilter]);
+
+  const churnedVisible = useMemo(() => (!testFilter || testFilter.empty) ? churned
+    : churned.filter(b => !testFilter.isTestRow({ teacherId: b.teacher_id, studentName: b.student_name })),
+  [churned, testFilter]);
 
   // Los cerrados en esta sesión desaparecen de sus pestañas de origen.
   const resolvedIds = useMemo(() => new Set(resolved.map(r => r.id)), [resolved]);
@@ -560,7 +572,7 @@ export default function AiRiskTab({ teachers, assignments }: Props) {
           <VerifTab
             rows={verifVisible}
             missingTable={missingTable}
-            churned={churned}
+            churned={churnedVisible}
             teacherNameOf={id => teachers.find(t => t.id === id)?.name ?? 'sin asignar'}
             open={open} sel={sel} busyId={busyId}
             onToggle={toggleOpen} onSelect={toggleSel}
