@@ -42,10 +42,11 @@ export type AdminTabId =
  * Secciones que existen (código, datos y cron siguen ahí) pero NO se muestran,
  * ni en las pestañas de escritorio ni en el "Más" del teléfono ni por ?tab=.
  * "Bajas" se ocultó en septiembre de 2026 a pedido de Facundo: en fase de
- * recopilación no aportaba nada y no se entendía. Para reactivar una sección,
- * basta con quitarla de acá.
+ * recopilación no aportaba nada y no se entendía. "Seguimiento" y "Fuera de
+ * calendario" se ocultaron el 16/10/2026, también a pedido de Facundo. Para
+ * reactivar una sección, basta con quitarla de acá.
  */
-export const SECCIONES_OCULTAS: ReadonlySet<AdminTabId> = new Set<AdminTabId>(['bajas']);
+export const SECCIONES_OCULTAS: ReadonlySet<AdminTabId> = new Set<AdminTabId>(['bajas', 'tracking', 'fueracal']);
 
 /** Contadores de pendientes. null = todavía cargando (se muestra sin número). */
 export interface AdminContadores {
