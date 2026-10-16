@@ -26,6 +26,9 @@ import type { HelpTooltipKey } from '@/lib/help-tooltips';
 // Plazo de 24 h del transcript: cuenta regresiva en las pendientes y aviso de
 // vencida. La misma fuente que Mis clases, la ficha y Asistencias.
 import { hoursLeftLabel, deadlineLabel, countdownLabel } from '@/lib/transcriptDeadline';
+// Datos de pago (IBAN + titular): por /api, nunca por TeachersContext.
+import { fetchMyPaymentDetails, type LoadResult, type PaymentDetails } from '@/lib/paymentDetails';
+import { PaymentDetailsBanner, PaymentDetailsCard } from '@/components/PaymentDetailsCard';
 
 // Las etiquetas de ingresoBadge / classTypeBadge / subscriptionBadge vienen con
 // emoji desde lib/finance (fuente compartida con el panel de admin). Acá solo se
@@ -1073,6 +1076,22 @@ function MisClasesContent() {
   // pasarían a valer 1 (ver lib/finance.sessionSpanFor).
   const myAssignments = directAssignments.length > 0 ? directAssignments : contextAssignments;
 
+  // Datos de pago: UNA fila, la del profe, al abrir Finanzas. Se pide con el
+  // teacherId de la sesión y NO con `teacher` (que cae a teachers[0] mientras
+  // carga el contexto: mostraría el IBAN de otro profesor).
+  const paymentTeacherId = user?.teacherId ?? '';
+  const [payment, setPayment] = useState<LoadResult<PaymentDetails | null> | null>(null);
+  const [paymentReload, setPaymentReload] = useState(0);
+  useEffect(() => {
+    if (!paymentTeacherId) return;
+    let cancelled = false;
+    fetchMyPaymentDetails(paymentTeacherId).then(r => { if (!cancelled) setPayment(r); });
+    return () => { cancelled = true; };
+  }, [paymentTeacherId, paymentReload]);
+  // Sin tabla (falta el SQL) no se muestra nada de esto.
+  const paymentAvailable = !!paymentTeacherId && !(payment && !payment.ok && payment.noConfigurado);
+  const missingPayment = !!payment?.ok && payment.value === null;
+
   return (
     <div style={{ minHeight: '100vh', background: '#f4f5f2' }}>
       <NavBar />
@@ -1088,9 +1107,18 @@ function MisClasesContent() {
               <LastUpdated />
             </div>
           </header>
+          {missingPayment && <PaymentDetailsBanner />}
           {teacher
             ? <MyClassesTab teacher={teacher} myAssignments={myAssignments} />
             : <div className="mcf-empty">Cargando...</div>}
+          {paymentAvailable && (
+            <PaymentDetailsCard
+              teacherId={paymentTeacherId}
+              load={payment}
+              onSaved={details => setPayment({ ok: true, value: details })}
+              onRetry={() => { setPayment(null); setPaymentReload(n => n + 1); }}
+            />
+          )}
         </div>
       </PullToRefresh>
     </div>

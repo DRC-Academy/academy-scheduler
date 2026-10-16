@@ -42,6 +42,7 @@ import { dbGetReviewRequests } from '@/lib/reviewRequests';
 import { dbGetStudentDropouts, type StudentDropout } from '@/lib/studentPeriod';
 import ReviewRequestsTab from '@/components/admin/ReviewRequestsTab';
 import OutOfScheduleTab from '@/components/admin/OutOfScheduleTab';
+import PaymentDetailsTab from '@/components/admin/PaymentDetailsTab';
 import { Assignment, ScoringEvent, FinanceManualApproval, Teacher, ClassReviewRequest } from '@/types';
 import { Check, ChevronDown, ChevronLeft, ChevronRight, Download, Lock, Undo2 } from 'lucide-react';
 
@@ -684,6 +685,9 @@ function FinanceTab({ onHow }: { onHow: () => void }) {
   const nowSpain = getSpainParts(new Date());
   const [monthYear, setMonthYear] = useState(nowSpain.dateStr.slice(0, 7));
   const [statusFilter, setStatusFilter] = useState<'all' | 'paid' | 'pending'>('all');
+  // "Pagos del mes" (lo de siempre) o "Datos de pago" (IBAN de cada profe, que
+  // se pide solo al elegir esta vista: components/admin/PaymentDetailsTab).
+  const [vista, setVista] = useState<'pagos' | 'datos'>('pagos');
   const [abierto, setAbierto] = useState<string | null>(null);
   const funnelData = useFunnelData(abierto !== null);
   const [ocupado, setOcupado] = useState<string | null>(null);
@@ -864,13 +868,21 @@ function FinanceTab({ onHow }: { onHow: () => void }) {
       ) : (
         <>
           <div className="fz-head">
-            <div className="fz-head-l"><div><h1 className="fz-h1">Finanzas</h1><p className="fz-sub">Pago mensual a los profesores</p></div><SelectorMes label={mesLabel} alTope={monthYear >= nowSpain.dateStr.slice(0, 7)} onCambiar={cambiarMes} /></div>
-            <div className="fz-head-r">
-              <button type="button" className="adm-btn adm-btn-ghost" onClick={onHow}>¿Cómo entra y se paga una clase?</button>
-              <button type="button" className="adm-btn adm-btn-ghost fz-csv" onClick={exportCsv}><Download size={15} aria-hidden /> Exportar CSV</button>
-            </div>
+            <div className="fz-head-l"><div><h1 className="fz-h1">Finanzas</h1><p className="fz-sub">{vista === 'pagos' ? 'Pago mensual a los profesores' : 'IBAN y titular de cada profesor'}</p></div>{vista === 'pagos' && <SelectorMes label={mesLabel} alTope={monthYear >= nowSpain.dateStr.slice(0, 7)} onCambiar={cambiarMes} />}</div>
+            {vista === 'pagos' && (
+              <div className="fz-head-r">
+                <button type="button" className="adm-btn adm-btn-ghost" onClick={onHow}>¿Cómo entra y se paga una clase?</button>
+                <button type="button" className="adm-btn adm-btn-ghost fz-csv" onClick={exportCsv}><Download size={15} aria-hidden /> Exportar CSV</button>
+              </div>
+            )}
           </div>
 
+          <div className="fz-chips fz-vista" role="group" aria-label="Vista">
+            <button type="button" className="fz-chip" aria-pressed={vista === 'pagos'} onClick={() => setVista('pagos')}>Pagos del mes</button>
+            <button type="button" className="fz-chip" aria-pressed={vista === 'datos'} onClick={() => setVista('datos')}>Datos de pago</button>
+          </div>
+
+          {vista === 'datos' ? <PaymentDetailsTab /> : <>
           <CabeceraMes c={cifras} reciente={reciente} cerrado={cerrado} mesLabel={mesLabel.charAt(0).toUpperCase() + mesLabel.slice(1)} />
 
           <div className="adm-card fz-lista">
@@ -905,6 +917,7 @@ function FinanceTab({ onHow }: { onHow: () => void }) {
               debajo de la lista, como hasta ahora. */}
           <ReviewRequestsTab />
           <OutOfScheduleTab monthYear={monthYear} monthLabel={mesLabel} />
+          </>}
         </>
       )}
 
@@ -1057,6 +1070,7 @@ const ESTILOS = `
 .fz-lista { overflow: clip; }
 .fz-lh { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid #E0E0DA; flex-wrap: wrap; }
 .fz-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.fz-vista { margin-bottom: 16px; }
 .fz-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 12px; border-radius: 999px; border: 1.5px solid #E0E0DA; background: transparent; font-family: inherit; font-size: 13px; font-weight: 500; color: #4A4A4A; cursor: pointer; }
 .fz-chip:hover { background: #f4f5f2; }
 .fz-chip[aria-pressed="true"] { border-color: #1E9E3A; background: rgba(30,158,58,0.1); color: #1E9E3A; font-weight: 700; }
