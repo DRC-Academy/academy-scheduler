@@ -2070,19 +2070,63 @@ body.driver-active .drc-modal-backdrop * { pointer-events: auto; }
 .adm-btn-ghost:hover { background: #f4f5f2; color: #1a1c1a; }
 .adm-btn-ghost:disabled { color: #a4a7a1; cursor: not-allowed; }
 
-/* Tabs con subrayado verde */
-.adm-tabs {
-  display: flex; gap: 2px; overflow-x: auto;
-  border-bottom: 1px solid #e6e7e2; margin-bottom: 20px;
+/* Desplegable de secciones (components/admin/AdminSeccionMenu). Reemplaza la
+   fila de pestañas, que con tantas secciones obligaba a deslizar de costado.
+   Por debajo de 768 px lo oculta AdminNavMovil (barra inferior del teléfono). */
+.asm { position: relative; margin-bottom: 20px; max-width: 100%; }
+.asm-btn {
+  display: inline-flex; align-items: center; gap: 8px; max-width: 100%;
+  padding: 9px 14px; background: #fff; border: 1px solid #e6e7e2; border-radius: 14px;
+  box-shadow: 0 1px 2px rgba(16,24,16,0.04);
+  font-family: var(--font-app); font-size: 14px; color: #1a1c1a; cursor: pointer;
 }
-.adm-tab {
-  flex: 0 0 auto; padding: 10px 16px; border: none; background: transparent;
-  border-bottom: 2px solid transparent; margin-bottom: -1px;
-  font-family: inherit; font-size: 13.5px; font-weight: 500; color: #5f6360;
-  cursor: pointer; white-space: nowrap;
+.asm-btn:hover { border-color: #cfd3cd; }
+.asm-btn.is-open, .asm-btn:focus-visible { border-color: #1E9E3A; outline: none; box-shadow: 0 0 0 3px rgba(30,158,58,0.15); }
+.asm-btn-k { color: #5f6360; font-weight: 500; }
+.asm-btn-v { color: #1E9E3A; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.asm-dot { width: 9px; height: 9px; border-radius: 50%; background: #FFC400; box-shadow: 0 0 0 2px #fff; flex-shrink: 0; }
+.asm-chev { color: #5f6360; flex-shrink: 0; transition: transform 0.15s; }
+.asm-btn.is-open .asm-chev { transform: rotate(180deg); }
+
+.asm-pop {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 40;
+  width: min(360px, calc(100vw - 32px));
+  background: #fff; border: 1px solid #e6e7e2; border-radius: 14px;
+  box-shadow: var(--shadow-overlay); font-family: var(--font-app);
+  display: flex; flex-direction: column; overflow: hidden;
 }
-.adm-tab:hover { color: #1a1c1a; }
-.adm-tab.is-active { color: #15803d; font-weight: 600; border-bottom-color: #16a34a; }
+.asm-search {
+  display: flex; align-items: center; gap: 8px; margin: 10px 10px 6px;
+  padding: 8px 10px; border: 1px solid #e6e7e2; border-radius: 10px; color: #8a8e8a;
+}
+.asm-search:focus-within { border-color: #1E9E3A; }
+/* El input global trae borde y relleno propios: acá el marco es el label. */
+.asm-search input {
+  flex: 1; min-width: 0; border: none; outline: none; background: transparent;
+  padding: 0; line-height: 1.4; font-family: inherit; font-size: 14px; color: #1a1c1a;
+}
+.asm-list { max-height: min(60vh, 460px); overflow-y: auto; overflow-x: hidden; padding: 0 6px 8px; }
+.asm-grp {
+  margin: 0; padding: 10px 10px 4px; font-size: 11px; font-weight: 700;
+  letter-spacing: 0.06em; text-transform: uppercase; color: #8a8e8a;
+}
+.asm-opt {
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px;
+  font-size: 14px; color: #1a1c1a; text-decoration: none; cursor: pointer; user-select: none;
+}
+.asm-opt.is-hi { background: #f4f5f2; }
+.asm-opt.is-cur { color: #1E9E3A; font-weight: 600; background: rgba(30,158,58,0.08); }
+.asm-check { width: 16px; display: inline-flex; flex-shrink: 0; color: #1E9E3A; }
+.asm-opt-l { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.asm-ext { color: #8a8e8a; flex-shrink: 0; }
+.asm-empty { margin: 0; padding: 14px 10px; font-size: 13px; color: #8a8e8a; }
+.asm-badge {
+  display: inline-flex; align-items: center; justify-content: center; min-width: 20px;
+  padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 700; border: 1px solid transparent;
+}
+.asm-badge.is-ambar { background: rgba(255,196,0,0.22); color: #8a6d00; border-color: rgba(255,196,0,0.5); }
+.asm-badge.is-rojo { background: var(--danger-soft); color: var(--danger); border-color: var(--danger-border); }
+.asm-badge.is-gris { background: var(--bg-surface-3); color: var(--text-muted); }
 
 /* KPIs monocromos */
 .adm-kpis { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin-bottom: 18px; }
@@ -2233,7 +2277,8 @@ body.driver-active .drc-modal-backdrop * { pointer-events: auto; }
   .adm-kpis { grid-template-columns: repeat(2, 1fr); }
   .adm-tiles { grid-template-columns: 1fr; }
   .adm-bottom { grid-template-columns: 1fr; }
-  .adm-tab { min-height: 44px; }
+  .asm-btn { min-height: 44px; }
+  .asm-opt { min-height: 40px; }
   .adm-btn { min-height: 44px; }
   .adm-tool-head { min-height: 44px; }
   .adm-banner-btn { min-height: 44px; margin-left: 0; width: 100%; }

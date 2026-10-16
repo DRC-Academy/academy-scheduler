@@ -2,8 +2,8 @@
 
 // NAVEGACIÓN DE /admin EN EL TELÉFONO (por debajo de 768 px).
 //
-// En escritorio las doce secciones son una fila de pestañas. En el teléfono esa
-// fila no entraba: obligaba a deslizar de costado, no se veía cuántas
+// En escritorio las secciones son un desplegable (AdminSeccionMenu). En el
+// teléfono la vieja fila de pestañas no entraba: obligaba a deslizar de costado, no se veía cuántas
 // secciones había ni dónde estaba uno parado, y los contadores (Validación con
 // 36) quedaban escondidos. Esto lo reemplaza con la opción elegida en el lienzo
 // "Navegación de Admin en el móvil" (sep/2026):
@@ -23,6 +23,12 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { ClipboardCheck, AlertTriangle, Users, Link2, MoreHorizontal, ChevronLeft, ChevronRight, X } from 'lucide-react';
+// Las secciones, sus grupos, las ocultas y los contadores: la lista única que
+// comparte con el desplegable de escritorio.
+import {
+  GRUPOS_ADMIN as GRUPOS, GRUPO_DE, LABEL_DE, SECCIONES_OCULTAS, contadorDe,
+  type AdminContadores, type AdminTabId, type TonoContador,
+} from '@/components/admin/adminSecciones';
 
 /** Las otras pantallas del admin, al final de "Más": acá la barra global no se
  *  pinta (dos barras apiladas no caben), así que este es el atajo. */
@@ -34,81 +40,12 @@ const OTRAS_PANTALLAS = [
   { href: '/ayuda',     label: 'Centro de ayuda' },
 ];
 
-export type AdminTabId =
-  | 'teachers' | 'emails' | 'scoring' | 'bonos' | 'tracking' | 'fueracal' | 'classlog' | 'transcripts'
-  | 'leveltests' | 'validacion' | 'recuperaciones' | 'ai' | 'aiusage' | 'bajas' | 'testimoniales' | 'notifications';
-
-/**
- * Secciones que existen (código, datos y cron siguen ahí) pero NO se muestran,
- * ni en las pestañas de escritorio ni en el "Más" del teléfono ni por ?tab=.
- * "Bajas" se ocultó en septiembre de 2026 a pedido de Facundo: en fase de
- * recopilación no aportaba nada y no se entendía. "Seguimiento" y "Fuera de
- * calendario" se ocultaron el 16/10/2026, también a pedido de Facundo. Para
- * reactivar una sección, basta con quitarla de acá.
- */
-export const SECCIONES_OCULTAS: ReadonlySet<AdminTabId> = new Set<AdminTabId>(['bajas', 'tracking', 'fueracal']);
-
-/** Contadores de pendientes. null = todavía cargando (se muestra sin número). */
-export interface AdminContadores {
-  validacion: number;
-  /** Ámbar cuando la cola lleva días; gris si es reciente. */
-  validacionUrgente: boolean;
-  riesgo: number | null;
-  /** Asignaciones activas sin enlace de clase con más de 24 h (lib/meetLinkStatus). */
-  emails: number;
-  proximosACancelar: number;
-}
-
-// ─── Las secciones, agrupadas por tema ───────────────────────────────────────
-// "Próximos a cancelar" es una ruta aparte (/proximos-cancelar), pero para el
-// admin es una sección más de Alumnos: va en "Más" como enlace.
-interface Seccion { id: AdminTabId | 'proximos'; label: string; href?: string }
-const GRUPOS: Array<{ nombre: string; secciones: Seccion[] }> = [
-  { nombre: 'Alumnos', secciones: [
-    { id: 'tracking', label: 'Seguimiento' },
-    { id: 'fueracal', label: 'Fuera de calendario' },
-    { id: 'leveltests', label: 'Tests de nivel' },
-    { id: 'ai', label: 'Riesgo' },
-    { id: 'proximos', label: 'Próximos a cancelar', href: '/proximos-cancelar' },
-    { id: 'bajas', label: 'Bajas' },
-    { id: 'testimoniales', label: 'Testimoniales' },
-  ] },
-  { nombre: 'Profesores', secciones: [
-    { id: 'teachers', label: 'Profesores' },
-    { id: 'scoring', label: 'Scoring' },
-    { id: 'bonos', label: 'Bonos' },
-    { id: 'aiusage', label: 'Uso de IA' },
-  ] },
-  { nombre: 'Clases', secciones: [
-    { id: 'classlog', label: 'Registro de clases' },
-    { id: 'transcripts', label: 'Transcripts' },
-    { id: 'validacion', label: 'Validación' },
-    { id: 'recuperaciones', label: 'Recuperaciones' },
-  ] },
-  { nombre: 'Avisos', secciones: [
-    { id: 'emails', label: 'Enlaces' },
-    { id: 'notifications', label: 'Notificaciones' },
-  ] },
-];
-const GRUPO_DE: Record<string, string> = Object.fromEntries(GRUPOS.flatMap(g => g.secciones.map(s => [s.id, g.nombre])));
-const LABEL_DE: Record<string, string> = Object.fromEntries(GRUPOS.flatMap(g => g.secciones.map(s => [s.id, s.label])));
-
 /** Las cuatro fijas de la barra; el resto va detrás de "Más". */
 const FIJAS: AdminTabId[] = ['validacion', 'ai', 'teachers', 'emails'];
 
-function Contador({ n, tono }: { n: number | null | undefined; tono: 'rojo' | 'ambar' | 'gris' }) {
+function Contador({ n, tono }: { n: number | null | undefined; tono: TonoContador }) {
   if (!n) return null;
   return <span className={`anm-badge is-${tono}`}>{n}</span>;
-}
-
-function contadorDe(id: string, c: AdminContadores): { n: number | null; tono: 'rojo' | 'ambar' | 'gris' } | null {
-  switch (id) {
-    case 'validacion': return { n: c.validacion, tono: c.validacionUrgente ? 'ambar' : 'gris' };
-    case 'ai':         return { n: c.riesgo, tono: 'rojo' };
-    case 'emails':     return { n: c.emails, tono: 'rojo' };
-    case 'proximos':   return { n: c.proximosACancelar, tono: 'ambar' };
-    default:           return null;
-  }
 }
 
 export function AdminNavMovil({ activeTab, contadores, onSelect, onVolver, children }: {
@@ -212,14 +149,14 @@ export function AdminNavMovil({ activeTab, contadores, onSelect, onVolver, child
   );
 }
 
-// Solo por debajo de 768 px. Mientras esto está montado (solo en /admin) la fila
-// de pestañas y la cabecera de escritorio se ocultan en el teléfono, y la
-// página deja sitio abajo para la barra.
+// Solo por debajo de 768 px. Mientras esto está montado (solo en /admin) el
+// desplegable de secciones y la cabecera de escritorio se ocultan en el
+// teléfono, y la página deja sitio abajo para la barra.
 const ESTILOS = `
 .anm { display: none; }
 @media (max-width: 767.98px) {
   .anm { display: block; font-size: 14px; }
-  .adm-tabs, .adm-head { display: none !important; }
+  .asm, .adm-head { display: none !important; }
   .adm { padding-bottom: calc(84px + env(safe-area-inset-bottom)) !important; }
 
   .anm-head { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }

@@ -37,7 +37,9 @@ import { triggerEmail } from '@/lib/emailClient';
 import { notificationDirection, notificationTypeInfo, type NotificationDirection } from '@/lib/notificationDirection';
 // Navegación del teléfono: barra inferior con las cuatro secciones más usadas,
 // "Más" para el resto y "Volver". Sus contadores salen de acá.
-import { AdminNavMovil, SECCIONES_OCULTAS } from '@/components/admin/AdminNavMovil';
+import { AdminNavMovil } from '@/components/admin/AdminNavMovil';
+import { AdminSeccionMenu } from '@/components/admin/AdminSeccionMenu';
+import { SECCIONES_OCULTAS, isAdminTabId, type AdminContadores, type AdminTabId } from '@/components/admin/adminSecciones';
 import { fetchRiskLite, riesgoResumen, type RiskLite } from '@/lib/dashboardExtras';
 import { proximosSinContactar } from '@/lib/dashboardMetrics';
 import { madridToday } from '@/lib/subscriptionAccess';
@@ -2488,8 +2490,10 @@ function DuplicatesBanner() {
 }
 
 // ─── Admin Content ────────────────────────────────────────────────────────────
-const ADMIN_TABS = ['teachers', 'emails', 'scoring', 'bonos', 'tracking', 'fueracal', 'classlog', 'transcripts', 'leveltests', 'validacion', 'recuperaciones', 'ai', 'aiusage', 'bajas', 'testimoniales', 'notifications'] as const;
-type AdminTab = typeof ADMIN_TABS[number];
+// Las secciones (ids, nombres, grupos, ocultas) viven en una sola lista que
+// comparten el desplegable de escritorio y la barra del teléfono:
+// components/admin/adminSecciones.ts.
+type AdminTab = AdminTabId;
 
 /**
  * La pestaña "Resumen" ('overview') dejó de vivir acá en septiembre de 2026: es
@@ -2510,9 +2514,11 @@ function AdminContent() {
     teacherId: a.teacherId, studentId: a.studentId, studentName: a.studentName, studentEmail: a.studentEmail,
   })), [assignments, pruebas]);
 
-  // El campanario del header navega a /admin?tab=notifications. Sincronizamos la
-  // pestaña con la URL (sistema externo) para aterrizar en Avisos; la pestaña
-  // sigue siendo estado local para que cambiarla no cueste un round-trip de red.
+  // La sección vive en la URL (?tab=): un enlace directo abre la sección
+  // correcta (el campanario navega a /admin?tab=notifications) y al recargar uno
+  // se queda donde estaba. La pestaña sigue siendo estado local, y al cambiarla
+  // la URL se reescribe con history.replaceState: Next sincroniza
+  // useSearchParams sin navegar, así que no cuesta un round-trip de red.
   const searchParams = useSearchParams();
   const router = useRouter();
   // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -2521,8 +2527,16 @@ function AdminContent() {
     // Un enlace viejo a la pestaña Resumen: su contenido es ahora /dashboard.
     // `replace` y no `push` para que el botón de volver no rebote otra vez acá.
     if (t === MOVED_TO_DASHBOARD) { router.replace('/dashboard'); return; }
-    if (t && (ADMIN_TABS as readonly string[]).includes(t) && !SECCIONES_OCULTAS.has(t as AdminTab)) setActiveTab(t as AdminTab);
+    if (isAdminTabId(t) && !SECCIONES_OCULTAS.has(t)) setActiveTab(t);
   }, [searchParams, router]);
+  /** Cambia de sección y la deja en la URL. Los demás parámetros (?filter= de Enlaces) se conservan. */
+  const mostrarTab = (tab: AdminTab) => {
+    setActiveTab(tab);
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('tab') === tab) return;
+    params.set('tab', tab);
+    window.history.replaceState(null, '', `?${params.toString()}`);
+  };
 
   // Filtro de la pestaña Enlaces (id 'emails'), también en la URL: así el enlace se puede
   // compartir o recargar y sigue mostrando lo mismo.
@@ -2546,11 +2560,11 @@ function AdminContent() {
   const historialTabs = useRef<AdminTab[]>([]);
   const irA = (tab: AdminTab) => {
     if (tab !== activeTab) historialTabs.current.push(activeTab);
-    setActiveTab(tab);
+    mostrarTab(tab);
   };
   const volver = () => {
     const previa = historialTabs.current.pop();
-    if (previa) setActiveTab(previa);
+    if (previa) mostrarTab(previa);
     else router.push('/dashboard');
   };
   // Alumnos en rojo, para el contador de Riesgo en la barra. Lectura ligera
@@ -2610,27 +2624,16 @@ function AdminContent() {
 
   const teacher = selectedTeacher ? teachers.find(t => t.id === selectedTeacher) : null;
 
-  const tabs = [
-    { id: 'teachers',       label: 'Profesores' },
-    { id: 'emails',         label: 'Enlaces' },
-    { id: 'scoring',        label: 'Scoring' },
-    { id: 'bonos',          label: 'Bonos' },
-    { id: 'tracking',       label: 'Seguimiento' },
-    { id: 'fueracal',       label: 'Fuera de calendario' },
-    { id: 'classlog',       label: 'Registro de clases' },
-    { id: 'transcripts',    label: 'Transcripts' },
-    { id: 'leveltests',     label: 'Tests de nivel' },
-    { id: 'validacion',     label: 'Validación' },
-    { id: 'recuperaciones', label: 'Recuperaciones' },
-    { id: 'ai',             label: 'Riesgo' },
-    { id: 'aiusage',        label: 'Uso de IA' },
-    { id: 'bajas',          label: 'Bajas' },
-    { id: 'testimoniales',  label: 'Testimoniales' },
-    { id: 'notifications',  label: 'Notificaciones' },
-  ] as const;
-  // Las ocultas (ver SECCIONES_OCULTAS) no se pintan; su contenido sigue abajo,
-  // listo para cuando se reactiven.
-  const tabsVisibles = tabs.filter(t => !SECCIONES_OCULTAS.has(t.id));
+  // Contadores de pendientes: los mismos para el desplegable de escritorio y
+  // para la barra del teléfono.
+  const contadores: AdminContadores = {
+    validacion: pendingValidations.total,
+    validacionUrgente: pendingValidations.oldestDays >= 3,
+    riesgo: riesgoRojo,
+    // Asignaciones activas sin enlace de clase con más de 24 h (lib/meetLinkStatus).
+    emails: assignmentsSinPrueba.filter(a => isActiveAssignment(a) && getMeetLinkStatus(a, nowMs).status === 'overdue').length,
+    proximosACancelar: proximosSinContactar(students, madridToday()),
+  };
 
   return (
     <div style={{ minHeight: '100vh', background: '#f4f5f2' }}>
@@ -2654,43 +2657,22 @@ function AdminContent() {
           </button>
         </div>
 
-        <div className="adm-tabs" role="tablist">
-          {tabsVisibles.map(tab => (
-            <button key={tab.id} role="tab" aria-selected={activeTab === tab.id}
-              className={`adm-tab${activeTab === tab.id ? ' is-active' : ''}`}
-              onClick={() => irA(tab.id)}>
-              {tab.label}
-              {/* Cola de validación: mientras no se vio desde fuera, se acumularon
-                  clases que no le contaban a nadie. Ámbar a partir de 3 días
-                  esperando, que es cuando deja de ser un retraso normal. */}
-              {tab.id === 'validacion' && pendingValidations.total > 0 && (
-                <span
-                  title={`${pendingValidations.total} transcripciones esperando validación · la más antigua del ${pendingValidations.oldestDate} (${pendingValidations.oldestDays} días)`}
-                  style={{
-                    marginLeft: 6, fontSize: 10.5, fontWeight: 700, padding: '1px 7px', borderRadius: 999,
-                    background: pendingValidations.oldestDays >= 3 ? 'rgba(255,196,0,0.22)' : 'var(--bg-surface-3)',
-                    color: pendingValidations.oldestDays >= 3 ? '#8a6d00' : 'var(--text-muted)',
-                    border: pendingValidations.oldestDays >= 3 ? '1px solid rgba(255,196,0,0.5)' : '1px solid transparent',
-                  }}>
-                  {pendingValidations.total}
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
+        {/* Escritorio: desplegable de secciones. Cola de validación en ámbar a
+            partir de 3 días esperando, que es cuando deja de ser un retraso normal. */}
+        <AdminSeccionMenu
+          activeTab={activeTab}
+          onSelect={irA}
+          contadores={contadores}
+          tituloValidacion={pendingValidations.total > 0
+            ? `${pendingValidations.total} transcripciones esperando validación · la más antigua del ${pendingValidations.oldestDate} (${pendingValidations.oldestDays} días)`
+            : undefined}
+        />
 
         <AdminNavMovil
           activeTab={activeTab}
           onSelect={irA}
           onVolver={volver}
-          contadores={{
-            validacion: pendingValidations.total,
-            validacionUrgente: pendingValidations.oldestDays >= 3,
-            riesgo: riesgoRojo,
-            // Asignaciones activas sin enlace de clase con más de 24 h (lib/meetLinkStatus).
-            emails: assignmentsSinPrueba.filter(a => isActiveAssignment(a) && getMeetLinkStatus(a, nowMs).status === 'overdue').length,
-            proximosACancelar: proximosSinContactar(students, madridToday()),
-          }}>
+          contadores={contadores}>
           {activeTab === 'teachers' && (
             <button className="adm-btn adm-btn-primary" style={{ alignSelf: 'flex-start', minHeight: 44 }} onClick={() => setShowNewTeacher(true)}>
               Nuevo profesor
