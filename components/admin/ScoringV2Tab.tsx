@@ -28,32 +28,39 @@ export interface PuntajeViejo {
 
 interface Detalle {
   teacherName?: string;
+  /** Puntaje sin volumen (desde la fórmula v2.1). */
+  score_calidad?: number | null;
   scorePilares?: number | null;
   levelMotivo?: string;
   pilares?: Record<string, Pilar>;
   ajustes?: { total: number; eventos: string[] };
-  exposicion?: { alumnosMes: number; clases: number; alumnos: number; bajas: number };
+  exposicion?: { alumnosMes: number; alumnosMedia?: number; clases: number; alumnos: number; bajas: number };
   experiencia?: {
     alumnosActivos: number; horasSemanales: number; pctCalendarioOcupado: number | null;
     primeraClase: string | null; mesesEnAcademia: number | null;
   };
-  academia?: { tasaBajas: number | null; bajas: number; alumnosMes: number; medianaHabla: number | null; bajasDuplicadasDescartadas: number };
+  academia?: {
+    tasaBajas: number | null; bajas: number; alumnosMes: number; medianaHabla: number | null; bajasDuplicadasDescartadas: number;
+    volumenTope?: number | null; volumenTopeOrigen?: string;
+  };
 }
 
 type Columna =
-  | 'nombre' | 'score' | 'level' | 'confidence' | 'retencion' | 'cumplimiento' | 'riesgo' | 'calidad'
-  | 'alumnosMes' | 'bajas' | 'viejo' | 'nivelViejo';
+  | 'nombre' | 'score' | 'scoreCalidad' | 'level' | 'confidence' | 'retencion' | 'volumen' | 'cumplimiento' | 'riesgo' | 'calidad'
+  | 'alumnosMedia' | 'bajas' | 'viejo' | 'nivelViejo';
 
 const COLUMNAS: Array<{ id: Columna; label: string; num?: boolean }> = [
   { id: 'nombre', label: 'Profe' },
   { id: 'score', label: 'Puntaje v2', num: true },
+  { id: 'scoreCalidad', label: 'Puntaje calidad', num: true },
   { id: 'level', label: 'Nivel v2' },
   { id: 'confidence', label: 'Confianza' },
   { id: 'retencion', label: 'Retención', num: true },
+  { id: 'volumen', label: 'Volumen', num: true },
   { id: 'cumplimiento', label: 'Cumplim.', num: true },
   { id: 'riesgo', label: 'Riesgo', num: true },
   { id: 'calidad', label: 'Calidad', num: true },
-  { id: 'alumnosMes', label: 'Alumnos-mes', num: true },
+  { id: 'alumnosMedia', label: 'Alumnos de media', num: true },
   { id: 'bajas', label: 'Bajas', num: true },
   { id: 'viejo', label: 'Puntaje viejo', num: true },
   { id: 'nivelViejo', label: 'Nivel viejo' },
@@ -63,7 +70,7 @@ const ORDEN_NIVEL: Record<string, number> = { 'Top': 5, 'Destacado': 4, 'Estánd
 const ORDEN_CONF: Record<string, number> = { alta: 3, media: 2, baja: 1 };
 const NIVEL_VIEJO = ['', 'Junior', 'Senior', 'Elite'];
 const NOMBRE_PILAR: Record<string, string> = {
-  retencion: 'Retención', cumplimiento: 'Cumplimiento', riesgo: 'Gestión del riesgo', calidad: 'Calidad', crecimiento: 'Crecimiento',
+  retencion: 'Retención', volumen: 'Volumen', cumplimiento: 'Cumplimiento', riesgo: 'Gestión del riesgo', calidad: 'Calidad', crecimiento: 'Crecimiento',
 };
 const NOMBRE_PARTE: Record<string, string> = {
   puntualidad: 'Puntualidad', transcripts: 'Transcripts a tiempo', cancelaciones: 'Cancelaciones tardías',
@@ -115,6 +122,15 @@ function MetricaLinea({ titulo, m, peso }: { titulo: string; m: Metrica; peso?: 
   );
 }
 
+/** Cuánto pesa el pilar en el puntaje global y en el de calidad. */
+function textoPeso(id: string, p: Pilar): string {
+  if (p.score === null) return 'sin dato: su peso se reparte';
+  const global = `pesa ${fmt(p.pesoEfectivo)}% (config. ${p.peso})`;
+  if (id === 'volumen') return `${global} · no cuenta en el puntaje de calidad`;
+  // Las fotos anteriores a la v2.1 no traen el peso en el puntaje de calidad.
+  return p.pesoEfectivoCalidad === undefined ? global : `${global} · en calidad ${fmt(p.pesoEfectivoCalidad)}%`;
+}
+
 function DetalleProfe({ d }: { d: Detalle }) {
   const pilares = Object.entries(d.pilares ?? {}).filter(([k]) => k !== 'crecimiento');
   const ex = d.experiencia;
@@ -123,14 +139,14 @@ function DetalleProfe({ d }: { d: Detalle }) {
       <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 10 }}>
         <strong style={{ color: 'var(--text-primary)' }}>Nivel:</strong> {d.levelMotivo ?? '—'}
         {' · '}<strong style={{ color: 'var(--text-primary)' }}>Pilares:</strong> {fmt(d.scorePilares)}
+        {' · '}<strong style={{ color: 'var(--text-primary)' }}>Puntaje calidad (sin volumen):</strong> {fmt(d.score_calidad)}
         {' · '}<strong style={{ color: 'var(--text-primary)' }}>Ajustes:</strong> {d.ajustes ? `${d.ajustes.total > 0 ? '+' : ''}${d.ajustes.total}` : '—'}
         {d.ajustes && d.ajustes.eventos.length > 0 && <> ({d.ajustes.eventos.join('; ')})</>}
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12 }}>
         {pilares.map(([k, p]) => (
           <div key={k} style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 10, padding: '10px 12px' }}>
-            <MetricaLinea titulo={NOMBRE_PILAR[k] ?? k} m={p}
-              peso={p.score === null ? 'sin dato: su peso se reparte' : `pesa ${fmt(p.pesoEfectivo)}% (config. ${p.peso})`} />
+            <MetricaLinea titulo={NOMBRE_PILAR[k] ?? k} m={p} peso={textoPeso(k, p)} />
             {p.partes && (
               <div style={{ borderTop: '1px dashed var(--border)', marginTop: 6, paddingTop: 4 }}>
                 {Object.entries(p.partes).map(([pk, parte]) => (
@@ -147,7 +163,7 @@ function DetalleProfe({ d }: { d: Detalle }) {
             <div>Horas semanales: <strong>{ex.horasSemanales}</strong></div>
             <div>Calendario ocupado: <strong>{ex.pctCalendarioOcupado === null ? '—' : `${fmt(ex.pctCalendarioOcupado)}%`}</strong></div>
             <div>En la academia desde: <strong>{ddmmaaaa(ex.primeraClase)}</strong> ({ex.mesesEnAcademia ?? '—'} meses)</div>
-            {d.exposicion && <div>En la ventana: {fmt(d.exposicion.alumnosMes)} alumnos-mes · {d.exposicion.clases} clases</div>}
+            {d.exposicion && <div>En la ventana: {fmt(d.exposicion.alumnosMes)} alumnos-mes{d.exposicion.alumnosMedia !== undefined && <> ({fmt(d.exposicion.alumnosMedia)} alumnos de media)</>} · {d.exposicion.clases} clases</div>}
           </div>
         )}
       </div>
@@ -206,13 +222,15 @@ export default function ScoringV2Tab({ viejos }: { viejos: PuntajeViejo[] }) {
       switch (orden.col) {
         case 'nombre': return (d.teacherName ?? f.teacher_id).toLowerCase();
         case 'score': return f.score;
+        case 'scoreCalidad': return d.score_calidad ?? null;
         case 'level': return ORDEN_NIVEL[f.level] ?? 0;
         case 'confidence': return ORDEN_CONF[f.confidence] ?? 0;
         case 'retencion': return f.retention_score;
+        case 'volumen': return d.pilares?.volumen?.score ?? null;
         case 'cumplimiento': return f.compliance_score;
         case 'riesgo': return f.risk_score;
         case 'calidad': return f.quality_score;
-        case 'alumnosMes': return d.exposicion?.alumnosMes ?? null;
+        case 'alumnosMedia': return d.exposicion?.alumnosMedia ?? null;
         case 'bajas': return d.exposicion?.bajas ?? null;
         case 'viejo': return v?.score ?? null;
         case 'nivelViejo': return v ? v.level * 10 - (v.blocked ? 5 : 0) : null;
@@ -248,7 +266,7 @@ export default function ScoringV2Tab({ viejos }: { viejos: PuntajeViejo[] }) {
             Scoring v2 <span style={{ background: AMARILLO, color: '#3a2c00', fontSize: 10, fontWeight: 800, padding: '2px 7px', borderRadius: 6, marginLeft: 4 }}>BETA</span>
           </div>
           Últimos 90 días · {fecha ? `foto del ${ddmmaaaa(fecha)}` : 'todavía sin foto guardada'}
-          {academia && <> · academia: {fmt(academia.tasaBajas === null ? null : academia.tasaBajas * 100)} bajas cada 100 alumnos-mes, habla mediana {fmt(academia.medianaHabla)}% · {academia.bajasDuplicadasDescartadas} bajas duplicadas descartadas</>}
+          {academia && <> · academia: {fmt(academia.tasaBajas === null ? null : academia.tasaBajas * 100)} bajas cada 100 alumnos-mes, habla mediana {fmt(academia.medianaHabla)}%{academia.volumenTope !== undefined && <>, tope de volumen {fmt(academia.volumenTope)} alumnos de media ({academia.volumenTopeOrigen})</>} · {academia.bajasDuplicadasDescartadas} bajas duplicadas descartadas</>}
           <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>No cambia nada en la app: el scoring viejo sigue mandando. &quot;En revisión&quot; es solo una marca, no bloquea.</div>
         </div>
         <button onClick={() => void recalcular()} disabled={recalculando}
@@ -308,13 +326,15 @@ export default function ScoringV2Tab({ viejos }: { viejos: PuntajeViejo[] }) {
                         {d.teacherName ?? f.teacher_id}
                       </td>
                       <td style={{ ...celda, textAlign: 'right', fontWeight: 800, fontSize: 15, color: colorPuntaje(f.score) }}>{fmt(f.score)}</td>
+                      {num(d.score_calidad)}
                       <td style={celda}><NivelBadge level={f.level} /></td>
                       <td style={{ ...celda, color: 'var(--text-secondary)' }}>{f.confidence}</td>
                       {num(f.retention_score)}
+                      {num(d.pilares?.volumen?.score)}
                       {num(f.compliance_score)}
                       {num(f.risk_score)}
                       {num(f.quality_score)}
-                      <td style={{ ...celda, textAlign: 'right', color: 'var(--text-secondary)' }}>{fmt(d.exposicion?.alumnosMes)}</td>
+                      <td style={{ ...celda, textAlign: 'right', color: 'var(--text-secondary)' }}>{fmt(d.exposicion?.alumnosMedia)}</td>
                       <td style={{ ...celda, textAlign: 'right', color: 'var(--text-secondary)' }}>{d.exposicion?.bajas ?? '—'}</td>
                       <td style={{ ...celda, textAlign: 'right', color: 'var(--text-muted)' }}>{v ? v.score : '—'}</td>
                       <td style={{ ...celda, color: 'var(--text-muted)' }}>

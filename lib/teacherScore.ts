@@ -21,12 +21,17 @@
 // LOS PILARES
 //   1) Retención     bajas por alumno-mes frente a la tasa de la academia, con
 //                    suavizado hacia el promedio cuando hay poca exposición.
-//   2) Cumplimiento  puntualidad, transcripts a tiempo, cancelaciones tardías y
+//   2) Volumen       alumnos de media en la ventana frente a un tope de la
+//                    academia (p90); a la mitad si la retención es baja.
+//   3) Cumplimiento  puntualidad, transcripts a tiempo, cancelaciones tardías y
 //                    enlaces de clase a tiempo.
-//   3) Riesgo        % de auditorías de protocolo en las que el profe intervino,
+//   4) Riesgo        % de auditorías de protocolo en las que el profe intervino,
 //                    suavizado hacia el % de la academia con pocas auditorías.
-//   4) Calidad       % de clases en verde y % de habla del alumno.
-//   5) Crecimiento   preparado, devuelve null (peso 0).
+//   5) Calidad       % de clases en verde y % de habla del alumno.
+//   6) Crecimiento   preparado, devuelve null (peso 0).
+//
+// DOS PUNTAJES: `score` (global, todos los pilares, define el nivel) y
+// `scoreCalidad` (los mismos sin volumen, para la asignación automática).
 
 import type { ClassJoinLog, ClassRecord } from '@/types';
 import type { ClassTranscriptRef } from '@/lib/transcriptDeadline';
@@ -37,7 +42,7 @@ import { normName } from '@/lib/retention';
 import { MEET_LINK_PENALTY_START_DATE } from '@/lib/meetLinkStatus';
 import {
   AJUSTES_MANUALES, CALIDAD, CONFIANZA, CUMPLIMIENTO, FORMULA_VERSION, MAX_EVENTOS_DETALLE,
-  NIVELES, PESOS, RETENCION, RIESGO, VENTANA_DIAS,
+  NIVELES, PESOS, RETENCION, RIESGO, VENTANA_DIAS, VOLUMEN,
 } from '@/lib/teacherScoreConfig';
 
 // ── Entrada ───────────────────────────────────────────────────────────────────
@@ -151,7 +156,7 @@ export interface EntradaScore {
 
 export type NivelV2 = 'En evaluación' | 'Estándar' | 'Destacado' | 'Top' | 'En revisión';
 export type ConfianzaV2 = 'alta' | 'media' | 'baja';
-export type PilarId = 'retencion' | 'cumplimiento' | 'riesgo' | 'calidad' | 'crecimiento';
+export type PilarId = 'retencion' | 'volumen' | 'cumplimiento' | 'riesgo' | 'calidad' | 'crecimiento';
 
 /** Una métrica (pilar o parte de un pilar) con su porqué. */
 export interface Metrica {
@@ -172,6 +177,8 @@ export interface Pilar extends Metrica {
   peso: number;
   /** Peso que terminó teniendo tras repartir los pilares en null (suma 100). */
   pesoEfectivo: number;
+  /** Lo mismo en el puntaje de calidad (sin volumen). El volumen lleva 0. */
+  pesoEfectivoCalidad: number;
   /** Partes del pilar (cumplimiento y calidad). */
   partes?: Record<string, Metrica & { subpeso: number }>;
 }
@@ -183,13 +190,20 @@ export interface ResultadoProfe {
   score: number | null;
   /** Puntaje de los pilares, antes de los ajustes manuales. */
   scorePilares: number | null;
+  /**
+   * Puntaje de calidad: los mismos pilares SIN volumen (su peso se reparte) más
+   * los mismos ajustes manuales. Es el que usará la asignación automática; el
+   * nivel lo define `score`.
+   */
+  scoreCalidad: number | null;
   level: NivelV2;
   /** Por qué ese nivel ("Confianza baja", "Menos de 90 días dando clases"...). */
   levelMotivo: string;
   confidence: ConfianzaV2;
   pilares: Record<PilarId, Pilar>;
   ajustes: { total: number; eventos: string[] };
-  exposicion: { alumnosMes: number; clases: number; alumnos: number; bajas: number };
+  /** alumnosMedia = alumnos-mes de la ventana / meses de la ventana (cuántos a la vez). */
+  exposicion: { alumnosMes: number; alumnosMedia: number; clases: number; alumnos: number; bajas: number };
   experiencia: {
     alumnosActivos: number;
     horasSemanales: number;
@@ -212,6 +226,9 @@ export interface ResultadoAcademia {
   /** Detalle de los duplicados descartados: "Virginia Alfonso (Wanda) ×6". */
   duplicados: string[];
   medianaHabla: number | null;
+  /** Alumnos de media que dan 100 en volumen, y de dónde sale. */
+  volumenTope: number | null;
+  volumenTopeOrigen: string;
   /** Avisos de calidad de datos (fechas ilegibles, asignaciones sin fecha de fin...). */
   avisos: string[];
 }
@@ -464,7 +481,69 @@ function pilarRetencion(
   };
 }
 
-// ── 2) Cumplimiento ───────────────────────────────────────────────────────────
+// ── 2) Volumen ────────────────────────────────────────────────────────────────
+
+/** Meses de la ventana: alumnos de media = alumnos-mes / esto (90 días → 3). */
+const MESES_VENTANA = VENTANA_DIAS / RETENCION.diasPorAlumnoMes;
+
+/** Alumnos que tuvo a la vez, en promedio, dentro de la ventana. */
+export const alumnosDeMedia = (alumnosMes: number): number => alumnosMes / MESES_VENTANA;
+
+/** Percentil p (0–100) con interpolación lineal entre vecinos; null si no hay valores. */
+export function percentil(xs: number[], p: number): number | null {
+  if (xs.length === 0) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  const pos = ((s.length - 1) * p) / 100;
+  const lo = Math.floor(pos);
+  const hi = Math.ceil(pos);
+  return s[lo] + (s[hi] - s[lo]) * (pos - lo);
+}
+
+/**
+ * Tope del volumen: el fijado a mano en la config o, si no, el percentil
+ * VOLUMEN.percentilTope de los alumnos de media de los profes con confianza
+ * alta o media.
+ */
+export function topeVolumen(mediasConfiables: number[]): { tope: number | null; origen: string } {
+  if (VOLUMEN.topeManual !== null) return { tope: VOLUMEN.topeManual, origen: 'fijado a mano en la config' };
+  const tope = percentil(mediasConfiables.filter(x => x > 0), VOLUMEN.percentilTope);
+  return {
+    tope,
+    origen: tope === null
+      ? 'sin profes con confianza alta o media'
+      : `percentil ${VOLUMEN.percentilTope} de ${mediasConfiables.filter(x => x > 0).length} profes con confianza alta o media`,
+  };
+}
+
+/** Puntos del volumen: lineal hasta el tope, a la mitad (config) con retención baja. */
+export function puntosVolumen(alumnosMedia: number, tope: number, retencion: number | null):
+  { score: number; sinProteccion: number; reducido: boolean } {
+  const sinProteccion = Math.min(100, (alumnosMedia / tope) * 100);
+  const reducido = retencion !== null && retencion < VOLUMEN.retencionMinima;
+  return { score: reducido ? sinProteccion * VOLUMEN.factorRetencionBaja : sinProteccion, sinProteccion, reducido };
+}
+
+function pilarVolumen(
+  alumnosMes: number, tope: { tope: number | null; origen: string }, retencion: number | null,
+): Metrica {
+  const media = alumnosDeMedia(alumnosMes);
+  const numeros: Metrica['numeros'] = { alumnosMedia: r1(media), alumnosMes: r1(alumnosMes), tope: tope.tope === null ? null : r1(tope.tope), topeOrigen: tope.origen };
+  if (alumnosMes <= 0) return nula('Sin alumnos dentro de la ventana', 'No tuvo ningún alumno en los últimos 90 días.', numeros);
+  if (tope.tope === null || tope.tope <= 0) return nula(`${fmt(media)} alumnos de media`, `No hay tope de la academia (${tope.origen}).`, numeros);
+  const v = puntosVolumen(media, tope.tope, retencion);
+  return {
+    score: r1(v.score),
+    resumen: `${fmt(media)} alumnos de media · tope academia ${fmt(tope.tope)}`
+      + (v.reducido ? ' · volumen a la mitad por retención baja' : ''),
+    numeros: {
+      ...numeros, puntajeSinProteccion: r1(v.sinProteccion),
+      retencion, retencionMinima: VOLUMEN.retencionMinima, factor: v.reducido ? VOLUMEN.factorRetencionBaja : 1,
+    },
+    eventos: [],
+  };
+}
+
+// ── 3) Cumplimiento ───────────────────────────────────────────────────────────
 
 /** Clases (sesiones) del profe en la ventana: profe + alumno + fecha. */
 function sesionesDe(ingresos: ClassJoinLog[]): Map<string, ClassJoinLog[]> {
@@ -593,7 +672,7 @@ function metricaEnlaces(
   };
 }
 
-// ── 3) Gestión del riesgo ─────────────────────────────────────────────────────
+// ── 4) Gestión del riesgo ─────────────────────────────────────────────────────
 
 /** % de intervención suavizado: como si el profe tuviera K_RIESGO auditorías extra con el % de la academia. */
 export function intervencionSuavizada(conIntervencion: number, auditorias: number, tasaAcademia: number): number {
@@ -619,7 +698,7 @@ function pilarRiesgo(teacherId: string, auditoriasVentana: AuditoriaScore[], tas
   };
 }
 
-// ── 4) Calidad ────────────────────────────────────────────────────────────────
+// ── 5) Calidad ────────────────────────────────────────────────────────────────
 
 const SENALES = new Set(['verde', 'amarillo', 'rojo']);
 
@@ -713,7 +792,7 @@ export function nivelDe(score: number | null, confianza: ConfianzaV2, diasDandoC
   return { level: 'En revisión', motivo: `Puntaje ${fmt(score)}, por debajo de ${NIVELES.estandar}. Es solo una marca: no bloquea nada` };
 }
 
-// ── 5) Crecimiento (preparado) ────────────────────────────────────────────────
+// ── 6) Crecimiento (preparado) ────────────────────────────────────────────────
 
 /** Upsells, renovaciones... Todavía no se mide: devuelve null y pesa 0. */
 export function pilarCrecimiento(): Metrica {
@@ -723,7 +802,14 @@ export function pilarCrecimiento(): Metrica {
 // ── El cálculo completo ───────────────────────────────────────────────────────
 
 function armarPilar(m: Metrica, peso: number, partes?: Pilar['partes']): Pilar {
-  return { ...m, peso, pesoEfectivo: 0, ...(partes ? { partes } : {}) };
+  return { ...m, peso, pesoEfectivo: 0, pesoEfectivoCalidad: 0, ...(partes ? { partes } : {}) };
+}
+
+/** Pondera los pilares que cuentan y anota en cada uno el peso que terminó teniendo. */
+function puntajeDe(pilares: Pilar[], campo: 'pesoEfectivo' | 'pesoEfectivoCalidad'): number | null {
+  const pesoConDato = pilares.filter(x => x.score !== null && x.peso > 0).reduce((s, x) => s + x.peso, 0);
+  for (const x of pilares) x[campo] = x.score !== null && pesoConDato > 0 ? r1((x.peso / pesoConDato) * 100) : 0;
+  return ponderar(pilares.map(x => ({ score: x.score, peso: x.peso })));
 }
 
 /** Pilar compuesto por partes ponderadas (cumplimiento, calidad). */
@@ -775,11 +861,17 @@ export function calcularScoringV2(input: EntradaScore): ResultadoScore {
     .map(d => `${d.studentName} (${nombres.get(d.teacherId) ?? d.teacherId}): ${d.filas} filas, ${d.descartadas} descartada(s)`);
   const descartadas = [...exp.duplicados.values()].reduce((s, d) => s + d.descartadas, 0);
 
-  const profesores = input.profesores.map((p): ResultadoProfe => {
+  // Primera pasada: exposición y confianza de todos, porque el tope del volumen
+  // sale de los alumnos de media de los profes con confianza alta o media.
+  const previos = input.profesores.map(p => {
     const ingresos = ingresosVentana.filter(l => l.teacherId === p.id);
     const clases = sesionesDe(ingresos).size;
-
     const ret = pilarRetencion(p.id, exp, tasaAcademia, desde, hoy);
+    return { p, ingresos, clases, ret, confidence: confianzaDe(ret.alumnosMes, clases) };
+  });
+  const tope = topeVolumen(previos.filter(x => x.confidence !== 'baja').map(x => alumnosDeMedia(x.ret.alumnosMes)));
+
+  const profesores = previos.map(({ p, ingresos, clases, ret, confidence }): ResultadoProfe => {
     const cumpl = compuesto({
       puntualidad: metricaPuntualidad(ingresos),
       transcripts: metricaTranscripts(p.id, ingresos, input),
@@ -794,18 +886,18 @@ export function calcularScoringV2(input: EntradaScore): ResultadoScore {
 
     const pilares: Record<PilarId, Pilar> = {
       retencion: armarPilar(ret, PESOS.retencion),
+      volumen: armarPilar(pilarVolumen(ret.alumnosMes, tope, ret.score), PESOS.volumen),
       cumplimiento: armarPilar(cumpl.metrica, PESOS.cumplimiento, cumpl.partes),
       riesgo: armarPilar(pilarRiesgo(p.id, auditoriasVentana, intervencionAcademia), PESOS.riesgo),
       calidad: armarPilar(cal.metrica, PESOS.calidad, cal.partes),
       crecimiento: armarPilar(pilarCrecimiento(), PESOS.crecimiento),
     };
     const lista = Object.values(pilares);
-    const pesoConDato = lista.filter(x => x.score !== null && x.peso > 0).reduce((s, x) => s + x.peso, 0);
-    for (const x of lista) x.pesoEfectivo = x.score !== null && pesoConDato > 0 ? r1((x.peso / pesoConDato) * 100) : 0;
-
-    const scorePilares = ponderar(lista.map(x => ({ score: x.score, peso: x.peso })));
+    const scorePilares = puntajeDe(lista, 'pesoEfectivo');
+    const scorePilaresCalidad = puntajeDe(lista.filter(x => x !== pilares.volumen), 'pesoEfectivoCalidad');
     const ajustes = ajustesDe(p.id, input, desde);
     const score = scorePilares === null ? null : r1(clamp(scorePilares + ajustes.total));
+    const scoreCalidad = scorePilaresCalidad === null ? null : r1(clamp(scorePilaresCalidad + ajustes.total));
 
     // Desde cuándo está en la academia: lo más antiguo entre su alta y su primera
     // clase registrada. La plataforma registra clases recién desde fines de junio,
@@ -815,7 +907,6 @@ export function calcularScoringV2(input: EntradaScore): ResultadoScore {
     const clase = input.primeraClase.get(p.id) ?? null;
     const primera = alta && clase ? (alta < clase ? alta : clase) : (alta ?? clase);
     const diasDandoClases = primera ? diasEntre(primera, hoy) : null;
-    const confidence = confianzaDe(ret.alumnosMes, clases);
     const { level, motivo } = nivelDe(score, confidence, diasDandoClases);
 
     const alumnosActivos = new Set(input.asignaciones
@@ -826,9 +917,12 @@ export function calcularScoringV2(input: EntradaScore): ResultadoScore {
 
     return {
       teacherId: p.id, teacherName: p.name,
-      score, scorePilares: scorePilares === null ? null : r1(scorePilares),
+      score, scorePilares: scorePilares === null ? null : r1(scorePilares), scoreCalidad,
       level, levelMotivo: motivo, confidence, pilares, ajustes,
-      exposicion: { alumnosMes: r1(ret.alumnosMes), clases, alumnos: ret.alumnos, bajas: ret.bajas },
+      exposicion: {
+        alumnosMes: r1(ret.alumnosMes), alumnosMedia: r1(alumnosDeMedia(ret.alumnosMes)),
+        clases, alumnos: ret.alumnos, bajas: ret.bajas,
+      },
       experiencia: {
         alumnosActivos,
         horasSemanales: p.weeklyLoad,
@@ -850,6 +944,8 @@ export function calcularScoringV2(input: EntradaScore): ResultadoScore {
       bajasDuplicadasDescartadas: descartadas,
       duplicados,
       medianaHabla,
+      volumenTope: tope.tope === null ? null : r1(tope.tope),
+      volumenTopeOrigen: tope.origen,
       avisos: exp.avisos,
     },
     profesores,
@@ -887,8 +983,11 @@ export function filaSnapshot(r: ResultadoProfe, academia: ResultadoAcademia, fec
     risk_score: r.pilares.riesgo.score,
     quality_score: r.pilares.calidad.score,
     growth_score: r.pilares.crecimiento.score,
+    // El volumen y el puntaje de calidad no tienen columna propia: van en details
+    // (pilares.volumen y score_calidad).
     details: {
       teacherName: r.teacherName,
+      score_calidad: r.scoreCalidad,
       scorePilares: r.scorePilares,
       levelMotivo: r.levelMotivo,
       pilares: r.pilares,
@@ -898,6 +997,7 @@ export function filaSnapshot(r: ResultadoProfe, academia: ResultadoAcademia, fec
       academia: {
         ventana: academia.ventana, tasaBajas: academia.tasaBajas, bajas: academia.bajas,
         alumnosMes: academia.alumnosMes, medianaHabla: academia.medianaHabla,
+        volumenTope: academia.volumenTope, volumenTopeOrigen: academia.volumenTopeOrigen,
         bajasDuplicadasDescartadas: academia.bajasDuplicadasDescartadas,
       },
     },

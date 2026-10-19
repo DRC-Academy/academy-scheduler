@@ -8,8 +8,11 @@
 // El scoring viejo (lib/scoringStore, pestaña Scoring, Mi Scoring, setter) NO lee
 // nada de este archivo. Los dos conviven hasta que el v2 se valide.
 
-/** Versión de la fórmula. Va en teacher_score_snapshots.formula_version. */
-export const FORMULA_VERSION = 'v2';
+/**
+ * Versión de la fórmula. Va en teacher_score_snapshots.formula_version.
+ * v2.1 (19/10/2026): pilar Volumen, pesos nuevos y score_calidad aparte.
+ */
+export const FORMULA_VERSION = 'v2.1';
 
 /** Ventana de cálculo: los últimos N días (hora de España), hoy incluido. */
 export const VENTANA_DIAS = 90;
@@ -17,11 +20,16 @@ export const VENTANA_DIAS = 90;
 /**
  * Peso de cada pilar sobre 100. Un pilar sin datos suficientes queda en null y
  * su peso se reparte entre los demás (no cuenta como cero).
+ *
+ * Hay DOS puntajes: el global (`score`, define el nivel) usa todos los pilares;
+ * el de calidad (`score_calidad`, el que usará la asignación automática) usa los
+ * mismos SIN volumen, con su peso repartido entre el resto.
  */
 export const PESOS = {
-  retencion: 40,
-  cumplimiento: 30,
-  riesgo: 20,
+  retencion: 30,
+  volumen: 25,
+  cumplimiento: 20,
+  riesgo: 15,
   calidad: 10,
   /** Preparado para más adelante: hoy no suma nada. */
   crecimiento: 0,
@@ -45,7 +53,22 @@ export const RETENCION = {
   multiploParaCero: 2,
 } as const;
 
-// ── 2) Cumplimiento ───────────────────────────────────────────────────────────
+// ── 2) Volumen ────────────────────────────────────────────────────────────────
+
+export const VOLUMEN = {
+  /**
+   * Tope fijo de "alumnos de media" (100 puntos). null = automático: el
+   * percentil `percentilTope` entre los profes con confianza alta o media.
+   */
+  topeManual: null as number | null,
+  /** Percentil del tope automático. */
+  percentilTope: 90,
+  /** Con la retención por debajo de esto, el volumen se multiplica por `factorRetencionBaja`. */
+  retencionMinima: 40,
+  factorRetencionBaja: 0.5,
+};
+
+// ── 3) Cumplimiento ───────────────────────────────────────────────────────────
 
 export const CUMPLIMIENTO = {
   /** Peso de cada parte dentro del pilar (las que quedan en null se reparten). */
@@ -70,7 +93,7 @@ export const CUMPLIMIENTO = {
   minAlumnosNuevosEnlaces: 1,
 } as const;
 
-// ── 3) Gestión del riesgo ─────────────────────────────────────────────────────
+// ── 4) Gestión del riesgo ─────────────────────────────────────────────────────
 
 export const RIESGO = {
   /** Con menos auditorías de protocolo que esto, el pilar queda en null. */
@@ -83,7 +106,7 @@ export const RIESGO = {
   K_RIESGO: 5,
 } as const;
 
-// ── 4) Calidad ────────────────────────────────────────────────────────────────
+// ── 5) Calidad ────────────────────────────────────────────────────────────────
 
 export const CALIDAD = {
   /** Peso de cada parte dentro del pilar. */

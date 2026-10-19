@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
-  calcularScoringV2, confianzaDe, construirExposicion, intervencionSuavizada, nivelDe, puntosHabla, puntosPorTasa, tasaSuavizada,
+  alumnosDeMedia, calcularScoringV2, confianzaDe, construirExposicion, intervencionSuavizada, nivelDe, percentil,
+  puntosHabla, puntosPorTasa, puntosVolumen, tasaSuavizada, topeVolumen,
   type AsignacionScore, type BajaScore, type EntradaScore,
 } from '@/lib/teacherScore';
+import { VOLUMEN } from '@/lib/teacherScoreConfig';
 import type { ClassJoinLog } from '@/types';
 
 const HOY = '2026-10-16';
@@ -160,6 +162,100 @@ describe('puntaje total', () => {
   it('el profe veterano cuenta desde su alta aunque la primera clase registrada sea reciente', () => {
     const r = calcularScoringV2(entrada({ primeraClase: new Map([['A', '2026-08-01']]) }));
     expect(r.profesores[0].experiencia.primeraClase).toBe('2026-06-03');
+  });
+});
+
+describe('volumen', () => {
+  const profe = (id: string) => ({ id, name: id, createdAt: '2026-06-03T00:00:00Z', weeklyLoad: 0, freeSpots: 0 });
+  /** n alumnos activos desde enero: cada uno suma 3 alumnos-mes (1 de media) en la ventana. */
+  const alumnos = (teacherId: string, n: number, prefijo = 'Al') =>
+    Array.from({ length: n }, (_, i) => asig({ teacherId, studentName: `${prefijo} ${teacherId}${i}` }));
+
+  it('alumnos de media = alumnos-mes / 3; percentil con interpolación lineal', () => {
+    expect(alumnosDeMedia(40.5)).toBeCloseTo(13.5);
+    expect(percentil([2, 4], 90)).toBeCloseTo(3.8);
+    expect(percentil([5], 90)).toBe(5);
+    expect(percentil([], 90)).toBeNull();
+  });
+
+  it('lineal hasta el tope, máximo 100, y a la mitad con retención < 40', () => {
+    expect(puntosVolumen(9, 18, 80).score).toBe(50);
+    expect(puntosVolumen(30, 18, 80).score).toBe(100);
+    expect(puntosVolumen(9, 18, 39.9)).toMatchObject({ score: 25, sinProteccion: 50, reducido: true });
+    expect(puntosVolumen(9, 18, 40).reducido).toBe(false);
+    expect(puntosVolumen(9, 18, null).reducido).toBe(false);   // retención sin dato: no se castiga
+  });
+
+  it('el tope se puede fijar a mano en la config', () => {
+    expect(topeVolumen([2, 4]).tope).toBeCloseTo(3.8);
+    VOLUMEN.topeManual = 20;
+    try {
+      expect(topeVolumen([2, 4])).toEqual({ tope: 20, origen: 'fijado a mano en la config' });
+    } finally {
+      VOLUMEN.topeManual = null;
+    }
+  });
+
+  it('tope automático = p90 de los profes con confianza alta o media; los de confianza baja no cuentan', () => {
+    const r = calcularScoringV2(entrada({
+      profesores: [profe('A'), profe('B'), profe('C')],
+      // A: 2 de media (media), B: 4 de media (alta por alumnos-mes, pero sin clases → media), C: 1 de media (baja).
+      asignaciones: [...alumnos('A', 2), ...alumnos('B', 4), ...alumnos('C', 1)],
+    }));
+    expect(r.academia.volumenTope).toBe(3.8);
+    const [a, b, c] = r.profesores;
+    expect(a.exposicion.alumnosMedia).toBe(2);
+    expect(a.pilares.volumen.score).toBe(52.6);   // 2 / 3,8
+    expect(a.pilares.volumen.resumen).toBe('2 alumnos de media · tope academia 3,8');
+    expect(b.pilares.volumen.score).toBe(100);
+    expect(c.pilares.volumen.score).toBe(26.3);   // cuenta para su puntaje aunque no para el tope
+  });
+
+  it('sin alumnos en la ventana el volumen es null', () => {
+    const r = calcularScoringV2(entrada({
+      profesores: [profe('A'), profe('B')],
+      asignaciones: alumnos('B', 5),
+    }));
+    expect(r.profesores[0].pilares.volumen.score).toBeNull();
+    expect(r.profesores[1].pilares.volumen.score).toBe(100);
+  });
+
+  it('con retención baja el volumen va a la mitad y lo dice el detalle', () => {
+    VOLUMEN.topeManual = 4;
+    try {
+      const bajasA = [0, 1, 2, 3].map(i =>
+        baja({ teacherId: 'A', studentName: `Se fue ${i}`, startDate: '2026-08-01', droppedAt: '2026-09-01T10:00:00Z' }));
+      const r = calcularScoringV2(entrada({
+        profesores: [profe('A'), profe('B')],
+        asignaciones: [...alumnos('A', 2), ...alumnos('B', 10)],
+        bajas: bajasA,
+      }));
+      const v = r.profesores[0].pilares.volumen;
+      expect(r.profesores[0].pilares.retencion.score!).toBeLessThan(40);
+      // 2 alumnos × 90 días + 4 bajas × 32 días = 308 días → 3,42 de media sobre 4 = 85,6.
+      expect(v.numeros.puntajeSinProteccion).toBe(85.6);
+      expect(v.score).toBe(42.8);
+      expect(v.resumen).toContain('volumen a la mitad por retención baja');
+    } finally {
+      VOLUMEN.topeManual = null;
+    }
+  });
+
+  it('score global con los 5 pilares; score de calidad sin volumen, con su peso repartido', () => {
+    VOLUMEN.topeManual = 4;
+    try {
+      const r = calcularScoringV2(entrada({ asignaciones: alumnos('A', 2) }));
+      const a = r.profesores[0];
+      const ret = a.pilares.retencion.score!, vol = a.pilares.volumen.score!;
+      expect(vol).toBe(50);
+      // Solo retención (30) y volumen (25) tienen dato.
+      expect(a.score).toBeCloseTo((30 * ret + 25 * vol) / 55, 1);
+      expect(a.scoreCalidad).toBe(ret);
+      expect(a.pilares.retencion.pesoEfectivoCalidad).toBe(100);
+      expect(a.pilares.volumen.pesoEfectivoCalidad).toBe(0);
+    } finally {
+      VOLUMEN.topeManual = null;
+    }
   });
 });
 
