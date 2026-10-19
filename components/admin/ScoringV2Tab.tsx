@@ -1,12 +1,12 @@
 'use client';
 
-// ── Pestaña "Scoring v2 (beta)" del admin ─────────────────────────────────────
+// ── Pestaña Scoring del admin (scoring v2, beta) ──────────────────────────────
 //
-// Pantalla TEMPORAL para comparar el scoring nuevo con el viejo antes de
-// validarlo. Solo pinta: el puntaje lo calcula el servidor con el motor único
-// (lib/teacherScore) y llega ya guardado desde /api/admin/teacher-score-v2. El
-// puntaje y el nivel VIEJOS los pasa la pestaña Scoring, que es quien los
-// calcula (app/admin/page.tsx → ScoringTab).
+// Desde el 19/10/2026 es lo único que muestra la pestaña Scoring del admin (el
+// scoring anterior ya no se ve ahí). Solo pinta: el puntaje lo calcula el
+// servidor con el motor único (lib/teacherScore) y llega ya guardado desde
+// /api/admin/teacher-score-v2. El botón "Evento" de cada fila abre el modal de
+// carga de eventos de app/admin/page.tsx (ScoringTab).
 //
 // La visual definitiva se hace después: esto es una tabla ordenable y, al tocar
 // un profe, el porqué de cada pilar (la columna details de la foto).
@@ -17,14 +17,6 @@ import type { FilaSnapshot, Metrica, Pilar } from '@/lib/teacherScore';
 const VERDE = '#1E9E3A';
 const AMARILLO = '#FFC400';
 const FONDO = '#F7F7F5';
-
-export interface PuntajeViejo {
-  teacherId: string;
-  score: number;
-  /** 1 Junior · 2 Senior · 3 Elite */
-  level: number;
-  blocked: boolean;
-}
 
 interface Detalle {
   teacherName?: string;
@@ -47,7 +39,7 @@ interface Detalle {
 
 type Columna =
   | 'nombre' | 'score' | 'scoreCalidad' | 'level' | 'confidence' | 'retencion' | 'volumen' | 'cumplimiento' | 'riesgo' | 'calidad'
-  | 'alumnosMedia' | 'bajas' | 'viejo' | 'nivelViejo';
+  | 'alumnosMedia' | 'bajas';
 
 const COLUMNAS: Array<{ id: Columna; label: string; num?: boolean }> = [
   { id: 'nombre', label: 'Profe' },
@@ -62,13 +54,10 @@ const COLUMNAS: Array<{ id: Columna; label: string; num?: boolean }> = [
   { id: 'calidad', label: 'Calidad', num: true },
   { id: 'alumnosMedia', label: 'Alumnos de media', num: true },
   { id: 'bajas', label: 'Bajas', num: true },
-  { id: 'viejo', label: 'Puntaje viejo', num: true },
-  { id: 'nivelViejo', label: 'Nivel viejo' },
 ];
 
 const ORDEN_NIVEL: Record<string, number> = { 'Top': 5, 'Destacado': 4, 'Estándar': 3, 'En revisión': 2, 'En evaluación': 1 };
 const ORDEN_CONF: Record<string, number> = { alta: 3, media: 2, baja: 1 };
-const NIVEL_VIEJO = ['', 'Junior', 'Senior', 'Elite'];
 const NOMBRE_PILAR: Record<string, string> = {
   retencion: 'Retención', volumen: 'Volumen', cumplimiento: 'Cumplimiento', riesgo: 'Gestión del riesgo', calidad: 'Calidad', crecimiento: 'Crecimiento',
 };
@@ -185,7 +174,7 @@ async function pedirScoring(metodo: 'GET' | 'POST'): Promise<Respuesta> {
   }
 }
 
-export default function ScoringV2Tab({ viejos }: { viejos: PuntajeViejo[] }) {
+export default function ScoringV2Tab({ onEvento }: { onEvento: (teacherId: string) => void }) {
   const [filas, setFilas] = useState<FilaSnapshot[]>([]);
   const [fecha, setFecha] = useState<string | null>(null);
   const [cargando, setCargando] = useState(true);
@@ -213,12 +202,9 @@ export default function ScoringV2Tab({ viejos }: { viejos: PuntajeViejo[] }) {
     setRecalculando(false);
   }
 
-  const porViejo = useMemo(() => new Map(viejos.map(v => [v.teacherId, v])), [viejos]);
-
   const ordenadas = useMemo(() => {
     const valor = (f: FilaSnapshot): number | string | null => {
       const d = f.details as Detalle;
-      const v = porViejo.get(f.teacher_id);
       switch (orden.col) {
         case 'nombre': return (d.teacherName ?? f.teacher_id).toLowerCase();
         case 'score': return f.score;
@@ -232,8 +218,6 @@ export default function ScoringV2Tab({ viejos }: { viejos: PuntajeViejo[] }) {
         case 'calidad': return f.quality_score;
         case 'alumnosMedia': return d.exposicion?.alumnosMedia ?? null;
         case 'bajas': return d.exposicion?.bajas ?? null;
-        case 'viejo': return v?.score ?? null;
-        case 'nivelViejo': return v ? v.level * 10 - (v.blocked ? 5 : 0) : null;
       }
     };
     return [...filas].sort((a, b) => {
@@ -245,7 +229,7 @@ export default function ScoringV2Tab({ viejos }: { viejos: PuntajeViejo[] }) {
       const c = typeof x === 'string' ? x.localeCompare(String(y)) : x - (y as number);
       return orden.dir === 'asc' ? c : -c;
     });
-  }, [filas, orden, porViejo]);
+  }, [filas, orden]);
 
   const academia = (filas[0]?.details as Detalle | undefined)?.academia;
 
@@ -267,7 +251,7 @@ export default function ScoringV2Tab({ viejos }: { viejos: PuntajeViejo[] }) {
           </div>
           Últimos 90 días · {fecha ? `foto del ${ddmmaaaa(fecha)}` : 'todavía sin foto guardada'}
           {academia && <> · academia: {fmt(academia.tasaBajas === null ? null : academia.tasaBajas * 100)} bajas cada 100 alumnos-mes, habla mediana {fmt(academia.medianaHabla)}%{academia.volumenTope !== undefined && <>, tope de volumen {fmt(academia.volumenTope)} alumnos de media ({academia.volumenTopeOrigen})</>} · {academia.bajasDuplicadasDescartadas} bajas duplicadas descartadas</>}
-          <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>No cambia nada en la app: el scoring viejo sigue mandando. &quot;En revisión&quot; es solo una marca, no bloquea.</div>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Por ahora no cambia nada en la app: Mi Scoring del profe y el setter siguen con el scoring anterior. &quot;En revisión&quot; es solo una marca, no bloquea.</div>
         </div>
         <button onClick={() => void recalcular()} disabled={recalculando}
           style={{
@@ -307,12 +291,12 @@ export default function ScoringV2Tab({ viejos }: { viejos: PuntajeViejo[] }) {
                     </button>
                   </th>
                 ))}
+                <th style={{ ...celda, padding: '10px 10px' }} aria-label="Acciones" />
               </tr>
             </thead>
             <tbody>
               {ordenadas.map(f => {
                 const d = f.details as Detalle;
-                const v = porViejo.get(f.teacher_id);
                 const open = abierto === f.teacher_id;
                 const num = (x: number | null | undefined) => (
                   <td style={{ ...celda, textAlign: 'right', fontWeight: 600, color: colorPuntaje(x) }}>{fmt(x)}</td>
@@ -336,14 +320,19 @@ export default function ScoringV2Tab({ viejos }: { viejos: PuntajeViejo[] }) {
                       {num(f.quality_score)}
                       <td style={{ ...celda, textAlign: 'right', color: 'var(--text-secondary)' }}>{fmt(d.exposicion?.alumnosMedia)}</td>
                       <td style={{ ...celda, textAlign: 'right', color: 'var(--text-secondary)' }}>{d.exposicion?.bajas ?? '—'}</td>
-                      <td style={{ ...celda, textAlign: 'right', color: 'var(--text-muted)' }}>{v ? v.score : '—'}</td>
-                      <td style={{ ...celda, color: 'var(--text-muted)' }}>
-                        {v ? NIVEL_VIEJO[v.level] ?? v.level : '—'}{v?.blocked ? ' · bloqueado' : ''}
+                      <td style={{ ...celda, padding: '6px 10px' }} onClick={e => e.stopPropagation()}>
+                        <button onClick={() => onEvento(f.teacher_id)} title="Cargar queja, felicitación u otro evento"
+                          style={{
+                            padding: '6px 10px', borderRadius: 7, border: `1px solid ${VERDE}`, background: 'rgba(30,158,58,0.08)',
+                            color: VERDE, cursor: 'pointer', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', minHeight: 0,
+                          }}>
+                          ➕ Evento
+                        </button>
                       </td>
                     </tr>
                     {open && (
                       <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                        <td colSpan={COLUMNAS.length} style={{ padding: 0 }}><DetalleProfe d={d} /></td>
+                        <td colSpan={COLUMNAS.length + 1} style={{ padding: 0 }}><DetalleProfe d={d} /></td>
                       </tr>
                     )}
                   </Fragment>
