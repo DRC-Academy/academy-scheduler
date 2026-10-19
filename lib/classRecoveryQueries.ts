@@ -15,16 +15,26 @@ export async function liveReservationsWith(db: Db, teacherId: string, nowMs = Da
   return (await liveReservationsOfTeachersWith(db, [teacherId], nowMs)).get(teacherId) ?? [];
 }
 
-/** liveReservationsWith para VARIOS profesores en UNA consulta, por profesor. */
+/**
+ * liveReservationsWith para VARIOS profesores en UNA consulta, por profesor.
+ *
+ * Las opciones AUTOMÁTICAS de una recuperación por ausencia (ronda 1) no
+ * reservan (decisión del 19/10/2026): se ofrecen sin tapar el calendario y se
+ * comprueban al elegir. Las 2 fechas que propone el profesor en la ronda 2 sí
+ * reservan, como en "No puedo dar esta clase". Se
+ * leen todas las columnas (`*`) para no depender de que exista `origin`: si la
+ * consulta fallara, el profesor se quedaría sin NINGUNA reserva.
+ */
 export async function liveReservationsOfTeachersWith(
   db: Db, teacherIds: string[], nowMs = Date.now(),
 ): Promise<Map<string, LiveReservation[]>> {
   const out = new Map<string, LiveReservation[]>(teacherIds.map(id => [id, []]));
   if (teacherIds.length === 0) return out;
   const { data, error } = await db.from('class_recoveries')
-    .select('teacher_id, group_id, student_name, teacher_proposals, status').in('teacher_id', teacherIds).eq('status', 'esperando_alumno');
+    .select('*').in('teacher_id', teacherIds).eq('status', 'esperando_alumno');
   if (error) return out;
   for (const r of data ?? []) {
+    if (r.origin === 'ausencia' && (r.round ?? 1) === 1) continue;
     const props = (r.teacher_proposals ?? []) as Slot[];
     if (proposalsExpired(props, nowMs)) continue;
     const lista = out.get(r.teacher_id);

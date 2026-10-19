@@ -26,7 +26,7 @@ import 'server-only';
 import { supabase } from '@/lib/supabase';
 import { dbReadTeacherGrid, dbApplyGridChanges, dbAddScoringEvent, type CalendarActor } from '@/lib/db';
 import type { GridChanges } from '@/lib/gridPatch';
-import { baseCellOf, isPuntualState } from '@/lib/cells';
+import { baseCellOf, isPuntualState, esHuecoLibreParaAlumno } from '@/lib/cells';
 import { liveReservationsWith, type LiveReservation } from '@/lib/classRecoveryQueries';
 import { dayNameFromIso, mondayIsoOfIso } from '@/lib/teacherClasses';
 import { hourNum, hourText, nkName } from '@/lib/sessions';
@@ -36,13 +36,16 @@ import {
   teacherProposalDays, teacherSlotProblems,
   spainMonthOf, spainDateOf, slotHours, normalizeHour, proposalsExpired, claseDe, cuandoEs, fechaLarga, statusAfterNone,
   BLOCKING_STATUSES, MONTHLY_WILDCARDS, PENALTY_START_DATE, NO_SHOW_PENALTY_EUROS, PENALTY_EUROS,
-  nightlyAction, reclassPenalty, slotStartMs, MAX_ROUNDS,
+  nightlyAction, reclassPenalty, slotStartMs, waitingExpired, MAX_ROUNDS,
   type Slot, type RecoveryStatus, type PriorCancellation, type WildcardOutcome, type OccupiedCheck, type RecoveryOrigin,
 } from '@/lib/classRecoveries';
 import {
-  buildCancellationEmail, buildConfirmedEmail, buildReproposalEmail, sendStudentEmail,
+  buildCancellationEmail, buildConfirmedEmail, buildReproposalEmail, buildAbsenceRecoveryEmail, sendStudentEmail,
 } from '@/lib/classRecoveryEmails';
-import { fetchTeacher, sendRecoveryChosenEmail, sendRecoveryStudentProposedEmail } from '@/lib/emailNotifications';
+import {
+  fetchTeacher, sendRecoveryChosenEmail, sendRecoveryStudentProposedEmail, sendAbsenceRecoveryTeacherEmail,
+} from '@/lib/emailNotifications';
+import { pickAbsenceOptions, shouldEmailAbsenceRecovery } from '@/lib/teacherAbsences';
 import type { Cell, Grid } from '@/types';
 
 type Row = Record<string, any>;   // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -95,7 +98,7 @@ export function mapRecovery(r: Row): RecoveryRow {
     status: r.status, statusChangedAt: r.status_changed_at,
     cancelMonth: r.cancel_month ?? spainMonthOf(r.cancelled_at), penaltyEventId: r.penalty_event_id ?? null,
     createdAt: r.created_at,
-    origin: r.origin === 'admin_reclasificacion' ? 'admin_reclasificacion' : 'profesor',
+    origin: r.origin === 'admin_reclasificacion' || r.origin === 'ausencia' ? r.origin : 'profesor',
     annulledAt: r.annulled_at ?? null, annulledBy: r.annulled_by ?? null, annulReason: r.annul_reason ?? null,
   };
 }
@@ -110,6 +113,7 @@ export async function getRecovery(id: string): Promise<RecoveryRow | null> {
 /**
  * Cancelaciones del profesor (una fila por trozo), para los comodines. Las
  * reclasificaciones del admin no entran: llevan multa fija y no gastan comodín.
+ * Las de ausencia tampoco: su multa se decide aparte (y van con late = false).
  * `select('*')` a propósito: funciona con o sin la columna `origin` del bloque B.
  */
 async function priorCancellationsOf(teacherId: string): Promise<PriorCancellation[]> {
@@ -117,7 +121,7 @@ async function priorCancellationsOf(teacherId: string): Promise<PriorCancellatio
   if (isMissingTable(error)) throw new RecoveryError(503, 'no_configurado', 'Falta correr supabase-class-recoveries.sql.');
   if (error) throw new RecoveryError(500, 'error', error.message);
   return (data ?? [])
-    .filter((r: Row) => r.origin !== 'admin_reclasificacion')
+    .filter((r: Row) => r.origin !== 'admin_reclasificacion' && r.origin !== 'ausencia')
     .map((r: Row) => ({ groupId: r.group_id, cancelledAt: r.cancelled_at, late: !!r.late, status: r.status }));
 }
 
@@ -574,6 +578,13 @@ async function confirmSlot(
     const why = occupied(h.date, h.hour);
     if (why) throw new RecoveryError(409, 'hueco_no_disponible', why);
   }
+  // Por ausencia, las opciones automáticas (ronda 1) NO se reservaron: al elegir
+  // se exige además el criterio estricto del LMS (hora pintada 'libre', dentro
+  // del rango, sin reserva). En la ronda 2 las fechas son del profesor: como siempre.
+  if (rec.origin === 'ausencia' && opts.from === 'esperando_alumno' && rec.round === 1) {
+    const why = await strictSlotProblem(rec.teacherId, grid, slot, reservations);
+    if (why) throw new RecoveryError(409, 'hueco_no_disponible', why);
+  }
 
   // 1) Reclamar la fila (solo una petición puede salir del estado de partida).
   const now = new Date().toISOString();
@@ -601,7 +612,7 @@ async function confirmSlot(
       baseState: base?.state ?? 'libre',
       ...(base?.student ? { baseStudent: base.student } : {}),
       recoveryFor: rec.originalDate,
-      recoveryNote: 'Clase que el profesor no pudo dar',
+      recoveryNote: rec.origin === 'ausencia' ? 'El profesor no se conectó a la clase' : 'Clase que el profesor no pudo dar',
     };
     changes[key] = { expected: current, next };
   }
@@ -626,7 +637,7 @@ async function confirmSlot(
   const { error: recErr } = await supabase.from('class_records').insert({
     id: recordId, teacher_id: rec.teacherId, teacher_name: rec.teacherName, student_name: rec.studentName,
     class_date: slot.date, class_time: chosenHour, screenshot_url: '', class_type: 'recuperacion',
-    comment: `Recuperación de clase del ${rec.originalDate} — No puedo dar esta clase`,
+    comment: `Recuperación de clase del ${rec.originalDate} — ${rec.origin === 'ausencia' ? 'El profesor no se conectó' : 'No puedo dar esta clase'}`,
     recovery_for_date: rec.originalDate, created_at: new Date().toISOString(),
   });
   if (recErr) {
@@ -729,8 +740,13 @@ async function notifyStudentProposed(rec: RecoveryRow): Promise<void> {
   const horarios = rec.studentProposals.map(cuandoEs).join(', ');
   const parte = rec.parts > 1 ? ` (${rec.part}.ª hora de la clase de 2 h)` : '';
   const title = `${rec.studentName} propone otros horarios`;
-  const body = `${rec.studentName} no puede en las fechas que propusiste para recuperar la clase del ${fechaLarga(rec.originalDate)}${parte}. ` +
-    `Te propone: ${horarios}.` + (rec.studentNote ? ` Nota: ${rec.studentNote}` : '');
+  const porAusencia = rec.origin === 'ausencia' && rec.round === 1;
+  const inicio = !porAusencia
+    ? `${rec.studentName} no puede en las fechas que propusiste para recuperar la clase del ${fechaLarga(rec.originalDate)}${parte}. `
+    : rec.teacherProposals.length
+      ? `${rec.studentName} no puede en los horarios que le ofrecimos para recuperar la clase del ${fechaLarga(rec.originalDate)} (no te conectaste). `
+      : `${rec.studentName} propone horarios para recuperar la clase del ${fechaLarga(rec.originalDate)} (no te conectaste). `;
+  const body = inicio + `Te propone: ${horarios}.` + (rec.studentNote ? ` Nota: ${rec.studentNote}` : '');
   await teacherBell(`notif_rec_propuso_${rec.id}_r${rec.round}`, rec.teacherId, title, body, 'recuperacion_alumno_propuso');
   try {
     const teacher = await fetchTeacher(rec.teacherId);
@@ -857,7 +873,7 @@ export async function annulRecovery(id: string, opts: { by: string; reason: stri
  */
 export async function expireIfDue(rec: RecoveryRow, nowMs = Date.now()): Promise<RecoveryRow> {
   const vencida =
-    (rec.status === 'esperando_alumno' && proposalsExpired(rec.teacherProposals, nowMs)) ||
+    (rec.status === 'esperando_alumno' && waitingExpired(rec, nowMs)) ||
     (rec.status === 'alumno_propuso' && proposalsExpired(rec.studentProposals.map(s => ({ ...s, hours: 1 })), nowMs));
   if (!vencida) return rec;
   const now = new Date().toISOString();
@@ -866,7 +882,7 @@ export async function expireIfDue(rec: RecoveryRow, nowMs = Date.now()): Promise
   const done: RecoveryRow = { ...rec, status: 'sin_acuerdo', statusChangedAt: now };
   if (data?.length) {
     await notifyNoAgreement(done, rec.status === 'esperando_alumno'
-      ? 'Pasaron las fechas propuestas sin que el alumno eligiera.'
+      ? (rec.teacherProposals.length ? 'Pasaron las fechas propuestas sin que el alumno eligiera.' : 'El alumno no propuso horarios en 7 días.')
       : 'Pasaron los horarios que propuso el alumno sin respuesta del profesor.');
   }
   return done;
@@ -1093,6 +1109,217 @@ export async function notifyMonthlyLimit(teacherId: string, teacherName: string,
   } catch (err) {
     console.error('[recuperaciones] Aviso de límite mensual fallido:', err);
   }
+}
+
+// ── Recuperación por AUSENCIA del profesor ────────────────────────────────────
+//
+// La crea el chequeo de posibles ausencias (lib/teacherAbsenceStore) para los
+// profesores de ABSENCE_RECOVERY_BETA_TEACHERS (lib/teacherAbsences). Lo que
+// cambia respecto de "No puedo dar esta clase":
+//   · las opciones las calcula Gestión: hasta 4, una por día, la hora más
+//     cercana a la de la clase, con el criterio ESTRICTO del LMS;
+//   · NO reservan horas (liveReservationsWith las salta): se vuelven a
+//     comprobar al elegir (confirmSlot) y, si ya no están libres, 409
+//     'hueco_no_disponible'. Si llega a la ronda 2, las 2 fechas del profesor
+//     reservan y se validan como siempre;
+//   · sin constancia de cancelación: la clase original no tiene ingreso, así
+//     que Finanzas ya no la cuenta ni gasta cupo del alumno;
+//   · sin comodín ni multa (late = false: ningún contador la ve);
+//   · sin horas libres → 'esperando_alumno' con la lista VACÍA: el alumno
+//     propone sus horarios ("Ninguna me viene bien") y vence a los 7 días
+//     (waitingExpired).
+// Elegir, "Ninguna", la respuesta del profesor y los avisos son los de siempre.
+
+type CalendarRange = { from: number | null; to: number | null };
+
+/** teachers.calendar_start_hour / calendar_end_hour (null → los de por defecto). */
+async function calendarRangeOf(teacherId: string): Promise<CalendarRange> {
+  const { data, error } = await supabase.from('teachers')
+    .select('calendar_start_hour, calendar_end_hour').eq('id', teacherId).maybeSingle();
+  const row = (error ? null : data) as Row | null;
+  const n = (v: unknown): number | null => (v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
+  return { from: n(row?.calendar_start_hour), to: n(row?.calendar_end_hour) };
+}
+
+/** Por qué un hueco NO pasa el criterio estricto del LMS (lib/cells), o null si pasa. */
+function strictSlotProblemIn(grid: Grid, slot: Slot, reservations: LiveReservation[], range: CalendarRange): string | null {
+  for (const h of slotHours(slot)) {
+    const r = esHuecoLibreParaAlumno(grid, `${dayNameFromIso(h.date)}_${h.hour}`, {
+      horaInicio: range.from, horaFin: range.to,
+      alcance: { tipo: 'puntual', fecha: h.date }, reservas: reservations,
+    });
+    if (!r.libre) return `El ${fechaLarga(h.date)} a las ${h.hour} ya no está libre. Elige otra opción.`;
+  }
+  return null;
+}
+
+async function strictSlotProblem(teacherId: string, grid: Grid, slot: Slot, reservations: LiveReservation[]): Promise<string | null> {
+  return strictSlotProblemIn(grid, slot, reservations, await calendarRangeOf(teacherId));
+}
+
+/**
+ * Las opciones para el alumno: los días y horas del modal (freeSlotsOn: desde
+ * mañana, 7 días, sin domingos, no ocupadas ni reservadas) que ADEMÁS pasan el
+ * criterio estricto (pintadas 'libre' y dentro del rango: el modal da por libres
+ * las horas sin pintar y las de "no trabajo", y aquí no elige el profesor).
+ * Solo lee.
+ */
+export async function absenceRecoveryOptions(input: {
+  teacherId: string; date: string; hour: string; hours: number; nowMs?: number;
+}): Promise<Slot[]> {
+  const nowMs = input.nowMs ?? Date.now();
+  const hours = Math.max(1, Math.min(4, Math.round(input.hours || 1)));
+  const [grid, reservations, range] = await Promise.all([
+    dbReadTeacherGrid(input.teacherId), reservationsOf(input.teacherId, nowMs), calendarRangeOf(input.teacherId),
+  ]);
+  const days = await freeSlotsOn(input.teacherId, grid, nowMs, hours, occupiedChecker(grid, reservations), { date: input.date, hour: input.hour });
+  const strict = days.map(d => ({
+    date: d.date,
+    hours: d.hours.filter(h => strictSlotProblemIn(grid, { date: d.date, hour: h, hours }, reservations, range) === null),
+  }));
+  return pickAbsenceOptions(strict, input.hour, hours);
+}
+
+/** Recuperación por ausencia de esa clase que no esté anulada, o null. */
+export async function absenceRecoveryOfClass(c: { teacherId: string; studentName: string; date: string; hour: string }): Promise<RecoveryRow | null> {
+  const hour = normalizeHour(c.hour);
+  const { data, error } = await supabase.from('class_recoveries').select('*')
+    .eq('teacher_id', c.teacherId).eq('original_date', c.date).neq('status', 'anulada');
+  if (isMissingTable(error)) return null;
+  if (error) throw new RecoveryError(500, 'error', error.message);
+  const hit = (data ?? []).find((r: Row) => r.origin === 'ausencia' && r.original_hour === hour && nkName(r.student_name) === nkName(c.studentName));
+  return hit ? mapRecovery(hit) : null;
+}
+
+/** Recuperación que bloquea esa clase (cualquier origen), o null. */
+async function blockingRecoveryOfClass(c: { teacherId: string; studentName: string; date: string; hour: string }): Promise<RecoveryRow | null> {
+  const { data } = await supabase.from('class_recoveries').select('*')
+    .eq('teacher_id', c.teacherId).eq('original_date', c.date).eq('original_hour', c.hour)
+    .in('status', BLOCKING_STATUSES as string[]);
+  const hit = (data ?? []).find((r: Row) => nkName(r.student_name) === nkName(c.studentName));
+  return hit ? mapRecovery(hit) : null;
+}
+
+export interface AbsenceRecoveryInput {
+  teacherId: string;
+  teacherName: string;
+  assignmentId: string | null;
+  studentId: string | null;
+  studentName: string;
+  studentEmail: string | null;
+  studentPhone: string | null;
+  /** La clase perdida: 'YYYY-MM-DD' y 'HH:00' de inicio (hora de España). */
+  date: string;
+  hour: string;
+  durationHours: number;
+}
+
+export interface AbsenceRecoveryResult {
+  recovery: RecoveryRow;
+  /** false: ya existía una recuperación para esa clase (no se avisa a nadie otra vez). */
+  created: boolean;
+  studentEmailSent: boolean;
+}
+
+/**
+ * Crea la recuperación de una clase a la que el profesor no se conectó, con
+ * sus opciones, y avisa: campanita + email al profesor, email al alumno (según
+ * ABSENCE_RECOVERY_STUDENT_EMAIL). Idempotente: si la clase ya tiene una
+ * recuperación viva (de cualquier origen) la devuelve sin crear ni avisar.
+ * Lanza 503 'no_configurado' si falta supabase-recuperacion-por-falta.sql.
+ */
+export async function createAbsenceRecovery(input: AbsenceRecoveryInput): Promise<AbsenceRecoveryResult> {
+  const hour = normalizeHour(input.hour);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.date ?? '') || !hour) throw new RecoveryError(422, 'datos_invalidos', 'Fecha u hora no válidas.');
+  const clase = { teacherId: input.teacherId, studentName: input.studentName, date: input.date, hour };
+
+  const ya = await blockingRecoveryOfClass(clase);
+  if (ya) return { recovery: ya, created: false, studentEmailSent: false };
+
+  const nowMs = Date.now();
+  const hours = Math.max(1, Math.min(4, Math.round(input.durationHours || 1)));
+  const options = await absenceRecoveryOptions({ teacherId: input.teacherId, date: input.date, hour, hours, nowMs });
+  const now = new Date(nowMs).toISOString();
+  const row = {
+    id: nuevoId('rec'), group_id: nuevoId('grp'), part: 1, parts: 1,
+    assignment_id: input.assignmentId, teacher_id: input.teacherId, teacher_name: input.teacherName,
+    student_id: input.studentId, student_name: input.studentName, student_email: normEmail(input.studentEmail) || null,
+    original_date: input.date, original_hour: hour, hours,
+    cancel_record_id: null, reason: 'El profesor no se conectó a la clase (posible ausencia)',
+    cancelled_at: now, cancel_month: spainMonthOf(now),
+    notice_minutes: noticeMinutes({ date: input.date, hour }, nowMs), late: false,
+    used_wildcard: false, penalty_euros: 0, would_have_penalty: false,
+    agreed_directly: false, round: 1, teacher_proposals: options,
+    status: 'esperando_alumno', status_changed_at: now, created_at: now, updated_at: now,
+    origin: 'ausencia',
+  };
+  const { error } = await supabase.from('class_recoveries').insert(row);
+  if (error) {
+    if (error.code === '23505') {
+      const otra = await blockingRecoveryOfClass(clase);
+      if (otra) return { recovery: otra, created: false, studentEmailSent: false };
+    }
+    // 23514: el CHECK de origin todavía no admite 'ausencia'.
+    if (isMissingTable(error) || error.code === '23514' || error.code === '42703' || error.code === 'PGRST204') {
+      throw new RecoveryError(503, 'no_configurado', 'Falta correr supabase-recuperacion-por-falta.sql.');
+    }
+    throw new RecoveryError(500, 'error', `No se pudo crear la recuperación: ${error.message}`);
+  }
+  const rec = mapRecovery(row);
+
+  await notifyAbsenceTeacher(rec);
+  let studentEmailSent = false;
+  if (rec.studentEmail && shouldEmailAbsenceRecovery(input.studentPhone)) {
+    const { subject, html } = buildAbsenceRecoveryEmail({
+      studentName: rec.studentName, teacherName: rec.teacherName ?? '', recoveryId: rec.id,
+      original: { date: rec.originalDate, hour: rec.originalHour }, todayIso: spainDateOf(nowMs), options,
+    });
+    studentEmailSent = await sendStudentEmail('recuperacion_ausencia', rec.studentEmail, subject, html, null, `recuperacion_ausencia_${rec.id}`);
+    if (studentEmailSent) await supabase.from('class_recoveries').update({ student_email_sent_at: new Date().toISOString() }).eq('id', rec.id);
+  }
+  return { recovery: rec, created: true, studentEmailSent };
+}
+
+/** Campanita + email al profesor: no se conectó y el alumno elegirá la recuperación. */
+async function notifyAbsenceTeacher(rec: RecoveryRow): Promise<void> {
+  const title = `No te conectaste a la clase con ${rec.studentName}`;
+  const body = `No te conectaste a tu clase de las ${rec.originalHour} con ${rec.studentName}. ` + (rec.teacherProposals.length
+    ? `Le hemos ofrecido horarios para recuperarla: ${rec.teacherProposals.map(cuandoEs).join(', ')}. Cuando elija uno, aparecerá en tu calendario.`
+    : 'No tenías horas libres en los próximos días, así que le hemos pedido que proponga sus horarios para recuperarla. Te llegarán para que aceptes uno.');
+  await teacherBell(`notif_rec_ausencia_${rec.id}`, rec.teacherId, title, body, 'recuperacion_ausencia');
+  try {
+    const teacher = await fetchTeacher(rec.teacherId);
+    if (teacher) await sendAbsenceRecoveryTeacherEmail(teacher, { title, body });
+  } catch (err) {
+    console.error('[recuperaciones] Email de ausencia al profesor fallido:', err);
+  }
+}
+
+export type AbsenceAnnulOutcome = 'anulada' | 'ya_recuperada' | 'sin_recuperacion';
+
+/**
+ * Anula la recuperación por ausencia de una clase (el profesor ingresó antes de
+ * la mitad, o el admin anuló la posible ausencia): libera la fecha elegida si la
+ * había (annulRecovery). Una 'recuperada' ya se dio y no se toca: se devuelve
+ * para que quien llama lo avise. Campanita al profesor solo si la tenía en el
+ * calendario.
+ */
+export async function annulAbsenceRecovery(
+  c: { recoveryId?: string | null; teacherId: string; studentName: string; date: string; hour: string },
+  opts: { by: string; reason: string },
+): Promise<{ outcome: AbsenceAnnulOutcome; recovery: RecoveryRow | null }> {
+  const byId = c.recoveryId ? await getRecovery(c.recoveryId) : null;
+  const rec = byId && byId.status !== 'anulada' ? byId : await absenceRecoveryOfClass(c);
+  if (!rec) return { outcome: 'sin_recuperacion', recovery: null };
+  if (rec.status === 'recuperada') return { outcome: 'ya_recuperada', recovery: rec };
+  const out = await annulRecovery(rec.id, opts);
+  if (rec.status === 'confirmada' && rec.chosenDate) {
+    await teacherBell(`notif_rec_ausencia_anulada_${rec.id}`, rec.teacherId,
+      `Recuperación anulada · ${rec.studentName}`,
+      `Se anuló la recuperación del ${fechaLarga(rec.chosenDate)} a las ${rec.chosenHour} con ${rec.studentName}: ${opts.reason}. Ya no está en tu calendario.`,
+      'recuperacion_anulada');
+  }
+  return { outcome: 'anulada', recovery: out };
 }
 
 // ── Pestaña del admin ─────────────────────────────────────────────────────────

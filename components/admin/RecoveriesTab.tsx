@@ -47,6 +47,7 @@ function antelacion(min: number): string {
 }
 
 function coste(r: AdminRecovery): { texto: string; tono: string } {
+  if (r.origin === 'ausencia') return { texto: 'Posible ausencia: sin multa (se decide aparte)', tono: 'ambar' };
   if (r.origin === 'admin_reclasificacion') {
     return r.penaltyEuros < 0 ? { texto: `Multa fija ${Math.abs(r.penaltyEuros)} € (reclasificada)`, tono: 'rojo' }
       : { texto: `Multa fija: habría costado 5 € (antes del ${corta(PENALTY_START_DATE)})`, tono: 'ambar' };
@@ -85,7 +86,7 @@ export default function RecoveriesTab() {
       <div className="rt-head">
         <div>
           <div className="rt-title">Recuperaciones</div>
-          <div className="rt-sub">Clases que el profesor no pudo dar («No puedo dar esta clase» y reclasificaciones). Solo profesores beta.</div>
+          <div className="rt-sub">Clases que el profesor no pudo dar («No puedo dar esta clase», reclasificaciones y posibles ausencias con recuperación automática).</div>
         </div>
         <button type="button" className="rt-btn-sec" onClick={() => reload()}>Actualizar</button>
       </div>
@@ -177,9 +178,11 @@ function Fila({ r, hoy, by, onChanged }: { r: AdminRecovery; hoy: string; by: st
         <div><span className="rt-k">Clase cancelada</span>
           {fechaLarga(r.originalDate)} · {r.originalHour}{r.parts > 1 ? ` · ${r.part}.ª hora de 2` : r.hours > 1 ? ` · ${r.hours} h` : ''}
         </div>
-        <div><span className="rt-k">Antelación</span>{antelacion(r.noticeMinutes)}{r.late ? ' · menos de 24 h' : ''}</div>
+        <div><span className="rt-k">Antelación</span>
+          {r.origin === 'ausencia' ? 'el profesor no se conectó' : `${antelacion(r.noticeMinutes)}${r.late ? ' · menos de 24 h' : ''}`}
+        </div>
         <div><span className="rt-k">Comodín / multa</span><span className={`rt-tx is-${c.tono}`}>{c.texto}</span></div>
-        <div><span className="rt-k">Fechas del profesor{r.round > 1 ? ` (ronda ${r.round})` : ''}</span>
+        <div><span className="rt-k">{r.origin === 'ausencia' && r.round === 1 ? 'Opciones ofrecidas' : 'Fechas del profesor'}{r.round > 1 ? ` (ronda ${r.round})` : ''}</span>
           {r.teacherProposals.length ? r.teacherProposals.map(cuando).join(' · ') : '—'}
         </div>
         <div><span className="rt-k">Horarios del alumno</span>

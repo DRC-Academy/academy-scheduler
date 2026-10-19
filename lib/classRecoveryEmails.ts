@@ -79,6 +79,42 @@ export function buildCancellationEmail(i: CancellationEmailInput): { subject: st
 }
 
 /**
+ * El profesor no se conectó a la clase (posible ausencia) y Gestión le ofrece al
+ * alumno horarios para recuperarla. Lo firma el EQUIPO, no el profesor: no fue
+ * él quien escribió ni quien eligió las fechas. Sin opciones (el profesor no
+ * tenía horas libres), le pide al alumno que proponga las suyas.
+ */
+export function buildAbsenceRecoveryEmail(i: {
+  studentName: string; teacherName: string; recoveryId: string;
+  original: { date: string; hour: string }; todayIso: string; options: Slot[];
+}): { subject: string; html: string } {
+  const nombre = primerNombre(i.studentName) || i.studentName;
+  const profe = primerNombre(i.teacherName) || i.teacherName;
+  const clase = claseDe(i.original.date, i.todayIso).replace(/^la clase /, 'tu clase ');
+  const hora = horaCorta(i.original.hour);
+  const link = recoveryLink(i.recoveryId);
+  const cuerpo = i.options.length
+    ? p(`Puedes recuperarla sin ningún coste. Te ofrecemos ${esc(opciones(i.options))}.`) +
+      p('Elige aquí la que prefieras:') +
+      boton('Elegir fecha', link) +
+      p('Si ninguna te viene bien, desde el mismo enlace puedes proponernos otros horarios.')
+    : p('Puedes recuperarla sin ningún coste. Dinos aquí cuándo te viene bien y se lo pasamos a tu profe:') +
+      boton('Proponer horarios', link);
+  return {
+    subject: 'Tu profe no se ha conectado: elige cuándo recuperar tu clase',
+    html: studentEmailTemplate(
+      p(`Hola ${esc(nombre)},`) +
+      p(`${esc(profe)} no se ha conectado a ${esc(clase)} de las ${esc(hora)}. Lo sentimos mucho.`) +
+      cuerpo +
+      p('Un abrazo,<br />El equipo de DRC Academy') +
+      enlaceDeRespaldo(link),
+      'Elige cuándo quieres recuperar tu clase',
+      { noReply: true },
+    ),
+  };
+}
+
+/**
  * Ronda 2: el alumno dijo "ninguna" y el profesor propone otras 2 fechas.
  * `part`: en una clase de 2 h partida, qué hora es (1 o 2); null si no.
  */

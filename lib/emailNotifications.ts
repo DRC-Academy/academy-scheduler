@@ -360,6 +360,23 @@ export async function sendRecoveryStudentProposedEmail(
   return send('sendRecoveryStudentProposedEmail', teacher, info.title, html);
 }
 
+// ═══ A.6 bis) No se conectó a la clase: recuperación ofrecida al alumno ════════
+//
+// Posible ausencia con recuperación automática (lib/classRecoveryStore,
+// createAbsenceRecovery). Mismo texto que la campanita.
+export async function sendAbsenceRecoveryTeacherEmail(
+  teacher: TeacherLike,
+  info: { title: string; body: string },
+): Promise<boolean> {
+  const html = baseEmailTemplate(
+    p(`Hola ${esc(teacher.name)},`) +
+    p(esc(info.body)) +
+    ctaButton('Ver mis clases', `${APP_URL}/clases`),
+    info.title,
+  );
+  return send('sendAbsenceRecoveryTeacherEmail', teacher, info.title, html);
+}
+
 // ═══ A.7) El alumno cambió su horario desde el LMS (autoservicio) ═════════════
 //
 // Cambio FIJO (todas sus clases) o PUNTUAL (una sola). Mismo texto que la

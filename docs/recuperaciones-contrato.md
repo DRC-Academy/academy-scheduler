@@ -1,6 +1,33 @@
 # Contrato Gestión ↔ LMS: recuperaciones de clases canceladas por el profesor
 
-Versión 1 · octubre de 2026 · implementado en Gestión (academy-scheduler).
+Versión 1.1 · octubre de 2026 · implementado en Gestión (academy-scheduler).
+
+## Novedades de la 1.1 (recuperación por ausencia del profesor)
+
+Compatible con la 1: solo se **añade** un campo y un caso. Nada se renombra.
+
+1. Campo nuevo `origen` en cada recuperación: `"ausencia"` o `"profesor"`.
+   - `"ausencia"`: el profesor **no se conectó** a la clase. Gestión lo detecta
+     a los 30 minutos y crea la recuperación sola. Texto sugerido para el
+     alumno: «Tu profe no se ha conectado a tu clase. Elige cuándo quieres
+     recuperarla».
+   - `"profesor"`: todas las demás (el profesor pulsó «No puedo dar esta clase»).
+     Se muestran como hasta ahora.
+2. En `esperando_alumno` puede haber **de 0 a 4 opciones** (antes, siempre 1 o 2
+   por recuperación). El LMS no debe asumir un número fijo.
+3. **Opciones vacías**: el profesor no tenía horas libres. Llega
+   `estado: "esperando_alumno"`, `opciones: []`, `puede_elegir: false` y
+   `puede_decir_ninguna: true`. El LMS muestra **directamente** el formulario de
+   «Ninguna me viene bien» (proponer de 1 a 3 horarios + nota) y lo envía al
+   endpoint 3 de siempre. Si el alumno no propone nada en 7 días, pasa sola a
+   `sin_acuerdo`.
+4. Las opciones de una recuperación por ausencia **no se reservan** en el
+   calendario del profesor: si al elegir esa hora ya no está libre, el endpoint 2
+   responde `409 hueco_no_disponible` (ya existía). El LMS muestra el `mensaje`
+   y vuelve a pedir la lista para pintar las opciones que quedan.
+
+El enlace que recibe el alumno (email y WhatsApp) es el de siempre:
+`<LMS_URL>/mis-clases?recuperacion=<id>`.
 
 ## Principio
 
@@ -51,7 +78,7 @@ Cuerpo JSON: `{ "error": "<codigo>", "mensaje": "<texto listo para mostrar>" }`
 | 401 | `no_autorizado` | falta o no coincide `x-lms-secret` |
 | 404 | `no_encontrada` | no existe o no es de ese alumno |
 | 409 | `estado_cambiado` | ya no admite esa acción (ya eligió, se anuló, las fechas pasaron, otra pestaña) |
-| 409 | `hueco_no_disponible` | la fecha elegida ya no está libre en el calendario del profesor |
+| 409 | `hueco_no_disponible` | la fecha elegida ya no está libre en el calendario del profesor (en las de ausencia puede pasar más a menudo: sus opciones no se reservan) |
 | 422 | `datos_invalidos` | faltan datos, horarios fuera de rango, más de 3, en el pasado… |
 | 503 | `no_configurado` | Gestión sin el secreto o sin la tabla |
 
@@ -80,6 +107,7 @@ respuesta se devuelven ya como `sin_acuerdo`.
     {
       "id": "rec_mg1abc2def",
       "estado": "esperando_alumno",
+      "origen": "profesor",
       "profesor": "Ignacio",
       "clase_cancelada": { "fecha": "2026-10-08", "hora": "17:00", "horas": 1 },
       "parte": { "numero": 1, "de": 1 },
@@ -101,7 +129,29 @@ respuesta se devuelven ya como `sin_acuerdo`.
 - `parte`: una clase de 2 h recuperada «en dos días diferentes» llega como **dos
   recuperaciones** (`parte.numero` 1 y 2 de 2), cada una con sus opciones. El
   alumno elige cada una por separado.
-- `opciones` solo viene con datos en `esperando_alumno`.
+- `opciones` solo viene con datos en `esperando_alumno` (de 0 a 4 en las de
+  `origen: "ausencia"`; ver Novedades de la 1.1).
+- `puede_elegir` es `false` cuando no hay opciones.
+
+Ejemplo de una recuperación por ausencia sin horas libres:
+
+```json
+{
+  "id": "rec_mh9xyz",
+  "estado": "esperando_alumno",
+  "origen": "ausencia",
+  "profesor": "Sebastián",
+  "clase_cancelada": { "fecha": "2026-10-20", "hora": "18:00", "horas": 1 },
+  "parte": { "numero": 1, "de": 1 },
+  "ronda": 1,
+  "opciones": [],
+  "mis_propuestas": [],
+  "mi_nota": null,
+  "fecha_confirmada": null,
+  "puede_elegir": false,
+  "puede_decir_ninguna": true
+}
+```
 
 ## 2. Elegir una de las fechas
 

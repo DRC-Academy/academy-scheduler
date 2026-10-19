@@ -4,7 +4,7 @@ import {
   validateTeacherProposals, validateStudentProposals, canTransition, statusAfterNone,
   proposalsExpired, spainMonthOf, fechaLarga, claseDe, cuandoEs, slotHours,
   teacherProposalDays, teacherSlotProblems, nightlyAction, lateCancellationsOfMonth, reclassPenalty,
-  PENALTY_START_DATE, type PriorCancellation,
+  PENALTY_START_DATE, waitingExpired, type PriorCancellation,
 } from '@/lib/classRecoveries';
 
 /** Instante de una hora de pared española (CEST, +2, en octubre hasta el 25). */
@@ -206,5 +206,25 @@ describe('contadores y reclasificación', () => {
   it('la reclasificación lleva multa fija desde el 22/10 (fecha de la clase); antes solo se marca', () => {
     expect(reclassPenalty('2026-10-21')).toEqual({ chargeNow: false, wouldHavePenalty: true, penaltyEuros: 0 });
     expect(reclassPenalty('2026-10-22')).toEqual({ chargeNow: true, wouldHavePenalty: false, penaltyEuros: -5 });
+  });
+});
+
+describe('espera sin opciones (recuperación por ausencia)', () => {
+  const base = { status: 'esperando_alumno' as const, studentProposals: [], chosenDate: null, chosenHour: null };
+  it('sin opciones vence a los 7 días de entrar en el estado', () => {
+    const since = '2026-10-20T16:35:00Z';
+    const r = { ...base, teacherProposals: [], statusChangedAt: since };
+    expect(waitingExpired(r, Date.parse(since) + 6 * 86_400_000)).toBe(false);
+    expect(waitingExpired(r, Date.parse(since) + 7 * 86_400_000)).toBe(true);
+    expect(nightlyAction(r, { nowMs: Date.parse(since) + 7 * 86_400_000, given: false, assignmentActive: true })).toBe('sin_acuerdo');
+    expect(nightlyAction(r, { nowMs: Date.parse(since) + 86_400_000, given: false, assignmentActive: true })).toBe(null);
+  });
+  it('con opciones manda la fecha de las opciones, no los 7 días', () => {
+    const r = { ...base, teacherProposals: [{ date: '2026-10-21', hour: '18:00', hours: 1 }], statusChangedAt: '2026-10-01T00:00:00Z' };
+    expect(waitingExpired(r, Date.parse('2026-10-21T10:00:00Z'))).toBe(false);
+    expect(waitingExpired(r, Date.parse('2026-10-21T17:00:00Z'))).toBe(true);
+  });
+  it('sin fecha de estado no vence sola', () => {
+    expect(waitingExpired({ teacherProposals: [], statusChangedAt: null }, Date.now())).toBe(false);
   });
 });

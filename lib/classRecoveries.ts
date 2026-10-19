@@ -61,8 +61,11 @@ export const MAX_STUDENT_PROPOSALS = 3;
  * De dónde salió una fila. 'admin_reclasificacion': el admin aprobó una
  * revisión como "cancelada por el profesor" (la clase pasó sin aviso). Esa NO
  * usa comodín ni ocupa uno: lleva la multa fija (ver reclassPenalty).
+ * 'ausencia': la creó el chequeo de posibles ausencias (el profesor no se
+ * conectó). Sin comodín, sin multa y SIN reservas: sus opciones no tapan horas
+ * del calendario y se comprueban al elegir (ver lib/teacherAbsences).
  */
-export type RecoveryOrigin = 'profesor' | 'admin_reclasificacion';
+export type RecoveryOrigin = 'profesor' | 'admin_reclasificacion' | 'ausencia';
 
 /**
  * Multa de una reclasificación del admin: fija, sin comodines, contada en el
@@ -341,6 +344,19 @@ export function proposalsExpired(proposals: Slot[], nowMs: number): boolean {
   return proposals.length > 0 && proposals.every(s => !(slotStartMs(s.date, s.hour) > nowMs));
 }
 
+/**
+ * ¿Venció la espera del alumno en 'esperando_alumno'? Con opciones: cuando
+ * pasaron todas. SIN opciones (recuperación por ausencia de un profesor sin
+ * horas libres: el alumno propone las suyas) no hay fecha que pase, así que
+ * vence a los PROPOSAL_WINDOW_DAYS días de entrar en el estado. Sin esta regla
+ * quedaría abierta para siempre.
+ */
+export function waitingExpired(r: { teacherProposals: Slot[]; statusChangedAt?: string | null }, nowMs: number): boolean {
+  if (r.teacherProposals.length > 0) return proposalsExpired(r.teacherProposals, nowMs);
+  const since = Date.parse(r.statusChangedAt ?? '');
+  return Number.isFinite(since) && nowMs >= since + PROPOSAL_WINDOW_DAYS * 24 * 60 * 60_000;
+}
+
 // ── Chequeo nocturno ──────────────────────────────────────────────────────────
 
 /** Lo mínimo de una recuperación que necesita el chequeo nocturno. */
@@ -350,6 +366,8 @@ export interface NightlyInput {
   studentProposals: Array<{ date: string; hour: string }>;
   chosenDate: string | null;
   chosenHour: string | null;
+  /** Para vencer una espera sin opciones (ver waitingExpired). */
+  statusChangedAt?: string | null;
 }
 
 export type NightlyAction = 'recuperada' | 'sin_acuerdo' | 'anular' | null;
@@ -369,7 +387,7 @@ export function nightlyAction(r: NightlyInput, opts: { nowMs: number; given: boo
   if (r.status === 'confirmada' && chosenStarted && opts.given) return 'recuperada';
   if (!opts.assignmentActive && (['esperando_alumno', 'alumno_propuso', 'sin_acuerdo'] as RecoveryStatus[]).includes(r.status)) return 'anular';
   if (!opts.assignmentActive && r.status === 'confirmada' && !chosenStarted) return 'anular';
-  if (r.status === 'esperando_alumno' && proposalsExpired(r.teacherProposals, opts.nowMs)) return 'sin_acuerdo';
+  if (r.status === 'esperando_alumno' && waitingExpired(r, opts.nowMs)) return 'sin_acuerdo';
   if (r.status === 'alumno_propuso' && proposalsExpired(r.studentProposals.map(s => ({ ...s, hours: 1 })), opts.nowMs)) return 'sin_acuerdo';
   return null;
 }

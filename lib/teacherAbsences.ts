@@ -42,6 +42,77 @@ export const ABSENCE_WINDOW_END_MINUTES = 90;
 /** Intentos de envío a Zapier por clase (solo se reintenta si Zapier falló). */
 export const MAX_ZAPIER_ATTEMPTS = 3;
 
+// ── Recuperación automática por ausencia ─────────────────────────────────────
+
+/**
+ * Profesores a los que, al detectar una posible ausencia, se les crea sola la
+ * recuperación (el alumno elige la fecha desde el LMS). El resto sigue EXACTO
+ * como antes: aviso a Zapier sin recuperación y con `enlace_recuperacion` vacío.
+ *
+ * PARA ABRIRLO A TODOS: cambiar esta línea por `['*']`.
+ */
+export const ABSENCE_RECOVERY_BETA_TEACHERS: readonly string[] = ['t1'];
+
+export function isAbsenceRecoveryTeacher(teacherId: string | null | undefined): boolean {
+  if (ABSENCE_RECOVERY_BETA_TEACHERS.includes('*')) return true;
+  return !!teacherId && ABSENCE_RECOVERY_BETA_TEACHERS.includes(teacherId);
+}
+
+/** Opciones que se ofrecen al alumno: una por día, como mucho estas. */
+export const MAX_ABSENCE_OPTIONS = 4;
+
+/**
+ * Cuándo se manda el email al alumno con el enlace de la recuperación.
+ * 'siempre' mientras el WhatsApp de Zapier no esté activo; después,
+ * 'sin_telefono' (solo a quien no le puede llegar el WhatsApp).
+ */
+export const ABSENCE_RECOVERY_STUDENT_EMAIL: 'siempre' | 'sin_telefono' = 'siempre';
+
+export function shouldEmailAbsenceRecovery(phone: string | null | undefined): boolean {
+  return ABSENCE_RECOVERY_STUDENT_EMAIL === 'siempre' || !(phone ?? '').trim();
+}
+
+/**
+ * Las opciones de una recuperación por ausencia: UNA por día (los días vienen
+ * ya en orden y filtrados: desde mañana, 7 días, sin domingos), la hora libre
+ * más cercana a la de la clase perdida (a igual distancia, la más temprana), y
+ * como mucho `max` días. Los días sin horas libres se saltan.
+ */
+export function pickAbsenceOptions(
+  freeByDay: Array<{ date: string; hours: string[] }>, originalHour: string, hours: number, max = MAX_ABSENCE_OPTIONS,
+): Array<{ date: string; hour: string; hours: number }> {
+  const target = hourNum(originalHour);
+  const out: Array<{ date: string; hour: string; hours: number }> = [];
+  for (const day of freeByDay) {
+    if (out.length >= max) break;
+    const best = [...day.hours]
+      .filter(h => Number.isFinite(hourNum(h)))
+      .sort((a, b) => Math.abs(hourNum(a) - target) - Math.abs(hourNum(b) - target) || hourNum(a) - hourNum(b))[0];
+    if (best) out.push({ date: day.date, hour: hourText(hourNum(best)), hours });
+  }
+  return out;
+}
+
+/**
+ * El profesor pulsó "Ingresar" tarde: ¿antes de la MITAD de la clase?
+ *   · true  → la clase se dio: se anula la recuperación;
+ *   · false → la recuperación sigue viva y la fila queda para que la revise un
+ *             admin (la clase original puede acabar pagándose: ver
+ *             lib/teacherAbsenceStore).
+ * Un ingreso sin hora legible cuenta como antes de la mitad: hubo ingreso y,
+ * ante la duda, no se deja abierta una segunda clase que pagar.
+ *
+ * OJO: la ausencia se detecta al minuto 30, así que en una clase de 1 h
+ * cualquier ingreso posterior ya cae en la segunda mitad.
+ */
+export function joinedBeforeHalf(a: { classDate: string; classHour: string; durationHours: number }, clickedAt: string | null | undefined): boolean {
+  const t = Date.parse(clickedAt ?? '');
+  const start = spainWallClockToEpoch(a.classDate, hourNum(a.classHour));
+  if (!Number.isFinite(t) || !Number.isFinite(start)) return true;
+  const half = start + (Math.max(1, a.durationHours || 1) * 60 * MIN) / 2;
+  return t < half;
+}
+
 const MIN = 60_000;
 
 // ── Tipos ─────────────────────────────────────────────────────────────────────
@@ -314,6 +385,12 @@ export interface AbsenceWebhookPayload {
   alumno_telefono: string;
   /** Mensaje listo para Slack. */
   texto_slack: string;
+  /**
+   * <LMS_URL>/mis-clases?recuperacion=<id>: donde el alumno elige cuándo
+   * recuperar la clase. '' si no se creó recuperación (profesor fuera de
+   * ABSENCE_RECOVERY_BETA_TEACHERS, o falló al crearla).
+   */
+  enlace_recuperacion: string;
 }
 
 export function slackTextOf(a: { teacherName: string; hour: string; studentName: string; phone: string }): string {
@@ -326,6 +403,7 @@ export function slackTextOf(a: { teacherName: string; hour: string; studentName:
 export function buildAbsencePayload(a: {
   id: string; date: string; hour: string; teacherName: string;
   studentName: string; studentEmail: string; phone: string;
+  recoveryLink?: string;
 }): AbsenceWebhookPayload {
   return {
     clase_id: a.id,
@@ -337,6 +415,7 @@ export function buildAbsencePayload(a: {
     alumno_email: a.studentEmail,
     alumno_telefono: a.phone,
     texto_slack: slackTextOf({ teacherName: a.teacherName, hour: a.hour, studentName: a.studentName, phone: a.phone }),
+    enlace_recuperacion: a.recoveryLink ?? '',
   };
 }
 
@@ -353,5 +432,6 @@ export function sampleAbsencePayload(nowMs = Date.now()): AbsenceWebhookPayload 
     studentName: 'Alumna Ejemplo [PRUEBA]',
     studentEmail: 'prueba@drcacademy.test',
     phone: '+34600111222',
+    recoveryLink: 'https://drc-lms.vercel.app/mis-clases?recuperacion=rec_prueba',
   });
 }

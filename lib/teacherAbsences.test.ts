@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   findDueAbsences, findLateJoins, absenceIdOf, normalizePhone, phoneLooksInternational, firstNameOf,
   buildAbsencePayload, slackTextOf, windowDates, inAbsenceWindow, sampleAbsencePayload,
+  pickAbsenceOptions, joinedBeforeHalf, isAbsenceRecoveryTeacher, shouldEmailAbsenceRecovery, MAX_ABSENCE_OPTIONS,
+  ABSENCE_RECOVERY_STUDENT_EMAIL,
   type TeacherScheduleInput, type JoinLogLite, type ClassRecordLite,
 } from '@/lib/teacherAbsences';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
@@ -179,7 +181,15 @@ describe('lo que recibe Zapier', () => {
       alumno_nombre: 'Ana Pérez', alumno_nombre_pila: 'Ana', alumno_email: 'ana@x.com',
       alumno_telefono: '+34600111222',
       texto_slack: '⚠️ Posible falta: Laura no se ha conectado a la clase de las 18:00 con Ana Pérez. Teléfono del alumno: +34600111222',
+      enlace_recuperacion: '',
     });
+  });
+  it('con recuperación: el enlace viaja en enlace_recuperacion', () => {
+    const p = buildAbsencePayload({
+      id: 'a', date: '2026-10-15', hour: '18:00', teacherName: 'Laura', studentName: 'Ana', studentEmail: '', phone: '',
+      recoveryLink: 'https://lms.test/mis-clases?recuperacion=rec_1',
+    });
+    expect(p.enlace_recuperacion).toBe('https://lms.test/mis-clases?recuperacion=rec_1');
   });
   it('sin teléfono: campo vacío y lo dice el texto', () => {
     const p = buildAbsencePayload({ id: 'a', date: '2026-10-15', hour: '18:00', teacherName: 'Laura', studentName: 'Ana', studentEmail: '', phone: '' });
@@ -197,5 +207,58 @@ describe('lo que recibe Zapier', () => {
   });
   it('nombre de pila', () => {
     expect(firstNameOf('  María José Cabrera ')).toBe('María');
+  });
+});
+
+describe('recuperación automática por ausencia', () => {
+  it('beta solo para t1', () => {
+    expect(isAbsenceRecoveryTeacher('t1')).toBe(true);
+    expect(isAbsenceRecoveryTeacher('t2')).toBe(false);
+    expect(isAbsenceRecoveryTeacher(null)).toBe(false);
+  });
+
+  it('una opción por día, la hora más cercana a la original, como mucho 4', () => {
+    const days = [
+      { date: '2026-10-21', hours: ['09:00', '17:00', '20:00'] },
+      { date: '2026-10-22', hours: [] },
+      { date: '2026-10-23', hours: ['19:00', '17:00'] },   // 17 y 19 a la misma distancia de 18: la más temprana
+      { date: '2026-10-24', hours: ['10:00'] },
+      { date: '2026-10-26', hours: ['18:00'] },
+      { date: '2026-10-27', hours: ['18:00'] },
+    ];
+    expect(pickAbsenceOptions(days, '18:00', 1)).toEqual([
+      { date: '2026-10-21', hour: '17:00', hours: 1 },
+      { date: '2026-10-23', hour: '17:00', hours: 1 },
+      { date: '2026-10-24', hour: '10:00', hours: 1 },
+      { date: '2026-10-26', hour: '18:00', hours: 1 },
+    ]);
+    expect(MAX_ABSENCE_OPTIONS).toBe(4);
+  });
+
+  it('sin horas libres: ninguna opción; las de 2 h llevan hours 2', () => {
+    expect(pickAbsenceOptions([{ date: '2026-10-21', hours: [] }], '18:00', 1)).toEqual([]);
+    expect(pickAbsenceOptions([{ date: '2026-10-21', hours: ['9'] }], '18:00', 2)).toEqual([{ date: '2026-10-21', hour: '09:00', hours: 2 }]);
+  });
+
+  it('llegó tarde: antes o después de la mitad (hora de España)', () => {
+    const clase = { classDate: MARTES, classHour: '18:00', durationHours: 1 };
+    expect(joinedBeforeHalf(clase, new Date(madrid(MARTES, 18, 29)).toISOString())).toBe(true);
+    expect(joinedBeforeHalf(clase, new Date(madrid(MARTES, 18, 30)).toISOString())).toBe(false);
+    expect(joinedBeforeHalf(clase, new Date(madrid(MARTES, 18, 40)).toISOString())).toBe(false);
+    // Sesión de 2 h: la mitad es a la hora.
+    const larga = { ...clase, durationHours: 2 };
+    expect(joinedBeforeHalf(larga, new Date(madrid(MARTES, 18, 45)).toISOString())).toBe(true);
+    expect(joinedBeforeHalf(larga, new Date(madrid(MARTES, 19, 5)).toISOString())).toBe(false);
+    // Sin hora legible: cuenta como antes (hubo ingreso).
+    expect(joinedBeforeHalf(clase, '')).toBe(true);
+  });
+
+  it('email al alumno: siempre por ahora; con "sin_telefono" solo a quien no lo tiene', () => {
+    if (ABSENCE_RECOVERY_STUDENT_EMAIL === 'siempre') {
+      expect(shouldEmailAbsenceRecovery('+34600111222')).toBe(true);
+    } else {
+      expect(shouldEmailAbsenceRecovery('+34600111222')).toBe(false);
+    }
+    expect(shouldEmailAbsenceRecovery('')).toBe(true);
   });
 });

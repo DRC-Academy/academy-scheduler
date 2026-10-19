@@ -27,7 +27,7 @@ export interface AdminRecovery extends TeacherRecovery {
   usedWildcard: boolean; penaltyEuros: number; wouldHavePenalty: boolean;
   agreedDirectly: boolean; chosenBy: string | null;
   reason: string | null; statusChangedAt: string; createdAt: string;
-  origin: 'profesor' | 'admin_reclasificacion';
+  origin: 'profesor' | 'admin_reclasificacion' | 'ausencia';
   annulledAt: string | null; annulledBy: string | null; annulReason: string | null;
 }
 
@@ -116,7 +116,9 @@ export function recoveryLineFor(recoveries: TeacherRecovery[], studentName: stri
   return mine.map(r => {
     const pre = r.parts > 1 ? `${r.part}.ª hora: ` : '';
     switch (r.status) {
-      case 'esperando_alumno': return `${pre}esperando que elija: ${r.teacherProposals.map(corta).join(' o ')}`;
+      case 'esperando_alumno': return r.teacherProposals.length
+        ? `${pre}esperando que elija: ${r.teacherProposals.map(corta).join(' o ')}`
+        : `${pre}esperando que el alumno proponga horarios`;
       case 'alumno_propuso':   return `${pre}propuso otros horarios: ${r.studentProposals.map(corta).join(', ')} — respóndele arriba`;
       case 'confirmada':       return `${pre}recuperación el ${r.chosenDate ? corta({ date: r.chosenDate, hour: r.chosenHour ?? '' }) : '—'}`;
       case 'recuperada':       return `${pre}recuperada`;
