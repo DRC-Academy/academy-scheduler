@@ -6,7 +6,7 @@
 // y, a los 30 minutos del inicio, el profesor no había pulsado "Ingresar a
 // clase". Sin multa. Si el profesor ingresa después, pasa sola a "Llegó tarde".
 //
-// Profesores de la beta de recuperación automática (lib/teacherAbsences): cada
+// Recuperación automática (lib/teacherAbsences, hoy para todos): cada
 // ausencia trae su recuperación (opciones, elegida…). "Anular" pide un motivo,
 // anula la ausencia y su recuperación. "Revisar" marca las que el profesor
 // entró pasada la mitad con la recuperación viva: la clase original se podría

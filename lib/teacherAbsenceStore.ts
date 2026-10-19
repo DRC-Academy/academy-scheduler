@@ -15,7 +15,7 @@
 //      vueltas se pisan, la segunda choca con la clave primaria y no envía nada.
 //   5. Marca "llegó tarde" las posibles ausencias cuyo profesor ya ingresó.
 //
-// RECUPERACIÓN AUTOMÁTICA (solo ABSENCE_RECOVERY_BETA_TEACHERS): en el paso 4,
+// RECUPERACIÓN AUTOMÁTICA (ABSENCE_RECOVERY_BETA_TEACHERS, hoy todos): en el paso 4,
 // entre reservar la fila y avisar a Zapier, se crea la recuperación
 // (lib/classRecoveryStore, createAbsenceRecovery) y su enlace viaja en
 // `enlace_recuperacion`. Si el profesor ingresa después:
@@ -54,6 +54,7 @@ import {
   createAbsenceRecovery, absenceRecoveryOptions, annulAbsenceRecovery, absenceRecoveryOfClass, type AbsenceAnnulOutcome,
 } from '@/lib/classRecoveryStore';
 import { recoveryLink } from '@/lib/classRecoveryEmails';
+import { destinationFor } from '@/lib/emailNotifications';
 import { isAbsenceRecoveryTeacher, joinedBeforeHalf } from '@/lib/teacherAbsences';
 import type { Slot } from '@/lib/classRecoveries';
 import type { Assignment, Grid, Student } from '@/types';
@@ -79,7 +80,7 @@ export interface AbsenceReportItem {
   /** Solo en ensayo: lo que recibiría Zapier. */
   payload?: AbsenceWebhookPayload;
   /**
-   * Recuperación automática (profesores de la beta). En ensayo, las opciones que
+   * Recuperación automática (ABSENCE_RECOVERY_BETA_TEACHERS). En ensayo, las opciones que
    * se ofrecerían; de verdad, la recuperación creada o por qué no.
    */
   recuperacion?: { id?: string; opciones?: Slot[]; emailAlumno?: boolean; error?: string };
@@ -142,6 +143,8 @@ interface Datos {
   joinLogs: JoinLogLite[];
   records: ClassRecordLite[];
   alerts: Row[];
+  /** profe_email de Zapier por id de profesor (destinationFor: notification_email → email). */
+  teacherEmails: Map<string, string>;
 }
 
 /**
@@ -185,12 +188,14 @@ async function cargarDatos(admin: SupabaseClient, fechas: string[], ensayo: bool
   }
 
   const teachers: TeacherScheduleInput[] = [];
+  const teacherEmails = new Map<string, string>();
   for (const t of teachersRaw) {
     if (t.archived_at) continue;
     const id = str(t.id);
     const grid = grids.get(id);
     if (!grid || Object.keys(grid).length === 0) continue;
     const prof = { id, name: str(t.name), email: str(t.email) };
+    teacherEmails.set(id, destinationFor({ name: prof.name, email: prof.email, notificationEmail: str(t.notification_email) }));
     const assignments = teacherAssignmentsFrom(prof, teacherStudentsFrom(grid, asgPorProfe.get(id) ?? [], students));
     teachers.push({
       teacherId: id, teacherName: prof.name, assignments, grid,
@@ -200,7 +205,7 @@ async function cargarDatos(admin: SupabaseClient, fechas: string[], ensayo: bool
   }
 
   return {
-    teachers, students, alerts,
+    teachers, students, alerts, teacherEmails,
     joinLogs: logsRaw.map(l => ({
       teacherId: str(l.teacher_id), studentName: str(l.student_name), scheduledDate: str(l.scheduled_date),
       scheduledTime: str(l.scheduled_time), clickedAt: str(l.clicked_at),
@@ -361,8 +366,9 @@ export async function runAbsenceCheck(admin: SupabaseClient, opts: { nowMs?: num
 
   for (const d of due) {
     const c = await clasificar(d, datos.students);
+    const teacherEmail = datos.teacherEmails.get(d.teacherId) ?? '';
     const payload = c.estado === 'posible_ausencia'
-      ? buildAbsencePayload({ id: d.id, date: d.date, hour: d.hour, teacherName: d.teacherName, studentName: d.studentName, studentEmail: c.email, phone: c.phone })
+      ? buildAbsencePayload({ id: d.id, date: d.date, hour: d.hour, teacherName: d.teacherName, teacherEmail, studentName: d.studentName, studentEmail: c.email, phone: c.phone })
       : null;
     const item: AbsenceReportItem = {
       id: d.id, profesor: d.teacherName, alumno: d.studentName, fecha: d.date, hora: d.hour,
@@ -391,7 +397,7 @@ export async function runAbsenceCheck(admin: SupabaseClient, opts: { nowMs?: num
     }
     let aEnviar = payload;
     if (payload && isAbsenceRecoveryTeacher(d.teacherId)) {
-      const r = await crearRecuperacion(admin, d, c);
+      const r = await crearRecuperacion(admin, d, c, teacherEmail);
       item.recuperacion = r.info;
       if (r.link) aEnviar = { ...payload, enlace_recuperacion: r.link };
     }
@@ -418,7 +424,7 @@ async function opcionesDeEnsayo(d: DueAbsence, nowMs: number): Promise<NonNullab
  * a Zapier sale igual, con `enlace_recuperacion` vacío.
  */
 async function crearRecuperacion(
-  admin: SupabaseClient, d: DueAbsence, c: Awaited<ReturnType<typeof clasificar>>,
+  admin: SupabaseClient, d: DueAbsence, c: Awaited<ReturnType<typeof clasificar>>, teacherEmail: string,
 ): Promise<{ link: string | null; info: NonNullable<AbsenceReportItem['recuperacion']> }> {
   try {
     const r = await createAbsenceRecovery({
@@ -429,7 +435,7 @@ async function crearRecuperacion(
     });
     const link = recoveryLink(r.recovery.id);
     const payload = buildAbsencePayload({
-      id: d.id, date: d.date, hour: d.hour, teacherName: d.teacherName, studentName: d.studentName,
+      id: d.id, date: d.date, hour: d.hour, teacherName: d.teacherName, teacherEmail, studentName: d.studentName,
       studentEmail: c.email, phone: c.phone, recoveryLink: link,
     });
     const now = new Date().toISOString();

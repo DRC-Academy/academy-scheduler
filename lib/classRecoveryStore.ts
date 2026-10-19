@@ -43,7 +43,7 @@ import {
   buildCancellationEmail, buildConfirmedEmail, buildReproposalEmail, buildAbsenceRecoveryEmail, sendStudentEmail,
 } from '@/lib/classRecoveryEmails';
 import {
-  fetchTeacher, sendRecoveryChosenEmail, sendRecoveryStudentProposedEmail, sendAbsenceRecoveryTeacherEmail,
+  fetchTeacher, sendRecoveryChosenEmail, sendRecoveryStudentProposedEmail,
 } from '@/lib/emailNotifications';
 import { pickAbsenceOptions, shouldEmailAbsenceRecovery } from '@/lib/teacherAbsences';
 import type { Cell, Grid } from '@/types';
@@ -1114,7 +1114,8 @@ export async function notifyMonthlyLimit(teacherId: string, teacherName: string,
 // ── Recuperación por AUSENCIA del profesor ────────────────────────────────────
 //
 // La crea el chequeo de posibles ausencias (lib/teacherAbsenceStore) para los
-// profesores de ABSENCE_RECOVERY_BETA_TEACHERS (lib/teacherAbsences). Lo que
+// profesores de ABSENCE_RECOVERY_BETA_TEACHERS (lib/teacherAbsences; hoy todos).
+// Lo que
 // cambia respecto de "No puedo dar esta clase":
 //   · las opciones las calcula Gestión: hasta 4, una por día, la hora más
 //     cercana a la de la clase, con el criterio ESTRICTO del LMS;
@@ -1223,7 +1224,8 @@ export interface AbsenceRecoveryResult {
 
 /**
  * Crea la recuperación de una clase a la que el profesor no se conectó, con
- * sus opciones, y avisa: campanita + email al profesor, email al alumno (según
+ * sus opciones, y avisa: campanita al profesor (el email se lo manda Zapier),
+ * email al alumno (según
  * ABSENCE_RECOVERY_STUDENT_EMAIL). Idempotente: si la clase ya tiene una
  * recuperación viva (de cualquier origen) la devuelve sin crear ni avisar.
  * Lanza 503 'no_configurado' si falta supabase-recuperacion-por-falta.sql.
@@ -1280,19 +1282,16 @@ export async function createAbsenceRecovery(input: AbsenceRecoveryInput): Promis
   return { recovery: rec, created: true, studentEmailSent };
 }
 
-/** Campanita + email al profesor: no se conectó y el alumno elegirá la recuperación. */
+/**
+ * Campanita al profesor: no se conectó y el alumno elegirá la recuperación. El
+ * email se lo manda Zapier (profe_email del aviso), no Gestión.
+ */
 async function notifyAbsenceTeacher(rec: RecoveryRow): Promise<void> {
   const title = `No te conectaste a la clase con ${rec.studentName}`;
   const body = `No te conectaste a tu clase de las ${rec.originalHour} con ${rec.studentName}. ` + (rec.teacherProposals.length
     ? `Le hemos ofrecido horarios para recuperarla: ${rec.teacherProposals.map(cuandoEs).join(', ')}. Cuando elija uno, aparecerá en tu calendario.`
     : 'No tenías horas libres en los próximos días, así que le hemos pedido que proponga sus horarios para recuperarla. Te llegarán para que aceptes uno.');
   await teacherBell(`notif_rec_ausencia_${rec.id}`, rec.teacherId, title, body, 'recuperacion_ausencia');
-  try {
-    const teacher = await fetchTeacher(rec.teacherId);
-    if (teacher) await sendAbsenceRecoveryTeacherEmail(teacher, { title, body });
-  } catch (err) {
-    console.error('[recuperaciones] Email de ausencia al profesor fallido:', err);
-  }
 }
 
 export type AbsenceAnnulOutcome = 'anulada' | 'ya_recuperada' | 'sin_recuperacion';

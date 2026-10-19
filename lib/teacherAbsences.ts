@@ -46,12 +46,12 @@ export const MAX_ZAPIER_ATTEMPTS = 3;
 
 /**
  * Profesores a los que, al detectar una posible ausencia, se les crea sola la
- * recuperación (el alumno elige la fecha desde el LMS). El resto sigue EXACTO
- * como antes: aviso a Zapier sin recuperación y con `enlace_recuperacion` vacío.
- *
- * PARA ABRIRLO A TODOS: cambiar esta línea por `['*']`.
+ * recuperación (el alumno elige la fecha desde el LMS). `['*']` = todos (desde
+ * el 19/10/2026; antes fue una beta con ['t1']). Con una lista de ids, el resto
+ * sigue como antes: aviso a Zapier sin recuperación y con `enlace_recuperacion`
+ * vacío.
  */
-export const ABSENCE_RECOVERY_BETA_TEACHERS: readonly string[] = ['t1'];
+export const ABSENCE_RECOVERY_BETA_TEACHERS: readonly string[] = ['*'];
 
 export function isAbsenceRecoveryTeacher(teacherId: string | null | undefined): boolean {
   if (ABSENCE_RECOVERY_BETA_TEACHERS.includes('*')) return true;
@@ -378,6 +378,12 @@ export interface AbsenceWebhookPayload {
   /** '18:00' (hora de España) */
   hora: string;
   profe_nombre: string;
+  /**
+   * Donde el profesor recibe los avisos de Gestión: teachers.notification_email
+   * y, si está vacío, teachers.email. Zapier le manda el email de la ausencia
+   * (Gestión ya no lo manda). '' si no hay ninguno.
+   */
+  profe_email: string;
   alumno_nombre: string;
   alumno_nombre_pila: string;
   alumno_email: string;
@@ -401,7 +407,7 @@ export function slackTextOf(a: { teacherName: string; hour: string; studentName:
 }
 
 export function buildAbsencePayload(a: {
-  id: string; date: string; hour: string; teacherName: string;
+  id: string; date: string; hour: string; teacherName: string; teacherEmail?: string;
   studentName: string; studentEmail: string; phone: string;
   recoveryLink?: string;
 }): AbsenceWebhookPayload {
@@ -410,6 +416,7 @@ export function buildAbsencePayload(a: {
     fecha: fmtDateDMY(a.date),
     hora: a.hour,
     profe_nombre: a.teacherName,
+    profe_email: a.teacherEmail ?? '',
     alumno_nombre: a.studentName,
     alumno_nombre_pila: firstNameOf(a.studentName),
     alumno_email: a.studentEmail,
@@ -429,6 +436,7 @@ export function sampleAbsencePayload(nowMs = Date.now()): AbsenceWebhookPayload 
     id: `aus_prueba_${p.dateStr}_${String(p.hour).padStart(2, '0')}`,
     date: p.dateStr, hour: hourText(p.hour),
     teacherName: 'Profesora Ejemplo [PRUEBA]',
+    teacherEmail: 'profesora.ejemplo@drcacademy.test',
     studentName: 'Alumna Ejemplo [PRUEBA]',
     studentEmail: 'prueba@drcacademy.test',
     phone: '+34600111222',

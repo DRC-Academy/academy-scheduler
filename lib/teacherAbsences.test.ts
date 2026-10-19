@@ -177,7 +177,7 @@ describe('lo que recibe Zapier', () => {
       studentName: 'Ana Pérez', studentEmail: 'ana@x.com', phone: '+34600111222',
     });
     expect(p).toEqual({
-      clase_id: 'aus_x', fecha: '15/10/2026', hora: '18:00', profe_nombre: 'Laura',
+      clase_id: 'aus_x', fecha: '15/10/2026', hora: '18:00', profe_nombre: 'Laura', profe_email: '',
       alumno_nombre: 'Ana Pérez', alumno_nombre_pila: 'Ana', alumno_email: 'ana@x.com',
       alumno_telefono: '+34600111222',
       texto_slack: '⚠️ Posible falta: Laura no se ha conectado a la clase de las 18:00 con Ana Pérez. Teléfono del alumno: +34600111222',
@@ -190,6 +190,13 @@ describe('lo que recibe Zapier', () => {
       recoveryLink: 'https://lms.test/mis-clases?recuperacion=rec_1',
     });
     expect(p.enlace_recuperacion).toBe('https://lms.test/mis-clases?recuperacion=rec_1');
+  });
+  it('profe_email: el email del profesor tal cual llega', () => {
+    const p = buildAbsencePayload({
+      id: 'a', date: '2026-10-15', hour: '18:00', teacherName: 'Laura', teacherEmail: 'laura@drcacademy.com',
+      studentName: 'Ana', studentEmail: '', phone: '',
+    });
+    expect(p.profe_email).toBe('laura@drcacademy.com');
   });
   it('sin teléfono: campo vacío y lo dice el texto', () => {
     const p = buildAbsencePayload({ id: 'a', date: '2026-10-15', hour: '18:00', teacherName: 'Laura', studentName: 'Ana', studentEmail: '', phone: '' });
@@ -204,6 +211,10 @@ describe('lo que recibe Zapier', () => {
     expect(p.alumno_nombre).toContain('[PRUEBA]');
     expect(p.alumno_nombre_pila).toBe('Alumna');
     expect(p.hora).toBe('18:00');
+    // Todos los campos con algo, para poder mapearlos en el Zap.
+    for (const [campo, valor] of Object.entries(p)) expect(valor, campo).not.toBe('');
+    expect(p.profe_email).toContain('@');
+    expect(p.enlace_recuperacion).toContain('recuperacion=');
   });
   it('nombre de pila', () => {
     expect(firstNameOf('  María José Cabrera ')).toBe('María');
@@ -211,10 +222,10 @@ describe('lo que recibe Zapier', () => {
 });
 
 describe('recuperación automática por ausencia', () => {
-  it('beta solo para t1', () => {
+  it('abierta a todos los profesores', () => {
     expect(isAbsenceRecoveryTeacher('t1')).toBe(true);
-    expect(isAbsenceRecoveryTeacher('t2')).toBe(false);
-    expect(isAbsenceRecoveryTeacher(null)).toBe(false);
+    expect(isAbsenceRecoveryTeacher('t2')).toBe(true);
+    expect(isAbsenceRecoveryTeacher('t30')).toBe(true);
   });
 
   it('una opción por día, la hora más cercana a la original, como mucho 4', () => {
