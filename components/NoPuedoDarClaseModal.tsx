@@ -21,7 +21,7 @@ interface Preview {
   late: boolean;
   sessionHours: number;
   canSplit: boolean;
-  wildcard: { position: number | null; usedWildcard: boolean; wildcardsLeft: number; penaltyApplies: boolean; chargeNow: boolean; wouldHavePenalty: boolean };
+  wildcard: { position: number | null; usedWildcard: boolean; wildcardsLeft: number; penaltyApplies: boolean; chargeNow: boolean; beforeStart?: boolean };
   wildcardsTotal: number;
   penaltyStartDate: string;
   penaltyEuros: number;
@@ -189,20 +189,20 @@ export default function NoPuedoDarClaseModal({ teacherId, assignmentId, studentN
         {listo && w && (
           !preview.late ? (
             <div className="npd-box npd-box-verde"><b>Sin coste:</b> avisas con {antelacion(preview.noticeMinutes)} de antelación.</div>
+          ) : w.beforeStart ? (
+            <div className="npd-box npd-box-verde">
+              <b>Sin coste</b> · no gasta comodín
+              <div className="npd-box-nota">Avisas con menos de 24 h ({antelacion(preview.noticeMinutes)}), pero los comodines empiezan a contar el {fmtDateDMY(preview.penaltyStartDate).slice(0, 5)}.</div>
+            </div>
           ) : !w.penaltyApplies ? (
             <div className="npd-box npd-box-amarillo">
               <b>Usa 1 comodín</b> · {w.wildcardsLeft === 0 ? 'no te queda ninguno' : w.wildcardsLeft === 1 ? 'te queda 1' : `te quedan ${w.wildcardsLeft}`} este mes
               <div className="npd-box-nota">Avisas con menos de 24 h ({antelacion(preview.noticeMinutes)}).</div>
             </div>
-          ) : w.chargeNow ? (
+          ) : (
             <div className="npd-box npd-box-rojo">
               <b>Esta cancelación cuesta {preview.penaltyEuros} €</b>
               <div className="npd-box-nota">Menos de 24 h y ya usaste tus {preview.wildcardsTotal} comodines de este mes.</div>
-            </div>
-          ) : (
-            <div className="npd-box npd-box-rojo">
-              <b>Te costaría {preview.penaltyEuros} € a partir del {fmtDateDMY(preview.penaltyStartDate).slice(0, 5)}</b>
-              <div className="npd-box-nota">Menos de 24 h y ya usaste tus {preview.wildcardsTotal} comodines de este mes. Hasta esa fecha no se cobra.</div>
             </div>
           )
         )}
@@ -297,7 +297,7 @@ export default function NoPuedoDarClaseModal({ teacherId, assignmentId, studentN
         </div>
 
         {listo && (
-          <div className="npd-pie">Si no cancelas la clase y no te presentas, la penalización es de {preview.noShowPenaltyEuros} €.</div>
+          <div className="npd-pie">Si no cancelas la clase y simplemente no te presentas, la penalización es el doble: {preview.noShowPenaltyEuros} euros</div>
         )}
       </div>
     </div>

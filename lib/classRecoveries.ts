@@ -5,7 +5,8 @@
 // el LMS. Este módulo decide, sin tocar nada:
 //   · la antelación (minutos exactos, hora de España);
 //   · los comodines: 2 cancelaciones con menos de 24 h al mes por profesor, en
-//     total; desde la 3.ª, −5 € (a partir de PENALTY_START_DATE);
+//     total; desde la 3.ª, −5 €. Solo cuentan las cancelaciones desde
+//     PENALTY_START_DATE: las anteriores no gastan comodín ni pagan multa;
 //   · si las fechas propuestas valen;
 //   · qué cambios de estado están permitidos.
 // El servidor (lib/classRecoveryStore.ts) aplica lo que esto decide. La pantalla
@@ -40,9 +41,10 @@ export function isRecoveryBetaTeacher(teacherId: string | null | undefined): boo
 // ── Constantes de la regla ────────────────────────────────────────────────────
 
 /**
- * Desde qué día (fecha de la CANCELACIÓN, hora de España) se cobra la multa.
- * Antes se cuenta igual y se avisa "te costaría 5 €", pero no se crea el evento
- * de −5 €: queda `would_have_penalty` para saber cuántas habría habido.
+ * Desde qué día rige el sistema único de penalizaciones (lib/teacherPenalties):
+ * cancelaciones (fecha de la CANCELACIÓN, hora de España) y faltas (fecha de la
+ * CLASE). Las cancelaciones anteriores no gastan comodín ni pagan multa; las
+ * faltas anteriores no se cobran nunca.
  */
 export const PENALTY_START_DATE = '2026-10-22';
 /** Menos de esto es "sin antelación" y gasta comodín. */
@@ -50,7 +52,7 @@ export const LATE_NOTICE_MINUTES = 24 * 60;
 /** Cancelaciones sin antelación gratis al mes, por profesor y en total. */
 export const MONTHLY_WILDCARDS = 2;
 export const PENALTY_EUROS = 5;
-/** Solo texto por ahora: nada detecta todavía la ausencia sin cancelar. */
+/** Falta del profesor (no canceló y no se presentó). Ver lib/teacherPenalties. */
 export const NO_SHOW_PENALTY_EUROS = 10;
 /** Las fechas propuestas (del profesor o del alumno) caen en los próximos N días. */
 export const PROPOSAL_WINDOW_DAYS = 7;
@@ -60,21 +62,13 @@ export const MAX_STUDENT_PROPOSALS = 3;
 /**
  * De dónde salió una fila. 'admin_reclasificacion': el admin aprobó una
  * revisión como "cancelada por el profesor" (la clase pasó sin aviso). Esa NO
- * usa comodín ni ocupa uno: lleva la multa fija (ver reclassPenalty).
+ * usa comodín ni ocupa uno: es una FALTA (−10 €, lib/teacherPenalties).
  * 'ausencia': la creó el chequeo de posibles ausencias (el profesor no se
  * conectó). Sin comodín, sin multa y SIN reservas: sus opciones no tapan horas
  * del calendario y se comprueban al elegir (ver lib/teacherAbsences).
  */
 export type RecoveryOrigin = 'profesor' | 'admin_reclasificacion' | 'ausencia';
 
-/**
- * Multa de una reclasificación del admin: fija, sin comodines, contada en el
- * mes de la CLASE. Antes de PENALTY_START_DATE no se cobra, solo se marca.
- */
-export function reclassPenalty(classDate: string): { chargeNow: boolean; wouldHavePenalty: boolean; penaltyEuros: number } {
-  const chargeNow = classDate >= PENALTY_START_DATE;
-  return { chargeNow, wouldHavePenalty: !chargeNow, penaltyEuros: chargeNow ? -PENALTY_EUROS : 0 };
-}
 export const MAX_NOTE_LENGTH = 500;
 
 // ── Estados ───────────────────────────────────────────────────────────────────
@@ -170,10 +164,15 @@ export interface WildcardOutcome {
   wildcardsLeft: number;
   /** Le corresponde multa por la regla (3.ª o posterior del mes). */
   penaltyApplies: boolean;
-  /** Se cobra de verdad (la regla y la fecha de inicio). */
+  /** Se cobra (= penaltyApplies: ya no hay multas "de mentira" antes del inicio). */
   chargeNow: boolean;
-  /** Le habría correspondido multa, pero es anterior a PENALTY_START_DATE. */
+  /** Histórico: filas guardadas antes del sistema único. Siempre false ahora. */
   wouldHavePenalty: boolean;
+  /**
+   * Es anterior a PENALTY_START_DATE: sin antelación pero no cuenta (ni gasta
+   * comodín ni paga). La pantalla lo dice tal cual.
+   */
+  beforeStart: boolean;
   /** 0 o −5. */
   penaltyEuros: number;
 }
@@ -192,15 +191,18 @@ export function wildcardOutcome(args: {
   late: boolean;
 }): WildcardOutcome {
   const month = spainMonthOf(args.cancelledAt);
+  const counts = (cancelledAt: string) => spainDateOf(cancelledAt) >= PENALTY_START_DATE;
   const others = args.prior.filter(p =>
-    p.late && p.status !== 'anulada' && spainMonthOf(p.cancelledAt) === month && p.groupId !== args.groupId);
+    p.late && p.status !== 'anulada' && counts(p.cancelledAt) && spainMonthOf(p.cancelledAt) === month && p.groupId !== args.groupId);
+  const beforeStart = !counts(args.cancelledAt);
 
-  if (!args.late) {
+  if (!args.late || beforeStart) {
     const used = new Set(others.map(p => p.groupId)).size;
     return {
       lateThisMonth: used, position: null, usedWildcard: false,
       wildcardsLeft: Math.max(0, MONTHLY_WILDCARDS - used),
       penaltyApplies: false, chargeNow: false, wouldHavePenalty: false, penaltyEuros: 0,
+      beforeStart: args.late && beforeStart,
     };
   }
 
@@ -217,14 +219,14 @@ export function wildcardOutcome(args: {
   const lateThisMonth = groups.size + 1;
 
   const penaltyApplies = position > MONTHLY_WILDCARDS;
-  const chargeNow = penaltyApplies && spainDateOf(args.cancelledAt) >= PENALTY_START_DATE;
   return {
     lateThisMonth, position,
     usedWildcard: !penaltyApplies,
     wildcardsLeft: Math.max(0, MONTHLY_WILDCARDS - position),
-    penaltyApplies, chargeNow,
-    wouldHavePenalty: penaltyApplies && !chargeNow,
-    penaltyEuros: chargeNow ? -PENALTY_EUROS : 0,
+    penaltyApplies, chargeNow: penaltyApplies,
+    wouldHavePenalty: false,
+    penaltyEuros: penaltyApplies ? -PENALTY_EUROS : 0,
+    beforeStart: false,
   };
 }
 

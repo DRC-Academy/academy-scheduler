@@ -2521,22 +2521,18 @@ async function notifyAdmin(title: string, body: string, type: string): Promise<v
   });
 }
 
-// Efectos secundarios al registrar una falta/cancelación (además del class_record):
-//  · 'cancelada_por_profesor' → penalización de -5 € (scoring_event) + alerta al
-//    admin a las 4. Es el profesor cancelando su clase con menos de 24 h.
-//  · 'falta_sin_aviso' (falta DEL ALUMNO) → NINGUNA penalización: el profesor
-//    entró y cumplió. Ni siquiera un contador: no es asunto suyo.
+// Efectos secundarios al registrar un aviso del ALUMNO (además del class_record):
 //  · 'cancelacion_hora'/'falta_con_aviso' → sin penalización económica; se cuentan
 //    y se avisa al admin al superar 3 y al superar 5 (contador interno, no al profe).
+//  · 'falta_sin_aviso' (falta DEL ALUMNO) → NINGÚN efecto: el profesor entró y
+//    cumplió. Ni siquiera un contador: no es asunto suyo.
 //
-// LO QUE CAMBIÓ Y POR QUÉ: hasta ago/2026, 'falta_sin_aviso' era a la vez la falta
-// del alumno (selector de "Añadir clase") y la cancelación de última hora del
-// profesor (botón "Cancelar clase"), y las dos creaban el -5 €. En la primera
-// estaba al revés —el profesor cumplió, y la clase encima se le pagaba, o sea que
-// el mismo registro le daba la clase y le quitaba 5 €—; en la segunda era correcto.
-// Ahora son dos tipos distintos y cada uno hace lo suyo. El event_type conserva el
-// nombre 'falta_sin_aviso_penalizacion' para no orfanar los 17 eventos ya emitidos
-// ni romper el botón de revertir del panel de finanzas.
+// LO QUE SE ELIMINÓ (oct/2026, sistema único de penalizaciones): la rama de
+// 'cancelada_por_profesor', que ponía −5 € al instante a toda cancelación con
+// menos de 24 h del botón viejo "Cancelar clase". Hoy el profesor cancela con
+// "No puedo dar esta clase" (comodines, lib/classRecoveries) y las faltas las
+// cobra el servidor (lib/teacherPenalties). Los 17 eventos viejos
+// 'falta_sin_aviso_penalizacion' quedan como estaban, con su botón de revertir.
 //
 // Best-effort: nunca debe romper el registro de la clase.
 export async function dbApplyFaltaSideEffects(p: {
@@ -2546,34 +2542,7 @@ export async function dbApplyFaltaSideEffects(p: {
   const monthPrefix = (p.classDate || new Date().toISOString()).slice(0, 7);
 
   try {
-    if (p.classType === 'cancelada_por_profesor') {
-      // Penalización económica de -5 € en el balance del profesor.
-      await dbAddScoringEvent({
-        teacherId: p.teacherId, teacherName: p.teacherName,
-        eventType: 'falta_sin_aviso_penalizacion', points: 0, euros: -5,
-        note: `Cancelación sin antelación — alumno ${p.studentName}, fecha ${p.classDate}`,
-        createdBy: 'sistema', studentRef: p.studentName,
-      });
-
-      // Contador interno (SOLO admin): cancelaciones NO revertidas del mes.
-      // Un solo mes para las dos cosas: el de la CANCELACIÓN, en hora de España.
-      // Antes se comparaba el mes UTC del evento con el mes de la CLASE, así que
-      // cancelar el 30/09 una clase del 01/10 contaba en un mes que no era.
-      const cancelMonth = getSpainParts(new Date()).dateStr.slice(0, 7);
-      const { data } = await supabase.from('scoring_events')
-        .select('created_at, student_ref, reverted')
-        .eq('teacher_id', p.teacherId).eq('event_type', 'falta_sin_aviso_penalizacion');
-      const month = (data ?? []).filter(e =>
-        !!e.created_at && getSpainParts(new Date(e.created_at)).dateStr.slice(0, 7) === cancelMonth && !e.reverted);
-      if (month.length === 4) {
-        const alumnos = [...new Set(month.map(e => e.student_ref).filter(Boolean))].join(', ');
-        await notifyAdmin(
-          `${p.teacherName} alcanzó 4 cancelaciones sin antelación`,
-          `Revisar situación. Alumnos afectados: ${alumnos || '—'}.`,
-          'limite_faltas_admin',
-        );
-      }
-    } else if (p.classType === 'cancelacion_hora' || p.classType === 'falta_con_aviso') {
+    if (p.classType === 'cancelacion_hora' || p.classType === 'falta_con_aviso') {
       // Faltas CON aviso: sin penalización económica, pero se cuentan para el admin.
       const { data } = await supabase.from('class_records')
         .select('student_name, class_date, class_type')
@@ -2646,6 +2615,7 @@ export async function dbGetScoringEvents(teacherId?: string): Promise<ScoringEve
     reverted:    r.reverted ?? false,
     revertedBy:  r.reverted_by ?? undefined,
     revertedAt:  r.reverted_at ?? undefined,
+    appliesMonth: r.applies_month ?? undefined,
   }));
 }
 

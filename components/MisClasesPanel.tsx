@@ -403,59 +403,6 @@ function RescheduleModal({ studentName, currentDate, currentHour, durationHours,
   );
 }
 
-// ─── Modal "Cancelar clase" (Bloque 4.4) ──────────────────────────────────────
-function CancelClassModal({ studentName, currentDate, currentHour, saving, onConfirm, onClose }: {
-  studentName: string; currentDate: string; currentHour: string; saving: boolean;
-  onConfirm: (reason: string, withNotice: boolean, hoursNotice: number) => void;
-  onClose: () => void;
-}) {
-  const [reason, setReason] = useState('');
-  // Horas de antelación entre AHORA y la clase. La hora de la clase es hora de
-  // PARED ESPAÑOLA: con `new Date("2026-07-29T16:00:00")` se interpretaba en la
-  // zona del navegador y un profesor en Argentina veía 5 horas de más, con lo que
-  // se libraba de la penalización de 5 € en una franja de 5 horas.
-  const classEpoch = spainWallClockToEpoch(currentDate, parseInt(currentHour || '0', 10) || 0);
-  const hoursNotice = isNaN(classEpoch) ? 0 : Math.max(0, (classEpoch - Date.now()) / 3_600_000);
-  const withNotice = hoursNotice > 24;
-  const hoursLabel = Math.round(hoursNotice);
-  const canConfirm = !!reason.trim() && !saving;
-
-  return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 85, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
-      onClick={e => { if (e.target === e.currentTarget && !saving) onClose(); }}>
-      <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 14, padding: 24, width: '100%', maxWidth: 420 }}>
-        <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)', marginBottom: 4 }}>Cancelar clase</div>
-        <div style={{ fontSize: 12.5, color: 'var(--text-muted)', marginBottom: 16 }}>{studentName} — {fmtDateDMY(currentDate)} {currentHour}</div>
-
-        {withNotice ? (
-          <div style={{ fontSize: 12.5, color: '#1f7a3d', background: 'rgba(30,158,58,0.08)', border: '1px solid rgba(30,158,58,0.3)', borderRadius: 8, padding: '10px 12px', marginBottom: 16, lineHeight: 1.5 }}>
-            <b>Cancelación con antelación suficiente</b><br />
-            Faltan {hoursLabel} horas para la clase. Esta cancelación no genera penalización.
-          </div>
-        ) : (
-          <div style={{ fontSize: 12.5, color: '#b45309', background: 'rgba(255,196,0,0.14)', border: '1px solid rgba(255,196,0,0.5)', borderRadius: 8, padding: '10px 12px', marginBottom: 16, lineHeight: 1.5 }}>
-            <b>Cancelación sin antelación suficiente</b><br />
-            Faltan solo {hoursLabel} horas para la clase. Esta cancelación se registrará como falta y puede afectar a tu balance.
-          </div>
-        )}
-
-        <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>Motivo</label>
-        <textarea value={reason} onChange={e => setReason(e.target.value)} rows={3} autoFocus
-          placeholder="Explica brevemente el motivo…"
-          style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1.5px solid var(--border)', background: 'var(--bg-surface-2)', color: 'var(--text-primary)', fontSize: 13, fontFamily: 'inherit', boxSizing: 'border-box', resize: 'vertical', marginBottom: 18 }} />
-
-        <div style={{ display: 'flex', gap: 10 }}>
-          <button onClick={onClose} disabled={saving} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: saving ? 'not-allowed' : 'pointer', fontSize: 13, fontFamily: 'inherit' }}>Cerrar</button>
-          <button onClick={() => canConfirm && onConfirm(reason.trim(), withNotice, hoursNotice)} disabled={!canConfirm}
-            style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: !canConfirm ? 'var(--bg-surface-3)' : withNotice ? '#1E9E3A' : '#ea580c', color: !canConfirm ? 'var(--text-muted)' : 'white', cursor: canConfirm ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
-            {saving ? 'Cancelando…' : 'Confirmar cancelación'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ─── Teacher Upcoming Classes Tab ─────────────────────────────────────────────
 export function MisClasesPanel({ teacher, myAssignments, students, classRecords, classAnalyses, classJoinLogs, grid, onGridChange, updateMeetLink, logClassJoin, addRescheduleRecord, addRescheduleSplit, registerClassRecord, onDataChanged, formIndex, refreshFormIndex }: {
   teacher: Teacher;
@@ -481,8 +428,6 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
 }) {
   const [rescheduleModal, setRescheduleModal] = useState<{ c: TodayClass; date: string } | null>(null);
   const [savingReschedule, setSavingReschedule] = useState(false);
-  const [cancelModal, setCancelModal] = useState<{ c: TodayClass; date: string } | null>(null);
-  const [savingCancel, setSavingCancel] = useState(false);
   // Beta "No puedo dar esta clase". Para el resto, `beta` es false y no se consulta nada.
   const beta = isRecoveryBetaTeacher(teacher.id);
   const [noPuedoModal, setNoPuedoModal] = useState<{ c: TodayClass; date: string } | null>(null);
@@ -1114,42 +1059,6 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     }
   }
 
-  async function handleCancelConfirm(reason: string, withNotice: boolean, hoursNotice: number) {
-    if (!cancelModal) return;
-    const { c, date } = cancelModal;
-    setSavingCancel(true);
-    try {
-      // Cancela el PROFESOR su propia clase: >24h → constancia sin penalización;
-      // <24h → 'cancelada_por_profesor' (no se cobra y penaliza -5 €).
-      //
-      // Antes lo de <24h se guardaba como 'falta_sin_aviso', el mismo tipo que la
-      // falta DEL ALUMNO. Con un solo tipo para dos culpables opuestos no se podía
-      // decidir el pago: quitar la penalización de la falta del alumno habría hecho
-      // cobrable la cancelación de última hora del profesor.
-      const classType = withNotice ? 'cancelada_con_preaviso' : 'cancelada_por_profesor';
-      await registerClassRecord(teacher.id, c.studentName, date, c.hour, null, classType, reason);
-      // Email al alumno + aviso al admin (best-effort). `classDate` es lo que la
-      // ruta usa para comprobar que la cancelación existe de verdad.
-      fetch('/api/classes/cancel', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          studentEmail: subEmailForAssignment(c.assignment),
-          studentName: c.studentName, teacherName: teacher.name, teacherId: teacher.id,
-          classDate: date,
-          dateLabel: fmtDateDMY(date), timeLabel: c.hour, hoursNotice, reason, withNotice,
-        }),
-      }).catch(() => {});
-      setCancelModal(null);
-      showToast(withNotice ? '✅ Clase cancelada — avisamos al alumno' : '⚠️ Registrada como falta — avisamos al alumno');
-    } catch (e) {
-      // 23505: la base ya tenía esa cancelación (doble clic, dos pestañas).
-      showToast(`⚠️ ${e instanceof Error ? e.message : 'No se pudo cancelar la clase.'}`, 4000);
-      if ((e as { code?: string }).code === '23505') { setCancelModal(null); await onDataChanged(); }
-    } finally {
-      setSavingCancel(false);
-    }
-  }
-
   function showToast(msg: string, ms = 2500) {
     setToast(msg);
     setTimeout(() => setToast(null), ms);
@@ -1455,14 +1364,6 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
                       onClick={() => { setOpenMenu(null); setRescheduleModal({ c, date }); }}>
                       {beta ? 'El alumno pidió cambiarla' : 'Reprogramar clase'}
                     </button>
-                    {/* Una clase ya cancelada no se vuelve a cancelar: era un −5 € doble.
-                        Beta: no se muestra; lo del profesor va por "No puedo dar esta clase". */}
-                    {!beta && !passed && !rescheduled && !cancelled && (
-                      <button className="mc-menu-item" role="menuitem"
-                        onClick={() => { setOpenMenu(null); setCancelModal({ c, date }); }}>
-                        Cancelar clase
-                      </button>
-                    )}
                     <button className="mc-menu-item" role="menuitem"
                       onClick={() => { setOpenMenu(null); join.openLinkModal(c.assignment); }}>
                       {hasLink ? 'Cambiar enlace' : 'Definir enlace'}
@@ -1813,18 +1714,6 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
             showToast(msg, 4000);
             await Promise.all([onDataChanged(), recov.reload()]);
           }}
-        />
-      )}
-
-      {/* Cancel modal (Bloque 4.4) */}
-      {cancelModal && (
-        <CancelClassModal
-          studentName={cancelModal.c.studentName}
-          currentDate={cancelModal.date}
-          currentHour={cancelModal.c.hour}
-          saving={savingCancel}
-          onConfirm={handleCancelConfirm}
-          onClose={() => setCancelModal(null)}
         />
       )}
 

@@ -15,6 +15,16 @@
 //      vueltas se pisan, la segunda choca con la clave primaria y no envía nada.
 //   5. Marca "llegó tarde" las posibles ausencias cuyo profesor ya ingresó.
 //
+// FALTA (−10 €, sistema único de penalizaciones, lib/teacherPenalties): en el
+// paso 4, cada posible ausencia (alumno activo y verificado) de una clase desde
+// PENALTY_START_DATE y de un profesor que no es de prueba se COBRA en el acto
+// (evento con id fijo por clase, mes de la clase). Excepciones:
+//   · si el profesor intentó cancelar esa clase con la app vieja y el trigger lo
+//     descartó (blocked_cancel_attempts), no se cobra: queda "revisar" para el
+//     admin, que decide (Cobrar falta / Anular);
+//   · si después pulsa "Ingresar" ANTES de la mitad de la clase, se revierte sola;
+//   · el admin puede anularla con motivo (annulAbsence) y se revierte.
+//
 // RECUPERACIÓN AUTOMÁTICA (ABSENCE_RECOVERY_BETA_TEACHERS, hoy todos): en el paso 4,
 // entre reservar la fila y avisar a Zapier, se crea la recuperación
 // (lib/classRecoveryStore, createAbsenceRecovery) y su enlace viaja en
@@ -56,6 +66,8 @@ import {
 import { recoveryLink } from '@/lib/classRecoveryEmails';
 import { destinationFor } from '@/lib/emailNotifications';
 import { isAbsenceRecoveryTeacher, joinedBeforeHalf } from '@/lib/teacherAbsences';
+import { faltaApplies } from '@/lib/teacherPenalties';
+import { chargeFalta, revertFalta, hadBlockedCancelAttempt } from '@/lib/teacherPenaltyStore';
 import type { Slot } from '@/lib/classRecoveries';
 import type { Assignment, Grid, Student } from '@/types';
 
@@ -66,6 +78,10 @@ export const ABSENCES_TABLE = 'teacher_absence_alerts';
 
 export type AbsenceStatus = 'posible_ausencia' | 'llego_tarde' | 'no_verificado' | 'descartada' | 'anulada';
 export type ZapierStatus = 'pendiente' | 'enviado' | 'sin_webhook' | 'error' | 'no_enviado';
+/** Estado de la multa de una posible ausencia (teacher_absence_alerts.penalty_state). */
+export type PenaltyState = 'cobrada' | 'revertida' | 'revisar';
+/** Qué pasó con la multa en esta vuelta del chequeo. */
+export type PenaltyOutcome = 'cobrada' | 'ya_cobrada' | 'revisar' | 'no_aplica' | 'se_cobraria' | 'error';
 
 export interface AbsenceReportItem {
   id: string;
@@ -84,6 +100,8 @@ export interface AbsenceReportItem {
    * se ofrecerían; de verdad, la recuperación creada o por qué no.
    */
   recuperacion?: { id?: string; opciones?: Slot[]; emailAlumno?: boolean; error?: string };
+  /** Falta (−10 €). En ensayo, 'se_cobraria' / 'revisar' / 'no_aplica'. */
+  multa?: PenaltyOutcome;
 }
 
 export interface AbsenceCheckReport {
@@ -93,7 +111,11 @@ export interface AbsenceCheckReport {
   webhookConfigurado: boolean;
   clasesEnVentana: number;
   nuevas: AbsenceReportItem[];
-  llegoTarde: Array<{ id: string; ingreso: string; mitad: 'antes' | 'despues'; recuperacion?: AbsenceAnnulOutcome | 'sigue_viva' | 'error' }>;
+  llegoTarde: Array<{
+    id: string; ingreso: string; mitad: 'antes' | 'despues'; recuperacion?: AbsenceAnnulOutcome | 'sigue_viva' | 'error';
+    /** Antes de la mitad, la falta se revierte sola. */
+    multa?: 'revertida' | 'sin_multa' | 'error';
+  }>;
   reintentos: AbsenceReportItem[];
   errores: string[];
 }
@@ -145,6 +167,8 @@ interface Datos {
   alerts: Row[];
   /** profe_email de Zapier por id de profesor (destinationFor: notification_email → email). */
   teacherEmails: Map<string, string>;
+  /** Profesores de prueba (teachers.is_test): nunca se les cobra la falta. */
+  testTeacherIds: Set<string>;
 }
 
 /**
@@ -189,6 +213,7 @@ async function cargarDatos(admin: SupabaseClient, fechas: string[], ensayo: bool
 
   const teachers: TeacherScheduleInput[] = [];
   const teacherEmails = new Map<string, string>();
+  const testTeacherIds = new Set(teachersRaw.filter(t => t.is_test === true).map(t => str(t.id)));
   for (const t of teachersRaw) {
     if (t.archived_at) continue;
     const id = str(t.id);
@@ -205,7 +230,7 @@ async function cargarDatos(admin: SupabaseClient, fechas: string[], ensayo: bool
   }
 
   return {
-    teachers, students, alerts, teacherEmails,
+    teachers, students, alerts, teacherEmails, testTeacherIds,
     joinLogs: logsRaw.map(l => ({
       teacherId: str(l.teacher_id), studentName: str(l.student_name), scheduledDate: str(l.scheduled_date),
       scheduledTime: str(l.scheduled_time), clickedAt: str(l.clicked_at),
@@ -337,6 +362,7 @@ export async function runAbsenceCheck(admin: SupabaseClient, opts: { nowMs?: num
     if (error) { report.errores.push(`llegó tarde ${t.id}: ${error.message}`); continue; }
     if (!marcada?.length) continue;   // otra vuelta (o el admin) ya la cambió
     item.recuperacion = await recuperacionTrasLlegarTarde(admin, a, antes, t.clickedAt);
+    if (antes) item.multa = await revertirPorLlegarTarde(admin, a);
   }
   const yaTarde = new Set(tarde.map(t => t.id));
 
@@ -378,6 +404,7 @@ export async function runAbsenceCheck(admin: SupabaseClient, opts: { nowMs?: num
     if (dry) {
       if (payload) item.payload = payload;
       if (payload && isAbsenceRecoveryTeacher(d.teacherId)) item.recuperacion = await opcionesDeEnsayo(d, nowMs);
+      if (c.estado === 'posible_ausencia') item.multa = await multaAlDetectar(admin, d, datos.testTeacherIds, true, report);
       report.nuevas.push(item);
       continue;
     }
@@ -403,10 +430,72 @@ export async function runAbsenceCheck(admin: SupabaseClient, opts: { nowMs?: num
     }
     if (aEnviar) Object.assign(item, await enviar(admin, d.id, aEnviar, 1));
     else item.zapier = 'no_enviado';
+    // La falta, DESPUÉS del aviso: un fallo aquí no retrasa ni corta el WhatsApp.
+    if (c.estado === 'posible_ausencia') item.multa = await multaAlDetectar(admin, d, datos.testTeacherIds, false, report);
     report.nuevas.push(item);
   }
 
   return report;
+}
+
+// ── Falta (−10 €) ────────────────────────────────────────────────────────────
+
+/** Anota en la fila de la ausencia qué pasó con la multa. Best-effort. */
+async function anotarMulta(admin: SupabaseClient, id: string, cambios: {
+  penalty_state: PenaltyState; penalty_event_id?: string | null; penalty_reason?: string | null;
+}): Promise<void> {
+  const { error } = await admin.from(ABSENCES_TABLE).update({ ...cambios, updated_at: new Date().toISOString() }).eq('id', id);
+  if (error) console.error(`[ausencias] No se pudo anotar la multa de ${id} (¿falta supabase-penalizaciones-unicas.sql?):`, error.message);
+}
+
+/**
+ * La falta de una posible ausencia recién detectada (alumno activo y
+ * verificado). En ensayo no escribe nada: dice qué haría.
+ */
+async function multaAlDetectar(
+  admin: SupabaseClient, d: DueAbsence, testTeacherIds: Set<string>, dry: boolean, report: AbsenceCheckReport,
+): Promise<PenaltyOutcome> {
+  if (!faltaApplies({ classDate: d.date, isTestTeacher: testTeacherIds.has(d.teacherId) })) return 'no_aplica';
+  if (await hadBlockedCancelAttempt(admin, { teacherId: d.teacherId, studentName: d.studentName, classDate: d.date })) {
+    if (!dry) {
+      await anotarMulta(admin, d.id, {
+        penalty_state: 'revisar',
+        penalty_reason: 'El profesor intentó cancelar esta clase con la app vieja (bloqueado). No se cobró: revisar.',
+      });
+      await adminBell(admin, `notif_aus_bloqueada_${d.id}`,
+        `Revisar falta: ${d.teacherName} intentó cancelar con la app vieja`,
+        `${d.teacherName} no se conectó a la clase de las ${d.hour} del ${d.date} con ${d.studentName}, pero antes intentó cancelarla ` +
+        'con la versión vieja de la app y el sistema lo bloqueó. No se cobró la falta: decide en Recuperaciones → Posibles ausencias.');
+    }
+    return 'revisar';
+  }
+  if (dry) return 'se_cobraria';
+  try {
+    const r = await chargeFalta({
+      absenceId: d.id, teacherId: d.teacherId, teacherName: d.teacherName,
+      studentName: d.studentName, classDate: d.date, hour: d.hour, origen: 'deteccion', createdBy: 'sistema',
+    }, admin);
+    await anotarMulta(admin, d.id, { penalty_state: 'cobrada', penalty_event_id: r.eventId, penalty_reason: null });
+    return r.created ? 'cobrada' : 'ya_cobrada';
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    report.errores.push(`multa ${d.id}: ${msg}`);
+    console.error(`[ausencias] No se pudo cobrar la falta de ${d.id}:`, msg);
+    return 'error';
+  }
+}
+
+/** Ingresó antes de la mitad: la clase se dio y la falta se revierte sola. */
+async function revertirPorLlegarTarde(admin: SupabaseClient, a: Row): Promise<'revertida' | 'sin_multa' | 'error'> {
+  try {
+    const r = await revertFalta({ absenceId: str(a.id), by: 'sistema', reason: 'El profesor ingresó a la clase antes de la mitad' }, admin);
+    if (!r.reverted) return 'sin_multa';
+    await anotarMulta(admin, str(a.id), { penalty_state: 'revertida', penalty_reason: 'Ingresó antes de la mitad de la clase.' });
+    return 'revertida';
+  } catch (err) {
+    console.error(`[ausencias] No se pudo revertir la falta de ${str(a.id)}:`, err);
+    return 'error';
+  }
 }
 
 /** Ensayo: las opciones que se ofrecerían, sin crear nada. */
@@ -552,6 +641,11 @@ export interface AdminAbsence {
   revisar: boolean;
   annulledAt: string | null;
   annulledBy: string | null;
+  /** Multa de la falta: cobrada, revertida o pendiente de revisar (null = sin multa). */
+  penaltyState: PenaltyState | null;
+  penaltyReason: string | null;
+  /** ¿Lleva multa esta clase? (desde PENALTY_START_DATE y profesor que no es de prueba). */
+  penaltyEligible: boolean;
 }
 
 const RECUPERACION_VIVA = ['esperando_alumno', 'alumno_propuso', 'confirmada', 'sin_acuerdo'];
@@ -559,13 +653,15 @@ const RECUPERACION_VIVA = ['esperando_alumno', 'alumno_propuso', 'confirmada', '
 export async function listAbsencesForAdmin(admin: SupabaseClient, days = 30): Promise<AdminAbsence[]> {
   const desde = addDaysIso(getSpainParts(new Date()).dateStr, -days);
   // `*` para no depender de las columnas de supabase-recuperacion-por-falta.sql.
-  const [{ data, error }, { data: recs }] = await Promise.all([
+  const [{ data, error }, { data: recs }, { data: tests }] = await Promise.all([
     admin.from(ABSENCES_TABLE).select('*')
       .gte('class_date', desde)
       .order('class_date', { ascending: false }).order('class_hour', { ascending: false })
       .limit(1000),
     admin.from('class_recoveries').select('*').gte('original_date', desde).limit(2000),
+    admin.from('teachers').select('id').eq('is_test', true),
   ]);
+  const testIds = new Set(((tests ?? []) as Row[]).map(t => str(t.id)));
   if (error) {
     if (isMissingTable(error)) throw new MissingTableError('Falta correr supabase-teacher-absences.sql en Supabase.');
     throw new Error(error.message);
@@ -602,6 +698,9 @@ export async function listAbsencesForAdmin(admin: SupabaseClient, days = 30): Pr
       lateAfterHalf,
       revisar: lateAfterHalf && !!rec && RECUPERACION_VIVA.includes(str(rec.status)),
       annulledAt: r.annulled_at ?? null, annulledBy: r.annulled_by ?? null,
+      penaltyState: r.penalty_state === 'cobrada' || r.penalty_state === 'revertida' || r.penalty_state === 'revisar' ? r.penalty_state : null,
+      penaltyReason: r.penalty_reason ?? null,
+      penaltyEligible: faltaApplies({ classDate: str(r.class_date), isTestTeacher: testIds.has(str(r.teacher_id)) }),
     };
   });
 }
@@ -619,11 +718,22 @@ export class AbsenceAdminError extends Error {
  */
 export async function annulAbsence(
   admin: SupabaseClient, id: string, opts: { by: string; reason: string },
-): Promise<{ status: 'anulada'; recuperacion: AbsenceAnnulOutcome | 'error'; aviso: string | null }> {
+): Promise<{ status: 'anulada'; recuperacion: AbsenceAnnulOutcome | 'error'; multa: 'revertida' | 'sin_multa'; aviso: string | null }> {
   const { data: a, error } = await admin.from(ABSENCES_TABLE).select('*').eq('id', id).maybeSingle();
   if (error) throw new AbsenceAdminError(500, error.message);
   if (!a) throw new AbsenceAdminError(404, 'No encontramos esa posible ausencia.');
   const now = new Date().toISOString();
+  // La multa primero: si no se puede revertir, la ausencia no se anula (y el
+  // admin puede reintentar) en vez de quedar anulada con el cobro vivo.
+  let multa: 'revertida' | 'sin_multa';
+  try {
+    multa = (await revertFalta({ absenceId: id, by: opts.by, reason: opts.reason }, admin)).reverted ? 'revertida' : 'sin_multa';
+  } catch (err) {
+    throw new AbsenceAdminError(500, `No se pudo revertir la multa: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (multa === 'revertida' || a.penalty_state === 'revisar') {
+    await anotarMulta(admin, id, { penalty_state: 'revertida', penalty_reason: `Anulada por ${opts.by}: ${opts.reason}` });
+  }
   if (a.status !== 'anulada') {
     const motivo = `Anulada por ${opts.by}: ${opts.reason}`;
     const full = await admin.from(ABSENCES_TABLE).update({
@@ -644,15 +754,42 @@ export async function annulAbsence(
       date: str(a.class_date), hour: str(a.class_hour),
     }, { by: opts.by, reason: `Posible ausencia anulada: ${opts.reason}` });
     return {
-      status: 'anulada', recuperacion: r.outcome,
+      status: 'anulada', recuperacion: r.outcome, multa,
       aviso: r.outcome === 'ya_recuperada'
         ? 'La recuperación ya se dio y no se puede deshacer: si la clase original también se paga, serían dos clases.'
         : null,
     };
   } catch (err) {
     console.error(`[ausencias] No se pudo anular la recuperación de ${id}:`, err);
-    return { status: 'anulada', recuperacion: 'error', aviso: 'La ausencia quedó anulada, pero no se pudo anular su recuperación: anúlala a mano abajo.' };
+    return { status: 'anulada', recuperacion: 'error', multa, aviso: 'La ausencia quedó anulada, pero no se pudo anular su recuperación: anúlala a mano abajo.' };
   }
+}
+
+/**
+ * El admin revisó una falta que quedó sin cobrar (el profesor había intentado
+ * cancelar con la app vieja) y decide cobrarla. Mismas condiciones que el cobro
+ * automático: clase desde PENALTY_START_DATE, profesor que no es de prueba, y
+ * la ausencia no anulada. Idempotente (id fijo).
+ */
+export async function chargeReviewedAbsence(
+  admin: SupabaseClient, id: string, opts: { by: string },
+): Promise<{ multa: 'cobrada' | 'ya_cobrada' }> {
+  const { data: a, error } = await admin.from(ABSENCES_TABLE).select('*').eq('id', id).maybeSingle();
+  if (error) throw new AbsenceAdminError(500, error.message);
+  if (!a) throw new AbsenceAdminError(404, 'No encontramos esa posible ausencia.');
+  if (a.status === 'anulada') throw new AbsenceAdminError(409, 'Esta posible ausencia está anulada: no se puede cobrar.');
+  if (a.penalty_state !== 'revisar') throw new AbsenceAdminError(409, 'Solo se cobran a mano las faltas marcadas para revisar.');
+  const { data: t } = await admin.from('teachers').select('is_test').eq('id', str(a.teacher_id)).maybeSingle();
+  if (!faltaApplies({ classDate: str(a.class_date), isTestTeacher: (t as Row | null)?.is_test === true })) {
+    throw new AbsenceAdminError(409, 'Esta clase no lleva multa (anterior al inicio del sistema o cuenta de prueba).');
+  }
+  const r = await chargeFalta({
+    absenceId: id, teacherId: str(a.teacher_id), teacherName: str(a.teacher_name), studentName: str(a.student_name),
+    classDate: str(a.class_date), hour: hourText(hourNum(str(a.class_hour))) || str(a.class_hour),
+    origen: 'deteccion', createdBy: opts.by,
+  }, admin);
+  await anotarMulta(admin, id, { penalty_state: 'cobrada', penalty_event_id: r.eventId, penalty_reason: `Cobrada por ${opts.by} tras revisar.` });
+  return { multa: r.created ? 'cobrada' : 'ya_cobrada' };
 }
 
 export function isMissingAbsencesTable(err: unknown): boolean {

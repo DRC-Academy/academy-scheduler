@@ -3,7 +3,8 @@
 //
 // Pasa la ausencia a 'anulada' y anula su recuperación automática, si la tiene
 // (libera la fecha si el alumno ya la había elegido). Así no se paga dos veces
-// la misma clase. Lógica en lib/teacherAbsenceStore (annulAbsence).
+// la misma clase. Si la falta llevaba multa (−10 €), se revierte. Lógica en
+// lib/teacherAbsenceStore (annulAbsence).
 
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { annulAbsence, AbsenceAdminError } from '@/lib/teacherAbsenceStore';

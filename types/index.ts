@@ -425,6 +425,11 @@ export type ScoringEventType =
   // "No puedo dar esta clase": 3.ª cancelación sin antelación del mes o posterior
   // (-5 €, id fijo se_cancel_prof_<grupo>). Ver lib/classRecoveries.ts.
   | 'cancelacion_profesor_penalizacion'
+  // FALTA del profesor: no canceló y no se presentó (−10 €, id fijo
+  // se_falta_prof_<ausencia>). Se cobra al detectar la posible ausencia o al
+  // reclasificar el admin. Ver lib/teacherPenalties.ts. Tipo PROPIO: nunca se
+  // mezcla con las faltas del alumno ni con las cancelaciones.
+  | 'falta_profesor_penalizacion'
   // Alerta de riesgo sin atender. NUNCA automático: solo lo carga el admin desde
   // la auditoría de intervenciones si decide que hubo negligencia real.
   | 'alerta_no_atendida';
@@ -445,6 +450,13 @@ export interface ScoringEvent {
   reverted?: boolean;
   revertedBy?: string;
   revertedAt?: string;
+  /**
+   * 'YYYY-MM' al que se imputa (scoring_events.applies_month). Lo fijan las
+   * multas del sistema único: la falta, el mes de la CLASE; la cancelación, el
+   * de la cancelación. Sin él, el mes en hora de España de createdAt. Leerlo
+   * SIEMPRE con eventMonthOf (lib/teacherPenalties).
+   */
+  appliesMonth?: string;
 }
 
 export interface ClassCount {

@@ -43,9 +43,8 @@ export const EVENT_POINTS: Record<string, number> = {
 export const EVENT_EUROS: Record<string, number> = {
   upsell:          20,
   bonus_retencion: 30,
-  // Una falta injustificada resta 15 puntos de scoring Y 5 € del pago, igual que
-  // la falta sin aviso registrada desde el calendario. Antes solo restaba puntos,
-  // así que el admin la cargaba esperando ver el descuento en finanzas y no pasaba
-  // nada.
-  falta_injustificada: -5,
+  // Ya NO hay multas en euros cargadas a mano (oct/2026): la "Falta
+  // injustificada" (−5 €) se eliminó del formulario y las faltas del profesor
+  // las cobra el servidor (−10 €, lib/teacherPenalties). Los eventos viejos
+  // guardan su importe en la fila, así que siguen sumando igual en su mes.
 };

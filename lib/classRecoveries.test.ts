@@ -3,7 +3,7 @@ import {
   isRecoveryBetaTeacher, noticeMinutes, isLateNotice, wildcardOutcome, slotProblems,
   validateTeacherProposals, validateStudentProposals, canTransition, statusAfterNone,
   proposalsExpired, spainMonthOf, fechaLarga, claseDe, cuandoEs, slotHours,
-  teacherProposalDays, teacherSlotProblems, nightlyAction, lateCancellationsOfMonth, reclassPenalty,
+  teacherProposalDays, teacherSlotProblems, nightlyAction, lateCancellationsOfMonth,
   PENALTY_START_DATE, waitingExpired, type PriorCancellation,
 } from '@/lib/classRecoveries';
 
@@ -74,12 +74,22 @@ describe('comodines', () => {
     expect(wildcardOutcome({ prior, groupId: 'gB', cancelledAt: NOV(5), late: true }).position).toBe(3);
   });
 
-  it(`antes del ${PENALTY_START_DATE}: avisa pero no cobra`, () => {
+  it(`antes del ${PENALTY_START_DATE}: ni gasta comodín ni cobra`, () => {
     const prior = [late('g1', at('2026-10-02', 10)), late('g2', at('2026-10-03', 10))];
     const antes = wildcardOutcome({ prior, cancelledAt: at('2026-10-21', 23, 30), late: true });
-    expect(antes).toMatchObject({ penaltyApplies: true, chargeNow: false, wouldHavePenalty: true, penaltyEuros: 0 });
+    expect(antes).toMatchObject({ position: null, usedWildcard: false, penaltyApplies: false, chargeNow: false, penaltyEuros: 0, beforeStart: true, wildcardsLeft: 2 });
+  });
+
+  it(`las cancelaciones de antes del ${PENALTY_START_DATE} no gastan los comodines de después`, () => {
+    // Nahiara: dos sin antelación el 19/10. La primera del 22/10 es su 1.ª.
+    const prior = [late('g1', at('2026-10-19', 15, 57)), late('g2', at('2026-10-19', 15, 59))];
     const desde = wildcardOutcome({ prior, cancelledAt: at('2026-10-22', 0, 10), late: true });
-    expect(desde).toMatchObject({ penaltyApplies: true, chargeNow: true, wouldHavePenalty: false, penaltyEuros: -5 });
+    expect(desde).toMatchObject({ position: 1, usedWildcard: true, wildcardsLeft: 1, penaltyApplies: false, penaltyEuros: 0, beforeStart: false });
+    const tercera = wildcardOutcome({
+      prior: [...prior, late('g3', at('2026-10-22', 0, 10)), late('g4', at('2026-10-23', 9))],
+      cancelledAt: at('2026-10-24', 9), late: true,
+    });
+    expect(tercera).toMatchObject({ position: 3, penaltyApplies: true, chargeNow: true, penaltyEuros: -5 });
   });
 });
 
@@ -202,10 +212,6 @@ describe('contadores y reclasificación', () => {
     ];
     expect(lateCancellationsOfMonth(rows, 't1', '2026-10')).toBe(1);
     expect(lateCancellationsOfMonth(rows, 't1', '2026-09')).toBe(0);
-  });
-  it('la reclasificación lleva multa fija desde el 22/10 (fecha de la clase); antes solo se marca', () => {
-    expect(reclassPenalty('2026-10-21')).toEqual({ chargeNow: false, wouldHavePenalty: true, penaltyEuros: 0 });
-    expect(reclassPenalty('2026-10-22')).toEqual({ chargeNow: true, wouldHavePenalty: false, penaltyEuros: -5 });
   });
 });
 

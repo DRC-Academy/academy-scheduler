@@ -352,31 +352,37 @@ describe('faltasProfesorDelMes', () => {
   const ev = (o: Partial<ScoringEvent>): ScoringEvent => ({
     id: Math.random().toString(36).slice(2),
     teacherId: 'p1', teacherName: 'Seba',
-    eventType: 'falta_sin_aviso_penalizacion', points: 0, euros: -5,
-    note: '', createdAt: '2026-09-05T10:00:00Z', createdBy: 'admin',
+    eventType: 'falta_profesor_penalizacion', points: 0, euros: -10,
+    note: '', createdAt: '2026-10-25T10:00:00Z', createdBy: 'sistema', appliesMonth: '2026-10',
     ...o,
   });
+  const rec = (o: Partial<{ groupId: string; cancelledAt: string; late: boolean; status: string; origin: string; teacherId: string }>) => ({
+    groupId: 'g', teacherId: 'p1', studentName: 'Ana', originalDate: '2026-10-26',
+    cancelledAt: '2026-10-25T10:00:00Z', late: true, status: 'esperando_alumno', origin: 'profesor', ...o,
+  });
 
-  it('cuenta las del mes y descarta las revertidas y las de otro tipo', () => {
+  it('cuenta las faltas del mes de la clase y descarta revertidas, viejas y de otro tipo', () => {
     const eventos = [
       ev({}),
       ev({ reverted: true }),
-      ev({ createdAt: '2026-08-05T10:00:00Z' }),
-      ev({ eventType: 'upsell' }),
+      ev({ appliesMonth: '2026-09' }),
+      ev({ eventType: 'falta_sin_aviso_penalizacion', euros: -5, appliesMonth: undefined }),   // sistema viejo: ya no cuenta
+      ev({ eventType: 'upsell', euros: 20 }),
     ];
-    expect(faltasProfesorDelMes(eventos, '2026-09')).toBe(1);
+    expect(faltasProfesorDelMes(eventos, '2026-10')).toBe(1);
   });
 
-  it('suma las cancelaciones del flujo nuevo, una por grupo, sin anuladas ni con antelación', () => {
+  it('suma las cancelaciones tardías desde el inicio, una por grupo, sin anuladas, con antelación ni reclasificadas', () => {
     const recs = [
-      { groupId: 'g1', cancelMonth: '2026-09', late: true, status: 'esperando_alumno' },
-      { groupId: 'g1', cancelMonth: '2026-09', late: true, status: 'esperando_alumno' },   // 2.ª hora de la misma
-      { groupId: 'g2', cancelMonth: '2026-09', late: true, status: 'anulada' },
-      { groupId: 'g3', cancelMonth: '2026-09', late: false, status: 'confirmada' },
-      { groupId: 'g4', cancelMonth: '2026-08', late: true, status: 'sin_acuerdo' },
-      { groupId: 'g5', cancelMonth: '2026-09', late: true, status: 'sin_acuerdo' },
+      rec({ groupId: 'g1' }),
+      rec({ groupId: 'g1' }),                                         // 2.ª hora de la misma
+      rec({ groupId: 'g2', status: 'anulada' }),
+      rec({ groupId: 'g3', late: false }),
+      rec({ groupId: 'g4', cancelledAt: '2026-10-19T10:00:00Z' }),     // antes del 22/10: no cuenta
+      rec({ groupId: 'g5', origin: 'admin_reclasificacion' }),        // es una falta: cuenta por su evento
+      rec({ groupId: 'g6', teacherId: 'p2' }),
     ];
-    expect(faltasProfesorDelMes([ev({})], '2026-09', recs)).toBe(3);
+    expect(faltasProfesorDelMes([ev({})], '2026-10', recs)).toBe(3);
   });
 });
 

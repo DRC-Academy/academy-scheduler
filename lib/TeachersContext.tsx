@@ -653,13 +653,12 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     const record = await dbAddClassRecord(teacherId, teacherName, studentName, date, time, url, classType, comment, subscriptionStatus, recoveryForDate);
     setClassRecords(prev => [record, ...prev]);
 
-    // Efectos de falta. La falta DEL ALUMNO ('falta_sin_aviso') ya no dispara
-    // ninguno: no penaliza y no es asunto del profesor. La que sí penaliza es la
-    // cancelación de última hora del propio profesor, y solo ahí hace falta
-    // recargar scoring, porque es lo único que mueve su balance.
-    if (classType === 'cancelada_por_profesor' || classType === 'cancelacion_hora' || classType === 'falta_con_aviso') {
+    // Efectos de los avisos del alumno (solo contadores, sin euros). La falta DEL
+    // ALUMNO ('falta_sin_aviso') no dispara ninguno: no es asunto del profesor.
+    // Las multas al profesor ya no salen de aquí: las cobra el servidor
+    // (sistema único, lib/teacherPenalties).
+    if (classType === 'cancelacion_hora' || classType === 'falta_con_aviso') {
       await dbApplyFaltaSideEffects({ teacherId, teacherName, studentName, classDate: date, classType });
-      if (classType === 'cancelada_por_profesor') await loadScoringEvents();
     }
   }
 

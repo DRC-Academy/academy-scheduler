@@ -44,7 +44,17 @@ interface Absence {
   } | null;
   lateAfterHalf: boolean;
   revisar: boolean;
+  /** Multa de la falta (−10 €, sistema único): cobrada, revertida o para revisar. */
+  penaltyState: 'cobrada' | 'revertida' | 'revisar' | null;
+  penaltyReason: string | null;
+  penaltyEligible: boolean;
 }
+
+const MULTA: Record<NonNullable<Absence['penaltyState']>, { label: string; tono: string }> = {
+  cobrada:   { label: 'Falta cobrada: −10 €',                 tono: 'rojo' },
+  revertida: { label: 'Sin multa (revertida o anulada)',      tono: 'gris' },
+  revisar:   { label: 'Sin cobrar: revisar',                  tono: 'ambar' },
+};
 
 const ESTADO: Record<Absence['status'], { label: string; tono: string }> = {
   posible_ausencia: { label: 'Posible ausencia', tono: 'rojo' },
@@ -122,7 +132,7 @@ export function PossibleAbsencesSection() {
 
   const descartadas = rows.filter(r => r.status === 'descartada');
   const visibles = verDescartadas ? rows : rows.filter(r => r.status !== 'descartada');
-  const abiertas = rows.filter(r => r.status === 'posible_ausencia' || r.revisar).length;
+  const abiertas = rows.filter(r => r.status === 'posible_ausencia' || r.revisar || r.penaltyState === 'revisar').length;
 
   return (
     <section className="rt-seccion">
@@ -134,6 +144,7 @@ export function PossibleAbsencesSection() {
       </div>
       <div className="rt-muted">
         Clases en las que, a los 30 minutos del inicio, el profesor no había pulsado «Ingresar a clase». Últimos 30 días.
+        Desde el 22/10 cada una se cobra como falta (−10 €) en el acto; si entra antes de la mitad de la clase o la anulas, se revierte.
       </div>
 
       {loading && <div className="rt-muted">Cargando…</div>}
@@ -165,6 +176,26 @@ function Fila({ r, by, onChanged }: { r: Absence; by: string; onChanged: () => P
   const est = ESTADO[r.status] ?? { label: r.status, tono: 'gris' };
   const zap = ZAPIER[r.zapierStatus] ?? { label: r.zapierStatus, tono: 'gris' };
   const anulable = r.status === 'posible_ausencia' || r.status === 'no_verificado' || r.status === 'llego_tarde';
+  const multa = r.penaltyState ? MULTA[r.penaltyState] : null;
+  const cobrable = r.penaltyState === 'revisar' && r.penaltyEligible && r.status !== 'anulada';
+
+  async function cobrar() {
+    if (saving) return;
+    setSaving(true); setErr(null);
+    try {
+      const res = await fetch(`/api/admin/posibles-ausencias/${encodeURIComponent(r.id)}/cobrar`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ by }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setErr(data.mensaje ?? 'No se pudo cobrar la falta.'); return; }
+      await onChanged();
+    } catch {
+      setErr('No se pudo conectar con el servidor.');
+    } finally {
+      setSaving(false);
+    }
+  }
 
   async function anular() {
     if (motivo.trim().length < 3 || saving) return;
@@ -186,7 +217,7 @@ function Fila({ r, by, onChanged }: { r: Absence; by: string; onChanged: () => P
   }
 
   return (
-    <article className={`rt-card${r.status === 'posible_ausencia' || r.revisar ? ' is-alerta' : ''}`}>
+    <article className={`rt-card${r.status === 'posible_ausencia' || r.revisar || r.penaltyState === 'revisar' ? ' is-alerta' : ''}`}>
       <div className="rt-card-top">
         <div className="rt-who">
           <b>{r.teacherName}</b> <span className="rt-muted">con {r.studentName}</span>
@@ -207,7 +238,20 @@ function Fila({ r, by, onChanged }: { r: Absence; by: string; onChanged: () => P
         </div>
         {r.recovery && <div><span className="rt-k">Recuperación</span>{recuperacionTexto(r.recovery)}</div>}
         {r.statusReason && <div><span className="rt-k">Motivo</span>{r.statusReason}</div>}
+        {multa && (
+          <div><span className="rt-k">Multa</span>
+            <span className={`rt-tx is-${multa.tono}`}>{multa.label}</span>
+            {r.penaltyReason && <span className="rt-nota">{r.penaltyReason}</span>}
+          </div>
+        )}
       </div>
+
+      {r.penaltyState === 'revisar' && r.status !== 'anulada' && (
+        <div className="rt-error" style={{ marginTop: 10 }}>
+          El profesor intentó cancelar esta clase con la versión vieja de la app y el sistema lo bloqueó, así que la falta no se cobró sola.
+          Decide: «Cobrar falta» (−10 €) o «Anular posible ausencia» (sin multa).
+        </div>
+      )}
 
       {r.revisar && (
         <div className="rt-error" style={{ marginTop: 10 }}>
@@ -217,15 +261,21 @@ function Fila({ r, by, onChanged }: { r: Absence; by: string; onChanged: () => P
       )}
       {aviso && <div className="rt-error" style={{ marginTop: 10 }}>{aviso}</div>}
 
+      {cobrable && !anulando && (
+        <button type="button" className="rt-btn-pri rt-anular" onClick={cobrar} disabled={saving}>
+          {saving ? 'Cobrando…' : 'Cobrar falta (−10 €)'}
+        </button>
+      )}
       {anulable && !anulando && (
         <button type="button" className="rt-btn-sec rt-anular" onClick={() => setAnulando(true)}>Anular posible ausencia</button>
       )}
+      {err && !anulando && <div className="rt-error">{err}</div>}
       {anulando && (
         <div className="rt-anular-form">
           <label className="rt-k" htmlFor={`aus-${r.id}`}>Motivo de la anulación (obligatorio)</label>
           <textarea id={`aus-${r.id}`} rows={2} value={motivo} onChange={e => setMotivo(e.target.value)}
             placeholder="Por ejemplo: la clase se dio por otro enlace, fallo técnico…" />
-          <div className="rt-muted">Si tiene recuperación, también se anula y se libera la hora elegida.</div>
+          <div className="rt-muted">Si tiene recuperación, también se anula y se libera la hora elegida. Si se cobró la falta (−10 €), se revierte.</div>
           {err && <div className="rt-error">{err}</div>}
           <div className="rt-anular-acc">
             <button type="button" className="rt-btn-sec" onClick={() => { setAnulando(false); setErr(null); }} disabled={saving}>Volver</button>

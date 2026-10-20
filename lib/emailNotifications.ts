@@ -243,23 +243,6 @@ export async function sendNewStudentEmail(teacher: TeacherLike, info: NewStudent
   return send('sendNewStudentEmail', teacher, subject, html);
 }
 
-// ═══ A.2) Cancelación de una clase — email AL ALUMNO (Bloque 4.4) ═══════════════
-export async function sendClassCancelledEmail(args: {
-  studentEmail: string; studentName: string; teacherName: string;
-  dateLabel: string; timeLabel: string;
-}): Promise<boolean> {
-  const subject = `Cambio en tu clase del ${args.dateLabel} · DRC Academy`;
-  const html = baseEmailTemplate(
-    p(`Hola ${esc(args.studentName)},`) +
-    p(`Te escribimos para informarte de que tu clase del <strong>${esc(args.dateLabel)}</strong> a las <strong>${esc(args.timeLabel)}</strong> no podrá realizarse.`) +
-    p(`Tu profesor/a ${esc(args.teacherName)} se pondrá en contacto contigo para reprogramarla lo antes posible.`) +
-    p('Disculpa las molestias.') +
-    p('Un saludo,<br/>El equipo de DRC Academy'),
-    `Cambio en tu clase del ${args.dateLabel}`,
-  );
-  return sendToAddress('sendClassCancelledEmail', args.studentEmail, subject, html);
-}
-
 // ═══ A.3) Intervención recomendada sobre una alerta de riesgo ═════════════════
 //
 // Es el ÚNICO email ligado a las señales de riesgo: las alertas de riesgo en sí

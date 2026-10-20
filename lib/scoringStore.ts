@@ -165,6 +165,9 @@ export async function addScoringEventWith(
     student_ref:  event.studentRef ?? null,
     quantity:     event.quantity ?? null,
     created_at:   createdAt,
+    // Mes al que se imputa (multas: el de la clase o el de la cancelación, hora
+    // de España). Solo lo llevan los eventos que lo fijan; ver lib/teacherPenalties.
+    ...(event.appliesMonth ? { applies_month: event.appliesMonth } : {}),
   };
 
   let { error } = await db.from('scoring_events').insert(row);
@@ -173,9 +176,9 @@ export async function addScoringEventWith(
   // ellas para no perder el evento: mejor guardarlo sin el alumno que no
   // guardarlo. Se avisa por consola para que se corra supabase-scoring-columns.sql.
   if (error && (error.code === 'PGRST204' || error.code === '42703')) {
-    console.warn('[scoring] Faltan columnas en scoring_events (student_ref/quantity). Corré supabase-scoring-columns.sql. Se guarda sin ellas.');
-    const { student_ref, quantity, ...base } = row;
-    void student_ref; void quantity;
+    console.warn('[scoring] Faltan columnas en scoring_events (student_ref/quantity/applies_month). Corré supabase-scoring-columns.sql y supabase-penalizaciones-unicas.sql. Se guarda sin ellas.');
+    const { student_ref, quantity, applies_month, ...base } = row as typeof row & { applies_month?: string };
+    void student_ref; void quantity; void applies_month;
     ({ error } = await db.from('scoring_events').insert(base));
   }
 

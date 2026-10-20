@@ -29,6 +29,7 @@ import { hoursLeftLabel, deadlineLabel, countdownLabel } from '@/lib/transcriptD
 // Datos de pago (IBAN + titular): por /api, nunca por TeachersContext.
 import { fetchMyPaymentDetails, type LoadResult, type PaymentDetails } from '@/lib/paymentDetails';
 import { PaymentDetailsBanner, PaymentDetailsCard } from '@/components/PaymentDetailsCard';
+import { eventMonthOf } from '@/lib/teacherPenalties';
 
 // Las etiquetas de ingresoBadge / classTypeBadge / subscriptionBadge vienen con
 // emoji desde lib/finance (fuente compartida con el panel de admin). Acá solo se
@@ -510,7 +511,7 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
   // del total sin aparecer en el desglose, que es lo peor de los dos mundos.
   // Las revertidas se muestran tachadas y no restan (ver lib/finance.ts).
   const monthPenalties = scoringEvents
-    .filter(e => e.teacherId === teacher.id && (e.euros ?? 0) < 0 && (e.createdAt ?? '').slice(0, 7) === monthYear)
+    .filter(e => e.teacherId === teacher.id && (e.euros ?? 0) < 0 && eventMonthOf(e) === monthYear)
     .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''));
 
   return (

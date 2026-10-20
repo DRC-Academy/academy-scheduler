@@ -27,7 +27,6 @@ import type {
 } from '@/types';
 import type { ClassTranscriptRef } from '@/lib/finance';
 import { periodIndex, existsForStudent } from '@/lib/studentPeriod';
-import { isRecoveryBetaTeacher } from '@/lib/classRecoveries';
 
 const nk = (s: string | null | undefined): string => (s ?? '').trim().toLowerCase();
 
@@ -42,7 +41,7 @@ const ACCESS_FLAG = 'sin_acceso_registrado';
  * que "lo que eligió el profesor" signifique lo mismo en las dos puntas.
  *
  * Deliberadamente NO se le ofrecen al profesor 'cancelada_por_profesor' (lleva
- * una penalización de -5 €, nadie la elegiría solo) ni 'cancelada_con_preaviso'
+ * una FALTA de −10 €, nadie la elegiría solo) ni 'cancelada_con_preaviso'
  * (es una regla de tiempo que calcula el sistema, no algo que se declare). El
  * admin sí puede reclasificar a ellas al validar.
  */
@@ -91,7 +90,7 @@ export const RESOLVE_TYPE_OPTIONS: Array<{ value: ReviewResolvedType; label: str
   { value: 'falta_sin_aviso',        label: 'Falta sin aviso del alumno',   note: 'Crea el ingreso y la constancia. Se paga sin transcript.' },
   { value: 'falta_con_aviso',        label: 'El alumno avisó',              note: 'Solo constancia. No se paga.' },
   { value: 'cancelacion_hora',       label: 'Cancelación sobre la hora',    note: 'Solo constancia. Cobrable dentro de las 2 clases perdidas del mes.' },
-  { value: 'cancelada_por_profesor', label: 'Cancelada por el profesor',    note: 'Solo constancia. Aplica la penalización de -5 €.' },
+  { value: 'cancelada_por_profesor', label: 'Cancelada por el profesor',    note: 'Falta del profesor: −10 € y recuperación para el alumno.' },
 ];
 
 /** ¿Este tipo crea un ingreso al aprobarse? Es lo que decide si la clase se paga. */
@@ -523,8 +522,8 @@ async function clearAccessFlag(analysisId: string, requestId: string, reviewerNa
  *   · 'falta_sin_aviso' → ingreso manual + constancia. Cobra a tarifa normal, sin
  *                         transcript, y consume cupo del alumno.
  *   · cancelaciones     → SOLO constancia. Sin ingreso: la clase no se dio y no se
- *                         paga. 'cancelada_por_profesor' arrastra su -5 € por la
- *                         misma función que usa el resto del sistema.
+ *                         paga. 'cancelada_por_profesor' es una FALTA del profesor
+ *                         (−10 €): la registra el servidor (reclasificarComoFalta).
  *
  * El orden importa: primero los efectos, después cerrar la solicitud. Si algo
  * falla, queda 'pendiente' y se reintenta; al revés quedaría aprobada sin que la
@@ -597,24 +596,25 @@ export async function dbResolveReviewRequest(p: {
     // Las de tipo 'normal' no llevan constancia: el transcript ya la describe, y
     // un class_record de más solo puede ganarle el cruce a otro (ver el bug de
     // las faltas descartadas por colisión, lib/finance.ts).
-    if (tipo !== 'normal') {
-      const constancia = await dbAddClassRecord(
+    if (tipo === 'cancelada_por_profesor') {
+      // Sistema único de penalizaciones: es una FALTA del profesor (−10 €, sin
+      // comodín, mes de la clase). La constancia, la recuperación del alumno y la
+      // multa las crea el SERVIDOR: desde el navegador la base descarta esas
+      // constancias (trigger de supabase-penalizaciones-unicas.sql). Si falla,
+      // LANZA y la revisión queda pendiente para reintentar.
+      await reclasificarComoFalta(r, reviewerName);
+    } else if (tipo !== 'normal') {
+      await dbAddClassRecord(
         r.teacherId, r.teacherName, r.studentName, r.classDate, r.classTime, '',
         tipo as ClassRecordType,
         `Solicitud de revisión aprobada por ${reviewerName}${r.comment ? ` — ${r.comment}` : ''}`,
       );
-      // Profesor beta de "No puedo dar esta clase": la cancelación del profesor
-      // se registra en class_recoveries ('sin_acuerdo', multa fija de 5 € desde
-      // PENALTY_START_DATE, mes de la clase) en vez de los −5 € de siempre. Solo
-      // si falta el SQL del bloque B (503) se vuelve al camino de siempre.
-      const viaRecuperaciones = tipo === 'cancelada_por_profesor' && isRecoveryBetaTeacher(r.teacherId)
-        && await reclasificarComoRecuperacion(r, constancia.id);
       // MISMA condición que TeachersContext.registerClassRecord, a propósito: la
       // falta DEL ALUMNO no dispara ningún efecto (no penaliza y no es asunto del
-      // profesor); las cancelaciones sí, y 'cancelada_por_profesor' es la que
-      // lleva los -5 €. Enumerarlas acá en vez de llamar siempre evita que un
-      // cambio futuro en esa función acabe penalizando una falta del alumno.
-      if (!viaRecuperaciones && (tipo === 'cancelada_por_profesor' || tipo === 'cancelacion_hora' || tipo === 'falta_con_aviso')) {
+      // profesor); los avisos del alumno solo se cuentan, sin euros. Enumerarlas
+      // acá en vez de llamar siempre evita que un cambio futuro en esa función
+      // acabe penalizando una falta del alumno.
+      if (tipo === 'cancelacion_hora' || tipo === 'falta_con_aviso') {
         await dbApplyFaltaSideEffects({
           teacherId:   r.teacherId,
           teacherName: r.teacherName,
@@ -669,24 +669,22 @@ export async function dbResolveReviewRequest(p: {
 }
 
 /**
- * Reclasificación a "cancelada por el profesor" de un profesor beta: la manda
- * al servidor (class_recoveries). true = registrada ahí (o ya lo estaba), así
- * que NO se aplica la multa de siempre. false solo si falta el SQL del bloque B
- * (503): entonces se sigue con los −5 € de siempre. Ante cualquier otro error
- * NO se vuelve al camino viejo (podría cobrar dos veces si el servidor llegó a
- * guardar): se avisa en consola y el admin lo ve en la pestaña Recuperaciones.
+ * Reclasificación a "cancelada por el profesor" = FALTA del profesor (sistema
+ * único). Todo lo hace el servidor (lib/classRecoveryStore,
+ * reclassifyAsTeacherFalta), idempotente. Ante cualquier error LANZA: la
+ * revisión no se cierra y el admin puede reintentar sin riesgo de cobrar dos
+ * veces. Ya no hay vuelta al −5 € de siempre.
  */
-async function reclasificarComoRecuperacion(r: ClassReviewRequest, cancelRecordId: string): Promise<boolean> {
-  try {
-    const res = await fetch('/api/recuperaciones/reclasificar', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ teacherId: r.teacherId, studentName: r.studentName, classDate: r.classDate, classTime: r.classTime, cancelRecordId }),
-    });
-    if (res.status === 503) return false;
-    if (!res.ok) console.error('[reviewRequests] La reclasificación en recuperaciones falló:', res.status, await res.text().catch(() => ''));
-    return true;
-  } catch (err) {
-    console.error('[reviewRequests] La reclasificación en recuperaciones falló:', err);
-    return true;
+async function reclasificarComoFalta(r: ClassReviewRequest, reviewerName: string): Promise<void> {
+  const res = await fetch('/api/recuperaciones/reclasificar', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      teacherId: r.teacherId, studentName: r.studentName, classDate: r.classDate, classTime: r.classTime,
+      by: reviewerName, comment: r.comment ?? null,
+    }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({})) as { mensaje?: string };
+    throw new Error(`No se pudo registrar la falta del profesor: ${data.mensaje ?? `error ${res.status}`}. La revisión sigue pendiente; inténtalo de nuevo.`);
   }
 }

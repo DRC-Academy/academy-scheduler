@@ -47,16 +47,18 @@ function antelacion(min: number): string {
 }
 
 function coste(r: AdminRecovery): { texto: string; tono: string } {
-  if (r.origin === 'ausencia') return { texto: 'Posible ausencia: sin multa (se decide aparte)', tono: 'ambar' };
+  // La multa de la falta (−10 €) vive en la posible ausencia, no aquí.
+  if (r.origin === 'ausencia') return { texto: 'Posible ausencia: la falta se ve en Posibles ausencias', tono: 'ambar' };
   if (r.origin === 'admin_reclasificacion') {
-    return r.penaltyEuros < 0 ? { texto: `Multa fija ${Math.abs(r.penaltyEuros)} € (reclasificada)`, tono: 'rojo' }
-      : { texto: `Multa fija: habría costado 5 € (antes del ${corta(PENALTY_START_DATE)})`, tono: 'ambar' };
+    return r.penaltyEuros < 0 ? { texto: `Falta del profesor: ${Math.abs(r.penaltyEuros)} € (reclasificada)`, tono: 'rojo' }
+      : r.wouldHavePenalty ? { texto: `Histórico: habría costado 5 € (antes del ${corta(PENALTY_START_DATE)})`, tono: 'ambar' }
+      : { texto: `Falta sin multa (clase anterior al ${corta(PENALTY_START_DATE)} o cuenta de prueba)`, tono: 'ambar' };
   }
   if (!r.late) return { texto: 'Con antelación: sin coste', tono: 'verde' };
   if (r.penaltyEuros < 0) return { texto: `Multa ${Math.abs(r.penaltyEuros)} €`, tono: 'rojo' };
-  if (r.wouldHavePenalty) return { texto: `Habría costado 5 € (antes del ${corta(PENALTY_START_DATE)})`, tono: 'ambar' };
+  if (r.wouldHavePenalty) return { texto: `Histórico: habría costado 5 € (antes del ${corta(PENALTY_START_DATE)})`, tono: 'ambar' };
   if (r.usedWildcard) return { texto: 'Usó comodín', tono: 'ambar' };
-  return { texto: 'Sin antelación', tono: 'ambar' };
+  return { texto: `Sin antelación, antes del ${corta(PENALTY_START_DATE)}: no gastó comodín`, tono: 'ambar' };
 }
 
 export default function RecoveriesTab() {

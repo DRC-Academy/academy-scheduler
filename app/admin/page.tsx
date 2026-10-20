@@ -46,6 +46,7 @@ import { madridToday } from '@/lib/subscriptionAccess';
 import { RETENTION_BONUS_DAYS, RETENTION_UPCOMING_DAYS, retentionDaysLeft, retentionBonusFor } from '@/lib/retention';
 import { BONUS_STATE_LABEL } from '@/lib/bonuses';
 import { useAdminRecoveries } from '@/lib/useTeacherRecoveries';
+import { teacherPenaltiesInMonth, spainMonthOfInstant, type PenaltyItem } from '@/lib/teacherPenalties';
 import BonusesTab from '@/components/admin/BonusesTab';
 import ScoringV2Tab from '@/components/admin/ScoringV2Tab';
 import { buildTestAccountFilter } from '@/lib/testAccounts';
@@ -1031,7 +1032,7 @@ function EventModal({ teacher, students, createdBy, onClose, onSave }: {
   const isPositive = basePoints > 0;
   const isNegative = basePoints < 0;
 
-  const isFalta = eventType === 'falta_injustificada' || eventType === 'falta_justificada';
+  const isFalta = eventType === 'falta_justificada';
   const isCambio = eventType === 'cambio_por_alumno' || eventType === 'cambio_por_profesor';
 
   const inputStyle = {
@@ -1087,7 +1088,9 @@ function EventModal({ teacher, students, createdBy, onClose, onSave }: {
             <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>Tipo de evento</label>
             <select value={eventType} onChange={e => setEventType(e.target.value as ScoringEventType)} style={inputStyle}>
               <optgroup label="Faltas">
-                <option value="falta_injustificada">🚫 Falta injustificada (−15 pts · baja nivel)</option>
+                {/* La "Falta injustificada" (−5 €) se eliminó en oct/2026: las faltas del
+                    profesor las cobra el sistema (−10 €, lib/teacherPenalties) al detectar
+                    la ausencia o al reclasificar una revisión. */}
                 <option value="falta_justificada">📋 Falta justificada (−5 pts)</option>
               </optgroup>
               <optgroup label="Desempeño negativo">
@@ -1113,12 +1116,6 @@ function EventModal({ teacher, students, createdBy, onClose, onSave }: {
           </div>
 
           {/* Falta warnings */}
-          {eventType === 'falta_injustificada' && (
-            <div style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, padding: '10px 14px', fontSize: 12 }}>
-              <div style={{ color: '#ef4444', fontWeight: 700, marginBottom: 3 }}>⚠️ Falta injustificada</div>
-              <div style={{ color: '#6b7280' }}>−15 puntos · Baja de nivel automático · 0 faltas injustificadas permitidas en cualquier nivel</div>
-            </div>
-          )}
           {eventType === 'falta_justificada' && (
             <div style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 8, padding: '10px 14px', fontSize: 12 }}>
               <div style={{ color: '#f59e0b', fontWeight: 700, marginBottom: 3 }}>📋 Falta justificada</div>
@@ -1901,30 +1898,14 @@ function AdminContent() {
   const [emailDetail, setEmailDetail] = useState<string | null>(null);   // profe con el detalle de emails abierto
   const [faltasDetail, setFaltasDetail] = useState<string | null>(null); // profe con el detalle de faltas del mes abierto
 
-  // Contador interno del mes (SOLO admin): cancelaciones del PROFESOR con menos
-  // de 24 h, que son las que penalizan. Excluye las revertidas.
-  //
-  // Sigue contando scoring_events porque son exactamente esas: desde ago/2026 la
-  // falta DEL ALUMNO tiene tipo propio y no emite ninguno, así que este contador
-  // dejó de mezclar los dos casos sin necesidad de tocarlo. El event_type
-  // conserva el nombre viejo ('falta_sin_aviso_penalizacion') para no orfanar los
-  // eventos ya emitidos.
-  //
-  // Desde oct/2026 suma también las cancelaciones del flujo nuevo ("No puedo dar
-  // esta clase" y reclasificaciones del admin, tabla class_recoveries), una por
-  // cancelación. No se cuentan dos veces: el flujo nuevo no crea el evento viejo.
-  const faltasMonth = new Date().toISOString().slice(0, 7);
+  // Contador interno del mes (SOLO admin), sistema único de penalizaciones
+  // (lib/teacherPenalties): cancelaciones con menos de 24 h desde el inicio del
+  // sistema (una por cancelación) + faltas cobradas sin revertir. Mes en hora de
+  // España. Los −5 € del sistema viejo ya no cuentan aquí (siguen en Finanzas).
+  const faltasMonth = spainMonthOfInstant(new Date().toISOString());
   const { rows: recRows } = useAdminRecoveries();
-  const faltasOfTeacher = (teacherId: string): Array<{ note: string }> => {
-    const viejas = scoringEvents.filter(e =>
-      e.teacherId === teacherId && e.eventType === 'falta_sin_aviso_penalizacion' &&
-      (e.createdAt ?? '').slice(0, 7) === faltasMonth && !e.reverted).map(e => ({ note: e.note }));
-    const vistos = new Set<string>();
-    const nuevas = recRows.filter(r => r.teacherId === teacherId && r.late && r.status !== 'anulada' && r.cancelMonth === faltasMonth)
-      .filter(r => (vistos.has(r.groupId) ? false : (vistos.add(r.groupId), true)))
-      .map(r => ({ note: `alumno ${r.studentName}, fecha ${r.originalDate}${r.origin === 'admin_reclasificacion' ? ' (reclasificada por el admin)' : ' (No puedo dar esta clase)'}` }));
-    return [...viejas, ...nuevas];
-  };
+  const faltasOfTeacher = (teacherId: string): PenaltyItem[] =>
+    teacherPenaltiesInMonth({ teacherId, month: faltasMonth, events: scoringEvents, recoveries: recRows });
 
   // Referencia temporal compartida por las pestañas que muestran antigüedades
   // (Emails, Seguimiento, Registro). No requiere reloj vivo: se recalcula al
@@ -2161,8 +2142,8 @@ function AdminContent() {
                           <Badge
                             tone={faltas >= 4 ? 'danger' : faltas >= 2 ? 'warn' : 'neutral'}
                             title={faltas === 0
-                              ? 'Sin cancelaciones sin antelación este mes'
-                              : `${faltas} cancelaci${faltas !== 1 ? 'ones' : 'ón'} sin antelación este mes · clic para ver el detalle`}>
+                              ? 'Sin cancelaciones sin antelación ni faltas este mes'
+                              : `${faltas} penalizaci${faltas !== 1 ? 'ones' : 'ón'} este mes (cancelaciones sin antelación y faltas) · clic para ver el detalle`}>
                             {faltas}
                           </Badge>
                         </button>
@@ -2206,12 +2187,12 @@ function AdminContent() {
                       <tr style={{ background: T.bg.surface2 }}>
                         <td colSpan={8} style={{ padding: `${T.space(3)} ${T.space(4)}`, borderBottom: `1px solid ${T.border.base}` }}>
                           <div style={{ fontSize: T.fs.caption, fontWeight: T.fw.semibold, color: T.text.primary, marginBottom: T.space(2) }}>
-                            {t.name} — Cancelaciones sin antelación de este mes:
+                            {t.name} — Cancelaciones sin antelación y faltas de este mes:
                           </div>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: T.space(1) }}>
                             {faltasList.map((e, i) => (
                               <div key={i} style={{ fontSize: T.fs.caption, color: T.text.secondary }}>
-                                {e.note.replace(/^(Falta sin aviso registrada|Cancelación sin antelación) — /, '')}
+                                {e.kind === 'falta' ? '🔴 ' : ''}{e.note}
                               </div>
                             ))}
                           </div>

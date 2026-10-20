@@ -10,10 +10,12 @@
 // TODO el cálculo de antelación y comodines se hace aquí, con la hora del
 // servidor. El navegador solo muestra lo que devuelve la vista previa.
 //
-// NO llama a dbApplyFaltaSideEffects: esa función pone −5 € a TODA cancelación
-// 'cancelada_por_profesor', y aquí la multa la decide la regla de comodines
-// (evento 'cancelacion_profesor_penalizacion', id fijo se_cancel_prof_<grupo>).
-// Llamarla cobraría dos veces.
+// La multa la decide la regla de comodines (evento
+// 'cancelacion_profesor_penalizacion', id fijo se_cancel_prof_<grupo>, mes de la
+// cancelación). La constancia 'cancelada_por_profesor' / 'cancelada_con_preaviso'
+// y la multa se escriben con el cliente ADMIN: el trigger de
+// supabase-penalizaciones-unicas.sql descarta las que llegan con la llave
+// pública (el "Cancelar clase" de la app vieja). Ver lib/teacherPenalties.ts.
 //
 // RESERVAS: las fechas propuestas NO se escriben en el calendario. Viven en la
 // fila (teacher_proposals) mientras está 'esperando_alumno'; el calendario las
@@ -24,7 +26,9 @@
 import 'server-only';
 
 import { supabase } from '@/lib/supabase';
-import { dbReadTeacherGrid, dbApplyGridChanges, dbAddScoringEvent, type CalendarActor } from '@/lib/db';
+import { dbReadTeacherGrid, dbApplyGridChanges, type CalendarActor } from '@/lib/db';
+import { adminClient, insertPenaltyEvent, chargeFalta } from '@/lib/teacherPenaltyStore';
+import { faltaApplies, faltaEventId, teacherPenaltiesInMonth, FALTA_PENALTY_EUROS, FALTA_EVENT_TYPE } from '@/lib/teacherPenalties';
 import type { GridChanges } from '@/lib/gridPatch';
 import { baseCellOf, isPuntualState, esHuecoLibreParaAlumno } from '@/lib/cells';
 import { liveReservationsWith, type LiveReservation } from '@/lib/classRecoveryQueries';
@@ -36,7 +40,7 @@ import {
   teacherProposalDays, teacherSlotProblems,
   spainMonthOf, spainDateOf, slotHours, normalizeHour, proposalsExpired, claseDe, cuandoEs, fechaLarga, statusAfterNone,
   BLOCKING_STATUSES, MONTHLY_WILDCARDS, PENALTY_START_DATE, NO_SHOW_PENALTY_EUROS, PENALTY_EUROS,
-  nightlyAction, reclassPenalty, slotStartMs, waitingExpired, MAX_ROUNDS,
+  nightlyAction, slotStartMs, waitingExpired, MAX_ROUNDS,
   type Slot, type RecoveryStatus, type PriorCancellation, type WildcardOutcome, type OccupiedCheck, type RecoveryOrigin,
 } from '@/lib/classRecoveries';
 import {
@@ -45,7 +49,7 @@ import {
 import {
   fetchTeacher, sendRecoveryChosenEmail, sendRecoveryStudentProposedEmail,
 } from '@/lib/emailNotifications';
-import { pickAbsenceOptions, shouldEmailAbsenceRecovery } from '@/lib/teacherAbsences';
+import { pickAbsenceOptions, shouldEmailAbsenceRecovery, absenceIdOf } from '@/lib/teacherAbsences';
 import type { Cell, Grid } from '@/types';
 
 type Row = Record<string, any>;   // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -406,9 +410,9 @@ export async function cancelClass(input: CancelInput): Promise<CancelResult> {
   const reason = (input.reason ?? '').trim().slice(0, 500) || null;
 
   // 1) La constancia de la clase cancelada: hace que Finanzas NO la pague, que
-  //    no gaste cupo y que sea recuperable. Directa, SIN dbApplyFaltaSideEffects.
+  //    no gaste cupo y que sea recuperable. Con el cliente admin (ver cabecera).
   const cancelRecordId = nuevoId('cr');
-  const { error: crErr } = await supabase.from('class_records').insert({
+  const { error: crErr } = await adminClient().from('class_records').insert({
     id: cancelRecordId, teacher_id: input.teacherId, teacher_name: ctx.teacherName,
     student_name: ctx.studentName, class_date: ctx.date, class_time: ctx.hour,
     screenshot_url: '', class_type: ctx.late ? 'cancelada_por_profesor' : 'cancelada_con_preaviso',
@@ -461,16 +465,18 @@ export async function cancelClass(input: CancelInput): Promise<CancelResult> {
   if (wildcard.chargeNow) {
     penaltyEventId = `se_cancel_prof_${groupId}`;
     try {
-      await dbAddScoringEvent({
+      // Ya estaba (reintento): insertPenaltyEvent no lo cuenta como error.
+      await insertPenaltyEvent({
         teacherId: input.teacherId, teacherName: ctx.teacherName,
         eventType: 'cancelacion_profesor_penalizacion', points: 0, euros: -PENALTY_EUROS,
         note: `Cancelación sin antelación — alumno ${ctx.studentName}, fecha ${ctx.date} (${wildcard.position}.ª del mes)`,
         createdBy: 'sistema', studentRef: ctx.studentName,
-      }, { id: penaltyEventId });
+        appliesMonth: spainMonthOf(cancelledAt),
+      }, penaltyEventId);
     } catch (err) {
-      // 23505: ya estaba (reintento). Cualquier otro error se registra: la
-      // cancelación está hecha y la multa se puede aplicar a mano.
-      if ((err as { code?: string }).code !== '23505') console.error('[recuperaciones] No se pudo crear la multa:', err);
+      // La cancelación está hecha: el error queda en el log y la multa se
+      // puede cargar a mano.
+      console.error('[recuperaciones] No se pudo crear la multa:', err);
     }
   }
   await supabase.from('class_recoveries').update({
@@ -496,8 +502,8 @@ export async function cancelClass(input: CancelInput): Promise<CancelResult> {
 
   // 6) Aviso al admin (id fijo: un reintento no lo duplica).
   const coste = !ctx.late ? 'con antelación, sin coste'
+    : wildcard.beforeStart ? `sin antelación, pero antes del ${fechaLarga(PENALTY_START_DATE)}: sin coste ni comodín`
     : wildcard.chargeNow ? `sin antelación, ${wildcard.position}.ª del mes: −${PENALTY_EUROS} €`
-    : wildcard.wouldHavePenalty ? `sin antelación, ${wildcard.position}.ª del mes (habría costado ${PENALTY_EUROS} €)`
     : `sin antelación, comodín ${wildcard.position} de ${MONTHLY_WILDCARDS}`;
   await supabase.from('notifications').upsert({
     id: `notif_cancel_${groupId}`, target_user: null, target_role: 'admin',
@@ -1013,98 +1019,131 @@ export async function runNightlyRecoveryCheck(opts: { dry?: boolean; nowMs?: num
 // ── Reclasificación del admin ─────────────────────────────────────────────────
 
 /**
- * El admin aprobó una revisión como "cancelada por el profesor" (profesor beta):
- * la clase pasó sin que el profesor avisara. Se registra en class_recoveries
- * como 'sin_acuerdo' (el alumno conserva la clase y el equipo coordina la
- * fecha), SIN comodín, con la multa fija de 5 € contada en el mes de la CLASE
- * (antes de PENALTY_START_DATE solo se marca). La constancia en class_records la
- * crea quien llama (dbResolveReviewRequest), como siempre.
- *
- * Idempotente: si esa clase ya tiene una recuperación no anulada, no hace nada.
- * Lanza 503 'no_configurado' si falta supabase-class-recoveries-b.sql: el que
- * llama vuelve entonces a la multa de siempre.
+ * El admin aprobó una revisión como "cancelada por el profesor": la clase pasó
+ * sin que el profesor avisara ni se presentara. En el sistema único eso es una
+ * FALTA (−10 €, sin comodín, mes de la CLASE; lib/teacherPenalties). Aquí, en el
+ * servidor y con el cliente admin, se hace TODO:
+ *   1. la constancia 'cancelada_por_profesor' en class_records (Finanzas no paga
+ *      la clase y no gasta cupo). Antes la creaba el navegador; ahora el trigger
+ *      descarta esas constancias si llegan con la llave pública;
+ *   2. la recuperación del alumno ('sin_acuerdo', origin admin_reclasificacion),
+ *      como siempre, salvo que la clase ya tenga una viva (p. ej. la automática
+ *      de la posible ausencia);
+ *   3. la multa, con el MISMO id que usaría el chequeo de ausencias para esa
+ *      clase: si ya se cobró al detectarla, no se cobra otra vez.
+ * Idempotente de punta a punta: se puede reintentar.
  */
-export async function reclassifyAsTeacherCancellation(input: {
-  teacherId: string; studentName: string; classDate: string; classTime: string | null; cancelRecordId?: string | null;
+export async function reclassifyAsTeacherFalta(input: {
+  teacherId: string; studentName: string; classDate: string; classTime: string | null;
+  by: string; comment?: string | null;
 }): Promise<{ created: boolean; groupId: string | null; penaltyEuros: number }> {
-  if (!isRecoveryBetaTeacher(input.teacherId)) throw new RecoveryError(403, 'no_beta', 'Solo para profesores beta.');
   const hour = normalizeHour(input.classTime) ?? '00:00';
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.classDate)) throw new RecoveryError(422, 'datos_invalidos', 'Fecha no válida.');
+  const admin = adminClient();
 
-  const { data: ya } = await supabase.from('class_recoveries').select('id, group_id, student_name, original_hour, status')
-    .eq('teacher_id', input.teacherId).eq('original_date', input.classDate).neq('status', 'anulada');
-  const existente = (ya ?? []).find((r: Row) => nkName(r.student_name) === nkName(input.studentName) && (!input.classTime || r.original_hour === hour));
-  if (existente) return { created: false, groupId: existente.group_id, penaltyEuros: 0 };
-
-  const [{ data: t }, { data: asgs }] = await Promise.all([
-    supabase.from('teachers').select('name').eq('id', input.teacherId).maybeSingle(),
-    supabase.from('assignments').select('id, student_id, student_name, student_email, status').eq('teacher_id', input.teacherId),
+  const [{ data: t }, { data: asgs }, { data: crs }, { data: ya }] = await Promise.all([
+    admin.from('teachers').select('name, is_test').eq('id', input.teacherId).maybeSingle(),
+    admin.from('assignments').select('id, student_id, student_name, student_email, status').eq('teacher_id', input.teacherId),
+    admin.from('class_records').select('id, student_name').eq('teacher_id', input.teacherId)
+      .eq('class_date', input.classDate).eq('class_type', 'cancelada_por_profesor'),
+    admin.from('class_recoveries').select('id, group_id, student_name, original_hour, status')
+      .eq('teacher_id', input.teacherId).eq('original_date', input.classDate).neq('status', 'anulada'),
   ]);
-  const a = (asgs ?? []).filter((x: Row) => nkName(x.student_name) === nkName(input.studentName))
-    .sort((x: Row, y: Row) => (x.status === 'inactive' ? 1 : 0) - (y.status === 'inactive' ? 1 : 0))[0] as Row | undefined;
-  const { data: s } = a?.student_id ? await supabase.from('students').select('email').eq('id', a.student_id).maybeSingle() : { data: null };
   const teacherName = (t as Row | null)?.name ?? '';
-
-  const multa = reclassPenalty(input.classDate);
-  const groupId = nuevoId('grp');
-  // La "cancelación" es la propia clase: su instante y su mes.
-  const cancelledAt = new Date(slotStartMs(input.classDate, hour)).toISOString();
   const now = new Date().toISOString();
-  const penaltyEventId = multa.chargeNow ? `se_cancel_prof_${groupId}` : null;
-  const { error } = await supabase.from('class_recoveries').insert({
-    id: nuevoId('rec'), group_id: groupId, part: 1, parts: 1,
-    assignment_id: a?.id ?? null, teacher_id: input.teacherId, teacher_name: teacherName,
-    student_id: a?.student_id ?? null, student_name: input.studentName,
-    student_email: normEmail((s as Row | null)?.email) || normEmail(a?.student_email) || null,
-    original_date: input.classDate, original_hour: hour, hours: 1,
-    cancel_record_id: input.cancelRecordId ?? null, reason: 'Reclasificada por el admin desde una revisión',
-    cancelled_at: cancelledAt, cancel_month: input.classDate.slice(0, 7),
-    notice_minutes: 0, late: true, used_wildcard: false,
-    penalty_euros: multa.penaltyEuros, would_have_penalty: multa.wouldHavePenalty, penalty_event_id: penaltyEventId,
-    agreed_directly: false, round: 1, teacher_proposals: [],
-    status: 'sin_acuerdo', status_changed_at: now, created_at: now, updated_at: now,
-    origin: 'admin_reclasificacion',
-  });
-  if (error) {
-    if (isMissingTable(error) || error.code === '42703' || error.code === 'PGRST204') {
-      throw new RecoveryError(503, 'no_configurado', 'Falta correr supabase-class-recoveries-b.sql.');
-    }
-    throw new RecoveryError(500, 'error', `No se pudo registrar la cancelación: ${error.message}`);
+
+  // 1) Constancia.
+  let cancelRecordId = ((crs ?? []) as Row[]).find(r => nkName(r.student_name) === nkName(input.studentName))?.id as string | undefined;
+  if (!cancelRecordId) {
+    cancelRecordId = nuevoId('cr');
+    const { error: crErr } = await admin.from('class_records').insert({
+      id: cancelRecordId, teacher_id: input.teacherId, teacher_name: teacherName,
+      student_name: input.studentName, class_date: input.classDate, class_time: input.classTime ?? null,
+      screenshot_url: '', class_type: 'cancelada_por_profesor',
+      comment: `Solicitud de revisión aprobada por ${input.by}${input.comment ? ` — ${input.comment}` : ''}`,
+      created_at: now,
+    });
+    // 23505: ya había una (con otro nombre escrito): vale esa, sin enlazarla.
+    if (crErr?.code === '23505') cancelRecordId = undefined;
+    else if (crErr) throw new RecoveryError(500, 'error', `No se pudo registrar la constancia: ${crErr.message}`);
   }
 
-  if (penaltyEventId) {
-    try {
-      await dbAddScoringEvent({
-        teacherId: input.teacherId, teacherName,
-        eventType: 'cancelacion_profesor_penalizacion', points: 0, euros: -PENALTY_EUROS,
-        note: `Cancelación sin aviso (reclasificada por el admin) — alumno ${input.studentName}, fecha ${input.classDate}`,
-        createdBy: 'admin', studentRef: input.studentName,
-      }, { id: penaltyEventId });
-    } catch (err) {
-      if ((err as { code?: string }).code !== '23505') console.error('[recuperaciones] No se pudo crear la multa de la reclasificación:', err);
+  // 2) Recuperación del alumno (si la clase no tiene ya una viva).
+  const multa = faltaApplies({ classDate: input.classDate, isTestTeacher: (t as Row | null)?.is_test === true });
+  const absenceId = absenceIdOf(input.teacherId, input.studentName, input.classDate, hour);
+  const penaltyEventId = multa ? faltaEventId(absenceId) : null;
+  const existente = ((ya ?? []) as Row[]).find(r => nkName(r.student_name) === nkName(input.studentName) && (!input.classTime || r.original_hour === hour));
+  let groupId: string | null = existente?.group_id ?? null;
+  if (!existente) {
+    const a = ((asgs ?? []) as Row[]).filter(x => nkName(x.student_name) === nkName(input.studentName))
+      .sort((x, y) => (x.status === 'inactive' ? 1 : 0) - (y.status === 'inactive' ? 1 : 0))[0];
+    const { data: s } = a?.student_id ? await admin.from('students').select('email').eq('id', a.student_id).maybeSingle() : { data: null };
+    groupId = nuevoId('grp');
+    // La "cancelación" es la propia clase: su instante y su mes.
+    const cancelledAt = new Date(slotStartMs(input.classDate, hour)).toISOString();
+    const { error } = await admin.from('class_recoveries').insert({
+      id: nuevoId('rec'), group_id: groupId, part: 1, parts: 1,
+      assignment_id: a?.id ?? null, teacher_id: input.teacherId, teacher_name: teacherName,
+      student_id: a?.student_id ?? null, student_name: input.studentName,
+      student_email: normEmail((s as Row | null)?.email) || normEmail(a?.student_email) || null,
+      original_date: input.classDate, original_hour: hour, hours: 1,
+      cancel_record_id: cancelRecordId ?? null, reason: 'Reclasificada por el admin desde una revisión (falta)',
+      cancelled_at: cancelledAt, cancel_month: input.classDate.slice(0, 7),
+      notice_minutes: 0, late: true, used_wildcard: false,
+      penalty_euros: multa ? -FALTA_PENALTY_EUROS : 0, would_have_penalty: false, penalty_event_id: penaltyEventId,
+      agreed_directly: false, round: 1, teacher_proposals: [],
+      status: 'sin_acuerdo', status_changed_at: now, created_at: now, updated_at: now,
+      origin: 'admin_reclasificacion',
+    });
+    if (error) {
+      if (isMissingTable(error) || error.code === '42703' || error.code === 'PGRST204') {
+        throw new RecoveryError(503, 'no_configurado', 'Falta correr supabase-class-recoveries-b.sql.');
+      }
+      throw new RecoveryError(500, 'error', `No se pudo registrar la recuperación: ${error.message}`);
     }
   }
-  await notifyMonthlyLimit(input.teacherId, teacherName, input.classDate.slice(0, 7));
-  return { created: true, groupId, penaltyEuros: multa.penaltyEuros };
+
+  // 3) La falta. Si falla, LANZA: la revisión queda pendiente y se reintenta.
+  if (multa) {
+    await chargeFalta({
+      absenceId, teacherId: input.teacherId, teacherName, studentName: input.studentName,
+      classDate: input.classDate, hour, origen: 'reclasificacion', createdBy: input.by,
+    }, admin);
+    // Si el chequeo ya la tenía como posible ausencia, la fila lo refleja.
+    const { error: ausErr } = await admin.from('teacher_absence_alerts').update({
+      penalty_state: 'cobrada', penalty_event_id: penaltyEventId, penalty_reason: `Reclasificada por ${input.by}.`, updated_at: now,
+    }).eq('id', absenceId);
+    if (ausErr) console.error('[recuperaciones] No se pudo anotar la falta en la ausencia:', ausErr.message);
+    await notifyMonthlyLimit(input.teacherId, teacherName, input.classDate.slice(0, 7));
+  }
+  return { created: !existente, groupId, penaltyEuros: multa ? -FALTA_PENALTY_EUROS : 0 };
 }
 
 /**
- * Aviso al admin cuando un profesor llega a 4 cancelaciones sin antelación en
- * el mes: las de la tabla nueva (una por grupo) MÁS los eventos viejos de −5 €
- * de ese mes. Id fijo por profesor y mes: sale una sola vez.
+ * Aviso al admin cuando un profesor llega a 4 penalizaciones en el mes del
+ * sistema único: cancelaciones tardías (una por cancelación, desde
+ * PENALTY_START_DATE) + faltas cobradas sin revertir. Los −5 € del sistema viejo
+ * ya no cuentan. Id fijo por profesor y mes: sale una sola vez.
  */
 export async function notifyMonthlyLimit(teacherId: string, teacherName: string, month: string): Promise<void> {
   try {
     const [{ data: recs }, { data: evs }] = await Promise.all([
-      supabase.from('class_recoveries').select('group_id, cancel_month, late, status').eq('teacher_id', teacherId).eq('cancel_month', month),
-      supabase.from('scoring_events').select('created_at, reverted').eq('teacher_id', teacherId).eq('event_type', 'falta_sin_aviso_penalizacion'),
+      supabase.from('class_recoveries').select('*').eq('teacher_id', teacherId),
+      supabase.from('scoring_events').select('*').eq('teacher_id', teacherId).eq('event_type', FALTA_EVENT_TYPE),
     ]);
-    const nuevas = new Set((recs ?? []).filter((r: Row) => r.late && r.status !== 'anulada').map((r: Row) => r.group_id)).size;
-    const viejas = (evs ?? []).filter((e: Row) => !e.reverted && e.created_at && spainMonthOf(e.created_at) === month).length;
-    if (nuevas + viejas < 4) return;
+    const items = teacherPenaltiesInMonth({
+      teacherId, month,
+      recoveries: ((recs ?? []) as Row[]).map(mapRecovery),
+      events: ((evs ?? []) as Row[]).map(e => ({
+        teacherId: e.teacher_id, eventType: e.event_type, createdAt: e.created_at,
+        appliesMonth: e.applies_month ?? undefined, reverted: !!e.reverted, note: e.note,
+      })),
+    });
+    if (items.length < 4) return;
+    const faltas = items.filter(i => i.kind === 'falta').length;
     await adminBell(`notif_limite_cancel_${teacherId}_${month}`,
-      `${teacherName} alcanzó ${nuevas + viejas} cancelaciones sin antelación`,
-      `${teacherName} lleva ${nuevas + viejas} cancelaciones sin antelación en ${month}. Revisa la pestaña Recuperaciones.`,
+      `${teacherName} alcanzó ${items.length} penalizaciones este mes`,
+      `${teacherName} lleva en ${month} ${items.length - faltas} cancelaciones sin antelación y ${faltas} faltas. Revisa la pestaña Recuperaciones.`,
       'limite_faltas_admin');
   } catch (err) {
     console.error('[recuperaciones] Aviso de límite mensual fallido:', err);

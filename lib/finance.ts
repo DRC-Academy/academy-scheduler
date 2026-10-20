@@ -36,6 +36,7 @@
 
 import { Assignment, ClassJoinLog, ClassRecord, FinanceRate, ScoringEvent, FinancePayment, Student, ClassRecordType, FinanceManualApproval, TeacherBonus } from '@/types';
 import { bonusesForMonth, sumBonusEuros } from '@/lib/bonuses';
+import { eventMonthOf } from '@/lib/teacherPenalties';
 import { classifyPlan, classifyFor, planBadgeStyle, type PlanClassification } from '@/lib/productUtils';
 import { contiguousRunLength, hourNum, hourText, nkName, runStartHour, sessionRangeLabel } from '@/lib/sessions';
 // Qué estado de suscripción da acceso (y cómo se llama) es UNA sola decisión,
@@ -1092,9 +1093,12 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
   // Eventos de scoring de ESTE mes que afectan al balance. Se excluyen las
   // penalizaciones revertidas (quedan solo como constancia tachada) y sus eventos
   // compensatorios (audit-only), para que una reversión sea neutra en el total.
+  // El mes es eventMonthOf: el fijado al crear la multa (la falta, el de la
+  // clase; la cancelación, el de la cancelación) o el de createdAt en hora de
+  // ESPAÑA. Antes era el mes UTC (ver lib/teacherPenalties).
   const scoringThisMonth = scoringEvents.filter(e =>
     e.teacherId === teacherId &&
-    (e.createdAt ?? '').slice(0, 7) === monthYear &&
+    eventMonthOf(e) === monthYear &&
     !e.reverted &&
     e.eventType !== 'penalizacion_revertida');
 

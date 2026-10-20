@@ -45,6 +45,7 @@ import OutOfScheduleTab from '@/components/admin/OutOfScheduleTab';
 import PaymentDetailsTab from '@/components/admin/PaymentDetailsTab';
 import { Assignment, ScoringEvent, FinanceManualApproval, Teacher, ClassReviewRequest } from '@/types';
 import { Check, ChevronDown, ChevronLeft, ChevronRight, Download, Lock, Undo2 } from 'lucide-react';
+import { eventMonthOf, absenceIdOfFaltaEvent, FALTA_EVENT_TYPE } from '@/lib/teacherPenalties';
 
 // ─── Finance helpers ──────────────────────────────────────────────────────────
 const FIN_MONTHS_ADMIN = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
@@ -757,6 +758,21 @@ function FinanceTab({ onHow }: { onHow: () => void }) {
     if (!revertModal || !revertReason.trim()) return;
     setReverting(true);
     try {
+      // La FALTA del profesor (sistema único) se revierte anulando su posible
+      // ausencia: así la multa, la fila de la ausencia y los contadores quedan
+      // de acuerdo. El resto de penalizaciones, como siempre.
+      const ausencia = revertModal.eventType === FALTA_EVENT_TYPE ? absenceIdOfFaltaEvent(revertModal.id) : null;
+      if (ausencia) {
+        const res = await fetch(`/api/admin/posibles-ausencias/${encodeURIComponent(ausencia)}/anular`, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ by: approvedBy, reason: revertReason.trim() }),
+        });
+        const data = await res.json().catch(() => ({})) as { mensaje?: string };
+        if (!res.ok) throw new Error(data.mensaje ?? `error ${res.status}`);
+        setRevertModal(null); setRevertReason('');
+        await loadFinanceData();
+        return;
+      }
       await dbRevertPenalty({
         penaltyId: revertModal.id, teacherId: revertModal.teacherId, teacherName: revertModal.teacherName,
         originalDate: (revertModal.createdAt ?? '').slice(0, 10), studentName: revertModal.studentRef,
@@ -776,7 +792,7 @@ function FinanceTab({ onHow }: { onHow: () => void }) {
   // que sea. Si se filtrara por un event_type concreto, una penalización de otro
   // tipo restaría del total sin salir en la lista ni poder revertirse.
   const penaltiesOf = (teacherId: string): ScoringEvent[] => scoringEvents.filter(e =>
-    e.teacherId === teacherId && (e.euros ?? 0) < 0 && (e.createdAt ?? '').slice(0, 7) === monthYear);
+    e.teacherId === teacherId && (e.euros ?? 0) < 0 && eventMonthOf(e) === monthYear);
   // Finanzas de cada profesor: MISMAS entradas que la vista del profesor
   // (app/mis-clases) y que la liquidación (TeachersContext.markPaymentAsPaid).
   const results = useMemo<TeacherFinanceResult[]>(() => teachers.map(t => {
@@ -995,6 +1011,9 @@ function FinanceTab({ onHow }: { onHow: () => void }) {
             Se devolverán <b>{eur(Math.abs(revertModal.euros ?? 5))}</b> al balance de <b>{revertModal.teacherName}</b> por la falta registrada
             el {(revertModal.createdAt ?? '').slice(0, 10)}{revertModal.studentRef ? ` con ${revertModal.studentRef}` : ''}.
           </p>
+          {revertModal.eventType === FALTA_EVENT_TYPE && (
+            <p className="fz-mod-s">Es una falta del profesor: se anula su posible ausencia y también la recuperación automática del alumno, si aún no se dio.</p>
+          )}
           <label className="fz-mod-l">Motivo de la reversión</label>
           <textarea value={revertReason} onChange={e => setRevertReason(e.target.value)} rows={3} autoFocus placeholder="Ej: el alumno confirmó que avisó por WhatsApp" className="fz-mod-ta" />
           <div className="fz-mod-b">

@@ -26,6 +26,7 @@ import { isMovedClass } from '@/lib/classTypes';
 // origen del acceso y los planes que terminan, con las mismas reglas que el
 // resto de la app.
 import { accessOverrideOf } from '@/lib/subscriptionAccess';
+import { teacherPenaltiesInMonth, type CountableRecovery } from '@/lib/teacherPenalties';
 import { buildEndingPlans, ENDING_NOTICE_DAYS, type EndingStudentRow } from '@/lib/endingPlans';
 
 const norm = (s: string | null | undefined): string => (s ?? '').trim().toLowerCase();
@@ -357,27 +358,20 @@ export function filasProfesores(args: {
 // ── Faltas del profesor ──────────────────────────────────────────────────────
 
 /**
- * Cancelaciones del PROFESOR con menos de 24 h en el mes, de los dos sistemas:
- *  · los eventos de −5 € del flujo viejo ('falta_sin_aviso_penalizacion'), sin
- *    los revertidos;
- *  · las filas de class_recoveries ("No puedo dar esta clase" y las
- *    reclasificaciones del admin), una por cancelación (group_id), sin anuladas.
- * No se cuentan dos veces: una cancelación del flujo nuevo nunca crea el evento
- * viejo. La falta del ALUMNO se cuenta en `operacionDelMes`.
+ * Penalizaciones de TODOS los profesores en el mes, del sistema único
+ * (lib/teacherPenalties): cancelaciones con menos de 24 h desde el inicio del
+ * sistema (una por cancelación, aunque tenga dos trozos) + faltas cobradas sin
+ * revertir. Los −5 € del sistema viejo ya no cuentan. La falta del ALUMNO se
+ * cuenta en `operacionDelMes`.
  */
 export function faltasProfesorDelMes(
   events: readonly ScoringEvent[], mes: string,
-  recoveries: ReadonlyArray<{ groupId: string; cancelMonth: string; late: boolean; status: string }> = [],
+  recoveries: ReadonlyArray<CountableRecovery> = [],
 ): number {
-  const viejas = events.filter(e =>
-    e.eventType === 'falta_sin_aviso_penalizacion' &&
-    (e.createdAt ?? '').slice(0, 7) === mes &&
-    !e.reverted,
-  ).length;
-  const nuevas = new Set(recoveries
-    .filter(r => r.late && r.status !== 'anulada' && r.cancelMonth === mes)
-    .map(r => r.groupId)).size;
-  return viejas + nuevas;
+  const profes = new Set<string>([...events.map(e => e.teacherId), ...recoveries.map(r => r.teacherId)]);
+  let n = 0;
+  for (const teacherId of profes) n += teacherPenaltiesInMonth({ teacherId, month: mes, events, recoveries }).length;
+  return n;
 }
 
 // ── Alumnos ──────────────────────────────────────────────────────────────────
