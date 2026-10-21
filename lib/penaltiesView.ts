@@ -6,10 +6,14 @@
 //   · una fila por multa, con tipo, alumno, clase, estado y origen;
 //   · el resumen por profesor del mes, con el cuadre contra Finanzas.
 //
+// SOLO el sistema único: faltas y cancelaciones tardías. Las multas del sistema
+// viejo (las −5 € de antes) no salen en la pestaña ni entran en el cuadre;
+// Finanzas las sigue restando como siempre, eso no se toca.
+//
 // EL CUADRE: "Finanzas resta" sale de scoringEventsForMonth + penaltySumOf, las
-// MISMAS funciones que usa calculateTeacherFinance. Si el total de la pestaña no
-// coincide, es porque hay otras multas en la base (las −5 € del sistema viejo,
-// por ejemplo), nunca por una cuenta distinta.
+// MISMAS funciones que usa calculateTeacherFinance, quedándose con los eventos
+// de falta y cancelación. Si no coincide con el total de la pestaña, hay una
+// multa del sistema único que la pestaña no está mostrando.
 //
 // Lo prueba lib/penaltiesView.test.ts.
 
@@ -24,21 +28,23 @@ import { MONTHLY_WILDCARDS } from '@/lib/classRecoveries';
 export const CANCEL_EVENT_TYPE = 'cancelacion_profesor_penalizacion';
 const CANCEL_PREFIX = 'se_cancel_prof_';
 
-export type PenaltyKind = 'falta' | 'cancelacion' | 'antigua';
+export type PenaltyKind = 'falta' | 'cancelacion';
 export type PenaltyState = 'cobrada' | 'revertida' | 'revisar';
-export type PenaltyOrigin = 'deteccion' | 'reclasificacion' | 'cancelacion' | 'antigua';
+export type PenaltyOrigin = 'deteccion' | 'reclasificacion' | 'cancelacion';
 
 export const KIND_LABEL: Record<PenaltyKind, string> = {
   falta: 'Falta (no se presentó)',
   cancelacion: 'Cancelación con menos de 24 h',
-  antigua: 'Multa antigua (sistema viejo)',
 };
 export const ORIGIN_LABEL: Record<PenaltyOrigin, string> = {
   deteccion: 'Detección automática',
   reclasificacion: 'Reclasificación del admin',
   cancelacion: 'Cancelación del profe',
-  antigua: 'Sistema viejo',
 };
+
+/** Multa del sistema único (falta o cancelación tardía). El resto de eventos no sale en la pestaña. */
+export const isSystemPenalty = (e: Pick<ScoringEvent, 'eventType'>) =>
+  e.eventType === FALTA_EVENT_TYPE || e.eventType === CANCEL_EVENT_TYPE;
 
 /** Lo que hace falta de una fila de class_recoveries. */
 export interface PenaltyRecovery extends CountableRecovery {
@@ -117,9 +123,7 @@ export function buildPenaltyRows(args: {
   const eventIds = new Set(args.events.map(e => e.id));
 
   for (const e of args.events) {
-    if (e.eventType === 'penalizacion_revertida') continue;
-    const nueva = e.eventType === FALTA_EVENT_TYPE || e.eventType === CANCEL_EVENT_TYPE;
-    if (!nueva && !((e.euros ?? 0) < 0)) continue;   // antiguas: solo las que restaban dinero
+    if (!isSystemPenalty(e)) continue;
 
     const base = {
       key: e.id, eventId: e.id, teacherId: e.teacherId,
@@ -144,7 +148,7 @@ export function buildPenaltyRows(args: {
         at: e.createdAt,
         origin: /reclasificada/i.test(e.note ?? '') ? 'reclasificacion' : 'deteccion',
       });
-    } else if (e.eventType === CANCEL_EVENT_TYPE) {
+    } else {
       const rec = e.id.startsWith(CANCEL_PREFIX) ? recByGroup.get(e.id.slice(CANCEL_PREFIX.length)) : undefined;
       rows.push({
         ...base, kind: 'cancelacion', absenceId: null,
@@ -152,12 +156,6 @@ export function buildPenaltyRows(args: {
         classDate: rec?.originalDate ?? nota.date, classHour: rec?.originalHour ?? null,
         at: rec?.cancelledAt ?? e.createdAt,
         origin: rec?.origin === 'admin_reclasificacion' ? 'reclasificacion' : 'cancelacion',
-      });
-    } else {
-      rows.push({
-        ...base, kind: 'antigua', absenceId: null,
-        studentName: e.studentRef ?? nota.student ?? '—',
-        classDate: nota.date, classHour: nota.hour, at: e.createdAt, origin: 'antigua',
       });
     }
   }
@@ -190,15 +188,14 @@ export interface PenaltySummary {
   comodines: number;
   /** Total en euros de las filas cobradas mostradas (positivo). */
   total: number;
-  /** Lo que resta Finanzas ese mes (positivo): todas las multas vivas del mes. */
+  /** Lo que resta Finanzas ese mes por faltas y cancelaciones (positivo). */
   finanzas: number;
   cuadra: boolean;
 }
 
 /**
  * Resumen por profesor de las filas YA filtradas (mes, profesor, tipo…), más los
- * comodines del mes y lo que resta Finanzas. Si `withOld` es false, el total no
- * lleva las multas antiguas y por eso puede no cuadrar: la pestaña lo dice.
+ * comodines del mes y lo que resta Finanzas por esas mismas multas.
  */
 export function summarizePenalties(args: {
   rows: readonly PenaltyRow[];
@@ -215,15 +212,15 @@ export function summarizePenalties(args: {
     (usadas.get(r.teacherId) ?? usadas.set(r.teacherId, new Set()).get(r.teacherId)!).add(r.groupId);
     ids.add(r.teacherId);
   }
-  // También quien solo tiene multas que la pestaña no muestra (las antiguas):
-  // si no, el descuadre con Finanzas quedaría escondido.
-  for (const id of args.teacherIds) {
-    if (penaltySumOf(scoringEventsForMonth(args.events, id, args.month)) < 0) ids.add(id);
-  }
+  // También quien tiene multas en Finanzas que no llegaron a las filas: si no,
+  // el descuadre quedaría escondido.
+  const finanzasDe = (id: string) =>
+    -penaltySumOf(scoringEventsForMonth(args.events, id, args.month).filter(isSystemPenalty));
+  for (const id of args.teacherIds) if (finanzasDe(id) > 0) ids.add(id);
   return [...ids].filter(id => args.teacherIds.has(id)).map(teacherId => {
     const mias = args.rows.filter(r => r.teacherId === teacherId && r.state === 'cobrada');
     const total = mias.reduce((s, r) => s + r.euros, 0);
-    const finanzas = -penaltySumOf(scoringEventsForMonth(args.events, teacherId, args.month));
+    const finanzas = finanzasDe(teacherId);
     return {
       teacherId, teacherName: args.teacherName(teacherId),
       faltas: mias.filter(r => r.kind === 'falta').length,

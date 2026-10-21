@@ -66,7 +66,7 @@ describe('filas', () => {
     expect(cobrada.map(r => r.state)).toEqual(['cobrada']);
   });
 
-  it('antiguas: solo las que restaban dinero; los eventos de puntos no salen', () => {
+  it('las multas del sistema viejo y los eventos de puntos no salen', () => {
     const rows = buildPenaltyRows({
       events: [
         ev({ id: 'se_old', teacherId: 't24', eventType: 'falta_sin_aviso_penalizacion', euros: -5, note: 'Cancelación sin antelación — alumno Gema Ávila Marín, fecha 2026-10-15', createdAt: '2026-10-15T17:53:00Z' }),
@@ -74,8 +74,7 @@ describe('filas', () => {
       ],
       recoveries: [], absences: [], teacherName: nombre,
     });
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ kind: 'antigua', studentName: 'Gema Ávila Marín', classDate: '2026-10-15', euros: 5, origin: 'antigua' });
+    expect(rows).toHaveLength(0);
   });
 });
 
@@ -91,20 +90,18 @@ describe('resumen y cuadre con Finanzas', () => {
 
   it('cuenta faltas, cancelaciones con multa, comodines (máx. 2) y total', () => {
     const s = summarizePenalties({
-      rows: rows.filter(r => r.kind !== 'antigua'), month: '2026-10', events, recoveries,
+      rows, month: '2026-10', events, recoveries,
       teacherIds: new Set(['t3', 't24']), teacherName: nombre,
     });
     const johny = s.find(x => x.teacherId === 't3')!;
     expect(johny).toMatchObject({ faltas: 1, cancelaciones: 1, comodines: 2, total: 15, finanzas: 15, cuadra: true });
-    // Liliana: sin multas nuevas, pero Finanzas le resta el −5 € viejo → no cuadra.
-    const liliana = s.find(x => x.teacherId === 't24')!;
-    expect(liliana).toMatchObject({ total: 0, finanzas: 5, cuadra: false });
+    // Liliana solo tiene el −5 € del sistema viejo: no sale ni descuadra.
+    expect(s.find(x => x.teacherId === 't24')).toBeUndefined();
   });
 
-  it('con las antiguas, cuadra', () => {
-    const s = summarizePenalties({ rows, month: '2026-10', events, recoveries, teacherIds: new Set(['t3', 't24']), teacherName: nombre });
-    expect(s.find(x => x.teacherId === 't24')).toMatchObject({ total: 5, finanzas: 5, cuadra: true });
-    expect(s[0].teacherId).toBe('t3');   // mayor importe primero
+  it('una multa del sistema único que no llegó a las filas sí descuadra', () => {
+    const s = summarizePenalties({ rows: [], month: '2026-10', events, recoveries, teacherIds: new Set(['t3']), teacherName: nombre });
+    expect(s[0]).toMatchObject({ teacherId: 't3', total: 0, finanzas: 15, cuadra: false });
   });
 
   it('"Finanzas resta" es lo mismo que penaltiesFromScoring de calculateTeacherFinance', () => {

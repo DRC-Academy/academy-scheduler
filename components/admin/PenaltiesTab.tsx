@@ -65,7 +65,6 @@ export default function PenaltiesTab() {
   const [teacherId, setTeacherId] = useState('');
   const [tipo, setTipo] = useState<'todos' | PenaltyKind>('todos');
   const [estado, setEstado] = useState<'todos' | PenaltyState>('todos');
-  const [verAntiguas, setVerAntiguas] = useState(false);
   const [verPrueba, setVerPrueba] = useState(false);
   const [absences, setAbsences] = useState<PenaltyAbsence[]>([]);
   const [absError, setAbsError] = useState<string | null>(null);
@@ -99,7 +98,6 @@ export default function PenaltiesTab() {
   // El resumen usa mes + profesor + interruptores; el tipo y el estado solo filtran el detalle.
   const base = todas.filter(r => r.month === month
     && (verPrueba || !testIds.has(r.teacherId))
-    && (verAntiguas || r.kind !== 'antigua')
     && (!teacherId || r.teacherId === teacherId));
   const visiblesIds = new Set(teachers.filter(t => (verPrueba || !t.isTest) && (!teacherId || t.id === teacherId)).map(t => t.id));
   const resumen = summarizePenalties({ rows: base, month, events: scoringEvents, recoveries, teacherIds: visiblesIds, teacherName: nombre });
@@ -137,7 +135,6 @@ export default function PenaltiesTab() {
             <option value="todos">Todos</option>
             <option value="falta">{KIND_LABEL.falta}</option>
             <option value="cancelacion">{KIND_LABEL.cancelacion}</option>
-            {verAntiguas && <option value="antigua">{KIND_LABEL.antigua}</option>}
           </select>
         </label>
         <label>Estado
@@ -149,7 +146,6 @@ export default function PenaltiesTab() {
           </select>
         </label>
         <div className="pz-toggles">
-          <label className="pz-check"><input type="checkbox" checked={verAntiguas} onChange={e => setVerAntiguas(e.target.checked)} /> Ver multas antiguas</label>
           <label className="pz-check"><input type="checkbox" checked={verPrueba} onChange={e => setVerPrueba(e.target.checked)} /> Ver cuentas de prueba</label>
         </div>
       </div>
@@ -163,7 +159,7 @@ export default function PenaltiesTab() {
         {descuadres.length > 0 && (
           <div className="pz-aviso">
             <b>No cuadra con Finanzas</b> en {descuadres.length === 1 ? '1 profesor' : `${descuadres.length} profesores`}:
-            Finanzas resta multas que aquí no se suman{!verAntiguas ? ' (activa «Ver multas antiguas» para verlas)' : ''}.
+            Finanzas resta por faltas y cancelaciones un importe distinto al de aquí.
           </div>
         )}
         {resumen.length === 0 && !loading && <div className="pz-muted">Sin penalizaciones en {mesLargo(month)}.</div>}
@@ -200,7 +196,7 @@ function Fila({ r, by, onChanged }: { r: PenaltyRow; by: string; onChanged: () =
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const est = ESTADO[r.state];
-  const anulable = r.kind !== 'antigua' && (r.state === 'cobrada' || r.state === 'revisar');
+  const anulable = r.state === 'cobrada' || r.state === 'revisar';
 
   async function post(url: string, body: object, fallo: string): Promise<boolean> {
     setSaving(true); setErr(null);
@@ -229,7 +225,7 @@ function Fila({ r, by, onChanged }: { r: PenaltyRow; by: string; onChanged: () =
   }
 
   return (
-    <article className={`pz-card${r.state === 'revisar' ? ' is-alerta' : ''}${r.kind === 'antigua' ? ' is-antigua' : ''}`}>
+    <article className={`pz-card${r.state === 'revisar' ? ' is-alerta' : ''}`}>
       <div className="pz-card-top">
         <div className="pz-who"><b>{r.teacherName}</b> <span className="pz-muted">con {r.studentName}</span></div>
         <span className={`pz-badge is-${est.tono}`}>{est.label}</span>
@@ -315,7 +311,6 @@ const CSS = `
 .pz-prof-w { grid-column: 1 / -1; font-size: 12px; color: #8a5a00; font-weight: 600; }
 .pz-card { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
 .pz-card.is-alerta { border-left: 4px solid ${AMARILLO}; }
-.pz-card.is-antigua { opacity: 0.75; }
 .pz-card-top { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
 .pz-who { font-size: 15px; }
 .pz-badge { font-size: 12px; font-weight: 700; border-radius: 999px; padding: 3px 10px; white-space: nowrap; }
