@@ -17,7 +17,7 @@ import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { addScoringEventWith } from '@/lib/scoringStore';
 import { nkName } from '@/lib/sessions';
 import {
-  FALTA_EVENT_TYPE, FALTA_PENALTY_EUROS, faltaEventId, faltaBellBody, faltaEventNote,
+  FALTA_EVENT_TYPE, FALTA_PENALTY_EUROS, faltaEventId, faltaBellBody, faltaEventNote, absenceIdOfFaltaEvent,
 } from '@/lib/teacherPenalties';
 import type { ScoringEvent } from '@/types';
 
@@ -109,7 +109,20 @@ export async function chargeFalta(input: FaltaInput, admin: SupabaseClient = adm
 export async function revertFalta(input: {
   absenceId: string; by: string; reason: string;
 }, admin: SupabaseClient = adminClient()): Promise<{ reverted: boolean }> {
-  const eventId = faltaEventId(input.absenceId);
+  return revertPenaltyEvent({ eventId: faltaEventId(input.absenceId), by: input.by, reason: input.reason }, admin);
+}
+
+/**
+ * Revierte UNA multa del sistema único (falta o cancelación tardía): la marca
+ * como revertida y deja el compensatorio con id fijo `<multa>_rev` (+importe,
+ * constancia, mismo mes). Finanzas excluye los dos: neto 0. Solo devuelve el
+ * dinero: no toca la recuperación del alumno ni devuelve el comodín (decisión
+ * de Facundo, 21/10/2026). `reverted: false` si no había multa viva.
+ */
+export async function revertPenaltyEvent(input: {
+  eventId: string; by: string; reason: string;
+}, admin: SupabaseClient = adminClient()): Promise<{ reverted: boolean }> {
+  const eventId = input.eventId;
   const { data: ev, error } = await admin.from('scoring_events').select('*').eq('id', eventId).maybeSingle();
   if (error) throw new Error(`No se pudo leer la multa ${eventId}: ${error.message}`);
   if (!ev || ev.reverted) return { reverted: false };
@@ -125,11 +138,47 @@ export async function revertFalta(input: {
   await insertPenaltyEvent({
     teacherId: (ev as Row).teacher_id, teacherName: (ev as Row).teacher_name,
     eventType: 'penalizacion_revertida', points: 0, euros: Math.abs(Number((ev as Row).euros) || FALTA_PENALTY_EUROS),
-    note: `Reversión de la falta${ref ? ` (${ref})` : ''}. Motivo: ${input.reason}`,
+    note: `Reversión de la ${(ev as Row).event_type === FALTA_EVENT_TYPE ? 'falta' : 'multa por cancelación'}${ref ? ` (${ref})` : ''}. Motivo: ${input.reason}`,
     createdBy: input.by, studentRef: ref,
     appliesMonth: (ev as Row).applies_month ?? undefined,
   }, `${eventId}_rev`, admin);
   return { reverted: true };
+}
+
+// ── Anular desde el admin (pestaña Penalizaciones y Finanzas) ─────────────────
+
+export class PenaltyAdminError extends Error {
+  constructor(public status: number, message: string) { super(message); }
+}
+
+const ANULABLES = new Set<string>([FALTA_EVENT_TYPE, 'cancelacion_profesor_penalizacion']);
+
+/**
+ * El admin anula una multa del sistema único: SOLO se devuelve el dinero
+ * (revertPenaltyEvent). La recuperación del alumno sigue viva y el comodín sigue
+ * gastado. En una falta, la ficha de la posible ausencia (si existe: las
+ * reclasificadas pueden no tenerla) queda en "revertida" con el motivo, para que
+ * Posibles ausencias diga lo mismo. Las multas del sistema viejo no se anulan
+ * por aquí: siguen con el "Revertir" de Finanzas.
+ */
+export async function annulPenalty(input: {
+  eventId: string; by: string; reason: string;
+}, admin: SupabaseClient = adminClient()): Promise<{ reverted: boolean }> {
+  const { data: ev, error } = await admin.from('scoring_events').select('id, event_type, reverted').eq('id', input.eventId).maybeSingle();
+  if (error) throw new PenaltyAdminError(500, error.message);
+  if (!ev) throw new PenaltyAdminError(404, 'No encontramos esa multa.');
+  if (!ANULABLES.has((ev as Row).event_type)) throw new PenaltyAdminError(409, 'Solo se anulan aquí las multas del sistema nuevo.');
+  if ((ev as Row).reverted) throw new PenaltyAdminError(409, 'Esa multa ya estaba revertida.');
+
+  const r = await revertPenaltyEvent(input, admin);
+  const ausencia = absenceIdOfFaltaEvent(input.eventId);
+  if (r.reverted && ausencia) {
+    const { error: e2 } = await admin.from('teacher_absence_alerts').update({
+      penalty_state: 'revertida', penalty_reason: `Multa anulada por ${input.by}: ${input.reason}`, updated_at: new Date().toISOString(),
+    }).eq('id', ausencia);
+    if (e2) console.error(`[penalizaciones] No se pudo anotar la anulación en la ausencia ${ausencia}:`, e2.message);
+  }
+  return r;
 }
 
 // ── Intentos bloqueados de la app vieja ───────────────────────────────────────

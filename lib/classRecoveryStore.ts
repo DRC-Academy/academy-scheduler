@@ -1363,11 +1363,23 @@ export async function annulAbsenceRecovery(
 // ── Pestaña del admin ─────────────────────────────────────────────────────────
 
 /** Todas las filas (las más recientes primero), para la pestaña "Recuperaciones". */
-export async function listRecoveriesForAdmin(): Promise<RecoveryRow[]> {
+/**
+ * Todas las recuperaciones para el admin, con `penaltyReverted`: su multa (si
+ * la tuvo) se anuló después. La fila guarda el importe cobrado; quién manda es
+ * el evento de scoring, así que se mira ahí.
+ */
+export async function listRecoveriesForAdmin(): Promise<Array<RecoveryRow & { penaltyReverted: boolean }>> {
   const { data, error } = await supabase.from('class_recoveries').select('*').order('cancelled_at', { ascending: false }).limit(2000);
   if (isMissingTable(error)) throw new RecoveryError(503, 'no_configurado', 'Falta correr supabase-class-recoveries.sql.');
   if (error) throw new RecoveryError(500, 'error', error.message);
-  return (data ?? []).map(mapRecovery);
+  const rows = (data ?? []).map(mapRecovery);
+  const ids = [...new Set(rows.map(r => r.penaltyEventId).filter((x): x is string => !!x))];
+  const revertidas = new Set<string>();
+  for (let i = 0; i < ids.length; i += 200) {
+    const { data: evs } = await supabase.from('scoring_events').select('id, reverted').in('id', ids.slice(i, i + 200));
+    for (const e of (evs ?? []) as Row[]) if (e.reverted) revertidas.add(e.id);
+  }
+  return rows.map(r => ({ ...r, penaltyReverted: !!r.penaltyEventId && revertidas.has(r.penaltyEventId) }));
 }
 
 /** Recuperaciones de un alumno (para el LMS): por id del alumno o por su email. */

@@ -29,6 +29,10 @@ export interface AdminRecovery extends TeacherRecovery {
   reason: string | null; statusChangedAt: string; createdAt: string;
   origin: 'profesor' | 'admin_reclasificacion' | 'ausencia';
   annulledAt: string | null; annulledBy: string | null; annulReason: string | null;
+  /** Evento de la multa (se_cancel_prof_<grupo> o se_falta_prof_<ausencia>). */
+  penaltyEventId?: string | null;
+  /** Su multa (penaltyEuros) se anuló después: el admin devolvió el dinero. */
+  penaltyReverted?: boolean;
 }
 
 /**

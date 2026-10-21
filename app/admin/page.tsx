@@ -48,6 +48,7 @@ import { BONUS_STATE_LABEL } from '@/lib/bonuses';
 import { useAdminRecoveries } from '@/lib/useTeacherRecoveries';
 import { teacherPenaltiesInMonth, spainMonthOfInstant, type PenaltyItem } from '@/lib/teacherPenalties';
 import BonusesTab from '@/components/admin/BonusesTab';
+import PenaltiesTab from '@/components/admin/PenaltiesTab';
 import ScoringV2Tab from '@/components/admin/ScoringV2Tab';
 import { buildTestAccountFilter } from '@/lib/testAccounts';
 
@@ -2443,6 +2444,7 @@ function AdminContent() {
 
         {/* BONOS: retención (6 meses) y upsells. Ver lib/bonuses.ts. */}
         {activeTab === 'bonos' && <BonusesTab />}
+        {activeTab === 'penalizaciones' && <PenaltiesTab />}
 
         {/* TRACKING TAB */}
         {activeTab === 'tracking' && <ClassTrackingTab />}

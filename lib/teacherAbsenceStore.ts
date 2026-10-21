@@ -650,12 +650,20 @@ export interface AdminAbsence {
 
 const RECUPERACION_VIVA = ['esperando_alumno', 'alumno_propuso', 'confirmada', 'sin_acuerdo'];
 
-export async function listAbsencesForAdmin(admin: SupabaseClient, days = 30): Promise<AdminAbsence[]> {
-  const desde = addDaysIso(getSpainParts(new Date()).dateStr, -days);
+/**
+ * Posibles ausencias para el admin: las de los últimos `days` días o, con
+ * `month` ('YYYY-MM'), las de las clases de ese mes (pestaña Penalizaciones).
+ */
+export async function listAbsencesForAdmin(admin: SupabaseClient, days = 30, month?: string): Promise<AdminAbsence[]> {
+  const delMes = !!month && /^\d{4}-\d{2}$/.test(month);
+  const desde = delMes ? `${month}-01` : addDaysIso(getSpainParts(new Date()).dateStr, -days);
+  // Hasta el día 1 del mes siguiente (sin incluirlo): '2026-11-31' no es una fecha.
+  const [y, m] = delMes ? month!.split('-').map(Number) : [0, 0];
+  const hasta = delMes ? `${m === 12 ? y + 1 : y}-${String(m === 12 ? 1 : m + 1).padStart(2, '0')}-01` : '9999-12-31';
   // `*` para no depender de las columnas de supabase-recuperacion-por-falta.sql.
   const [{ data, error }, { data: recs }, { data: tests }] = await Promise.all([
     admin.from(ABSENCES_TABLE).select('*')
-      .gte('class_date', desde)
+      .gte('class_date', desde).lt('class_date', hasta)
       .order('class_date', { ascending: false }).order('class_hour', { ascending: false })
       .limit(1000),
     admin.from('class_recoveries').select('*').gte('original_date', desde).limit(2000),

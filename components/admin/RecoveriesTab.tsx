@@ -49,6 +49,7 @@ function antelacion(min: number): string {
 function coste(r: AdminRecovery): { texto: string; tono: string } {
   // La multa de la falta (−10 €) vive en la posible ausencia, no aquí.
   if (r.origin === 'ausencia') return { texto: 'Posible ausencia: la falta se ve en Posibles ausencias', tono: 'ambar' };
+  if (r.penaltyEuros < 0 && r.penaltyReverted) return { texto: `Multa de ${Math.abs(r.penaltyEuros)} € anulada`, tono: 'gris' };
   if (r.origin === 'admin_reclasificacion') {
     return r.penaltyEuros < 0 ? { texto: `Falta del profesor: ${Math.abs(r.penaltyEuros)} € (reclasificada)`, tono: 'rojo' }
       : r.wouldHavePenalty ? { texto: `Histórico: habría costado 5 € (antes del ${corta(PENALTY_START_DATE)})`, tono: 'ambar' }

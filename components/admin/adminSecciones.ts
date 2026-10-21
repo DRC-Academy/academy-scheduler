@@ -11,7 +11,7 @@
 
 /** Ids de las secciones, en el orden histórico de las pestañas. */
 export const ADMIN_TAB_IDS = [
-  'teachers', 'emails', 'scoring', 'bonos', 'tracking', 'fueracal', 'classlog', 'transcripts',
+  'teachers', 'emails', 'scoring', 'bonos', 'penalizaciones', 'tracking', 'fueracal', 'classlog', 'transcripts',
   'leveltests', 'validacion', 'recuperaciones', 'ai', 'aiusage', 'bajas', 'testimoniales', 'notifications',
 ] as const;
 
@@ -75,6 +75,7 @@ export const GRUPOS_ADMIN: ReadonlyArray<{ nombre: string; secciones: SeccionAdm
     { id: 'teachers', label: 'Profesores' },
     { id: 'scoring', label: 'Scoring' },
     { id: 'bonos', label: 'Bonos' },
+    { id: 'penalizaciones', label: 'Penalizaciones' },
     { id: 'aiusage', label: 'Uso de IA' },
   ] },
   { nombre: 'Clases', secciones: [

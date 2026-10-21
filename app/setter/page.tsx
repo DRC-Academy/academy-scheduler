@@ -2,10 +2,12 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { NavBar } from '@/components/NavBar';
 import { StatusBadge } from '@/components/StatusBadge';
+import { Badge } from '@/components/ui';
+import { Search, Clock } from 'lucide-react';
 import { AuthGuard } from '@/components/AuthGuard';
 import { PullToRefresh } from '@/components/PullToRefresh';
 import { LastUpdated } from '@/components/LastUpdated';
-import { VisualCalendar, buildGridFromTeacher, cellKey, HOURS_ES, getWeekDates, formatWeekRange } from '@/components/VisualCalendar';
+import { VisualCalendar, buildGridFromTeacher, cellKey, getWeekDates, formatWeekRange } from '@/components/VisualCalendar';
 import { dbCheckStudentExists, dbSetStudentProduct, dbGetAssignmentsByTeacher, dbGetAssignments, dbUpsertStudent, dbRepairStudentLink, dbRepairAllBrokenLinks, dbGetAllGridOccupancy, GridOccupancy } from '@/lib/db';
 import { CrearVinculoModal } from '@/components/CrearVinculoModal';
 import { CambiarProfesorModal } from '@/components/CambiarProfesorModal';
@@ -15,8 +17,12 @@ import { useStudentAutofill } from '@/lib/useStudentAutofill';
 import { planBadgeStyle } from '@/lib/productUtils';
 import { formatPuntualDate, isAssignableCell, withBaseState } from '@/lib/cells';
 import { useTeachers } from '@/lib/TeachersContext';
-import { daysOfWeek } from '@/lib/mock-data';
-import { Teacher, SlotFilter, Grid, Assignment, Student, AssignedSlot } from '@/types';
+import { Teacher, Grid, Assignment, Student, AssignedSlot } from '@/types';
+import { ALL_SPECIALTIES } from '@/lib/specialties';
+import {
+  searchTeachers, pickRecommended, activeSelection, SEARCH_DAYS, DAY_SHORT, DEFAULT_STATUSES,
+  type SearchMode, type Coverage, type SortKey, type FilterStatus, type TeacherMatch,
+} from '@/lib/setterSearch';
 import FormStatusBadge from '@/components/FormStatusBadge';
 import { fetchFormTokensIndex, lookupToken, type FormTokenInfo } from '@/lib/formClient';
 import { isValidEmail } from '@/lib/validation';
@@ -28,28 +34,16 @@ import { checkSubscription, subBadge, type SubscriptionInfo } from '@/lib/useSub
 
 type FormIndex = { byId: Map<string, FormTokenInfo>; byName: Map<string, FormTokenInfo> };
 
-// ─── Specialty constants ──────────────────────────────────────────────────────
-const ALL_SPECIALTIES = ['Adultos', 'Niños', 'Exámenes'] as const;
-
-const SPECIALTY_STYLE: Record<string, { color: string; bg: string; border: string }> = {
-  Adultos:   { color: '#2563eb', bg: 'rgba(59,130,246,0.1)',    border: 'rgba(59,130,246,0.35)' },
-  Niños:     { color: '#ea580c', bg: 'rgba(249,115,22,0.1)',    border: 'rgba(249,115,22,0.35)' },
-  Exámenes:  { color: '#7c3aed', bg: 'rgba(139,92,246,0.1)',    border: 'rgba(139,92,246,0.35)' },
+// ─── Specialty chips ──────────────────────────────────────────────────────────
+// Esta pantalla sí colorea la especialidad (el resto de la app usa el chip
+// neutro de components/ui): el setter escanea la lista buscando "Niños" o
+// "Exámenes" y el color le ahorra leer cada fila. Inglés lo tienen todos → gris.
+const SPECIALTY_CLASS: Record<string, string> = {
+  Adultos: 'is-adultos', Niños: 'is-ninos', Exámenes: 'is-examenes', Teens: 'is-teens',
 };
 
 function SpecialtyChip({ specialty }: { specialty: string }) {
-  const s = SPECIALTY_STYLE[specialty] ?? { color: '#6b7280', bg: 'rgba(107,114,128,0.1)', border: 'rgba(107,114,128,0.3)' };
-  return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center',
-      padding: '2px 8px', borderRadius: 12,
-      background: s.bg, border: `1px solid ${s.border}`,
-      color: s.color, fontSize: 10, fontWeight: 700,
-      whiteSpace: 'nowrap',
-    }}>
-      {specialty}
-    </span>
-  );
+  return <span className={`stx-spec ${SPECIALTY_CLASS[specialty] ?? ''}`}>{specialty}</span>;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -981,34 +975,61 @@ function LinkCreateAssign({
 
 /** Orden de la lista. 'suggested' es el orden que ya devolvía `filtered` — es el
  *  valor por defecto para que el rediseño no altere lo que se ve hoy. */
-type SortKey = 'suggested' | 'name' | 'spots' | 'load';
-
 const SORT_LABELS: Record<SortKey, string> = {
   suggested: 'Sugerido',
-  name:      'Nombre',
-  spots:     'Más cupos',
-  load:      'Menor carga',
+  spots:     'Más cupos libres',
+  load:      'Menos carga',
+  name:      'Nombre (A–Z)',
 };
+
+const MODE_HINT: Record<SearchMode, string> = {
+  dayhour: 'Cada día se combina con cada hora (ej. Lun 18:00, Mar 18:00…).',
+  day:     'Profesores con algún hueco libre en los días elegidos.',
+  hour:    'Profesores libres a esas horas, cualquier día.',
+};
+
+// Franjas horarias del selector de horas (hora de España). Madrugada va aparte
+// porque casi nunca se usa: oculta por defecto salvo que tenga algo elegido.
+const hh = (n: number) => `${String(n).padStart(2, '0')}:00`;
+const hourBand = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => hh(from + i));
+const HOUR_BANDS = [
+  { key: 'madrugada', label: 'Madrugada', hours: hourBand(0, 6) },
+  { key: 'manana',    label: 'Mañana',    hours: hourBand(7, 12) },
+  { key: 'tarde',     label: 'Tarde',     hours: hourBand(13, 18) },
+  { key: 'noche',     label: 'Noche',     hours: hourBand(19, 23) },
+];
+
+const STATUS_CHIPS: Array<{ value: FilterStatus; label: string; dot: string }> = [
+  { value: 'available',   label: 'Disponible', dot: 'is-ok' },
+  { value: 'almost_full', label: 'Casi lleno', dot: 'is-warn' },
+  { value: 'busy',        label: 'Completo',   dot: 'is-danger' },
+];
+
+// Barra de carga semanal: verde < 45 %, ámbar 45–75 %, rojo desde 75 %.
+const loadTone = (pct: number) => (pct >= 75 ? 'is-danger' : pct >= 45 ? 'is-warn' : 'is-ok');
+const MAX_FRANJA_TAGS = 8;
+
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+function initials(name: string): string {
+  // Solo palabras que empiezan con letra: "Sebastian (test)" → "S", no "S(".
+  const parts = name.trim().split(/\s+/).filter(w => /^\p{L}/u.test(w));
+  return ((parts[0]?.[0] ?? '') + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase() || '?';
+}
 
 function SetterContent() {
   const { teachers, students, assignments, unassignedStudents, addStudent, addAssignment, reloadAll } = useTeachers();
 
-  const [searchMode, setSearchMode] = useState<'dayhour' | 'day' | 'hour'>('dayhour');
-  const [dayOnly, setDayOnly] = useState('Lunes');
-  // Horas exactas seleccionadas (modo "Solo hora"). Arranca con una sola, que es
-  // exactamente el estado que tenía el <select> de antes: con una hora elegida el
-  // resultado es idéntico al de siempre. Varias horas = unión (libre en ALGUNA).
-  const [hourSel, setHourSel] = useState<string[]>(['18:00']);
-  // Día activo de la grilla de horas en modo "Día + hora": elegir un día y luego
-  // una hora agrega ese par a `slotFilters`. Solo cambia cómo se eligen los
-  // pares; la semántica del filtro (el profesor debe tener TODOS libres) no.
-  const [dayPick, setDayPick] = useState('Lunes');
+  const [searchMode, setSearchMode] = useState<SearchMode>('dayhour');
+  const [days, setDays] = useState<string[]>([]);
+  const [hours, setHours] = useState<string[]>([]);
+  const [coverage, setCoverage] = useState<Coverage>('all');
+  const [specialties, setSpecialties] = useState<string[]>([]);
+  const [statuses, setStatuses] = useState<FilterStatus[]>(DEFAULT_STATUSES);
+  const [showMadrugada, setShowMadrugada] = useState(false);
   const [sortBy, setSortBy] = useState<SortKey>('suggested');
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [slotFilters, setSlotFilters] = useState<SlotFilter[]>([]);
-  const [onlyAvailable, setOnlyAvailable] = useState(false);
   const [searchName, setSearchName] = useState('');
-  const [specialtyFilter, setSpecialtyFilter] = useState<string>('');
   const [calendarTeacher, setCalendarTeacher] = useState<Teacher | null>(null);
   const [emailAssignment, setEmailAssignment] = useState<Assignment | null>(null);
   const [activeTab, setActiveTab] = useState<'search' | 'unassigned' | 'agenda' | 'history'>('search');
@@ -1135,150 +1156,93 @@ function SetterContent() {
     showToast(msg);
   }
 
-  function removeSlotFilter(id: string) {
-    setSlotFilters(prev => prev.filter(f => f.id !== id));
+  // ── Selección (todos los selectores se encienden y se apagan al pulsarlos) ──
+  const toggleIn = <V,>(list: V[], v: V) => (list.includes(v) ? list.filter(x => x !== v) : [...list, v]);
+  const toggleDay  = (d: string) => setDays(prev => toggleIn(prev, d));
+  const toggleHour = (h: string) => setHours(prev => toggleIn(prev, h));
+  // "Toda la franja" agrega las horas que falten; si ya estaban todas, las quita.
+  function toggleBand(bandHours: string[]) {
+    setHours(prev => bandHours.every(h => prev.includes(h))
+      ? prev.filter(h => !bandHours.includes(h))
+      : [...prev, ...bandHours.filter(h => !prev.includes(h))]);
   }
-  // Agrega o quita el par (día activo, hora) de la grilla. Sustituye a los pares
-  // add/update de <select>: el modelo `slotFilters` y su semántica son los mismos.
-  function toggleSlotFilter(day: string, hour: string) {
-    setSlotFilters(prev => {
-      const hit = prev.find(f => f.day === day && f.hour === hour);
-      if (hit) return prev.filter(f => f.id !== hit.id);
-      return [...prev, { id: `${day}_${hour}_${Date.now()}`, day, hour }];
-    });
-  }
-  function toggleHour(h: string) {
-    setHourSel(prev => prev.includes(h) ? prev.filter(x => x !== h) : [...prev, h].sort((a, b) => parseInt(a) - parseInt(b)));
-  }
+  const toggleSpecialty = (sp: string) => setSpecialties(prev => toggleIn(prev, sp));
+  const toggleStatus = (st: FilterStatus) => setStatuses(prev => toggleIn(prev, st));
 
-  // A searched slot counts as available if the teacher's real grid cell (from
-  // teacher_calendars) admite un alumno recurrente. libreCells holds those exact
-  // `${day}_${hour}` keys — NOT a min-max range — so 'ocupado' / 'no_work' cells
-  // between free hours never match. Una celda "En recuperación" SÍ matchea: es una
-  // clase puntual de una semana, el horario de fondo sigue libre (ver lib/cells).
-  const teacherHasAllSlots = (t: Teacher) =>
-    slotFilters.every(sf => (t.libreCells ?? []).includes(`${sf.day}_${sf.hour}`));
+  const query = { mode: searchMode, days, hours, coverage, name: searchName, specialties, statuses };
+  // Lo que de verdad cuenta: el bloque atenuado se ignora, y "Día + hora" con
+  // solo días u horas se comporta como "Solo día" / "Solo hora".
+  const sel = activeSelection(query);
+  const totalFranjas = sel.mode === 'dayhour' ? sel.days.length * sel.hours.length
+    : sel.mode === 'day' ? sel.days.length
+    : sel.mode === 'hour' ? sel.hours.length : 0;
 
-  // Avisos para los horarios que están libres pero tienen una recuperación puntual
-  // en una semana concreta.
-  const puntualNotes = (t: Teacher, slots: Array<{ day: string; hour: string }>) =>
-    slots
+  const results = useMemo(
+    () => searchTeachers(teachers, query, sortBy),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [teachers, searchMode, days, hours, coverage, searchName, specialties, statuses, sortBy],
+  );
+  const recommended = useMemo(() => pickRecommended(results), [results]);
+  // "Libre en todas" sin nadie que cumpla: en vez de la mejor opción, se ofrece
+  // pasar a "Alguna franja" con un toque.
+  const nobodyCoversAll = coverage === 'all' && totalFranjas > 0 && results.length === 0;
+
+  // Aviso para los horarios que están libres pero tienen una recuperación puntual
+  // en una semana concreta. Un solo renglón por profesor (antes era uno por
+  // horario y con varias franjas la fila se llenaba de avisos).
+  const puntualNotes = (t: Teacher, slots: AssignedSlot[]): string[] => {
+    const items = slots
       .map(sf => {
         const date = (t.puntualCells ?? {})[`${sf.day}_${sf.hour}`];
-        return date
-          ? `${sf.day} ${sf.hour}: disponible — tiene una recuperación puntual el ${formatPuntualDate(date)}, el resto de semanas es libre`
-          : null;
+        return date ? `${DAY_SHORT[sf.day] ?? sf.day} ${sf.hour} (${formatPuntualDate(date)})` : null;
       })
       .filter((n): n is string => n !== null);
-
-  // Horarios en juego según el modo de búsqueda activo, para los avisos de arriba.
-  const searchedSlots = (t: Teacher): Array<{ day: string; hour: string }> => {
-    if (searchMode === 'day')  return freeHoursOnDay(t, dayOnly).map(h => ({ day: dayOnly, hour: h }));
-    if (searchMode === 'hour') return hourSel.flatMap(h => freeDaysAtHour(t, h).map(d => ({ day: d, hour: h })));
-    return slotFilters.map(sf => ({ day: sf.day, hour: sf.hour }));
+    return items.length ? [`Libre todas las semanas salvo una recuperación puntual: ${items.join(' · ')}`] : [];
   };
 
-  // Horas libres de un profesor un día dado (modo "Solo por día").
-  const freeHoursOnDay = (t: Teacher, day: string) =>
-    (t.libreCells ?? []).filter(k => k.split('_')[0] === day).map(k => k.split('_')[1])
-      .sort((a, b) => parseInt(a) - parseInt(b));
-  // Días libres de un profesor a una hora dada (modo "Solo por hora").
-  const freeDaysAtHour = (t: Teacher, hour: string) => {
-    const set = new Set((t.libreCells ?? []).filter(k => k.split('_')[1] === hour).map(k => k.split('_')[0]));
-    return daysOfWeek.filter(d => set.has(d));
-  };
-  // Unión sobre varias horas: días en los que el profesor tiene libre ALGUNA de
-  // las horas elegidas. Con una sola hora es idéntico a freeDaysAtHour.
-  const freeDaysAtHours = (t: Teacher, hours: string[]) => {
-    const set = new Set(
-      (t.libreCells ?? []).filter(k => hours.includes(k.split('_')[1])).map(k => k.split('_')[0]),
-    );
-    return daysOfWeek.filter(d => set.has(d));
-  };
-
-  const filtered = useMemo(() => {
-    // Filtros comunes a todos los modos: cupos, nombre, especialidad.
-    const base = teachers.filter(t => {
-      if (onlyAvailable && t.status !== 'available' && t.status !== 'almost_full') return false;
-      if (searchName && !t.name.toLowerCase().includes(searchName.toLowerCase())) return false;
-      if (specialtyFilter && !(t.specialties ?? []).includes(specialtyFilter)) return false;
-      return true;
-    });
-    if (searchMode === 'day') {
-      return base.filter(t => freeHoursOnDay(t, dayOnly).length > 0)
-        .sort((a, b) => freeHoursOnDay(b, dayOnly).length - freeHoursOnDay(a, dayOnly).length);
-    }
-    if (searchMode === 'hour') {
-      // Sin ninguna hora elegida no hay restricción horaria, igual que "Día +
-      // hora" sin pares: se listan todos los que pasaron los filtros comunes.
-      if (hourSel.length === 0) return base;
-      return base.filter(t => freeDaysAtHours(t, hourSel).length > 0)
-        .sort((a, b) => freeDaysAtHours(b, hourSel).length - freeDaysAtHours(a, hourSel).length);
-    }
-    return base.filter(t => slotFilters.length === 0 || teacherHasAllSlots(t));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [teachers, onlyAvailable, searchName, specialtyFilter, slotFilters, searchMode, dayOnly, hourSel]);
-
-  // Orden de presentación. 'suggested' devuelve `filtered` intacto — es el orden
-  // que ya tenía la pantalla y el valor por defecto, así que el rediseño no
-  // cambia lo que ve el setter salvo que él elija otro criterio.
-  const sorted = useMemo(() => {
-    if (sortBy === 'suggested') return filtered;
-    const out = [...filtered];
-    if (sortBy === 'name')  out.sort((a, b) => a.name.localeCompare(b.name, 'es'));
-    if (sortBy === 'spots') out.sort((a, b) => b.freeSpots - a.freeSpots || a.name.localeCompare(b.name, 'es'));
-    if (sortBy === 'load')  out.sort((a, b) => a.weeklyLoad - b.weeklyLoad || a.name.localeCompare(b.name, 'es'));
-    return out;
-  }, [filtered, sortBy]);
-
-  // Recomendado: el primero de la lista (ya ordenada) que pueda recibir alumnos.
-  const recommended = useMemo(() => {
-    if (searchMode === 'day' || searchMode === 'hour') {
-      return filtered.find(t => !t.isBlocked && t.status === 'available' && t.freeSpots > 0);
-    }
-    return filtered.find(t =>
-      !t.isBlocked && t.status === 'available' &&
-      t.freeSpots >= Math.max(slotFilters.length, 1) &&
-      (slotFilters.length === 0 || teacherHasAllSlots(t))
-    );
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filtered, searchMode, slotFilters]);
-
-  // Celdas a resaltar en el calendario del profesor que se está viendo.
+  // Celdas a resaltar en el calendario del profesor que se está viendo: en
+  // "Día + hora" todas las combinaciones buscadas; en "Solo día" / "Solo hora"
+  // las celdas libres que hacen que ese día u hora cuente.
   const highlightSlots = useMemo<AssignedSlot[]>(() => {
-    if (searchMode === 'day' && calendarTeacher) return freeHoursOnDay(calendarTeacher, dayOnly).map(h => ({ day: dayOnly, hour: h }));
-    if (searchMode === 'hour' && calendarTeacher) return hourSel.flatMap(h => freeDaysAtHour(calendarTeacher, h).map(d => ({ day: d, hour: h })));
-    return slotFilters.map(sf => ({ day: sf.day, hour: sf.hour }));
+    if (sel.mode === 'dayhour') return sel.days.flatMap(day => sel.hours.map(hour => ({ day, hour })));
+    if (!calendarTeacher || sel.mode === 'none') return [];
+    return results.find(m => m.teacher.id === calendarTeacher.id)?.freeCells ?? [];
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchMode, calendarTeacher, dayOnly, hourSel, slotFilters]);
+  }, [calendarTeacher, results, searchMode, days, hours]);
 
-  // ── Filtros activos, como chips removibles uno por uno ─────────────────────
-  // El día de "Solo día" no entra: siempre vale algo (no es opcional), y un chip
-  // que no se puede quitar es un botón que miente. Va en la línea de resultados.
-  const activeChips: Array<{ key: string; label: string; clear: () => void }> = [];
-  if (searchName.trim()) {
-    activeChips.push({ key: 'name', label: `“${searchName.trim()}”`, clear: () => setSearchName('') });
-  }
-  if (searchMode === 'hour') {
-    for (const h of hourSel) activeChips.push({ key: `h_${h}`, label: h, clear: () => toggleHour(h) });
-  }
-  if (searchMode === 'dayhour') {
-    for (const sf of slotFilters) activeChips.push({ key: sf.id, label: `${sf.day} ${sf.hour}`, clear: () => removeSlotFilter(sf.id) });
-  }
-  if (specialtyFilter) {
-    activeChips.push({ key: 'sp', label: specialtyFilter, clear: () => setSpecialtyFilter('') });
-  }
-  if (onlyAvailable) {
-    activeChips.push({ key: 'av', label: 'Solo con cupos libres', clear: () => setOnlyAvailable(false) });
-  }
+  // Píldoras del resumen: cada día y cada hora que está en juego, quitables.
+  const selectionPills = [
+    ...sel.days.map(d => ({ key: `d_${d}`, label: DAY_SHORT[d] ?? d, clear: () => toggleDay(d) })),
+    ...sel.hours.map(h => ({ key: `h_${h}`, label: h, clear: () => toggleHour(h) })),
+  ];
+  const statusesChanged = statuses.length !== DEFAULT_STATUSES.length || !DEFAULT_STATUSES.every(s => statuses.includes(s));
+  const activeCount = selectionPills.length + specialties.length + (searchName.trim() ? 1 : 0) + (statusesChanged ? 1 : 0);
+
+  const summaryTitle = sel.mode === 'dayhour'
+    ? `${plural(sel.days.length, 'día', 'días')} × ${plural(sel.hours.length, 'hora', 'horas')} = ${plural(totalFranjas, 'franja', 'franjas')}`
+    : sel.mode === 'day' ? `${plural(sel.days.length, 'día elegido', 'días elegidos')}`
+    : sel.mode === 'hour' ? `${plural(sel.hours.length, 'hora elegida', 'horas elegidas')}`
+    : 'Sin días ni horas';
+
+  const madrugadaHours = HOUR_BANDS[0].hours;
+  const madrugadaVisible = showMadrugada || hours.some(h => madrugadaHours.includes(h));
 
   function clearFilters() {
+    setSearchMode('dayhour');
+    setDays([]);
+    setHours([]);
+    setCoverage('all');
     setSearchName('');
-    setSpecialtyFilter('');
-    setOnlyAvailable(false);
-    setSlotFilters([]);
-    setHourSel([]);
+    setSpecialties([]);
+    setStatuses(DEFAULT_STATUSES);
+    setShowMadrugada(false);
   }
+
+  // Motivo de la "mejor opción" y de cada fila: "libre en 6 de 6 · 14 cupos libres".
+  const matchReason = (m: TeacherMatch) => [
+    m.total > 0 ? `libre en ${m.matched} de ${m.total}` : null,
+    plural(m.teacher.freeSpots, 'cupo libre', 'cupos libres'),
+  ].filter(Boolean).join(' · ');
 
   async function handleAssigned(a: Assignment, s: Student) {
     // El alumno PRIMERO (la assignment tiene FK a students), y con manejo de
@@ -1307,7 +1271,7 @@ function SetterContent() {
           <div className="stx-head-top">
             <div>
               <h1 className="stx-title">Setter</h1>
-              <p className="stx-sub">Asigná alumnos a profesores disponibles.</p>
+              <p className="stx-sub">Elegí días y horas, y te mostramos qué profesores pueden tomar al alumno.</p>
             </div>
             <span className="stx-stamp">
               <span className="stx-stamp-dot" aria-hidden />
@@ -1345,53 +1309,46 @@ function SetterContent() {
           <div className="stx-grid">
 
             {/* ── Barra de filtros en MÓVIL ────────────────────────────────
-                El buscador queda siempre a la vista; el resto de los filtros
-                entran en un panel plegable. Con el panel cerrado, los filtros
-                aplicados siguen visibles como chips: el criterio es que el
-                usuario nunca pierda de vista qué está filtrando. */}
+                El buscador queda siempre a la vista y el resto del panel se
+                pliega. Lo elegido sigue visible en la tarjeta de resumen de
+                arriba de los resultados, así nunca se pierde qué se filtra. */}
             <div className="stx-mob">
               <div className="stx-mob-bar">
-                <input value={searchName} onChange={e => setSearchName(e.target.value)}
-                  placeholder="Buscar profesor..." aria-label="Buscar por nombre de profesor" />
+                <div className="stx-search">
+                  <Search size={16} aria-hidden className="stx-search-ico" />
+                  <input value={searchName} onChange={e => setSearchName(e.target.value)}
+                    placeholder="Buscar profesor..." aria-label="Buscar por nombre de profesor" />
+                </div>
                 <button type="button" className={`stx-mob-toggle${filtersOpen ? ' is-on' : ''}`}
                   aria-expanded={filtersOpen} onClick={() => setFiltersOpen(o => !o)}>
                   Filtros
-                  {activeChips.length > 0 && <span className="stx-mob-n">{activeChips.length}</span>}
+                  {activeCount > 0 && <span className="stx-mob-n">{activeCount}</span>}
                 </button>
               </div>
-              {!filtersOpen && activeChips.length > 0 && (
-                <div className="stx-mob-chips">
-                  {activeChips.map(c => (
-                    <button key={c.key} type="button" className="stx-chip" onClick={c.clear}
-                      aria-label={`Quitar filtro ${c.label}`}>
-                      {c.label}<span className="stx-chip-x" aria-hidden>×</span>
-                    </button>
-                  ))}
-                </div>
-              )}
             </div>
 
-            {/* ── Rail de filtros ──────────────────────────────────────────
-                En escritorio es sticky y siempre visible (is-collapsed solo
-                tiene efecto dentro del media query de móvil). */}
+            {/* ── Panel de filtros ─────────────────────────────────────────
+                Todo se aplica al instante: no hay botón de "Buscar". */}
             <aside className={`stx-rail${filtersOpen ? '' : ' is-collapsed'}`} aria-label="Filtros">
               <div className="stx-rail-head">
                 <span className="stx-rail-title">Filtros</span>
-                <button type="button" className="stx-clear" onClick={clearFilters}
-                  disabled={activeChips.length === 0}>
-                  Limpiar
-                </button>
+                <button type="button" className="stx-link" onClick={clearFilters}>Limpiar todo</button>
               </div>
 
+              {/* 1. Buscar profesor */}
               <div className="stx-field stx-deskonly">
                 <label className="stx-label" htmlFor="stx-name">Buscar profesor</label>
-                <input id="stx-name" value={searchName} onChange={e => setSearchName(e.target.value)}
-                  placeholder="Ej: Silvia, Sebastian..." />
+                <div className="stx-search">
+                  <Search size={16} aria-hidden className="stx-search-ico" />
+                  <input id="stx-name" value={searchName} onChange={e => setSearchName(e.target.value)}
+                    placeholder="Ej: Silvia, Sebastian..." />
+                </div>
               </div>
 
+              {/* 2. Buscar por */}
               <div className="stx-field">
-                <span className="stx-label">Disponibilidad</span>
-                <div className="stx-seg" role="group" aria-label="Tipo de búsqueda">
+                <span className="stx-label">Buscar por</span>
+                <div className="stx-seg" role="group" aria-label="Buscar por">
                   {([
                     ['dayhour', 'Día + hora'],
                     ['day',     'Solo día'],
@@ -1404,140 +1361,189 @@ function SetterContent() {
                     </button>
                   ))}
                 </div>
+                <div className="stx-hint">{MODE_HINT[searchMode]}</div>
               </div>
 
-              {/* Días — en "Solo hora" no se muestran. En "Día + hora" el día
-                  elegido es el que se combina con la grilla de horas de abajo. */}
-              {searchMode !== 'hour' && (
-                <div className="stx-field">
-                  <span className="stx-label">{searchMode === 'day' ? 'Día' : 'Día a combinar'}</span>
-                  <div className="stx-opts">
-                    {daysOfWeek.map(d => {
-                      const active = searchMode === 'day' ? dayOnly === d : dayPick === d;
-                      return (
-                        <button key={d} type="button" aria-pressed={active}
-                          className={`stx-opt${active ? ' is-active' : ''}`}
-                          onClick={() => (searchMode === 'day' ? setDayOnly(d) : setDayPick(d))}>
-                          {d}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {searchMode === 'day' && (
-                    <div className="stx-hint">Profesores con al menos una hora libre el {dayOnly}, ordenados por cantidad de horas libres.</div>
-                  )}
+              {/* 3. Días — selección múltiple. Atenuado en "Solo hora". */}
+              <fieldset className={`stx-field stx-fs${searchMode === 'hour' ? ' is-off' : ''}`}
+                disabled={searchMode === 'hour'} aria-label="Días">
+                <div className="stx-field-head">
+                  <span className="stx-label">Días · podés elegir varios</span>
                 </div>
-              )}
-
-              {/* Horario exacto — nunca franjas (mañana/tarde/noche): se eligen
-                  las horas concretas. El rango es el real del calendario
-                  (HOURS_ES), no un 08–21 fijo: recortarlo escondería horas que
-                  hoy se pueden filtrar. */}
-              {searchMode !== 'day' && (
-                <div className="stx-field">
-                  <span className="stx-label">Horario exacto (España)</span>
-                  <div className="stx-hours">
-                    {HOURS_ES.map(h => {
-                      const active = searchMode === 'hour'
-                        ? hourSel.includes(h)
-                        : slotFilters.some(sf => sf.day === dayPick && sf.hour === h);
-                      return (
-                        <button key={h} type="button" aria-pressed={active}
-                          className={`stx-hour${active ? ' is-active' : ''}`}
-                          onClick={() => (searchMode === 'hour' ? toggleHour(h) : toggleSlotFilter(dayPick, h))}>
-                          {h}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <div className="stx-hint">
-                    {searchMode === 'hour'
-                      ? (hourSel.length === 0
-                          ? 'Sin horas elegidas — se muestran todos los profesores.'
-                          : `Profesores libres a las ${hourSel.join(' o ')} en cualquier día, ordenados por cantidad de días libres.`)
-                      : (slotFilters.length === 0
-                          ? 'Sin horarios elegidos — se muestran todos los profesores.'
-                          : `Profesores con TODOS estos horarios libres: ${slotFilters.map(sf => `${sf.day} ${sf.hour}`).join(' · ')}.`)}
-                  </div>
+                <div className="stx-days">
+                  {SEARCH_DAYS.map(d => {
+                    const on = days.includes(d);
+                    return (
+                      <button key={d} type="button" aria-pressed={on} aria-label={d} title={d}
+                        className={`stx-opt stx-day${on ? ' is-active' : ''}`} onClick={() => toggleDay(d)}>
+                        {DAY_SHORT[d]}
+                      </button>
+                    );
+                  })}
                 </div>
-              )}
+                <div className="stx-shortcuts">
+                  <button type="button" className="stx-link" onClick={() => setDays(['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes'])}>Lun a Vie</button>
+                  {/* El calendario de los profesores no tiene domingo: fin de semana = sábado. */}
+                  <button type="button" className="stx-link" onClick={() => setDays(['Sábado'])} title="Sábado (el calendario no tiene domingo)">Fin de semana</button>
+                  <button type="button" className="stx-link" onClick={() => setDays([])} disabled={days.length === 0}>Quitar días</button>
+                </div>
+              </fieldset>
 
+              {/* 4. Horas (España) — selección múltiple por franja. Atenuado en "Solo día". */}
+              <fieldset className={`stx-field stx-fs${searchMode === 'day' ? ' is-off' : ''}`}
+                disabled={searchMode === 'day'} aria-label="Horas">
+                <div className="stx-field-head">
+                  <span className="stx-label">Horas (España) · varias</span>
+                  <button type="button" className="stx-link" onClick={() => setHours([])} disabled={hours.length === 0}>Quitar horas</button>
+                </div>
+                {!hours.some(h => madrugadaHours.includes(h)) && (
+                  <button type="button" className="stx-link stx-madrugada" onClick={() => setShowMadrugada(v => !v)}>
+                    {madrugadaVisible ? 'Ocultar madrugada' : 'Mostrar madrugada (00–06)'}
+                  </button>
+                )}
+                {HOUR_BANDS.filter(b => b.key !== 'madrugada' || madrugadaVisible).map(b => {
+                  const allOn = b.hours.every(h => hours.includes(h));
+                  return (
+                    <div key={b.key} className="stx-band">
+                      <div className="stx-band-head">
+                        <span className="stx-band-t">
+                          {b.label} <span className="stx-band-r">{b.hours[0].slice(0, 2)}–{b.hours[b.hours.length - 1].slice(0, 2)}</span>
+                        </span>
+                        <button type="button" className="stx-link" onClick={() => toggleBand(b.hours)}>
+                          {allOn ? 'Quitar franja' : 'Toda la franja'}
+                        </button>
+                      </div>
+                      <div className="stx-hours">
+                        {b.hours.map(h => {
+                          const on = hours.includes(h);
+                          return (
+                            <button key={h} type="button" aria-pressed={on} aria-label={h}
+                              className={`stx-hour${on ? ' is-active' : ''}`} onClick={() => toggleHour(h)}>
+                              {h.slice(0, 2)}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </fieldset>
+
+              {/* 5. Cobertura */}
               <div className="stx-field">
-                <span className="stx-label">Especialidad</span>
-                <div className="stx-opts">
-                  {(['', ...ALL_SPECIALTIES] as string[]).map(sp => (
-                    <button key={sp || 'all'} type="button" aria-pressed={specialtyFilter === sp}
-                      className={`stx-opt${specialtyFilter === sp ? ' is-active' : ''}`}
-                      onClick={() => setSpecialtyFilter(sp)}>
-                      {sp || 'Todas'}
+                <span className="stx-label">El profesor debe estar libre en</span>
+                <div className="stx-seg" role="group" aria-label="El profesor debe estar libre en">
+                  {([
+                    ['all', 'Todas las franjas'],
+                    ['any', 'Alguna franja'],
+                  ] as const).map(([c, label]) => (
+                    <button key={c} type="button" aria-pressed={coverage === c}
+                      className={`stx-seg-btn${coverage === c ? ' is-active' : ''}`}
+                      onClick={() => setCoverage(c)}>
+                      {label}
                     </button>
                   ))}
                 </div>
               </div>
 
+              {/* 6. Especialidad — varias = el profesor tiene que tenerlas todas. */}
               <div className="stx-field">
-                <label className="stx-switch">
-                  Solo con cupos libres
-                  <input type="checkbox" checked={onlyAvailable} onChange={e => setOnlyAvailable(e.target.checked)} />
-                </label>
+                <span className="stx-label">Especialidad</span>
+                <div className="stx-opts">
+                  <button type="button" aria-pressed={specialties.length === 0}
+                    className={`stx-opt${specialties.length === 0 ? ' is-active' : ''}`}
+                    onClick={() => setSpecialties([])}>
+                    Todas
+                  </button>
+                  {ALL_SPECIALTIES.map(sp => {
+                    const on = specialties.includes(sp);
+                    return (
+                      <button key={sp} type="button" aria-pressed={on}
+                        className={`stx-opt${on ? ' is-active' : ''}`} onClick={() => toggleSpecialty(sp)}>
+                        {sp}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* 7. Estado */}
+              <div className="stx-field">
+                <span className="stx-label">Estado</span>
+                <div className="stx-opts">
+                  {STATUS_CHIPS.map(s => {
+                    const on = statuses.includes(s.value);
+                    return (
+                      <button key={s.value} type="button" aria-pressed={on}
+                        className={`stx-opt${on ? ' is-active' : ''}`} onClick={() => toggleStatus(s.value)}>
+                        <span className={`stx-dot ${s.dot}`} aria-hidden />{s.label}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
 
               {/* Solo móvil: cierre del panel. */}
               <div className="stx-rail-actions">
-                <button type="button" className="stx-cta stx-cta-ghost" onClick={clearFilters}>Limpiar</button>
+                <button type="button" className="stx-cta stx-cta-ghost" onClick={clearFilters}>Limpiar todo</button>
                 <button type="button" className="stx-cta" onClick={() => setFiltersOpen(false)}>
-                  Ver {sorted.length} profesor{sorted.length !== 1 ? 'es' : ''}
+                  Ver {plural(results.length, 'profesor', 'profesores')}
                 </button>
               </div>
             </aside>
 
             {/* ── Resultados ───────────────────────────────────────────────*/}
-            <section aria-label="Profesores">
-              {recommended && (
+            <section className="stx-results" aria-label="Profesores">
+
+              {/* Resumen de la búsqueda */}
+              <div className="stx-panel stx-summary">
+                <div className="stx-summary-top">
+                  <span className="stx-summary-ico" aria-hidden><Clock size={18} /></span>
+                  <span className="stx-summary-t">{summaryTitle}</span>
+                  {totalFranjas > 0 && (
+                    <span className="stx-summary-cov">{coverage === 'all' ? 'Libre en todas' : 'Libre en alguna'}</span>
+                  )}
+                </div>
+                {selectionPills.length > 0 ? (
+                  <div className="stx-pills">
+                    {selectionPills.map(p => (
+                      <button key={p.key} type="button" className="stx-pill" onClick={p.clear} aria-label={`Quitar ${p.label}`}>
+                        {p.label}<span className="stx-pill-x" aria-hidden>×</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="stx-summary-empty">Todavía no elegiste días ni horas: se muestran todos los profesores.</p>
+                )}
+              </div>
+
+              {/* Mejor opción, o el aviso si nadie cubre todas las franjas */}
+              {nobodyCoversAll ? (
+                <div className="stx-warn" role="status">
+                  <span className="stx-warn-t">Ningún profesor está libre en todas las franjas elegidas.</span>
+                  <button type="button" className="stx-cta stx-cta-ghost" onClick={() => setCoverage('any')}>
+                    Mostrar los que cubren alguna
+                  </button>
+                </div>
+              ) : recommended && (
                 <div className="stx-best">
+                  <div className="stx-avatar is-best" aria-hidden>{initials(recommended.teacher.name)}</div>
                   <div className="stx-best-body">
-                    <div className="stx-label" style={{ marginBottom: 4 }}>Mejor opción ahora</div>
-                    {searchMode === 'day' ? (() => {
-                      const hrs = freeHoursOnDay(recommended, dayOnly);
-                      return (<>
-                        <div className="stx-best-name">{recommended.name} — {hrs.length} horario{hrs.length !== 1 ? 's' : ''} libre{hrs.length !== 1 ? 's' : ''} el {dayOnly}</div>
-                        <div className="stx-best-detail">{hrs.join(', ')}</div>
-                      </>);
-                    })() : searchMode === 'hour' ? (() => {
-                      const dys = freeDaysAtHours(recommended, hourSel);
-                      return (<>
-                        <div className="stx-best-name">{recommended.name} — libre en {dys.length} día{dys.length !== 1 ? 's' : ''}</div>
-                        <div className="stx-best-detail">{dys.join(', ') || '—'}</div>
-                      </>);
-                    })() : (<>
-                      <div className="stx-best-name">{recommended.name} — {recommended.freeSpots} cupos libres</div>
-                      {slotFilters.length > 0 && (() => {
-                        const freeSearched = slotFilters.filter(sf => (recommended.libreCells ?? []).includes(`${sf.day}_${sf.hour}`));
-                        return freeSearched.length > 0 && <div className="stx-best-detail">Disponible en: {freeSearched.map(sf => `${sf.day} ${sf.hour}`).join(' · ')}</div>;
-                      })()}
-                    </>)}
-                    {puntualNotes(recommended, searchedSlots(recommended)).map(note => (
+                    <div className="stx-label" style={{ marginBottom: 2 }}>Mejor opción ahora</div>
+                    <div className="stx-best-name">{recommended.teacher.name} — {matchReason(recommended)}</div>
+                    {puntualNotes(recommended.teacher, recommended.freeCells).map(note => (
                       <div key={note} className="stx-note stx-note-warn">♻️ {note}</div>
                     ))}
                   </div>
-                  <button className="stx-cta" onClick={() => setCalendarTeacher(recommended)}>Ver calendario</button>
+                  <button type="button" className="stx-cta" onClick={() => setCalendarTeacher(recommended.teacher)}>Ver calendario</button>
                 </div>
               )}
 
-              {/* Línea de estado: cuántos hay, qué filtros están puestos y orden. */}
+              {/* Cuántos hay y orden */}
               <div className="stx-statusline">
                 <span className="stx-count">
-                  {sorted.length} profesor{sorted.length !== 1 ? 'es' : ''}
-                  {searchMode === 'day' && <span style={{ fontWeight: 'var(--fw-regular)', color: 'var(--text-secondary)' }}> · {dayOnly}</span>}
+                  <span className="stx-count-n">{results.length}</span> {results.length === 1 ? 'profesor' : 'profesores'}
                 </span>
-                <div className="stx-chips">
-                  {activeChips.map(c => (
-                    <button key={c.key} type="button" className="stx-chip" onClick={c.clear}
-                      aria-label={`Quitar filtro ${c.label}`}>
-                      {c.label}<span className="stx-chip-x" aria-hidden>×</span>
-                    </button>
-                  ))}
-                </div>
                 <div className="stx-sort">
                   <label className="stx-label" htmlFor="stx-sort" style={{ margin: 0 }}>Orden</label>
                   <select id="stx-sort" value={sortBy} onChange={e => setSortBy(e.target.value as SortKey)}>
@@ -1549,83 +1555,77 @@ function SetterContent() {
               </div>
 
               <div className="stx-card">
-                <div className="stx-thead" aria-hidden>
-                  <span className="stx-th stx-th-main">Profesor</span>
-                  <span className="stx-th-meta">
-                    <span className="stx-th" style={{ minWidth: 116 }}>Estado</span>
-                    <span className="stx-th" style={{ minWidth: 52, textAlign: 'center' }}>Cupos</span>
-                    <span className="stx-th" style={{ flex: '1 1 120px' }}>Carga</span>
-                  </span>
-                </div>
-
-                {sorted.length === 0 ? (
+                {results.length === 0 ? (
                   <div className="stx-empty">
-                    <div className="stx-empty-t">Ningún profesor coincide con los filtros</div>
-                    <div className="stx-empty-d">Probá quitar alguno de los filtros aplicados o ampliar el horario.</div>
-                    <button type="button" className="stx-cta" onClick={clearFilters}>Limpiar filtros</button>
+                    <div className="stx-empty-d">No hay profesores con estos filtros. Probá quitar alguna hora o cambiar a &lsquo;Alguna franja&rsquo;.</div>
                   </div>
-                ) : sorted.map(t => {
-                  const loadPct = t.maxWeeklyLoad > 0 ? Math.round((t.weeklyLoad / t.maxWeeklyLoad) * 100) : 0;
-                  // Mismos colores que el punto del StatusBadge de la fila: la
-                  // barra y el estado tienen que contar la misma historia.
-                  const loadColor = loadPct >= 90 ? 'var(--status-busy)' : loadPct >= 65 ? 'var(--status-almost)' : 'var(--status-available)';
+                ) : results.map(m => {
+                  const t = m.teacher;
+                  const max = t.maxWeeklyLoad > 0 ? t.maxWeeklyLoad : 20;
+                  const loadPct = Math.min(100, Math.round((t.weeklyLoad / max) * 100));
                   const isBlocked = t.isBlocked ?? false;
+                  const isFull = t.status === 'busy';
+                  const matchTone = m.total === 0 ? 'is-none' : m.matched === m.total ? 'is-ok' : 'is-warn';
+                  const extra = m.franjas.length - MAX_FRANJA_TAGS;
 
                   return (
                     <div key={t.id} className={`stx-row${isBlocked ? ' is-blocked' : ''}`}>
                       <div className="stx-row-main">
-                        <div className="stx-avatar" aria-hidden>{t.avatar}</div>
+                        <div className="stx-avatar" aria-hidden>{initials(t.name)}</div>
                         <div style={{ minWidth: 0 }}>
-                          <div className="stx-name">{t.name}</div>
+                          <div className="stx-name-line">
+                            <span className="stx-name">{t.name}</span>
+                            {/* El estado nunca se comunica solo por color: punto + texto. */}
+                            {isBlocked ? <Badge tone="danger" dot>Bloqueado</Badge> : <StatusBadge status={t.status} />}
+                          </div>
                           <div className="stx-email">{t.email}</div>
                           {(t.specialties ?? []).length > 0 && (
                             <div className="stx-tags">
                               {(t.specialties ?? []).map(sp => <SpecialtyChip key={sp} specialty={sp} />)}
                             </div>
                           )}
-                          {searchMode === 'day' && (
-                            <div className="stx-note">Libre el {dayOnly}: {freeHoursOnDay(t, dayOnly).join(', ') || '—'}</div>
-                          )}
-                          {searchMode === 'hour' && hourSel.length > 0 && (
-                            <div className="stx-note">Libre a las {hourSel.join(' / ')}: {freeDaysAtHours(t, hourSel).join(', ') || '—'}</div>
-                          )}
-                          {puntualNotes(t, searchedSlots(t)).map(note => (
+                          {puntualNotes(t, m.freeCells).map(note => (
                             <div key={note} className="stx-note stx-note-warn">♻️ {note}</div>
                           ))}
                         </div>
                       </div>
 
-                      <div className="stx-row-meta">
-                        {/* El estado nunca se comunica solo por color: StatusBadge
-                            ya trae punto + texto y es el mismo de toda la app. */}
-                        <div style={{ minWidth: 116 }}>
-                          {isBlocked ? (
-                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 'var(--radius-pill)', background: 'var(--danger-soft)', border: '1px solid var(--danger-border)', color: 'var(--danger)', fontSize: 'var(--fs-caption)', fontWeight: 'var(--fw-semibold)' }}>
-                              <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--danger)', flexShrink: 0 }} />
-                              Bloqueado
-                            </span>
-                          ) : (
-                            <StatusBadge status={t.status} />
-                          )}
+                      <div className="stx-match">
+                        <div className={`stx-match-t ${matchTone}`}>
+                          {m.total === 0 ? 'Sin franja elegida'
+                            : m.matched === m.total ? `Libre en todas · ${m.matched} de ${m.total}`
+                            : `Libre en ${m.matched} de ${m.total}`}
                         </div>
-
-                        <div className="stx-metric">
-                          <div className={`stx-metric-n${t.freeSpots > 0 && !isBlocked ? '' : ' is-zero'}`}>{t.freeSpots}</div>
-                          <div className="stx-metric-l">Cupos</div>
-                        </div>
-
-                        <div className="stx-load">
-                          <div className="stx-load-top"><span>Carga</span><span>{t.weeklyLoad}h</span></div>
-                          <div className="stx-load-bar">
-                            <div className="stx-load-fill" style={{ width: `${loadPct}%`, background: loadColor }} />
+                        {m.total > 0 && (
+                          <div className="stx-ftags">
+                            {m.franjas.slice(0, MAX_FRANJA_TAGS).map(f => (
+                              <span key={f.key} className={`stx-ftag${f.free ? ' is-free' : ' is-busy'}`}
+                                title={`${f.label}: ${f.free ? 'libre' : 'ocupado'}`}>
+                                {f.label}
+                              </span>
+                            ))}
+                            {extra > 0 && <span className="stx-ftag is-more">+{extra}</span>}
                           </div>
-                        </div>
-
-                        <button className="stx-cta" onClick={() => setCalendarTeacher(t)} disabled={isBlocked}
-                          title={isBlocked ? 'Profesor bloqueado por baja retención' : undefined}>
-                          {isBlocked ? 'No disponible' : 'Ver calendario'}
-                        </button>
+                        )}
                       </div>
+
+                      <div className="stx-metric">
+                        <div className={`stx-metric-n${t.freeSpots > 0 && !isBlocked ? '' : ' is-zero'}`}>{t.freeSpots}</div>
+                        <div className="stx-metric-l">Cupos</div>
+                      </div>
+
+                      <div className="stx-load">
+                        <div className="stx-load-top"><span>Carga semanal</span><span>{t.weeklyLoad}h</span></div>
+                        <div className="stx-load-bar" title={`${t.weeklyLoad}h de ${max}h`}>
+                          <div className={`stx-load-fill ${loadTone(loadPct)}`} style={{ width: `${loadPct}%` }} />
+                        </div>
+                      </div>
+
+                      <button type="button" className={`stx-cta stx-row-cta${isFull ? ' stx-cta-ghost' : ''}`}
+                        onClick={() => setCalendarTeacher(t)} disabled={isBlocked}
+                        title={isBlocked ? 'Profesor bloqueado por baja retención' : undefined}>
+                        {isBlocked ? 'No disponible' : 'Ver calendario'}
+                      </button>
                     </div>
                   );
                 })}
@@ -1729,7 +1729,7 @@ function SetterContent() {
                               🔗 Crear vínculo
                             </button>
                           )}
-                          <button onClick={() => { setSearchName(''); setSpecialtyFilter(''); setActiveTab('search'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                          <button onClick={() => { setSearchName(''); setSpecialties([]); setActiveTab('search'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
                             style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: '#1E9E3A', color: 'white', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
                             Asignar profesor →
                           </button>

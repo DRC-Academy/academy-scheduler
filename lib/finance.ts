@@ -621,6 +621,25 @@ export interface CalcInput {
   now?: number;
 }
 
+/**
+ * Eventos de scoring que cuentan en el balance de un profesor en un mes: los de
+ * ese mes (eventMonthOf, hora de España), sin los revertidos ni sus
+ * compensatorios. Fuente ÚNICA: la usan calculateTeacherFinance y la pestaña
+ * Penalizaciones del admin, así que sus totales no pueden diferir por el cálculo.
+ */
+export function scoringEventsForMonth(scoringEvents: readonly ScoringEvent[], teacherId: string, monthYear: string): ScoringEvent[] {
+  return scoringEvents.filter(e =>
+    e.teacherId === teacherId &&
+    eventMonthOf(e) === monthYear &&
+    !e.reverted &&
+    e.eventType !== 'penalizacion_revertida');
+}
+
+/** Suma NEGATIVA de las penalizaciones (euros < 0) de una lista de eventos. */
+export function penaltySumOf(events: readonly ScoringEvent[]): number {
+  return events.filter(e => (e.euros ?? 0) < 0).reduce((s, e) => s + (e.euros ?? 0), 0);
+}
+
 // Calcula la liquidación de UN profesor para un mes.
 export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult {
   const {
@@ -1096,11 +1115,7 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
   // El mes es eventMonthOf: el fijado al crear la multa (la falta, el de la
   // clase; la cancelación, el de la cancelación) o el de createdAt en hora de
   // ESPAÑA. Antes era el mes UTC (ver lib/teacherPenalties).
-  const scoringThisMonth = scoringEvents.filter(e =>
-    e.teacherId === teacherId &&
-    eventMonthOf(e) === monthYear &&
-    !e.reverted &&
-    e.eventType !== 'penalizacion_revertida');
+  const scoringThisMonth = scoringEventsForMonth(scoringEvents, teacherId, monthYear);
 
   // Los euros positivos de scoring EXCLUYEN los tipos que ya se pagan por
   // teacher_bonuses: así un bono viejo cargado por Scoring aporta puntos pero
@@ -1116,9 +1131,7 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
   const bonusFromBonuses = sumBonusEuros(bonusRows);
   // Suma NEGATIVA (penalizaciones: falta sin aviso, etc.). FIX del bug histórico:
   // antes solo se sumaban los euros > 0, así que las penalizaciones no restaban.
-  const penaltiesFromScoring = scoringThisMonth
-    .filter(e => (e.euros ?? 0) < 0)
-    .reduce((s, e) => s + (e.euros ?? 0), 0);
+  const penaltiesFromScoring = penaltySumOf(scoringThisMonth);
 
   let totalAPagar = montoPagable + bonusFromScoring + bonusFromBonuses + penaltiesFromScoring;
 
