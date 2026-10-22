@@ -61,10 +61,8 @@ export interface GuideBannerInput {
   completedAt: string | null | undefined;
   /** Día en que pulsó "Más tarde" o la X. Ese mismo día no vuelve a salir. */
   laterOn: string | null | undefined;
-  /** Hay un recorrido abierto (esta guía o el tutorial). */
+  /** Hay un recorrido abierto (esta guía o el tutorial): el panel espera a que se cierre. */
   tourOpen: boolean;
-  /** Profesor nuevo con el tutorial automático en curso: no se le juntan los dos. */
-  autoOnboarding: boolean;
 }
 
 /** ¿Se muestra el panel inferior? */
@@ -73,7 +71,7 @@ export function shouldShowGuideBanner(i: GuideBannerInput): boolean {
   if (i.today > GUIDE_BANNER_UNTIL) return false;
   if (i.completedAt) return false;
   if (i.laterOn === i.today) return false;
-  if (i.tourOpen || i.autoOnboarding) return false;
+  if (i.tourOpen) return false;
   return true;
 }
 

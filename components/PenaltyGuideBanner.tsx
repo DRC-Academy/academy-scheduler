@@ -30,7 +30,7 @@ function writeLater(teacherId: string, day: string): void {
 
 export function PenaltyGuideBanner() {
   const { user } = useAuth();
-  const { mode, penaltyGuideDone, autoOnboarding, openPenaltyGuide } = useOnboarding();
+  const { mode, penaltyGuideDone, openPenaltyGuide } = useOnboarding();
   const teacherId = user?.role === 'teacher' ? user.teacherId ?? null : null;
 
   // `today` y `laterOn` solo existen en el cliente: hasta montar no se pinta
@@ -46,7 +46,7 @@ export function PenaltyGuideBanner() {
   if (!teacherId || !today) return null;
   const visible = shouldShowGuideBanner({
     role: user?.role, today, completedAt: penaltyGuideDone ? 'si' : null,
-    laterOn, tourOpen: mode !== 'off', autoOnboarding,
+    laterOn, tourOpen: mode !== 'off',
   });
   if (!visible) return null;
 

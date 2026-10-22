@@ -90,8 +90,6 @@ export interface OnboardingState {
   finishedNotice: boolean;
   /** Este profesor ya terminó la guía de penalizaciones (base o en esta sesión). */
   penaltyGuideDone: boolean;
-  /** Profesor nuevo con el tutorial automático en curso. */
-  autoOnboarding: boolean;
 }
 
 /**
@@ -125,7 +123,7 @@ const OnboardingStateContext = createContext<OnboardingState>({
   stepIndex: 0, step: ONBOARDING_STEPS[0],
   totalSteps: ONBOARDING_STEPS.length, anchor: null,
   done: new Set(), skipped: new Map(), classesCompleted: 0,
-  available: false, finishedNotice: false, penaltyGuideDone: false, autoOnboarding: false,
+  available: false, finishedNotice: false, penaltyGuideDone: false,
 });
 
 const OnboardingActionsContext = createContext<OnboardingActions>({
@@ -813,7 +811,6 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       anchor, done, skipped, classesCompleted,
       available: !!teacher, finishedNotice,
       penaltyGuideDone: guideDoneLocal || !!teacher?.penaltyGuideCompletedAt,
-      autoOnboarding: isAutoOnboarding(teacher),
     };
   }, [mode, phase, tour, stepIndex, anchor, done, skipped, classesCompleted, teacher, finishedNotice, guideDoneLocal]);
 

@@ -12,7 +12,7 @@ const NBSP = ' ';
 
 const base: GuideBannerInput = {
   role: 'teacher', today: '2026-10-22', completedAt: null, laterOn: null,
-  tourOpen: false, autoOnboarding: false,
+  tourOpen: false,
 };
 
 describe('shouldShowGuideBanner', () => {
@@ -36,9 +36,8 @@ describe('shouldShowGuideBanner', () => {
     expect(shouldShowGuideBanner({ ...base, laterOn: '2026-10-22' })).toBe(false);
     expect(shouldShowGuideBanner({ ...base, laterOn: '2026-10-21' })).toBe(true);
   });
-  it('no se junta con un recorrido abierto ni con el tutorial automático', () => {
+  it('no se junta con un recorrido abierto (espera a que se cierre)', () => {
     expect(shouldShowGuideBanner({ ...base, tourOpen: true })).toBe(false);
-    expect(shouldShowGuideBanner({ ...base, autoOnboarding: true })).toBe(false);
   });
 });
 
