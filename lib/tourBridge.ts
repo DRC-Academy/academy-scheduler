@@ -4,7 +4,8 @@
 // ("¿este profesor tiene alumnos?"). Este módulo es el registro donde cada
 // pantalla deja esas capacidades mientras está montada. (Hasta sep/2026 también
 // ACCIONABA: abría y cerraba el modal del email de presentación para su bloque
-// de tres pasos. Se retiró con el email.)
+// de tres pasos. Se retiró con el email. Desde oct/2026 vuelve a accionar algo:
+// la guía de penalizaciones abre y cierra el menú ⋯ de una clase.)
 //
 // Es un singleton de módulo y NO un contexto de React a propósito: el motor lo
 // consulta dentro de una función asíncrona, fuera del ciclo de render, y pasarlo
@@ -27,6 +28,10 @@ export interface TourBridge {
   hasUpcomingClass: () => boolean;
   /** ¿Hay alguna clase ya dada esperando transcript? (lo sabe /clases) */
   hasClassNeedingTranscript: () => boolean;
+  /** Abre el menú ⋯ de la primera clase por delante (lo sabe /clases). */
+  openClassMenu: () => Promise<void>;
+  /** Cierra cualquier menú ⋯ abierto. */
+  closeClassMenu: () => Promise<void>;
 }
 
 const DEFAULTS: TourBridge = {
@@ -34,6 +39,9 @@ const DEFAULTS: TourBridge = {
   hasLinkPending: () => true,
   hasUpcomingClass: () => true,
   hasClassNeedingTranscript: () => true,
+  // Sin "Mis clases" montada no hay menú que abrir: el paso queda centrado.
+  openClassMenu: async () => {},
+  closeClassMenu: async () => {},
 };
 
 let current: TourBridge = { ...DEFAULTS };
@@ -69,4 +77,34 @@ function restaurarEn<K extends keyof TourBridge>(dest: Partial<TourBridge>, k: K
 
 export function tourBridge(): TourBridge {
   return current;
+}
+
+// ── ¿Qué recorrido hay en pantalla? ───────────────────────────────────────────
+//
+// Lo publica el motor (lib/OnboardingContext) y lo leen las pantallas con
+// `useSyncExternalStore`, NO por el contexto de estado del tour: así una pantalla
+// se re-renderiza solo al abrirse y cerrarse el recorrido, nunca en cada paso
+// (ver "DOS CONTEXTOS" en el motor). Lo usan los pop-ups que taparían lo que el
+// recorrido señala, para APLAZARSE (no se dan por vistos):
+//   · "Transcripts con el plazo a punto de vencer" (Mis clases), con cualquiera;
+//   · "Enlaces pendientes de definir", solo con la guía de penalizaciones: en el
+//     tutorial se queda encima a propósito, porque definir el enlace es su paso 1.
+export type OpenTour = 'onboarding' | 'penalizaciones' | null;
+
+let recorridoAbierto: OpenTour = null;
+const oyentes = new Set<() => void>();
+
+export function setOpenTour(abierto: OpenTour): void {
+  if (recorridoAbierto === abierto) return;
+  recorridoAbierto = abierto;
+  for (const f of [...oyentes]) f();
+}
+
+export function getOpenTour(): OpenTour {
+  return recorridoAbierto;
+}
+
+export function subscribeOpenTour(f: () => void): () => void {
+  oyentes.add(f);
+  return () => { oyentes.delete(f); };
 }

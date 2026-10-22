@@ -289,6 +289,8 @@ export async function dbGetTeachers(
       onboardingActive:            row.onboarding_active ?? false,
       onboardingClassesCompleted:  row.onboarding_classes_completed ?? 0,
       onboardingStartedAt:         row.onboarding_started_at ?? undefined,
+      // Guía de penalizaciones. Sin migrar → undefined = "no la vio".
+      penaltyGuideCompletedAt:     row.penalty_guide_completed_at ?? undefined,
       timeSlots,
       libreCells,
       puntualCells,

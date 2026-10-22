@@ -27,6 +27,7 @@
 import type { Teacher } from '@/types';
 import { tourBridge } from '@/lib/tourBridge';
 import { cleanAiText } from '@/lib/textCleanup';
+import type { PenaltyGuideStepId } from '@/lib/penaltyGuide';
 
 /** Clases que dura la formación automática. */
 export const ONBOARDING_TARGET_CLASSES = 5;
@@ -37,6 +38,12 @@ export type OnboardingStepId =
   | 'students-list' | 'ficha-generate' | 'student-open' | 'ficha-tabs'
   | 'join-class' | 'give-class' | 'add-transcript'
   | 'class-status';
+
+/**
+ * Id de un paso de CUALQUIER recorrido del motor: el tutorial de siempre y la
+ * guía de penalizaciones (lib/penaltyGuide), que comparten contrato y motor.
+ */
+export type TourStepId = OnboardingStepId | PenaltyGuideStepId;
 
 export type StepSide = 'top' | 'right' | 'bottom' | 'left';
 export type StepAlign = 'start' | 'center' | 'end';
@@ -65,7 +72,7 @@ export type StepAlign = 'start' | 'center' | 'end';
 export type OnMissing = 'skip' | 'center';
 
 export interface TourStep {
-  id: OnboardingStepId;
+  id: TourStepId;
   /** Pantalla donde vive el paso. El tour navega solo hasta ella. */
   route: string;
   /** `data-onboarding` a resaltar. Vacío = paso informativo, globo centrado. */
@@ -135,6 +142,8 @@ export interface TourStep {
   once?: boolean;
   /** Se cumple con una acción real del profesor (no solo leyendo el paso). */
   actionable: boolean;
+  /** Texto del botón del ÚLTIMO paso. Sin declararlo, "Terminar". */
+  doneLabel?: string;
 }
 
 /** Rutas del profesor que recorre el tour. */
@@ -411,13 +420,14 @@ export const ONBOARDING_SIGNATURE = `${ONBOARDING_STEPS.length}:${ONBOARDING_STE
 export function exitBetween(
   desde: TourStep | undefined,
   hacia: TourStep | undefined,
+  steps: TourStep[] = ONBOARDING_STEPS,
 ): (() => Promise<void>) | null {
   if (!desde) return null;
   // Moverse DENTRO del bloque no puede deshacer lo que ese mismo bloque necesita.
   if (desde.block && hacia?.block === desde.block) return null;
   if (desde.onExit) return desde.onExit;
   if (!desde.block) return null;
-  return ONBOARDING_STEPS.find(s => s.block === desde.block && s.onExit)?.onExit ?? null;
+  return steps.find(s => s.block === desde.block && s.onExit)?.onExit ?? null;
 }
 
 export function stepIndexOf(id: OnboardingStepId): number {

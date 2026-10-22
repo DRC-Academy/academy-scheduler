@@ -69,8 +69,8 @@ function purgarRastroDelTour(): void {
 
 export function OnboardingTour() {
   const {
-    mode, phase, step, stepIndex, anchor, done, classesCompleted,
-    close, skipAuto, next, prev, resume, reanchor,
+    mode, phase, step, stepIndex, anchor, done, classesCompleted, steps,
+    close, finish, skipAuto, next, prev, resume, reanchor,
     finishedNotice, dismissFinished,
   } = useOnboarding();
 
@@ -93,10 +93,12 @@ export function OnboardingTour() {
   const doneRef = useRef(done);
   const modeRef = useRef(mode);
   const classesRef = useRef(classesCompleted);
+  const stepsRef = useRef(steps);
   useEffect(() => {
     doneRef.current = done;
     modeRef.current = mode;
     classesRef.current = classesCompleted;
+    stepsRef.current = steps;
   });
 
   const stop = useCallback(() => {
@@ -113,6 +115,7 @@ export function OnboardingTour() {
 
     driverRef.current = driver(buildDriverConfig({
       mode: mode === 'auto' ? 'auto' : 'manual',
+      steps: stepsRef.current,
       done: () => doneRef.current,
       classesCompleted: () => classesRef.current,
       onNext: next,
@@ -122,7 +125,7 @@ export function OnboardingTour() {
       // la X, Escape y "Terminar".
       onClose: () => { stop(); close(); },
     }));
-    if (process.env.NODE_ENV !== 'production') validarAnclas(pathname);
+    if (process.env.NODE_ENV !== 'production') validarAnclas(pathname, stepsRef.current);
   }, [activo, mode, stop, next, prev, close, skipAuto, pathname]);
 
   // Desmontaje: sin esto el overlay quedaría pintado sobre la app.
@@ -144,12 +147,15 @@ export function OnboardingTour() {
     if (anchor && !anchorSigueValida(anchor)) { reanchor(); return; }
     d.highlight(buildHighlight(step, stepIndex, anchor, {
       mode: mode === 'auto' ? 'auto' : 'manual',
+      steps,
       done: () => doneRef.current,
       classesCompleted: () => classesRef.current,
       onNext: next,
       onPrev: prev,
       onSkip: () => { stop(); skipAuto(); },
       onClose: () => { stop(); close(); },
+      // El último botón TERMINA (la guía lo registra); la X solo cierra.
+      onFinish: () => { stop(); finish(); },
     }));
     // DESPUÉS de driver, nunca antes. driver.js scrollea por su cuenta dentro de
     // `highlight()`: `smoothScroll: false` solo lo hace instantáneo, no lo apaga.
@@ -157,7 +163,7 @@ export function OnboardingTour() {
     // la barra sticky, así que la parrilla del calendario quedaba con su borde
     // superior bajo el header. Este segundo scroll lo corrige.
     if (anchor) scrollAnchorIntoView(anchor);
-  }, [activo, mode, phase, step, stepIndex, anchor, next, prev, close, skipAuto, stop, reanchor]);
+  }, [activo, mode, phase, step, stepIndex, steps, anchor, next, prev, close, finish, skipAuto, stop, reanchor]);
 
   // ── Parpadeo de la pestaña de destino ───────────────────────────────────────
   // Un parpadeo corto sobre el enlace del header por el que se acaba de entrar,

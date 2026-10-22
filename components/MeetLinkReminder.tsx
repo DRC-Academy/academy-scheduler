@@ -22,13 +22,14 @@
 // El silencio es por tiempo, no "no volver a mostrar": el aviso sigue existiendo,
 // pero deja de interrumpir cada vez que el profesor cambia de pantalla. El badge
 // permanente de Avisos y Próximas clases sigue mostrando el estado real.
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useSyncExternalStore } from 'react';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
 import { MeetLinkPendingPopup } from '@/components/MeetLinkPendingPopup';
 import { DefineLinkModal } from '@/components/DefineLinkModal';
 import { hoursSinceAssignment, isMeetLinkDefined, LINK_DEADLINE_HOURS } from '@/lib/meetLinkStatus';
 import { baseStudentOf } from '@/lib/cells';
+import { subscribeOpenTour, getOpenTour } from '@/lib/tourBridge';
 import type { Assignment, Grid } from '@/types';
 
 // Clave nueva a propósito: el silencio del antiguo recordatorio del email no
@@ -99,11 +100,15 @@ export function MeetLinkReminder() {
   // `myPending.length > 0`, y esa lista se recalcula en cuanto updateMeetLink
   // actualiza el contexto. Desaparece en el mismo render.
 
+  // Con la guía de penalizaciones en pantalla el aviso se aplaza (sale al
+  // cerrarla). Con el tutorial NO: ahí definir el enlace es justo el paso 1.
+  const guiaAbierta = useSyncExternalStore(subscribeOpenTour, getOpenTour, () => null) === 'penalizaciones';
+
   if (!isTeacher || !teacher) return null;
 
   return (
     <>
-      {showPopup && myPending.length > 0 && (
+      {showPopup && myPending.length > 0 && !guiaAbierta && (
         <MeetLinkPendingPopup
           assignments={myPending}
           onDefine={(a) => { setShowPopup(false); setModal(a); }}

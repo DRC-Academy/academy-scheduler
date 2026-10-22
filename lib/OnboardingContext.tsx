@@ -12,6 +12,13 @@
 //            NO se salta ningún paso: es un repaso del procedimiento completo, y
 //            lo que no se pueda anclar se muestra centrado con su "Dónde está".
 //
+// Y un SEGUNDO recorrido sobre el mismo motor: la guía de cancelaciones,
+// recuperaciones y faltas (lib/penaltyGuide). Corre siempre en modo 'manual'
+// (nada se salta) y lo único propio es el final: su botón "Entendido" deja
+// constancia en la base (teachers.penalty_guide_completed_at). Cerrarla a mitad
+// no cuenta. `stepsRef` dice qué lista está corriendo; al cerrar vuelve siempre
+// a la del tutorial, que es la que retoma el automático.
+//
 // ── EL MOTOR ─────────────────────────────────────────────────────────────────
 //
 // `irAlPaso` es una función asíncrona que, para cada paso y en este orden:
@@ -45,9 +52,12 @@ import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
 import {
   ONBOARDING_STEPS, ONBOARDING_TARGET_CLASSES, ONBOARDING_SIGNATURE,
-  ANCLA_MODAL_ENLACE, isAutoOnboarding, selectorsOf,
-  exitBetween, esRutaDeProfesor, type TourStep, type OnboardingStepId,
+  ANCLA_MODAL_ENLACE, isAutoOnboarding, selectorsOf, RUTA_AGENDA,
+  exitBetween, esRutaDeProfesor, type TourStep, type TourStepId,
 } from '@/lib/onboarding';
+import { PENALTY_GUIDE_STEPS } from '@/lib/penaltyGuide';
+import { dbCompletePenaltyGuide } from '@/lib/penaltyGuideStore';
+import { setOpenTour } from '@/lib/tourBridge';
 import { enRutaDelPaso, destinoDelPaso } from '@/lib/tourConfig';
 import {
   waitFor, waitForElement, waitForElementOrGiveUp, waitForElementGone, ROUTE_TIMEOUT_MS,
@@ -57,22 +67,31 @@ import { dbStartOnboarding, dbSkipOnboarding, dbCompleteOnboardingClass } from '
 export type OnboardingMode = 'off' | 'auto' | 'manual';
 /** 'transitioning' = navegando o esperando el elemento; el tour no pinta nada. */
 export type TourPhase = 'idle' | 'transitioning' | 'ready';
+/** Qué lista de pasos corre el motor. */
+export type TourId = 'onboarding' | 'penalizaciones';
 
 /** Lo que CAMBIA con cada paso. Solo lo consume el pintor (OnboardingTour). */
 export interface OnboardingState {
   mode: OnboardingMode;
   phase: TourPhase;
+  tour: TourId;
+  /** La lista de pasos del recorrido abierto. */
+  steps: TourStep[];
   stepIndex: number;
   step: TourStep;
   totalSteps: number;
   /** Elemento YA resuelto del paso. null = globo centrado a propósito. */
   anchor: HTMLElement | null;
-  done: Set<OnboardingStepId>;
+  done: Set<TourStepId>;
   /** Pasos que el motor descartó, con el motivo. No son checks: son constancia. */
-  skipped: Map<OnboardingStepId, string>;
+  skipped: Map<TourStepId, string>;
   classesCompleted: number;
   available: boolean;
   finishedNotice: boolean;
+  /** Este profesor ya terminó la guía de penalizaciones (base o en esta sesión). */
+  penaltyGuideDone: boolean;
+  /** Profesor nuevo con el tutorial automático en curso. */
+  autoOnboarding: boolean;
 }
 
 /**
@@ -82,6 +101,10 @@ export interface OnboardingState {
  */
 export interface OnboardingActions {
   openManual: () => void;
+  /** Abre la guía de penalizaciones desde el paso 1 (panel inferior, centro de ayuda). */
+  openPenaltyGuide: () => void;
+  /** Botón del último paso: el recorrido se terminó, no se abandonó. */
+  finish: () => void;
   /** Reanuda el automático en el paso guardado (cartel flotante). */
   resume: () => void;
   /** Vuelve a resolver el ancla del paso actual si el nodo se desconectó. */
@@ -91,21 +114,22 @@ export interface OnboardingActions {
   dismissFinished: () => void;
   next: () => void;
   prev: () => void;
-  reportAction: (id: OnboardingStepId) => void;
+  reportAction: (id: TourStepId) => void;
   reportClassCompleted: (classKey: string) => void;
 }
 
 const noop = () => {};
 
 const OnboardingStateContext = createContext<OnboardingState>({
-  mode: 'off', phase: 'idle', stepIndex: 0, step: ONBOARDING_STEPS[0],
+  mode: 'off', phase: 'idle', tour: 'onboarding', steps: ONBOARDING_STEPS,
+  stepIndex: 0, step: ONBOARDING_STEPS[0],
   totalSteps: ONBOARDING_STEPS.length, anchor: null,
   done: new Set(), skipped: new Map(), classesCompleted: 0,
-  available: false, finishedNotice: false,
+  available: false, finishedNotice: false, penaltyGuideDone: false, autoOnboarding: false,
 });
 
 const OnboardingActionsContext = createContext<OnboardingActions>({
-  openManual: noop, resume: noop, reanchor: noop, close: noop, skipAuto: noop,
+  openManual: noop, openPenaltyGuide: noop, finish: noop, resume: noop, reanchor: noop, close: noop, skipAuto: noop,
   dismissFinished: noop, next: noop, prev: noop,
   reportAction: noop, reportClassCompleted: noop,
 });
@@ -177,20 +201,20 @@ function writeCounted(teacherId: string, keys: Set<string>) {
  */
 function onceKey(teacherId: string) { return `drc_onboarding_once_${teacherId}`; }
 
-function readOnce(teacherId: string): Set<OnboardingStepId> {
+function readOnce(teacherId: string): Set<TourStepId> {
   try {
     const raw = localStorage.getItem(onceKey(teacherId));
     const ids = raw ? (JSON.parse(raw) as string[]) : [];
     const validos = new Set(ONBOARDING_STEPS.filter(s => s.once).map(s => s.id as string));
-    return new Set(ids.filter(id => validos.has(id)) as OnboardingStepId[]);
+    return new Set(ids.filter(id => validos.has(id)) as TourStepId[]);
   } catch { return new Set(); }
 }
 
-function writeOnce(teacherId: string, ids: Set<OnboardingStepId>) {
+function writeOnce(teacherId: string, ids: Set<TourStepId>) {
   try { localStorage.setItem(onceKey(teacherId), JSON.stringify([...ids])); } catch { /* modo privado */ }
 }
 
-function soloOnce(done: Set<OnboardingStepId>): Set<OnboardingStepId> {
+function soloOnce(done: Set<TourStepId>): Set<TourStepId> {
   return new Set(ONBOARDING_STEPS.filter(s => s.once && done.has(s.id)).map(s => s.id));
 }
 
@@ -211,17 +235,20 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
   const [phase, setPhase] = useState<TourPhase>('idle');
   const [stepIndex, setStepIndex] = useState(0);
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
-  const [done, setDone] = useState<Set<OnboardingStepId>>(new Set());
-  const [skipped, setSkipped] = useState<Map<OnboardingStepId, string>>(new Map());
+  const [done, setDone] = useState<Set<TourStepId>>(new Set());
+  const [skipped, setSkipped] = useState<Map<TourStepId, string>>(new Map());
   const [classesCompleted, setClassesCompleted] = useState(0);
   const [finishedNotice, setFinishedNotice] = useState(false);
+  const [tour, setTour] = useState<TourId>('onboarding');
+  /** La guía se terminó en ESTA sesión (la fila en memoria todavía no lo sabe). */
+  const [guideDoneLocal, setGuideDoneLocal] = useState(false);
 
   // Espejos de lectura síncrona: el motor corre dentro de una función asíncrona,
   // fuera del ciclo de render, y necesita el valor de AHORA.
   const modeRef = useRef<OnboardingMode>('off');
   const indexRef = useRef(0);
   const pathnameRef = useRef(pathname);
-  const doneRef = useRef<Set<OnboardingStepId>>(new Set());
+  const doneRef = useRef<Set<TourStepId>>(new Set());
   const completedRef = useRef(0);
   const countedRef = useRef<Set<string>>(new Set());
   const autoEndedRef = useRef(false);
@@ -231,6 +258,11 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
   /** Transición en curso: guard de reentrada contra el doble clic en "Siguiente". */
   const busyRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
+  /** Lista de pasos en curso. Se lee por ref: el motor corre fuera del render. */
+  const stepsRef = useRef<TourStep[]>(ONBOARDING_STEPS);
+  const tourRef = useRef<TourId>('onboarding');
+  /** La guía se pidió desde fuera del área del profesor: arranca al llegar a ella. */
+  const guidePendingRef = useRef(false);
 
   // ── Espera de ruta ──────────────────────────────────────────────────────────
   // Los cambios de ruta llegan por React, no por el DOM, así que la espera se
@@ -299,9 +331,10 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       // de fuera, el modal tapaba el botón que ese paso señala y "Anterior" no
       // llevaba a ninguna parte visible. Quién sabe deshacerlo lo decide
       // `exitBetween`, que trata el bloque como una unidad.
-      const saliendo = ONBOARDING_STEPS[indexRef.current];
-      const destinoPaso = ONBOARDING_STEPS[target];
-      const salida = exitBetween(saliendo, destinoPaso);
+      const steps = stepsRef.current;
+      const saliendo = steps[indexRef.current];
+      const destinoPaso = steps[target];
+      const salida = exitBetween(saliendo, destinoPaso, steps);
       if (salida) {
         await salida();
         await waitForElementGone([ANCLA_MODAL_ENLACE], { signal: ac.signal });
@@ -323,9 +356,9 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       const ESPERA_CORTA_MS = 250;
 
       let i = target;
-      while (i >= 0 && i < ONBOARDING_STEPS.length) {
+      while (i >= 0 && i < steps.length) {
         if (ac.signal.aborted) return;
-        const step = ONBOARDING_STEPS[i];
+        const step = steps[i];
         /** false = se muestra el globo sin foco (decisión explícita, con warn). */
         let anclar = true;
 
@@ -415,7 +448,9 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
         setStepIndex(i);
         setAnchor(el);
         setPhase('ready');
-        writeSavedIndex(i);
+        // Solo el tutorial retoma donde quedó: la guía empieza siempre en el 1, y
+        // guardar su índice pisaría el del automático.
+        if (tourRef.current === 'onboarding') writeSavedIndex(i);
         // El scroll NO se hace acá: driver.js scrollea por su cuenta dentro de
         // `highlight()` y pisaría el nuestro. `smoothScroll: false` solo lo vuelve
         // instantáneo, no lo desactiva, y para un elemento más alto que la ventana
@@ -445,8 +480,21 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
   const irAlPasoRef = useRef(irAlPaso);
   useEffect(() => { irAlPasoRef.current = irAlPaso; });
 
+  /** Vuelve a la lista del tutorial (la que retoma el automático). */
+  const volverAlTutorial = useCallback(() => {
+    if (tourRef.current === 'onboarding') return;
+    tourRef.current = 'onboarding';
+    stepsRef.current = ONBOARDING_STEPS;
+    setTour('onboarding');
+    const guardado = readSavedIndex() ?? 0;
+    indexRef.current = guardado;
+    setStepIndex(guardado);
+  }, []);
+
   const close = useCallback(() => {
     detener();
+    guidePendingRef.current = false;
+    volverAlTutorial();
     // No se relee `isAutoOnboarding(teacher)` a secas: la fila en memoria puede
     // traer todavía el contador viejo. Mandan el progreso local y el ref de "ya
     // terminó", que son los que están al día.
@@ -455,17 +503,66 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       && completedRef.current < ONBOARDING_TARGET_CLASSES;
     applyMode(volverAlAuto ? 'auto' : 'off');
     if (!volverAlAuto) clearSavedIndex();
-  }, [applyMode, detener]);
+  }, [applyMode, detener, volverAlTutorial]);
   useEffect(() => { cerrarRef.current = close; });
 
   const openManual = useCallback(() => {
     // Repaso completo: SIEMPRE desde el paso 1, y sin escribir nada en la base.
+    guidePendingRef.current = false;
+    volverAlTutorial();
     indexRef.current = 0;
     setStepIndex(0);
     setSkipped(new Map());
     applyMode('manual');
     void irAlPasoRef.current(0, 1);
+  }, [applyMode, volverAlTutorial]);
+
+  /** Arranca la guía ya dentro del área del profesor. */
+  const arrancarGuia = useCallback(() => {
+    guidePendingRef.current = false;
+    tourRef.current = 'penalizaciones';
+    stepsRef.current = PENALTY_GUIDE_STEPS;
+    setTour('penalizaciones');
+    indexRef.current = 0;
+    setStepIndex(0);
+    setSkipped(new Map());
+    applyMode('manual');
+    // Si había una transición en curso (el automático), se acaba de abortar pero
+    // todavía no soltó `busyRef`, y el guard de reentrada descartaría este
+    // arranque. Se reintenta en el siguiente frame: es una espera por condición,
+    // no un retardo fijo.
+    const lanzar = () => {
+      if (modeRef.current !== 'manual' || tourRef.current !== 'penalizaciones') return;
+      if (busyRef.current) { requestAnimationFrame(lanzar); return; }
+      void irAlPasoRef.current(0, 1);
+    };
+    lanzar();
   }, [applyMode]);
+
+  const openPenaltyGuide = useCallback(() => {
+    // Lo que hubiera abierto (el automático) se corta: no pueden ir dos a la vez.
+    detener();
+    if (esRutaDeProfesor(pathnameRef.current)) { arrancarGuia(); return; }
+    // Desde el centro de ayuda (u otra pantalla fuera del área): el efecto que
+    // cierra el tour fuera del área lo mataría al instante. Se navega primero y
+    // arranca al llegar (ver el efecto de `guidePendingRef`).
+    applyMode('off');
+    guidePendingRef.current = true;
+    router.push(RUTA_AGENDA);
+  }, [applyMode, arrancarGuia, detener, router]);
+
+  /**
+   * Último botón del recorrido. En la guía es lo ÚNICO que la da por vista: la X
+   * o Escape a mitad no cuentan y el panel inferior vuelve a salir.
+   */
+  const finish = useCallback(() => {
+    const t = teacherRef.current;
+    if (tourRef.current === 'penalizaciones' && t) {
+      setGuideDoneLocal(true);
+      void dbCompletePenaltyGuide(t.id);
+    }
+    cerrarRef.current();
+  }, []);
 
   const skipAuto = useCallback(() => {
     autoEndedRef.current = true;
@@ -501,7 +598,8 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     // identidad nunca (ver la nota de los dos contextos, más abajo).
     const cerrado = () => modeRef.current === 'off';
     if (busyRef.current || cerrado()) return;
-    const step = ONBOARDING_STEPS[indexRef.current];
+    const step = stepsRef.current[indexRef.current];
+    if (!step) return;
     const selectores = selectorsOf(step);
     if (selectores.length === 0) return;
 
@@ -585,6 +683,12 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     void irAlPaso(indexRef.current, 1);
   }, [mode, irAlPaso]);
 
+  // ── Guía pedida desde fuera del área: arranca al llegar a "Mis clases" ──────
+  useEffect(() => {
+    if (!guidePendingRef.current || !esRutaDeProfesor(pathname)) return;
+    arrancarGuia();
+  }, [pathname, arrancarGuia]);
+
   // ── Fuera del área del profesor: cerrar limpiamente ─────────────────────────
   useEffect(() => {
     if (mode === 'off') return;
@@ -603,10 +707,10 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (mode === 'off' || busyRef.current) return;
     if (!esRutaDeProfesor(pathname)) return;
-    const actual = ONBOARDING_STEPS[indexRef.current];
+    const actual = stepsRef.current[indexRef.current];
     if (actual && enRutaDelPaso(actual, pathname)) return;
 
-    const destino = ONBOARDING_STEPS.findIndex(s => enRutaDelPaso(s, pathname));
+    const destino = stepsRef.current.findIndex(s => enRutaDelPaso(s, pathname));
     if (destino === -1) { cerrarRef.current(); return; }
     void irAlPaso(destino, destino > indexRef.current ? 1 : -1);
   }, [mode, pathname, irAlPaso]);
@@ -620,7 +724,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
    * Marca en los DOS modos (es información en pantalla, no un dato de negocio),
    * pero solo el automático deja rastro en localStorage/Supabase.
    */
-  const reportAction = useCallback((id: OnboardingStepId) => {
+  const reportAction = useCallback((id: TourStepId) => {
     if (modeRef.current === 'off') return;
     if (doneRef.current.has(id)) return;
     const nextDone = new Set(doneRef.current).add(id);
@@ -631,7 +735,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     // Avanza SOLO si el paso cerrado es el que está a la vista: si cumplió otro
     // (subió el transcript de una clase vieja estando en el paso 2), lo que le
     // falta sigue siendo el paso 2.
-    if (ONBOARDING_STEPS[indexRef.current]?.id === id) void irAlPasoRef.current(indexRef.current + 1, 1);
+    if (stepsRef.current[indexRef.current]?.id === id) void irAlPasoRef.current(indexRef.current + 1, 1);
   }, []);
 
   /**
@@ -663,6 +767,10 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     });
   }, [applyMode, detener]);
 
+  // ¿Hay un recorrido EN PANTALLA? (no basta con el modo: el automático en
+  // reposo solo pinta el cartel de "Ver el tutorial" y no tapa nada).
+  useEffect(() => { setOpenTour(mode !== 'off' && phase !== 'idle' ? tour : null); }, [mode, phase, tour]);
+
   // Desmontaje del provider: se corta cualquier espera viva.
   useEffect(() => () => { abortRef.current?.abort(); }, []);
 
@@ -689,20 +797,25 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
   // siendo lo correcto —remontar 30 tarjetas en cada render es caro y tira
   // cualquier foco o scroll interno—, pero es un refactor aparte del tutorial.
   const acciones = useMemo<OnboardingActions>(() => ({
-    openManual, resume, reanchor, close, skipAuto, dismissFinished, next, prev,
-    reportAction, reportClassCompleted,
+    openManual, openPenaltyGuide, finish, resume, reanchor, close, skipAuto, dismissFinished,
+    next, prev, reportAction, reportClassCompleted,
   }), [
-    openManual, resume, reanchor, close, skipAuto, dismissFinished, next, prev,
-    reportAction, reportClassCompleted,
+    openManual, openPenaltyGuide, finish, resume, reanchor, close, skipAuto, dismissFinished,
+    next, prev, reportAction, reportClassCompleted,
   ]);
 
-  const estado = useMemo<OnboardingState>(() => ({
-    mode, phase, stepIndex,
-    step: ONBOARDING_STEPS[stepIndex] ?? ONBOARDING_STEPS[0],
-    totalSteps: ONBOARDING_STEPS.length,
-    anchor, done, skipped, classesCompleted,
-    available: !!teacher, finishedNotice,
-  }), [mode, phase, stepIndex, anchor, done, skipped, classesCompleted, teacher, finishedNotice]);
+  const estado = useMemo<OnboardingState>(() => {
+    const steps = tour === 'penalizaciones' ? PENALTY_GUIDE_STEPS : ONBOARDING_STEPS;
+    return {
+      mode, phase, tour, steps, stepIndex,
+      step: steps[stepIndex] ?? steps[0],
+      totalSteps: steps.length,
+      anchor, done, skipped, classesCompleted,
+      available: !!teacher, finishedNotice,
+      penaltyGuideDone: guideDoneLocal || !!teacher?.penaltyGuideCompletedAt,
+      autoOnboarding: isAutoOnboarding(teacher),
+    };
+  }, [mode, phase, tour, stepIndex, anchor, done, skipped, classesCompleted, teacher, finishedNotice, guideDoneLocal]);
 
   return (
     <OnboardingActionsContext.Provider value={acciones}>

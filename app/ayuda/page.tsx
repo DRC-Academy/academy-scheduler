@@ -2,6 +2,10 @@
 
 // Centro de ayuda del profesor: FAQ con búsqueda, filtro por categoría y
 // acordeones. Contenido en lib/helpFaq.ts.
+//
+// Arriba de todo, la sección "Cancelaciones, recuperaciones y faltas" (contenido
+// en lib/penaltyGuide.ts): reglas, casos y el botón que abre la guía paso a paso,
+// siempre disponible, también después de que deje de salir el panel inferior.
 
 import { useMemo, useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
@@ -11,6 +15,10 @@ import {
   HELP_CATEGORIES, HELP_ITEMS, RATE_TABLE, haystack,
   type HelpCategory, type HelpItem,
 } from '@/lib/helpFaq';
+import {
+  GUIDE_HELP_TITLE, GUIDE_RULES, GUIDE_CASES, GUIDE_BANNER, TEAM_WHATSAPP_URL,
+} from '@/lib/penaltyGuide';
+import { useOnboardingActions } from '@/lib/OnboardingContext';
 
 type Filter = 'all' | HelpCategory;
 
@@ -37,6 +45,14 @@ function AyudaContent() {
       .map(cat => ({ cat, items: results.filter(r => r.category === cat.id) }))
       .filter(g => g.items.length > 0)
   ), [results]);
+
+  // La sección de la guía también responde al buscador: se filtran sus casos.
+  const guideCases = useMemo(() => (
+    searching
+      ? GUIDE_CASES.filter(c => `${c.situation} ${c.action}`.toLowerCase().includes(q))
+      : GUIDE_CASES
+  ), [q, searching]);
+  const showGuide = !searching || guideCases.length > 0 || GUIDE_HELP_TITLE.toLowerCase().includes(q);
 
   const isOpen = (item: HelpItem) => (searching ? true : open === item.id);
 
@@ -90,11 +106,15 @@ function AyudaContent() {
           </div>
         )}
 
+        {showGuide && <GuideSection cases={guideCases} query={q} searching={searching} />}
+
         {grouped.length === 0 ? (
+          showGuide ? null : (
           <div className="help-empty">
             No encontramos resultados para «{query.trim()}». Contacta con el equipo si
             necesitas ayuda adicional.
           </div>
+          )
         ) : (
           grouped.map(({ cat, items }) => (
             <section key={cat.id} className="help-cat">
@@ -125,6 +145,55 @@ function AyudaContent() {
         )}
       </div>
     </div>
+  );
+}
+
+// Sección "Cancelaciones, recuperaciones y faltas": botón de la guía, reglas y
+// casos (situación → qué hacer). En búsqueda solo quedan los casos que coinciden.
+function GuideSection({ cases, query, searching }: {
+  cases: typeof GUIDE_CASES; query: string; searching: boolean;
+}) {
+  const { openPenaltyGuide } = useOnboardingActions();
+  return (
+    <section className="help-guide" aria-labelledby="help-guide-title">
+      <div className="help-guide-head">
+        <div>
+          <span className="help-guide-tag">{GUIDE_BANNER.tag}</span>
+          <h2 id="help-guide-title" className="help-guide-title">{GUIDE_HELP_TITLE}</h2>
+          <p className="help-guide-sub">Las reglas en corto y qué hacer en cada caso. La guía paso a paso te lo enseña sobre tu pantalla.</p>
+        </div>
+        <button type="button" className="help-guide-btn" onClick={openPenaltyGuide}>{GUIDE_BANNER.start}</button>
+      </div>
+
+      {!searching && (
+        <table className="help-table help-guide-rules">
+          <thead><tr>{GUIDE_RULES.head.map(h => <th key={h}>{h}</th>)}</tr></thead>
+          <tbody>
+            {GUIDE_RULES.rows.map(([a, b]) => <tr key={a}><td>{a}</td><td>{b}</td></tr>)}
+          </tbody>
+        </table>
+      )}
+
+      {cases.length > 0 && (
+        <>
+          <div className="help-guide-cases-title">Qué hacer si…</div>
+          <ul className="help-guide-cases">
+            {cases.map(c => (
+              <li key={c.id} className="help-guide-case">
+                <span className="help-guide-sit">{highlight(c.situation, query)}</span>
+                <span className="help-guide-act">{highlight(c.action, query)}</span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      {TEAM_WHATSAPP_URL && (
+        <a className="help-guide-wa" href={TEAM_WHATSAPP_URL} target="_blank" rel="noopener noreferrer">
+          Escríbenos por WhatsApp
+        </a>
+      )}
+    </section>
   );
 }
 

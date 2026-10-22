@@ -207,6 +207,7 @@ export function NotificationBell({ compact = false }: { compact?: boolean } = {}
           onClick={() => setOpen(v => !v)}
           className={shaking ? 'bell-animated' : ''}
           aria-label="Notificaciones"
+          data-onboarding="notification-bell"
           style={{
             position: 'relative',
             width: 40, height: 40,

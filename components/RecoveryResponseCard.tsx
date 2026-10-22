@@ -63,7 +63,7 @@ function RecoveryResponseCard({ teacherId, recovery: r, onChanged }: {
 
   const parte = r.parts > 1 ? ` · ${r.part}.ª hora` : r.hours > 1 ? ` · ${r.hours} h` : '';
   return (
-    <div className="rc-card">
+    <div className="rc-card" data-onboarding="recovery-response">
       <div className="rc-title">{r.studentName} no puede en las fechas que propusiste</div>
       <div className="rc-sub">Recuperación de la clase del {fechaLarga(r.originalDate)} · {r.originalHour}{parte}</div>
       {r.studentNote && <div className="rc-note">“{r.studentNote}”</div>}

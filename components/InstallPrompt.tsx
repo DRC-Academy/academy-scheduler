@@ -59,7 +59,9 @@ export function InstallPrompt() {
   if (!visible) return null;
 
   return (
-    <div style={{
+    // `data-install-prompt`: lo lee el panel de la guía (PenaltyGuideBanner) para
+    // subirse y no quedar tapado por este aviso.
+    <div data-install-prompt style={{
       position: 'fixed',
       bottom: 20,
       left: 16,

@@ -22,7 +22,7 @@
 import type { Config, DriveStep } from 'driver.js';
 import {
   ONBOARDING_STEPS, formationLabel, selectorsOf,
-  type TourStep, type OnboardingStepId,
+  type TourStep, type TourStepId,
 } from '@/lib/onboarding';
 import { findAnchor } from '@/lib/tourEngine';
 
@@ -121,16 +121,20 @@ export function flechaSvg(side: PointerSide): { viewBox: string; w: number; h: n
 export interface TourOptions {
   /** 'auto' añade el progreso de formación y el enlace "Saltar tutorial". */
   mode: 'auto' | 'manual';
+  /** La lista de pasos del recorrido abierto (tutorial o guía de penalizaciones). */
+  steps: TourStep[];
   /** Pasos ya cumplidos por una acción real, para el check verde. */
-  done: () => Set<OnboardingStepId>;
+  done: () => Set<TourStepId>;
   /** Clases de formación completadas, para el "Clase 3 de 5". */
   classesCompleted: () => number;
   onNext: () => void;
   onPrev: () => void;
   /** "Saltar tutorial" (solo modo automático). */
   onSkip: () => void;
-  /** Cierre por la X, Escape o "Terminar". */
+  /** Cierre por la X o Escape (y por "Terminar" si no hay `onFinish`). */
   onClose: () => void;
+  /** Botón del ÚLTIMO paso: el recorrido se dio por terminado, no se abandonó. */
+  onFinish?: () => void;
 }
 
 /**
@@ -154,7 +158,7 @@ function decorarPopover(
 
   // Aviso de cambio de pestaña. El profesor ve ADÓNDE lo lleva el paso siguiente
   // antes de que la pantalla cambie sola debajo suyo, que sin avisar desorienta.
-  const siguiente = ONBOARDING_STEPS[index + 1];
+  const siguiente = opts.steps[index + 1];
   if (siguiente && siguiente.route !== step.route) {
     const salto = document.createElement('div');
     salto.className = 'drc-tour-jump';
@@ -241,8 +245,9 @@ export function buildHighlight(
   element: HTMLElement | null,
   opts: TourOptions,
 ): DriveStep {
-  const total = ONBOARDING_STEPS.length;
+  const total = opts.steps.length;
   const ultimo = index === total - 1;
+  const terminar = step.doneLabel ?? 'Terminar';
   return {
     element: element ?? undefined,
     popover: {
@@ -258,12 +263,12 @@ export function buildHighlight(
       progressText: `Paso ${index + 1} de ${total}`,
       showButtons: ['next', 'previous', 'close'],
       disableButtons: index === 0 ? ['previous'] : [],
-      nextBtnText: ultimo ? 'Terminar' : 'Siguiente →',
+      nextBtnText: ultimo ? terminar : 'Siguiente →',
       prevBtnText: '← Anterior',
-      doneBtnText: 'Terminar',
+      doneBtnText: terminar,
       onPopoverRender: popover => decorarPopover(popover, step, index, !!element, opts),
       // El puntero lo lleva React: acá solo se traduce el clic.
-      onNextClick: () => (ultimo ? opts.onClose() : opts.onNext()),
+      onNextClick: () => (ultimo ? (opts.onFinish ?? opts.onClose)() : opts.onNext()),
       onPrevClick: () => opts.onPrev(),
       onCloseClick: () => opts.onClose(),
     },
@@ -311,13 +316,13 @@ export function buildDriverConfig(opts: TourOptions): Config {
  * botón "Añadir transcript" por clase pendiente); en un elemento único es un
  * error de marcado que haría saltar el foco de un sitio a otro sin motivo.
  */
-export function validarAnclas(pathname: string): void {
+export function validarAnclas(pathname: string, steps: TourStep[] = ONBOARDING_STEPS): void {
   if (process.env.NODE_ENV === 'production') return;
 
   const faltanAqui: string[] = [];
   const duplicados: string[] = [];
 
-  for (const step of ONBOARDING_STEPS) {
+  for (const step of steps) {
     for (const sel of selectorsOf(step)) {
       const nodos = document.querySelectorAll(`[data-onboarding="${sel}"]`);
       if (nodos.length > 1 && !step.multiple) duplicados.push(`${step.id} → "${sel}" (${nodos.length} nodos)`);

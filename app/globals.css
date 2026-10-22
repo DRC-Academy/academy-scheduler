@@ -2363,8 +2363,48 @@ body.driver-active .drc-modal-backdrop * { pointer-events: auto; }
   padding: 36px 24px; text-align: center; color: #5f6360; font-size: 14px; line-height: 1.6;
 }
 
+/* Sección "Cancelaciones, recuperaciones y faltas" (guía de penalizaciones). */
+.help-guide {
+  background: #fff; border: 1px solid #e6e7e2; border-radius: 14px;
+  padding: 18px 20px 20px; margin-bottom: 26px;
+}
+.help-guide-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.help-guide-tag {
+  display: inline-block; font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  background: #FFC400; color: #3d2f00; padding: 2px 9px; border-radius: 999px; margin-bottom: 6px;
+}
+.help-guide-title { font-size: 18px; font-weight: 700; margin: 0 0 4px; color: #1a1c1a; }
+.help-guide-sub { font-size: 13.5px; color: #5f6360; line-height: 1.5; margin: 0; }
+.help-guide-btn, .help-guide-wa {
+  flex-shrink: 0; min-height: 44px; padding: 0 20px; border-radius: 10px;
+  border: 1px solid #1E9E3A; background: #1E9E3A; color: #fff;
+  font-family: inherit; font-size: 15px; font-weight: 700; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; text-decoration: none;
+}
+.help-guide-btn:hover, .help-guide-wa:hover { background: #188232; border-color: #188232; }
+.help-guide-btn:focus-visible, .help-guide-wa:focus-visible { outline: 3px solid rgba(30,158,58,0.35); outline-offset: 2px; }
+.help-guide-wa { margin-top: 14px; }
+.help-guide-rules { margin-bottom: 18px; }
+.help-guide-cases-title {
+  font-size: 12px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.08em; color: #8b8e88; margin-bottom: 6px;
+}
+.help-guide-cases { list-style: none; margin: 0; padding: 0; }
+.help-guide-case {
+  display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 4px 16px;
+  padding: 11px 0; border-top: 1px solid #e6e7e2; font-size: 14px; line-height: 1.55;
+}
+.help-guide-case:first-child { border-top: none; }
+.help-guide-sit { font-weight: 600; color: #1a1c1a; }
+.help-guide-act { color: #5f6360; }
+.help-guide mark { background: rgba(255,196,0,0.2); color: inherit; border-radius: 2px; padding: 0 1px; }
+
 @media (max-width: 640px) {
   .help { padding: 16px 12px 56px; }
+  .help-guide { padding: 16px 14px 18px; }
+  .help-guide-head { flex-direction: column; align-items: stretch; }
+  .help-guide-btn { width: 100%; }
+  .help-guide-case { grid-template-columns: 1fr; }
   .help-title { font-size: 22px; }
   .help-search { max-width: none; }
   .help-chips { justify-content: flex-start; }

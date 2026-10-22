@@ -105,6 +105,8 @@ export interface Teacher {
   onboardingActive?: boolean;
   onboardingClassesCompleted?: number;
   onboardingStartedAt?: string;
+  /** Cuándo terminó la guía de penalizaciones ("Entendido"). Sin valor = no la vio. */
+  penaltyGuideCompletedAt?: string;
   libreCells?: string[];         // exact `${day}_${hour}` keys asignables (estado recurrente 'libre')
   puntualCells?: Record<string, string>; // key → 'YYYY-MM-DD' de la marca puntual (recuperación) sobre un horario libre
   /**

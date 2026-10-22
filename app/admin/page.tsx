@@ -682,6 +682,16 @@ function LevelBadge({ level, blocked }: { level: number; blocked?: boolean }) {
   );
 }
 
+// ¿Vio la guía de penalizaciones? Fecha en hora de España; `long` para la
+// tarjeta del teléfono, donde no hay cabecera de columna que lo explique.
+function GuideBadge({ at, long = false }: { at?: string; long?: boolean }) {
+  if (!at) return <Badge tone="neutral" title="Todavía no terminó la guía de penalizaciones">{long ? 'Guía: no' : 'No'}</Badge>;
+  const d = new Date(at);
+  const corta = d.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', timeZone: 'Europe/Madrid' });
+  const larga = d.toLocaleString('es-ES', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Madrid' });
+  return <Badge tone="ok" title={`Terminó la guía de penalizaciones el ${larga}`}>{long ? `Guía ✓ ${corta}` : `✓ ${corta}`}</Badge>;
+}
+
 // ─── New teacher modal ────────────────────────────────────────────────────────
 function NewTeacherModal({ onClose, onSave }: { onClose: () => void; onSave: (t: Teacher, username: string) => void }) {
   const [form, setForm] = useState({ name: '', email: '', username: '' });
@@ -1995,8 +2005,19 @@ function AdminContent() {
               })}
             </div>
 
+            {/* Guía de penalizaciones: cuántos la terminaron ("Entendido" en el
+                último paso). Sin el SQL corrido todos figuran como "No". */}
+            {(() => {
+              const vieron = teachers.filter(t => !!t.penaltyGuideCompletedAt).length;
+              return (
+                <div style={{ fontSize: T.fs.caption, color: T.text.secondary, marginBottom: T.space(3) }}>
+                  Vieron la guía de penalizaciones: <b style={{ color: T.text.primary }}>{vieron} de {teachers.length}</b>
+                </div>
+              );
+            })()}
+
             {/* ── Desktop: tabla ───────────────────────────────────────────────
-                OCHO columnas con ancho fijo en % (<colgroup> + table-layout:fixed
+                NUEVE columnas con ancho fijo en % (<colgroup> + table-layout:fixed
                 vía TableWrap `fixed`). El ancho lo mandan las columnas, no el
                 contenido: con el algoritmo automático `width:100%` era un mínimo
                 y una celda larga desbordaba la card.
@@ -2005,19 +2026,20 @@ function AdminContent() {
                 `top={NAV_STICKY_TOP}`, ver components/ui/Table.tsx). */}
             <TableWrap className="adm-tt-desk" fixed stickyHeader style={{ borderRadius: 14, marginBottom: T.space(4) }}>
               <colgroup>
-                <col style={{ width: '17%' }} />{/* Nombre */}
-                <col style={{ width: '15%' }} />{/* Especialidades */}
-                <col style={{ width: '11%' }} />{/* Estado */}
-                <col style={{ width: '10%' }} />{/* Nivel */}
-                <col style={{ width: '15%' }} />{/* Carga (barra + horas + cupos) */}
-                <col style={{ width: '11%' }} />{/* Enlaces */}
-                <col style={{ width:  '8%' }} />{/* Faltas mes */}
+                <col style={{ width: '16%' }} />{/* Nombre */}
+                <col style={{ width: '14%' }} />{/* Especialidades */}
+                <col style={{ width: '10%' }} />{/* Estado */}
+                <col style={{ width:  '9%' }} />{/* Nivel */}
+                <col style={{ width: '14%' }} />{/* Carga (barra + horas + cupos) */}
+                <col style={{ width: '10%' }} />{/* Enlaces */}
+                <col style={{ width:  '7%' }} />{/* Faltas mes */}
+                <col style={{ width:  '7%' }} />{/* Guía de penalizaciones */}
                 <col style={{ width: '13%' }} />{/* Acciones */}
               </colgroup>
               <THead
                 top={NAV_STICKY_TOP}
-                align={[undefined, undefined, undefined, undefined, undefined, undefined, undefined, 'right']}
-                columns={['Nombre', 'Especialidades', 'Estado', 'Nivel', 'Carga', 'Enlaces', 'Faltas mes', '']}
+                align={[undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, 'right']}
+                columns={['Nombre', 'Especialidades', 'Estado', 'Nivel', 'Carga', 'Enlaces', 'Faltas mes', 'Guía', '']}
               />
               <tbody>
                 {teachers
@@ -2150,6 +2172,11 @@ function AdminContent() {
                         </button>
                       </TD>
 
+                      {/* Vio la guía de penalizaciones (con la fecha en que la terminó). */}
+                      <TD style={{ overflow: 'hidden' }}>
+                        <GuideBadge at={t.penaltyGuideCompletedAt} />
+                      </TD>
+
                       <TD align="right" style={{ overflow: 'hidden' }}>
                         <span style={{ display: 'inline-flex', gap: T.space(1) }}>
                           <Button variant="secondary" size="sm" onClick={() => setEditTeacher(t)}>
@@ -2165,7 +2192,7 @@ function AdminContent() {
 
                     {emailOpen && pendN > 0 && (
                       <tr style={{ background: T.bg.surface2 }}>
-                        <td colSpan={8} style={{ padding: `${T.space(3)} ${T.space(4)}`, borderBottom: `1px solid ${T.border.base}` }}>
+                        <td colSpan={9} style={{ padding: `${T.space(3)} ${T.space(4)}`, borderBottom: `1px solid ${T.border.base}` }}>
                           <div style={{ fontSize: T.fs.caption, fontWeight: T.fw.semibold, color: T.text.primary, marginBottom: T.space(2) }}>
                             {t.name} — Enlace sin definir:
                           </div>
@@ -2186,7 +2213,7 @@ function AdminContent() {
 
                     {faltasDetail === t.id && (
                       <tr style={{ background: T.bg.surface2 }}>
-                        <td colSpan={8} style={{ padding: `${T.space(3)} ${T.space(4)}`, borderBottom: `1px solid ${T.border.base}` }}>
+                        <td colSpan={9} style={{ padding: `${T.space(3)} ${T.space(4)}`, borderBottom: `1px solid ${T.border.base}` }}>
                           <div style={{ fontSize: T.fs.caption, fontWeight: T.fw.semibold, color: T.text.primary, marginBottom: T.space(2) }}>
                             {t.name} — Cancelaciones sin antelación y faltas de este mes:
                           </div>
@@ -2262,6 +2289,7 @@ function AdminContent() {
                           {faltas} falta{faltas !== 1 ? 's' : ''} mes
                         </Badge>
                       )}
+                      <GuideBadge at={t.penaltyGuideCompletedAt} long />
                     </div>
 
                     {/* Carga: misma lectura que la columna de la tabla. */}

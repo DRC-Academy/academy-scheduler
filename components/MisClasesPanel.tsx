@@ -13,7 +13,7 @@
 //   · Cada clase ya dada tiene "Añadir transcript", que abre el mismo modal y el
 //     mismo guardado que Finanzas (components/AddClassModal).
 
-import { Fragment, useState, useEffect, useMemo, useRef, type CSSProperties } from 'react';
+import { Fragment, useState, useEffect, useMemo, useRef, useSyncExternalStore, type CSSProperties } from 'react';
 import { cellKey, getSpainParts, spainWallClockToEpoch } from '@/components/VisualCalendar';
 import { calcRegisteredClassNumber, dbDeleteClassRecordsByIds } from '@/lib/db';
 import {
@@ -48,7 +48,9 @@ import {
 } from '@/lib/rescheduleSplit';
 import { useClassJoin } from '@/components/JoinClass';
 import { useOnboardingActions } from '@/lib/OnboardingContext';
-import { registerTourBridge } from '@/lib/tourBridge';
+import { registerTourBridge, subscribeOpenTour, getOpenTour } from '@/lib/tourBridge';
+import { findAnchor } from '@/lib/tourEngine';
+import { ANCLA_MENU_CLASE, ANCLA_MENU_NO_PUEDO, ANCLA_MENU_ALUMNO } from '@/lib/penaltyGuide';
 import { fetchRiskBriefings, briefingFor, type RiskBriefingIndex } from '@/lib/interventionsClient';
 import { AddClassModal, saveTeacherClass, ANALYSIS_FAILED_NOTICE } from '@/components/AddClassModal';
 import { periodIndex, dbGetStudentDropouts, type StudentDropout } from '@/lib/studentPeriod';
@@ -473,7 +475,11 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
   useEffect(() => {
     if (!openMenu) return;
     const onDown = (e: MouseEvent) => {
-      if (!(e.target as HTMLElement).closest('[data-mc-menu]')) setOpenMenu(null);
+      const t = e.target as HTMLElement;
+      // Los botones del recorrido guiado ("Siguiente") no cuentan como "fuera":
+      // el menú lo abre y lo cierra la propia guía.
+      if (t.closest('.driver-popover')) return;
+      if (!t.closest('[data-mc-menu]')) setOpenMenu(null);
     };
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpenMenu(null); };
     document.addEventListener('mousedown', onDown);
@@ -791,7 +797,10 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
   const popupKey = `drc_transcript_deadline_popup_${teacher.id}`;
   const [popupClosed, setPopupClosed] = useState(false);
   const popupSeen = relojListo && (() => { try { return sessionStorage.getItem(popupKey) === '1'; } catch { return false; } })();
-  const deadlinePopup = relojListo && !popupClosed && !popupSeen && urgentClasses.length > 0;
+  // Con un recorrido en pantalla (tutorial o guía) el pop-up se APLAZA: taparía
+  // lo que el recorrido señala. No se marca como visto, sale al cerrarlo.
+  const recorridoAbierto = useSyncExternalStore(subscribeOpenTour, getOpenTour, () => null) !== null;
+  const deadlinePopup = relojListo && !popupClosed && !popupSeen && urgentClasses.length > 0 && !recorridoAbierto;
   function closeDeadlinePopup() {
     try { sessionStorage.setItem(popupKey, '1'); } catch { /* sin storage: no vuelve a salir en este montaje */ }
     setPopupClosed(true);
@@ -832,6 +841,15 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     hasLinkPending: () => pendienteRef.current,
     hasUpcomingClass: () => clasePorDelanteRef.current,
     hasClassNeedingTranscript: () => faltaTranscriptRef.current,
+    // Guía de penalizaciones: abre el menú ⋯ de la PRIMERA tarjeta que lleva el
+    // ancla (la que el paso anterior acaba de señalar). El id del menú viaja en
+    // el propio botón para no recalcular aquí qué clase es.
+    openClassMenu: async () => {
+      const btn = findAnchor([ANCLA_MENU_CLASE]);
+      const id = btn?.getAttribute('data-menu-id');
+      if (id) setOpenMenu(id);
+    },
+    closeClassMenu: async () => { setOpenMenu(null); },
   }), []);
 
   // Emails de todos los alumnos a la vista (los días que se están mostrando, más
@@ -1328,8 +1346,9 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
               ) : hasLink && !joinWin.open ? (
                 // Fuera de la ventana del ingreso (ver joinWindowOf): se ve CUÁNDO
                 // se abre, pero no registra nada. Sin ancla del tutorial: el paso
-                // "Ingresa a tu clase" espera al botón de verdad.
-                <button className="mc-btn mc-btn-ghost" disabled title="El ingreso se abre 15 minutos antes de la clase">
+                // "Ingresa a tu clase" espera al botón de verdad. `join-slot` es solo
+                // para la guía de penalizaciones, que señala el hueco del botón.
+                <button data-onboarding={relojListo ? 'join-slot' : undefined} className="mc-btn mc-btn-ghost" disabled title="El ingreso se abre 15 minutos antes de la clase">
                   {joinWin.label}
                 </button>
               ) : hasLink ? (
@@ -1348,19 +1367,24 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
               )}
 
               <div className="mc-menu-wrap" data-mc-menu>
+                {/* Ancla de la guía de penalizaciones: solo en las tarjetas cuyo menú
+                    trae "No puedo dar esta clase" (por delante, en pie y no de
+                    recuperación), que es lo que el paso siguiente enseña. */}
                 <button className="mc-more" aria-haspopup="menu" aria-expanded={menuOpen} aria-label={`Más acciones para ${c.studentName}`}
+                  data-onboarding={relojListo && beta && !passed && !inactive && !c.isRecovery ? ANCLA_MENU_CLASE : undefined}
+                  data-menu-id={menuId}
                   onClick={() => setOpenMenu(menuOpen ? null : menuId)}>
                   ⋯
                 </button>
                 {menuOpen && (
                   <div className="mc-menu" role="menu">
                     {beta && !passed && !inactive && !c.isRecovery && (
-                      <button className="mc-menu-item" role="menuitem"
+                      <button className="mc-menu-item" role="menuitem" data-onboarding={ANCLA_MENU_NO_PUEDO}
                         onClick={() => { setOpenMenu(null); setNoPuedoModal({ c, date }); }}>
                         No puedo dar esta clase
                       </button>
                     )}
-                    <button className="mc-menu-item" role="menuitem"
+                    <button className="mc-menu-item" role="menuitem" data-onboarding={ANCLA_MENU_ALUMNO}
                       onClick={() => { setOpenMenu(null); setRescheduleModal({ c, date }); }}>
                       {beta ? 'El alumno pidió cambiarla' : 'Reprogramar clase'}
                     </button>
