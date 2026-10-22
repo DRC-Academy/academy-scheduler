@@ -345,13 +345,6 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
     };
   }, [finance.rows]);
 
-  // ¿Alguna clase del mes con menos de 6 h de plazo o ya vencida? Deja el banner
-  // del plazo fijo en el modal de "Añadir clase".
-  const deadlineUrgent = useMemo(
-    () => finance.rows.some(r => r.status === 'vencida' || r.deadline.urgent),
-    [finance.rows],
-  );
-
   /** Todas las líneas del embudo, planas, para poder buscarlas por clave. */
   const funnelLines = useMemo(
     () => funnel.branches.flatMap(b => [b, ...(b.children ?? [])]),
@@ -1029,7 +1022,6 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
           deadline={addPrefill
             ? finance.rows.find(r => r.studentName === addPrefill.studentName && r.date === addPrefill.date)?.deadline ?? null
             : null}
-          deadlineUrgent={deadlineUrgent}
           onClose={() => { setShowAdd(false); setAddPrefill(null); }}
           onSaved={handleAddClass}
         />

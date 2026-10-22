@@ -19,7 +19,6 @@ import { checkTranscriptDuplicates, transcriptHash, type DupeCheck } from '@/lib
 import { quickTranscriptCheck } from '@/lib/transcriptValidation';
 import { canMarkStudentLostClass, LOST_CLASS_MONTHLY_CAP, LOST_CLASS_CAP_MESSAGE } from '@/lib/finance';
 import { deadlineLabel, hoursLeftLabel, type TranscriptStatusResult } from '@/lib/transcriptDeadline';
-import { TranscriptDeadlineBanner } from '@/components/TranscriptDeadlineBanner';
 import type { Teacher, Assignment, ClassRecord, ClassRecordType } from '@/types';
 
 // Opciones del selector "Tipo de clase".
@@ -254,11 +253,6 @@ export interface AddClassModalProps {
    * ya venció, avisa de que el transcript no valida la clase para el pago.
    */
   deadline?: TranscriptStatusResult | null;
-  /**
-   * El profesor tiene alguna clase con menos de 6 h de plazo o vencida: el
-   * banner del plazo no se puede ocultar.
-   */
-  deadlineUrgent?: boolean;
   onClose: () => void;
   onSaved: (
     studentName: string, date: string, time: string | undefined, transcript: string,
@@ -269,7 +263,7 @@ export interface AddClassModalProps {
 
 export function AddClassModal({
   teacher, myAssignments, classRecords, initial, title, lockClass, lockType, contextNote,
-  durationHours, deadline, deadlineUrgent, submitLabel, onClose, onSaved,
+  durationHours, deadline, submitLabel, onClose, onSaved,
 }: AddClassModalProps) {
   // Se extrae a una variable para que el memo dependa del nombre y no del objeto
   // `initial` entero (que el llamador puede recrear en cada render).
@@ -396,8 +390,6 @@ export function AddClassModal({
           <div style={{ fontWeight: 700, fontSize: 17, color: '#111827' }}>{title ?? 'Añadir clase'}</div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: '#6b7280' }}>✕</button>
         </div>
-        {/* Plazo de 24 h: banner fijo (mismo texto que en Mis clases). */}
-        <TranscriptDeadlineBanner compact urgent={!!deadlineUrgent || deadline?.status === 'vencido' || !!deadline?.urgent} />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           {deadline?.status === 'vencido' && (
             <div style={{ fontSize: 12.5, color: '#b91c1c', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.35)', borderRadius: 8, padding: '9px 12px', lineHeight: 1.5 }}>

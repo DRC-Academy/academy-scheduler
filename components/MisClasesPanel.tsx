@@ -26,7 +26,6 @@ import {
   getTranscriptStatus, reopenedDeadlineFor, transcriptDeadlineBadge, uploadedAtLabel, hoursLeftLabel, countdownLabel,
   TRANSCRIPT_WARN_HOURS, type TranscriptStatusResult,
 } from '@/lib/transcriptDeadline';
-import { TranscriptDeadlineBanner } from '@/components/TranscriptDeadlineBanner';
 import { planFieldsOf } from '@/lib/productUtils';
 import { marcasDeReprogramacion } from '@/lib/reprogramacion';
 import { checkSubscription, subBadge, type SubscriptionInfo } from '@/lib/useSubscriptionStatus';
@@ -1570,11 +1569,6 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
         </div>
       </div>
 
-      {/* Plazo de 24 h del transcript: banner fijo. Se puede ocultar con
-          "Entendido", pero vuelve mientras haya una clase con menos de 6 h de
-          plazo o vencida. */}
-      <TranscriptDeadlineBanner urgent={urgentClasses.length > 0} />
-
       {/* Rango (día / semana) y filtro. La semana es lunes → sábado: el grid del
           calendario no tiene domingo, así que un séptimo día saldría vacío. */}
       <div className="mc-controls">
@@ -1756,7 +1750,6 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
           }
           durationHours={transcriptFor.c.durationHours}
           deadline={transcriptFor.kind ? null : deadlineOf(transcriptFor.c, transcriptFor.date)}
-          deadlineUrgent={urgentClasses.length > 0}
           onClose={() => setTranscriptFor(null)}
           onSaved={handleSaveTranscript}
         />

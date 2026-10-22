@@ -25,7 +25,6 @@ import { checkTranscriptDuplicates, transcriptHash, type DupeCheck } from '@/lib
 import { pendingClassesFor, type PendingClass } from '@/lib/pendingClasses';
 import { logUsageEvent } from '@/lib/usageEvents';
 import { hoursLeftLabel, deadlineLabel, EXPIRED_LABEL } from '@/lib/transcriptDeadline';
-import { TranscriptDeadlineBanner } from '@/components/TranscriptDeadlineBanner';
 import type { Assignment } from '@/types';
 import type { StudentProfileRow } from '@/lib/aiTypes';
 import {
@@ -792,8 +791,6 @@ function PendingTranscriptModal({ pending, assignment, profile, ficha, teacher, 
           {assignment.studentName}{pending.time ? ` · ${pending.time}` : ''} · Pega el transcript de Fathom.
         </div>
 
-        {/* Plazo de 24 h: mismo banner fijo que en Mis clases. */}
-        <TranscriptDeadlineBanner compact urgent={pending.deadline.status === 'vencido' || pending.deadline.urgent} />
         {pending.deadline.status === 'vencido' ? (
           <div style={{ fontSize: 12.5, color: '#b91c1c', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.35)', borderRadius: 8, padding: '9px 12px', lineHeight: 1.5, marginBottom: 14 }}>
             <b>Plazo vencido.</b> Puedes subir el transcript igualmente para que el alumno tenga su práctica,

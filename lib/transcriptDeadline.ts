@@ -51,11 +51,6 @@ export const TRANSCRIPT_WARN_HOURS = 6;
 /** Horas que da una reapertura del admin, contadas desde el momento de reabrir. */
 export const TRANSCRIPT_REOPEN_HOURS = 24;
 
-/** Texto del banner fijo (Mis clases y pantalla de subir transcript). Español de España. */
-export const TRANSCRIPT_DEADLINE_NOTICE =
-  'Nuevo plazo: tienes 24 horas desde el final de cada clase para subir el transcript. '
-  + 'Sin transcript, el alumno no puede generar su práctica de la clase y la clase no se valida para el pago.';
-
 const HOUR_MS = 3_600_000;
 
 // ── Fila de class_analyses ────────────────────────────────────────────────────
