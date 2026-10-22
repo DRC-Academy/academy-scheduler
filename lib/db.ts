@@ -1,7 +1,7 @@
 import { supabase } from './supabase';
 import { triggerEmail } from './emailClient';
 import { baseStateOf, baseStudentOf, withBaseState, assignableCellKeys, puntualCellDates, puntualDateOf, isPuntualState, cellIsStudentLoose } from './cells';
-import { minutesLateSpain, getSpainParts } from './spainTime';
+import { getSpainParts } from './spainTime';
 import { EVENT_POINTS } from './scoringConstants';
 import { fetchOpenAlertState } from './interventionsClient';
 import { findContiguityMismatches, type ContiguityMismatch } from './teacherClasses';
@@ -19,6 +19,7 @@ import { depsNavegador } from './transferencia/navegador';
 import { notifyNewAssignmentWith } from './notificationStore';
 import { changesOfStudent } from './slotHistory';
 import { insertClassRecordsWith, deleteClassRecordsWith, addRescheduleRecordWith, type RescheduleRecordInput } from './classRecordStore';
+import { normalizePunctuality } from './classJoinStore';
 import { findOffCalendar, slotStatusOf, type OffCalendarRow } from './offCalendar';
 import { Teacher, Student, Assignment, AppUser, Grid, TeacherStatus, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, AssignedSlot, EmailPreferences, SalesContactResult, RecoveryCell, TeacherBonus, BonusType, SlotChange } from '@/types';
 import {
@@ -3083,85 +3084,15 @@ export async function dbUpdateMeetLink(assignmentId: string, link: string): Prom
 // ── CLASS JOIN LOGS ───────────────────────────────────────────────────────────
 
 /**
- * Puntualidad tal como sale de la base, traducida a los tres valores que entiende
- * la aplicación.
+ * Registra el ingreso a clase ("Ingresar a clase"). Lo escribe el SERVIDOR
+ * (app/api/class-join → lib/classJoinStore), que añade la IP y el user agent;
+ * la fila y la guarda de doble clic son las de siempre.
  *
- * En `class_join_logs` hay filas antiguas con el valor en español ('a_tiempo'),
- * que ningún código actual escribe. Nadie las traducía, así que llegaban intactas
- * a las pantallas: el panel de admin busca el estilo por ese valor y, al no
- * encontrarlo, la pestaña "Registro de clases" entera dejaba de cargar por tres
- * filas de hace un mes.
- *
- * Un valor desconocido se toma como 'on_time' por el mismo criterio que
- * calcPunctuality cuando la fecha no es válida: ante la duda, no se penaliza.
+ * El error se LANZA. Antes se ignoraba y el profesor veía "Ingreso registrado"
+ * sin que hubiera nada guardado: la clase quedaba como "no ingresó" (sin pago)
+ * y el chequeo de ausencias la daría por falta. Quien llama (components/JoinClass)
+ * avisa y deja reintentar; el Meet se abre igual.
  */
-function normalizePunctuality(v: unknown): ClassJoinLog['punctuality'] {
-  switch (String(v ?? '').trim().toLowerCase()) {
-    case 'late':
-    case 'tarde':      return 'late';
-    case 'very_late':
-    case 'muy_tarde':  return 'very_late';
-    default:           return 'on_time';
-  }
-}
-
-function calcPunctuality(scheduledDate: string, scheduledTime: string, clickedAt: Date): ClassJoinLog['punctuality'] {
-  // scheduledTime es "HH:00" en hora de ESPAÑA. Antes se construía la hora
-  // programada con `new Date(y, m, d, h)`, que usa la zona del navegador: un
-  // profesor en Argentina la medía contra las 15:00 argentinas en vez de las
-  // españolas, así que entrar 5 h tarde quedaba registrado como 'on_time'.
-  const diffMin = minutesLateSpain(scheduledDate, scheduledTime, clickedAt);
-  if (isNaN(diffMin)) return 'on_time';   // fecha inválida: no penalizamos
-  if (diffMin <= 5)  return 'on_time';
-  if (diffMin <= 15) return 'late';
-  return 'very_late';
-}
-
-/**
- * Ingreso YA registrado para esa misma clase, si lo hay. GUARDA DE DOBLE CLIC:
- * mismo profesor + mismo alumno + misma fecha, con la hora dentro del tramo de
- * la sesión (`durationHours` a partir de `scheduledTime`; una sesión de 2 h
- * cubre sus dos horas). Sin esto cada clic creaba un class_join_log nuevo y la
- * ficha del alumno mostraba una "clase pendiente de transcript" por clic: la
- * auditoría de agosto de 2026 contó 148 clics repetidos.
- *
- * Ante un error de lectura devuelve null (se inserta como siempre): perder un
- * ingreso es peor que duplicarlo.
- */
-async function findExistingJoinLog(
-  teacherId: string, studentName: string, scheduledDate: string, scheduledTime: string, durationHours: number,
-): Promise<ClassJoinLog | null> {
-  const { data, error } = await supabase
-    .from('class_join_logs')
-    .select('*')
-    .eq('teacher_id', teacherId)
-    .eq('scheduled_date', scheduledDate);
-  if (error || !data) return null;
-
-  const name = studentName.trim().toLowerCase();
-  const start = parseInt(scheduledTime, 10);
-  const span = Math.max(1, durationHours || 1);
-  const dup = data.find(row => {
-    if ((row.student_name ?? '').trim().toLowerCase() !== name) return false;
-    const h = parseInt(row.scheduled_time ?? '', 10);
-    if (!Number.isFinite(start) || !Number.isFinite(h)) return row.scheduled_time === scheduledTime;
-    // Misma hora, u otra hora del mismo bloque (17:00 y 18:00 de una sesión de 2 h).
-    return Math.abs(h - start) < span;
-  });
-  if (!dup) return null;
-
-  return {
-    id: dup.id, teacherId: dup.teacher_id, teacherName: dup.teacher_name, studentName: dup.student_name,
-    scheduledDate: dup.scheduled_date, scheduledTime: dup.scheduled_time, clickedAt: dup.clicked_at,
-    punctuality: normalizePunctuality(dup.punctuality),
-    subscriptionStatus: dup.subscription_status ?? undefined,
-    enteredWithoutActive: dup.entered_without_active ?? false,
-    subscriptionDaysRemaining: dup.subscription_days_remaining ?? undefined,
-    source: dup.source === 'manual' ? 'manual' : 'click',
-    transcriptDeadlineAt: dup.transcript_deadline_at ?? undefined,
-  };
-}
-
 export async function dbLogClassJoin(
   teacherId: string,
   teacherName: string,
@@ -3174,46 +3105,20 @@ export async function dbLogClassJoin(
   /** Horas de la sesión que se está abriendo (2 en un bloque de dos celdas). Solo para la guarda de doble clic. */
   durationHours = 1,
 ): Promise<ClassJoinLog> {
-  // Segundo clic sobre la misma clase → se devuelve el ingreso que ya existe y
-  // no se inserta nada. El Meet se abre igual (eso lo hace el botón).
-  const existing = await findExistingJoinLog(teacherId, studentName, scheduledDate, scheduledTime, durationHours);
-  if (existing) return existing;
-
-  const clickedAt   = new Date();
-  const punctuality = calcPunctuality(scheduledDate, scheduledTime, clickedAt);
-  const id          = `cjl_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-
-  // El error se LANZA. Antes se ignoraba y el profesor veía "Ingreso registrado"
-  // sin que hubiera nada guardado: la clase quedaba como "no ingresó" (sin pago)
-  // y el chequeo de ausencias la daría por falta. Quien llama (components/JoinClass)
-  // avisa y deja reintentar; el Meet se abre igual.
-  const { error: insertError } = await supabase.from('class_join_logs').insert({
-    id,
-    teacher_id:                  teacherId,
-    teacher_name:                teacherName,
-    student_name:                studentName,
-    scheduled_date:              scheduledDate,
-    scheduled_time:              scheduledTime,
-    clicked_at:                  clickedAt.toISOString(),
-    punctuality,
-    subscription_status:         subscriptionStatus ?? null,
-    entered_without_active:      enteredWithoutActive ?? false,
-    subscription_days_remaining: subscriptionDaysRemaining ?? null,
+  const res = await fetch('/api/class-join', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      teacherId, teacherName, studentName, scheduledDate, scheduledTime,
+      subscriptionStatus, enteredWithoutActive, subscriptionDaysRemaining, durationHours,
+    }),
   });
-  if (insertError) {
-    console.error('[db] No se pudo registrar el ingreso:', insertError);
-    throw new Error(`No se pudo registrar el ingreso: ${insertError.message}`);
+  const data = await res.json().catch(() => ({})) as Partial<ClassJoinLog> & { error?: string };
+  if (!res.ok || !data.id) {
+    console.error('[db] No se pudo registrar el ingreso:', data.error ?? res.status);
+    throw new Error(`No se pudo registrar el ingreso: ${data.error ?? `HTTP ${res.status}`}`);
   }
-
-  return {
-    id, teacherId, teacherName, studentName,
-    scheduledDate, scheduledTime,
-    clickedAt: clickedAt.toISOString(),
-    punctuality,
-    subscriptionStatus,
-    enteredWithoutActive: enteredWithoutActive ?? false,
-    subscriptionDaysRemaining: subscriptionDaysRemaining ?? undefined,
-  };
+  return data as ClassJoinLog;
 }
 
 export async function dbGetClassJoinLogs(): Promise<ClassJoinLog[]> {

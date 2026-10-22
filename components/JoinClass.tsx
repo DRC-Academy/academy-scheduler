@@ -16,10 +16,12 @@
 //   3. Verificación de la suscripción del alumno (fuente única:
 //      lib/useSubscriptionStatus). Si está inactiva, disclaimer con la opción de
 //      entrar igual: el acceso queda marcado como `enteredWithoutActive`.
-//   4. Se abre el Meet y se registra el ingreso en class_join_logs. Si el
-//      guardado falla, el Meet ya está abierto y el profesor ve un aviso con
-//      "Reintentar": sin ingreso la clase no cuenta para el pago y el chequeo de
-//      ausencias (/api/cron/ausencias) la daría por falta a los 30 minutos.
+//   4. Se abre el Meet y se registra el ingreso en class_join_logs. Lo escribe
+//      el SERVIDOR (logClassJoin → /api/class-join), que guarda además la IP y
+//      el user agent. Si el guardado falla, el Meet ya está abierto y el
+//      profesor ve un aviso con "Reintentar": sin ingreso la clase no cuenta
+//      para el pago y el chequeo de ausencias (/api/cron/ausencias) la daría por
+//      falta a los 30 minutos.
 //   5. Si el alumno está en riesgo de baja, ANTES de abrir el Meet se le enseña
 //      al profesor el protocolo de esa clase (ver `riskFor`).
 //
@@ -152,6 +154,9 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
     const pending: PendingJoin = { c, subscriptionStatus, enteredWithoutActive, daysRemaining, ok };
 
     if (!briefing) {
+      // El Meet PRIMERO y sin esperar a nada: el registro va a la red y, si el
+      // window.open quedara detrás de un await, el bloqueador de pop-ups lo
+      // cortaría. El registro sigue en segundo plano.
       window.open(normalizeUrl(c.meetLink), '_blank', 'noopener,noreferrer');
       void registrarIngreso(pending);
       return;
