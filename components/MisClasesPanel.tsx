@@ -17,7 +17,7 @@ import { Fragment, useState, useEffect, useMemo, useRef, useSyncExternalStore, t
 import { cellKey, getSpainParts, spainWallClockToEpoch } from '@/components/VisualCalendar';
 import { calcRegisteredClassNumber, dbDeleteClassRecordsByIds } from '@/lib/db';
 import {
-  classCategoryBadge, transcriptStateOf, transcriptNeedsTeacher,
+  classCategoryBadge, transcriptStateOf, transcriptNeedsTeacher, LOST_CLASS_MONTHLY_CAP,
   type ClassTranscriptRef,
 } from '@/lib/finance';
 // Plazo de 24 h del transcript: fuente única para esta vista, la ficha,
@@ -53,6 +53,8 @@ import { findAnchor } from '@/lib/tourEngine';
 import { ANCLA_MENU_CLASE, ANCLA_MENU_NO_PUEDO, ANCLA_MENU_ALUMNO } from '@/lib/penaltyGuide';
 import { fetchRiskBriefings, briefingFor, type RiskBriefingIndex } from '@/lib/interventionsClient';
 import { AddClassModal, saveTeacherClass, ANALYSIS_FAILED_NOTICE } from '@/components/AddClassModal';
+import { MarkClassStatusModal, type MarkableStatus } from '@/components/MarkClassStatusModal';
+import type { UnmarkedClass } from '@/lib/classStatus';
 import { periodIndex, dbGetStudentDropouts, type StudentDropout } from '@/lib/studentPeriod';
 import FormStatusBadge from '@/components/FormStatusBadge';
 import { lookupToken, formStateOf, type FormTokenInfo } from '@/lib/formClient';
@@ -405,6 +407,11 @@ function RescheduleModal({ studentName, currentDate, currentHour, durationHours,
   );
 }
 
+/** Clave de una clase para cruzarla con las "sin estado" del servidor. */
+function sinEstadoKey(date: string, hour: number | string, name: string): string {
+  return `${date}|${hourNum(hour)}|${name.trim().toLowerCase()}`;
+}
+
 // ─── Teacher Upcoming Classes Tab ─────────────────────────────────────────────
 export function MisClasesPanel({ teacher, myAssignments, students, classRecords, classAnalyses, classJoinLogs, grid, onGridChange, updateMeetLink, logClassJoin, addRescheduleRecord, addRescheduleSplit, registerClassRecord, onDataChanged, formIndex, refreshFormIndex }: {
   teacher: Teacher;
@@ -445,7 +452,14 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [subInfo, setSubInfo] = useState<Record<string, SubscriptionInfo>>({});
   // Clase para la que se está subiendo el transcript (abre el modal de Finanzas).
-  const [transcriptFor, setTranscriptFor] = useState<{ c: TodayClass; date: string } | null>(null);
+  // `kind`: se abrió desde "Marcar estado" para registrar una clase perdida del
+  // alumno (mismo modal y mismo tope de 2 al mes que "Añadir clase").
+  const [transcriptFor, setTranscriptFor] = useState<{ c: TodayClass; date: string; kind?: 'falta_sin_aviso' | 'cancelacion_hora' } | null>(null);
+  // Clases terminadas SIN ESTADO (lib/classStatus). Las calcula el servidor con
+  // la misma función que el aviso de 24 h, así que la tarjeta y el email no
+  // pueden discrepar.
+  const [sinEstado, setSinEstado] = useState<UnmarkedClass[]>([]);
+  const [statusFor, setStatusFor] = useState<{ c: TodayClass; date: string; hasJoin: boolean } | null>(null);
   const [saveNotice, setSaveNotice] = useState<{ title: string; body: string } | null>(null);
 
   // Lookup de alumnos por email/nombre para clasificar el plan con TODOS los campos
@@ -461,6 +475,22 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
   const studentForAssignment = (a: Assignment): Student | undefined =>
     (a.studentEmail && studentByEmail.get(a.studentEmail.trim().toLowerCase())) ||
     studentByEmail.get(`name:${a.studentName.trim().toLowerCase()}`);
+
+  // Se recalcula al cambiar las constancias o los transcripts (marcar un estado
+  // cambia uno de los dos). Best-effort: si falla, la tarjeta no señala nada.
+  const [sinEstadoTick, setSinEstadoTick] = useState(0);
+  useEffect(() => {
+    let vivo = true;
+    fetch(`/api/classes/estado?teacherId=${encodeURIComponent(teacher.id)}`, { cache: 'no-store' })
+      .then(r => (r.ok ? r.json() : null))
+      .then((d: { sinEstado?: UnmarkedClass[] } | null) => { if (vivo && d?.sinEstado) setSinEstado(d.sinEstado); })
+      .catch(() => { /* best-effort */ });
+    return () => { vivo = false; };
+  }, [teacher.id, classRecords, classAnalyses, sinEstadoTick]);
+  const sinEstadoIndex = useMemo(
+    () => new Map(sinEstado.map(u => [sinEstadoKey(u.date, u.hour, u.studentName), u])),
+    [sinEstado],
+  );
 
   // Live "now" — set on mount (avoids SSR hydration mismatch) and refreshed every
   // minute so each class's state (pasada / en curso / próxima) updates on its own.
@@ -1116,7 +1146,9 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     });
 
     // Tutorial: el transcript ya está guardado (no se espera al informe de IA, que
-    // es posterior y puede fallar sin que la clase deje de contar).
+    // es posterior y puede fallar sin que la clase deje de contar). Una falta o
+    // cancelación registrada desde "Marcar estado" no lleva transcript: no cuenta.
+    if (!transcript.trim()) { await onDataChanged(); return; }
     onboarding.reportAction('add-transcript');
     // Una clase de formación se completa con sus DOS factores: el ingreso
     // registrado y el transcript. Sin el ingreso la clase no se paga, así que
@@ -1126,6 +1158,36 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     }
 
     await onDataChanged();
+  }
+
+  /**
+   * "Marcar estado": lleva cada respuesta al flujo que ya existe para ella
+   * (components/MarkClassStatusModal). Si lanza, el modal muestra el error.
+   */
+  async function handleStatusChoice(s: MarkableStatus) {
+    if (!statusFor) return;
+    const { c, date } = statusFor;
+    if (s === 'realizada' || s === 'recuperada') { setStatusFor(null); setTranscriptFor({ c, date }); return; }
+    if (s === 'alumno_no_conecto') { setStatusFor(null); setTranscriptFor({ c, date, kind: 'falta_sin_aviso' }); return; }
+    if (s === 'cancelada_alumno_tarde') { setStatusFor(null); setTranscriptFor({ c, date, kind: 'cancelacion_hora' }); return; }
+    if (s === 'cancelada_alumno_antelacion') {
+      await registerClassRecord(teacher.id, c.studentName, date, hourLabel(c.hour), null, 'falta_con_aviso',
+        'Estado de la clase: el alumno avisó con más de 24 h de antelación.');
+    } else {
+      // 'profesor_ausente': falta del profesor, en el servidor.
+      const res = await fetch('/api/classes/estuve-ausente', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ teacherId: teacher.id, studentName: c.studentName, date, hour: hourLabel(c.hour) }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(d.error || 'No se pudo registrar la ausencia. Inténtalo de nuevo.');
+      }
+    }
+    setStatusFor(null);
+    showToast('✅ Estado guardado');
+    await onDataChanged();
+    setSinEstadoTick(t => t + 1);
   }
 
   /**
@@ -1168,6 +1230,8 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     const cancelLabel   = cancellationLabel(cancelledType);
     // Estado inactivo = la clase no se va a dar. Agrupa reprogramada y cancelada.
     const inactive = rescheduled || cancelled;
+    // Terminada y sin estado (lib/classStatus): se señala y se ofrece "Marcar estado".
+    const unmarked = passed && !inactive ? sinEstadoIndex.get(sinEstadoKey(date, c.startHourNum, c.studentName)) : undefined;
 
     const hasLink = !!c.meetLink;
     // Estado REAL del transcript (fuente única, lib/finance). Antes acá bastaba
@@ -1277,6 +1341,12 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
               </div>
             )}
             {desde && !c.isRecovery && <div className="mc-meta">{desde}</div>}
+            {unmarked && (
+              <button type="button" onClick={() => setStatusFor({ c, date, hasJoin: unmarked.hasJoin })}
+                style={{ marginTop: 4, padding: 0, minHeight: 0, border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, color: '#b54708', textAlign: 'left' }}>
+                ⚠️ Sin estado · Marcar estado
+              </button>
+            )}
           </div>
 
           {/* Estado del enlace primero: es la información clave para el profesor. */}
@@ -1378,6 +1448,12 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
                 </button>
                 {menuOpen && (
                   <div className="mc-menu" role="menu">
+                    {unmarked && (
+                      <button className="mc-menu-item" role="menuitem"
+                        onClick={() => { setOpenMenu(null); setStatusFor({ c, date, hasJoin: unmarked.hasJoin }); }}>
+                        Marcar estado
+                      </button>
+                    )}
                     {beta && !passed && !inactive && !c.isRecovery && (
                       <button className="mc-menu-item" role="menuitem" data-onboarding={ANCLA_MENU_NO_PUEDO}
                         onClick={() => { setOpenMenu(null); setNoPuedoModal({ c, date }); }}>
@@ -1619,6 +1695,19 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
           hito y disclaimer de suscripción inactiva (components/JoinClass). */}
       {join.dialogs}
 
+      {/* "Marcar estado" de una clase terminada (lib/classStatus). */}
+      {statusFor && (
+        <MarkClassStatusModal
+          studentName={statusFor.c.studentName}
+          date={statusFor.date}
+          hourLabel={sessionHoursLabel(statusFor.c)}
+          isRecovery={!!statusFor.c.isRecovery}
+          hasJoin={statusFor.hasJoin}
+          onChoose={handleStatusChoice}
+          onClose={() => setStatusFor(null)}
+        />
+      )}
+
       {/* Transcript de una clase ya dada. MISMO modal y mismo guardado que
           Finanzas: guarda el transcript primero y analiza después. El alumno y la
           fecha vienen bloqueados por la clase desde la que se abrió. */}
@@ -1627,16 +1716,23 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
           teacher={teacher}
           myAssignments={myAssignments}
           classRecords={classRecords}
-          title="Añadir transcript"
+          title={transcriptFor.kind === 'falta_sin_aviso' ? 'El alumno no se conectó'
+            : transcriptFor.kind === 'cancelacion_hora' ? 'Cancelada por el alumno con menos de 24 h'
+            : 'Añadir transcript'}
           lockClass
+          lockType={!!transcriptFor.kind}
           initial={{
             studentName: transcriptFor.c.studentName,
             date: transcriptFor.date,
-            classType: transcriptFor.c.isRecovery ? 'recuperacion' : 'normal',
+            classType: transcriptFor.kind ?? (transcriptFor.c.isRecovery ? 'recuperacion' : 'normal'),
             time: hourLabel(transcriptFor.c.hour),
           }}
           contextNote={
-            transcriptFor.c.mixedRecovery ? (
+            transcriptFor.kind ? (
+              <>Clase de <b>{transcriptFor.c.studentName}</b> del <b>{fmtDateDMY(transcriptFor.date)}</b> a
+              las <b>{hourLabel(transcriptFor.c.hour)}</b>. Se da por realizada: se te paga y gasta una clase del
+              alumno (máximo {LOST_CLASS_MONTHLY_CAP} al mes entre faltas y cancelaciones).</>
+            ) : transcriptFor.c.mixedRecovery ? (
               // Bloque mixto: un solo transcript cubre la hora normal Y la de
               // recuperación. Se le dice explícitamente porque antes tenía que
               // subir dos y solo se le pagaba una de las dos horas.
@@ -1659,7 +1755,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
             )
           }
           durationHours={transcriptFor.c.durationHours}
-          deadline={deadlineOf(transcriptFor.c, transcriptFor.date)}
+          deadline={transcriptFor.kind ? null : deadlineOf(transcriptFor.c, transcriptFor.date)}
           deadlineUrgent={urgentClasses.length > 0}
           onClose={() => setTranscriptFor(null)}
           onSaved={handleSaveTranscript}

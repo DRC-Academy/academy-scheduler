@@ -1036,6 +1036,10 @@ export async function runNightlyRecoveryCheck(opts: { dry?: boolean; nowMs?: num
 export async function reclassifyAsTeacherFalta(input: {
   teacherId: string; studentName: string; classDate: string; classTime: string | null;
   by: string; comment?: string | null;
+  /** Comentario de la constancia. Por defecto, el de la revisión aprobada por el admin. */
+  recordComment?: string;
+  /** Motivo de la recuperación del alumno. Por defecto, el de la reclasificación del admin. */
+  recoveryReason?: string;
 }): Promise<{ created: boolean; groupId: string | null; penaltyEuros: number }> {
   const hour = normalizeHour(input.classTime) ?? '00:00';
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.classDate)) throw new RecoveryError(422, 'datos_invalidos', 'Fecha no válida.');
@@ -1060,7 +1064,7 @@ export async function reclassifyAsTeacherFalta(input: {
       id: cancelRecordId, teacher_id: input.teacherId, teacher_name: teacherName,
       student_name: input.studentName, class_date: input.classDate, class_time: input.classTime ?? null,
       screenshot_url: '', class_type: 'cancelada_por_profesor',
-      comment: `Solicitud de revisión aprobada por ${input.by}${input.comment ? ` — ${input.comment}` : ''}`,
+      comment: input.recordComment ?? `Solicitud de revisión aprobada por ${input.by}${input.comment ? ` — ${input.comment}` : ''}`,
       created_at: now,
     });
     // 23505: ya había una (con otro nombre escrito): vale esa, sin enlazarla.
@@ -1087,7 +1091,7 @@ export async function reclassifyAsTeacherFalta(input: {
       student_id: a?.student_id ?? null, student_name: input.studentName,
       student_email: normEmail((s as Row | null)?.email) || normEmail(a?.student_email) || null,
       original_date: input.classDate, original_hour: hour, hours: 1,
-      cancel_record_id: cancelRecordId ?? null, reason: 'Reclasificada por el admin desde una revisión (falta)',
+      cancel_record_id: cancelRecordId ?? null, reason: input.recoveryReason ?? 'Reclasificada por el admin desde una revisión (falta)',
       cancelled_at: cancelledAt, cancel_month: input.classDate.slice(0, 7),
       notice_minutes: 0, late: true, used_wildcard: false,
       penalty_euros: multa ? -FALTA_PENALTY_EUROS : 0, would_have_penalty: false, penalty_event_id: penaltyEventId,

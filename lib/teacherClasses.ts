@@ -729,13 +729,20 @@ export function cancellationFor(
   records: ClassRecord[], teacherId: string, studentName: string, dateIso: string,
   span?: HourSpan,
 ): ClassRecordType | null {
-  const rec = records.find(r =>
+  return (cancellationRecordFor(records, teacherId, studentName, dateIso, span)?.classType as ClassRecordType) ?? null;
+}
+
+/** La constancia de cancelación entera (con su comentario), no solo el tipo. */
+export function cancellationRecordFor(
+  records: ClassRecord[], teacherId: string, studentName: string, dateIso: string,
+  span?: HourSpan,
+): ClassRecord | null {
+  return records.find(r =>
     r.teacherId === teacherId && !r.rescheduledTo &&
     CANCEL_TYPES.has(r.classType ?? '') &&
     nk(r.studentName) === nk(studentName) && r.classDate === dateIso &&
     recordInSpan(r, span),
-  );
-  return (rec?.classType as ClassRecordType) ?? null;
+  ) ?? null;
 }
 
 /** Etiqueta corta de una cancelación, para el badge de la clase. */
