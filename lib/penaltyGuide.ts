@@ -77,9 +77,16 @@ export function shouldShowGuideBanner(i: GuideBannerInput): boolean {
   return true;
 }
 
-/** "Más tarde": se guarda el día, por profesor. Vuelve a salir al día siguiente. */
+/** "Más tarde": se guarda el día, por profesor. Vuelve a salir al día siguiente
+ *  o en el próximo inicio de sesión, lo que llegue antes (forgetGuideLater). */
 export function laterKey(teacherId: string): string {
   return `drc_guia_penal_mas_tarde_${teacherId}`;
+}
+
+/** Cada inicio de sesión olvida el "Más tarde": el panel vuelve a salir. */
+export function forgetGuideLater(teacherId: string | undefined): void {
+  if (!teacherId) return;
+  try { localStorage.removeItem(laterKey(teacherId)); } catch { /* modo privado */ }
 }
 
 // ── Recorrido ─────────────────────────────────────────────────────────────────

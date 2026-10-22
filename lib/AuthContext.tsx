@@ -2,6 +2,7 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { AppUser, UserRole } from '@/types';
 import { dbAuthenticate } from '@/lib/db';
+import { forgetGuideLater } from '@/lib/penaltyGuide';
 
 interface AuthContextType {
   user: AppUser | null;
@@ -74,6 +75,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   async function login(username: string, password: string): Promise<AppUser | null> {
     const u = await dbAuthenticate(username, password);
     if (!u) return null;
+    if (u.role === 'teacher') forgetGuideLater(u.teacherId);
     setUser(u);
     try { localStorage.setItem(SESSION_KEY, JSON.stringify(u)); } catch {}
     return u;

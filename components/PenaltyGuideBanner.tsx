@@ -7,8 +7,9 @@
 //
 //   · "Iniciar guía" abre el recorrido (mismo motor que el tutorial).
 //   · "Más tarde" y la X lo esconden HASTA MAÑANA (día de España, por profesor,
-//     en localStorage). Es una comodidad del navegador: si se pierde, el panel
-//     sale antes, nunca se pierde la guía.
+//     en localStorage) o hasta el próximo inicio de sesión, que lo olvida
+//     (AuthContext.login → forgetGuideLater). Si se pierde, el panel sale
+//     antes, nunca se pierde la guía.
 //   · Solo "Entendido" en el último paso lo apaga para siempre, y eso sí va a la
 //     base (lib/penaltyGuideStore), así que vale en todos los dispositivos.
 //

@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   GUIDE_BANNER_UNTIL, PENALTY_GUIDE_STEPS, GUIDE_RULES, GUIDE_CASES,
-  shouldShowGuideBanner, spainToday, type GuideBannerInput,
+  shouldShowGuideBanner, spainToday, forgetGuideLater, laterKey, type GuideBannerInput,
 } from '@/lib/penaltyGuide';
 import { MONTHLY_WILDCARDS, PENALTY_EUROS, NO_SHOW_PENALTY_EUROS } from '@/lib/classRecoveries';
 import { ONBOARDING_STEPS } from '@/lib/onboarding';
@@ -39,6 +39,18 @@ describe('shouldShowGuideBanner', () => {
   it('no se junta con un recorrido abierto ni con el tutorial automático', () => {
     expect(shouldShowGuideBanner({ ...base, tourOpen: true })).toBe(false);
     expect(shouldShowGuideBanner({ ...base, autoOnboarding: true })).toBe(false);
+  });
+});
+
+describe('forgetGuideLater', () => {
+  it('cada inicio de sesión borra el "Más tarde" de ese profesor', () => {
+    const store = new Map<string, string>([[laterKey('t1'), '2026-10-22'], [laterKey('t2'), '2026-10-22']]);
+    vi.stubGlobal('localStorage', { removeItem: (k: string) => store.delete(k) });
+    forgetGuideLater('t1');
+    forgetGuideLater(undefined);
+    expect(store.has(laterKey('t1'))).toBe(false);
+    expect(store.has(laterKey('t2'))).toBe(true);
+    vi.unstubAllGlobals();
   });
 });
 
