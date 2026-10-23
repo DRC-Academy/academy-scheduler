@@ -3,6 +3,7 @@ import { createContext, useContext, useState, useEffect, ReactNode } from 'react
 import { AppUser, UserRole } from '@/types';
 import { dbAuthenticate } from '@/lib/db';
 import { forgetGuideLater } from '@/lib/penaltyGuide';
+import { openAdminSession, closeAdminSession } from '@/lib/adminSessionClient';
 
 interface AuthContextType {
   user: AppUser | null;
@@ -76,12 +77,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const u = await dbAuthenticate(username, password);
     if (!u) return null;
     if (u.role === 'teacher') forgetGuideLater(u.teacherId);
+    // Solo el admin: sesión de servidor para las pantallas con datos personales
+    // (lib/adminSession). Best-effort: si falla, la pantalla la vuelve a pedir.
+    if (u.role === 'admin') await openAdminSession(username, password);
     setUser(u);
     try { localStorage.setItem(SESSION_KEY, JSON.stringify(u)); } catch {}
     return u;
   }
 
   function logout() {
+    if (user?.role === 'admin') closeAdminSession();
     setUser(null);
     try {
       localStorage.removeItem(SESSION_KEY);

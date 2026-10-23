@@ -1,6 +1,10 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // pdfkit (PDF del "Registro para disputas", lib/classRegisterPdf) lee sus
+  // fuentes estándar del disco con __dirname: empaquetado por Next no las
+  // encuentra. Con `require` nativo, sí.
+  serverExternalPackages: ['pdfkit'],
   // Identificador del despliegue, inyectado en build. Nombra la caché del service
   // worker para que cada deploy purgue la anterior (ver public/sw.js).
   // VERCEL_GIT_COMMIT_SHA existe en el build de Vercel sin necesidad de activar

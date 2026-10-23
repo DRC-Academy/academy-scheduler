@@ -27,6 +27,7 @@ import AiRiskTab from '@/components/ai/AiRiskTab';
 import AiUsageTab from '@/components/admin/AiUsageTab';
 import LevelTestsTab from '@/components/admin/LevelTestsTab';
 import ClassLogTab from '@/components/admin/ClassLogTab';
+import DisputeRegisterTab from '@/components/admin/DisputeRegisterTab';
 import RecoveriesTab from '@/components/admin/RecoveriesTab';
 import TranscriptsTab from '@/components/admin/TranscriptsTab';
 import TestimonialsTab from '@/components/admin/TestimonialsTab';
@@ -2479,6 +2480,7 @@ function AdminContent() {
 
         {/* CLASS LOG TAB */}
         {activeTab === 'classlog' && <ClassLogTab />}
+        {activeTab === 'disputas' && <DisputeRegisterTab />}
         {activeTab === 'recuperaciones' && <RecoveriesTab />}
         {activeTab === 'transcripts' && <TranscriptsTab />}
         {activeTab === 'testimoniales' && <TestimonialsTab />}

@@ -69,7 +69,7 @@ export function AdminNavMovil({ activeTab, contadores, onSelect, onVolver, child
     ai: <AlertTriangle size={22} strokeWidth={1.75} aria-hidden />,
     teachers: <Users size={22} strokeWidth={1.75} aria-hidden />,
     emails: <Link2 size={22} strokeWidth={1.75} aria-hidden />,
-    scoring: null, bonos: null, penalizaciones: null, tracking: null, fueracal: null, classlog: null, transcripts: null, leveltests: null, recuperaciones: null, aiusage: null, bajas: null, testimoniales: null, notifications: null,
+    scoring: null, bonos: null, penalizaciones: null, tracking: null, fueracal: null, classlog: null, transcripts: null, leveltests: null, recuperaciones: null, aiusage: null, bajas: null, testimoniales: null, notifications: null, disputas: null,
   };
 
   return (
