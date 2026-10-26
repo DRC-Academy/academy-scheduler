@@ -106,6 +106,31 @@ export function classExistsOn(period: StudentPeriod, dateIso: string, hour?: str
 }
 
 /**
+ * ¿La baja es de una etapa ANTERIOR a esta asignación? Lo es si ocurrió antes de
+ * que se creara la asignación: el alumno se dio de baja y después se le volvió a
+ * dar de alta (con el mismo nombre, que es como se guardan las bajas).
+ *
+ * Caso real (26/10/2026): "Facundo Test" dado de baja a las 20:55 y vuelto a
+ * asignar a las 20:57 con inicio el 02/10. La baja del 26/10 caía DENTRO del
+ * período nuevo (después del inicio) y lo cerraba: el alumno salía en el
+ * calendario y en ninguna otra pantalla.
+ *
+ * Con instante completo en los dos lados se compara el instante; si alguno
+ * trae solo la fecha, el día (el mismo día no se descarta: ante la duda, como
+ * antes). Sin `createdAt`, la baja cuenta, como siempre.
+ */
+export function isEarlierStageDropout(droppedAt: string | undefined, createdAt: string | undefined): boolean {
+  if (!droppedAt || !createdAt) return false;
+  const conHora = (v: string) => v.length > 10;
+  if (conHora(droppedAt) && conHora(createdAt)) {
+    const d = Date.parse(droppedAt), c = Date.parse(createdAt);
+    if (Number.isFinite(d) && Number.isFinite(c)) return d < c;
+  }
+  const dd = toIsoDate(droppedAt), cd = toIsoDate(createdAt);
+  return !!dd && !!cd && dd < cd;
+}
+
+/**
  * Índice `alumno normalizado → período`, listo para consultar dentro de un bucle.
  *
  * Se arma por PROFESOR: el mismo alumno puede haber empezado en fechas distintas
@@ -122,22 +147,26 @@ export function periodIndex(
 ): Map<string, StudentPeriod> {
   const nk = (s: string) => (s ?? '').trim().toLowerCase();
 
-  const bajaPor = new Map<string, string>();
+  // Bajas por alumno (las bajas se guardan por NOMBRE, sin la asignación).
+  const bajasPor = new Map<string, string[]>();
   for (const d of dropouts) {
-    if (d.teacherId !== teacherId) continue;
-    const iso = toIsoDate(d.droppedAt);
-    if (!iso) continue;
+    if (d.teacherId !== teacherId || !toIsoDate(d.droppedAt)) continue;
     const k = nk(d.studentName);
-    const prev = bajaPor.get(k);
-    // La baja MÁS RECIENTE: un alumno que volvió y se fue otra vez tiene dos.
-    if (!prev || iso > prev) bajaPor.set(k, iso);
+    const arr = bajasPor.get(k);
+    if (arr) arr.push(d.droppedAt!); else bajasPor.set(k, [d.droppedAt!]);
   }
 
   const out = new Map<string, StudentPeriod>();
   for (const a of assignments) {
     if (a.teacherId !== teacherId) continue;
     const k = nk(a.studentName);
-    const p: StudentPeriod = periodOf(a, { droppedAt: bajaPor.get(k) });
+    // La baja MÁS RECIENTE que sea de ESTA asignación: un alumno que volvió y se
+    // fue otra vez tiene dos, y una anterior a que se creara la asignación es de
+    // la etapa pasada aunque la fecha de inicio nueva quede antes que ella.
+    const baja = (bajasPor.get(k) ?? [])
+      .filter(d => !isEarlierStageDropout(d, a.createdAt))
+      .reduce<string | undefined>((max, d) => (!max || (toIsoDate(d) ?? '') > (toIsoDate(max) ?? '') ? d : max), undefined);
+    const p: StudentPeriod = periodOf(a, { droppedAt: baja });
     const prev = out.get(k);
     const spans = holdSpansFor(holds, a);
     if (!prev || p.from < prev.from) out.set(k, { ...p, holds: mergeSpans(prev?.holds, spans) });

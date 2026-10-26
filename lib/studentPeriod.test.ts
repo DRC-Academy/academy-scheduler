@@ -4,7 +4,7 @@
 // que hace seguro aplicarlo a asistencias, la agenda y /revisiones sin mover un
 // euro. Si algún día alguien la rompe, que lo diga un test y no un profesor.
 import { describe, it, expect } from 'vitest';
-import { periodOf, classExistsOn, periodIndex, existsForStudent, findStartDateMismatches } from '@/lib/studentPeriod';
+import { periodOf, classExistsOn, periodIndex, existsForStudent, findStartDateMismatches, isEarlierStageDropout } from '@/lib/studentPeriod';
 import { buildAttendanceRows } from '@/lib/attendance';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import type { Assignment, ClassJoinLog } from '@/types';
@@ -56,6 +56,38 @@ describe('classExistsOn — extremos incluidos', () => {
   it('el día siguiente a la baja NO', () => expect(classExistsOn(p, '2026-08-21')).toBe(false));
   it('sin baja, abierto por la derecha', () => {
     expect(classExistsOn({ from: '2026-08-10', to: null }, '2030-01-01')).toBe(true);
+  });
+});
+
+describe('periodIndex — baja de una etapa anterior', () => {
+  // Caso real del 26/10/2026: baja a las 20:55, nueva asignación a las 20:57 con
+  // inicio el 02/10. La baja caía dentro del período nuevo y lo cerraba.
+  it('una baja anterior a la creación de la asignación no cierra el período nuevo', () => {
+    const asgs = [asgn('Facundo Test', '2026-10-02', '2026-10-26T19:57:12Z')];
+    const bajas = [{ teacherId: T, studentName: 'Facundo Test', droppedAt: '2026-10-26T19:55:40Z' }];
+    const p = periodIndex(asgs, bajas, T).get('facundo test')!;
+    expect(p.to).toBeNull();
+    expect(existsForStudent(periodIndex(asgs, bajas, T), 'Facundo Test', '2026-10-29')).toBe(true);
+  });
+  it('una baja posterior a la creación sí lo cierra (como siempre)', () => {
+    const asgs = [asgn('Ana', '2026-10-02', '2026-10-01T10:00:00Z')];
+    const bajas = [{ teacherId: T, studentName: 'Ana', droppedAt: '2026-10-26T19:55:40Z' }];
+    expect(periodIndex(asgs, bajas, T).get('ana')!.to).toBe('2026-10-26');
+  });
+  it('con dos bajas, manda la más reciente de esta etapa', () => {
+    const asgs = [asgn('Ana', '2026-03-01', '2026-03-01T10:00:00Z')];
+    const bajas = [
+      { teacherId: T, studentName: 'Ana', droppedAt: '2026-02-10T10:00:00Z' },   // etapa anterior
+      { teacherId: T, studentName: 'Ana', droppedAt: '2026-09-15T10:00:00Z' },
+    ];
+    expect(periodIndex(asgs, bajas, T).get('ana')!.to).toBe('2026-09-15');
+  });
+  it('isEarlierStageDropout: instante si hay hora; día si no; sin alta, cuenta', () => {
+    expect(isEarlierStageDropout('2026-10-26T19:55:40Z', '2026-10-26T19:57:12Z')).toBe(true);
+    expect(isEarlierStageDropout('2026-10-26T19:58:00Z', '2026-10-26T19:57:12Z')).toBe(false);
+    expect(isEarlierStageDropout('2026-10-25', '2026-10-26T19:57:12Z')).toBe(true);
+    expect(isEarlierStageDropout('2026-10-26', '2026-10-26T19:57:12Z')).toBe(false);
+    expect(isEarlierStageDropout('2026-10-26T19:55:40Z', undefined)).toBe(false);
   });
 });
 
