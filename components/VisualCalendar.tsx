@@ -3,7 +3,7 @@ import { useState, useCallback, useEffect } from 'react';
 import { Grid, Cell, CellState } from '@/types';
 import { Button } from '@/components/ui';
 import { isPuntualState, baseCellOf, baseStudentOf, isAssignableCell } from '@/lib/cells';
-import { getSpainParts } from '@/lib/spainTime';
+import { getSpainParts, spainHourToArgentinaHour } from '@/lib/spainTime';
 import { hourNum, nkName, sessionRangeLabel } from '@/lib/sessions';
 
 export const DAYS = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
@@ -41,11 +41,11 @@ export const HOURS_ES = hourRange(CAL_MIN_HOUR, CAL_MAX_HOUR);
 const MONTH_NAMES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
 const MONTH_NAMES_SHORT = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
 
-export function toAR(hourES: string): string {
-  const h = parseInt(hourES);
-  let ar = h - 5;
-  if (ar < 0) ar += 24;
-  return `${ar.toString().padStart(2, '0')}:00`;
+/** Hora española 'HH:00' → hora argentina 'HH:00' en esa fecha (YYYY-MM-DD).
+ *  La diferencia cambia con el horario de verano de España (5 h o 4 h). */
+export function toAR(hourES: string, dateIso: string): string {
+  const ar = spainHourToArgentinaHour(dateIso, parseInt(hourES));
+  return isNaN(ar) ? '' : `${ar.toString().padStart(2, '0')}:00`;
 }
 
 function toISODateStr(d: Date): string {
@@ -268,7 +268,7 @@ function CellMenu({
       <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 'var(--space-2)', minWidth: 210, boxShadow: 'var(--shadow-overlay)' }}
         onClick={e => e.stopPropagation()}>
         <div style={{ fontSize: 'var(--fs-caption)', fontWeight: 'var(--fw-medium)', color: 'var(--text-muted)', padding: '4px 10px 8px' }}>
-          {day} · {hour} ES / {toAR(hour)} AR
+          {day} · {hour} ES / {toAR(hour, date)} AR
         </div>
         {options.map(opt => (
           <button key={opt.state} onClick={() => {
@@ -853,7 +853,7 @@ export function VisualCalendar(props: Props) {
             <div key={hour} className="vc-arow">
               <div className="vc-hcell" style={{ position: 'static', border: 'none', padding: 0 }}>
                 <div className="vc-h-es">{hour}</div>
-                <div className="vc-h-ar">{toAR(hour)}</div>
+                <div className="vc-h-ar">{toAR(hour, toISODateStr(weekDates[activeDay]))}</div>
               </div>
               <div
                 className={`vc-block${isClickable(cell) ? ' is-clickable' : ''}${dimPast ? ' is-past' : ''}${runClass(run)}`}
@@ -894,7 +894,9 @@ export function VisualCalendar(props: Props) {
               <tr key={hour}>
                 <td className="vc-hcell">
                   <div className="vc-h-es">{hour}</div>
-                  <div className="vc-h-ar">{toAR(hour)}</div>
+                  {/* España cambia de hora en domingo y la grilla va de lunes a
+                      sábado: toda la semana tiene la misma diferencia. */}
+                  <div className="vc-h-ar">{toAR(hour, toISODateStr(weekDates[0]))}</div>
                 </td>
                 {DAYS.map((day, colIdx) => {
                   const cell = getCell(day, hour);

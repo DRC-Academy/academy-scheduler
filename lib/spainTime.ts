@@ -2,9 +2,10 @@
 //
 // El calendario, los horarios de clase y todo lo que diga "las 15:00" se refieren
 // SIEMPRE a la hora de pared española, sin importar dónde esté el navegador que
-// mira. La academia tiene profesores en España y en Argentina (5 h de diferencia
-// en verano), así que cualquier cálculo que use `new Date(y, m, d, h)` —que
-// construye en la zona del navegador— da resultados distintos según quién lo abra.
+// mira. Los alumnos están en España y los profesores en Argentina (5 h de
+// diferencia en el verano español, 4 h en el invierno), así que cualquier cálculo
+// que use `new Date(y, m, d, h)` —que construye en la zona del navegador— da
+// resultados distintos según quién lo abra.
 //
 // Estas dos funciones son la conversión en ambos sentidos y son la ÚNICA forma
 // correcta de cruzar horas de clase con instantes reales.
@@ -43,6 +44,20 @@ export function spainWallClockToEpoch(dateIso: string, hour: number, minute = 0)
   const [py, pm, pd] = parts.dateStr.split('-').map(Number);
   const spainAsUtc = Date.UTC(py, pm - 1, pd, parts.hour, parts.minute, 0, 0);
   return asUtc - (spainAsUtc - asUtc);
+}
+
+/**
+ * Hora de pared española de un día concreto → hora de pared en Argentina (0–23).
+ * La diferencia NO es fija: Argentina no cambia de hora y España sí, así que son
+ * 5 h en el verano español y 4 h en el invierno. Por eso hace falta la fecha.
+ */
+export function spainHourToArgentinaHour(dateIso: string, hour: number): number {
+  const epoch = spainWallClockToEpoch(dateIso, hour);
+  if (isNaN(epoch)) return NaN;
+  const h = parseInt(new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'America/Argentina/Buenos_Aires', hour: '2-digit', hour12: false,
+  }).format(new Date(epoch)), 10);
+  return h === 24 ? 0 : h;
 }
 
 /**
