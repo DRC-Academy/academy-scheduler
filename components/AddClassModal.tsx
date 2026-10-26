@@ -20,6 +20,8 @@ import { quickTranscriptCheck } from '@/lib/transcriptValidation';
 import { canMarkStudentLostClass, LOST_CLASS_MONTHLY_CAP, LOST_CLASS_CAP_MESSAGE } from '@/lib/finance';
 import { deadlineLabel, hoursLeftLabel, type TranscriptStatusResult } from '@/lib/transcriptDeadline';
 import type { Teacher, Assignment, ClassRecord, ClassRecordType } from '@/types';
+import { dbGetPaymentHolds } from '@/lib/studentPeriod';
+import { holdSpansFor, isClassOnHold, type PaymentHold } from '@/lib/paymentHolds';
 
 // Opciones del selector "Tipo de clase".
 const CLASS_TYPE_OPTIONS: Array<{ value: ClassRecordType; label: string; needsTranscript: boolean }> = [
@@ -307,6 +309,21 @@ export function AddClassModal({
   }, [classRecords, teacher.id, studentName, isFaltaType, date]);
   const limitReached = isFaltaType && typeCount >= LOST_CLASS_MONTHLY_CAP;
 
+  // PAGO PENDIENTE (lib/paymentHolds): una falta o cancelación del alumno sería
+  // cobrable sin ingreso y consumiría cupo, y esa clase no existe. Sin hora se
+  // mira el día entero: ante la duda, no se registra.
+  const [holds, setHolds] = useState<PaymentHold[]>([]);
+  useEffect(() => { dbGetPaymentHolds().then(setHolds).catch(() => {}); }, []);
+  const onHold = useMemo(() => {
+    if (!isFaltaType || !holds.length || !studentName || !date) return false;
+    const a = myAssignments.find(x => x.studentName === studentName);
+    const spans = holdSpansFor(holds, { studentName, studentId: a?.studentId, studentEmail: a?.studentEmail });
+    if (!spans.length) return false;
+    const h = parseInt(time, 10);
+    if (Number.isFinite(h)) return isClassOnHold(spans, date, h);
+    return Array.from({ length: 24 }, (_, i) => i).some(i => isClassOnHold(spans, date, i));
+  }, [isFaltaType, holds, studentName, date, time, myAssignments]);
+
   // Auto-rellenar la hora con el slot recurrente del alumno si el día coincide.
   // Depende solo de alumno+fecha para no pisar una hora editada a mano. Si el
   // llamador ya pasó la hora de la clase concreta, no hay nada que adivinar.
@@ -332,7 +349,7 @@ export function AddClassModal({
   // Normal/recuperación: TRANSCRIPT obligatorio (segundo factor de verificación).
   // Falta/cancelación: comentario obligatorio y bloqueado al llegar a 2 de ese tipo.
   const words = transcript.trim() ? transcript.trim().split(/\s+/).length : 0;
-  const canSave = !!studentName && !!date && !saving && !limitReached &&
+  const canSave = !!studentName && !!date && !saving && !limitReached && !onHold &&
     (needsTranscript ? words >= 30 : !!comment.trim());
 
   // Guardado real. `replaceId` llega solo cuando el profesor confirmó reemplazar
@@ -433,10 +450,12 @@ export function AddClassModal({
               </select>
             )}
           </div>
-          {limitReached ? (
+          {limitReached || onHold ? (
             <>
               <div style={{ fontSize: 13, color: '#dc2626', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.35)', borderRadius: 10, padding: '12px 14px', lineHeight: 1.5 }}>
-                {LOST_CLASS_CAP_MESSAGE}
+                {onHold
+                  ? `${studentName} tenía el pago pendiente en esa fecha: sus clases quedaron suspendidas y no se registran.`
+                  : LOST_CLASS_CAP_MESSAGE}
               </div>
               <div style={{ display: 'flex', gap: 10, marginTop: 2 }}>
                 <button onClick={onClose} style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: '#6b7280', cursor: 'pointer', fontSize: 14, fontFamily: 'inherit' }}>Cerrar</button>

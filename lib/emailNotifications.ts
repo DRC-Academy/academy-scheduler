@@ -17,6 +17,7 @@ import {
 import { cleanAiText } from '@/lib/textCleanup';
 import { longDateEs, retentionLine, type EndingPlan } from '@/lib/endingPlans';
 import { PUBLIC_APP_URL as APP_URL } from '@/lib/appUrl';
+import { suspendedCopy, reactivatedCopy } from '@/lib/paymentHolds';
 
 const FROM = 'DRC Academy <notificaciones@drcacademy.com>';
 const PAGOS_EMAIL = 'pagos@drcacademy.com';
@@ -373,6 +374,36 @@ export async function sendFormCompletedEmail(teacher: TeacherLike, studentName: 
     `Ficha de ${studentName} lista`,
   );
   return send('sendFormCompletedEmail', teacher, subject, html);
+}
+
+// ═══ Pago pendiente del alumno (suscripción on-hold) ══════════════════════════
+// Los dispara lib/paymentHoldStore, uno por episodio y profesor. Los textos
+// viven en lib/paymentHolds (los mismos de la campanita). Sin importes ni
+// detalles del pago, a propósito.
+
+export async function sendPaymentHoldEmail(teacher: TeacherLike, studentName: string): Promise<boolean> {
+  const c = suspendedCopy(studentName);
+  const html = baseEmailTemplate(
+    p(`Hola ${esc(teacher.name)},`) +
+    p(`<strong>${esc(studentName)}</strong> tiene el pago pendiente. Sus clases quedan suspendidas hasta que regularice el pago.`) +
+    p('No hace falta que te conectes a sus clases mientras tanto: no cuentan como falta tuya ni del alumno. En DRC Gestión verás el botón «Ingresar a clase» bloqueado con el aviso «Pago pendiente».') +
+    p('Te avisaremos por email en cuanto lo regularice.') +
+    ctaButton('Ver mis clases', `${APP_URL}/clases`),
+    c.body,
+  );
+  return send('sendPaymentHoldEmail', teacher, c.subject, html);
+}
+
+export async function sendPaymentResumedEmail(teacher: TeacherLike, studentName: string): Promise<boolean> {
+  const c = reactivatedCopy(studentName);
+  const html = baseEmailTemplate(
+    p(`Hola ${esc(teacher.name)},`) +
+    p(`<strong>${esc(studentName)}</strong> ya ha regularizado el pago, puedes retomar las clases con normalidad.`) +
+    p('El botón «Ingresar a clase» vuelve a estar disponible en su horario de siempre.') +
+    ctaButton('Ver mis clases', `${APP_URL}/clases`),
+    c.body,
+  );
+  return send('sendPaymentResumedEmail', teacher, c.subject, html);
 }
 
 // ═══ E) Recordatorios escalonados del enlace de clase ═════════════════════════

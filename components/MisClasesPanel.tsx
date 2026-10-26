@@ -29,7 +29,8 @@ import {
 import { planFieldsOf } from '@/lib/productUtils';
 import { marcasDeReprogramacion } from '@/lib/reprogramacion';
 import { checkSubscription, subBadge, type SubscriptionInfo } from '@/lib/useSubscriptionStatus';
-import { isPausedStatus } from '@/lib/subscriptionAccess';
+import { isPausedStatus, isPaymentHoldStatus } from '@/lib/subscriptionAccess';
+import { holdSpansFor, isClassOnHold, openHoldFor, type PaymentHold } from '@/lib/paymentHolds';
 import { isMilestone, getMilestoneSlides, MILESTONES, MILESTONE_SLIDES, MILESTONE_TITLES } from '@/lib/milestones';
 import {
   classesForDate, recoveriesForDate, addDaysIso, isoDateLocal,
@@ -54,7 +55,7 @@ import { fetchRiskBriefings, briefingFor, type RiskBriefingIndex } from '@/lib/i
 import { AddClassModal, saveTeacherClass, ANALYSIS_FAILED_NOTICE } from '@/components/AddClassModal';
 import { MarkClassStatusModal, type MarkableStatus } from '@/components/MarkClassStatusModal';
 import type { UnmarkedClass } from '@/lib/classStatus';
-import { periodIndex, dbGetStudentDropouts, type StudentDropout } from '@/lib/studentPeriod';
+import { periodIndex, dbGetStudentDropouts, dbGetPaymentHolds, type StudentDropout } from '@/lib/studentPeriod';
 import FormStatusBadge from '@/components/FormStatusBadge';
 import { lookupToken, formStateOf, type FormTokenInfo } from '@/lib/formClient';
 import { stripProtocol, MeetLinkBadge } from '@/components/teacherPanelUi';
@@ -583,6 +584,8 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     // abrir el Meet. Si la consulta no llegó todavía, el índice está vacío y el
     // flujo es exactamente el de siempre.
     riskFor: name => briefingFor(riskBriefings, name),
+    // Pago pendiente: el mismo dato con el que la tarjeta pinta el candado.
+    paymentHoldFor: c => onHoldFor(c, c.date),
   });
   const subEmailForAssignment = join.emailFor;
 
@@ -728,7 +731,34 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
 
   /** ¿Esta clase se dio de verdad? (no reprogramada ni cancelada) */
   function isRealClass(c: TodayClass, date: string) {
-    return !rescheduledFor(c, date) && !cancelledFor(c, date);
+    return !rescheduledFor(c, date) && !cancelledFor(c, date) && !onHoldFor(c, date);
+  }
+
+  // ── Pago pendiente (lib/paymentHolds) ───────────────────────────────────────
+  // Las clases del alumno con la suscripción en on-hold SE VEN (con el candado),
+  // pero no son clases: ni transcript, ni "Sin estado", ni cuentan en los avisos.
+  // El período de esta pantalla se arma SIN los episodios a propósito: si no,
+  // desaparecerían y el profesor no sabría por qué.
+  const [holds, setHolds] = useState<PaymentHold[]>([]);
+  useEffect(() => { dbGetPaymentHolds().then(setHolds).catch(() => {}); }, []);
+  /**
+   * ¿Clase bloqueada por pago pendiente?
+   *   · Ya empezada → lo dicen los episodios guardados (cómo estaba ENTONCES).
+   *   · Por empezar → manda el estado de AHORA: la verificación de la suscripción
+   *     si ya llegó (es la que se actualiza al pagar); si no, el episodio abierto.
+   */
+  function onHoldFor(c: { assignment: TodayClass['assignment']; hour: string }, iso: string): boolean {
+    if (holds.length === 0 && Object.keys(subInfo).length === 0) return false;
+    const ref = { studentId: c.assignment.studentId, studentEmail: c.assignment.studentEmail, studentName: c.assignment.studentName };
+    const startMs = spainWallClockToEpoch(iso, parseInt(c.hour, 10));
+    const empezada = Number.isFinite(startMs) && startMs <= refDate.getTime();
+    if (!empezada) {
+      const e = subEmailForAssignment(c.assignment);
+      const info = e ? subInfo[e] : undefined;
+      if (info && info.active !== null && info.status !== 'error' && info.status !== 'no_email') return isPaymentHoldStatus(info.status);
+      if (openHoldFor(holds, ref)) return true;
+    }
+    return isClassOnHold(holdSpansFor(holds, ref), iso, c.hour);
   }
 
   // Período de cada alumno (inicio de clases → baja). El horario del grid es
@@ -816,7 +846,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [relojListo, todayIso, myAssignments, grid, classRecords, classAnalyses, classJoinLogs, nowMs]);
+  }, [relojListo, todayIso, myAssignments, grid, classRecords, classAnalyses, classJoinLogs, nowMs, holds, subInfo]);
 
   // Pop-up de una vez por sesión con esas clases y el botón directo "Subir
   // transcript". No depende del cron: se decide al entrar a esta pantalla. La
@@ -1227,8 +1257,11 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     const cancelledType = cancelledFor(c, date);
     const cancelled     = !!cancelledType;
     const cancelLabel   = cancellationLabel(cancelledType);
-    // Estado inactivo = la clase no se va a dar. Agrupa reprogramada y cancelada.
-    const inactive = rescheduled || cancelled;
+    // Pago pendiente: la clase no existe (candado, sin acciones). Una reprogramada
+    // o cancelada sigue diciendo eso, que es un hecho anterior.
+    const held = !rescheduled && !cancelled && onHoldFor(c, date);
+    // Estado inactivo = la clase no se va a dar. Agrupa reprogramada, cancelada y bloqueada.
+    const inactive = rescheduled || cancelled || held;
     // Terminada y sin estado (lib/classStatus): se señala y se ofrece "Marcar estado".
     const unmarked = passed && !inactive ? sinEstadoIndex.get(sinEstadoKey(date, c.startHourNum, c.studentName)) : undefined;
 
@@ -1310,7 +1343,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
 
           <div className="mc-main">
             <div className="mc-nameline">
-              <span className={`mc-name${inactive ? ' is-struck' : ''}`}>{c.studentName}</span>
+              <span className={`mc-name${inactive && !held ? ' is-struck' : ''}`}>{c.studentName}</span>
               {/* Sesión de varias horas: una sola clase que cuenta como N. */}
               {hoursBadge && <span className="mc-badge-hours" title={`Sesión de ${c.durationHours} horas seguidas · cuenta como ${c.billingUnits} clases`}>{hoursBadge}</span>}
               {/* Bloque MIXTO: una hora normal + una de recuperación seguidas. Se
@@ -1323,6 +1356,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
               {c.isRecovery && <span className="mc-badge-recovery">Recuperación</span>}
               {rescheduled && <span className="mc-badge-resched">Reprogramada → {fmtDateDMY(rescheduledTo)}</span>}
               {cancelled && <span className="mc-badge-resched">{cancelLabel}</span>}
+              {held && <span className="mc-badge-resched" title="Suscripción en espera: sus clases quedan suspendidas hasta que regularice el pago">🔒 Pago pendiente</span>}
               <span className="mc-tag" style={tagPalette}>{cat.label}</span>
               {inProgress && !inactive && (
                 <span className="mc-live">
@@ -1357,7 +1391,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
             {inactive ? (
               <span className="mc-status is-muted">
                 <span className="mc-dot" style={{ background: '#a4a7a1' }} />
-                {rescheduled ? 'Reprogramada' : cancelLabel}
+                {rescheduled ? 'Reprogramada' : cancelled ? cancelLabel : 'Suspendida · pago pendiente'}
                 {/* Beta: en qué punto está la recuperación de esta clase. */}
                 {beta && cancelled && (() => {
                   const line = recoveryLineFor(recov.recoveries, c.studentName, date, c.hour);
@@ -1391,6 +1425,13 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
                 <button className="mc-btn mc-btn-ghost" disabled>Reprogramada</button>
               ) : cancelled ? (
                 <button className="mc-btn mc-btn-ghost" disabled>{cancelLabel}</button>
+              ) : held ? (
+                // Pago pendiente: gris y con candado. El clic enseña el aviso (no
+                // registra nada); por eso no va `disabled`, sino con aria-disabled.
+                <button className="mc-btn mc-btn-ghost" aria-disabled="true" style={{ cursor: 'not-allowed' }}
+                  title="Este alumno tiene el pago pendiente" onClick={() => join.join({ ...c, date })}>
+                  🔒 Pago pendiente
+                </button>
               ) : passed ? (
                 // La clase ya se dio. Si falta el transcript (o se lo rechazaron),
                 // subirlo es LA acción de la fila. Si ya está subido —esperando
@@ -1459,10 +1500,12 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
                         No puedo dar esta clase
                       </button>
                     )}
+                    {!held && (
                     <button className="mc-menu-item" role="menuitem" data-onboarding={ANCLA_MENU_ALUMNO}
                       onClick={() => { setOpenMenu(null); setRescheduleModal({ c, date }); }}>
                       {beta ? 'El alumno pidió cambiarla' : 'Reprogramar clase'}
                     </button>
+                    )}
                     <button className="mc-menu-item" role="menuitem"
                       onClick={() => { setOpenMenu(null); join.openLinkModal(c.assignment); }}>
                       {hasLink ? 'Cambiar enlace' : 'Definir enlace'}

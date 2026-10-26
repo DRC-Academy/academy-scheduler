@@ -14,7 +14,8 @@ import { dbGetAssignmentsByTeacher, calcRegisteredClassNumber, getTeacherAssignm
 import { buildClassFunnel } from '@/lib/classFunnel';
 import { ClassFunnelCard } from '@/components/ClassFunnelCard';
 import { dbGetReviewRequests } from '@/lib/reviewRequests';
-import { dbGetStudentDropouts, type StudentDropout } from '@/lib/studentPeriod';
+import { dbGetStudentDropouts, dbGetPaymentHolds, type StudentDropout } from '@/lib/studentPeriod';
+import type { PaymentHold } from '@/lib/paymentHolds';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { useHistorialHorarios } from '@/lib/HistorialHorariosContext';
 import { asignacionesConHistorial } from '@/lib/slotHistory';
@@ -223,12 +224,14 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
   const [gridAssignments, setGridAssignments] = useState<Assignment[]>([]);
   const [reviewRequests, setReviewRequests] = useState<ClassReviewRequest[]>([]);
   const [dropouts, setDropouts] = useState<StudentDropout[]>([]);
+  // Episodios de pago pendiente: esas clases no existen y no son reclamables.
+  const [holds, setHolds] = useState<PaymentHold[]>([]);
   useEffect(() => {
     let cancelled = false;
-    Promise.all([getTeacherAssignments(teacher), dbGetReviewRequests(teacher.id), dbGetStudentDropouts()])
-      .then(([asgs, reqs, bajas]) => {
+    Promise.all([getTeacherAssignments(teacher), dbGetReviewRequests(teacher.id), dbGetStudentDropouts(), dbGetPaymentHolds()])
+      .then(([asgs, reqs, bajas, episodios]) => {
         if (cancelled) return;
-        setGridAssignments(asgs); setReviewRequests(reqs); setDropouts(bajas);
+        setGridAssignments(asgs); setReviewRequests(reqs); setDropouts(bajas); setHolds(episodios);
       })
       .catch(err => console.error('[finanzas] No se pudo armar el embudo:', err));
     return () => { cancelled = true; };
@@ -310,11 +313,11 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
     monthYear, teacherId: teacher.id,
     assignments: asignacionesConHistorial(gridAssignments, cambios),
     joinLogs: classJoinLogs, classRecords, analyses: classAnalyses,
-    requests: reviewRequests, dropouts,
+    requests: reviewRequests, dropouts, holds,
     gridOccupancy: gridOccupancyOfTeacher(teacher),
     finance,
     todayIso, nowMinutes: spainNow.hour * 60 + spainNow.minute,
-  }), [monthYear, teacher, gridAssignments, cambios, classJoinLogs, classRecords, classAnalyses, reviewRequests, dropouts, finance, todayIso, spainNow.hour, spainNow.minute]);
+  }), [monthYear, teacher, gridAssignments, cambios, classJoinLogs, classRecords, classAnalyses, reviewRequests, dropouts, holds, finance, todayIso, spainNow.hour, spainNow.minute]);
 
   /** Lo que el profesor deja de cobrar si no reclama. Tarifa real de cada alumno. */
   const claimAmount = useMemo(() => funnel.missing

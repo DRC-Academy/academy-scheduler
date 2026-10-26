@@ -27,6 +27,7 @@ import type {
 } from '@/types';
 import type { ClassTranscriptRef } from '@/lib/finance';
 import { periodIndex, existsForStudent } from '@/lib/studentPeriod';
+import type { PaymentHold } from '@/lib/paymentHolds';
 
 const nk = (s: string | null | undefined): string => (s ?? '').trim().toLowerCase();
 
@@ -211,6 +212,8 @@ export function buildMissingJoinClasses(opts: {
   analyses?: ClassTranscriptRef[];
   /** Bajas registradas: cierran el período del alumno (ver lib/studentPeriod). */
   dropouts?: Array<{ teacherId: string; studentName: string; droppedAt?: string }>;
+  /** Episodios de pago pendiente: esas clases no existen y no se reclaman (lib/paymentHolds). */
+  holds?: readonly PaymentHold[];
   teacherId: string;
   fromDate: string;
   toDate: string;
@@ -235,7 +238,7 @@ export function buildMissingJoinClasses(opts: {
   // Período del alumno (inicio y baja). Reemplaza al filtro propio que solo
   // miraba `startDate`: ahora es la misma regla que usan asistencias y la agenda,
   // y de paso cubre el lado de la baja. Ver el contrato en lib/studentPeriod.ts.
-  const periodos = periodIndex(assignments, dropouts ?? [], teacherId);
+  const periodos = periodIndex(assignments, dropouts ?? [], teacherId, opts.holds);
 
   // Por alumno + fecha + HORA, que es la clave del índice único de la tabla: un
   // alumno puede tener dos clases sueltas el mismo día (14:00 y 18:00) y son dos
@@ -303,7 +306,7 @@ export function buildMissingJoinClasses(opts: {
     if (row.status !== 'missed') continue;
     if (ingresoEseDia.has(`${nk(row.studentName)}|${row.date}`)) continue;
 
-    if (!existsForStudent(periodos, row.studentName, row.date)) continue;
+    if (!existsForStudent(periodos, row.studentName, row.date, row.hour)) continue;
 
     // Ya dijo qué pasó con esta clase: cancelada, con aviso, reprogramada…
     if (cancellationFor(classRecords, teacherId, row.studentName, row.date)) continue;

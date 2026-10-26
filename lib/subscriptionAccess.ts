@@ -218,6 +218,28 @@ export function isScheduledWooStatus(status: string | null | undefined): boolean
   return status === 'scheduled';
 }
 
+/**
+ * ¿PAGO PENDIENTE? El estado RESUELTO del alumno (el que devuelve
+ * /api/check-subscription, ya con Oritalk, activación manual, otras
+ * suscripciones y la Pausa aplicados) es 'on-hold'. Es lo único que bloquea el
+ * ingreso por pago fallido (ver lib/paymentHolds): un alumno de pago único, con
+ * Oritalk, con activación manual o con otra suscripción activa nunca llega a
+ * este estado, porque la regla de arriba resuelve antes.
+ */
+export const PAYMENT_HOLD_STATUS = 'on-hold';
+
+export function isPaymentHoldStatus(status: string | null | undefined): boolean {
+  return status === PAYMENT_HOLD_STATUS;
+}
+
+/** Estados RESUELTOS que dan acceso: los de Woo que cuentan y los overrides. */
+const ACCESS_OVERRIDE_STATUSES = ['manual_override', 'manual_active', 'oritalk'];
+
+/** ¿Este estado resuelto da acceso a clases? (el `active === true` del endpoint). */
+export function isAccessStatus(status: string | null | undefined): boolean {
+  return isActiveWooStatus(status) || ACCESS_OVERRIDE_STATUSES.includes(String(status ?? ''));
+}
+
 /** Estados que permiten tomar clases, en el orden en que se prefieren cuando un
  *  alumno tiene varias suscripciones. */
 export const ACTIVE_WOO_STATUSES = Object.keys(WOO_STATUS).filter(s => WOO_STATUS[s].countsAsActive);

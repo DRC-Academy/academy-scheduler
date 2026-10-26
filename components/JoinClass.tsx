@@ -25,6 +25,12 @@
 //   5. Si el alumno está en riesgo de baja, ANTES de abrir el Meet se le enseña
 //      al profesor el protocolo de esa clase (ver `riskFor`).
 //
+// PAGO PENDIENTE (lib/paymentHolds) va POR DELANTE de todo lo anterior: si el
+// alumno tiene la suscripción en on-hold, sale solo ese aviso, no se abre el
+// Meet y no se registra nada. Se detecta en tres puntos, por si uno llega tarde:
+// la pantalla ya lo sabe (`paymentHoldFor`), la verificación de la suscripción
+// dice 'on-hold', o el servidor rechaza el ingreso (/api/class-join → 409).
+//
 // El acceso se registra con la fecha de la CLASE (`c.date`), no con la del clic.
 // No se puede antedatar ni postdatar porque el botón solo existe mientras la
 // clase está abierta: el día de la clase, desde 15 minutos antes hasta el final
@@ -36,7 +42,9 @@ import { useState, type ReactNode } from 'react';
 import { calcRegisteredClassNumber } from '@/lib/db';
 import { isMilestone, getMilestoneSlides, getMilestoneCopy } from '@/lib/milestones';
 import { checkSubscription, type SubscriptionInfo } from '@/lib/useSubscriptionStatus';
-import { isPausedStatus } from '@/lib/subscriptionAccess';
+import { isPausedStatus, isPaymentHoldStatus } from '@/lib/subscriptionAccess';
+import { PAYMENT_HOLD_JOIN_TITLE, PAYMENT_HOLD_JOIN_BODY } from '@/lib/paymentHolds';
+import { PaymentHoldJoinError } from '@/lib/db';
 import { markInterventionShown } from '@/lib/interventionsClient';
 import { AVOID_ITEMS, AVOID_TITLE, ESCALATED_GUARDRAIL, NATURAL_REMINDER, type RiskBriefing } from '@/lib/interventions';
 import { RISK_CAUSE_META } from '@/lib/aiTypes';
@@ -84,6 +92,12 @@ export interface UseClassJoinArgs {
    * null (o no pasar la función) deja el flujo exactamente como estaba.
    */
   riskFor?: (studentName: string) => RiskBriefing | null;
+  /**
+   * ¿La pantalla ya sabe que esta clase está bloqueada por pago pendiente? Si
+   * dice que sí, el aviso sale sin verificar nada más (es el mismo dato con el
+   * que la tarjeta pinta el candado).
+   */
+  paymentHoldFor?: (c: JoinableClass) => boolean;
 }
 
 export interface ClassJoinApi {
@@ -106,7 +120,7 @@ export interface ClassJoinApi {
 export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
   const {
     teacher, students, classRecords,
-    logClassJoin, updateMeetLink, onLinkSaved, onToast, getCachedSub, onSubResolved, riskFor,
+    logClassJoin, updateMeetLink, onLinkSaved, onToast, getCachedSub, onSubResolved, riskFor, paymentHoldFor,
   } = args;
 
   const [joinedKeys, setJoined] = useState<Set<string>>(new Set());
@@ -121,6 +135,8 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
   const [linkModal, setLinkModal] = useState<Assignment | null>(null);
   // El ingreso no se pudo guardar: aviso con "Reintentar" (el Meet ya se abrió).
   const [saveError, setSaveError] = useState<PendingJoin | null>(null);
+  // Pago pendiente: el aviso que sustituye a todos los demás.
+  const [holdModal, setHoldModal] = useState<JoinableClass | null>(null);
   const [retrying, setRetrying] = useState(false);
 
   const toast = (msg: string, ms?: number) => onToast?.(msg, ms);
@@ -186,6 +202,13 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
       // misma clase (misma fecha, hora dentro del tramo) no crea otro ingreso.
       await logClassJoin(teacher.id, teacher.name, c.studentName, c.date, c.hour, p.subscriptionStatus, p.enteredWithoutActive, p.daysRemaining, c.durationHours ?? 1);
     } catch (err) {
+      // El servidor lo rechazó por pago pendiente: no es un fallo que reintentar.
+      // Sustituye también al protocolo de riesgo, si se había abierto.
+      if (err instanceof PaymentHoldJoinError) {
+        setRiskModal(null);
+        setHoldModal(c);
+        return false;
+      }
       console.error('[ingreso] No se pudo registrar:', err);
       setSaveError(p);
       return false;
@@ -216,6 +239,8 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
   // disclaimer; al confirmar sigue el flujo normal.
   function join(c: JoinableClass) {
     if (checkingKey || !teacher) return;
+    // Pago pendiente: antes que el enlace, el hito o cualquier otra cosa.
+    if (paymentHoldFor?.(c)) { setHoldModal(c); return; }
     if (!c.meetLink) { setLinkModal(c.assignment); return; }
     const nextClass = calcRegisteredClassNumber(c.assignment, classRecords) + 1;
     if (isMilestone(nextClass)) {
@@ -240,6 +265,10 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
     const info = await checkSubscription(email);
     onSubResolved?.(email, info);
     setCheckingKey(null);
+
+    // Pago pendiente: ni "Ingresar de todas formas" ni registro. El estado ya
+    // viene resuelto (Oritalk, manual u otra suscripción activa nunca dan on-hold).
+    if (isPaymentHoldStatus(info.status)) { setHoldModal(c); return; }
 
     if (info.active === true) {
       // Se guarda el estado REAL, no un 'active' fijo. Antes se escribía siempre
@@ -273,6 +302,25 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
 
   const dialogs = (
     <>
+      {/* Pago pendiente: por encima de todo y sin otra salida que "Entendido". */}
+      {holdModal && (
+        <div role="alertdialog" aria-labelledby="pago-pendiente-title" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 96, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+          onClick={e => { if (e.target === e.currentTarget) setHoldModal(null); }}>
+          <div style={{ background: 'rgba(255,247,237,1)', border: '2px solid #92400e', borderRadius: 14, padding: 24, width: '100%', maxWidth: 420 }}>
+            <div id="pago-pendiente-title" style={{ fontWeight: 700, fontSize: 17, color: '#92400e', marginBottom: 6 }}>
+              {PAYMENT_HOLD_JOIN_TITLE}
+            </div>
+            <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 12 }}>{holdModal.studentName} · {holdModal.hour}</div>
+            <div style={{ fontSize: 14, color: '#374151', marginBottom: 20, lineHeight: 1.6 }}>
+              {PAYMENT_HOLD_JOIN_BODY}
+            </div>
+            <button onClick={() => setHoldModal(null)} autoFocus style={{ width: '100%', padding: '11px', borderRadius: 8, border: 'none', background: '#92400e', color: 'white', cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+              Entendido
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* El ingreso no se guardó. Va por encima de todo (también del protocolo
           de riesgo): sin esto el profesor cree que entró y la clase no cuenta. */}
       {saveError && (

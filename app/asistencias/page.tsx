@@ -17,7 +17,8 @@ import { buildAttendanceRows, attachTranscriptStatus, markMovedClasses, isoDate,
 import { transcriptDeadlineBadge, type TranscriptStatusResult } from '@/lib/transcriptDeadline';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { getTeacherAssignments } from '@/lib/db';
-import { periodIndex, dbGetStudentDropouts, type StudentDropout } from '@/lib/studentPeriod';
+import { periodIndex, dbGetStudentDropouts, dbGetPaymentHolds, type StudentDropout } from '@/lib/studentPeriod';
+import type { PaymentHold } from '@/lib/paymentHolds';
 import type { Assignment } from '@/types';
 import { checkSubscription, subBadge, resolveSubscriptionEmail, type SubscriptionInfo } from '@/lib/useSubscriptionStatus';
 import { HelpTooltip } from '@/components/ui';
@@ -163,6 +164,9 @@ function AsistenciasContent() {
   // Bajas: cierran el período del alumno (ver lib/studentPeriod).
   const [dropouts, setDropouts] = useState<StudentDropout[]>([]);
   useEffect(() => { dbGetStudentDropouts().then(setDropouts).catch(() => {}); }, []);
+  // Episodios de pago pendiente: esas clases no existen (ni "No ingresó").
+  const [holds, setHolds] = useState<PaymentHold[]>([]);
+  useEffect(() => { dbGetPaymentHolds().then(setHolds).catch(() => {}); }, []);
   useEffect(() => {
     if (!teacher) return;
     let cancelled = false;
@@ -186,9 +190,9 @@ function AsistenciasContent() {
       // El horario recurrente no tiene fechas: sin el período, un alumno que
       // empieza el mes que viene ya figura con clases perdidas de este, y uno
       // dado de baja seguiría acumulando "no ingresó" cada semana.
-      periodsByTeacher: { [teacher.id]: periodIndex(myAssignments, dropouts, teacher.id) },
+      periodsByTeacher: { [teacher.id]: periodIndex(myAssignments, dropouts, teacher.id, holds) },
     }).sort((x, y) => x.date.localeCompare(y.date) || (parseInt(x.hour) - parseInt(y.hour)));
-  }, [teacher, myAssignments, dropouts, classJoinLogs, fromDate, toDate, todayIso, nowMinutes]);
+  }, [teacher, myAssignments, dropouts, holds, classJoinLogs, fromDate, toDate, todayIso, nowMinutes]);
 
   // Estado del transcript de cada clase CON ingreso, con la misma regla que Mis
   // clases, la ficha y Finanzas (lib/transcriptDeadline). Antes esta pantalla no

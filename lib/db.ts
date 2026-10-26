@@ -20,6 +20,7 @@ import { notifyNewAssignmentWith } from './notificationStore';
 import { changesOfStudent } from './slotHistory';
 import { insertClassRecordsWith, deleteClassRecordsWith, addRescheduleRecordWith, type RescheduleRecordInput } from './classRecordStore';
 import { normalizePunctuality } from './classJoinStore';
+import { PAYMENT_HOLD_ERROR } from './paymentHolds';
 import { findOffCalendar, slotStatusOf, type OffCalendarRow } from './offCalendar';
 import { Teacher, Student, Assignment, AppUser, Grid, TeacherStatus, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, AssignedSlot, EmailPreferences, SalesContactResult, RecoveryCell, TeacherBonus, BonusType, SlotChange } from '@/types';
 import {
@@ -3093,6 +3094,11 @@ export async function dbUpdateMeetLink(assignmentId: string, link: string): Prom
  * y el chequeo de ausencias la daría por falta. Quien llama (components/JoinClass)
  * avisa y deja reintentar; el Meet se abre igual.
  */
+/** El servidor rechazó el ingreso porque el alumno tiene el pago pendiente. */
+export class PaymentHoldJoinError extends Error {
+  constructor() { super(PAYMENT_HOLD_ERROR); this.name = 'PaymentHoldJoinError'; }
+}
+
 export async function dbLogClassJoin(
   teacherId: string,
   teacherName: string,
@@ -3114,6 +3120,9 @@ export async function dbLogClassJoin(
     }),
   });
   const data = await res.json().catch(() => ({})) as Partial<ClassJoinLog> & { error?: string };
+  // Pago pendiente: el servidor rechaza el ingreso. Error propio para que
+  // components/JoinClass enseñe el aviso del pago y no el de "Reintentar".
+  if (res.status === 409 && data.error === PAYMENT_HOLD_ERROR) throw new PaymentHoldJoinError();
   if (!res.ok || !data.id) {
     console.error('[db] No se pudo registrar el ingreso:', data.error ?? res.status);
     throw new Error(`No se pudo registrar el ingreso: ${data.error ?? `HTTP ${res.status}`}`);

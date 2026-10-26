@@ -28,6 +28,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { fetchAllPages, gridClassesOf, teacherStudentsFrom, teacherAssignmentsFrom } from '@/lib/db';
 import { gridOccupancyOfTeacher, addDaysIso, fmtDateDMY } from '@/lib/teacherClasses';
 import { periodIndex } from '@/lib/studentPeriod';
+import { readPaymentHolds } from '@/lib/paymentHoldStore';
 import { getSpainParts } from '@/lib/spainTime';
 import { nkName } from '@/lib/sessions';
 import type { TeacherScheduleInput } from '@/lib/teacherAbsences';
@@ -122,6 +123,9 @@ async function loadStatusData(admin: SupabaseClient, dates: string[], teacherId?
       .select('id, teacher_id, student_name, class_date, class_time, status, requested_type, resolved_type')).in('class_date', dates).order('id').range(f, t), true),
   ]);
 
+  // Pago pendiente: esas clases no existen y no piden estado (lib/paymentHolds).
+  const holds = await readPaymentHolds(admin);
+
   const grids = new Map<string, Grid>(calendars.map(c => [str(c.teacher_id), (c.grid ?? {}) as Grid]));
   const students = studentsRaw.map(toStudent);
   const dropouts = dropoutsRaw.map(d => ({ teacherId: str(d.teacher_id), studentName: str(d.student_name), droppedAt: strU(d.dropped_at) }));
@@ -146,7 +150,7 @@ async function loadStatusData(admin: SupabaseClient, dates: string[], teacherId?
     teachers.push({
       teacherId: id, teacherName: prof.name, assignments, grid,
       occupancy: gridOccupancyOfTeacher(gridClassesOf(grid)),
-      periods: periodIndex(assignments, dropouts, id),
+      periods: periodIndex(assignments, dropouts, id, holds),
     });
   }
 

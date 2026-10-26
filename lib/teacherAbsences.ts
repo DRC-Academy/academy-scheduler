@@ -221,7 +221,7 @@ export function absenceIdOf(teacherId: string, studentName: string, date: string
 export function sessionsOfTeacherOn(t: TeacherScheduleInput, dateIso: string): TeacherSession[] {
   return groupContiguousClasses([
     ...classesForDate(t.assignments, dateIso, t.periods),
-    ...recoveriesForDate(t.grid, dateIso, t.assignments),
+    ...recoveriesForDate(t.grid, dateIso, t.assignments, t.periods),
   ], t.teacherId, t.occupancy);
 }
 

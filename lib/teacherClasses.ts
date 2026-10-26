@@ -19,7 +19,7 @@
 import type { Assignment, AssignedSlot, ClassRecord, ClassRecordType, Grid, SlotChange } from '@/types';
 import { findTranscriptFor, type ClassTranscriptRef } from '@/lib/transcriptDeadline';
 import { baseStateOf, baseStudentOf } from '@/lib/cells';
-import { existsForStudent, type StudentPeriod } from '@/lib/studentPeriod';
+import { existsForStudent, onHoldForStudent, type StudentPeriod } from '@/lib/studentPeriod';
 import {
   contiguousRunLength, groupByContiguousHour, hourNum, hourText, nkName,
   sessionIdOf, sessionRangeLabel,
@@ -174,6 +174,8 @@ export function classesForDate(
     if (periods && !existsForStudent(periods, a.studentName, dateIso)) continue;
     for (const slot of a.slots ?? []) {
       if (slot.day !== dayName) continue;
+      // Pago pendiente (lib/paymentHolds): la clase de esa hora no existe.
+      if (periods && !existsForStudent(periods, a.studentName, dateIso, slot.hour)) continue;
       list.push({
         key:         `${a.id}_${dateIso}_${slot.hour}`,
         date:        dateIso,
@@ -204,7 +206,15 @@ export function findAssignmentForName(assignments: Assignment[], name: string): 
  * nivel y email. Las que no matchean ninguna assignment se omiten (siguen
  * visibles en el calendario).
  */
-export function recoveriesForDate(grid: Grid, dateIso: string, assignments: Assignment[]): TeacherClass[] {
+export function recoveriesForDate(
+  grid: Grid, dateIso: string, assignments: Assignment[],
+  /**
+   * Período de cada alumno. De él SOLO se miran los episodios de pago pendiente:
+   * una recuperación puesta a mano no se discute por fechas de inicio o baja,
+   * pero si cae con el pago pendiente no existe, como cualquier otra clase.
+   */
+  periods?: Map<string, StudentPeriod>,
+): TeacherClass[] {
   const list: TeacherClass[] = [];
   for (const [key, cell] of Object.entries(grid)) {
     if (cell.state !== 'bloqueado' || !cell.student || !cell.weekDate) continue;
@@ -219,6 +229,7 @@ export function recoveriesForDate(grid: Grid, dateIso: string, assignments: Assi
 
     const a = findAssignmentForName(assignments, cell.student);
     if (!a) continue;
+    if (onHoldForStudent(periods, a.studentName, dateIso, hour)) continue;
     list.push({
       key:         `rec_${key}_${dateIso}`,
       date:        dateIso,

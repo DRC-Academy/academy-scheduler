@@ -15,7 +15,8 @@
 import 'server-only';
 import { supabase } from '@/lib/supabase';
 import { dbGetTeachers, fetchAllPages } from '@/lib/db';
-import { dbGetStudentDropouts, periodIndex, type StudentPeriod } from '@/lib/studentPeriod';
+import { dbGetStudentDropouts, dbGetPaymentHolds, periodIndex, type StudentPeriod } from '@/lib/studentPeriod';
+import { holdSpansFor, isClassOnHold, type PaymentHold } from '@/lib/paymentHolds';
 import { construirSeguimiento } from '@/lib/levelTestSeguimiento';
 import { studentKeyOf, type FormTokenRow, type StudentRow, type DropoutRow } from '@/lib/formReminders';
 import type { LevelTestInfo } from '@/lib/levelTestClient';
@@ -174,7 +175,11 @@ export async function cargarInformeUso(opts: { semanas: number; now?: number }):
   const fechasSinFoto: string[] = [];
   for (let d = desde; d <= hoy; d = addDaysIso(d, 1)) if (!fechasConFoto.has(d)) fechasSinFoto.push(d);
   const periodos = periodosPorProfe(profesores.map(p => p.id), asignaciones, dropouts);
-  const programadas = [...fotos, ...proyectarCalendario(profesores, fechasSinFoto, periodos)];
+  // Pago pendiente: esas clases no existían (no había a qué entrar). Se filtra
+  // DESPUÉS de juntar fotos y proyección, porque la foto de cada noche se guardó
+  // sin mirar los episodios, y un episodio se puede registrar más tarde.
+  const holds = await dbGetPaymentHolds();
+  const programadas = sinPagoPendiente([...fotos, ...proyectarCalendario(profesores, fechasSinFoto, periodos)], holds);
 
   const informe = construirInformeUso({
     hoy, now, semanas, profesores, ignorar,
@@ -194,6 +199,17 @@ export async function cargarInformeUso(opts: { semanas: number; now?: number }):
   const otros = errores.filter(e => e !== 'usage_events' && e !== 'scheduled_class_snapshots');
   if (otros.length) avisos.push(`No se pudieron leer: ${otros.join(', ')}. Esas métricas pueden salir incompletas.`);
   return { ...informe, avisos };
+}
+
+/** Quita las clases que empezaban con el alumno en pago pendiente (lib/paymentHolds). */
+function sinPagoPendiente(clases: ClaseProgramada[], holds: PaymentHold[]): ClaseProgramada[] {
+  if (!holds.length) return clases;
+  const spans = new Map<string, ReturnType<typeof holdSpansFor>>();
+  return clases.filter(c => {
+    const k = nkName(c.studentName);
+    if (!spans.has(k)) spans.set(k, holdSpansFor(holds, { studentName: c.studentName }));
+    return !isClassOnHold(spans.get(k), c.date, c.startHour);
+  });
 }
 
 /** Período de cada alumno por profesor (inicio de clases → baja), para no proyectar clases que no existieron. */

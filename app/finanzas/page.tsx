@@ -39,7 +39,8 @@ import { dbRevertPenalty, dbGetAllTeacherAssignments, dbReopenTranscriptDeadline
 import { hoursLeftLabel, deadlineLabel, TRANSCRIPT_REOPEN_HOURS } from '@/lib/transcriptDeadline';
 import { buildClassFunnel, type ClassFunnel, type FunnelBranch } from '@/lib/classFunnel';
 import { dbGetReviewRequests } from '@/lib/reviewRequests';
-import { dbGetStudentDropouts, type StudentDropout } from '@/lib/studentPeriod';
+import { dbGetStudentDropouts, dbGetPaymentHolds, type StudentDropout } from '@/lib/studentPeriod';
+import type { PaymentHold } from '@/lib/paymentHolds';
 import ReviewRequestsTab from '@/components/admin/ReviewRequestsTab';
 import OutOfScheduleTab from '@/components/admin/OutOfScheduleTab';
 import PaymentDetailsTab from '@/components/admin/PaymentDetailsTab';
@@ -129,6 +130,7 @@ function useFunnelData(enabled: boolean) {
     grids: Map<string, Assignment[]>;
     dropouts: StudentDropout[];
     requests: ClassReviewRequest[];
+    holds: PaymentHold[];
   } | null>(null);
   const pedido = useRef(false);
 
@@ -140,8 +142,9 @@ function useFunnelData(enabled: boolean) {
       dbGetAllTeacherAssignments({ teachers, students, assignments }),
       dbGetStudentDropouts(),
       dbGetReviewRequests(),
+      dbGetPaymentHolds(),
     ])
-      .then(([grids, dropouts, requests]) => { if (!cancelled) setData({ grids, dropouts, requests }); })
+      .then(([grids, dropouts, requests, holds]) => { if (!cancelled) setData({ grids, dropouts, requests, holds }); })
       .catch(err => {
         console.error('[finanzas] No se pudieron cargar los datos del embudo:', err);
         pedido.current = false;   // que un fallo de red no lo deje muerto
@@ -588,7 +591,7 @@ function DetalleProfesor({ r, teacher, extras, penalties, funnelData, monthYear,
   const funnel = useMemo(() => teacher && funnelData ? buildClassFunnel({
     monthYear, teacherId: teacher.id, assignments: asgs,
     joinLogs: classJoinLogs, classRecords, analyses: classAnalyses,
-    requests: funnelData.requests.filter(q => q.teacherId === teacher.id), dropouts: funnelData.dropouts,
+    requests: funnelData.requests.filter(q => q.teacherId === teacher.id), dropouts: funnelData.dropouts, holds: funnelData.holds,
     gridOccupancy: gridOccupancyOfTeacher(teacher), finance: r,
     todayIso: spain.dateStr, nowMinutes: spain.hour * 60 + spain.minute,
   // eslint-disable-next-line react-hooks/exhaustive-deps

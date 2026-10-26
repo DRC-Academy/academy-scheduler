@@ -17,6 +17,7 @@ import {
   dbGetStudents, dbGetSlotChanges,
 } from '@/lib/db';
 import { dbGetStudentDropouts, periodIndex } from '@/lib/studentPeriod';
+import { readPaymentHolds } from '@/lib/paymentHoldStore';
 import { buildAttendanceRows, markMovedClasses } from '@/lib/attendance';
 import { gridOccupancyOfTeacher, applyGridSlots, addDaysIso } from '@/lib/teacherClasses';
 import { profesoresConHistorial, asignacionesConHistorial } from '@/lib/slotHistory';
@@ -100,7 +101,9 @@ export async function loadRegister(admin: SupabaseClient, filtro: RegisterFilter
   const teachers = profesoresConHistorial(teachersBase, cambios);
   const occupancy = Object.fromEntries(teachers.map(t => [t.id, gridOccupancyOfTeacher(t)]));
   const assignments = asignacionesConHistorial(applyGridSlots(assignmentsBase, occupancy), cambios);
-  const periods = Object.fromEntries(teachers.map(t => [t.id, periodIndex(assignmentsBase, dropouts, t.id)]));
+  // Pago pendiente: esas clases no existen, tampoco en el registro (lib/paymentHolds).
+  const holds = await readPaymentHolds(admin);
+  const periods = Object.fromEntries(teachers.map(t => [t.id, periodIndex(assignmentsBase, dropouts, t.id, holds)]));
 
   const attendance = markMovedClasses(buildAttendanceRows({
     assignments, joinLogs,

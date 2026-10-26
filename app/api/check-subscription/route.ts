@@ -3,7 +3,9 @@
 // de PAGO ÚNICO, y aplica la lógica correspondiente. Nunca bloquea de forma dura:
 // ante un error de conexión devuelve { active: null } para que el profesor decida.
 
+import { after } from 'next/server';
 import { supabase } from '@/lib/supabase';
+import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import {
   parseHoursFromText, parseHoursFromMeta, detectLevel,
   detectCompanyPlan, resolveCompanyPlanUpdate, isCompanyProduct,
@@ -247,7 +249,34 @@ async function persistPlanAnchor(
   }
 }
 
+// ── Pago pendiente (lib/paymentHoldStore) ────────────────────────────────────
+//
+// Cada verificación es también un chequeo gratis del episodio de pago pendiente:
+// si el estado resuelto y la tabla `student_payment_holds` no cuadran (está en
+// on-hold sin episodio abierto, o al revés), se sincroniza DESPUÉS de responder
+// (after), sin retrasar la respuesta. `sync=0` lo apaga: es como llama la propia
+// sincronización, para no entrar en bucle. `fresh=1` salta la caché de 5 min.
 export async function GET(request: Request): Promise<Response> {
+  const res = await check(request);
+  const params = new URL(request.url).searchParams;
+  const email = params.get('email')?.trim().toLowerCase();
+  if (email && params.get('sync') !== '0') {
+    try {
+      const body = (await res.clone().json()) as { active?: boolean | null; status?: string };
+      if (typeof body.status === 'string' && body.status !== 'error') {
+        after(async () => {
+          const admin = getSupabaseAdmin();
+          if (!admin) return;
+          const { reconcileFromCheck } = await import('@/lib/paymentHoldStore');
+          await reconcileFromCheck(admin, email, { active: body.active ?? null, status: body.status as string });
+        });
+      }
+    } catch { /* fuera de una petición (scripts, tests): sin corrección, nada más */ }
+  }
+  return res;
+}
+
+async function check(request: Request): Promise<Response> {
   const email = new URL(request.url).searchParams.get('email')?.trim().toLowerCase();
   if (!email) return Response.json({ ...ERROR_RESULT, status: 'error' }, { status: 400 });
 
@@ -497,7 +526,10 @@ export async function GET(request: Request): Promise<Response> {
 
   if (!creds) return Response.json(make({ active: null, status: 'error' }));
 
-  let sub = subCache.get(email)?.result ?? null;
+  // fresh=1: sin caché (la usa la sincronización del pago pendiente, que tiene
+  // que ver el estado de AHORA para no abrir ni cerrar episodios con datos viejos).
+  const fresh = new URL(request.url).searchParams.get('fresh') === '1';
+  let sub = fresh ? null : (subCache.get(email)?.result ?? null);
   if (!sub || Date.now() - (subCache.get(email)?.ts ?? 0) >= TTL_MS) {
     try {
       sub = await fetchSubStatus(creds, email);

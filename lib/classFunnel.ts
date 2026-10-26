@@ -38,6 +38,7 @@ import type { Assignment, ClassJoinLog, ClassRecord, ClassReviewRequest } from '
 import type { ClassTranscriptRef, TeacherFinanceResult, ClassFinanceRow } from '@/lib/finance';
 import type { GridOccupancy } from '@/lib/teacherClasses';
 import { buildMissingJoinClasses, type MissingJoinClass } from '@/lib/reviewRequests';
+import type { PaymentHold } from '@/lib/paymentHolds';
 import { type StudentDropout } from '@/lib/studentPeriod';
 import { scheduledIndex, originOf, OUT_ORIGINS } from '@/lib/outOfCalendar';
 
@@ -140,6 +141,8 @@ export function buildClassFunnel(opts: {
   analyses: ClassTranscriptRef[];
   requests: ClassReviewRequest[];
   dropouts: StudentDropout[];
+  /** Episodios de pago pendiente: esas clases no existen (lib/paymentHolds). */
+  holds?: readonly PaymentHold[];
   gridOccupancy: GridOccupancy;
   finance: TeacherFinanceResult;
   todayIso: string;
@@ -157,6 +160,7 @@ export function buildClassFunnel(opts: {
     requests: opts.requests,
     analyses: opts.analyses,
     dropouts: opts.dropouts,
+    holds: opts.holds,
     teacherId,
     fromDate: `${monthYear}-01`,
     toDate: `${monthYear}-${String(ultimo).padStart(2, '0')}`,

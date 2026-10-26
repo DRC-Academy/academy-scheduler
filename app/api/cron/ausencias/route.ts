@@ -20,6 +20,7 @@
 
 import { requireCronSecret, requireAdminClient } from '@/lib/cronAuth';
 import { runAbsenceCheck, isMissingAbsencesTable } from '@/lib/teacherAbsenceStore';
+import { sweepPaymentHolds } from '@/lib/paymentHoldStore';
 import { sendAbsenceToZapier, absenceWebhookUrl } from '@/lib/absenceWebhook';
 import { sampleAbsencePayload } from '@/lib/teacherAbsences';
 import { spainWallClockToEpoch } from '@/lib/spainTime';
@@ -66,12 +67,17 @@ async function handle(request: Request): Promise<Response> {
     return Response.json({ error: 'ahora no válido. Usá 2026-10-15T18:35 (hora de España).' }, { status: 422, headers: NO_STORE });
   }
 
+  // PAGO PENDIENTE (lib/paymentHoldStore): ANTES del chequeo, para que una clase
+  // de un alumno que acaba de pasar a on-hold no salga como ausencia. Va colgado
+  // de este reloj para no sumar un cron. Nunca lanza; en ensayo no se ejecuta.
+  const pagoPendiente = dry ? null : await sweepPaymentHolds(admin, Date.now(), { budgetMs: 20_000 });
+
   try {
     const report = await runAbsenceCheck(admin, { dry, nowMs: ahora ?? undefined });
     console.log(`[${LABEL}]${dry ? ' (ensayo)' : ''} ${report.ahoraEspana}: ${report.clasesEnVentana} clase(s) en ventana, ` +
       `${report.nuevas.length} nueva(s), ${report.llegoTarde.length} llegó tarde, ${report.reintentos.length} reintento(s), ` +
       `${report.errores.length} error(es).`);
-    return Response.json({ ok: report.errores.length === 0, ...report }, { headers: NO_STORE });
+    return Response.json({ ok: report.errores.length === 0, ...report, pagoPendiente }, { headers: NO_STORE });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[${LABEL}] Vuelta cortada, no se avisó nada:`, msg);

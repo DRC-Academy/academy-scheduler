@@ -12,6 +12,8 @@
 // La fuente es el CALENDARIO, no los transcripts: una falta sin aviso nunca tiene
 // transcript y es justamente la que hay que poder declarar.
 import { useState, useEffect, useMemo, useCallback } from 'react';
+import { dbGetPaymentHolds } from '@/lib/studentPeriod';
+import type { PaymentHold } from '@/lib/paymentHolds';
 import { NavBar } from '@/components/NavBar';
 import { AuthGuard } from '@/components/AuthGuard';
 import { PullToRefresh } from '@/components/PullToRefresh';
@@ -304,6 +306,10 @@ function RevisionesContent() {
     setVerHasta(PAGINA);
   }
 
+  // Episodios de pago pendiente: esas clases no existen y no se reclaman.
+  const [holds, setHolds] = useState<PaymentHold[]>([]);
+  useEffect(() => { dbGetPaymentHolds().then(setHolds).catch(() => {}); }, []);
+
   const clases = useMemo<MissingJoinClass[]>(() => {
     if (!teacher) return [];
     const { from, to } = monthRange(monthYear);
@@ -313,6 +319,7 @@ function RevisionesContent() {
       classRecords,
       requests,
       analyses: classAnalyses,
+      holds,
       teacherId: teacher.id,
       fromDate: from,
       toDate: to,
@@ -325,7 +332,7 @@ function RevisionesContent() {
       // pregunten qué pasó un martes del que no hay ni una prueba.
       onlyWithSignal: true,
     });
-  }, [teacher, myAssignments, classJoinLogs, classRecords, classAnalyses, requests, monthYear, todayIso, nowMinutes]);
+  }, [teacher, myAssignments, classJoinLogs, classRecords, classAnalyses, requests, holds, monthYear, todayIso, nowMinutes]);
 
   const sinDeclarar = pendingToDeclare(clases);
 

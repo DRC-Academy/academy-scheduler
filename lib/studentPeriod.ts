@@ -38,12 +38,21 @@
 // esté tapada. El hecho se cuela solo.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { holdFromRow, holdSpansFor, isClassOnHold, type HoldSpan, type PaymentHold } from '@/lib/paymentHolds';
+
 /** Período en el que un alumno tiene clases con un profesor. */
 export interface StudentPeriod {
   /** 'YYYY-MM-DD'. Nunca null: sin piso volveríamos al bug de origen. */
   from: string;
   /** 'YYYY-MM-DD' de la baja, o null si sigue activo. */
   to: string | null;
+  /**
+   * Episodios de PAGO PENDIENTE (on-hold) del alumno, en epoch ms. Una clase
+   * cuyo inicio cae dentro de uno no existe (lib/paymentHolds). Son huecos DENTRO
+   * del período, con precisión de hora: solo se aplican cuando quien pregunta
+   * dice la hora de la clase.
+   */
+  holds?: HoldSpan[];
 }
 
 /** Lo mínimo que hace falta de una asignación para saber cuándo empezó. */
@@ -89,9 +98,10 @@ export function periodOf(assignment: PeriodSource, dropout?: DropoutSource | nul
  * y el día de la baja también (el alumno se dio de baja después de esa clase, o
  * ese mismo día pero la clase ya había ocurrido).
  */
-export function classExistsOn(period: StudentPeriod, dateIso: string): boolean {
+export function classExistsOn(period: StudentPeriod, dateIso: string, hour?: string | number): boolean {
   if (dateIso < period.from) return false;
   if (period.to && dateIso > period.to) return false;
+  if (hour != null && isClassOnHold(period.holds, dateIso, hour)) return false;
   return true;
 }
 
@@ -104,9 +114,11 @@ export function classExistsOn(period: StudentPeriod, dateIso: string): boolean {
  * que es la que no recorta nada.
  */
 export function periodIndex(
-  assignments: Array<PeriodSource & { teacherId: string; studentName: string }>,
+  assignments: Array<PeriodSource & { teacherId: string; studentName: string; studentId?: string; studentEmail?: string }>,
   dropouts: Array<{ teacherId: string; studentName: string; droppedAt?: string }>,
   teacherId: string,
+  /** Episodios de pago pendiente (lib/paymentHolds). Sin ellos, como siempre. */
+  holds?: readonly PaymentHold[],
 ): Map<string, StudentPeriod> {
   const nk = (s: string) => (s ?? '').trim().toLowerCase();
 
@@ -125,11 +137,21 @@ export function periodIndex(
   for (const a of assignments) {
     if (a.teacherId !== teacherId) continue;
     const k = nk(a.studentName);
-    const p = periodOf(a, { droppedAt: bajaPor.get(k) });
+    const p: StudentPeriod = periodOf(a, { droppedAt: bajaPor.get(k) });
     const prev = out.get(k);
-    if (!prev || p.from < prev.from) out.set(k, p);
+    const spans = holdSpansFor(holds, a);
+    if (!prev || p.from < prev.from) out.set(k, { ...p, holds: mergeSpans(prev?.holds, spans) });
+    else if (spans.length) out.set(k, { ...prev, holds: mergeSpans(prev.holds, spans) });
   }
   return out;
+}
+
+/** Une los tramos de dos asignaciones del mismo alumno, sin repetir. */
+function mergeSpans(a: HoldSpan[] | undefined, b: HoldSpan[]): HoldSpan[] | undefined {
+  const all = [...(a ?? []), ...b];
+  if (!all.length) return undefined;
+  const seen = new Set<string>();
+  return all.filter(s => { const key = `${s.fromMs}|${s.toMs}`; if (seen.has(key)) return false; seen.add(key); return true; });
 }
 
 /**
@@ -141,13 +163,44 @@ export function periodIndex(
  * mostrar una de más solo le cuesta una fila.
  */
 export function existsForStudent(
-  index: Map<string, StudentPeriod>, studentName: string, dateIso: string,
+  index: Map<string, StudentPeriod>, studentName: string, dateIso: string, hour?: string | number,
 ): boolean {
   const p = index.get((studentName ?? '').trim().toLowerCase());
-  return p ? classExistsOn(p, dateIso) : true;
+  return p ? classExistsOn(p, dateIso, hour) : true;
+}
+
+/**
+ * ¿La clase de ese alumno, en esa fecha y hora, cae en un episodio de pago
+ * pendiente? Solo mira los episodios (no el inicio ni la baja). Lo usan las
+ * celdas de recuperación, que no pasan por el período.
+ */
+export function onHoldForStudent(
+  index: Map<string, StudentPeriod> | undefined, studentName: string, dateIso: string, hour: string | number,
+): boolean {
+  const p = index?.get((studentName ?? '').trim().toLowerCase());
+  return !!p && isClassOnHold(p.holds, dateIso, hour);
 }
 
 // ── Lectura de las bajas ─────────────────────────────────────────────────────
+
+/**
+ * Episodios de pago pendiente (`student_payment_holds`), para el navegador.
+ * Tabla pequeña: se lee entera. Si no existe todavía o falla, vacío: sin
+ * episodios todo funciona como antes de que existieran.
+ */
+export async function dbGetPaymentHolds(): Promise<PaymentHold[]> {
+  const { supabase } = await import('@/lib/supabase');
+  const { data, error } = await supabase
+    .from('student_payment_holds')
+    .select('id, student_id, student_email, student_name, started_at, ended_at, is_initial, end_status')
+    .order('started_at', { ascending: false })
+    .limit(2000);
+  if (error) {
+    console.warn('[studentPeriod] No se pudieron leer los episodios de pago pendiente:', error.message);
+    return [];
+  }
+  return (data ?? []).map(r => holdFromRow(r as Record<string, unknown>));
+}
 
 /** Una baja registrada, con lo justo para cerrar un período. */
 export interface StudentDropout {

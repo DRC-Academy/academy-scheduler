@@ -20,7 +20,8 @@ import {
 import { studentLostDatesInMonth, LOST_CLASS_MONTHLY_CAP, durationBadge, estimateClassAmount } from '@/lib/finance';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { useProfesoresConHistorial } from '@/lib/HistorialHorariosContext';
-import { findStartDateMismatches } from '@/lib/studentPeriod';
+import { findStartDateMismatches, dbGetPaymentHolds } from '@/lib/studentPeriod';
+import type { PaymentHold } from '@/lib/paymentHolds';
 import { dbGetAllTeacherAssignments, dbGetTranscriptForReview, type TranscriptForReview } from '@/lib/db';
 import { getSpainParts } from '@/components/VisualCalendar';
 import { flagLabel } from '@/lib/transcriptValidation';
@@ -88,6 +89,9 @@ function ClasesSinIngreso() {
   // relanzada cada 60 s porque reloadAll reemplaza el array `teachers`. Con la
   // base saturada (08/10/2026) era una de las ráfagas que la ahogaban.
   const pedido = useRef(false);
+  // Episodios de pago pendiente: esas clases no existen y no se reclaman.
+  const [holds, setHolds] = useState<PaymentHold[]>([]);
+  useEffect(() => { dbGetPaymentHolds().then(setHolds).catch(() => {}); }, []);
   useEffect(() => {
     if (pedido.current || teachers.length === 0) return;
     pedido.current = true;
@@ -119,7 +123,7 @@ function ClasesSinIngreso() {
       if (!asgs) continue;
       const clases = buildMissingJoinClasses({
         assignments: asgs, joinLogs: classJoinLogs, classRecords, requests: [],
-        analyses: classAnalyses, teacherId: t.id,
+        analyses: classAnalyses, holds, teacherId: t.id,
         fromDate: from, toDate: to,
         todayIso: spain.dateStr, nowMinutes: spain.hour * 60 + spain.minute,
         gridOccupancy: gridOccupancyOfTeacher(t),
@@ -129,7 +133,7 @@ function ClasesSinIngreso() {
     }
     return out.sort((a, b) => b.clases.length - a.clases.length);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conHistorial, asgsByTeacher, classJoinLogs, classRecords, classAnalyses, monthYear, conSeñalSolo]);
+  }, [conHistorial, asgsByTeacher, classJoinLogs, classRecords, classAnalyses, holds, monthYear, conSeñalSolo]);
 
   const total = porProfesor.reduce((s, p) => s + p.clases.length, 0);
 

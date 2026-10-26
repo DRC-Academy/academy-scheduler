@@ -30,7 +30,8 @@ import { CalendarDays, CheckCircle2, Link2, Search, X } from 'lucide-react';
 import { useTeachers } from '@/lib/TeachersContext';
 import { getSpainParts } from '@/lib/spainTime';
 import { buildAttendanceRows, attachTranscriptStatus, markMovedClasses, attendanceSubBadge, minutesLate, isoDate, type LogRow, type AttendanceStatus } from '@/lib/attendance';
-import { periodIndex, dbGetStudentDropouts, type StudentDropout } from '@/lib/studentPeriod';
+import { periodIndex, dbGetStudentDropouts, dbGetPaymentHolds, type StudentDropout } from '@/lib/studentPeriod';
+import type { PaymentHold } from '@/lib/paymentHolds';
 import { gridOccupancyOfTeacher, applyGridSlots } from '@/lib/teacherClasses';
 import { useProfesoresConHistorial } from '@/lib/HistorialHorariosContext';
 import { transcriptCell } from '@/lib/transcriptDeadline';
@@ -174,9 +175,12 @@ export default function ClassLogTab() {
   // contrato en lib/studentPeriod: filtra lo PROYECTADO, nunca los hechos.
   const [dropouts, setDropouts] = useState<StudentDropout[]>([]);
   useEffect(() => { dbGetStudentDropouts().then(setDropouts).catch(() => {}); }, []);
+  // Episodios de pago pendiente: esas clases no existen (ni "No ingresó").
+  const [holds, setHolds] = useState<PaymentHold[]>([]);
+  useEffect(() => { dbGetPaymentHolds().then(setHolds).catch(() => {}); }, []);
   const periodsByTeacher = useMemo(
-    () => Object.fromEntries(teachers.map(t => [t.id, periodIndex(assignments, dropouts, t.id)])),
-    [teachers, assignments, dropouts],
+    () => Object.fromEntries(teachers.map(t => [t.id, periodIndex(assignments, dropouts, t.id, holds)])),
+    [teachers, assignments, dropouts, holds],
   );
 
   // Filas de asistencia (fuente única: lib/attendance). Todos los profes (o el

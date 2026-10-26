@@ -222,8 +222,10 @@ export function buildAttendanceRows(opts: {
         // consumir el ingreso, para que si por algún motivo hubiera uno, salga
         // igual entre los leftovers de abajo (ver el contrato de studentPeriod).
         const periodos = periodsByTeacher?.[a.teacherId];
-        if (periodos && !existsForStudent(periodos, a.studentName, dateIso)) continue;
         const startHour = run[0];
+        // La hora va para los episodios de pago pendiente (lib/paymentHolds): una
+        // clase que empieza con el pago pendiente no existió.
+        if (periodos && !existsForStudent(periodos, a.studentName, dateIso, startHour)) continue;
         const durationHours = run.length;
         const hour = hourText(startHour);
         const hoursLabel = sessionRangeLabel(startHour, durationHours);

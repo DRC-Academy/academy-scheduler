@@ -23,6 +23,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 // Secreto en tiempo constante + cliente ADMIN de Supabase (sin él, 500).
 import { after } from 'next/server';
+import { sweepPaymentHolds } from '@/lib/paymentHoldStore';
 import { requireCronSecret, requireAdminClient } from '@/lib/cronAuth';
 import { guardarScoringV2 } from '@/lib/teacherScoreLoad';
 import {
@@ -86,6 +87,10 @@ export async function GET(request: Request): Promise<Response> {
       } catch (err) {
         console.error('[cron ending-plans] No se pudo guardar la foto del scoring v2:', err);
       }
+      // Pago pendiente: respaldo diario del barrido (el de cada 5 min solo corre
+      // de lunes a sábado de día). Ver lib/paymentHoldStore.
+      const r = await sweepPaymentHolds(supabase);
+      console.log(`[cron ending-plans] pago pendiente: ${r.enEsperaEnWoo} en Woo, ${r.abiertos.length} abierto(s), ${r.cerrados.length} cerrado(s), ${r.avisos.enviados} aviso(s), ${r.errores.length} error(es).`);
     });
   }
 

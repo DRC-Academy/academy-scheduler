@@ -50,6 +50,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { fetchAllPages, gridClassesOf, teacherStudentsFrom, teacherAssignmentsFrom } from '@/lib/db';
 import { gridOccupancyOfTeacher, addDaysIso } from '@/lib/teacherClasses';
 import { periodIndex } from '@/lib/studentPeriod';
+import { readPaymentHolds } from '@/lib/paymentHoldStore';
 import { isPausedStatus } from '@/lib/subscriptionAccess';
 import { getSpainParts, spainWallClockToEpoch } from '@/lib/spainTime';
 import { hourNum, hourText, nkName } from '@/lib/sessions';
@@ -199,6 +200,9 @@ async function cargarDatos(admin: SupabaseClient, fechas: string[], ensayo: bool
       .select('id, teacher_id, student_name, class_date, class_time, class_type, rescheduled_to').in('class_date', fechas).order('id').range(f, t)),
     leerAvisos(),
   ]);
+  // Pago pendiente: esas clases no existen, así que tampoco hay ausencia que
+  // detectar (lib/paymentHolds). Ante un fallo de lectura, sin episodios.
+  const holds = await readPaymentHolds(admin);
 
   const grids = new Map<string, Grid>(calendars.map(c => [str(c.teacher_id), (c.grid ?? {}) as Grid]));
   const students = studentsRaw.map(toStudent);
@@ -225,7 +229,7 @@ async function cargarDatos(admin: SupabaseClient, fechas: string[], ensayo: bool
     teachers.push({
       teacherId: id, teacherName: prof.name, assignments, grid,
       occupancy: gridOccupancyOfTeacher(gridClassesOf(grid)),
-      periods: periodIndex(assignments, dropouts, id),
+      periods: periodIndex(assignments, dropouts, id, holds),
     });
   }
 
