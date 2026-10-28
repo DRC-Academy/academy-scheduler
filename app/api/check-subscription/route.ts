@@ -58,6 +58,14 @@ interface SubResult {
    * `endDate` lo leen los planes de siempre y no puede cambiar para ellos.
    */
   programEndDate: string | null;
+  /** Próxima cuota de la suscripción ('YYYY-MM-DD', next_payment_date_gmt). */
+  nextPaymentDate: string | null;
+  /** Producto (y variación) del último pedido: con esto se consulta lib/productCatalog. */
+  wooProductId: number | null;
+  wooVariationId: number | null;
+  /** Número del último pedido y su fecha de PAGO (o de creación), como la activación por pedido. */
+  orderId: number | null;
+  orderPaidDate: string | null;
 }
 
 interface RichProduct {
@@ -71,6 +79,10 @@ interface RichProduct {
   orderDate: string | null;       // 'YYYY-MM-DD' — fecha de compra (fallback de inicio)
   /** El último pedido es de la variación "Pausa" (el cambio a la pausa o su renovación). */
   isPause: boolean;
+  productId: number | null;
+  variationId: number | null;
+  orderId: number | null;
+  orderPaidDate: string | null;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -86,6 +98,7 @@ const ERROR_RESULT: SubResult = {
   companyPlanMonths: null, companyPlanStart: null,
   metaData: [], phone: null,
   billingName: null, subscriptionStartDate: null, detectedLevel: null, programEndDate: null,
+  nextPaymentDate: null, wooProductId: null, wooVariationId: null, orderId: null, orderPaidDate: null,
 };
 
 // Convierte una fecha WooCommerce (ISO / 'YYYY-MM-DD HH:mm:ss') a 'YYYY-MM-DD'.
@@ -106,7 +119,7 @@ function billingNameFrom(billing: any): string | null {
 // Cache en memoria (por instancia serverless): 5 min por email.
 const TTL_MS = 5 * 60 * 1000;
 const productCache = new Map<string, { product: RichProduct; ts: number }>();
-const subCache     = new Map<string, { result: { active: boolean; status: string; endDate: string | null; daysRemaining: number | null; phone: string | null; planName: string | null; startDate: string | null; programEndDate: string | null }; ts: number }>();
+const subCache     = new Map<string, { result: { active: boolean; status: string; endDate: string | null; daysRemaining: number | null; phone: string | null; planName: string | null; startDate: string | null; programEndDate: string | null; nextPaymentDate: string | null }; ts: number }>();
 
 const MAX_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 500;
@@ -181,8 +194,14 @@ async function fetchLastProduct(c: { base: string; ck: string; cs: string }, ema
   const billingName = billingNameFrom(order?.billing);
   // Fecha de compra: pago completado → pagado → creación (fallback de inicio).
   const orderDate = toDateStr(firstNonEmpty(order?.date_completed, order?.date_paid, order?.date_created));
+  // Fecha de PAGO tal cual la da Woo (hora de la tienda), como lib/planOrderStore.toOrderLite.
+  const paidRaw = firstNonEmpty(order?.date_paid, order?.date_created);
+  const ids = {
+    productId: Number(li?.product_id) || null, variationId: Number(li?.variation_id) || null,
+    orderId: Number(order?.id) || null, orderPaidDate: typeof paidRaw === 'string' ? paidRaw.slice(0, 10) : null,
+  };
   const name = (typeof li?.name === 'string' && li.name.trim()) ? li.name.trim() : null;
-  if (!name) return { name: null, variation: null, fullName: null, hours: null, metaData: [], productType: null, billingName, orderDate, isPause: false };
+  if (!name) return { name: null, variation: null, fullName: null, hours: null, metaData: [], productType: null, billingName, orderDate, isPause: false, ...ids };
 
   const metaData = Array.isArray(li?.meta_data) ? li.meta_data : [];
   const variation = li?.variation_id ? variationFromMeta(metaData) : variationFromMeta(metaData);
@@ -193,7 +212,7 @@ async function fetchLastProduct(c: { base: string; ck: string; cs: string }, ema
   const hours = parseHoursFromMeta(metaData) ?? parseHoursFromText(variation) ?? parseHoursFromText(name) ?? parseHoursFromText(broad);
 
   const productType: ProductType = productTypeFor(li?.product_id, li?.variation_id, () => isOneTimeProduct(name) ? 'one_time' : 'subscription');
-  return { name, variation, fullName, hours, metaData, productType, billingName, orderDate, isPause: hasPauseItem([li]) };
+  return { name, variation, fullName, hours, metaData, productType, billingName, orderDate, isPause: hasPauseItem([li]), ...ids };
 }
 
 // Estado de la suscripción recurrente (como antes).
@@ -203,7 +222,7 @@ async function fetchSubStatus(c: { base: string; ck: string; cs: string }, email
     `&consumer_key=${encodeURIComponent(c.ck)}&consumer_secret=${encodeURIComponent(c.cs)}`;
   const subs = await fetchWoo(url, email, 'subscriptions');
   if (subs.length === 0) {
-    return { active: false, status: 'not_found', endDate: null, daysRemaining: null, phone: null, planName: null, startDate: null, programEndDate: null };
+    return { active: false, status: 'not_found', endDate: null, daysRemaining: null, phone: null, planName: null, startDate: null, programEndDate: null, nextPaymentDate: null };
   }
   // Más reciente por start_date; se prioriza una que dé acceso si existe.
   const byRecent = [...subs].sort((a, b) => {
@@ -229,6 +248,8 @@ async function fetchSubStatus(c: { base: string; ck: string; cs: string }, email
   const programEndDate = catalogProduct(li0?.product_id, li0?.variation_id)?.kind === 'fraccionado'
     ? (typeof chosen?.end_date_gmt === 'string' && /^\d{4}-\d{2}-\d{2}/.test(chosen.end_date_gmt) ? chosen.end_date_gmt.slice(0, 10) : null)
     : null;
+  const nextPaymentDate = typeof chosen?.next_payment_date_gmt === 'string' && /^\d{4}-\d{2}-\d{2}/.test(chosen.next_payment_date_gmt)
+    ? chosen.next_payment_date_gmt.slice(0, 10) : null;
   return {
     // 'active' y 'pending-cancel' dan acceso; 'paused', 'on-hold', 'cancelled' y
     // 'expired' no. El criterio vive en lib/subscriptionAccess y lo comparten el
@@ -237,7 +258,7 @@ async function fetchSubStatus(c: { base: string; ck: string; cs: string }, email
     status,
     endDate: endDate ? endDate.toISOString() : null,
     daysRemaining: endDate ? daysFromNow(endDate) : null,
-    phone, planName, startDate, programEndDate,
+    phone, planName, startDate, programEndDate, nextPaymentDate,
   };
 }
 
@@ -505,6 +526,9 @@ async function check(request: Request): Promise<Response> {
     productType, hoursFromApi, manualActiveUntil: null, oritalkUntil,
     companyPlanMonths, companyPlanStart, metaData, phone: null,
     billingName, subscriptionStartDate: orderDate, detectedLevel, programEndDate: null,
+    nextPaymentDate: null,
+    wooProductId: rich?.productId ?? null, wooVariationId: rich?.variationId ?? null,
+    orderId: rich?.orderId ?? null, orderPaidDate: rich?.orderPaidDate ?? null,
     ...o,
   });
 
@@ -558,5 +582,6 @@ async function check(request: Request): Promise<Response> {
     active: sub.active, status: sub.status, endDate: sub.endDate, daysRemaining: sub.daysRemaining, phone: sub.phone,
     subscriptionStartDate: sub.startDate ?? orderDate,
     programEndDate: sub.programEndDate ?? null,
+    nextPaymentDate: sub.nextPaymentDate ?? null,
   }));
 }

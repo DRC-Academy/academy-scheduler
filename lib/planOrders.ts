@@ -248,6 +248,106 @@ export function planSubscriptionEvents(
   return out;
 }
 
+// ── Asignación de un programa de pago único (modal del setter) ───────────────
+//
+// Al asignar profesor, el setter fija la fecha de INICIO real del programa (que
+// puede ser posterior al pago) y la de fin sale de inicio + meses del catálogo.
+// Misma regla "nunca recorta" que la activación por pedido: si el alumno ya
+// tiene una fecha más lejana (la automática por pago, o una puesta a mano), se
+// conserva la suya. El modal usa esta función para avisar ANTES de confirmar y
+// el servidor para decidir, así que los dos dicen lo mismo.
+
+/** ¿Programa de pago único con duración conocida? (los que tienen fecha de fin). */
+export function isFixedTermProgram(c: CatalogProduct | null | undefined): c is CatalogProduct & { months: number } {
+  return c?.kind === 'pago_unico' && c.months != null && c.months > 0;
+}
+
+export interface AssignmentProgramDecision {
+  /** Inicio + meses del plan. */
+  planUntil: string;
+  /** La fecha de fin pedida (la del plan, o la editada a mano). */
+  requestedUntil: string;
+  /** ¿La fecha de fin se editó a mano (distinta de la del plan)? */
+  manual: boolean;
+  /** La que queda tras "nunca recorta". */
+  finalUntil: string;
+  result: 'activado' | 'ampliado' | 'conserva_fecha' | 'sin_cambios';
+  writes: boolean;
+  /** Aviso para el modal cuando se conserva una fecha más lejana. null si no. */
+  warning: string | null;
+}
+
+const ddmmyyyy = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}`;
+
+/**
+ * Qué pasa al confirmar la asignación de un programa de pago único.
+ * null si el producto no es un programa de pago único con meses, o si la fecha
+ * de inicio no es válida: entonces el modal se comporta como siempre.
+ */
+export function assignmentProgramDecision(args: {
+  product: CatalogProduct | null | undefined;
+  start: string;
+  /** Fecha de fin del campo; null o vacía = la del plan. */
+  until?: string | null;
+  /** `manual_active_until` actual del alumno. */
+  currentUntil: string | null | undefined;
+  today: string;
+}): AssignmentProgramDecision | null {
+  if (!isFixedTermProgram(args.product)) return null;
+  const start = dateOnly(args.start);
+  const planUntil = start ? addCalendarMonths(start, args.product.months) : null;
+  if (!start || !planUntil) return null;
+  const requestedUntil = dateOnly(args.until) ?? planUntil;
+  const d = resolveCompanyPlanUpdate(requestedUntil, args.currentUntil, args.today);
+  const result: AssignmentProgramDecision['result'] =
+    d.action === 'extend' ? 'ampliado'
+    : d.action === 'keep_manual' ? 'conserva_fecha'
+    : d.action === 'unchanged' ? 'sin_cambios'
+    : 'activado';
+  return {
+    planUntil, requestedUntil, manual: requestedUntil !== planUntil,
+    finalUntil: d.until, result, writes: d.writes,
+    warning: result === 'conserva_fecha'
+      ? `Este alumno ya tiene acceso hasta el ${ddmmyyyy(d.until)}, más lejos que el ${ddmmyyyy(requestedUntil)}: se conservará su fecha.`
+      : null,
+  };
+}
+
+/**
+ * Lo que se escribe al confirmar la asignación: el alumno y, si el pedido está
+ * identificado, su fila en `woo_plan_events` (aplicada). Con la fila puesta, el
+ * webhook y el barrido diario ven ese pedido como "Ya procesado" y no lo vuelven
+ * a calcular desde la fecha de pago.
+ */
+export function assignmentProgramEvent(args: {
+  product: CatalogProduct;
+  decision: AssignmentProgramDecision;
+  start: string;
+  student: StudentLite;
+  /** Pedido verificado. null = sin pedido identificado (solo se escribe el alumno). */
+  order: WooOrderLite | null;
+}): PlanEvent {
+  const { product: c, decision: d, student, order } = args;
+  const li = order?.lineItems.find(x => catalogProduct(x.productId, x.variationId)?.id === c.id);
+  const write: Record<string, unknown> = { product_type: 'one_time', woo_product_id: c.id, company_plan_start: args.start };
+  if (d.writes) write.manual_active_until = d.finalUntil;
+  if (!(student.product_name ?? '').trim()) { write.product_name = li?.name || c.name; write.plan = li?.name || c.name; }
+  const notes = [`Desde la asignación (inicio ${ddmmyyyy(args.start)})`];
+  if (d.manual) notes.push(`fin editado a mano (por plan sería ${ddmmyyyy(d.planUntil)})`);
+  if (d.result === 'conserva_fecha') notes.push(`conserva su fecha ${ddmmyyyy(d.finalUntil)}`);
+  if (c.persons === 2) notes.push(`plan de 2 personas: falta vincular a la segunda persona`);
+  return {
+    sourceType: 'order', sourceId: order?.id ?? 0, productId: c.id,
+    productName: li?.name || c.name, kind: c.kind, wooStatus: order?.status ?? '',
+    email: order?.email ?? student.email, billingName: order?.billingName ?? '',
+    studentId: student.id, studentName: student.name,
+    start: args.start, computedUntil: d.requestedUntil,
+    previousUntil: student.manual_active_until, finalUntil: d.finalUntil,
+    result: d.result, needsAdmin: c.persons === 2, note: notes.join(' · '),
+    studentWrite: write, applies: true,
+  };
+}
+
 /** Clave de un evento en `woo_plan_events` (y en el mapa de existentes). */
 export function eventKey(sourceType: SourceType, sourceId: number, productId: number): string {
   return `${sourceType}:${sourceId}:${productId}`;

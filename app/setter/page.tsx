@@ -13,8 +13,12 @@ import { CrearVinculoModal } from '@/components/CrearVinculoModal';
 import { CambiarProfesorModal } from '@/components/CambiarProfesorModal';
 import { AssignmentEmailModal } from '@/components/AssignmentEmailModal';
 import { StudentAutofillCard } from '@/components/StudentAutofillCard';
-import { useStudentAutofill } from '@/lib/useStudentAutofill';
-import { planBadgeStyle } from '@/lib/productUtils';
+import { useStudentAutofill, orderPaidLabel } from '@/lib/useStudentAutofill';
+import { planBadgeStyle, addCalendarMonths } from '@/lib/productUtils';
+import { isFixedTermProgram, assignmentProgramDecision } from '@/lib/planOrders';
+import { madridToday } from '@/lib/subscriptionAccess';
+import { useAuth } from '@/lib/AuthContext';
+import { adminFetch } from '@/lib/adminSessionClient';
 import { formatPuntualDate, isAssignableCell, withBaseState } from '@/lib/cells';
 import { useTeachers } from '@/lib/TeachersContext';
 import { Teacher, Grid, Assignment, Student, AssignedSlot } from '@/types';
@@ -91,6 +95,40 @@ function addDays(iso: string, days: number): string {
   return d.toISOString().split('T')[0];
 }
 
+// ─── Programa de pago único (oferta nueva) ────────────────────────────────────
+// Lo que el modal de asignación pide activar al confirmar. Viaja con la
+// asignación hasta handleAssigned, que lo manda DESPUÉS de guardar el alumno y
+// la asignación (el alumno nuevo tiene que existir en la base).
+type ProgramActivation = {
+  productId: number;
+  orderId: number | null;
+  start: string;
+  /** Fin editado a mano (solo lo guarda un admin); null = inicio + meses del plan. */
+  until: string | null;
+};
+
+/**
+ * Activa el programa en el servidor (app/api/asignacion/programa). Devuelve el
+ * texto a mostrar si algo no salió del todo bien, o null.
+ */
+async function activateProgram(
+  act: ProgramActivation, studentId: string,
+  creds: { username: string; password: string } | null,
+): Promise<string | null> {
+  try {
+    const res = await adminFetch('/api/asignacion/programa', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ studentId, ...act }),
+    }, creds);
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) return `Asignado, pero no se pudo activar el programa: ${j.error ?? `error ${res.status}`}`;
+    const avisos = [j.warning, ...(j.warnings ?? [])].filter(Boolean);
+    return avisos.length ? `Programa activado hasta el ${fmtDate(j.finalUntil)}.\n\n${avisos.join('\n')}` : null;
+  } catch (e) {
+    return `Asignado, pero no se pudo activar el programa: ${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+
 // ─── Email Trigger ────────────────────────────────────────────────────────────
 // El cuerpo del email de asignación vive en components/AssignmentEmailModal.tsx
 // (fuente única, compartida con el flujo de cambio de profesor).
@@ -116,9 +154,11 @@ function AssignModal({
   existingStudents: Student[];
   initialStudentId?: string;
   onClose: () => void;
-  onConfirm: (a: Assignment, s: Student) => void;
+  onConfirm: (a: Assignment, s: Student, program?: ProgramActivation) => void;
 }) {
   const { assignments: allAssignments, removeAssignment } = useTeachers();
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
   const [tab, setTab] = useState<'existing' | 'new'>('existing');
   const [selectedExisting, setSelectedExisting] = useState(initialStudentId ?? '');
   const [newStudent, setNewStudent] = useState({ name: '', email: '', level: 'B1' });
@@ -149,6 +189,10 @@ function AssignModal({
   const [plan, setPlan] = useState('');
   const [notes, setNotes] = useState('');
   const [startDate, setStartDate] = useState('');
+  // Fecha de fin del programa de pago único: sale sola de inicio + meses hasta
+  // que se edita a mano (entonces se queda la editada aunque cambie el inicio).
+  const [endDate, setEndDate] = useState('');
+  const [endEdited, setEndEdited] = useState(false);
   const [success, setSuccess] = useState(false);
   const [resultAssignment, setResultAssignment] = useState<Assignment | null>(null);
   const [duplicateStudent, setDuplicateStudent] = useState<Student | null>(null);
@@ -203,7 +247,30 @@ function AssignModal({
     ? !!selectedExisting
     : (!!newStudent.name.trim() && isValidEmail(newStudent.email));
   const slotsComplete = slots.length === weeklyHours;
-  const canConfirm = hasStudent && slotsComplete && availableSlots.length > 0 && !!startDate;
+
+  // ── Oferta nueva: el tipo de plan sale del catálogo (por ID de producto) ──
+  // Pago único con meses → fecha de fin; fraccionado → fin de la suscripción;
+  // cualquier otro (mensual, plan antiguo, fuera del catálogo) → como siempre.
+  const catalog = autofill.catalog;
+  const oneTime = isFixedTermProgram(catalog) ? catalog : null;
+  const fraccionado = catalog?.kind === 'fraccionado';
+  const planUntil = oneTime && startDate ? addCalendarMonths(startDate, oneTime.months) : null;
+  const shownEnd = endEdited ? endDate : (planUntil ?? '');
+  // Un setter no puede guardar una fecha a mano: se guarda la del plan.
+  const manualSaved = endEdited && isAdmin;
+  const currentUntil = selectedStudent?.manualActiveUntil ?? autofill.existing?.manualActiveUntil ?? null;
+  const program = oneTime && startDate
+    ? assignmentProgramDecision({ product: oneTime, start: startDate, until: manualSaved ? endDate : null, currentUntil, today: madridToday() })
+    : null;
+  const endInvalid = !!oneTime && endEdited && (!endDate || (!!startDate && endDate <= startDate));
+  function changeEnd(v: string) {
+    setEndDate(v);
+    setEndEdited(!!v && v !== planUntil);
+  }
+  // Otro alumno / otro plan: la fecha a mano del anterior no vale.
+  useEffect(() => { setEndEdited(false); setEndDate(''); }, [oneTime?.id, currentEmail]);
+
+  const canConfirm = hasStudent && slotsComplete && availableSlots.length > 0 && !!startDate && !endInvalid;
 
   async function handleConfirm() {
     if (!canConfirm) return;
@@ -257,7 +324,10 @@ function AssignModal({
       createdAt: new Date().toISOString(),
     };
     setResultAssignment(assignment);
-    onConfirm(assignment, student);
+    const programAct: ProgramActivation | undefined = oneTime && program
+      ? { productId: oneTime.id, orderId: autofill.woo?.orderId ?? null, start: startDate, until: manualSaved ? endDate : null }
+      : undefined;
+    onConfirm(assignment, student, programAct);
     setSuccess(true);
     // Persistir tipo/nombre de producto en el alumno (best-effort).
     if (productInfo?.fullName) {
@@ -464,14 +534,63 @@ function AssignModal({
           <div><label>Notas internas</label>
             <textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="Info adicional sobre el alumno..." rows={2} style={{ resize: 'vertical' }} />
           </div>
-          <div><label>Fecha de inicio *</label>
-            <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} style={{ maxWidth: 200 }} />
-            {currentEmail.includes('@') && !detecting && (
-              autofill.startDate
-                ? <div style={{ fontSize: 11.5, color: '#1E9E3A', marginTop: 4 }}>📅 Detectada desde WooCommerce — inicio de suscripción</div>
-                : <div style={{ fontSize: 11.5, color: '#ea580c', marginTop: 4 }}>⚠️ Fecha no detectada — completá manualmente</div>
-            )}
-          </div>
+          {oneTime ? (
+            // PROGRAMA DE PAGO ÚNICO: inicio (editable, precargado con la fecha de
+            // pago) + fin = inicio + meses del plan, recalculado solo.
+            <div>
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                <div style={{ flex: '1 1 160px', maxWidth: 220 }}><label>Fecha de inicio *</label>
+                  <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} />
+                  {orderPaidLabel(autofill, startDate) && (
+                    <div style={{ fontSize: 11.5, color: '#1E9E3A', marginTop: 4 }}>📅 {orderPaidLabel(autofill, startDate)}</div>
+                  )}
+                </div>
+                <div style={{ flex: '1 1 160px', maxWidth: 220 }}><label>Fecha de fin *</label>
+                  <input type="date" value={shownEnd} onChange={e => changeEnd(e.target.value)} disabled={!startDate} />
+                  {endEdited && planUntil && (
+                    <div style={{ fontSize: 11.5, color: '#ea580c', marginTop: 4 }}>✏️ Fecha modificada a mano (por plan serían {fmtDate(planUntil)})</div>
+                  )}
+                  {!endEdited && planUntil && (
+                    <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 4 }}>Inicio + {oneTime.months} meses del plan</div>
+                  )}
+                </div>
+              </div>
+              {endInvalid && (
+                <div style={{ fontSize: 11.5, color: '#ef4444', marginTop: 6 }}>La fecha de fin tiene que ser posterior a la de inicio.</div>
+              )}
+              {endEdited && !isAdmin && planUntil && (
+                <div style={{ fontSize: 11.5, color: '#c2410c', marginTop: 6 }}>
+                  ⚠️ La fecha a mano solo la guarda un admin; se guardará la del plan ({fmtDate(planUntil)}).
+                </div>
+              )}
+              {program?.warning && (
+                <div style={{ marginTop: 8, padding: '8px 12px', borderRadius: 8, background: 'rgba(255,196,0,0.10)', border: '1px solid rgba(255,196,0,0.4)', fontSize: 12, color: '#8a6d00', lineHeight: 1.5 }}>
+                  ⚠️ {program.warning}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div style={fraccionado ? { display: 'flex', gap: 12, flexWrap: 'wrap' } : undefined}>
+              <div style={fraccionado ? { flex: '1 1 160px', maxWidth: 220 } : undefined}><label>Fecha de inicio *</label>
+                <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} style={{ maxWidth: 200 }} />
+                {currentEmail.includes('@') && !detecting && (
+                  autofill.startDate
+                    ? <div style={{ fontSize: 11.5, color: '#1E9E3A', marginTop: 4 }}>📅 Detectada desde WooCommerce — inicio de suscripción</div>
+                    : <div style={{ fontSize: 11.5, color: '#ea580c', marginTop: 4 }}>⚠️ Fecha no detectada — completá manualmente</div>
+                )}
+              </div>
+              {fraccionado && (
+                // PROGRAMA FRACCIONADO: el fin es el de la suscripción de Woo (solo
+                // lectura). El acceso lo sigue dando la suscripción.
+                <div style={{ flex: '1 1 160px', maxWidth: 220 }}><label>Fecha de fin del programa</label>
+                  <input type="date" value={autofill.woo?.programEndDate ?? ''} readOnly disabled />
+                  <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 4 }}>
+                    {autofill.woo?.programEndDate ? 'Fin de la suscripción en WooCommerce' : 'Sin fecha de fin en WooCommerce'}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         <div style={{ background: 'var(--bg-surface-2)', border: '1px solid var(--border)', borderRadius: 9, padding: '10px 14px', marginBottom: 16, fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.7 }}>
@@ -481,14 +600,18 @@ function AssignModal({
           <div>⏱ {weeklyHours}h/semana {plan && `· ${plan}`}</div>
           {objetivo && <div>🎯 {objetivo}</div>}
           {startDate && (
-            <div>📆 Inicio: {fmtDate(startDate)} · Renovación: {fmtDate(addDays(startDate, 30))}</div>
+            oneTime
+              ? <div>📆 Inicio: {fmtDate(startDate)} · Fin del programa: {program ? fmtDate(program.requestedUntil) : '—'}</div>
+              : fraccionado
+                ? <div>📆 Inicio: {fmtDate(startDate)} · Próxima cuota: {autofill.woo?.nextPaymentDate ? fmtDate(autofill.woo.nextPaymentDate) : '—'} · Fin del programa: {autofill.woo?.programEndDate ? fmtDate(autofill.woo.programEndDate) : '—'}</div>
+                : <div>📆 Inicio: {fmtDate(startDate)} · Renovación: {fmtDate(addDays(startDate, 30))}</div>
           )}
         </div>
 
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={onClose} style={{ flex: 1, padding: '11px', borderRadius: 9, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 14 }}>Cancelar</button>
           <button onClick={handleConfirm} disabled={!canConfirm || checkingEmail} style={{ flex: 2, padding: '11px', borderRadius: 9, border: 'none', background: canConfirm && !checkingEmail ? '#1E9E3A' : 'var(--bg-surface-3)', color: canConfirm && !checkingEmail ? 'white' : 'var(--text-muted)', cursor: canConfirm && !checkingEmail ? 'pointer' : 'not-allowed', fontSize: 14, fontWeight: 700 }}>
-            {checkingEmail ? 'Verificando...' : !hasStudent ? 'Elegí un alumno primero' : !slotsComplete ? `Faltan ${weeklyHours - slots.length} horario${weeklyHours - slots.length !== 1 ? 's' : ''}` : !startDate ? 'Ingresá la fecha de inicio' : 'Confirmar asignación ✓'}
+            {checkingEmail ? 'Verificando...' : !hasStudent ? 'Elegí un alumno primero' : !slotsComplete ? `Faltan ${weeklyHours - slots.length} horario${weeklyHours - slots.length !== 1 ? 's' : ''}` : !startDate ? 'Ingresá la fecha de inicio' : endInvalid ? 'Revisá la fecha de fin' : 'Confirmar asignación ✓'}
           </button>
         </div>
       </div>
@@ -555,7 +678,7 @@ function TeacherCalendarModal({
   highlightSlots: AssignedSlot[];
   existingStudents: Student[];
   onClose: () => void;
-  onAssigned: (a: Assignment, s: Student) => void;
+  onAssigned: (a: Assignment, s: Student, program?: ProgramActivation) => void;
 }) {
   const { getTeacherGrid } = useTeachers();
   const baseGrid = useMemo(() => buildGridFromTeacher(teacher.timeSlots, teacher.upcomingClasses), [teacher]);
@@ -644,7 +767,7 @@ function TeacherCalendarModal({
           teacherGrid={grid}
           existingStudents={existingStudents}
           onClose={() => setAssignCell(null)}
-          onConfirm={(a, s) => {
+          onConfirm={(a, s, program) => {
             let updated = { ...(Object.keys(gridRef.current).length > 0 ? gridRef.current : grid) };
             a.slots.forEach(sl => {
               // withBaseState: no borra una recuperación puntual de esa semana.
@@ -653,7 +776,7 @@ function TeacherCalendarModal({
             });
             handleGridChange(updated);
             setAssignCell(null);
-            onAssigned(a, s);
+            onAssigned(a, s, program);
           }}
         />
       )}
@@ -905,7 +1028,7 @@ function LinkCreateAssign({
   student: Student;
   existingStudents: Student[];
   onClose: () => void;
-  onAssigned: (a: Assignment, s: Student) => void;
+  onAssigned: (a: Assignment, s: Student, program?: ProgramActivation) => void;
 }) {
   const { getTeacherGrid } = useTeachers();
   const saveGrid = useGridSaver('setter');
@@ -923,7 +1046,7 @@ function LinkCreateAssign({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [teacher.id]);
 
-  async function confirm(a: Assignment, s: Student) {
+  async function confirm(a: Assignment, s: Student, program?: ProgramActivation) {
     const base = grid ?? {};
     let updated: Grid = { ...base };
     for (const sl of a.slots) {
@@ -937,7 +1060,7 @@ function LinkCreateAssign({
       alert('No se pudo marcar el horario en el calendario del profesor, así que NO se creó la asignación.\n\n' + calendarErrorMessage(err));
       return;
     }
-    onAssigned(a, s);
+    onAssigned(a, s, program);
   }
 
   if (error) {
@@ -1019,6 +1142,7 @@ function initials(name: string): string {
 
 function SetterContent() {
   const { teachers, students, assignments, unassignedStudents, addStudent, addAssignment, reloadAll } = useTeachers();
+  const { user } = useAuth();
 
   const [searchMode, setSearchMode] = useState<SearchMode>('dayhour');
   const [days, setDays] = useState<string[]>([]);
@@ -1244,7 +1368,7 @@ function SetterContent() {
     plural(m.teacher.freeSpots, 'cupo libre', 'cupos libres'),
   ].filter(Boolean).join(' · ');
 
-  async function handleAssigned(a: Assignment, s: Student) {
+  async function handleAssigned(a: Assignment, s: Student, program?: ProgramActivation) {
     // El alumno PRIMERO (la assignment tiene FK a students), y con manejo de
     // error: si el guardado falla, no seguimos como si se hubiera asignado.
     try {
@@ -1257,6 +1381,12 @@ function SetterContent() {
     }
     setCalendarTeacher(null);
     setEmailAssignment(a);
+    // Programa de pago único: se activa con las fechas del modal una vez que el
+    // alumno ya existe. Un fallo no deshace la asignación: se avisa y listo.
+    if (program) {
+      const aviso = await activateProgram(program, s.id, user?.role === 'admin' ? { username: user.username, password: user.password } : null);
+      if (aviso) alert(aviso);
+    }
   }
 
   return (
@@ -1830,7 +1960,7 @@ function SetterContent() {
           student={createAssign.student}
           existingStudents={students}
           onClose={() => setCreateAssign(null)}
-          onAssigned={(a, s) => { handleAssigned(a, s); setCreateAssign(null); }}
+          onAssigned={(a, s, program) => { handleAssigned(a, s, program); setCreateAssign(null); }}
         />
       )}
 

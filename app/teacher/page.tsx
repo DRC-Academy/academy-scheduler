@@ -23,7 +23,7 @@ import { sessionRangeLabel } from '@/lib/sessions';
 import { isoDateLocal, classesForDate, groupContiguousClasses, sessionHoursLabel, gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { periodIndex, dbGetStudentDropouts, type StudentDropout } from '@/lib/studentPeriod';
 import { StudentAutofillCard } from '@/components/StudentAutofillCard';
-import { useStudentAutofill } from '@/lib/useStudentAutofill';
+import { useStudentAutofill, isOneTimeProgram, orderPaidLabel } from '@/lib/useStudentAutofill';
 import { linkBtnStyle, MeetLinkBadge, PendingTasksCard, useNivelesSinValidar } from '@/components/teacherPanelUi';
 import { isMeetLinkDefined } from '@/lib/meetLinkStatus';
 import { transcriptsPendientes } from '@/lib/dashboardMetrics';
@@ -370,9 +370,13 @@ function AssignStudentModal({
                 </label>
                 <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} style={{ width: '100%' }} />
                 {newEmail.includes('@') && !autofill.loading && (
-                  autofill.startDate
-                    ? <div style={{ fontSize: 11, color: '#1E9E3A', marginTop: 4 }}>📅 Detectada desde WooCommerce — inicio de suscripción</div>
-                    : <div style={{ fontSize: 11, color: '#ea580c', marginTop: 4 }}>⚠️ Fecha no detectada — completá manualmente</div>
+                  isOneTimeProgram(autofill)
+                    // Programa de pago único: no hay suscripción. Solo se dice de dónde
+                    // sale la fecha si es la de pago del pedido; si no, nada.
+                    ? (orderPaidLabel(autofill, startDate) && <div style={{ fontSize: 11, color: '#1E9E3A', marginTop: 4 }}>📅 {orderPaidLabel(autofill, startDate)}</div>)
+                    : autofill.startDate
+                      ? <div style={{ fontSize: 11, color: '#1E9E3A', marginTop: 4 }}>📅 Detectada desde WooCommerce — inicio de suscripción</div>
+                      : <div style={{ fontSize: 11, color: '#ea580c', marginTop: 4 }}>⚠️ Fecha no detectada — completá manualmente</div>
                 )}
               </div>
               {(() => {

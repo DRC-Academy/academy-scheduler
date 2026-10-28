@@ -3,8 +3,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   planOrderEvents, planSubscriptionEvents, buildPlanEvents, eventKey,
+  assignmentProgramDecision, assignmentProgramEvent,
   type WooOrderLite, type WooSubscriptionLite, type StudentLite, type ExistingEvent,
 } from './planOrders';
+import { catalogProduct } from './productCatalog';
 
 const HOY = '2026-10-28';
 const none = () => null;
@@ -148,5 +150,85 @@ describe('buildPlanEvents', () => {
       [1, 'activado', '2027-04-10'],
       [2, 'ampliado', '2027-07-20'],
     ]);
+  });
+});
+
+describe('asignación de un programa de pago único (modal del setter)', () => {
+  const platino = catalogProduct(35658);
+  const dec = (o: Partial<Parameters<typeof assignmentProgramDecision>[0]>) =>
+    assignmentProgramDecision({ product: platino, start: '2026-11-02', currentUntil: null, today: HOY, ...o });
+
+  it('Platino, inicio 02/11/2026 → fin 02/08/2027 y activa', () => {
+    const d = dec({})!;
+    expect(d.planUntil).toBe('2027-08-02');
+    expect(d.finalUntil).toBe('2027-08-02');
+    expect(d.result).toBe('activado');
+    expect(d.manual).toBe(false);
+    expect(d.warning).toBeNull();
+  });
+
+  it('cambiar el inicio a 15/11/2026 → fin 15/08/2027', () => {
+    expect(dec({ start: '2026-11-15' })!.planUntil).toBe('2027-08-15');
+  });
+
+  it('Desbloqueo pago único → inicio + 6 meses', () => {
+    expect(dec({ product: catalogProduct(35652), start: '2026-11-02' })!.finalUntil).toBe('2027-05-02');
+  });
+
+  it('35773 (3 meses) y 35523 (9 meses, 2 personas) también tienen fin', () => {
+    expect(dec({ product: catalogProduct(35773) })!.planUntil).toBe('2027-02-02');
+    expect(dec({ product: catalogProduct(35523) })!.planUntil).toBe('2027-08-02');
+  });
+
+  it('alumno con una fecha manual más lejana → se conserva la suya y avisa', () => {
+    const d = dec({ currentUntil: '2027-12-31' })!;
+    expect(d.result).toBe('conserva_fecha');
+    expect(d.finalUntil).toBe('2027-12-31');
+    expect(d.writes).toBe(false);
+    expect(d.warning).toMatch(/31\/12\/2027/);
+  });
+
+  it('activada antes por el pago (pago + meses) y asignada con inicio posterior → amplía', () => {
+    // Pagó el 13/10 → la automática le dio hasta el 13/07/2027; empieza el 02/11.
+    const d = dec({ currentUntil: '2027-07-13' })!;
+    expect(d.result).toBe('ampliado');
+    expect(d.finalUntil).toBe('2027-08-02');
+  });
+
+  it('fecha de fin editada a mano', () => {
+    const d = dec({ until: '2027-09-15' })!;
+    expect(d.manual).toBe(true);
+    expect(d.planUntil).toBe('2027-08-02');
+    expect(d.finalUntil).toBe('2027-09-15');
+  });
+
+  it('mensual, fraccionado, sin datos o fuera del catálogo → no aplica (modal como hoy)', () => {
+    expect(dec({ product: catalogProduct(35660) })).toBeNull();
+    expect(dec({ product: catalogProduct(36385) })).toBeNull();
+    expect(dec({ product: catalogProduct(35905) })).toBeNull();
+    expect(dec({ product: catalogProduct(8247) })).toBeNull();
+    expect(dec({ start: '' })).toBeNull();
+  });
+
+  it('el evento deja el pedido como aplicado y escribe el alumno', () => {
+    const d = dec({ currentUntil: '2027-07-13' })!;
+    const e = assignmentProgramEvent({
+      product: platino!, decision: d, start: '2026-11-02',
+      student: stu({ manual_active_until: '2027-07-13' }),
+      order: order({ id: 35777, productId: 35658, datePaid: '2026-10-13' }),
+    });
+    expect(e).toMatchObject({ sourceType: 'order', sourceId: 35777, productId: 35658, result: 'ampliado', applies: true, finalUntil: '2027-08-02' });
+    expect(e.studentWrite).toMatchObject({ manual_active_until: '2027-08-02', product_type: 'one_time', woo_product_id: 35658, company_plan_start: '2026-11-02' });
+    expect(e.note).toMatch(/Desde la asignación \(inicio 02\/11\/2026\)/);
+    // Y el webhook que llegue después lo ve como ya procesado.
+    const [w] = planOrderEvents(order({ id: 35777, productId: 35658, datePaid: '2026-10-13' }), stu({ manual_active_until: '2027-08-02' }),
+      () => ({ result: e.result, applied_at: 'x' }), HOY);
+    expect(w.result).toBe('ya_procesado');
+  });
+
+  it('conserva fecha → el evento no toca manual_active_until', () => {
+    const d = dec({ currentUntil: '2027-12-31' })!;
+    const e = assignmentProgramEvent({ product: platino!, decision: d, start: '2026-11-02', student: stu({ manual_active_until: '2027-12-31' }), order: null });
+    expect(e.studentWrite).not.toHaveProperty('manual_active_until');
   });
 });
