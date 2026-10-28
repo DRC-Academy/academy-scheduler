@@ -70,7 +70,7 @@ describe('planTypeLabel', () => {
   });
   it('empresa, antiguo y manual', () => {
     expect(planTypeLabel({ productName: 'Empresas Ingles General — B1 · 6 Meses', isCompany })).toBe('Empresa');
-    expect(planTypeLabel({ productName: 'Curso de inglés general - 2h semanales', isCompany })).toBe('Plan antiguo');
+    expect(planTypeLabel({ productName: 'Curso de inglés general - 2h semanales', isCompany })).toBeNull();
     expect(planTypeLabel({ isOritalk: true, isCompany })).toBe('Manual');
     expect(planTypeLabel({ manualActiveUntil: '2026-12-31', isCompany })).toBe('Manual');
     expect(planTypeLabel({ isCompany })).toBeNull();

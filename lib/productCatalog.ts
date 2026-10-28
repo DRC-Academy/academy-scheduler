@@ -123,7 +123,7 @@ export function quotaWeeklyHours(assignmentWeeklyHours: number, wooProductId: un
 
 // ── Etiqueta de tipo de plan (panel de admin) ────────────────────────────────
 
-export type PlanTypeLabel = 'Programa único' | 'Programa fraccionado' | 'Mensual' | 'Plan antiguo' | 'Empresa' | 'Manual';
+export type PlanTypeLabel = 'Programa único' | 'Programa fraccionado' | 'Mensual' | 'Empresa' | 'Manual';
 
 export interface PlanTypeInput {
   wooProductId?: number | null;
@@ -141,8 +141,9 @@ export interface PlanTypeInput {
  *   · producto del catálogo → Programa único / Programa fraccionado / Mensual
  *   · producto de empresa → Empresa
  *   · sin producto de Woo pero con acceso puesto a mano (manual u Oritalk) → Manual
- *   · cualquier otro producto de Woo → Plan antiguo
- *   · nada de nada → null (no se pinta)
+ *   · cualquier otro producto de Woo (plan antiguo) → null: Facundo no quiere
+ *     ese badge (28/10/2026), así que no se pinta nada
+ *   · nada de nada → null
  */
 export function planTypeLabel(s: PlanTypeInput): PlanTypeLabel | null {
   const c = catalogProduct(s.wooProductId);
@@ -151,9 +152,9 @@ export function planTypeLabel(s: PlanTypeInput): PlanTypeLabel | null {
   if (c?.kind === 'mensual') return 'Mensual';
   const name = (s.productName ?? '').trim() || (s.plan ?? '').trim();
   if (name && s.isCompany(name)) return 'Empresa';
-  if ((s.productName ?? '').trim()) return 'Plan antiguo';
+  if ((s.productName ?? '').trim()) return null;
   if (s.isOritalk || (s.manualActiveUntil ?? '').trim()) return 'Manual';
-  return name ? 'Plan antiguo' : null;
+  return null;
 }
 
 export function planTypeLabelStyle(label: PlanTypeLabel): { color: string; bg: string } {
