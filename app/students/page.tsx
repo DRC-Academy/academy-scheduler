@@ -13,7 +13,9 @@ import { dbCheckStudentExists, dbSetStudentManualActive, dbActivateOneTimeAccess
 // usa para saber qué opciones ofrecer en el menú, nunca para pintar el badge (eso
 // sale siempre de subBadge, que lee la respuesta de /api/check-subscription).
 import { isUntilActive, madridToday, isPausedStatus } from '@/lib/subscriptionAccess';
-import { classifyFor, planBadgeStyle } from '@/lib/productUtils';
+import { classifyFor, planBadgeStyle, isCompanyProduct, baseProductName } from '@/lib/productUtils';
+import { planTypeLabel, planTypeLabelStyle } from '@/lib/productCatalog';
+import { PlanOfferAlerts } from '@/components/admin/PlanOfferAlerts';
 import { isAssignableCell, withBaseState } from '@/lib/cells';
 import { useGridSaver, conflictMessage, calendarErrorMessage } from '@/lib/useGridSaver';
 import { isOffCalendar, removalText } from '@/lib/offCalendar';
@@ -75,6 +77,8 @@ interface DisplayStudent {
   companyPlanMonths?: number;
   isOritalk?: boolean;
   oritalkUntil?: string;
+  /** Producto de la oferta nueva (students.woo_product_id). Ver lib/productCatalog. */
+  wooProductId?: number;
   inStudentsTable: boolean;
   createdAt: string;
 }
@@ -689,7 +693,7 @@ function StudentsContent() {
   const allStudents = useMemo<DisplayStudent[]>(() => {
     const map = new Map<string, DisplayStudent>();
     for (const s of students) {
-      map.set(s.id, { id: s.id, name: s.name, email: s.email, level: s.level, plan: s.plan ?? '', phone: s.phone ?? '', productType: s.productType, productName: s.productName, manualActiveUntil: s.manualActiveUntil, companyPlanMonths: s.companyPlanMonths, isOritalk: s.isOritalk, oritalkUntil: s.oritalkUntil, inStudentsTable: true, createdAt: s.createdAt });
+      map.set(s.id, { id: s.id, name: s.name, email: s.email, level: s.level, plan: s.plan ?? '', phone: s.phone ?? '', productType: s.productType, productName: s.productName, manualActiveUntil: s.manualActiveUntil, companyPlanMonths: s.companyPlanMonths, isOritalk: s.isOritalk, oritalkUntil: s.oritalkUntil, wooProductId: s.wooProductId, inStudentsTable: true, createdAt: s.createdAt });
     }
     const studentMatchesAssignment = (s: Student, a: Assignment) =>
       a.studentId === s.id ||
@@ -998,6 +1002,9 @@ function StudentsContent() {
           </div>
         </div>
 
+        {/* Avisos de la oferta nueva (productos sin regla, pedidos sin alumno…). Solo admin. */}
+        {user?.role === 'admin' && <PlanOfferAlerts />}
+
         {/* Search — ancho completo en mobile, acotado en desktop */}
         <div style={{ marginBottom: 12 }}>
           <input value={search} onChange={e => { setSearch(e.target.value); setVisibleCount(50); }} placeholder="Buscar por nombre o email..."
@@ -1073,6 +1080,16 @@ function StudentsContent() {
                   { plan: s.plan ?? null, productName: planText === '—' ? null : planText },
                 );
                 const clsStyle = planBadgeStyle(cls.type);
+                // Tipo de plan (oferta nueva / antiguo / empresa / manual). Solo
+                // informativo: no decide acceso ni cupo. Ver lib/productCatalog.
+                const planType = planTypeLabel({
+                  wooProductId: s.wooProductId ?? null, productName: s.productName ?? null, plan: s.plan ?? null,
+                  isOritalk: s.isOritalk ?? null, manualActiveUntil: s.manualActiveUntil ?? null,
+                  isCompany: n => isCompanyProduct(baseProductName(n)),
+                });
+                const planTypeStyle = planType ? planTypeLabelStyle(planType) : null;
+                // Programa fraccionado: su fin es el end_date de la suscripción.
+                const programEnd = subInfo[s.email?.trim().toLowerCase() ?? '']?.programEndDate ?? null;
                 const menuOpen = menuOpenId === s.id;
                 const hasPhone = !!s.phone?.trim();
                 // Semáforo de la ficha y cuenta atrás del plan. Los dos salen de
@@ -1229,7 +1246,17 @@ function StudentsContent() {
                           {cls.badge}
                         </span>
                       )}
+                      {planType && planTypeStyle && (
+                        <span title="Tipo de plan" style={{ fontSize: 10.5, fontWeight: 700, padding: '1px 8px', borderRadius: 10, background: planTypeStyle.bg, color: planTypeStyle.color, whiteSpace: 'nowrap' }}>
+                          {planType}
+                        </span>
+                      )}
                     </div>
+                    {programEnd && (
+                      <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 6 }}>
+                        🎓 Fin del programa: <b style={{ color: 'var(--text-primary)' }}>{longDate(programEnd)}</b>
+                      </div>
+                    )}
 
                     {/* Fila terciaria: profesor · horarios, o "sin profesor" */}
                     <div style={{ fontSize: 12.5, marginTop: 6 }}>

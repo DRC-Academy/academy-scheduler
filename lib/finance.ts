@@ -54,6 +54,7 @@ import {
   type ClassTranscriptRef, type TranscriptState, type TranscriptStatusResult,
 } from '@/lib/transcriptDeadline';
 import { isStudentAbsence, isStudentLostClass } from '@/lib/classTypes';
+import { quotaWeeklyHours } from '@/lib/productCatalog';
 
 export {
   transcriptStateOf, transcriptNeedsTeacher, transcriptStateBadge,
@@ -962,8 +963,15 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
 
   // Límite mensual por alumno (solo clases cobrables normal/recuperacion). Las
   // aprobadas manualmente nunca pasan a 'excede_limite'.
+  //
+  // OFERTA NUEVA (oct/2026): si el alumno tiene un producto del catálogo, el cupo
+  // sale de las horas semanales de SU PLAN, no de las casillas del calendario
+  // (quotaWeeklyHours). Cualquier otro alumno, exactamente como antes.
   const limitByStudent = new Map<string, number>();
-  for (const a of myAssignments) limitByStudent.set(nkey(a.studentName), monthlyLimit(a.weeklyHours ?? 0));
+  const wooProductOf = new Map((input.students ?? []).map(s => [s.id, s.wooProductId] as const));
+  for (const a of myAssignments) {
+    limitByStudent.set(nkey(a.studentName), monthlyLimit(quotaWeeklyHours(a.weeklyHours ?? 0, wooProductOf.get(a.studentId))));
+  }
 
   // El límite mensual del plan lo consumen las clases normales, las de
   // recuperación y las CLASES QUE EL ALUMNO PERDIÓ — faltas sin aviso y

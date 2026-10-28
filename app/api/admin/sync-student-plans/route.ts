@@ -13,6 +13,9 @@ import { supabase } from '@/lib/supabase';
 // suscripción a 8 alumnos que el otro marcaba como pago único.
 import { detectLevel, isOneTimeProduct } from '@/lib/productUtils';
 import { hasPauseItem } from '@/lib/subscriptionAccess';
+// Oferta nueva: con un producto del catálogo el tipo sale del ID (si no, un
+// programa de pago único volvía a quedar como 'subscription' al sincronizar).
+import { productTypeFor } from '@/lib/productCatalog';
 
 const TIMEOUT_MS = 10_000;
 
@@ -64,7 +67,7 @@ async function fetchProduct(c: { base: string; ck: string; cs: string }, email: 
     return {
       productName: name,
       productFullName: fullName,
-      productType: isOneTimeProduct(name) ? 'one_time' : 'subscription',
+      productType: productTypeFor(li?.product_id, li?.variation_id, () => isOneTimeProduct(name) ? 'one_time' : 'subscription'),
       detectedLevel: detectLevel(fullName, metaData),
       isPause: hasPauseItem([li]),
     };

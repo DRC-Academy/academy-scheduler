@@ -24,6 +24,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 // Secreto en tiempo constante + cliente ADMIN de Supabase (sin él, 500).
 import { after } from 'next/server';
 import { sweepPaymentHolds } from '@/lib/paymentHoldStore';
+import { syncPlanOrders } from '@/lib/planOrderStore';
 import { requireCronSecret, requireAdminClient } from '@/lib/cronAuth';
 import { guardarScoringV2 } from '@/lib/teacherScoreLoad';
 import {
@@ -91,6 +92,18 @@ export async function GET(request: Request): Promise<Response> {
       // de lunes a sábado de día). Ver lib/paymentHoldStore.
       const r = await sweepPaymentHolds(supabase);
       console.log(`[cron ending-plans] pago pendiente: ${r.enEsperaEnWoo} en Woo, ${r.abiertos.length} abierto(s), ${r.cerrados.length} cerrado(s), ${r.avisos.enviados} aviso(s), ${r.errores.length} error(es).`);
+      // Oferta nueva: respaldo diario del webhook "Pedido actualizado" (pedidos
+      // de pago único que activar, planes que apuntar para el cupo, avisos). Mira
+      // 45 días atrás; lo anterior a AUTO_SINCE solo entra por la puesta al día
+      // manual del admin. Ver lib/planOrders.
+      try {
+        const desde = new Date(Date.now() - 45 * 86_400_000).toISOString().slice(0, 10);
+        const p = await syncPlanOrders(supabase, { apply: true, since: desde, today, autoOnly: true });
+        const cambios = p.events.filter(e => e.result !== 'ya_procesado');
+        console.log(`[cron ending-plans] oferta nueva: ${cambios.length} evento(s) nuevo(s)${cambios.length ? ` (${cambios.map(e => `${e.sourceType} ${e.sourceId}→${e.result}`).join(', ')})` : ''}, ${p.errors.length} error(es).`);
+      } catch (err) {
+        console.error('[cron ending-plans] oferta nueva: no se pudo barrer:', err);
+      }
     });
   }
 

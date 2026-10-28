@@ -16,6 +16,9 @@ import {
 import {
   accessOverrideOf, isActiveWooStatus, madridToday, resolveWooSubscriptions, hasPauseItem,
 } from '@/lib/subscriptionAccess';
+// Oferta nueva (oct/2026): el tipo de un producto del catálogo sale de su ID, no
+// del nombre. Para cualquier otro producto, productTypeFor devuelve lo de siempre.
+import { catalogProduct, productTypeFor } from '@/lib/productCatalog';
 
 // La lista de productos de PAGO ÚNICO vive en lib/productUtils.isOneTimeProduct:
 // era una constante local duplicada en sync-student-plans, y las dos copias ya
@@ -49,6 +52,12 @@ interface SubResult {
   billingName: string | null;            // nombre del cliente (billing) para autocompletar
   subscriptionStartDate: string | null;  // 'YYYY-MM-DD' — inicio de la suscripción / compra
   detectedLevel: string | null;          // nivel A1–C2 detectado del producto/meta
+  /**
+   * Fin del PROGRAMA FRACCIONADO de la oferta nueva ('YYYY-MM-DD', end_date de su
+   * suscripción). null en cualquier otro plan. Va aparte de `endDate` a propósito:
+   * `endDate` lo leen los planes de siempre y no puede cambiar para ellos.
+   */
+  programEndDate: string | null;
 }
 
 interface RichProduct {
@@ -76,7 +85,7 @@ const ERROR_RESULT: SubResult = {
   productType: null, hoursFromApi: null, manualActiveUntil: null, oritalkUntil: null,
   companyPlanMonths: null, companyPlanStart: null,
   metaData: [], phone: null,
-  billingName: null, subscriptionStartDate: null, detectedLevel: null,
+  billingName: null, subscriptionStartDate: null, detectedLevel: null, programEndDate: null,
 };
 
 // Convierte una fecha WooCommerce (ISO / 'YYYY-MM-DD HH:mm:ss') a 'YYYY-MM-DD'.
@@ -97,7 +106,7 @@ function billingNameFrom(billing: any): string | null {
 // Cache en memoria (por instancia serverless): 5 min por email.
 const TTL_MS = 5 * 60 * 1000;
 const productCache = new Map<string, { product: RichProduct; ts: number }>();
-const subCache     = new Map<string, { result: { active: boolean; status: string; endDate: string | null; daysRemaining: number | null; phone: string | null; planName: string | null; startDate: string | null }; ts: number }>();
+const subCache     = new Map<string, { result: { active: boolean; status: string; endDate: string | null; daysRemaining: number | null; phone: string | null; planName: string | null; startDate: string | null; programEndDate: string | null }; ts: number }>();
 
 const MAX_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 500;
@@ -183,7 +192,7 @@ async function fetchLastProduct(c: { base: string; ck: string; cs: string }, ema
   const broad = `${name} ${metaData.map((m: any) => m?.display_value ?? m?.value ?? '').join(' ')}`;
   const hours = parseHoursFromMeta(metaData) ?? parseHoursFromText(variation) ?? parseHoursFromText(name) ?? parseHoursFromText(broad);
 
-  const productType: ProductType = isOneTimeProduct(name) ? 'one_time' : 'subscription';
+  const productType: ProductType = productTypeFor(li?.product_id, li?.variation_id, () => isOneTimeProduct(name) ? 'one_time' : 'subscription');
   return { name, variation, fullName, hours, metaData, productType, billingName, orderDate, isPause: hasPauseItem([li]) };
 }
 
@@ -194,7 +203,7 @@ async function fetchSubStatus(c: { base: string; ck: string; cs: string }, email
     `&consumer_key=${encodeURIComponent(c.ck)}&consumer_secret=${encodeURIComponent(c.cs)}`;
   const subs = await fetchWoo(url, email, 'subscriptions');
   if (subs.length === 0) {
-    return { active: false, status: 'not_found', endDate: null, daysRemaining: null, phone: null, planName: null, startDate: null };
+    return { active: false, status: 'not_found', endDate: null, daysRemaining: null, phone: null, planName: null, startDate: null, programEndDate: null };
   }
   // Más reciente por start_date; se prioriza una que dé acceso si existe.
   const byRecent = [...subs].sort((a, b) => {
@@ -214,6 +223,12 @@ async function fetchSubStatus(c: { base: string; ck: string; cs: string }, email
   const startDate = toDateStr(firstNonEmpty(chosen?.start_date, chosen?.date_created));
   const planName = (Array.isArray(chosen?.line_items) && typeof chosen.line_items[0]?.name === 'string') ? chosen.line_items[0].name : null;
   const phone = (typeof chosen?.billing?.phone === 'string' && chosen.billing.phone.trim()) ? chosen.billing.phone.trim() : null;
+  // Programa fraccionado: su fin es el end_date de la suscripción. La API v3 solo
+  // trae `end_date_gmt` (no `end_date`), y se lee SOLO para productos del catálogo.
+  const li0 = Array.isArray(chosen?.line_items) ? chosen.line_items[0] : null;
+  const programEndDate = catalogProduct(li0?.product_id, li0?.variation_id)?.kind === 'fraccionado'
+    ? (typeof chosen?.end_date_gmt === 'string' && /^\d{4}-\d{2}-\d{2}/.test(chosen.end_date_gmt) ? chosen.end_date_gmt.slice(0, 10) : null)
+    : null;
   return {
     // 'active' y 'pending-cancel' dan acceso; 'paused', 'on-hold', 'cancelled' y
     // 'expired' no. El criterio vive en lib/subscriptionAccess y lo comparten el
@@ -222,7 +237,7 @@ async function fetchSubStatus(c: { base: string; ck: string; cs: string }, email
     status,
     endDate: endDate ? endDate.toISOString() : null,
     daysRemaining: endDate ? daysFromNow(endDate) : null,
-    phone, planName, startDate,
+    phone, planName, startDate, programEndDate,
   };
 }
 
@@ -489,7 +504,7 @@ async function check(request: Request): Promise<Response> {
     planName: productName, productName, productVariation, productFullName,
     productType, hoursFromApi, manualActiveUntil: null, oritalkUntil,
     companyPlanMonths, companyPlanStart, metaData, phone: null,
-    billingName, subscriptionStartDate: orderDate, detectedLevel,
+    billingName, subscriptionStartDate: orderDate, detectedLevel, programEndDate: null,
     ...o,
   });
 
@@ -542,5 +557,6 @@ async function check(request: Request): Promise<Response> {
   return Response.json(make({
     active: sub.active, status: sub.status, endDate: sub.endDate, daysRemaining: sub.daysRemaining, phone: sub.phone,
     subscriptionStartDate: sub.startDate ?? orderDate,
+    programEndDate: sub.programEndDate ?? null,
   }));
 }

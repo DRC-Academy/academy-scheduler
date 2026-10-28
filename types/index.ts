@@ -199,6 +199,10 @@ export interface Student {
   salesContactedBy?: string;     // quién lo marcó (nombre de la sesión)
   salesContactForDate?: string;  // 'YYYY-MM-DD' — fin del ciclo gestionado
   isTest?: boolean;              // alumno de PRUEBA (students.is_test). Ver lib/testAccounts.ts
+  // Producto de la OFERTA NUEVA que tiene el alumno (ID de Woo, students.woo_product_id).
+  // Lo escribe solo la activación de pedidos (lib/planOrders). Con un producto del
+  // catálogo, el cupo mensual sale de sus horas semanales (lib/productCatalog).
+  wooProductId?: number;
   createdAt: string;
 }
 

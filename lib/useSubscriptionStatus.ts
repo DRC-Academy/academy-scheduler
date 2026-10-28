@@ -44,6 +44,8 @@ export interface SubscriptionInfo {
    * El endpoint ya lo devolvía; sin traerlo hasta acá el badge no podía decirlo.
    */
   subscriptionStartDate: string | null;
+  /** Fin del programa fraccionado de la oferta nueva ('YYYY-MM-DD'). null en cualquier otro plan. */
+  programEndDate: string | null;
   fetchedAt: number;
 }
 
@@ -65,7 +67,7 @@ const NO_EMAIL: SubscriptionInfo = {
   active: null, status: 'no_email', daysRemaining: null, endDate: null,
   productType: null, productName: null, manualActiveUntil: null, oritalkUntil: null,
   companyPlanMonths: null, companyPlanStart: null,
-  subscriptionStartDate: null, fetchedAt: 0,
+  subscriptionStartDate: null, programEndDate: null, fetchedAt: 0,
 };
 
 // Verifica la suscripción de un email. Usa cache (5 min) salvo `force`.
@@ -96,12 +98,13 @@ export async function checkSubscription(email?: string | null, force = false): P
       companyPlanMonths: data.companyPlanMonths ?? null,
       companyPlanStart:  data.companyPlanStart ?? null,
       subscriptionStartDate: data.subscriptionStartDate ?? null,
+      programEndDate:    data.programEndDate ?? null,
       fetchedAt:         Date.now(),
     };
     subscriptionCache.set(e, info);
     return info;
   } catch {
-    return { active: null, status: 'error', daysRemaining: null, endDate: null, productType: null, productName: null, manualActiveUntil: null, oritalkUntil: null, companyPlanMonths: null, companyPlanStart: null, subscriptionStartDate: null, fetchedAt: Date.now() };
+    return { active: null, status: 'error', daysRemaining: null, endDate: null, productType: null, productName: null, manualActiveUntil: null, oritalkUntil: null, companyPlanMonths: null, companyPlanStart: null, subscriptionStartDate: null, programEndDate: null, fetchedAt: Date.now() };
   }
 }
 

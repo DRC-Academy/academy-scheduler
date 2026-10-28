@@ -818,6 +818,9 @@ export async function dbGetStudents(): Promise<Student[]> {
     salesContactForDate: row.sales_contact_for_date ?? undefined,
     // Alumno de prueba (students.is_test). Sin la columna → false.
     isTest:            row.is_test === true,
+    // Producto de la oferta nueva (2026-10-28-oferta-nueva.sql). Sin la columna →
+    // undefined, y el cupo sale de las casillas como siempre.
+    wooProductId:      row.woo_product_id != null ? Number(row.woo_product_id) : undefined,
     createdAt:         row.created_at,
   }));
 }

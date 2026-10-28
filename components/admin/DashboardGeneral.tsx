@@ -57,6 +57,7 @@ import {
 // La misma pantalla en el teléfono: recibe los números de acá, no calcula nada.
 import { DashboardMovil, type DashboardDatos } from './DashboardMovil';
 import TeacherUsageDashboard from './TeacherUsageDashboard';
+import { PlanOfferSyncPanel } from './PlanOfferSyncPanel';
 import {
   dbAuditStudentAssignments, dbRelinkAssignment, dbSyncAssignmentName, dbMergeDuplicateStudents,
   dbSyncStudentAssignments, dbDiagnoseAllCalendars, dbSyncAllCalendarsToAssignments, dbCreateFullLink,
@@ -1504,6 +1505,7 @@ export default function DashboardGeneral() {
             <PlanSyncPanel />
             <StartDateSyncPanel />
             <CompanyPlanSyncPanel />
+            <PlanOfferSyncPanel />
           </AdminTool>
 
           <AdminTool title="Estilo de los textos de IA"

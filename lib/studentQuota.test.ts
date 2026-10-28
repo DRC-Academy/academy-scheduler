@@ -187,3 +187,33 @@ describe('recuperación de una clase cancelada por el profesor', () => {
     expect(fin.rows.filter(r => r.classType === 'recuperacion').every(r => r.status === 'pagable')).toBe(true);
   });
 });
+
+// Oferta nueva (oct/2026): con un producto del catálogo, el cupo sale de las
+// horas del PLAN, no de las casillas. Judith (Acelerado, 3 h) tenía 4 casillas.
+describe('cupo de la oferta nueva', () => {
+  const a = alumno('Judith', [
+    { day: 'Lunes', hour: '10:00' }, { day: 'Martes', hour: '10:00' },
+    { day: 'Miércoles', hour: '10:00' }, { day: 'Jueves', hour: '10:00' },
+  ]);
+  const base = {
+    teacherId: T, teacherName: 'Prof', monthYear: MES, assignments: [a],
+    joinLogs: [log('Judith', MARTES[0])], classRecords: [], classAnalyses: [tx('Judith', MARTES[0])],
+    rates, scoringEvents: [], teacherBonuses: [], manualApprovals: [], payment: null,
+    gridOccupancy: EMPTY_GRID_OCCUPANCY,
+  };
+
+  it('sin producto: 4 casillas → 18, como siempre', () => {
+    const fin = calculateTeacherFinance({ ...base, students: [student('Judith')] });
+    expect(studentQuotaOf(fin, 'Judith')!.limit).toBe(18);
+  });
+
+  it('Programa Acelerado (35655): 3 h → 14, tenga las casillas que tenga', () => {
+    const fin = calculateTeacherFinance({ ...base, students: [{ ...student('Judith'), wooProductId: 35655 }] });
+    expect(studentQuotaOf(fin, 'Judith')!.limit).toBe(14);
+  });
+
+  it('producto sin datos (Plan Maria Ahumada): no cambia nada', () => {
+    const fin = calculateTeacherFinance({ ...base, students: [{ ...student('Judith'), wooProductId: 35986 }] });
+    expect(studentQuotaOf(fin, 'Judith')!.limit).toBe(18);
+  });
+});
