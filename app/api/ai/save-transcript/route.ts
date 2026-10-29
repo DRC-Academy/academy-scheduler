@@ -20,6 +20,8 @@ import {
 } from '@/lib/transcriptStore';
 import { logUsageEvent } from '@/lib/usageEvents';
 import { after } from 'next/server';
+import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
+import { resolveTranscriptNotices } from '@/lib/transcriptNotices';
 import { runSegmentsInBackground } from '@/lib/testimonialSegmentsStore';
 
 export const runtime = 'nodejs';
@@ -103,6 +105,12 @@ export async function POST(request: Request): Promise<Response> {
     console.error('[save-transcript] No se pudo guardar el transcript:', saved.error);
     return Response.json({ error: saved.error ?? 'No se pudo guardar la transcripción.' }, { status: 500 });
   }
+
+  // Transcript subido: los avisos de campanita de esta clase (plazo, sin estado)
+  // quedan resueltos ANTES de responder, para que la campanita que se recarga al
+  // recibir la respuesta ya no los cuente. Nunca lanza.
+  const adminDb = getSupabaseAdmin();
+  if (adminDb) await resolveTranscriptNotices(adminDb, { teacherId: body.teacherId, studentName, classDate });
 
   // Hora de la PRIMERA subida, para el dashboard de uso: `analyzed_at` se
   // reescribe al reemplazar el transcript y la tabla no tiene created_at, así que

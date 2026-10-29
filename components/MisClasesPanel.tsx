@@ -23,7 +23,7 @@ import {
 // Plazo de 24 h del transcript: fuente única para esta vista, la ficha,
 // Asistencias y Finanzas. Acá se pinta la cuenta regresiva y la vencida.
 import {
-  getTranscriptStatus, reopenedDeadlineFor, transcriptDeadlineBadge, uploadedAtLabel, hoursLeftLabel, countdownLabel,
+  transcriptStatusForClass, transcriptStatusNeedsTeacher, reopenedDeadlineFor, transcriptDeadlineBadge, uploadedAtLabel, hoursLeftLabel, countdownLabel,
   TRANSCRIPT_WARN_HOURS, type TranscriptStatusResult,
 } from '@/lib/transcriptDeadline';
 import { planFieldsOf } from '@/lib/productUtils';
@@ -413,7 +413,7 @@ function sinEstadoKey(date: string, hour: number | string, name: string): string
 }
 
 // ─── Teacher Upcoming Classes Tab ─────────────────────────────────────────────
-export function MisClasesPanel({ teacher, myAssignments, students, classRecords, classAnalyses, classJoinLogs, grid, onGridChange, updateMeetLink, logClassJoin, addRescheduleRecord, addRescheduleSplit, registerClassRecord, onDataChanged, formIndex, refreshFormIndex }: {
+export function MisClasesPanel({ teacher, myAssignments, students, classRecords, classAnalyses, classJoinLogs, grid, onGridChange, updateMeetLink, logClassJoin, addRescheduleRecord, addRescheduleSplit, registerClassRecord, onDataChanged, formIndex, refreshFormIndex, dataReady = true }: {
   teacher: Teacher;
   myAssignments: Assignment[];
   students: Student[];
@@ -434,6 +434,12 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
   registerClassRecord: (teacherId: string, studentName: string, date: string, time: string | undefined, screenshotFile: File | null, classType?: import('@/types').ClassRecordType, comment?: string, recoveryForDate?: string) => Promise<void>;
   formIndex: FormIndex;
   refreshFormIndex: () => void;
+  /**
+   * ¿Ya llegaron los transcripts, ingresos y constancias (TeachersContext.
+   * financeLoaded)? Hasta entonces esas listas están vacías y el pop-up, el banner
+   * y el contador de "sin transcript" dirían que faltan TODOS: esperan.
+   */
+  dataReady?: boolean;
 }) {
   const [rescheduleModal, setRescheduleModal] = useState<{ c: TodayClass; date: string } | null>(null);
   const [savingReschedule, setSavingReschedule] = useState(false);
@@ -683,15 +689,20 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
 
   /**
    * Estado de la clase frente al PLAZO de 24 h: subido / pendiente (con la
-   * cuenta regresiva) / vencido. Corre desde el fin de la sesión y respeta la
-   * reapertura del admin guardada en el ingreso.
+   * cuenta regresiva) / vencido / no aplica (falta del alumno). Corre desde el
+   * fin de la sesión y respeta la reapertura del admin guardada en el ingreso.
+   * Regla común de lib/transcriptDeadline (transcriptStatusForClass): la misma que
+   * la ficha, la campanita y el email.
    */
   function deadlineOf(c: TodayClass, date: string): TranscriptStatusResult {
-    return getTranscriptStatus({
-      date, startHour: c.startHourNum, durationHours: c.durationHours,
+    const logs = joinLogsOf(c, date);
+    return transcriptStatusForClass({
+      analyses: classAnalyses, records: classRecords,
+      teacherId: teacher.id, studentName: c.studentName, date,
+      startHour: c.startHourNum, durationHours: c.durationHours,
+      joinLogIds: logs.map(l => l.id),
       classType: c.isRecovery ? 'recuperacion' : 'normal',
-      transcript: transcriptOf(c, date),
-      reopenedDeadlineAt: reopenedDeadlineFor(joinLogsOf(c, date)),
+      reopenedDeadlineAt: reopenedDeadlineFor(logs),
       now: refDate.getTime(),
     });
   }
@@ -700,10 +711,11 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
    * ¿Esta clase espera algo del PROFESOR respecto al transcript? Solo si falta o
    * se lo rechazaron. Una clase con el transcript en revisión ya está hecha de su
    * lado y no puede seguir contándose entre "las que le faltan": eso es lo que le
-   * hacía repegar transcripts que ya estaban guardados.
+   * hacía repegar transcripts que ya estaban guardados. Una falta del alumno
+   * tampoco: no lleva transcript.
    */
   function needsTranscriptFor(c: TodayClass, date: string) {
-    return transcriptNeedsTeacher(transcriptStateOf(transcriptOf(c, date)));
+    return transcriptStatusNeedsTeacher(deadlineOf(c, date));
   }
 
   /**
@@ -740,7 +752,12 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
   // El período de esta pantalla se arma SIN los episodios a propósito: si no,
   // desaparecerían y el profesor no sabría por qué.
   const [holds, setHolds] = useState<PaymentHold[]>([]);
-  useEffect(() => { dbGetPaymentHolds().then(setHolds).catch(() => {}); }, []);
+  // Hasta que llegan, una clase en pago pendiente parecería una clase normal sin
+  // transcript: el pop-up y el banner esperan (también si la lectura falla).
+  const [holdsReady, setHoldsReady] = useState(false);
+  useEffect(() => {
+    dbGetPaymentHolds().then(setHolds).catch(() => {}).finally(() => setHoldsReady(true));
+  }, []);
   /**
    * ¿Clase bloqueada por pago pendiente?
    *   · Ya empezada → lo dicen los episodios guardados (cómo estaba ENTONCES).
@@ -821,9 +838,15 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
   const passedCount  = allVisible.filter(x => statusOf(x.c, x.iso) === 'passed').length;
   const pendingCount = allVisible.length - passedCount;
 
+  // Los avisos de "te falta el transcript" (banner, contador, pop-up) solo se
+  // calculan con los datos ya cargados: antes de eso no hay transcripts ni
+  // constancias en memoria y TODAS las clases parecerían sin transcript. Eso es
+  // lo que hacía que el pop-up listara clases ya subidas al abrir la app.
+  const avisosListos = relojListo && dataReady && holdsReady;
+
   // Clases dadas que siguen sin transcript: es lo que le falta al profesor para
   // que cuenten en su pago, así que se avisa arriba del todo.
-  const missingTranscripts = allVisible.filter(
+  const missingTranscripts = !avisosListos ? [] : allVisible.filter(
     x => statusOf(x.c, x.iso) === 'passed' && isRealClass(x.c, x.iso) && needsTranscriptFor(x.c, x.iso),
   );
 
@@ -834,7 +857,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
   // el pop-up de una vez por sesión.
   const nowMs = refDate.getTime();
   const urgentClasses = useMemo(() => {
-    if (!relojListo) return [] as Array<{ c: TodayClass; iso: string; deadline: TranscriptStatusResult }>;
+    if (!avisosListos) return [] as Array<{ c: TodayClass; iso: string; deadline: TranscriptStatusResult }>;
     const out: Array<{ c: TodayClass; iso: string; deadline: TranscriptStatusResult }> = [];
     for (let back = 10; back >= 0; back--) {
       const iso = addDaysIso(todayIso, -back);
@@ -846,7 +869,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [relojListo, todayIso, myAssignments, grid, classRecords, classAnalyses, classJoinLogs, nowMs, holds, subInfo]);
+  }, [avisosListos, todayIso, myAssignments, grid, classRecords, classAnalyses, classJoinLogs, nowMs, holds, subInfo]);
 
   // Pop-up de una vez por sesión con esas clases y el botón directo "Subir
   // transcript". No depende del cron: se decide al entrar a esta pantalla. La

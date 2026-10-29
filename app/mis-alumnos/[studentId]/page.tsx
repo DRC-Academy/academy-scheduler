@@ -202,7 +202,7 @@ function StudentPageContent() {
   // Clases a las que el profe entró y todavía no tienen transcript.
   const pending = pendingClassesFor({
     studentName: a.studentName, teacherId: teacher.id,
-    joinLogs: classJoinLogs, analyses,
+    joinLogs: classJoinLogs, analyses, records: classRecords,
   });
 
   return (

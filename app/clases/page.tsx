@@ -27,7 +27,7 @@ const EMPTY_FORM_INDEX: FormIndex = { byId: new Map(), byName: new Map() };
 function ClasesContent() {
   const { user } = useAuth();
   const {
-    teachers, students, classRecords, classAnalyses, classJoinLogs,
+    teachers, students, classRecords, classAnalyses, classJoinLogs, financeLoaded,
     updateMeetLink, logClassJoin, addRescheduleRecord, addRescheduleSplit, registerClassRecord,
     loadFinanceData, reloadAll,
   } = useTeachers();
@@ -135,6 +135,7 @@ function ClasesContent() {
               onDataChanged={loadFinanceData}
               formIndex={formIndex}
               refreshFormIndex={refreshFormIndex}
+              dataReady={financeLoaded}
             />
           )}
         </div>

@@ -473,9 +473,18 @@ function MyClassesTab({ teacher, myAssignments }: { teacher: Teacher; myAssignme
     transcript: string, classType: ClassRecordType, comment: string,
     transcriptHashValue: string, replaceId: string | null,
   ) {
+    // Abierta desde una clase concreta de la lista: el transcript se VINCULA a su
+    // ingreso, como desde Mis clases. Sin el vínculo, si el profesor dejaba la
+    // fecha de hoy (la de subida) el transcript quedaba un día corrido y la clase
+    // salía sin transcript en Mis clases aunque finanzas la diera por subida.
+    // Solo si sigue siendo ESA clase: si cambió el alumno o la fecha, no hay vínculo.
+    const desdeLaFila = addPrefill && addPrefill.studentName === studentName && addPrefill.date === date
+      ? finance.rows.find(r => r.studentName === studentName && r.date === date)
+      : undefined;
     const result = await saveTeacherClass({
       teacher, myAssignments, studentName, date, time, transcript, classType, comment,
       transcriptHash: transcriptHashValue, replaceId, registerClassRecord,
+      joinLogId: desdeLaFila?.joinLogId ?? null,
     });
     if (result.notice) setValidationNotice(result.notice);
     // Solo se vuelve a avisar si el informe falla: si sale bien, no hay nada que

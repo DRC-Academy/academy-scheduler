@@ -32,6 +32,8 @@ import {
 } from '@/lib/transcriptAnalysis';
 import { enqueueAnalysis } from '@/lib/analysisBatch';
 import { after } from 'next/server';
+import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
+import { resolveTranscriptNotices } from '@/lib/transcriptNotices';
 import { runSegmentsInBackground } from '@/lib/testimonialSegmentsStore';
 
 export const runtime = 'nodejs';
@@ -161,6 +163,12 @@ async function handleSaveWithAnalysis(body: Body, studentName: string): Promise<
   if (saved.error || !saved.id) {
     return Response.json({ error: saved.error ?? 'No se pudo guardar la clase.' }, { status: 500 });
   }
+
+  // Transcript subido: los avisos de campanita de esta clase (plazo, sin estado)
+  // quedan resueltos ANTES de responder, para que la campanita que se recarga al
+  // recibir la respuesta ya no los cuente. Nunca lanza.
+  const adminDb = getSupabaseAdmin();
+  if (adminDb) await resolveTranscriptNotices(adminDb, { teacherId: body.teacherId, studentName, classDate });
 
   // Testimoniales (V6, sin IA): recortes del alumno y su pareja, después de
   // responder. Nunca lanza.

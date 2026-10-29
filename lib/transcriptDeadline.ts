@@ -369,6 +369,86 @@ export function getTranscriptStatus(input: TranscriptStatusInput): TranscriptSta
 
 const finiteOrNull = (n: number): number | null => (Number.isFinite(n) ? n : null);
 
+// ── Las dos preguntas juntas: el estado del transcript de UNA clase ───────────
+//
+// Lo que tiene que usar todo aviso que diga "te falta el transcript" (pop-up,
+// ficha, campanita, email): busca el transcript con findTranscriptFor, mira si
+// la clase es una falta del alumno (→ 'no_aplica') y calcula el estado con
+// getTranscriptStatus. Antes cada aviso montaba su propia combinación y la ficha,
+// por ejemplo, no miraba las constancias: le pedía transcript a una falta sin aviso.
+
+/** Constancia de la clase (class_records), con los campos que hacen falta acá. */
+export interface ClassRecordRef {
+  teacherId: string;
+  studentName: string;
+  classDate: string;
+  classTime?: string | null;
+  classType?: string | null;
+  rescheduledTo?: string | null;
+}
+
+export interface ClassTranscriptQuery {
+  analyses: ClassTranscriptRef[];
+  /** Constancias del profesor. Una falta del alumno en el tramo de la sesión → 'no_aplica'. */
+  records?: ClassRecordRef[];
+  teacherId: string;
+  studentName: string;
+  /** Fecha de la clase (hora de España), 'YYYY-MM-DD'. */
+  date: string;
+  startHour: string | number | null | undefined;
+  durationHours: number;
+  /** Ingresos de la clase (vínculo explícito con el transcript). */
+  joinLogIds?: Array<string | null | undefined>;
+  reopenedDeadlineAt?: string | null;
+  /** Tipo de la clase si no hay constancia ('recuperacion' / 'normal'). */
+  classType?: ClassRecordType | string | null;
+  exclude?: TranscriptExclusions;
+  now: number;
+}
+
+/**
+ * Constancia de FALTA DEL ALUMNO de esa clase, si la hay: mismo profesor, alumno
+ * y fecha, y la hora (si la trae) dentro del tramo de la sesión — sin el tramo,
+ * la falta de las 16:00 taparía la clase de las 18:00 del mismo día.
+ */
+export function studentLostRecordFor(
+  records: ClassRecordRef[], q: Pick<ClassTranscriptQuery, 'teacherId' | 'studentName' | 'date' | 'startHour' | 'durationHours'>,
+): ClassRecordRef | undefined {
+  const name = nkName(q.studentName);
+  const start = hourNum(q.startHour);
+  const end = start + (q.durationHours > 0 ? q.durationHours : 1);
+  return records.find(r => {
+    if (r.teacherId !== q.teacherId || r.classDate !== q.date || r.rescheduledTo) return false;
+    if (nkName(r.studentName) !== name || !isStudentLostClass(r.classType ?? undefined)) return false;
+    const h = hourNum(r.classTime ?? '');
+    return !Number.isFinite(h) || !Number.isFinite(start) || (h >= start && h < end);
+  });
+}
+
+/** Estado del transcript de UNA clase: busca el transcript, mira la falta y calcula el plazo. */
+export function transcriptStatusForClass(q: ClassTranscriptQuery): TranscriptStatusResult {
+  const lost = q.records ? studentLostRecordFor(q.records, q) : undefined;
+  return getTranscriptStatus({
+    date: q.date, startHour: q.startHour, durationHours: q.durationHours,
+    classType: lost?.classType ?? q.classType,
+    transcript: findTranscriptFor(q.analyses, {
+      teacherId: q.teacherId, studentName: q.studentName, dateIso: q.date,
+      joinLogIds: q.joinLogIds, exclude: q.exclude,
+    }),
+    reopenedDeadlineAt: q.reopenedDeadlineAt,
+    now: q.now,
+  });
+}
+
+/**
+ * ¿El PROFESOR tiene que subir (o volver a subir) el transcript? Solo si falta o
+ * se lo rechazaron: 'pendiente' o 'vencido'. Subido (también en revisión) y la
+ * falta del alumno, nunca.
+ */
+export function transcriptStatusNeedsTeacher(r: Pick<TranscriptStatusResult, 'status'>): boolean {
+  return r.status === 'pendiente' || r.status === 'vencido';
+}
+
 /**
  * Fecha límite de una clase: la reapertura del admin si la hay, y si no el fin
  * de la clase + 24 h. Una sola regla para las tres ramas (subido, pendiente,

@@ -1,5 +1,6 @@
 'use client';
 import { useState, useEffect, useRef } from 'react';
+import { onTranscriptSaved } from '@/lib/transcriptSaved';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
@@ -77,8 +78,13 @@ export function NotificationBell({ compact = false }: { compact?: boolean } = {}
     setLoading(false);
   }
 
-  // Initial load
-  useEffect(() => { load(); }, [userId]);
+  // Initial load. Y al subir un transcript: el servidor marca como resueltos los
+  // avisos de esa clase (lib/transcriptNotices) antes de responder, así que se
+  // recarga para que el contador deje de contarlos sin esperar a otra pantalla.
+  useEffect(() => {
+    load();
+    return onTranscriptSaved(() => { load(); });
+  }, [userId]);
 
   // Generate system alerts for teachers (once per session, after assignments load)
   useEffect(() => {

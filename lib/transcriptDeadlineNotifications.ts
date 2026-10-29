@@ -19,6 +19,15 @@
 // avisar dos veces de la misma clase en la misma categoría, sin tabla extra.
 //
 // NO manda emails. Solo campanita.
+//
+// DOS FILTROS: las filas salen de finanzas (calculateTeacherFinance), pero cada
+// clase se vuelve a mirar con la regla común (transcriptStatusForClass): si para
+// ella el transcript ya está subido, o es una falta del alumno, no se avisa. Así
+// la campanita dice lo mismo que el pop-up, la ficha y Mis clases aunque el
+// emparejamiento de finanzas (matchCand) difiera en algún caso.
+//
+// Y al SUBIR un transcript, resolveTranscriptNotices (lib/transcriptNotices)
+// marca como resueltos los avisos que ya hubiera de esa clase.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import {
@@ -28,7 +37,13 @@ import {
 } from '@/lib/db';
 import { calculateTeacherFinance, rowHoursLabel, transcriptNeedsTeacher, type ClassFinanceRow } from '@/lib/finance';
 import { gridOccupancyOfTeacher, fmtDateDMY } from '@/lib/teacherClasses';
-import { hoursLeftLabel, deadlineLabel } from '@/lib/transcriptDeadline';
+import {
+  hoursLeftLabel, deadlineLabel, reopenedDeadlineFor, transcriptStatusForClass, transcriptStatusNeedsTeacher,
+  type ClassRecordRef, type ClassTranscriptRef,
+} from '@/lib/transcriptDeadline';
+import { nkName } from '@/lib/sessions';
+import { deadlineNoticeId } from '@/lib/transcriptNotices';
+import type { ClassJoinLog } from '@/types';
 import { getSpainParts } from '@/lib/spainTime';
 
 /** Una vencida se avisa si venció hace menos de esto: las viejas ya no son noticia. */
@@ -55,11 +70,26 @@ export interface DeadlineNoticeResult {
   skipped: number;
 }
 
-const slug = (s: string) =>
-  (s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+export { deadlineNoticeId, resolveTranscriptNotices } from '@/lib/transcriptNotices';
 
-export function deadlineNoticeId(teacherId: string, date: string, studentName: string, kind: '6h' | 'vencida'): string {
-  return `tx_dl_${teacherId}_${date}_${slug(studentName)}_${kind}`;
+/**
+ * ¿Sigue faltando el transcript de esta fila de finanzas según la regla común?
+ * false = ya está subido (o en revisión) o es una falta del alumno: no se avisa.
+ * La usan la campanita y el email de fin de día.
+ */
+export function stillMissingTranscript(
+  row: Pick<ClassFinanceRow, 'studentName' | 'date' | 'hour' | 'durationHours'>,
+  ctx: { teacherId: string; analyses: ClassTranscriptRef[]; records: ClassRecordRef[]; joinLogs: ClassJoinLog[]; now: number },
+): boolean {
+  const name = nkName(row.studentName);
+  const logs = ctx.joinLogs.filter(l =>
+    l.teacherId === ctx.teacherId && l.scheduledDate === row.date && nkName(l.studentName) === name);
+  return transcriptStatusNeedsTeacher(transcriptStatusForClass({
+    analyses: ctx.analyses, records: ctx.records,
+    teacherId: ctx.teacherId, studentName: row.studentName, date: row.date,
+    startHour: row.hour, durationHours: row.durationHours ?? 1,
+    joinLogIds: logs.map(l => l.id), reopenedDeadlineAt: reopenedDeadlineFor(logs), now: ctx.now,
+  }));
 }
 
 /** Mes 'YYYY-MM' de un instante, en hora de España. */
@@ -124,7 +154,10 @@ export async function notifyTranscriptDeadlines(args: {
         gridOccupancy: gridOccupancyOfTeacher(t),
         now,
       });
+      const ctx = { teacherId: t.id, analyses: classAnalyses, records: classRecords, joinLogs, now };
       for (const r of result.rows) {
+        // Regla común: si ya está subido o es una falta del alumno, no se avisa.
+        if ((r.status === 'a_revisar' || r.status === 'vencida') && !stillMissingTranscript(r, ctx)) continue;
         // (a) Pendiente, es tarea del profesor y quedan menos de 6 h.
         if (r.status === 'a_revisar' && transcriptNeedsTeacher(r.transcriptState) && r.deadline.urgent) {
           candidates.push(noticeFor(t.id, t.name, r, '6h'));

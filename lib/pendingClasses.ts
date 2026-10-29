@@ -13,15 +13,17 @@
 // base y hay que agruparlos.
 //
 // CÓMO SE DECIDE SI TIENE TRANSCRIPT: con la regla única de
-// lib/transcriptDeadline (findTranscriptFor + getTranscriptStatus), la misma que
-// usan finanzas, Mis clases y Asistencias. Antes la ficha ignoraba
-// `validation_status` y daba por cubierta una clase con el transcript rechazado.
+// lib/transcriptDeadline (transcriptStatusForClass), la misma que usan Mis
+// clases, el pop-up, la campanita y el email. Antes la ficha ignoraba
+// `validation_status` y daba por cubierta una clase con el transcript rechazado,
+// y no miraba las constancias: le pedía transcript a una falta sin aviso del
+// alumno (el profesor entró, el alumno no vino), que no lleva.
 
 import type { ClassJoinLog } from '@/types';
 import type { ClassAnalysisRow } from '@/lib/aiTypes';
 import {
-  findTranscriptFor, getTranscriptStatus, reopenedDeadlineFor, transcriptNeedsTeacher,
-  type TranscriptStatusResult, type TranscriptExclusions,
+  transcriptStatusForClass, transcriptStatusNeedsTeacher, reopenedDeadlineFor,
+  type ClassRecordRef, type TranscriptStatusResult, type TranscriptExclusions,
 } from '@/lib/transcriptDeadline';
 import { hourNum } from '@/lib/sessions';
 
@@ -50,10 +52,12 @@ export function pendingClassesFor(args: {
   teacherId: string;
   joinLogs: ClassJoinLog[];
   analyses: ClassAnalysisRow[];
+  /** Constancias: una falta del alumno con ingreso no pide transcript. */
+  records?: ClassRecordRef[];
   /** Instante actual (epoch ms). Por defecto, ahora. */
   now?: number;
 }): PendingClass[] {
-  const { studentName, teacherId, joinLogs, analyses } = args;
+  const { studentName, teacherId, joinLogs, analyses, records } = args;
   const now = args.now ?? Date.now();
 
   const mine = joinLogs
@@ -88,14 +92,13 @@ export function pendingClassesFor(args: {
       1, declared, hours.length ? Math.max(...hours) - Math.min(...hours) + 1 : 1,
     );
 
-    const transcript = findTranscriptFor(analyses, {
-      teacherId, studentName, dateIso: first.scheduledDate, joinLogIds: ids, exclude: used,
-    });
-    const deadline = getTranscriptStatus({
+    const deadline = transcriptStatusForClass({
+      analyses, records, teacherId, studentName,
       date: first.scheduledDate, startHour: first.scheduledTime, durationHours,
-      transcript, reopenedDeadlineAt: reopenedDeadlineFor(g), now,
+      joinLogIds: ids, reopenedDeadlineAt: reopenedDeadlineFor(g), exclude: used, now,
     });
-    if (!transcriptNeedsTeacher(deadline.transcriptState)) continue;   // subido o en revisión
+    // Subido, en revisión o falta del alumno: no es tarea suya.
+    if (!transcriptStatusNeedsTeacher(deadline)) continue;
 
     out.push({
       joinLogId: first.id,
@@ -115,6 +118,7 @@ export function countPendingForTeacher(args: {
   teacherId: string;
   joinLogs: ClassJoinLog[];
   analyses: ClassAnalysisRow[];
+  records?: ClassRecordRef[];
   now?: number;
 }): number {
   const names = new Set(
@@ -128,6 +132,7 @@ export function countPendingForTeacher(args: {
       teacherId: args.teacherId,
       joinLogs: args.joinLogs,
       analyses: args.analyses.filter(a => nk(a.student_name) === name),
+      records: args.records,
       now: args.now,
     }).length;
   }

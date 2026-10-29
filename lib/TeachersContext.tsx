@@ -26,6 +26,7 @@ import {
   dbGetTeacherBonuses, dbClaimRetentionBonus, dbMarkBonusPaid, dbAddUpsellBonuses, dbUpdateAssignmentTeacherSince,
 } from '@/lib/db';
 import { accionesEstables, siCambio } from '@/lib/estable';
+import { onTranscriptSaved, upsertTranscript, mergeLocalTranscripts, type LocalTranscript } from '@/lib/transcriptSaved';
 import type { AffectedTeacher, ChangeTeacherParams, ArchiveTeacherResult, CalendarOrigin, GridSaveResult } from '@/lib/db';
 import type { TransferenciaResultado } from '@/lib/transferencia/core';
 import type { AssignedSlot } from '@/types';
@@ -50,6 +51,12 @@ interface TeachersContextType {
   classRecords: ClassRecord[];
   /** Transcripciones: segundo factor de verificación de finanzas. */
   classAnalyses: ClassTranscriptRef[];
+  /**
+   * true cuando terminó la PRIMERA carga de los datos de finanzas (transcripts,
+   * ingresos, constancias). Antes de eso esas listas están vacías y cualquier
+   * aviso de "te falta el transcript" diría que faltan todos: los avisos esperan.
+   */
+  financeLoaded: boolean;
   financeRates: FinanceRate[];
   financePayments: FinancePayment[];
   manualApprovals: FinanceManualApproval[];
@@ -126,7 +133,7 @@ interface TeachersContextType {
 const TeachersContext = createContext<TeachersContextType>({
   teachers: [], students: [], assignments: [], teacherGrids: {},
   loadingTeachers: true, scoringEvents: [], classCounts: [], notifications: [],
-  unassignedStudents: [], classJoinLogs: [], classRecords: [], classAnalyses: [],
+  unassignedStudents: [], classJoinLogs: [], classRecords: [], classAnalyses: [], financeLoaded: false,
   financeRates: [], financePayments: [], manualApprovals: [], teacherBonuses: [], lastUpdated: null,
   addTeacher:               async () => {},
   archiveTeacher:           async () => ({ ok: true }),
@@ -218,6 +225,14 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   // contexto y solo lo piden las pantallas que lo usan (lib/HistorialHorariosContext).
   const [classRecords, setClassRecords] = useState<ClassRecord[]>([]);
   const [classAnalyses, setClassAnalyses] = useState<ClassTranscriptRef[]>([]);
+  const [financeLoaded, setFinanceLoaded] = useState(false);
+  // Transcripts guardados en ESTE navegador que una carga en vuelo todavía puede
+  // no traer (lib/transcriptSaved.mergeLocalTranscripts).
+  const localTranscripts = useRef(new Map<string, LocalTranscript>());
+  useEffect(() => onTranscriptSaved(row => {
+    localTranscripts.current.set(row.id, { row, at: Date.now() });
+    setClassAnalyses(prev => upsertTranscript(prev, row));
+  }), []);
   const [financeRates, setFinanceRates] = useState<FinanceRate[]>([]);
   const [financePayments, setFinancePayments] = useState<FinancePayment[]>([]);
   const [manualApprovals, setManualApprovals] = useState<FinanceManualApproval[]>([]);
@@ -602,7 +617,8 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   // La llaman varias pantallas al montarse: con siCambio, una segunda carga con
   // los mismos datos no cambia ninguna identidad.
   async function loadFinanceData() {
-    const [rates, payments, records, logs, approvals, analyses, bonuses] = await Promise.all([
+    const startedAt = Date.now();
+    const [rates, payments, records, logs, approvals, fetchedAnalyses, bonuses] = await Promise.all([
       dbGetFinanceRates(),
       dbGetFinancePayments(),
       dbGetClassRecords(),
@@ -611,6 +627,9 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
       dbGetClassTranscripts(),
       dbGetTeacherBonuses(),
     ]);
+    // Un transcript guardado mientras esta carga estaba en vuelo no viene en ella:
+    // se conserva el que ya está en pantalla en vez de "desguardarlo".
+    const analyses = mergeLocalTranscripts(fetchedAnalyses, localTranscripts.current, startedAt);
     setFinanceRates(prev => siCambio(prev, rates));
     setFinancePayments(prev => siCambio(prev, payments));
     setClassRecords(prev => siCambio(prev, records));
@@ -618,6 +637,7 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     setManualApprovals(prev => siCambio(prev, approvals));
     setClassAnalyses(prev => siCambio(prev, analyses));
     setTeacherBonuses(prev => siCambio(prev, bonuses));
+    setFinanceLoaded(true);
   }
 
   async function loadTeacherBonuses() {
@@ -876,11 +896,11 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
   const value = useMemo<TeachersContextType>(() => ({
     teachers, students, assignments, teacherGrids, loadingTeachers,
     scoringEvents, classCounts, notifications, unassignedStudents, classJoinLogs,
-    classRecords, classAnalyses, financeRates, financePayments, manualApprovals, teacherBonuses, lastUpdated,
+    classRecords, classAnalyses, financeLoaded, financeRates, financePayments, manualApprovals, teacherBonuses, lastUpdated,
     ...estables,
   }), [teachers, students, assignments, teacherGrids, loadingTeachers,
     scoringEvents, classCounts, notifications, unassignedStudents, classJoinLogs,
-    classRecords, classAnalyses, financeRates, financePayments, manualApprovals, teacherBonuses, lastUpdated,
+    classRecords, classAnalyses, financeLoaded, financeRates, financePayments, manualApprovals, teacherBonuses, lastUpdated,
     estables]);
 
   return (

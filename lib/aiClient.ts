@@ -7,6 +7,7 @@
 import { supabase } from '@/lib/supabase';
 import type { GenerationOrigin } from '@/lib/aiUsage';
 import { fetchAllPages } from '@/lib/db';
+import { emitTranscriptSaved, savedTranscriptRow } from '@/lib/transcriptSaved';
 import {
   asObject, isRiskSignal,
   type AvatarDomain, type ClassType, type ClassAnalysisRow, type FichaIA,
@@ -219,9 +220,22 @@ export interface SaveAnalysisResult {
 /** Guarda transcript + análisis en un paso (el profesor ya revisó el informe).
  *  Nunca bloquea: como mucho la clase queda pendiente de validación. */
 export async function saveAnalysis(args: AnalyzeArgs & { analysis: TranscriptIA }): Promise<SaveAnalysisResult> {
-  return postJson<SaveAnalysisResult>(
+  const res = await postJson<SaveAnalysisResult>(
     '/api/ai/analyze-transcript', { ...args, save: true }, 'No se pudo guardar el análisis.',
   );
+  if (res.saved && res.analysisId) announceSaved(args, res.analysisId, res.validation?.decision);
+  return res;
+}
+
+/**
+ * Avisa al resto de la app de que el transcript YA está guardado
+ * (lib/transcriptSaved): el pop-up, el banner y las tarjetas lo ven al instante.
+ */
+function announceSaved(args: AnalyzeArgs, id: string, decision: string | null | undefined): void {
+  emitTranscriptSaved(savedTranscriptRow({
+    id, teacherId: args.teacherId, studentName: args.studentName,
+    classDate: args.classDate, joinLogId: args.joinLogId, decision,
+  }));
 }
 
 // ── Registrar una clase: GUARDAR primero, ANALIZAR después ───────────────────
@@ -268,6 +282,7 @@ export async function saveTranscriptOnly(args: AnalyzeArgs): Promise<{
     'No se pudo guardar la clase.',
   );
   if (!data.analysisId) throw new Error('No se pudo guardar la clase.');
+  announceSaved(args, data.analysisId, data.validation?.decision);
   return { analysisId: data.analysisId, validation: data.validation ?? null };
 }
 

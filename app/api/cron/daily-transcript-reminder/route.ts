@@ -17,6 +17,12 @@
 // (Las filas 'excede_limite' quedan fuera a propósito: subir el transcript no
 // las haría cobrables, porque lo que las frena es el límite mensual del plan.)
 //
+// REGLA COMÚN: cada clase que sale de finanzas se vuelve a mirar con
+// transcriptStatusForClass (lib/transcriptDeadline), la misma de Mis clases y la
+// ficha: si ya tiene transcript o es una falta del alumno, no va en el correo. Y
+// JUSTO ANTES de enviar cada correo se releen los transcripts de ese profesor:
+// uno subido mientras corría el cron tampoco se reclama.
+//
 // ANTI-DUPLICADO — "reservar y luego enviar": antes de escribir un solo correo
 // se inserta la fila del día en `daily_reminder_log` (id determinista). Si la
 // fila ya existía, ese profesor ya recibió su email hoy y se salta. Si el envío
@@ -45,7 +51,9 @@ import {
 } from '@/lib/db';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { requireCronSecret, requireAdminClient } from '@/lib/cronAuth';
-import { notifyTranscriptDeadlines } from '@/lib/transcriptDeadlineNotifications';
+import { notifyTranscriptDeadlines, stillMissingTranscript } from '@/lib/transcriptDeadlineNotifications';
+import type { ClassRecordRef, ClassTranscriptRef } from '@/lib/transcriptDeadline';
+import type { ClassJoinLog } from '@/types';
 import { calculateTeacherFinance, rowHoursLabel, transcriptNeedsTeacher } from '@/lib/finance';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { fetchTeacher, sendDailyTranscriptReminder, type PendingTranscriptClass } from '@/lib/emailNotifications';
@@ -99,10 +107,27 @@ function dayToReport(now: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
+/** Lo que hace falta para volver a mirar una clase justo antes de enviar. */
+interface PendingCheck {
+  studentName: string;
+  date: string;
+  hour: string;
+  durationHours: number;
+}
+
 interface TeacherPending {
   teacherId: string;
   teacherName: string;
   classes: PendingTranscriptClass[];
+  /** checks[i] ↔ classes[i]. */
+  checks: PendingCheck[];
+}
+
+/** Datos con los que se calculó la lista, para la última comprobación. */
+interface PendingContext {
+  analyses: ClassTranscriptRef[];
+  records: ClassRecordRef[];
+  joinLogs: ClassJoinLog[];
 }
 
 /**
@@ -143,8 +168,9 @@ export async function GET(request: Request): Promise<Response> {
   const monthYear = targetDate.slice(0, 7);
 
   let pendientes: TeacherPending[];
+  let pctx: PendingContext;
   try {
-    pendientes = await findPending(targetDate, monthYear, Date.now());
+    ({ pendientes, ctx: pctx } = await findPending(targetDate, monthYear, Date.now()));
   } catch (err) {
     console.error('[cron transcript-reminder] Error al calcular las clases pendientes:', err);
     return Response.json({ error: 'Error del servidor' }, { status: 500 });
@@ -164,9 +190,13 @@ export async function GET(request: Request): Promise<Response> {
     });
   }
 
-  let sent = 0, skipped = 0, failed = 0;
-  for (const t of pendientes) {
+  // yaSubidos: profesores cuyas clases pendientes se subieron mientras corría el cron.
+  let sent = 0, skipped = 0, failed = 0, yaSubidos = 0;
+  for (const pendiente of pendientes) {
     try {
+      // Última comprobación, con los transcripts de ESTE profesor leídos ahora.
+      const t = await recheckBeforeSend(admin, pendiente, pctx);
+      if (t.classes.length === 0) { yaSubidos++; continue; }
       const reserved = await claimToday(admin, t, targetDate);
       if (!reserved) { skipped++; continue; }   // ya se le escribió hoy
 
@@ -183,12 +213,12 @@ export async function GET(request: Request): Promise<Response> {
       }
     } catch (err) {
       failed++;
-      console.error(`[cron transcript-reminder] Fallo con ${t.teacherName}:`, err);
-      await releaseToday(admin, t.teacherId, targetDate);
+      console.error(`[cron transcript-reminder] Fallo con ${pendiente.teacherName}:`, err);
+      await releaseToday(admin, pendiente.teacherId, targetDate);
     }
   }
 
-  console.log(`[cron transcript-reminder] ${targetDate}: ${sent} enviado(s), ${skipped} ya avisado(s), ${failed} fallido(s).`);
+  console.log(`[cron transcript-reminder] ${targetDate}: ${sent} enviado(s), ${skipped} ya avisado(s), ${failed} fallido(s), ${yaSubidos} ya subido(s) antes de enviar.`);
 
   // Segunda tarea: campanita del plazo de 24 h (< 6 h y recién vencidas). Un
   // fallo acá no invalida los correos ya enviados: se informa y se sigue.
@@ -212,7 +242,7 @@ export async function GET(request: Request): Promise<Response> {
   // sin acuerdo / anulada por baja o desvinculación). Aislada como las demás.
   const recoveries = await revisarRecuperaciones(false);
 
-  return Response.json({ ok: true, date: targetDate, candidates: pendientes.length, sent, skipped, failed, deadlines, snapshot, recoveries });
+  return Response.json({ ok: true, date: targetDate, candidates: pendientes.length, sent, skipped, failed, yaSubidos, deadlines, snapshot, recoveries });
 }
 
 /** Chequeo nocturno de recuperaciones (lib/classRecoveryStore). Best-effort. */
@@ -258,7 +288,7 @@ async function guardarFotoCalendario(admin: SupabaseClient, date: string): Promi
  * Una sola lectura de cada tabla para todos los profesores; el cálculo por
  * profesor es en memoria.
  */
-async function findPending(targetDate: string, monthYear: string, nowMs: number): Promise<TeacherPending[]> {
+async function findPending(targetDate: string, monthYear: string, nowMs: number): Promise<{ pendientes: TeacherPending[]; ctx: PendingContext }> {
   const [
     teachers, students, assignments, joinLogs, classRecords,
     classAnalyses, rates, payments, manualApprovals, scoringEvents,
@@ -290,18 +320,45 @@ async function findPending(targetDate: string, monthYear: string, nowMs: number)
     // en el panel de "Mis clases".
     //
     // `classHasEnded` deja fuera las que todavía se están dando (ver arriba).
-    const classes = result.rows
+    // `stillMissingTranscript`: la regla común (la de Mis clases y la ficha) tiene
+    // que estar de acuerdo en que falta.
+    const ctx = { teacherId: t.id, analyses: classAnalyses, records: classRecords, joinLogs, now: nowMs };
+    const rows = result.rows
       .filter(r => r.date === targetDate && r.status === 'a_revisar' && transcriptNeedsTeacher(r.transcriptState)
-        && classHasEnded(r, nowMs))
-      .map(r => ({
-        studentName: r.studentName,
-        hours: r.hour ? rowHoursLabel(r) : undefined,
-        rejected: r.transcriptState === 'rejected',
-      }));
+        && classHasEnded(r, nowMs) && stillMissingTranscript(r, ctx));
+    const classes = rows.map(r => ({
+      studentName: r.studentName,
+      hours: r.hour ? rowHoursLabel(r) : undefined,
+      rejected: r.transcriptState === 'rejected',
+    }));
+    const checks = rows.map(r => ({ studentName: r.studentName, date: r.date, hour: r.hour, durationHours: r.durationHours }));
 
-    if (classes.length > 0) out.push({ teacherId: t.id, teacherName: t.name, classes });
+    if (classes.length > 0) out.push({ teacherId: t.id, teacherName: t.name, classes, checks });
   }
-  return out;
+  return { pendientes: out, ctx: { analyses: classAnalyses, records: classRecords, joinLogs } };
+}
+
+/**
+ * Justo antes de enviar: relee los transcripts de ESE profesor (los subidos
+ * desde que empezó el cron) y quita las clases que ya lo tienen. Si la lectura
+ * falla se envía con lo calculado: perder el aviso es peor que mandarlo.
+ */
+async function recheckBeforeSend(admin: SupabaseClient, t: TeacherPending, ctx: PendingContext): Promise<TeacherPending> {
+  const desde = t.checks.reduce((min, c) => (c.date < min ? c.date : min), t.checks[0]?.date ?? '');
+  const { data, error } = await admin.from('class_analyses')
+    .select('id, teacher_id, student_name, class_date, analyzed_at, has_transcript, validation_status, join_log_id')
+    .eq('teacher_id', t.teacherId).gte('analyzed_at', `${desde}T00:00:00Z`);
+  if (error) {
+    console.error(`[cron transcript-reminder] No se pudieron releer los transcripts de ${t.teacherName}:`, error);
+    return t;
+  }
+  const fresh = (data ?? []) as ClassTranscriptRef[];
+  const ids = new Set(fresh.map(r => r.id));
+  const analyses = [...fresh, ...ctx.analyses.filter(a => !a.id || !ids.has(a.id))];
+  const keep = t.checks.map(c => stillMissingTranscript(c, {
+    teacherId: t.teacherId, analyses, records: ctx.records, joinLogs: ctx.joinLogs, now: Date.now(),
+  }));
+  return { ...t, classes: t.classes.filter((_, i) => keep[i]), checks: t.checks.filter((_, i) => keep[i]) };
 }
 
 /**
