@@ -1,19 +1,32 @@
 'use client';
-// ── Panel "Mis clases" del profesor ───────────────────────────────────────────
+// ── Panel "Mis clases" del profesor (/clases) ─────────────────────────────────
 //
-// ES LA MISMA agenda que hasta ahora vivía como pestaña dentro del Calendario
-// (/teacher → "Mis clases"). Se movió a ruta propia (/clases) con su botón en el
-// header, sin rehacer el diseño: son las mismas tarjetas, el mismo navegador de
-// día y el mismo botón "Ingresar a clase".
+// La agenda del profesor: navegador de día/semana, filtros y una tarjeta por
+// clase con su única acción principal ("Ingresar a clase", "Definir enlace",
+// "Añadir transcript") y el resto en el menú ⋯. Estilos en MisClasesPanel.css
+// (bajo .mc2).
 //
-// Lo que SÍ cambió, que es lo que no se podía hacer antes:
-//   · Las clases YA DADAS se ven siempre, en su sitio y con su estado, en vez de
-//     quedar plegadas detrás de un desplegable (y en los días anteriores a hoy
-//     se pintaban como si estuvieran por darse).
-//   · Cada clase ya dada tiene "Añadir transcript", que abre el mismo modal y el
-//     mismo guardado que Finanzas (components/AddClassModal).
+// Rediseño del 29/10/2026. Principio: la tarjeta SOLO avisa de un problema, y
+// cada problema UNA vez:
+//   · Lo que está bien no se pinta (transcript subido, suscripción activa o que
+//     da acceso, enlace definido, formulario completado).
+//   · Chips de un único sistema (ámbar = acción pendiente, rojo = problema,
+//     azul = informativo, gris = neutro), máximo 2 a la vista y el resto en "+N".
+//   · Suscripción cancelada / vencida / pago pendiente: la clase POR DAR o EN
+//     CURSO no se puede dar. El botón lo dice, deshabilitado y sin handler. Es
+//     el único cambio de comportamiento del rediseño; una clase YA DADA nunca se
+//     bloquea (el transcript es lo que cobra el profesor).
+//   · Sin enlace: "Definir enlace" siempre, con la cuenta atrás hasta la clase y
+//     en rojo con menos de LINK_URGENT_HOURS.
+//   · "Ver ficha" en el nombre y en el menú ⋯.
+//
+// Las clases YA DADAS se ven siempre, en su sitio y con su estado, y cada una
+// tiene "Añadir transcript", que abre el mismo modal y el mismo guardado que
+// Finanzas (components/AddClassModal).
 
-import { Fragment, useState, useEffect, useMemo, useRef, useSyncExternalStore, type CSSProperties } from 'react';
+import Link from 'next/link';
+import { Fragment, useState, useEffect, useMemo, useRef, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
+import './MisClasesPanel.css';
 import { cellKey, getSpainParts, spainWallClockToEpoch } from '@/components/VisualCalendar';
 import { calcRegisteredClassNumber, dbDeleteClassRecordsByIds } from '@/lib/db';
 import {
@@ -29,7 +42,7 @@ import {
 import { planFieldsOf } from '@/lib/productUtils';
 import { marcasDeReprogramacion } from '@/lib/reprogramacion';
 import { checkSubscription, subBadge, type SubscriptionInfo } from '@/lib/useSubscriptionStatus';
-import { isPausedStatus, isPaymentHoldStatus } from '@/lib/subscriptionAccess';
+import { isPausedStatus, isPaymentHoldStatus, isAccessStatus, isScheduledWooStatus, PAYMENT_HOLD_STATUS } from '@/lib/subscriptionAccess';
 import { holdSpansFor, isClassOnHold, openHoldFor, type PaymentHold } from '@/lib/paymentHolds';
 import { isMilestone, getMilestoneSlides, MILESTONES, MILESTONE_SLIDES, MILESTONE_TITLES } from '@/lib/milestones';
 import {
@@ -56,10 +69,9 @@ import { AddClassModal, saveTeacherClass, ANALYSIS_FAILED_NOTICE } from '@/compo
 import { MarkClassStatusModal, type MarkableStatus } from '@/components/MarkClassStatusModal';
 import type { UnmarkedClass } from '@/lib/classStatus';
 import { periodIndex, dbGetStudentDropouts, dbGetPaymentHolds, type StudentDropout } from '@/lib/studentPeriod';
-import FormStatusBadge from '@/components/FormStatusBadge';
 import { lookupToken, formStateOf, type FormTokenInfo } from '@/lib/formClient';
-import { stripProtocol, MeetLinkBadge } from '@/components/teacherPanelUi';
-import { isMeetLinkDefined } from '@/lib/meetLinkStatus';
+import { stripProtocol } from '@/components/teacherPanelUi';
+import { isMeetLinkDefined, formatElapsed } from '@/lib/meetLinkStatus';
 // "No puedo dar esta clase": solo para los profesores beta (RECOVERY_BETA_TEACHERS).
 // Para el resto, este panel funciona exactamente como antes.
 import { isRecoveryBetaTeacher } from '@/lib/classRecoveries';
@@ -127,14 +139,13 @@ function ClassMaterialsSection() {
     setTimeout(() => setCopied(c => (c === m ? null : c)), 2000);
   }
 
+  // La cabecera es una fila fina; el contenido desplegado son las tarjetas por hito.
   return (
-    <div className="cm">
-      <button className="cm-head" onClick={toggle} aria-expanded={open} aria-controls="cm-panel">
-        <span style={{ flex: 1, minWidth: 0 }}>
-          <span className="cm-title" style={{ display: 'block' }}>Materiales de clase</span>
-          <span className="cm-sub">Presentaciones organizadas por hito de la trayectoria del alumno</span>
-        </span>
-        <span className="cm-chip">{MILESTONES.length} hitos</span>
+    <div className="cm mc2-cm">
+      <button className="mc2-cm-head" onClick={toggle} aria-expanded={open} aria-controls="cm-panel"
+        title="Presentaciones organizadas por hito de la trayectoria del alumno">
+        <span className="mc2-cm-title">Materiales de clase</span>
+        <span className="mc2-cm-sub">{MILESTONES.length} hitos · presentaciones por clase</span>
         <span aria-hidden className={`cm-caret${open ? ' is-open' : ''}`}>▼</span>
       </button>
 
@@ -412,8 +423,80 @@ function sinEstadoKey(date: string, hour: number | string, name: string): string
   return `${date}|${hourNum(hour)}|${name.trim().toLowerCase()}`;
 }
 
+// ─── Sistema de chips de la tarjeta (solo presentación) ───────────────────────
+// Un único tamaño y radio para todos. El tono dice qué significa:
+//   red = riesgo o problema · amber = pendiente de acción · blue = informativo ·
+//   gray = neutro. El verde queda para el botón de la acción principal.
+type ChipTone = 'red' | 'amber' | 'blue' | 'gray';
+interface CardChip {
+  key: string;
+  tone: ChipTone;
+  label: ReactNode;
+  /** Texto pequeño gris dentro del chip ("hace 3h", "Marcar estado"). */
+  sub?: string;
+  title?: string;
+  onClick?: () => void;
+  onboarding?: string;
+  spin?: boolean;
+}
+const CHIP_ORDER: Record<ChipTone, number> = { red: 0, amber: 1, blue: 2, gray: 3 };
+/** Chips a la vista por tarjeta; el resto queda detrás de "+N". */
+const MAX_VISIBLE_CHIPS = 2;
+
+/** Quita el emoji inicial de una etiqueta ("❌ Expirado" → "Expirado"): el color ya lo dice. */
+function plainLabel(label: string): string {
+  return label.replace(/^[^\p{L}\p{N}]+/u, '').trim();
+}
+
+/** "Definir enlace" pasa a rojo cuando falta menos que esto para la clase. */
+const LINK_URGENT_HOURS = 24;
+
+/**
+ * Suscripciones con las que una clase POR DAR no se puede dar, con el texto del
+ * botón (pedido 29/10/2026). Todo lo que da acceso según lib/subscriptionAccess
+ * (isAccessStatus: active, pending-cancel, manual, Oritalk vigente) queda fuera.
+ */
+const BLOCKED_SUB_LABEL: Record<string, string> = {
+  [PAYMENT_HOLD_STATUS]: 'Pago pendiente',
+  pending: 'Pago pendiente',
+  cancelled: 'Suscripción cancelada',
+  expired: 'Suscripción vencida',
+};
+function blockedSubLabelOf(status: string | null | undefined): string | null {
+  if (!status || isAccessStatus(status)) return null;
+  return BLOCKED_SUB_LABEL[status] ?? null;
+}
+
+/** Tiempo hasta la clase: "3h 20min", "45min" o "2 d 4h". */
+function untilLabel(ms: number): string {
+  const totalMin = Math.max(1, Math.ceil(ms / 60_000));
+  const d = Math.floor(totalMin / 1440);
+  const h = Math.floor((totalMin % 1440) / 60);
+  const m = totalMin % 60;
+  if (d > 0) return h > 0 ? `${d} d ${h}h` : `${d} d`;
+  return h > 0 ? formatElapsed(h, m) : `${m}min`;
+}
+
+function ChipView({ chip }: { chip: CardChip }) {
+  const body = (
+    <>
+      {chip.spin && <span className="drc-spinner-xs" />}
+      <span>{chip.label}</span>
+      {chip.sub && <span className="mc2-chip-sub">{chip.sub}</span>}
+    </>
+  );
+  return chip.onClick ? (
+    <button type="button" className={`mc2-chip is-${chip.tone} is-action`} title={chip.title}
+      data-onboarding={chip.onboarding} onClick={chip.onClick}>
+      {body}
+    </button>
+  ) : (
+    <span className={`mc2-chip is-${chip.tone}`} title={chip.title}>{body}</span>
+  );
+}
+
 // ─── Teacher Upcoming Classes Tab ─────────────────────────────────────────────
-export function MisClasesPanel({ teacher, myAssignments, students, classRecords, classAnalyses, classJoinLogs, grid, onGridChange, updateMeetLink, logClassJoin, addRescheduleRecord, addRescheduleSplit, registerClassRecord, onDataChanged, formIndex, refreshFormIndex, dataReady = true }: {
+export function MisClasesPanel({ teacher, myAssignments, students, classRecords, classAnalyses, classJoinLogs, grid, onGridChange, updateMeetLink, logClassJoin, addRescheduleRecord, addRescheduleSplit, registerClassRecord, onDataChanged, formIndex, dataReady = true }: {
   teacher: Teacher;
   myAssignments: Assignment[];
   students: Student[];
@@ -433,6 +516,7 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
   addRescheduleSplit: (p: { teacherId: string; teacherName: string; studentName: string; originalDate: string; originalTime?: string; lostHours: number; comment: string; recuperaciones: Array<{ date: string; hour: string; recoveryFor: string }> }) => Promise<string[]>;
   registerClassRecord: (teacherId: string, studentName: string, date: string, time: string | undefined, screenshotFile: File | null, classType?: import('@/types').ClassRecordType, comment?: string, recoveryForDate?: string) => Promise<void>;
   formIndex: FormIndex;
+  /** Lo recibía FormStatusBadge, que no lo usa; se conserva por compatibilidad. */
   refreshFormIndex: () => void;
   /**
    * ¿Ya llegaron los transcripts, ingresos y constancias (TeachersContext.
@@ -456,6 +540,8 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
   const [filter, setFilter] = useState<ClassFilter>('todas');
   // Fila cuyo menú "⋯" está abierto (una sola a la vez).
   const [openMenu, setOpenMenu] = useState<string | null>(null);
+  // Tarjeta con el detalle "+N" desplegado. Una a la vez.
+  const [openDetails, setOpenDetails] = useState<string | null>(null);
   const [subInfo, setSubInfo] = useState<Record<string, SubscriptionInfo>>({});
   // Clase para la que se está subiendo el transcript (abre el modal de Finanzas).
   // `kind`: se abrió desde "Marcar estado" para registrar una clase perdida del
@@ -1310,17 +1396,13 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     const menuId  = `${c.key}_${date}`;
     const menuOpen = openMenu === menuId;
 
-    // Tag de tipo de clase: la etiqueta la sigue decidiendo classCategoryBadge
-    // (fuente única); acá solo se le aplica la paleta sobria de esta vista.
+    // Tipo de clase: la etiqueta la sigue decidiendo classCategoryBadge (fuente
+    // única); se pinta como texto plano en la línea gris.
     const stu = studentForAssignment(c.assignment);
     const cat = classCategoryBadge(planFieldsOf(c.assignment, stu));
-    const tagPalette = /ex[aá]men/i.test(cat.label)
-      ? { background: '#eef1f8', color: '#3b5b9e' }
-      : { background: '#eef4ef', color: '#2f6b3f' };
 
     const sb = subBadgeFor(subEmailForAssignment(c.assignment));
     const formInfo = lookupToken(formIndex, { id: c.assignment.studentId, name: c.studentName });
-    const hasForm  = formStateOf(formInfo) !== 'none';
     // Enlace de la clase (lib/meetLinkStatus): "hecho" = meet_link_set_at. Solo
     // se sigue en clases normales que aún se van a dar.
     const linkDefined = isMeetLinkDefined(c.assignment);
@@ -1328,8 +1410,6 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     const linkPending = tracksLink && !linkDefined;
     // El botón principal ya es "Definir enlace" cuando no hay enlace: el
     // secundario solo aparece si el principal es otro (enlace antiguo sin fecha).
-    const showDefineLinkBtn = linkPending && hasLink;
-    const showLinkDefined = tracksLink && linkDefined;
 
     const joinWin = joinWindowOf(c);
     const nextClassNum = calcRegisteredClassNumber(c.assignment, classRecords) + 1;
@@ -1343,246 +1423,298 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
       return `Desde ${sd.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })} · ${dias} día${dias !== 1 ? 's' : ''}`;
     })();
 
-    // Estado visual de la tarjeta. Una clase ya dada se apaga para que se vea de
-    // un vistazo que pasó, y se distingue si todavía debe el transcript (entonces
-    // el botón queda encendido como única acción viva) o si ya está cerrada.
+    // ── Presentación ──────────────────────────────────────────────────────────
+    // Lo de abajo decide cómo se pinta lo que ya se calculó arriba (y el bloqueo
+    // por suscripción, que es lo único que cambia lo que se puede hacer).
+
+    // "Ver ficha": la misma condición y el mismo destino que FormStatusBadge
+    // (formulario completado → /mis-alumnos/<id>, en pestaña nueva).
+    const fichaRouteId = c.assignment.studentId || c.assignment.id || '';
+    const fichaHref = formStateOf(formInfo) === 'completed' && fichaRouteId
+      ? `/mis-alumnos/${encodeURIComponent(fichaRouteId)}` : null;
+
+    // Suscripción que bloquea la clase. Una clase YA DADA no se toca: pudo darse
+    // con la suscripción vigente y lleva su transcript. El pago pendiente de una
+    // clase ya empezada lo dicen los episodios (`held`, de arriba).
+    const subEmail = subEmailForAssignment(c.assignment);
+    const subStatus = subEmail ? subInfo[subEmail]?.status : undefined;
+    // Hasta que llega la verificación no se ofrece "Ingresar": si se pulsara
+    // antes, el flujo podría acabar en "Ingresar de todas formas".
+    const subChecking = !!subEmail && !subInfo[subEmail];
+    const blockedLabel = held
+      ? BLOCKED_SUB_LABEL[PAYMENT_HOLD_STATUS]
+      : !passed && !inactive ? blockedSubLabelOf(subStatus) : null;
+    const subBlocked = !!blockedLabel;
+
+    // Sin enlace (o con un enlace antiguo sin confirmar): la acción principal es
+    // SIEMPRE "Definir enlace", con la cuenta atrás hasta la clase debajo.
+    const needsLink = !passed && !inactive && !subBlocked && (!hasLink || linkPending);
+    const msToStart = now ? spainWallClockToEpoch(c.date, c.startHourNum) - now.getTime() : null;
+    const linkUrgent = msToStart != null && msToStart < LINK_URGENT_HOURS * 3_600_000;
+    const classInLabel = msToStart == null ? '' : msToStart <= 0 ? 'La clase ya empezó' : `Clase en ${untilLabel(msToStart)}`;
+
+    // Chips de atención: solo lo que pide algo. Lo que está bien (transcript
+    // subido, suscripción activa, enlace definido) no se pinta (pedido 29/10/2026).
+    const chips: CardChip[] = [];
+
+    if (inactive) {
+      // Una sola señal: el chip. La de "pago pendiente" la da su botón.
+      if (!held) {
+        const line = beta && cancelled ? recoveryLineFor(recov.recoveries, c.studentName, date, c.hour) : null;
+        chips.push({
+          key: 'inactive', tone: 'gray',
+          label: rescheduled ? `Reprogramada → ${fmtDateDMY(rescheduledTo)}` : cancelLabel,
+          sub: line ?? undefined,
+        });
+      }
+    } else if (passed && dl && dBadge) {
+      if (dBadge.tone === 'ok') {
+        // Subido y validado: nada que hacer.
+      } else if (dBadge.tone === 'review') {
+        chips.push({ key: 'transcript', tone: 'blue', label: dBadge.label, sub: uploaded || undefined, title: 'Transcript guardado, esperando la revisión del equipo' });
+      } else if (dBadge.tone === 'expired') {
+        chips.push({ key: 'transcript', tone: 'red', label: dBadge.label, title: 'El plazo de 24 h pasó sin transcript: la clase no se valida para el pago' });
+      } else if (dBadge.tone === 'muted') {
+        chips.push({ key: 'transcript', tone: 'gray', label: dBadge.label });
+      } else {
+        chips.push({
+          key: 'transcript', tone: tState === 'rejected' ? 'red' : 'amber',
+          label: tState === 'rejected' ? dBadge.label : 'Sin transcript',
+          title: countdown ? `Te quedan ${countdown} para subirlo` : undefined,
+        });
+      }
+    }
+    // El enlace no lleva chip: si falta, lo dice el botón "Definir enlace" (y el
+    // banner de arriba). Definido, no se pinta nada.
+
+    if (unmarked) {
+      chips.push({
+        key: 'unmarked', tone: 'amber', label: 'Sin estado', sub: 'Marcar estado',
+        title: 'La clase terminó y no tiene transcript ni estado: indica qué pasó',
+        onClick: () => setStatusFor({ c, date, hasJoin: unmarked.hasJoin }),
+      });
+    }
+    // Clase por dar o en curso (y no bloqueada): los avisos de problema del
+    // alumno. En una clase YA DADA no se pinta nada de esto: ahí solo cuenta el
+    // transcript. Una clase bloqueada no lleva ningún chip: lo dice el botón.
+    if (!passed && !inactive && !subBlocked) {
+      const risk = briefingFor(riskBriefings, c.studentName);
+      if (risk) {
+        chips.push({
+          key: 'risk', tone: 'red', label: 'En riesgo',
+          title: risk.previousContext || risk.body || 'Alumno con alerta de riesgo: al entrar a clase verás el protocolo',
+        });
+      }
+      if (formStateOf(formInfo) === 'pending') {
+        chips.push({ key: 'form', tone: 'amber', label: 'Formulario pendiente', title: 'Formulario enviado: el alumno todavía no lo completó' });
+      }
+      // Suscripción: si da acceso (activa, pendiente de cancelación, manual,
+      // Oritalk) no se pinta nada. Quedan "Sin verificar" (no se pudo comprobar)
+      // y "Programada", que conserva su chip de siempre.
+      if (sb && !sb.spin && !isAccessStatus(subStatus)) {
+        const label = plainLabel(sb.label);
+        if (isScheduledWooStatus(subStatus)) {
+          chips.push({ key: 'sub', tone: 'blue', label, title: 'Estado de la suscripción del alumno' });
+        } else if (label === 'Sin verificar') {
+          chips.push({ key: 'sub', tone: 'gray', label, title: 'No se pudo comprobar la suscripción del alumno' });
+        }
+      }
+    }
+
+    // Orden estable por gravedad: lo rojo primero.
+    const sortedChips = chips
+      .map((chip, i) => ({ chip, i }))
+      .sort((a, b) => CHIP_ORDER[a.chip.tone] - CHIP_ORDER[b.chip.tone] || a.i - b.i)
+      .map(x => x.chip);
+    const visibleChips = sortedChips.slice(0, MAX_VISIBLE_CHIPS);
+    const hiddenChips  = sortedChips.slice(MAX_VISIBLE_CHIPS);
+    const detailsOpen  = openDetails === menuId;
+    const toggleDetails = () => setOpenDetails(detailsOpen ? null : menuId);
+
+    // Transcript ya subido (en revisión o validado): corregirlo pasa al menú.
+    const replaceInMenu = passed && !inactive && !needsTranscript;
+
+    const typeLabel = plainLabel(cat.label);
+    const metaParts = [
+      typeLabel,
+      // El plan solo si dice algo más que el tipo de clase.
+      (c.plan || 'Clase').trim().toLowerCase() === typeLabel.toLowerCase() ? null : (c.plan || 'Clase'),
+      c.mixedRecovery ? 'Normal + recuperación' : c.isRecovery ? 'Recuperación' : null,
+      c.level || null,
+      c.isRecovery && c.recoveryFor ? `Recupera clase del ${fmtDateDMY(c.recoveryFor)}` : null,
+      !c.isRecovery ? desde : null,
+    ].filter(Boolean) as string[];
+
+    const mixedTitle = c.mixedRecovery
+      ? `Bloque de ${c.durationHours}h: ${c.durationHours - c.recoveryUnits}h normal + ${c.recoveryUnits}h de recuperación`
+        + (c.recoveryDates.length > 0 ? ` (recupera la clase del ${c.recoveryDates.map(fmtDateDMY).join(' y ')})` : '')
+        + ` · un solo transcript · cuenta como ${c.billingUnits} clases para tu pago`
+      : undefined;
+
     const cardClass = [
-      'mc-card',
+      'mc2-card',
       passed && ' is-passed',
-      inactive && ' is-inactive',
+      (inactive || subBlocked) && ' is-inactive',
       passed && !inactive && (needsTranscript ? ' needs-transcript' : ' is-done'),
       dl?.status === 'vencido' && ' is-expired',
+      inProgress && !inactive && !subBlocked && ' is-live',
+      isNext && !inactive && !subBlocked && ' is-next',
     ].filter(Boolean).join('');
 
     return (
       <div className={cardClass}>
-        <div className="mc-row">
-          <div className="mc-left">
-            {/* Rango completo de la sesión: "17:00 - 19:00" en una clase de 2h. */}
-            <div className="mc-hour">{sessionHoursLabel(c)}</div>
-            <div className={`mc-accent${inProgress ? ' is-live' : isNext ? ' is-next' : ''}`} />
-            <div className="mc-avatar">{c.studentName.charAt(0).toUpperCase()}</div>
+        <div className="mc2-row">
+          {/* Hora (y duración si es una sesión larga) */}
+          <div className="mc2-time" title={hoursBadge ? `Sesión de ${c.durationHours} horas seguidas · cuenta como ${c.billingUnits} clases` : undefined}>
+            <span className="mc2-hour">{hourLabel(c.hour)}</span>
+            {hoursBadge && (
+              <span className="mc2-dur">→ {sessionHoursLabel(c).split(' - ')[1]} · {hoursBadge}</span>
+            )}
+            {inProgress && !inactive && !subBlocked && <span className="mc2-live"><span className="mc2-live-dot" />En curso</span>}
           </div>
 
-          <div className="mc-main">
-            <div className="mc-nameline">
-              <span className={`mc-name${inactive && !held ? ' is-struck' : ''}`}>{c.studentName}</span>
-              {/* Sesión de varias horas: una sola clase que cuenta como N. */}
-              {hoursBadge && <span className="mc-badge-hours" title={`Sesión de ${c.durationHours} horas seguidas · cuenta como ${c.billingUnits} clases`}>{hoursBadge}</span>}
-              {/* Bloque MIXTO: una hora normal + una de recuperación seguidas. Se
-                  paga entero, pero solo la hora normal gasta clase del cupo. */}
-              {c.mixedRecovery && (
-                <span className="mc-badge-mixed" title={`Bloque de ${c.durationHours}h: ${c.durationHours - c.recoveryUnits}h normal + ${c.recoveryUnits}h de recuperación · un solo transcript · cuenta como ${c.billingUnits} clases para tu pago`}>
-                  Normal + recuperación
-                </span>
-              )}
-              {c.isRecovery && <span className="mc-badge-recovery">Recuperación</span>}
-              {rescheduled && <span className="mc-badge-resched">Reprogramada → {fmtDateDMY(rescheduledTo)}</span>}
-              {cancelled && <span className="mc-badge-resched">{cancelLabel}</span>}
-              {held && <span className="mc-badge-resched" title="Suscripción en espera: sus clases quedan suspendidas hasta que regularice el pago">🔒 Pago pendiente</span>}
-              <span className="mc-tag" style={tagPalette}>{cat.label}</span>
-              {inProgress && !inactive && (
-                <span className="mc-live">
-                  <span className="mc-dot" style={{ background: '#16a34a' }} />En curso
-                </span>
-              )}
-            </div>
-            <div className="mc-course">{c.plan || 'Clase'}{c.level ? ` · ${c.level}` : ''}</div>
-            {c.isRecovery && c.recoveryFor && <div className="mc-meta">Recupera clase del {fmtDateDMY(c.recoveryFor)}</div>}
-            {c.mixedRecovery && (
-              <div className="mc-meta">
-                {c.durationHours - c.recoveryUnits}h normal + {c.recoveryUnits}h que recupera
-                {c.recoveryDates.length > 0 && <> la clase del {c.recoveryDates.map(fmtDateDMY).join(' y ')}</>}
-                {' '}· un solo transcript
-              </div>
+          {/* Alumno: el nombre solo (→ ficha) y una línea gris: tipo · nivel · desde */}
+          <div className="mc2-main">
+            {fichaHref ? (
+              <Link href={fichaHref} target="_blank" rel="noopener noreferrer" title="Ver ficha"
+                className={`mc2-name is-link${inactive && !held ? ' is-struck' : ''}`}>
+                {c.studentName}
+              </Link>
+            ) : (
+              <span className={`mc2-name${inactive && !held ? ' is-struck' : ''}`}>{c.studentName}</span>
             )}
-            {desde && !c.isRecovery && <div className="mc-meta">{desde}</div>}
-            {unmarked && (
-              <button type="button" onClick={() => setStatusFor({ c, date, hasJoin: unmarked.hasJoin })}
-                style={{ marginTop: 4, padding: 0, minHeight: 0, border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, color: '#b54708', textAlign: 'left' }}>
-                ⚠️ Sin estado · Marcar estado
+            <div className="mc2-meta" title={mixedTitle}>{metaParts.join(' · ')}</div>
+          </div>
+
+          {/* Atención: máximo 2 chips, el resto detrás de "+N" */}
+          <div className="mc2-chips">
+            {visibleChips.map(chip => <ChipView key={chip.key} chip={chip} />)}
+            {hiddenChips.length > 0 && (
+              <button type="button" className="mc2-chip is-gray is-action is-more" aria-expanded={detailsOpen}
+                title={hiddenChips.map(h => (typeof h.label === 'string' ? h.label : '')).filter(Boolean).join(' · ')}
+                onClick={toggleDetails}>
+                +{hiddenChips.length}
               </button>
             )}
           </div>
 
-          {/* Estado del enlace primero: es la información clave para el profesor. */}
-          <div className="mc-right">
-            {/* Una clase apagada (reprogramada o cancelada) no se dio: no se le
-                pide transcript. En las demás el estado dice lo único que importa:
-                antes de la clase, si el enlace está listo; después, si falta el
-                transcript — en ámbar, porque es una acción pendiente. */}
-            {inactive ? (
-              <span className="mc-status is-muted">
-                <span className="mc-dot" style={{ background: '#a4a7a1' }} />
-                {rescheduled ? 'Reprogramada' : cancelled ? cancelLabel : 'Suspendida · pago pendiente'}
-                {/* Beta: en qué punto está la recuperación de esta clase. */}
-                {beta && cancelled && (() => {
-                  const line = recoveryLineFor(recov.recoveries, c.studentName, date, c.hour);
-                  return line ? <span style={{ marginLeft: 6, fontWeight: 500 }}>· {line}</span> : null;
-                })()}
-              </span>
-            ) : passed && dBadge ? (
-              // La CASILLA del transcript, junto al estado del enlace de la clase:
-              // subido (check verde + fecha y hora de subida), en revisión,
-              // rechazado, pendiente con la cuenta regresiva ("Quedan 14 h", en
-              // amarillo por debajo de 6 h) o VENCIDA en rojo.
-              // SIN ancla del tutorial: figuraba como respaldo del paso de cierre,
-              // pero ese paso vive en /mis-clases (donde se ve con importes si la
-              // clase ya cuenta) y el motor nunca lo resuelve estando aquí. Un
-              // `data-onboarding` que ningún paso usa es el que acaba pudriéndose.
-              <span className={`mc-status${dBadge.tone === 'expired' ? ' is-expired' : dBadge.tone === 'warn' ? ' is-warn' : ''}`}
-                style={{ background: dBadge.bg, color: dBadge.color }}
-                title={dl?.status === 'subido' ? 'Transcript guardado' : dl?.status === 'vencido' ? 'El plazo de 24 h pasó sin transcript: la clase no se valida para el pago' : undefined}>
-                <span className="mc-dot" style={{ background: dBadge.dot }} />
-                {dBadge.tone === 'ok' ? '✓ ' : ''}{dBadge.label}{uploaded ? ` · ${uploaded}` : ''}
-              </span>
-            ) : (
-              <span className={`mc-status ${hasLink ? 'is-ready' : 'is-missing'}`}>
-                <span className="mc-dot" style={{ background: hasLink ? '#16a34a' : '#e0912f' }} />
-                {hasLink ? 'Enlace listo' : 'Sin enlace'}
-              </span>
-            )}
-
-            <div className="mc-actions">
-              {rescheduled ? (
-                <button className="mc-btn mc-btn-ghost" disabled>Reprogramada</button>
-              ) : cancelled ? (
-                <button className="mc-btn mc-btn-ghost" disabled>{cancelLabel}</button>
-              ) : held ? (
-                // Pago pendiente: gris y con candado. El clic enseña el aviso (no
-                // registra nada); por eso no va `disabled`, sino con aria-disabled.
-                <button className="mc-btn mc-btn-ghost" aria-disabled="true" style={{ cursor: 'not-allowed' }}
-                  title="Este alumno tiene el pago pendiente" onClick={() => join.join({ ...c, date })}>
-                  🔒 Pago pendiente
-                </button>
-              ) : passed ? (
-                // La clase ya se dio. Si falta el transcript (o se lo rechazaron),
-                // subirlo es LA acción de la fila. Si ya está subido —esperando
-                // validación o validado— el botón baja a secundario: sirve para
-                // corregirlo, no para "completarlo".
-                // `data-onboarding` solo cuando el transcript es tarea suya: con la
-                // clase ya cerrada el botón dice "Reemplazar" y resaltarlo mandaría
-                // a rehacer algo que está hecho.
+          {/* UNA acción principal + menú ⋯ */}
+          <div className="mc2-actions">
+            {rescheduled || cancelled ? null : subBlocked ? (
+              // Suscripción en espera / cancelada / caducada: la clase no se puede
+              // dar. Deshabilitado de verdad y sin handler: no llega a "Ingresar".
+              <button className="mc2-btn mc2-btn-blocked" disabled aria-disabled="true"
+                title="El alumno no tiene la suscripción activa: no puede tomar esta clase">
+                <span aria-hidden>🔒</span>{blockedLabel}
+              </button>
+            ) : passed ? (
+              needsTranscript ? (
                 // Con el plazo VENCIDO el botón sigue (el alumno necesita su
-                // práctica), pero deja de ser la acción principal: la clase no se
-                // valida para el pago salvo que el admin reabra el plazo.
+                // práctica), pero deja de ser la acción principal.
                 <button
                   data-onboarding={relojListo && needsTranscript && dl?.status !== 'vencido' ? 'add-transcript' : undefined}
-                  className={`mc-btn ${needsTranscript && dl?.status !== 'vencido' ? 'mc-btn-primary' : 'mc-btn-ghost'}${dl?.urgent ? ' is-urgent' : ''}`}
+                  className={`mc2-btn ${dl?.status !== 'vencido' ? 'mc2-btn-primary' : 'mc2-btn-ghost'}${dl?.urgent ? ' is-urgent' : ''}`}
                   title={countdown ? `Te quedan ${countdown} para subirlo` : undefined}
                   onClick={() => setTranscriptFor({ c, date })}>
-                  {tState === 'none' ? '📝 Añadir transcript'
-                    : tState === 'rejected' ? '📝 Subir el correcto'
-                    : 'Reemplazar transcript'}
-                  {countdown && needsTranscript && <span className="mc-btn-count">⏱ {countdown}</span>}
+                  {tState === 'rejected' ? 'Subir el correcto' : 'Añadir transcript'}
+                  {countdown && <span className="mc2-btn-count">{countdown}</span>}
                 </button>
-              ) : hasLink && !joinWin.open ? (
-                // Fuera de la ventana del ingreso (ver joinWindowOf): se ve CUÁNDO
-                // se abre, pero no registra nada. Sin ancla del tutorial: el paso
-                // "Ingresa a tu clase" espera al botón de verdad. `join-slot` es solo
-                // para la guía de penalizaciones, que señala el hueco del botón.
-                <button data-onboarding={relojListo ? 'join-slot' : undefined} className="mc-btn mc-btn-ghost" disabled title="El ingreso se abre 15 minutos antes de la clase">
-                  {joinWin.label}
+              ) : null
+            ) : needsLink ? (
+              // Ancla del tutorial: "set-link" sin enlace, "define-link" con un
+              // enlace antiguo sin confirmar (los mismos pasos de siempre).
+              <div className="mc2-linkcta">
+                <button data-onboarding={relojListo ? (hasLink ? 'define-link' : 'set-link') : undefined}
+                  className={`mc2-btn mc2-btn-primary${linkUrgent ? ' is-danger' : ''}`}
+                  onClick={() => join.openLinkModal(c.assignment)}>
+                  Definir enlace
                 </button>
-              ) : hasLink ? (
-                <button data-onboarding={relojListo ? 'join-class' : undefined} className="mc-btn mc-btn-primary" onClick={() => join.join(c)} disabled={join.checkingKey === c.key}>
-                  {join.checkingKey === c.key
-                    ? <><span className="drc-spinner" />Verificando…</>
-                    : 'Ingresar a clase'}
-                </button>
-              ) : (
-                // Ancla de dos pasos del tutorial: "Define el enlace de tu clase"
-                // y, como respaldo, "Ingresar a clase" (es el hueco que ocupa
-                // cuando al alumno todavía le falta el enlace de Meet).
-                <button data-onboarding={relojListo ? 'set-link' : undefined} className="mc-btn mc-btn-primary" onClick={() => join.openLinkModal(c.assignment)}>
-                  🔗 Definir enlace
-                </button>
-              )}
-
-              <div className="mc-menu-wrap" data-mc-menu>
-                {/* Ancla de la guía de penalizaciones: solo en las tarjetas cuyo menú
-                    trae "No puedo dar esta clase" (por delante, en pie y no de
-                    recuperación), que es lo que el paso siguiente enseña. */}
-                <button className="mc-more" aria-haspopup="menu" aria-expanded={menuOpen} aria-label={`Más acciones para ${c.studentName}`}
-                  data-onboarding={relojListo && beta && !passed && !inactive && !c.isRecovery ? ANCLA_MENU_CLASE : undefined}
-                  data-menu-id={menuId}
-                  onClick={() => setOpenMenu(menuOpen ? null : menuId)}>
-                  ⋯
-                </button>
-                {menuOpen && (
-                  <div className="mc-menu" role="menu">
-                    {unmarked && (
-                      <button className="mc-menu-item" role="menuitem"
-                        onClick={() => { setOpenMenu(null); setStatusFor({ c, date, hasJoin: unmarked.hasJoin }); }}>
-                        Marcar estado
-                      </button>
-                    )}
-                    {beta && !passed && !inactive && !c.isRecovery && (
-                      <button className="mc-menu-item" role="menuitem" data-onboarding={ANCLA_MENU_NO_PUEDO}
-                        onClick={() => { setOpenMenu(null); setNoPuedoModal({ c, date }); }}>
-                        No puedo dar esta clase
-                      </button>
-                    )}
-                    {!held && (
-                    <button className="mc-menu-item" role="menuitem" data-onboarding={ANCLA_MENU_ALUMNO}
-                      onClick={() => { setOpenMenu(null); setRescheduleModal({ c, date }); }}>
-                      {beta ? 'El alumno pidió cambiarla' : 'Reprogramar clase'}
-                    </button>
-                    )}
-                    <button className="mc-menu-item" role="menuitem"
-                      onClick={() => { setOpenMenu(null); join.openLinkModal(c.assignment); }}>
-                      {hasLink ? 'Cambiar enlace' : 'Definir enlace'}
-                    </button>
-                    {slides && (
-                      <button className="mc-menu-item" role="menuitem"
-                        onClick={() => { setOpenMenu(null); window.open(slides, '_blank', 'noopener,noreferrer'); }}>
-                        Diapositivas · clase {nextClassNum}
-                      </button>
-                    )}
-                    {hasLink && (
-                      <>
-                        <div className="mc-menu-sep" />
-                        <div className="mc-menu-extra mc-meta" style={{ wordBreak: 'break-all' }}>
-                          {stripProtocol(c.meetLink!)}
-                        </div>
-                      </>
-                    )}
-                  </div>
-                )}
+                {classInLabel && <span className="mc2-linkcta-when">{classInLabel}</span>}
               </div>
-            </div>
-
-            {/* Acción secundaria: definir el enlace si el principal no lo hace. */}
-            {showDefineLinkBtn && (
-              <button data-onboarding={relojListo ? 'define-link' : undefined} className="mc-pres-btn"
-                onClick={() => join.openLinkModal(c.assignment)}>
-                🔗 Definir enlace
+            ) : !joinWin.open ? (
+              // Fuera de la ventana del ingreso: se ve CUÁNDO se abre, sin parecer
+              // un botón roto. `join-slot` es el ancla de la guía de penalizaciones.
+              <button data-onboarding={relojListo ? 'join-slot' : undefined} className="mc2-wait" disabled
+                title="El ingreso se abre 15 minutos antes de la clase">
+                <span aria-hidden>🕒</span>{joinWin.label}
+              </button>
+            ) : (
+              <button data-onboarding={relojListo ? 'join-class' : undefined} className="mc2-btn mc2-btn-primary" onClick={() => join.join(c)} disabled={join.checkingKey === c.key || subChecking}>
+                {join.checkingKey === c.key || subChecking
+                  ? <><span className="drc-spinner" />Verificando…</>
+                  : 'Ingresar a clase'}
               </button>
             )}
-            {showLinkDefined && (
-              <span className="mc-pres-sent">Enlace definido ✓</span>
-            )}
+
+            <div className="mc-menu-wrap" data-mc-menu>
+              <button className="mc2-more" aria-haspopup="menu" aria-expanded={menuOpen} aria-label={`Más acciones para ${c.studentName}`}
+                data-onboarding={relojListo && beta && !passed && !inactive && !c.isRecovery ? ANCLA_MENU_CLASE : undefined}
+                data-menu-id={menuId}
+                onClick={() => setOpenMenu(menuOpen ? null : menuId)}>
+                ⋯
+              </button>
+              {menuOpen && (
+                <div className="mc-menu mc2-menu" role="menu">
+                  {fichaHref && (
+                    <Link href={fichaHref} target="_blank" rel="noopener noreferrer" className="mc-menu-item" role="menuitem"
+                      onClick={() => setOpenMenu(null)}>
+                      Ver ficha
+                    </Link>
+                  )}
+                  {replaceInMenu && (
+                    <button className="mc-menu-item" role="menuitem"
+                      onClick={() => { setOpenMenu(null); setTranscriptFor({ c, date }); }}>
+                      Reemplazar transcript
+                    </button>
+                  )}
+                  {unmarked && (
+                    <button className="mc-menu-item" role="menuitem"
+                      onClick={() => { setOpenMenu(null); setStatusFor({ c, date, hasJoin: unmarked.hasJoin }); }}>
+                      Marcar estado
+                    </button>
+                  )}
+                  {beta && !passed && !inactive && !c.isRecovery && (
+                    <button className="mc-menu-item" role="menuitem" data-onboarding={ANCLA_MENU_NO_PUEDO}
+                      onClick={() => { setOpenMenu(null); setNoPuedoModal({ c, date }); }}>
+                      No puedo dar esta clase
+                    </button>
+                  )}
+                  {!held && (
+                  <button className="mc-menu-item" role="menuitem" data-onboarding={ANCLA_MENU_ALUMNO}
+                    onClick={() => { setOpenMenu(null); setRescheduleModal({ c, date }); }}>
+                    {beta ? 'El alumno pidió cambiarla' : 'Reprogramar clase'}
+                  </button>
+                  )}
+                  {!subBlocked && (
+                  <button className="mc-menu-item" role="menuitem"
+                    onClick={() => { setOpenMenu(null); join.openLinkModal(c.assignment); }}>
+                    {hasLink ? 'Cambiar enlace' : 'Definir enlace'}
+                  </button>
+                  )}
+                  {slides && (
+                    <button className="mc-menu-item" role="menuitem"
+                      onClick={() => { setOpenMenu(null); window.open(slides, '_blank', 'noopener,noreferrer'); }}>
+                      Diapositivas · clase {nextClassNum}
+                    </button>
+                  )}
+                  {hasLink && (
+                    <>
+                      <div className="mc-menu-sep" />
+                      <div className="mc-menu-extra mc2-menu-link">
+                        {stripProtocol(c.meetLink!)}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
-        {/* Zona secundaria: avisos que no compiten con la acción principal. */}
-        {(sb || hasForm || linkPending) && (
-          <div className="mc-foot">
-            {sb && (
-              <span className="mc-status" style={{ background: sb.bg, color: sb.color }}>
-                {sb.spin && <span className="drc-spinner-xs" />}
-                {sb.label}
-              </span>
-            )}
-            <FormStatusBadge
-              student={{ id: c.assignment.studentId, name: c.studentName, email: c.assignment.studentEmail }}
-              teacher={{ id: teacher.id, name: teacher.name }}
-              assignment={{ id: c.assignment.id, plan: c.assignment.plan, level: c.assignment.studentLevel }}
-              info={formInfo}
-              onRefresh={refreshFormIndex}
-              compact
-            />
-            {linkPending && <MeetLinkBadge assignment={c.assignment} />}
+        {/* Detalle desplegado: los chips que no entraron y lo que está bien. */}
+        {detailsOpen && hiddenChips.length > 0 && (
+          <div className="mc2-details">
+            {hiddenChips.map(chip => <ChipView key={chip.key} chip={chip} />)}
           </div>
         )}
       </div>
@@ -1597,68 +1729,65 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
   }
 
   return (
-    <div className="mc">
+    <div className="mc2">
       {/* Beta: recuperaciones en las que el alumno propuso otros horarios y le
           toca responder al profesor. Para el resto, la lista viene vacía. */}
       {beta && (
         <PendingRecoveriesPanel teacherId={teacher.id} recoveries={recov.recoveries}
           onChanged={async msg => { showToast(msg, 4000); await Promise.all([onDataChanged(), recov.reload()]); }} />
       )}
-      <div className="mc-head">
-        <div>
-          <div className="mc-title">Mis clases</div>
-          {/* Resumen del día: cuántas quedan y cuántas ya diste. Antes solo decía
-              el total, que no distingue "me faltan 4" de "ya terminé". */}
-          <div className="mc-count">
-            {allVisible.length === 0 ? 'Sin clases' : (
-              <span className="mc-summary">
-                {pendingCount > 0 && (
-                  <span><b>{pendingCount}</b> por dar</span>
-                )}
-                {passedCount > 0 && (
-                  <span><b>{passedCount}</b> ya dada{passedCount === 1 ? '' : 's'}</span>
-                )}
-                {relLabel && <span>{relLabel}</span>}
-              </span>
-            )}
-          </div>
-        </div>
 
-        {/* Navegador: día a día o semana a semana según el modo. */}
-        <div className="mc-nav">
-          <button className="mc-nav-btn" aria-label={range === 'week' ? 'Semana anterior' : 'Día anterior'}
-            onClick={() => setDayOffset(o => o - step)}>‹</button>
-          <span className="mc-nav-label">{dateLabel}</span>
-          <button className="mc-nav-btn" aria-label={range === 'week' ? 'Semana siguiente' : 'Día siguiente'}
-            onClick={() => setDayOffset(o => o + step)}>›</button>
-          <button className="mc-today-btn" onClick={() => setDayOffset(0)} disabled={atToday}>Hoy</button>
-        </div>
+      {/* Cabecera compacta: título + contador, y una sola franja de controles. */}
+      <div className="mc2-head">
+        <h2 className="mc2-title">Mis clases</h2>
+        <span className="mc2-count">
+          {allVisible.length === 0 ? 'Sin clases' : (
+            <span className="mc-summary">
+              {pendingCount > 0 && (
+                <span><b>{pendingCount}</b> por dar</span>
+              )}
+              {passedCount > 0 && (
+                <span><b>{passedCount}</b> ya dada{passedCount === 1 ? '' : 's'}</span>
+              )}
+              {relLabel && <span>{relLabel}</span>}
+            </span>
+          )}
+        </span>
       </div>
 
-      {/* Rango (día / semana) y filtro. La semana es lunes → sábado: el grid del
-          calendario no tiene domingo, así que un séptimo día saldría vacío. */}
-      <div className="mc-controls">
-        <div className="mc-segment" role="tablist" aria-label="Rango">
+      <div className="mc2-toolbar">
+        {/* Navegador: día a día o semana a semana según el modo. */}
+        <div className="mc2-nav">
+          <button className="mc2-nav-btn" aria-label={range === 'week' ? 'Semana anterior' : 'Día anterior'}
+            onClick={() => setDayOffset(o => o - step)}>‹</button>
+          <span className="mc2-nav-label">{dateLabel}</span>
+          <button className="mc2-nav-btn" aria-label={range === 'week' ? 'Semana siguiente' : 'Día siguiente'}
+            onClick={() => setDayOffset(o => o + step)}>›</button>
+          <button className="mc2-today-btn" onClick={() => setDayOffset(0)} disabled={atToday}>Hoy</button>
+        </div>
+
+        {/* Rango (día / semana). La semana es lunes → sábado. */}
+        <div className="mc2-seg" role="tablist" aria-label="Rango">
           {RANGE_TABS.map(t => (
             <button key={t.id} role="tab" aria-selected={range === t.id}
-              className={`mc-segment-btn${range === t.id ? ' is-active' : ''}`}
+              className={`mc2-seg-btn${range === t.id ? ' is-active' : ''}`}
               onClick={() => setRange(t.id)}>
               {t.label}
             </button>
           ))}
         </div>
 
-        <div className="mc-chips">
+        {/* Filtros como control segmentado. */}
+        <div className="mc2-seg mc2-filters" role="tablist" aria-label="Filtro">
           {FILTER_TABS.map(f => {
-            // El contador del filtro que cierra el pago se muestra siempre: es el
-            // que le dice al profesor cuánto le queda por hacer.
+            // El contador del filtro que cierra el pago se muestra siempre.
             const badge = f.id === 'sin_transcript' && missingTranscripts.length > 0
               ? missingTranscripts.length : null;
             return (
-              <button key={f.id}
-                className={`mc-chip${filter === f.id ? ' is-active' : ''}${badge ? ' is-warn' : ''}`}
+              <button key={f.id} role="tab" aria-selected={filter === f.id}
+                className={`mc2-seg-btn${filter === f.id ? ' is-active' : ''}`}
                 onClick={() => setFilter(f.id)}>
-                {f.label}{badge ? ` · ${badge}` : ''}
+                {f.label}{badge ? <span className="mc2-seg-badge">{badge}</span> : null}
               </button>
             );
           })}
@@ -1667,81 +1796,75 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
 
       {/* Aviso tras guardar un transcript */}
       {saveNotice && (
-        <div className="mc-banner" style={{ background: '#fffdf5', borderColor: 'rgba(255,196,0,0.55)' }}>
-          <div style={{ flex: 1, color: '#5f6360' }}>
-            <b style={{ color: '#1a1c1a' }}>{saveNotice.title}</b> · {saveNotice.body}
-          </div>
-          <button className="mc-btn mc-btn-ghost" onClick={() => setSaveNotice(null)}>Cerrar</button>
+        <div className="mc2-notice is-info">
+          <span className="mc2-notice-text"><b>{saveNotice.title}</b> · {saveNotice.body}</span>
+          <button className="mc2-notice-btn" onClick={() => setSaveNotice(null)}>Cerrar</button>
         </div>
       )}
 
-      {/* Transcripts pendientes del rango a la vista: es lo que le falta al
-          profesor para que esas clases cuenten en su pago. Va arriba, no
-          escondido, y el botón lleva al filtro que las aísla. */}
+      {/* Transcripts pendientes del rango a la vista. */}
       {missingTranscripts.length > 0 && filter !== 'sin_transcript' && (
-        <div className="mc-banner">
-          <div style={{ flex: 1 }}>
+        <div className="mc2-notice">
+          <span className="mc2-notice-text">
             {missingTranscripts.length} clase{missingTranscripts.length !== 1 ? 's' : ''} sin transcript{' '}
             {range === 'week' ? 'esta semana' : 'este día'}:{' '}
-            {[...new Set(missingTranscripts.map(x => x.c.studentName.split(' ')[0]))].join(', ')}
-          </div>
-          <button className="mc-btn mc-btn-ghost" onClick={() => setFilter('sin_transcript')}>
+            <span className="mc2-notice-names">{[...new Set(missingTranscripts.map(x => x.c.studentName.split(' ')[0]))].join(', ')}</span>
+          </span>
+          <button className="mc2-notice-btn" onClick={() => setFilter('sin_transcript')}>
             Ver solo esas
           </button>
         </div>
       )}
 
-      {/* Materiales de clase (diapositivas por hito) — desplegable discreto */}
-      <ClassMaterialsSection />
-
       {/* Aviso de alumnos sin enlace definido */}
       {missingLinks.length > 0 && (
-        <div className="mc-banner">
-          <div style={{ flex: 1 }}>
-            {missingLinks.length} alumno{missingLinks.length !== 1 ? 's' : ''} sin enlace definido: {missingNames.join(', ')}
-          </div>
-          <button className="mc-btn mc-btn-ghost" onClick={() => join.openLinkModal(missingLinks[0].assignment)}>
+        <div className="mc2-notice">
+          <span className="mc2-notice-text">
+            {missingLinks.length} alumno{missingLinks.length !== 1 ? 's' : ''} sin enlace definido:{' '}
+            <span className="mc2-notice-names">{missingNames.join(', ')}</span>
+          </span>
+          <button className="mc2-notice-btn" onClick={() => join.openLinkModal(missingLinks[0].assignment)}>
             Definir enlaces
           </button>
         </div>
       )}
 
-      {/* Clases del rango. UNA sola lista por hora, con las clases dadas en su
-          sitio: antes iban plegadas detrás de un desplegable y en los días
-          anteriores ni siquiera existían como "dadas", así que el profesor no
-          tenía dónde verlas ni dónde cerrarlas con el transcript. */}
+      {/* Materiales de clase (diapositivas por hito) — fila plegable */}
+      <ClassMaterialsSection />
+
+      {/* Clases del rango, una sola lista por hora con las dadas en su sitio. */}
       {allVisible.length === 0 ? (
-        <div className="mc-empty">
+        <div className="mc2-empty">
           {range === 'week'
             ? 'No tienes clases esta semana.'
             : isToday ? 'No tienes clases hoy.' : 'No tienes clases este día.'}
         </div>
       ) : shownCount === 0 ? (
-        <div className="mc-empty">
+        <div className="mc2-empty">
           Ninguna clase {range === 'week' ? 'de la semana' : 'del día'} coincide con este filtro.
           <div style={{ marginTop: 12 }}>
-            <button className="mc-btn mc-btn-ghost" onClick={() => setFilter('todas')}>Ver todas</button>
+            <button className="mc2-btn mc2-btn-ghost" onClick={() => setFilter('todas')}>Ver todas</button>
           </div>
         </div>
       ) : range === 'day' ? (
-        <div className="mc-list">
+        <div className="mc2-list">
           {dayGroups[0].shown.map(c => (
             <Fragment key={c.key}>{renderClassRow({ c, status: rowStatus(c, dayGroups[0].iso), date: dayGroups[0].iso })}</Fragment>
           ))}
         </div>
       ) : (
         // Semana: las mismas tarjetas, agrupadas bajo la cabecera de cada día.
-        <div className="mc-week">
+        <div className="mc2-week">
           {dayGroups.filter(g => g.shown.length > 0).map(g => (
             <div key={g.iso}>
-              <div className={`mc-daystrip${g.iso === todayIso ? ' is-today' : ''}`}>
-                <span className="mc-daystrip-name">{dayHeadingLabel(g.iso)}</span>
-                {g.iso === todayIso && <span className="mc-daystrip-hoy">Hoy</span>}
-                <span className="mc-daystrip-count">
+              <div className={`mc2-daystrip${g.iso === todayIso ? ' is-today' : ''}`}>
+                <span className="mc2-daystrip-name">{dayHeadingLabel(g.iso)}</span>
+                {g.iso === todayIso && <span className="mc2-daystrip-hoy">Hoy</span>}
+                <span className="mc2-daystrip-count">
                   {g.shown.length} clase{g.shown.length === 1 ? '' : 's'}
                 </span>
               </div>
-              <div className="mc-list">
+              <div className="mc2-list">
                 {g.shown.map(c => (
                   <Fragment key={c.key}>{renderClassRow({ c, status: rowStatus(c, g.iso), date: g.iso })}</Fragment>
                 ))}

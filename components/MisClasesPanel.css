@@ -1,0 +1,302 @@
+/* ── "Mis clases" del profesor (components/MisClasesPanel) ────────────────────
+   Capa aislada bajo .mc2. El diseño responde al ANCHO DEL PANEL (container
+   queries), no al de la ventana.
+
+   Chips: un solo sistema (mismo alto, radio y padding). El tono significa algo:
+     ámbar = pendiente de acción · rojo = riesgo o problema ·
+     azul  = informativo         · gris = neutro.
+   El verde #1E9E3A queda para el botón de la acción principal. */
+.mc2 {
+  /* Las variables de .mc, para las piezas compartidas (menú ⋯, pop-up, modales). */
+  --mc-page:   #F7F7F5;
+  --mc-card:   #ffffff;
+  --mc-border: #e8e8e3;
+  --mc-t1:     #1a1c1a;
+  --mc-t2:     #6f736d;
+  --mc-t3:     #9a9d97;
+  --mc-green:  #1E9E3A;
+
+  --mc2-green:       #1E9E3A;
+  --mc2-green-hover: #198533;
+  --mc2-blue:        #2563eb;
+
+  container-type: inline-size;
+  container-name: mc2;
+  font-family: var(--font-app);
+  background: var(--mc-page);
+  border-radius: 18px;
+  padding: 22px 24px 28px;
+  color: var(--mc-t1);
+}
+
+/* ── Cabecera ─────────────────────────────────────────────────────────────── */
+.mc2-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+.mc2-title { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -0.012em; }
+.mc2-count { font-size: 13px; color: var(--mc-t2); }
+
+.mc2-toolbar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.mc2-nav {
+  display: inline-flex; align-items: center; gap: 2px;
+  background: var(--mc-card); border: 1px solid var(--mc-border); border-radius: 10px; padding: 3px;
+}
+.mc2-nav-btn {
+  width: 30px; height: 30px; min-height: 0; display: grid; place-items: center;
+  border: none; background: transparent; border-radius: 7px;
+  color: var(--mc-t2); cursor: pointer; font-size: 16px; font-family: inherit; line-height: 1;
+}
+.mc2-nav-btn:hover { background: var(--mc-page); color: var(--mc-t1); }
+.mc2-nav-label {
+  min-width: 150px; text-align: center; font-size: 13px; font-weight: 600;
+  text-transform: capitalize; font-variant-numeric: tabular-nums;
+}
+.mc2-today-btn {
+  min-height: 0; border: none; background: transparent; color: var(--mc2-green);
+  font-family: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
+  padding: 6px 9px; border-radius: 7px;
+}
+.mc2-today-btn:hover:not(:disabled) { background: #eef6ef; }
+.mc2-today-btn:disabled { color: var(--mc-t3); cursor: default; }
+
+/* Control segmentado (Día/Semana y filtros): el mismo componente para los dos. */
+.mc2-seg {
+  display: inline-flex; gap: 2px; padding: 3px;
+  background: var(--mc-card); border: 1px solid var(--mc-border); border-radius: 10px;
+}
+.mc2-filters { margin-left: auto; }
+.mc2-seg-btn {
+  min-height: 0; display: inline-flex; align-items: center; gap: 6px;
+  border: none; background: transparent; border-radius: 7px;
+  padding: 6px 12px; cursor: pointer; font-family: inherit; white-space: nowrap;
+  font-size: 12.5px; font-weight: 600; color: var(--mc-t2);
+}
+.mc2-seg-btn:hover { color: var(--mc-t1); background: var(--mc-page); }
+.mc2-seg-btn.is-active { background: #1a1c1a; color: #fff; }
+.mc2-seg-badge {
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
+  display: inline-grid; place-items: center; font-size: 11px; font-weight: 700;
+  background: #FEF0DB; color: #92400E;
+}
+.mc2-seg-btn.is-active .mc2-seg-badge { background: #FFC400; color: #1a1c1a; }
+
+/* ── Avisos de una línea ─────────────────────────────────────────────────── */
+.mc2-notice {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 8px 12px 8px 14px; margin-bottom: 8px;
+  background: var(--mc-card); border: 1px solid var(--mc-border);
+  border-left: 3px solid #F59E0B; border-radius: 10px;
+  font-size: 13px; color: #5f4210;
+}
+.mc2-notice.is-info { border-left-color: var(--mc2-blue); color: var(--mc-t2); }
+.mc2-notice.is-info b { color: var(--mc-t1); }
+.mc2-notice-text { flex: 1; min-width: 0; }
+.mc2-notice-names { color: var(--mc-t2); }
+.mc2-notice-btn {
+  min-height: 0; border: none; background: transparent; padding: 4px 2px; cursor: pointer;
+  font-family: inherit; font-size: 12.5px; font-weight: 600; color: var(--mc-t1);
+  text-decoration: underline; text-underline-offset: 3px; text-decoration-color: #c9cbc5;
+}
+.mc2-notice-btn:hover { text-decoration-color: currentColor; }
+
+/* ── Materiales de clase: una fila fina, plegable ────────────────────────── */
+.mc2 .mc2-cm { border-radius: 10px; box-shadow: none; border-color: var(--mc-border); margin: 4px 0 16px; }
+.mc2-cm-head {
+  width: 100%; min-height: 0; display: flex; align-items: center; gap: 10px;
+  padding: 9px 14px; border: none; background: transparent;
+  cursor: pointer; font-family: inherit; text-align: left;
+}
+.mc2-cm-head:hover { background: #fafaf8; }
+.mc2-cm-title { font-size: 13px; font-weight: 600; color: var(--mc-t1); }
+.mc2-cm-sub { flex: 1; font-size: 12.5px; color: var(--mc-t3); }
+
+/* ── Lista y semana ──────────────────────────────────────────────────────── */
+.mc2-list { display: flex; flex-direction: column; gap: 8px; }
+.mc2-week { display: flex; flex-direction: column; gap: 20px; }
+.mc2-daystrip { display: flex; align-items: center; gap: 8px; padding: 0 4px 8px; }
+.mc2-daystrip-name { font-size: 13px; font-weight: 600; color: var(--mc-t2); text-transform: capitalize; }
+.mc2-daystrip.is-today .mc2-daystrip-name { color: var(--mc-t1); }
+.mc2-daystrip-hoy {
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase;
+  color: var(--mc2-blue); background: #EAF1FE; border-radius: 999px; padding: 2px 8px;
+}
+.mc2-daystrip-count { font-size: 12px; color: var(--mc-t3); margin-left: auto; }
+.mc2-empty { text-align: center; padding: 44px 16px; color: var(--mc-t2); font-size: 14px; }
+
+/* ── Tarjeta ─────────────────────────────────────────────────────────────── */
+.mc2-card {
+  position: relative;
+  background: var(--mc-card); border: 1px solid var(--mc-border);
+  border-radius: 14px; padding: 14px 16px 14px 18px;
+}
+/* Acento a la izquierda: en curso (azul) y la próxima de hoy (gris azulado). */
+.mc2-card.is-live::before,
+.mc2-card.is-next::before {
+  content: ''; position: absolute; left: -1px; top: 12px; bottom: 12px; width: 3px;
+  border-radius: 0 3px 3px 0; background: var(--mc2-blue);
+}
+.mc2-card.is-next::before { background: #b9c8e6; }
+
+.mc2-row {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr) auto auto;
+  grid-template-areas: "time main chips actions";
+  align-items: center; gap: 16px;
+}
+
+.mc2-time { grid-area: time; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.mc2-hour { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+.mc2-dur  { font-size: 12px; color: var(--mc-t2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mc2-live {
+  display: inline-flex; align-items: center; gap: 5px; margin-top: 2px;
+  font-size: 11.5px; font-weight: 600; color: var(--mc2-blue);
+}
+.mc2-live-dot {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--mc2-blue);
+  animation: mc2-pulse 1.6s ease-in-out infinite;
+}
+@keyframes mc2-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+.mc2-main { grid-area: main; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.mc2-name {
+  display: block; font-size: 15.5px; font-weight: 600; letter-spacing: -0.01em; color: var(--mc-t1);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
+}
+.mc2-name.is-link { text-decoration: none; }
+.mc2-name.is-link:hover { text-decoration: underline; text-underline-offset: 3px; text-decoration-color: #c9cbc5; }
+.mc2-name.is-struck { text-decoration: line-through; color: var(--mc-t2); }
+.mc2-meta {
+  font-size: 12.5px; color: var(--mc-t3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* Chips de atención */
+.mc2-chips {
+  grid-area: chips; display: flex; align-items: center; justify-content: flex-end;
+  gap: 6px; flex-wrap: wrap; max-width: 340px;
+}
+.mc2-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 24px; min-height: 0; padding: 0 9px; border-radius: 999px;
+  border: 1px solid transparent; font-family: inherit;
+  font-size: 12px; font-weight: 600; line-height: 1; white-space: nowrap;
+}
+.mc2-chip.is-amber { background: #FEF3E2; border-color: #F8E1BD; color: #8a4b06; }
+.mc2-chip.is-red   { background: #FDEDEC; border-color: #F6D0CC; color: #b42318; }
+.mc2-chip.is-blue  { background: #EDF3FE; border-color: #D5E2FB; color: #1d4ed8; }
+.mc2-chip.is-gray  { background: #F2F2EF; border-color: #E4E4DF; color: #5f6360; }
+.mc2-chip-sub { font-weight: 500; opacity: 0.72; }
+.mc2-chip.is-action { cursor: pointer; }
+.mc2-chip.is-action:hover { filter: brightness(0.97); border-color: currentColor; }
+.mc2-chip.is-more { padding: 0 8px; }
+
+
+/* Detalle desplegado ("+N"): sin línea divisoria, dentro de la tarjeta. */
+.mc2-details {
+  display: flex; align-items: center; justify-content: flex-end; gap: 6px 10px; flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+/* Acción principal + ⋯ */
+.mc2-actions { grid-area: actions; display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.mc2-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  min-height: 0; height: 38px; padding: 0 16px; border-radius: 10px; font-family: inherit;
+  font-size: 13.5px; font-weight: 600; cursor: pointer; white-space: nowrap;
+}
+.mc2-btn-primary { border: none; background: var(--mc2-green); color: #fff; }
+.mc2-btn-primary:hover { background: var(--mc2-green-hover); }
+.mc2-btn-primary:disabled { background: #a9d4b3; cursor: progress; }
+.mc2-btn-ghost { border: 1px solid var(--mc-border); background: var(--mc-card); color: #3f423f; }
+.mc2-btn-ghost:hover { background: var(--mc-page); }
+.mc2-btn.is-urgent.mc2-btn-primary { background: #FFC400; color: #1a1c1a; }
+.mc2-btn.is-urgent.mc2-btn-primary:hover { background: #f0b800; }
+/* "Definir enlace" con menos de 24 h para la clase: mismo botón, en rojo. */
+.mc2-btn-primary.is-danger { background: #dc2626; }
+.mc2-btn-primary.is-danger:hover { background: #b91c1c; }
+/* Pago pendiente / suscripción cancelada / vencida: el mismo botón blanco con
+   candado que tenía "Pago pendiente", deshabilitado de verdad. */
+.mc2-btn-blocked {
+  border: 1px solid var(--mc-border); background: var(--mc-card); color: #6f736d; cursor: not-allowed;
+}
+/* "Definir enlace" + la cuenta atrás hasta la clase, debajo. */
+.mc2-linkcta { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.mc2-linkcta-when { font-size: 11.5px; color: var(--mc-t2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mc2-btn-count {
+  display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border-radius: 999px;
+  font-size: 11.5px; font-weight: 700; font-variant-numeric: tabular-nums;
+  background: rgba(255,255,255,0.22); color: inherit;
+}
+.mc2-btn-ghost .mc2-btn-count,
+.mc2-btn.is-urgent .mc2-btn-count { background: rgba(0,0,0,0.08); }
+
+/* Ingreso todavía cerrado: inactivo a la vista, no un botón roto. */
+.mc2-wait {
+  display: inline-flex; align-items: center; gap: 6px;
+  min-height: 0; height: 38px; padding: 0 4px; border: none; background: transparent;
+  font-family: inherit; font-size: 12.5px; font-weight: 500; color: var(--mc-t3);
+  white-space: nowrap; cursor: default;
+}
+
+.mc2-more {
+  width: 38px; height: 38px; min-height: 0; display: grid; place-items: center;
+  border: 1px solid transparent; background: transparent; border-radius: 10px;
+  color: var(--mc-t2); cursor: pointer; font-family: inherit; font-size: 18px; line-height: 1;
+}
+.mc2-more:hover, .mc2-more[aria-expanded="true"] { background: var(--mc-page); border-color: var(--mc-border); color: var(--mc-t1); }
+.mc2-menu a.mc-menu-item { display: block; text-decoration: none; color: #2e312e; }
+.mc2-menu-link { font-size: 12px; color: var(--mc-t3); word-break: break-all; }
+
+/* Estados de la tarjeta */
+/* Ya dada: se atenúa el contenido; la acción y los avisos siguen a plena intensidad. */
+.mc2-card.is-passed .mc2-time,
+.mc2-card.is-passed .mc2-main { opacity: 0.62; }
+.mc2-card.is-passed.is-done { background: #fcfcfb; }
+/* Reprogramada / cancelada / pago pendiente: la clase no se da. */
+.mc2-card.is-inactive { background: #fbfbfa; }
+.mc2-card.is-inactive .mc2-time,
+.mc2-card.is-inactive .mc2-main { opacity: 0.5; }
+.mc2-card.is-expired { border-color: #f3c7c2; }
+
+/* ── Estrecho (móvil o columna "lado a lado"): la tarjeta se apila ───────── */
+@container mc2 (max-width: 680px) {
+  .mc2-toolbar { gap: 8px; }
+  .mc2-nav { width: 100%; justify-content: space-between; }
+  .mc2-nav-btn { width: 40px; height: 40px; }
+  .mc2-nav-label { min-width: 0; flex: 1; }
+  .mc2-today-btn { height: 40px; }
+  .mc2-seg { width: 100%; }
+  .mc2-seg-btn { flex: 1; justify-content: center; height: 36px; }
+  .mc2-filters {
+    margin-left: 0; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch;
+  }
+  .mc2-filters::-webkit-scrollbar { display: none; }
+  .mc2-filters .mc2-seg-btn { flex: 1 0 auto; }
+
+  .mc2-card { padding: 14px; }
+  .mc2-row {
+    grid-template-columns: 64px minmax(0, 1fr);
+    grid-template-areas: "time main" "chips chips" "actions actions";
+    align-items: start; gap: 10px 12px;
+  }
+  .mc2-hour { font-size: 16px; }
+  .mc2-chips { justify-content: flex-start; max-width: none; }
+  .mc2-chips:empty { display: none; }
+  .mc2-actions { justify-content: stretch; }
+  .mc2-actions > .mc2-btn, .mc2-actions > .mc2-wait, .mc2-actions > .mc2-linkcta { flex: 1; }
+  .mc2-actions > .mc2-btn, .mc2-actions > .mc2-wait, .mc2-linkcta > .mc2-btn { height: 44px; }
+  .mc2-linkcta > .mc2-btn { width: 100%; }
+  .mc2-wait { justify-content: center; background: #f2f2ef; border-radius: 10px; }
+  .mc2-actions > .mc-menu-wrap:first-child { margin-left: auto; }
+  .mc2-more { width: 44px; height: 44px; border-color: var(--mc-border); }
+  .mc2-details { justify-content: flex-start; }
+  /* Sin acción principal (clase cerrada, reprogramada…): el ⋯ va a la esquina
+     en vez de ocupar una fila entera. */
+  .mc2-actions:not(:has(> .mc2-btn, > .mc2-wait, > .mc2-linkcta)) { position: absolute; top: 8px; right: 8px; }
+  .mc2-card:has(.mc2-actions:not(:has(> .mc2-btn, > .mc2-wait, > .mc2-linkcta))) .mc2-main { padding-right: 44px; }
+}
+
+@media (max-width: 720px) {
+  .mc2 { padding: 14px; border-radius: 0; }
+}

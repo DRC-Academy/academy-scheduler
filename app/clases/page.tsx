@@ -100,7 +100,7 @@ function ClasesContent() {
   }, [teacher?.id, saveGrid]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div style={{ minHeight: '100vh', background: '#f4f5f2' }}>
+    <div style={{ minHeight: '100vh', background: '#F7F7F5' }}>
       <NavBar />
       <PullToRefresh onRefresh={async () => { await reloadAll(); await loadFinanceData(); }}>
         <div style={{ maxWidth: 1180, margin: '0 auto', padding: '20px 16px 48px' }}>
@@ -112,8 +112,8 @@ function ClasesContent() {
           </div>
 
           {!teacher || loading ? (
-            <div className="mc">
-              <div className="mc-empty">Cargando tus clases…</div>
+            <div className="mc2">
+              <div className="mc2-empty">Cargando tus clases…</div>
             </div>
           ) : gridError ? (
             <CalendarLoadError message={gridError} onRetry={() => { setGridError(null); setLoading(true); setReload(n => n + 1); }} />
