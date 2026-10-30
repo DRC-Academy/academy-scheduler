@@ -235,3 +235,45 @@ export async function cutFrame(source: FathomSource, atS: number): Promise<Buffe
     return f && f.length ? f : null;
   });
 }
+
+// ── Varios tramos de audio (escucha dirigida) ────────────────────────────────
+
+export interface AudioWindow { start: number; dur: number }
+
+/**
+ * Audio (MP3 mono 16 kHz) de varios tramos de la MISMA grabación: la lista se
+ * pide una vez y cada trozo de 6 s se baja una sola vez aunque lo usen dos
+ * tramos. ffmpeg no decodifica el video (-vn). Fathom no ofrece una pista solo de
+ * audio pública (su audio_url da 404 sin sesión), así que se baja el video igual.
+ */
+export async function cutAudioWindows(source: FathomSource, windows: AudioWindow[]): Promise<Array<AudioWindow & { audio: Buffer }>> {
+  if (!windows.length) return [];
+  const pl = await fetch(source.videoUrl, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(PAGE_TIMEOUT_MS) });
+  if (!pl.ok) throw new FathomCutError(`La lista del video responde ${pl.status}.`, pl.status === 404 ? 'borrado' : 'error');
+  const all = parsePlaylist(await pl.text(), source.videoUrl);
+  const plan = windows.map(w => ({ ...w, need: chunksFor(all, w.start, w.dur) })).filter(w => w.need.length);
+
+  const uris = [...new Set(plan.flatMap(w => w.need.map(c => c.uri)))];
+  const got = new Map<string, Buffer>();
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(6, uris.length) }, async () => {
+    for (let i = next++; i < uris.length; i = next++) {
+      const r = await fetch(uris[i], { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(CHUNK_TIMEOUT_MS) });
+      if (!r.ok) throw new FathomCutError(`Un trozo del video responde ${r.status}.`, 'error');
+      got.set(uris[i], Buffer.from(await r.arrayBuffer()));
+    }
+  }));
+
+  const out: Array<AudioWindow & { audio: Buffer }> = [];
+  for (const w of plan) {
+    const raw = Buffer.concat(w.need.map(c => got.get(c.uri)!));
+    const offset = Math.max(0, w.start - w.need[0].start);
+    const audio = await withFfmpeg(raw, async (ff, rawPath, dir) => {
+      await run(ff, ['-v', 'error', '-y', '-i', rawPath, '-ss', offset.toFixed(2), '-t', String(w.dur),
+        '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'libmp3lame', '-b:a', '48k', join(dir, 'a.mp3')]);
+      return readFile(join(dir, 'a.mp3'));
+    });
+    out.push({ start: w.start, dur: w.dur, audio });
+  }
+  return out;
+}

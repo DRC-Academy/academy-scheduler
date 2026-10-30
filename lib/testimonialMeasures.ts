@@ -46,6 +46,12 @@ export interface VerifyConfig {
   vision_camara_conf: number; vision_leyendo_conf: number;
   juez_nota_min: number; parejas_por_tanda: number;
   endurecer_ventana: number; endurecer_veces: number; alarma_fuente_pct: number; retencion_dias: number;
+  // Escucha dirigida (supabase-testimoniales-escucha.sql)
+  buscador_v6_activo: number;
+  escucha_tramos_por_clase: number; escucha_tope_s: number; escucha_min_turno_s: number; escucha_margen_s: number;
+  escucha_clases_lado: number; escucha_min_clases: number; escucha_antiguedad_dias: number;
+  escucha_min_palabras: number; escucha_clip_max_s: number;
+  deepgram_usd_min_multi: number; deepgram_usd_min_detect: number; deepgram_credito_usd: number;
 }
 
 /** Valores de supabase-testimoniales-verificador.sql: solo para lo que falte en la tabla. */
@@ -61,6 +67,12 @@ export const CONFIG_POR_DEFECTO: VerifyConfig = {
   vision_camara_conf: 0.6, vision_leyendo_conf: 0.6,
   juez_nota_min: 60, parejas_por_tanda: 5,
   endurecer_ventana: 20, endurecer_veces: 3, alarma_fuente_pct: 0.5, retencion_dias: 30,
+  // Sin la fila (SQL de la escucha sin correr), el buscador viejo sigue encendido.
+  buscador_v6_activo: 1,
+  escucha_tramos_por_clase: 5, escucha_tope_s: 45, escucha_min_turno_s: 15, escucha_margen_s: 2,
+  escucha_clases_lado: 3, escucha_min_clases: 4, escucha_antiguedad_dias: 60,
+  escucha_min_palabras: 8, escucha_clip_max_s: 30,
+  deepgram_usd_min_multi: 0.0052, deepgram_usd_min_detect: 0.0043, deepgram_credito_usd: 200,
 };
 
 // ── Tramo que se recorta ─────────────────────────────────────────────────────
@@ -182,6 +194,13 @@ export function measureClip(multi: DeepgramTranscript, detect: DeepgramTranscrip
     idioma: detect?.detectedLanguage ?? null,
     idioma_conf: detect?.languageConfidence ?? null,
   };
+}
+
+/** Segundos (dentro del audio) donde empieza y acaba de hablar el hablante principal. null = sin voz. */
+export function mainSpeakerSpan(t: DeepgramTranscript): { start: number; end: number } | null {
+  const dom = dominant(t.words);
+  const ws = t.words.filter(w => w.speaker === dom.speaker && !isFiller(w.word));
+  return ws.length ? { start: ws[0].start, end: ws[ws.length - 1].end } : null;
 }
 
 /** Texto del hablante principal (con puntuación), el que se enseña y lee el juez. */

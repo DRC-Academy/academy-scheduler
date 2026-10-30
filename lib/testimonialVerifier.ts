@@ -32,9 +32,11 @@ import { readFathomShare, cutClip, cutFrame, classifyShareUrl, FathomCutError, t
 import { parseTurns, toSeconds, withFathomTimestamp } from '@/lib/fluency';
 import { nameMatchesStrict } from '@/lib/testimonialSpeaker';
 import { syncSegmentPairs } from '@/lib/testimonialSegmentsStore';
+import { loadConfig, logDeepgramUsage } from '@/lib/testimonialConfigStore';
+import { pairFromListening } from '@/lib/testimonialListen';
 import type { TestimonialClip, TestimonialClips } from '@/lib/testimonials';
 import {
-  CONFIG_POR_DEFECTO, MOTIVOS_ADMIN, cutWindow, measureClip, mainSpeakerText, checkAudio, checkAntes, checkDespues,
+  MOTIVOS_ADMIN, cutWindow, measureClip, mainSpeakerText, checkAudio, checkAntes, checkDespues,
   checkContraste, checkVision, weeksBetween, shouldHarden, hardenedValue,
   type VerifyConfig, type ClipMeasures, type Motivo, type VisionVerdict, type RuleResult,
 } from '@/lib/testimonialMeasures';
@@ -42,24 +44,11 @@ import {
 type Row = Record<string, any>;   // eslint-disable-line @typescript-eslint/no-explicit-any
 export type BatchKind = 'busqueda' | 'prueba';
 
+export { loadConfig } from '@/lib/testimonialConfigStore';
 export const BUCKET = 'testimonios';
 const SIRVEN = ['listo', 'revisado', 'permiso_alumno'];
 
 // ── Configuración ────────────────────────────────────────────────────────────
-
-export interface ConfigRow { key: string; value: number; description: string; motivo: string | null; paso: number | null; limite: number | null }
-
-export async function loadConfig(admin: SupabaseClient): Promise<{ config: VerifyConfig; rows: ConfigRow[] }> {
-  const { data, error } = await admin.from('testimonial_config').select('key, value, description, motivo, paso, limite').order('key');
-  if (error) throw new Error(`testimonial_config: ${error.message}`);
-  const rows = ((data ?? []) as Row[]).map(r => ({
-    key: String(r.key), value: Number(r.value), description: String(r.description ?? ''),
-    motivo: r.motivo ?? null, paso: r.paso == null ? null : Number(r.paso), limite: r.limite == null ? null : Number(r.limite),
-  }));
-  const config = { ...CONFIG_POR_DEFECTO };
-  for (const r of rows) if (r.key in config && Number.isFinite(r.value)) (config as unknown as Record<string, number>)[r.key] = r.value;
-  return { config, rows };
-}
 
 async function testAccounts(admin: SupabaseClient): Promise<{ teachers: Set<string>; students: Set<string> }> {
   const [{ data: t }, { data: s }] = await Promise.all([
@@ -93,7 +82,8 @@ export interface StartedBatch { batchId: string; ids: string[]; resincronizados:
  *   · prueba: las "No sirve" del admin aún no pasadas por el verificador.
  */
 export async function startBatch(admin: SupabaseClient, kind: BatchKind): Promise<StartedBatch> {
-  const test = await testAccounts(admin);
+  const [test, { config }] = await Promise.all([testAccounts(admin), loadConfig(admin)]);
+  const v6 = config.buscador_v6_activo !== 0;
   let resincronizados = 0;
 
   if (kind === 'busqueda') {
@@ -104,7 +94,8 @@ export async function startBatch(admin: SupabaseClient, kind: BatchKind): Promis
     const conAbierta = new Set((abiertas ?? []).map((r: Row) => String(r.student_group)));
     const grupos = [...new Set((desc ?? []).map((r: Row) => String(r.student_group)))].filter(g => !conAbierta.has(g)).slice(0, 80);
     if (grupos.length) {
-      await syncSegmentPairs(grupos);
+      // Con el buscador viejo apagado, la otra pareja la elige la escucha.
+      if (v6) await syncSegmentPairs(grupos); else await pairFromListening(admin, grupos);
       resincronizados = grupos.length;
     }
   }
@@ -112,9 +103,11 @@ export async function startBatch(admin: SupabaseClient, kind: BatchKind): Promis
   const q = admin.from('testimonial_candidates')
     .select('id, student_id, pair_teacher_id, before_teacher_id, before_moment_id, after_moment_id, clips, improvement')
     .not('clips', 'is', null).limit(2000);
-  const { data: cands, error } = kind === 'busqueda'
-    ? await q.eq('status', 'detectado').not('pair_teacher_id', 'is', null)
-    : await q.eq('status', 'descartado').eq('discarded_by', 'admin');
+  const { data: cands, error } = kind === 'prueba'
+    ? await q.eq('status', 'descartado').eq('discarded_by', 'admin')
+    : v6
+      ? await q.eq('status', 'detectado').not('pair_teacher_id', 'is', null)
+      : await q.eq('status', 'detectado').not('pair_teacher_id', 'is', null).eq('source', 'escucha');
   if (error) throw new Error(`testimonial_candidates: ${error.message}`);
 
   // Ya verificadas (por id exacto: Supabase no devuelve más de 1.000 filas por consulta).
@@ -257,7 +250,7 @@ export async function verifyCandidate(admin: SupabaseClient, candidateId: string
   // 3-4. Audio y medidas
   let ta: { multi: DeepgramTranscript; detect: DeepgramTranscript | null }, tb: typeof ta;
   try {
-    [ta, tb] = await Promise.all([transcribeBoth(ca.audio, c), transcribeBoth(cb.audio, c)]);
+    [ta, tb] = await Promise.all([transcribeBoth(admin, ca.audio, ca.durS, c), transcribeBoth(admin, cb.audio, cb.durS, c)]);
   } catch (err) {
     const e = err instanceof DeepgramError ? err : new DeepgramError(String(err), null);
     return finish('error', null, `Deepgram: ${e.message}${e.body ? ` ${e.body.slice(0, 200)}` : ''}`);
@@ -288,11 +281,15 @@ export async function verifyCandidate(admin: SupabaseClient, candidateId: string
   return finish('aprobado', null, null, juez);
 }
 
-async function transcribeBoth(audio: Buffer, c: VerifyConfig) {
+async function transcribeBoth(admin: SupabaseClient, audio: Buffer, seconds: number, c: VerifyConfig) {
   const common = { model: 'nova-3', diarize_model: 'latest', filler_words: true, punctuate: true };
   const [multi, detect] = await Promise.all([
     transcribeAudio(audio, { ...common, language: 'multi' }),
     c.deepgram_ambas ? transcribeAudio(audio, { ...common, detect_language: ['en', 'es'] }) : Promise.resolve(null),
+  ]);
+  await Promise.all([
+    logDeepgramUsage(admin, 'verificador', 'multi', multi, seconds),
+    logDeepgramUsage(admin, 'verificador', 'detect', detect, seconds),
   ]);
   return { multi, detect };
 }

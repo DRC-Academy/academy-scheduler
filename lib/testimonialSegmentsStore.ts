@@ -23,6 +23,7 @@
 import 'server-only';
 
 import { supabase } from '@/lib/supabase';
+import { getSupabaseAdmin } from '@/lib/supabaseAdmin';
 import { parseTurns, extractFathomUrl, withFathomTimestamp } from '@/lib/fluency';
 import { resolveStudentKey } from '@/lib/fluencyStore';
 import { spainTodayIso } from '@/lib/retention';
@@ -210,6 +211,18 @@ function pairColumns(p: ScoredPair, studentName: string | null, avgWpm: number |
   };
 }
 
+/**
+ * Interruptor testimonial_config.buscador_v6_activo (supabase-testimoniales-escucha.sql).
+ * Sin la fila, o sin poder leerla, queda ENCENDIDO: como antes de la escucha.
+ */
+export async function v6PairingEnabled(): Promise<boolean> {
+  const admin = getSupabaseAdmin();
+  if (!admin) return true;
+  const { data, error } = await admin.from('testimonial_config').select('value').eq('key', 'buscador_v6_activo').maybeSingle();
+  if (error || !data) return true;
+  return Number(data.value) !== 0;
+}
+
 export interface SyncResult {
   created: number;
   updated: number;
@@ -227,6 +240,8 @@ export interface SyncResult {
 export async function syncSegmentPairs(groups?: string[]): Promise<SyncResult> {
   const res: SyncResult = { created: 0, updated: 0, deleted: 0, outcomes: {}, reasons: {} };
   if (groups && groups.length === 0) return res;
+  // Apagado: desde la escucha dirigida (oct/2026) las parejas salen de lib/testimonialListen.
+  if (!(await v6PairingEnabled())) return res;
   const filter = (q: any) => (groups ? q.in('student_group', groups) : q);   // eslint-disable-line @typescript-eslint/no-explicit-any
   const [segRows, txRows, candRows] = await Promise.all([
     pagedRows('testimonial_segments', 'id, analysis_id, student_group, teacher_id, class_day, student_label, kind, turn_index, start_s, end_s, text, words, fillers, repeats, searches, spanish_words, turn_wpm, teacher_before, fathom_url', 'id', filter),

@@ -42,8 +42,14 @@ interface Estado {
   cambios: Array<{ id: number; key: string; antes: number; despues: number; motivo: string; detalle: string | null; created_at: string; reverted_at: string | null }>;
   umbrales: Array<{ key: string; value: number; description: string; motivo: string | null }>;
   prueba: { objetivo: number; todas: ResumenPrueba; sinEnlaceFalso: ResumenPrueba; conEnlaceFalso: number };
+  escucha: Escucha | { error: string };
 }
-interface Progreso { kind: Kind; hechas: number; total: number; aprobadas: number; errores: number }
+interface Escucha {
+  activa: boolean; alumnos: number; fuera: Record<string, number>; clasesObjetivo: number; clases: Record<string, number>;
+  minutos: number; porOutcome: Record<string, number>; sinPareja: Record<string, number>; sinProfeEnComun: string[];
+  gasto: { minutos: { escucha: number; verificador: number }; usd: number; credito: number; queda: number } | null;
+}
+interface Progreso { kind: Kind | 'escucha'; hechas: number; total: number; aprobadas: number; errores: number }
 
 const API = '/api/admin/testimonial-verify';
 const MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
@@ -134,6 +140,53 @@ export default function TestimonialsVerifierTab() {
     }
   }, [post, cargar, objetivo]);
 
+  /** Escucha dirigida: una llamada por clase, 3 a la vez; al acabar, rehace las parejas. */
+  const escuchar = useCallback(async (alumnos?: number) => {
+    cancelar.current = false;
+    setError(null); setAviso(null);
+    try {
+      const q = await post<{ ids: string[]; alumnos: number; clases: number; yaEscuchadas: number }>('escucha-iniciar', alumnos ? { alumnos } : {});
+      const cola = [...q.ids];
+      const p: Progreso = { kind: 'escucha', hechas: 0, total: cola.length, aprobadas: 0, errores: 0 };
+      setProgreso({ ...p });
+      let seguidos = 0;
+      const trabajador = async () => {
+        for (let id = cola.shift(); id; id = cola.shift()) {
+          if (cancelar.current || !vivo.current) return;
+          try {
+            const r = await post<{ status: string }>('escuchar', { id });
+            if (r.status === 'error') p.errores++;
+            seguidos = 0;
+          } catch (e) {
+            p.errores++;
+            if (++seguidos >= 3) { cancelar.current = true; setError(`Se paró tras 3 fallos seguidos: ${e instanceof Error ? e.message : e}`); }
+          }
+          p.hechas++;
+          if (vivo.current) setProgreso({ ...p });
+        }
+      };
+      await Promise.all(Array.from({ length: 3 }, trabajador));
+      const pares = await post<{ outcomes: Record<string, number>; creadas: number; actualizadas: number }>('escucha-emparejar');
+      if (vivo.current) {
+        setAviso(`Escucha${alumnos ? ` (prueba con ${q.alumnos} alumnos)` : ''}: ${p.hechas} clases escuchadas ahora`
+          + `${q.yaEscuchadas ? `, ${q.yaEscuchadas} ya lo estaban` : ''}${p.errores ? `, ${p.errores} con error` : ''}.`
+          + ` Parejas: ${pares.creadas} nuevas, ${pares.actualizadas} cambiadas. Ahora pulsa “Buscar y verificar”.`);
+      }
+    } catch (e) {
+      if (vivo.current) setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (vivo.current) { setProgreso(null); await cargar(); }
+    }
+  }, [post, cargar]);
+
+  const emparejarEscucha = useCallback(async () => {
+    try {
+      const r = await post<{ creadas: number; actualizadas: number }>('escucha-emparejar');
+      setAviso(`Parejas de la escucha rehechas: ${r.creadas} nuevas, ${r.actualizadas} cambiadas.`);
+      await cargar();
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+  }, [post, cargar]);
+
   const revisar = useCallback(async (id: string, review: 'sirve' | 'no_sirve', motivo?: Motivo, texto?: string) => {
     try {
       const r = await post<{ endurecido: { key: string; antes: number; despues: number } | null }>('revisar', { id, review, motivo, texto });
@@ -173,6 +226,9 @@ export default function TestimonialsVerifierTab() {
             </button>
           )}
         </div>
+
+        {estado && <PanelEscucha e={estado.escucha} progreso={progreso?.kind === 'escucha' ? progreso : null} ocupado={!!progreso}
+          onEscuchar={escuchar} onEmparejar={emparejarEscucha} onCancelar={() => { cancelar.current = true; }} />}
 
         {ultima && (
           <p className="tv-line">
@@ -341,6 +397,63 @@ function Columna({ titulo, s, media, onVer, tono }: {
   );
 }
 
+// ── Escucha dirigida ─────────────────────────────────────────────────────────
+
+const usd = (x: number) => x.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const n = (x: number) => x.toLocaleString('es-ES');
+const FUERA_LABEL: Record<string, string> = { menos_2_meses: 'con menos de 2 meses', pocas_clases: 'con pocas clases grabadas' };
+
+function PanelEscucha({ e, progreso, ocupado, onEscuchar, onEmparejar, onCancelar }: {
+  e: Escucha | { error: string }; progreso: Progreso | null; ocupado: boolean;
+  onEscuchar: (alumnos?: number) => void; onEmparejar: () => void; onCancelar: () => void;
+}) {
+  if ('error' in e) return <p className="tv-line">Escucha de clases: {e.error}</p>;
+  const hechas = (e.clases.escuchada ?? 0) + (e.clases.sin_tramos ?? 0) + (e.clases.enlace_roto ?? 0);
+  const fuera = Object.entries(e.fuera).map(([k, v]) => `${v} ${FUERA_LABEL[k] ?? k}`).join(', ');
+  const sinPareja = Object.entries(e.sinPareja).map(([k, v]) => `${v} ${k.toLowerCase()}`).join(', ');
+  return (
+    <div className="tv-escucha">
+      <div className="tv-bar-acc">
+        {progreso ? (
+          <>
+            <div className="tv-prog" role="status">
+              <span>Escuchando {Math.min(progreso.hechas + 1, progreso.total)} de {progreso.total} clases…{progreso.errores ? ` · ${progreso.errores} con error` : ''}</span>
+              <div className="tv-prog-bar"><div style={{ width: `${progreso.total ? (progreso.hechas / progreso.total) * 100 : 0}%` }} /></div>
+            </div>
+            <button type="button" className="tv-btn tv-sec" onClick={onCancelar}>Cancelar</button>
+          </>
+        ) : (
+          <>
+            <button type="button" className="tv-btn tv-sec" disabled={ocupado} onClick={() => onEscuchar(10)}>Probar con 10 alumnos</button>
+            <button type="button" className="tv-btn tv-sec" disabled={ocupado} onClick={() => onEscuchar()}>Escuchar clases</button>
+            <button type="button" className="tv-link" disabled={ocupado} onClick={onEmparejar}>Rehacer parejas de la escucha</button>
+          </>
+        )}
+      </div>
+      <p className="tv-line">
+        <b>Escucha de clases</b>{!e.activa && ' (apagada: manda el buscador viejo)'}: {n(e.alumnos)} alumnos
+        {fuera && <> (fuera {fuera})</>} · {n(hechas)} de {n(e.clasesObjetivo)} clases escuchadas
+        {e.clases.error ? `, ${e.clases.error} con error` : ''} · {n(e.minutos)} min de audio.
+      </p>
+      {Object.keys(e.porOutcome).length > 0 && (
+        <p className="tv-line">
+          <b>Resultado por alumno:</b> {e.porOutcome.pareja ?? 0} con pareja
+          {e.porOutcome.ya_sirve ? ` · ${e.porOutcome.ya_sirve} ya tienen una que sirve` : ''}
+          {e.porOutcome.pendiente ? ` · ${e.porOutcome.pendiente} con clases sin escuchar` : ''}
+          {e.porOutcome.sin_profe_en_comun ? ` · ${e.porOutcome.sin_profe_en_comun} sin profe en común (${e.sinProfeEnComun.join(', ')})` : ''}
+          {sinPareja && ` · sin pareja: ${sinPareja}`}.
+        </p>
+      )}
+      {e.gasto && (
+        <p className="tv-line">
+          <b>Deepgram:</b> {usd(e.gasto.usd)} USD gastados (estimado: escucha {n(e.gasto.minutos.escucha)} min, verificador {n(e.gasto.minutos.verificador)} min)
+          {' '}· quedan ≈ <b>{usd(e.gasto.queda)} USD</b> de {usd(e.gasto.credito)}.
+        </p>
+      )}
+    </div>
+  );
+}
+
 // ── Secciones plegadas ───────────────────────────────────────────────────────
 
 function Sirven({ lista, onConsentimiento }: { lista: Verif[]; onConsentimiento: (id: string, valor: string) => void }) {
@@ -477,6 +590,7 @@ const ESTILOS = `
 .tv-bar { margin: 0 0 14px; padding: 14px 16px; border-radius: 14px; background: var(--fondo); display: flex; flex-direction: column; gap: 8px; }
 .tv-bar-acc { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .tv-line { margin: 0; font-size: 13.5px; line-height: 1.5; color: #4A4A4A; font-variant-numeric: tabular-nums; }
+.tv-escucha { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px solid var(--linea); }
 .tv-prog { flex: 1; min-width: 240px; display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-weight: 600; }
 .tv-prog-bar { height: 8px; border-radius: 999px; background: #E3E4DE; overflow: hidden; }
 .tv-prog-bar > div { height: 100%; background: var(--verde); transition: width .3s; }

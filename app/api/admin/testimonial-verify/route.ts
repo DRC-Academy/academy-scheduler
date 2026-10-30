@@ -17,6 +17,10 @@
 //   · 'consentimiento'  { id, valor: 'sin_pedir' | 'pedido' | 'dado' }
 //   · 'deshacer-umbral' { changeId }
 //   · 'medios'          { ids } → enlaces firmados de sus audios y fotogramas
+//   Escucha dirigida (lib/testimonialListen):
+//   · 'escucha-iniciar'   { alumnos? } → { ids } clases por escuchar (alumnos = prueba con N)
+//   · 'escuchar'          { id } → UNA clase (el navegador las encadena, 3 a la vez)
+//   · 'escucha-emparejar' → rehace las parejas de la escucha
 //
 // SEGURIDAD: todo exige la sesión de admin (cookie httpOnly firmada,
 // lib/adminSession): devuelve datos de alumnos y cada verificación gasta Deepgram
@@ -31,6 +35,7 @@ import {
   startBatch, verifyCandidate, closeBatch, loadState, reviewVerification, setConsent, undoConfigChange,
   signPaths, mediaPaths, type BatchKind,
 } from '@/lib/testimonialVerifier';
+import { listenQueue, listenClass, pairFromListening, listenState } from '@/lib/testimonialListen';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -167,8 +172,21 @@ export async function POST(request: Request): Promise<Response> {
   const tipo: BatchKind = str('tipo') === 'prueba' ? 'prueba' : 'busqueda';
   try {
     switch (body.accion) {
-      case 'estado':
-        return Response.json(await loadState(admin), { headers: NO_STORE });
+      case 'estado': {
+        const [verificador, escucha] = await Promise.all([loadState(admin), listenState(admin).catch(e => ({ error: e instanceof Error ? e.message : String(e) }))]);
+        return Response.json({ ...verificador, escucha }, { headers: NO_STORE });
+      }
+      case 'escucha-iniciar': {
+        const alumnos = Number(body.alumnos);
+        return Response.json(await listenQueue(admin, Number.isFinite(alumnos) && alumnos > 0 ? { alumnos } : {}), { headers: NO_STORE });
+      }
+      case 'escuchar': {
+        const id = str('id');
+        if (!id) return Response.json({ error: 'Falta id.' }, { status: 400, headers: NO_STORE });
+        return Response.json(await listenClass(admin, id), { headers: NO_STORE });
+      }
+      case 'escucha-emparejar':
+        return Response.json(await pairFromListening(admin), { headers: NO_STORE });
       case 'iniciar':
         return Response.json(await startBatch(admin, tipo), { headers: NO_STORE });
       case 'verificar': {
@@ -211,7 +229,7 @@ export async function POST(request: Request): Promise<Response> {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[testimonial-verify]', body.accion, msg);
-    const sinSql = /testimonial_(config|verif|examples)|bucket/i.test(msg) && /exist|schema cache|not found/i.test(msg);
+    const sinSql = /testimonial_(config|verif|examples|listen|deepgram)|bucket|source/i.test(msg) && /exist|schema cache|not found/i.test(msg);
     return Response.json({ error: sinSql ? 'Falta correr supabase-testimoniales-verificador.sql en Supabase.' : msg }, { status: 500, headers: NO_STORE });
   }
 }
