@@ -4,7 +4,14 @@ const nextConfig: NextConfig = {
   // pdfkit (PDF del "Registro para disputas", lib/classRegisterPdf) lee sus
   // fuentes estándar del disco con __dirname: empaquetado por Next no las
   // encuentra. Con `require` nativo, sí.
-  serverExternalPackages: ['pdfkit'],
+  // ffmpeg-static (recortes de video de testimoniales, lib/fathomVideo) calcula la
+  // ruta de su binario con __dirname: igual que pdfkit, con `require` nativo.
+  serverExternalPackages: ['pdfkit', 'ffmpeg-static'],
+  // El binario de ffmpeg no lo importa nadie: hay que añadirlo a mano a la función
+  // que lo ejecuta (en Vercel, npm ci instala el de Linux).
+  outputFileTracingIncludes: {
+    '/api/admin/testimonial-verify': ['./node_modules/ffmpeg-static/ffmpeg'],
+  },
   // Identificador del despliegue, inyectado en build. Nombra la caché del service
   // worker para que cada deploy purgue la anterior (ver public/sw.js).
   // VERCEL_GIT_COMMIT_SHA existe en el build de Vercel sin necesidad de activar
