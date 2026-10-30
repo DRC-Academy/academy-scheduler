@@ -162,8 +162,10 @@ function ffmpegPath(): string {
   return p;
 }
 
-/** Baja solo el tramo [startS, startS + durS] y saca el audio y 3 fotogramas. */
-export async function cutClip(source: FathomSource, startS: number, durS: number): Promise<CutResult> {
+interface Span { raw: Buffer; offset: number; start: number; chunks: number; ms: { playlist: number; download: number } }
+
+/** Baja los trozos que cubren [startS, startS + durS]. offset = segundo del tramo dentro de lo bajado. */
+async function downloadSpan(source: FathomSource, startS: number, durS: number): Promise<Span> {
   const t0 = Date.now();
   const pl = await fetch(source.videoUrl, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(PAGE_TIMEOUT_MS) });
   if (!pl.ok) throw new FathomCutError(`La lista del video responde ${pl.status}.`, pl.status === 404 ? 'borrado' : 'error');
@@ -173,41 +175,63 @@ export async function cutClip(source: FathomSource, startS: number, durS: number
   const need = chunksFor(all, start, durS);
   if (!need.length) throw new FathomCutError('La lista del video está vacía o el tramo cae fuera de la grabación.', 'error');
   const tPlaylist = Date.now() - t0;
-
   const t1 = Date.now();
   const bufs = await Promise.all(need.map(async c => {
     const r = await fetch(c.uri, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(CHUNK_TIMEOUT_MS) });
     if (!r.ok) throw new FathomCutError(`Un trozo del video responde ${r.status}.`, 'error');
     return Buffer.from(await r.arrayBuffer());
   }));
-  const raw = Buffer.concat(bufs);
-  const tDownload = Date.now() - t1;
+  return {
+    raw: Buffer.concat(bufs), offset: start - need[0].start, start, chunks: need.length,
+    ms: { playlist: tPlaylist, download: Date.now() - t1 },
+  };
+}
 
-  const t2 = Date.now();
+/** Escribe lo bajado en una carpeta temporal, corre ffmpeg y la borra siempre. */
+async function withFfmpeg<T>(raw: Buffer, fn: (ff: string, rawPath: string, dir: string) => Promise<T>): Promise<T> {
   const dir = await mkdtemp(join(tmpdir(), 'clip-'));
   try {
     const rawPath = join(dir, 'raw.ts');
     await writeFile(rawPath, raw);
-    const ff = ffmpegPath();
-    // -ss DESPUÉS de -i: corta por tiempo real del archivo (antes de -i, con los
-    // trozos concatenados, a veces salían 15 s en vez de 20).
-    const off = (start - need[0].start).toFixed(2);
-    await run(ff, ['-v', 'error', '-y', '-i', rawPath, '-ss', off, '-t', String(durS),
-      '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'libmp3lame', '-b:a', '48k', join(dir, 'clip.mp3')]);
-    const at = [0.5, durS / 2, Math.max(0.5, durS - 0.5)];
-    await Promise.all(at.map((s, i) => run(ff, ['-v', 'error', '-y', '-i', rawPath, '-ss', (start - need[0].start + s).toFixed(2),
-      '-frames:v', '1', '-q:v', '4', join(dir, `f${i}.jpg`)])));
-    const audio = await readFile(join(dir, 'clip.mp3'));
-    const frames = await Promise.all(at.map((_, i) => readFile(join(dir, `f${i}.jpg`)).catch(() => null)));
-    return {
-      audio, frames: frames.filter((f): f is NonNullable<typeof f> => !!f && f.length > 0),
-      startS: start, durS, chunks: need.length, bytes: raw.length,
-      ms: { playlist: tPlaylist, download: tDownload, ffmpeg: Date.now() - t2 },
-    };
+    return await fn(ffmpegPath(), rawPath, dir);
   } catch (err) {
     if (err instanceof FathomCutError) throw err;
     throw new FathomCutError(`ffmpeg no pudo cortar el clip: ${err instanceof Error ? err.message.slice(0, 300) : String(err)}`, 'error');
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+/** Baja solo el tramo [startS, startS + durS] y saca el audio y 3 fotogramas. */
+export async function cutClip(source: FathomSource, startS: number, durS: number): Promise<CutResult> {
+  const span = await downloadSpan(source, startS, durS);
+  const t2 = Date.now();
+  const at = [0.5, durS / 2, Math.max(0.5, durS - 0.5)];
+  return withFfmpeg(span.raw, async (ff, rawPath, dir) => {
+    // UNA pasada de ffmpeg con 4 salidas (el video se decodifica una vez: en
+    // Vercel, 4 procesos sueltos tardaban ~5 s). -ss DESPUÉS de -i, por salida:
+    // corta por tiempo real (antes de -i, con los trozos concatenados, a veces
+    // salían 15 s en vez de 20).
+    await run(ff, ['-v', 'error', '-y', '-i', rawPath,
+      '-ss', span.offset.toFixed(2), '-t', String(durS), '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'libmp3lame', '-b:a', '48k', join(dir, 'clip.mp3'),
+      ...at.flatMap((s, i) => ['-ss', (span.offset + s).toFixed(2), '-an', '-frames:v', '1', '-q:v', '4', join(dir, `f${i}.jpg`)]),
+    ]);
+    const audio = await readFile(join(dir, 'clip.mp3'));
+    const frames = await Promise.all(at.map((_, i) => readFile(join(dir, `f${i}.jpg`)).catch(() => null)));
+    return {
+      audio, frames: frames.filter((f): f is NonNullable<typeof f> => !!f && f.length > 0),
+      startS: span.start, durS, chunks: span.chunks, bytes: span.raw.length,
+      ms: { ...span.ms, ffmpeg: Date.now() - t2 },
+    };
+  });
+}
+
+/** Un solo fotograma en el segundo `atS` (la foto de referencia del profe). null si no sale. */
+export async function cutFrame(source: FathomSource, atS: number): Promise<Buffer | null> {
+  const span = await downloadSpan(source, atS, 1);
+  return withFfmpeg(span.raw, async (ff, rawPath, dir) => {
+    await run(ff, ['-v', 'error', '-y', '-i', rawPath, '-ss', span.offset.toFixed(2), '-an', '-frames:v', '1', '-q:v', '4', join(dir, 'f.jpg')]);
+    const f = await readFile(join(dir, 'f.jpg')).catch(() => null);
+    return f && f.length ? f : null;
+  });
 }

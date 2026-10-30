@@ -30,7 +30,7 @@ import ClassLogTab from '@/components/admin/ClassLogTab';
 import DisputeRegisterTab from '@/components/admin/DisputeRegisterTab';
 import RecoveriesTab from '@/components/admin/RecoveriesTab';
 import TranscriptsTab from '@/components/admin/TranscriptsTab';
-import TestimonialsTab from '@/components/admin/TestimonialsTab';
+import TestimonialsVerifierTab from '@/components/admin/TestimonialsVerifierTab';
 import FueraDeCalendarioTab from '@/components/admin/FueraDeCalendarioTab';
 import TranscriptValidationTab from '@/components/admin/TranscriptValidationTab';
 import ChurnTab from '@/components/admin/ChurnTab';
@@ -2483,7 +2483,7 @@ function AdminContent() {
         {activeTab === 'disputas' && <DisputeRegisterTab />}
         {activeTab === 'recuperaciones' && <RecoveriesTab />}
         {activeTab === 'transcripts' && <TranscriptsTab />}
-        {activeTab === 'testimoniales' && <TestimonialsTab />}
+        {activeTab === 'testimoniales' && <TestimonialsVerifierTab />}
         {activeTab === 'fueracal' && <FueraDeCalendarioTab />}
 
         {activeTab === 'leveltests' && <LevelTestsTab />}

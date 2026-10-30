@@ -69,6 +69,11 @@ export interface AskClaudeJsonOptions {
    * forma de apagarlo es `between_tools`, válido con effort 'high' o menor.
    */
   thinking?: 'off';
+  /**
+   * Imágenes que acompañan al prompt (p. ej. fotogramas de un clip en
+   * testimoniales), cada una precedida de su etiqueta. Van ANTES del texto.
+   */
+  images?: Array<{ label: string; mediaType: 'image/jpeg' | 'image/png'; base64: string }>;
 }
 
 // ── Saneado del esquema antes de enviarlo ─────────────────────────────────────
@@ -184,7 +189,18 @@ export function buildClaudeRequest(opts: AskClaudeJsonOptions): Anthropic.Messag
       format: { type: 'json_schema', schema: sanitizeSchemaForApi(opts.schema, opts.label) },
       ...(opts.effort ? { effort: opts.effort } : {}),
     },
-    messages: [{ role: 'user', content: opts.prompt }],
+    messages: [{
+      role: 'user',
+      content: opts.images?.length
+        ? [
+          ...opts.images.flatMap((img): Anthropic.ContentBlockParam[] => [
+            { type: 'text', text: img.label },
+            { type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.base64 } },
+          ]),
+          { type: 'text', text: opts.prompt },
+        ]
+        : opts.prompt,
+    }],
   };
 }
 

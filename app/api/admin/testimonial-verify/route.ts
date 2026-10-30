@@ -8,18 +8,35 @@
 //     · detect: detect_language=en,es (un idioma para todo el clip, con confianza).
 //   Sin id, toma la primera pareja por revisar cuyo enlace abra (sin cuentas de prueba).
 //
-// SEGURIDAD: exige la sesión de admin (cookie httpOnly firmada, lib/adminSession):
-// cada llamada gasta Deepgram.
+// POST { accion, ... } — la pestaña Testimoniales (lib/testimonialVerifier):
+//   · 'estado'          tarjetas, tandas, alarma, umbrales, prueba (y limpia Storage)
+//   · 'iniciar'         { tipo: 'busqueda' | 'prueba' } → { batchId, ids }
+//   · 'verificar'       { batchId, id, tipo } → UNA pareja (el navegador las encadena)
+//   · 'cerrar'          { batchId, cancelado }
+//   · 'revisar'         { id, review: 'sirve' | 'no_sirve', motivo?, texto? }
+//   · 'consentimiento'  { id, valor: 'sin_pedir' | 'pedido' | 'dado' }
+//   · 'deshacer-umbral' { changeId }
+//   · 'medios'          { ids } → enlaces firmados de sus audios y fotogramas
+//
+// SEGURIDAD: todo exige la sesión de admin (cookie httpOnly firmada,
+// lib/adminSession): devuelve datos de alumnos y cada verificación gasta Deepgram
+// y Claude.
 
 import { requireAdminSession } from '@/lib/adminSession';
 import { requireAdminClient } from '@/lib/cronAuth';
 import { readFathomShare, cutClip, FathomCutError, type FathomSource } from '@/lib/fathomVideo';
 import { transcribeAudio, DeepgramError, type DeepgramParams, type DeepgramTranscript } from '@/lib/deepgram';
 import type { TestimonialClip, TestimonialClips } from '@/lib/testimonials';
+import {
+  startBatch, verifyCandidate, closeBatch, loadState, reviewVerification, setConsent, undoConfigChange,
+  signPaths, mediaPaths, type BatchKind,
+} from '@/lib/testimonialVerifier';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-export const maxDuration = 60;
+// Una pareja tarda ~20-30 s (dos recortes, Deepgram y Claude); 'iniciar' puede
+// rehacer parejas del buscador. Hobby con Fluid Compute admite 300 s.
+export const maxDuration = 300;
 
 const NO_STORE = { 'Cache-Control': 'no-store' };
 const CLIP_SECONDS = 20;
@@ -137,4 +154,64 @@ export async function GET(request: Request): Promise<Response> {
     deepgram: { multi, detect },
     intentosFallidos: intentos,
   }, { headers: NO_STORE });
+}
+
+export async function POST(request: Request): Promise<Response> {
+  const session = requireAdminSession(request);
+  if (session.error) return session.error;
+  const { admin, error } = requireAdminClient('testimonial-verify');
+  if (error) return error;
+
+  const body = await request.json().catch(() => ({})) as Record<string, unknown>;
+  const str = (k: string) => (typeof body[k] === 'string' ? (body[k] as string) : null);
+  const tipo: BatchKind = str('tipo') === 'prueba' ? 'prueba' : 'busqueda';
+  try {
+    switch (body.accion) {
+      case 'estado':
+        return Response.json(await loadState(admin), { headers: NO_STORE });
+      case 'iniciar':
+        return Response.json(await startBatch(admin, tipo), { headers: NO_STORE });
+      case 'verificar': {
+        const id = str('id'), batchId = str('batchId');
+        if (!id || !batchId) return Response.json({ error: 'Faltan id o batchId.' }, { status: 400, headers: NO_STORE });
+        return Response.json(await verifyCandidate(admin, id, batchId, tipo), { headers: NO_STORE });
+      }
+      case 'cerrar': {
+        const batchId = str('batchId');
+        if (batchId) await closeBatch(admin, batchId, body.cancelado === true);
+        return Response.json({ ok: true }, { headers: NO_STORE });
+      }
+      case 'revisar': {
+        const id = str('id'), review = str('review');
+        if (!id || (review !== 'sirve' && review !== 'no_sirve')) return Response.json({ error: 'Revisión no válida.' }, { status: 400, headers: NO_STORE });
+        return Response.json(await reviewVerification(admin, id, review, str('motivo'), str('texto')), { headers: NO_STORE });
+      }
+      case 'consentimiento': {
+        const id = str('id'), valor = str('valor');
+        if (!id || !valor) return Response.json({ error: 'Faltan datos.' }, { status: 400, headers: NO_STORE });
+        await setConsent(admin, id, valor);
+        return Response.json({ ok: true }, { headers: NO_STORE });
+      }
+      case 'deshacer-umbral': {
+        const changeId = Number(body.changeId);
+        if (!Number.isFinite(changeId)) return Response.json({ error: 'Falta changeId.' }, { status: 400, headers: NO_STORE });
+        await undoConfigChange(admin, changeId);
+        return Response.json({ ok: true }, { headers: NO_STORE });
+      }
+      case 'medios': {
+        const ids = Array.isArray(body.ids) ? (body.ids as unknown[]).filter((x): x is string => typeof x === 'string').slice(0, 60) : [];
+        if (!ids.length) return Response.json({ media: {} }, { headers: NO_STORE });
+        const { data, error: e } = await admin.from('testimonial_verifications').select('id, antes, despues').in('id', ids);
+        if (e) throw new Error(e.message);
+        return Response.json({ media: await signPaths(admin, (data ?? []).flatMap(mediaPaths)) }, { headers: NO_STORE });
+      }
+      default:
+        return Response.json({ error: 'Acción desconocida.' }, { status: 400, headers: NO_STORE });
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('[testimonial-verify]', body.accion, msg);
+    const sinSql = /testimonial_(config|verif|examples)|bucket/i.test(msg) && /exist|schema cache|not found/i.test(msg);
+    return Response.json({ error: sinSql ? 'Falta correr supabase-testimoniales-verificador.sql en Supabase.' : msg }, { status: 500, headers: NO_STORE });
+  }
 }
