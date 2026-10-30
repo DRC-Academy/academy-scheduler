@@ -64,8 +64,10 @@ export const PESO_AH_EH = 0.5;
 export const PESO_REPETICION = 1;
 /** "how do you say", "I don't know how to say", "what's the word", "cómo se dice"… */
 export const PESO_BUSQUEDA_PALABRA = 2;
-/** Palabra suelta en español dentro de una intervención en inglés ("rencoroso, como…"). */
-export const PESO_PALABRA_ESPANOL = 1;
+/** Palabra suelta en español dentro de una intervención en inglés ("rencoroso, como…").
+ *  0 desde el 30/10/2026: el español NO es un bloqueo (ni suma ni resta). Los momentos
+ *  con español se apartan aparte (lib/testimonialPairPlan, momento_espanol_max). */
+export const PESO_PALABRA_ESPANOL = 0;
 /** Tope de palabras en español que puntúan en una intervención. */
 export const MAX_PALABRAS_ESPANOL = 3;
 /** Para ser A hace falta al menos este bloqueo SIN contar la lentitud: una frase
@@ -75,7 +77,8 @@ export const MIN_BLOQUEO_LINGUISTICO_A = 1;
 // ── Clip B ("después") ───────────────────────────────────────────────────────
 
 /** Bloqueo lingüístico máximo que admite un B (muletillas + repeticiones +
- *  palabras en español; cualquier búsqueda de palabra lo descarta). */
+ *  búsquedas; el español ya no cuenta, ver PESO_PALABRA_ESPANOL; cualquier
+ *  búsqueda de palabra lo descarta). */
 export const MAX_BLOQUEO_B = 1;
 /** Descartar como B un recorte largo (50+ palabras) sin ninguna duda, por si es
  *  una lectura o algo preparado. Fathom deja pocas muletillas (≈5 cada 1.000

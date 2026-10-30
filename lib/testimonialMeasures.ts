@@ -46,9 +46,13 @@ export interface VerifyConfig {
   vision_camara_conf: number; vision_leyendo_conf: number;
   juez_nota_min: number; parejas_por_tanda: number;
   endurecer_ventana: number; endurecer_veces: number; alarma_fuente_pct: number; retencion_dias: number;
+  /** Varias parejas por alumno (supabase-testimoniales-varias-parejas.sql). */
+  parejas_por_alumno: number; momento_max_parejas: number; momento_espanol_max: number; tanda_max_verificaciones: number;
+  /** Precios para el gasto estimado de cada tanda. */
+  deepgram_usd_min_multi: number; deepgram_usd_min_detect: number; claude_usd_mtok_entrada: number; claude_usd_mtok_salida: number;
 }
 
-/** Valores de supabase-testimoniales-verificador.sql: solo para lo que falte en la tabla. */
+/** Valores de supabase-testimoniales-verificador.sql (y -varias-parejas): solo para lo que falte en la tabla. */
 export const CONFIG_POR_DEFECTO: VerifyConfig = {
   recorte_margen_s: 2, recorte_min_s: 8, recorte_max_s: 35,
   deepgram_ambas: 1,
@@ -61,6 +65,8 @@ export const CONFIG_POR_DEFECTO: VerifyConfig = {
   vision_camara_conf: 0.6, vision_leyendo_conf: 0.6,
   juez_nota_min: 60, parejas_por_tanda: 5,
   endurecer_ventana: 20, endurecer_veces: 3, alarma_fuente_pct: 0.5, retencion_dias: 30,
+  parejas_por_alumno: 10, momento_max_parejas: 2, momento_espanol_max: 0.15, tanda_max_verificaciones: 150,
+  deepgram_usd_min_multi: 0.0052, deepgram_usd_min_detect: 0.0043, claude_usd_mtok_entrada: 2, claude_usd_mtok_salida: 10,
 };
 
 // ── Tramo que se recorta ─────────────────────────────────────────────────────

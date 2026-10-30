@@ -61,7 +61,9 @@ describe('análisis de transcripts', () => {
 
 describe('readClaudeJson', () => {
   it('parsea el JSON de la respuesta', () => {
-    expect(readClaudeJson<{ a: string }>(message('{"a":"x"}'), OPTS)).toEqual({ data: { a: 'x' }, status: 'ready' });
+    expect(readClaudeJson<{ a: string }>(message('{"a":"x"}'), OPTS)).toEqual({
+      data: { a: 'x' }, status: 'ready', usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0 },
+    });
   });
 
   it('una respuesta truncada es error, no un JSON a medias', () => {

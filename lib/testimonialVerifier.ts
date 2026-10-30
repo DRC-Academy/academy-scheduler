@@ -18,20 +18,36 @@
 // Las medidas (4) van antes que la imagen (5) porque son gratis una vez se tiene
 // el audio. Todos los umbrales salen de testimonial_config.
 //
-// Descartar por el verificador marca la pareja 'descartado' con discarded_by 'ia':
-// el buscador no vuelve a proponer esos dos momentos y, al volver a emparejar a
-// ese alumno, busca otra pareja suya.
+// VARIAS PAREJAS POR ALUMNO (rama testimoniales-varias-parejas, 30/10/2026):
+// "Buscar y verificar" ya no mira solo la pareja del buscador. Al abrir la tanda
+// calcula, por alumno, hasta `parejas_por_alumno` parejas ordenadas de mejor a
+// peor (lib/testimonialPairPlan) y las guarda en la tanda (plan). Cada llamada
+// coge la siguiente que valga (verifyNext), crea la pareja en
+// testimonial_candidates y la verifica. Al aprobar una de un alumno salta al
+// siguiente. Para al reunir `parejas_por_tanda` aprobadas o al hacer
+// `tanda_max_verificaciones`.
+//
+// VETOS (testimonial_vetos): un momento descartado por español, habla el profe,
+// leyendo o cámara apagada no vuelve a usarse en ninguna pareja; un enlace
+// privado o borrado inutiliza todos los momentos de esa grabación. El resto de
+// motivos (falso bloqueo, sin contraste, nota baja…) tira la pareja, no sus
+// momentos: cada uno puede salir con otra pareja.
 
 import 'server-only';
 
 import { createHash } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { askClaudeJson, ECONOMY_MODEL } from '@/lib/anthropic';
+import { askClaudeJson, ECONOMY_MODEL, type AiResult } from '@/lib/anthropic';
 import { transcribeAudio, DeepgramError, type DeepgramTranscript } from '@/lib/deepgram';
 import { readFathomShare, cutClip, cutFrame, classifyShareUrl, FathomCutError, type FathomSource, type CutResult } from '@/lib/fathomVideo';
 import { parseTurns, toSeconds, withFathomTimestamp } from '@/lib/fluency';
 import { nameMatchesStrict } from '@/lib/testimonialSpeaker';
-import { syncSegmentPairs } from '@/lib/testimonialSegmentsStore';
+import { toSegment, pairColumns } from '@/lib/testimonialSegmentsStore';
+import { averageWpm, blockingScore, fluencyScore, daysBetween, type ExtractStats } from '@/lib/testimonialScoring';
+import {
+  planStudentPairs, nextPlanItem, comparePlanned, toPlanItem, isVetoed, momentKey, momentKeyFromId, recordingKey, MOTIVOS_QUE_VETAN,
+  type PlanItem, type PlannedPair, type Vetos,
+} from '@/lib/testimonialPairPlan';
 import type { TestimonialClip, TestimonialClips } from '@/lib/testimonials';
 import {
   CONFIG_POR_DEFECTO, MOTIVOS_ADMIN, cutWindow, measureClip, mainSpeakerText, checkAudio, checkAntes, checkDespues,
@@ -84,37 +100,37 @@ const weeksOf = (c: Row) => {
 
 // ── Tandas ───────────────────────────────────────────────────────────────────
 
-export interface StartedBatch { batchId: string; ids: string[]; resincronizados: number }
+export interface StartedBatch {
+  batchId: string;
+  /** prueba: las parejas a verificar, en orden. busqueda: vacío (las elige verifyNext). */
+  ids: string[];
+  /** busqueda: parejas del plan y alumnos que cubren. */
+  parejas: number;
+  alumnos: number;
+}
 
 /**
- * Abre una tanda y devuelve las parejas a verificar, en orden.
- *   · busqueda: las parejas 'detectado' del buscador aún no verificadas (antes,
- *     rehace la pareja de los alumnos que el verificador dejó sin ninguna);
+ * Abre una tanda.
+ *   · busqueda: calcula el plan de parejas (varias por alumno) y lo guarda en la
+ *     tanda; el navegador llama a verifyNext hasta que diga `fin`;
  *   · prueba: las "No sirve" del admin aún no pasadas por el verificador.
  */
 export async function startBatch(admin: SupabaseClient, kind: BatchKind): Promise<StartedBatch> {
   const test = await testAccounts(admin);
-  let resincronizados = 0;
+  const batchId = `tb_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
   if (kind === 'busqueda') {
-    // Alumnos cuya pareja descartó el verificador y que no tienen otra abierta.
-    const { data: desc } = await admin.from('testimonial_candidates').select('student_group')
-      .eq('status', 'descartado').eq('discarded_by', 'ia').limit(1000);
-    const { data: abiertas } = await admin.from('testimonial_candidates').select('student_group').neq('status', 'descartado').limit(5000);
-    const conAbierta = new Set((abiertas ?? []).map((r: Row) => String(r.student_group)));
-    const grupos = [...new Set((desc ?? []).map((r: Row) => String(r.student_group)))].filter(g => !conAbierta.has(g)).slice(0, 80);
-    if (grupos.length) {
-      await syncSegmentPairs(grupos);
-      resincronizados = grupos.length;
-    }
+    const { config } = await loadConfig(admin);
+    const { plan, alumnos } = await buildPlan(admin, config, test);
+    const { error: bErr } = await admin.from('testimonial_verify_batches').insert({ id: batchId, kind, planned: plan.length, plan, cursor: 0, alumnos });
+    if (bErr) throw new Error(`testimonial_verify_batches: ${bErr.message}`);
+    return { batchId, ids: [], parejas: plan.length, alumnos };
   }
 
-  const q = admin.from('testimonial_candidates')
+  const { data: cands, error } = await admin.from('testimonial_candidates')
     .select('id, student_id, pair_teacher_id, before_teacher_id, before_moment_id, after_moment_id, clips, improvement')
-    .not('clips', 'is', null).limit(2000);
-  const { data: cands, error } = kind === 'busqueda'
-    ? await q.eq('status', 'detectado').not('pair_teacher_id', 'is', null)
-    : await q.eq('status', 'descartado').eq('discarded_by', 'admin');
+    .not('clips', 'is', null).limit(2000)
+    .eq('status', 'descartado').eq('discarded_by', 'admin');
   if (error) throw new Error(`testimonial_candidates: ${error.message}`);
 
   // Ya verificadas (por id exacto: Supabase no devuelve más de 1.000 filas por consulta).
@@ -133,14 +149,183 @@ export async function startBatch(admin: SupabaseClient, kind: BatchKind): Promis
     .sort((a, b) => weeksOf(b) - weeksOf(a) || Number(b.improvement ?? 0) - Number(a.improvement ?? 0))
     .map(c => String(c.id));
 
-  const batchId = `tb_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   const { error: bErr } = await admin.from('testimonial_verify_batches').insert({ id: batchId, kind, planned: ids.length });
   if (bErr) throw new Error(`testimonial_verify_batches: ${bErr.message}`);
-  return { batchId, ids, resincronizados };
+  return { batchId, ids, parejas: ids.length, alumnos: 0 };
 }
 
-export async function closeBatch(admin: SupabaseClient, batchId: string, cancelled: boolean): Promise<void> {
+/** Cierra la tanda y devuelve su resumen (con el gasto estimado). */
+export async function closeBatch(admin: SupabaseClient, batchId: string, cancelled: boolean) {
   await admin.from('testimonial_verify_batches').update({ finished_at: new Date().toISOString(), cancelled }).eq('id', batchId);
+  const { data } = await admin.from('testimonial_verifications')
+    .select('status, motivo, fathom_causa, antes, review, coste_deepgram_usd, coste_claude_usd').eq('batch_id', batchId);
+  return batchSummary((data ?? []) as Row[]);
+}
+
+// ── Plan de parejas (varias por alumno) ──────────────────────────────────────
+
+const SEG_COLS = 'id, analysis_id, student_group, teacher_id, class_day, student_label, kind, turn_index, start_s, end_s, text, words, fillers, repeats, searches, spanish_words, turn_wpm, teacher_before, fathom_url';
+
+async function paged(admin: SupabaseClient, table: string, cols: string, order: string, apply?: (q: any) => any): Promise<Row[]> {   // eslint-disable-line @typescript-eslint/no-explicit-any
+  const out: Row[] = [];
+  for (let from = 0; ; from += 1000) {
+    let q = admin.from(table).select(cols);
+    if (apply) q = apply(q);
+    const { data, error } = await q.order(order).range(from, from + 999);
+    if (error) throw new Error(`${table}: ${error.message}`);
+    out.push(...((data ?? []) as Row[]));
+    if ((data ?? []).length < 1000) break;
+  }
+  return out;
+}
+
+async function loadVetos(admin: SupabaseClient): Promise<Vetos> {
+  const rows = await paged(admin, 'testimonial_vetos', 'clave', 'clave');
+  const momentos = new Set<string>(), grabaciones = new Set<string>();
+  for (const r of rows) {
+    const k = String(r.clave);
+    if (k.startsWith('m:')) momentos.add(k.slice(2));
+    else if (k.startsWith('g:')) grabaciones.add(k.slice(2));
+  }
+  return { momentos, grabaciones };
+}
+
+/** Promedio de palabras por minuto del alumno (como el buscador) y su nombre. */
+function studentContext(txs: Row[]): { valid: boolean; avg: number | null; name: string | null } {
+  const valid = txs.filter(t => t.segments_at && t.status === 'ready');
+  return {
+    valid: valid.length > 0,
+    avg: valid.length ? averageWpm(valid.map(t => (t.segment_stats ?? { palabras: 0, segundos: 0 }) as ExtractStats)) : null,
+    name: (txs.find(t => t.student_name)?.student_name as string | undefined) ?? null,
+  };
+}
+
+/**
+ * Las parejas de todos los alumnos, en el orden en que se prueban: alumno a
+ * alumno (el de mejor primera pareja primero) y, dentro, de mejor a peor.
+ * Fuera: cuentas de prueba, alumnos con una "Sirve" o con una aprobada por
+ * revisar, momentos de un "No sirve" del admin, vetados o con enlace falso, y
+ * combinaciones ya verificadas.
+ */
+async function buildPlan(admin: SupabaseClient, c: VerifyConfig, test: { teachers: Set<string>; students: Set<string> }): Promise<{ plan: PlanItem[]; alumnos: number }> {
+  const [segRows, txRows, candRows, verRows, vetos] = await Promise.all([
+    paged(admin, 'testimonial_segments', SEG_COLS, 'id'),
+    paged(admin, 'testimonial_transcripts', 'analysis_id, student_group, student_name, status, segments_at, segment_stats', 'analysis_id'),
+    paged(admin, 'testimonial_candidates', 'id, student_group, status, discarded_by, clips', 'id'),
+    paged(admin, 'testimonial_verifications', 'id, student_group, status, review, before_moment_id, after_moment_id, candidate_snapshot->clips', 'id', q => q.eq('kind', 'busqueda')),
+    loadVetos(admin),
+  ]);
+  const bucket = (rows: Row[]) => {
+    const m = new Map<string, Row[]>();
+    for (const r of rows) { const g = String(r.student_group); m.set(g, [...(m.get(g) ?? []), r]); }
+    return m;
+  };
+  const segsBy = bucket(segRows), txBy = bucket(txRows), candBy = bucket(candRows);
+  // Combinaciones ya verificadas, por momento (las copias de un transcript cuentan como la misma).
+  const verificadas = new Set(verRows.filter(v => v.status === 'aprobado' || v.status === 'descartado').map(v => {
+    const k = v.clips as TestimonialClips | null;
+    return `${momentKeyFromId(v.before_moment_id, k?.malos?.[0]?.fathomUrl)}|${momentKeyFromId(v.after_moment_id, k?.buenos?.[0]?.fathomUrl)}`;
+  }));
+  const porRevisar = new Set(verRows.filter(v => v.status === 'aprobado' && !v.review).map(v => String(v.student_group)));
+  const linkOk = new Map<string, boolean>();
+  const enlaceBueno = (u: string) => { if (!linkOk.has(u)) linkOk.set(u, !enlaceFalso(u)); return linkOk.get(u)!; };
+
+  const porAlumno: Array<{ g: string; pares: PlannedPair[] }> = [];
+  for (const [g, rows] of segsBy) {
+    if (test.students.has(g) || porRevisar.has(g)) continue;
+    const cands = candBy.get(g) ?? [];
+    if (cands.some(x => SIRVEN.includes(String(x.status)))) continue;
+    const { valid, avg } = studentContext(txBy.get(g) ?? []);
+    if (!valid) continue;
+    // "No sirve" del admin: fuera esos momentos (los que se pisan con sus clips en
+    // la misma grabación, también en las copias del transcript).
+    const noSirve = cands.filter(x => x.status === 'descartado' && x.discarded_by !== 'ia').flatMap(x => {
+      const k = x.clips as TestimonialClips | null;
+      return k && Array.isArray(k.malos) && Array.isArray(k.buenos) ? [...k.malos, ...k.buenos] : [];
+    }).map(b => ({ rec: recordingKey(b.fathomUrl), start: b.start, end: b.end }));
+    const pares = planStudentPairs(rows.map(toSegment), avg, {
+      max: c.parejas_por_alumno, perMoment: c.momento_max_parejas, spanishMax: c.momento_espanol_max, minWeeks: c.semanas_min,
+      blocked: s => !s.fathomUrl || !enlaceBueno(s.fathomUrl) || test.teachers.has(String(s.teacherId))
+        || isVetoed(s, vetos)
+        || noSirve.some(b => b.rec === recordingKey(s.fathomUrl) && s.start < b.end && b.start < s.end),
+      skipPair: (a, b) => verificadas.has(`${momentKey(a)}|${momentKey(b)}`),
+    });
+    if (pares.length) porAlumno.push({ g, pares });
+  }
+  porAlumno.sort((x, y) => comparePlanned(y.pares[0], x.pares[0]));
+  const plan = porAlumno.flatMap(({ g, pares }) => pares.map(p => toPlanItem(g, p)));
+  return { plan, alumnos: porAlumno.length };
+}
+
+/** Crea en testimonial_candidates la pareja del plan que toca verificar. */
+async function materializePair(admin: SupabaseClient, item: PlanItem): Promise<string> {
+  const [{ data: segs, error }, { data: txs }] = await Promise.all([
+    admin.from('testimonial_segments').select(SEG_COLS).in('id', [item.a, item.b]),
+    admin.from('testimonial_transcripts').select('student_name, status, segments_at, segment_stats').eq('student_group', item.g),
+  ]);
+  if (error) throw new Error(`testimonial_segments: ${error.message}`);
+  const ra = ((segs ?? []) as Row[]).find(x => x.id === item.a), rb = ((segs ?? []) as Row[]).find(x => x.id === item.b);
+  if (!ra || !rb) throw new Error('Los momentos de esta pareja ya no existen (se reprocesó el transcript). Pasa a la siguiente.');
+  const a = toSegment(ra), b = toSegment(rb);
+  const { avg, name } = studentContext((txs ?? []) as Row[]);
+  const cols = pairColumns({ a, b, aScore: blockingScore(a, avg), bScore: fluencyScore(b, avg), gapDays: daysBetween(a.classDay, b.classDay) }, name, avg);
+
+  // Solo una pareja abierta por alumno y profe (índice único): la que dejó el
+  // buscador sin verificar deja sitio. Una aprobada por revisar, nunca.
+  const { data: abiertas } = await admin.from('testimonial_candidates').select('id')
+    .eq('student_group', item.g).eq('pair_teacher_id', a.teacherId).neq('status', 'descartado');
+  const ids = ((abiertas ?? []) as Row[]).map(x => String(x.id));
+  if (ids.length) {
+    const { data: aprobadas } = await admin.from('testimonial_verifications').select('id')
+      .in('candidate_id', ids).eq('status', 'aprobado').is('review', null).limit(1);
+    if ((aprobadas ?? []).length) throw new Error('Este alumno ya tiene una pareja aprobada por revisar. Pasa a la siguiente.');
+    const { error: dErr } = await admin.from('testimonial_candidates').delete().in('id', ids).eq('status', 'detectado');
+    if (dErr) throw new Error(`Dejando sitio a la pareja: ${dErr.message}`);
+  }
+  const id = `tc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const now = new Date().toISOString();
+  const { error: iErr } = await admin.from('testimonial_candidates').insert({
+    id, ...cols, ai_reason: `${cols.ai_reason} Pareja del plan de la tanda (varias por alumno).`,
+    status: 'detectado', status_changed_at: now, updated_at: now,
+  });
+  if (iErr) throw new Error(`Creando la pareja: ${iErr.message}`);
+  return id;
+}
+
+export interface NextResult {
+  /** La tanda ha terminado (no hace falta volver a llamar). */
+  fin: boolean;
+  motivoFin: 'objetivo' | 'tope' | 'sin_parejas' | null;
+  hechas: number;
+  aprobadas: number;
+  resultado: VerifyOutcome | null;
+}
+
+/** Verifica la siguiente pareja del plan de una tanda de búsqueda. */
+export async function verifyNext(admin: SupabaseClient, batchId: string): Promise<NextResult> {
+  const [{ config: c }, { data: batch, error }, { data: hechasRows, error: hErr }] = await Promise.all([
+    loadConfig(admin),
+    admin.from('testimonial_verify_batches').select('id, kind, plan, cursor').eq('id', batchId).maybeSingle(),
+    admin.from('testimonial_verifications').select('student_group, status').eq('batch_id', batchId).in('status', ['aprobado', 'descartado', 'error']),
+  ]);
+  if (error || hErr) throw new Error(`testimonial_verify_batches: ${(error ?? hErr)!.message}`);
+  if (!batch || batch.kind !== 'busqueda') throw new Error('No existe esa tanda de búsqueda.');
+  const hechas = (hechasRows ?? []).length;
+  const aprobados = new Set(((hechasRows ?? []) as Row[]).filter(r => r.status === 'aprobado').map(r => String(r.student_group)));
+  const fin = (h: number, ap: number): NextResult['motivoFin'] =>
+    ap >= c.parejas_por_tanda ? 'objetivo' : h >= c.tanda_max_verificaciones ? 'tope' : null;
+  const yaFin = fin(hechas, aprobados.size);
+  if (yaFin) return { fin: true, motivoFin: yaFin, hechas, aprobadas: aprobados.size, resultado: null };
+
+  const next = nextPlanItem((batch.plan ?? []) as PlanItem[], Number(batch.cursor ?? 0), aprobados, await loadVetos(admin));
+  if (!next) return { fin: true, motivoFin: 'sin_parejas', hechas, aprobadas: aprobados.size, resultado: null };
+  // El cursor avanza ANTES de verificar: si esta pareja falla, la siguiente llamada sigue.
+  await admin.from('testimonial_verify_batches').update({ cursor: next.index + 1 }).eq('id', batchId);
+  const candId = await materializePair(admin, next.item);
+  const resultado = await verifyCandidate(admin, candId, batchId, 'busqueda');
+  const h = hechas + 1, ap = aprobados.size + (resultado.status === 'aprobado' ? 1 : 0);
+  const motivoFin = fin(h, ap);
+  return { fin: !!motivoFin, motivoFin, hechas: h, aprobadas: ap, resultado };
 }
 
 /** Id estable de la verificación de una pareja: la misma pareja no se verifica dos veces. */
@@ -200,22 +385,29 @@ export async function verifyCandidate(admin: SupabaseClient, candidateId: string
   if (upErr) throw new Error(`testimonial_verifications: ${upErr.message}`);
 
   const sides: { antes: SideResult | null; despues: SideResult | null } = { antes: null, despues: null };
+  const coste = { deepgram: 0, claude: 0 };
+  type Lado = 'ANTES' | 'DESPUÉS';
   const finish = async (status: VerifyOutcome['status'], motivo: Motivo | null, detalle: string | null,
-    extra: Row = {}): Promise<VerifyOutcome> => {
+    extra: Row = {}, lado: Lado | null = null): Promise<VerifyOutcome> => {
     const ms = Date.now() - t0;
-    await admin.from('testimonial_verifications').update({
+    const r4 = (x: number) => Math.round(x * 10000) / 10000;
+    const { error: fErr } = await admin.from('testimonial_verifications').update({
       status, motivo, motivo_detalle: detalle, antes: sides.antes, despues: sides.despues, ms,
+      coste_deepgram_usd: r4(coste.deepgram), coste_claude_usd: r4(coste.claude),
       updated_at: new Date().toISOString(), ...extra,
     }).eq('id', id);
-    // Descarte del verificador: esos dos momentos no vuelven a proponerse.
+    if (fErr) throw new Error(`testimonial_verifications: ${fErr.message}`);
+    // Descarte del verificador: la pareja sale de "Por revisar" y, según el
+    // motivo, el momento o la clase quedan vetados (saveVeto).
     if (kind === 'busqueda' && status === 'descartado') {
       await admin.from('testimonial_candidates').update({
         status: 'descartado', discarded_by: 'ia', status_changed_at: new Date().toISOString(), updated_at: new Date().toISOString(),
       }).eq('id', cand.id).eq('status', 'detectado');
+      await saveVeto(admin, id, motivo, lado, (extra.fathom_causa as string | undefined) ?? null, cand, malo, bueno);
     }
     return { id, status, motivo, detalle, fathomCausa: (extra.fathom_causa as string | undefined) ?? null, nota: (extra.juez_nota as number | undefined) ?? null, ms };
   };
-  const discard = (r: Extract<RuleResult, { ok: false }>, extra: Row = {}) => finish('descartado', r.motivo, r.detalle, extra);
+  const discard = (r: Extract<RuleResult, { ok: false }>, extra: Row = {}, lado: Lado | null = null) => finish('descartado', r.motivo, r.detalle, extra, lado);
 
   // 0. Gratis
   if (!malo || !bueno) return finish('descartado', 'otro', 'La pareja no tiene los dos clips.');
@@ -230,7 +422,7 @@ export async function verifyCandidate(admin: SupabaseClient, candidateId: string
     const detalle = `${lado}: ${r.detail}`;
     return r.cause === 'error'
       ? finish('error', 'enlace_roto', detalle, { fathom_causa: 'error' })
-      : finish('descartado', 'enlace_roto', detalle, { fathom_causa: r.cause });
+      : finish('descartado', 'enlace_roto', detalle, { fathom_causa: r.cause }, lado);
   }
   if (!ra.ok || !rb.ok) throw new Error('inalcanzable');
 
@@ -258,6 +450,7 @@ export async function verifyCandidate(admin: SupabaseClient, candidateId: string
   let ta: { multi: DeepgramTranscript; detect: DeepgramTranscript | null }, tb: typeof ta;
   try {
     [ta, tb] = await Promise.all([transcribeBoth(ca.audio, c), transcribeBoth(cb.audio, c)]);
+    coste.deepgram = deepgramUsd(ta, ca.durS, c) + deepgramUsd(tb, cb.durS, c);
   } catch (err) {
     const e = err instanceof DeepgramError ? err : new DeepgramError(String(err), null);
     return finish('error', null, `Deepgram: ${e.message}${e.body ? ` ${e.body.slice(0, 200)}` : ''}`);
@@ -267,25 +460,67 @@ export async function verifyCandidate(admin: SupabaseClient, candidateId: string
   sides.despues.texto = mainSpeakerText(tb.multi); sides.despues.medidas = mb;
   if (!ma) return finish('descartado', 'sin_voz', 'ANTES: Deepgram no oye a nadie en el tramo.');
   if (!mb) return finish('descartado', 'sin_voz', 'DESPUÉS: Deepgram no oye a nadie en el tramo.');
-  for (const r of [checkAudio(ma, 'ANTES', c), checkAudio(mb, 'DESPUÉS', c), checkAntes(ma, c), checkDespues(mb, c), checkContraste(ma, mb, c)]) {
-    if (!r.ok) return discard(r);
-  }
+  const reglasAudio: Array<[RuleResult, Lado | null]> = [
+    [checkAudio(ma, 'ANTES', c), 'ANTES'], [checkAudio(mb, 'DESPUÉS', c), 'DESPUÉS'],
+    [checkAntes(ma, c), 'ANTES'], [checkDespues(mb, c), 'DESPUÉS'], [checkContraste(ma, mb, c), null],
+  ];
+  for (const [r, lado] of reglasAudio) if (!r.ok) return discard(r, {}, lado);
 
   // 5. Imagen + juez
   const names = await pairNames(admin, cand, malo, teacherId);
   const refFrame = await ref;
   const verdict = await askJudge(admin, { cand, sides: { antes: sides.antes, despues: sides.despues }, ca, cb, refFrame, semanas: semanas ?? 0, names });
+  coste.claude = claudeUsd(verdict.usage, c);
   if (!verdict.ok) return finish('error', null, `Claude: ${verdict.error}`);
   const v = verdict.data;
   sides.antes.vision = v.antes; sides.despues.vision = v.despues;
   const isStudent = (n: string) => names.student.some(s => nameMatchesStrict(n, s) || nameMatchesStrict(s, n));
   const isTeacher = (n: string) => names.teacher.some(s => nameMatchesStrict(n, s) || nameMatchesStrict(s, n));
   const juez = { juez_nota: Math.round(v.nota), juez_explicacion: v.explicacion };
-  for (const r of [checkVision(v.antes, 'ANTES', c, isStudent, isTeacher), checkVision(v.despues, 'DESPUÉS', c, isStudent, isTeacher)]) {
-    if (!r.ok) return discard(r, juez);
-  }
+  const reglasImagen: Array<[RuleResult, Lado]> = [
+    [checkVision(v.antes, 'ANTES', c, isStudent, isTeacher), 'ANTES'], [checkVision(v.despues, 'DESPUÉS', c, isStudent, isTeacher), 'DESPUÉS'],
+  ];
+  for (const [r, lado] of reglasImagen) if (!r.ok) return discard(r, juez, lado);
   if (v.nota < c.juez_nota_min) return finish('descartado', 'nota_baja', `Nota ${Math.round(v.nota)} (mínimo ${c.juez_nota_min}): ${v.explicacion}`, juez);
   return finish('aprobado', null, null, juez);
+}
+
+/** Gasto estimado de Deepgram de un clip: segundos cobrados × precio de cada modo. */
+function deepgramUsd(t: { multi: DeepgramTranscript; detect: DeepgramTranscript | null }, durS: number, c: VerifyConfig): number {
+  const min = (x: DeepgramTranscript | null) => (x ? (x.durationS ?? durS) / 60 : 0);
+  return min(t.multi) * c.deepgram_usd_min_multi + min(t.detect) * c.deepgram_usd_min_detect;
+}
+
+/** Gasto estimado de Claude por los tokens que devolvió la API (caché: lectura ×0,1, escritura ×1,25). */
+function claudeUsd(u: AiResult<unknown>['usage'], c: VerifyConfig): number {
+  if (!u) return 0;
+  const entrada = u.input + u.cacheRead * 0.1 + u.cacheWrite * 1.25;
+  return (entrada * c.claude_usd_mtok_entrada + u.output * c.claude_usd_mtok_salida) / 1_000_000;
+}
+
+/**
+ * Veto tras un descarte del verificador: el MOMENTO por español, habla el profe,
+ * leyendo o cámara apagada; la GRABACIÓN entera por enlace privado o borrado.
+ * Momento = intervención en una grabación (momentKey): vale también para las
+ * copias del mismo transcript en otra clase.
+ * Best-effort: un fallo aquí no tumba la verificación.
+ */
+async function saveVeto(admin: SupabaseClient, verificationId: string, motivo: Motivo | null, lado: 'ANTES' | 'DESPUÉS' | null,
+  fathomCausa: string | null, cand: Row, malo: TestimonialClip | null, bueno: TestimonialClip | null): Promise<void> {
+  if (!motivo || !lado) return;
+  const antes = lado === 'ANTES';
+  const url = (antes ? malo : bueno)?.fathomUrl ?? null;
+  let clave: string | null = null;
+  if ((MOTIVOS_QUE_VETAN as readonly string[]).includes(motivo)) {
+    const momento = momentKeyFromId((antes ? cand.before_moment_id : cand.after_moment_id) as string | null, url);
+    if (momento) clave = `m:${momento}`;
+  } else if (motivo === 'enlace_roto' && (fathomCausa === 'privado' || fathomCausa === 'borrado')) {
+    if (url) clave = `g:${recordingKey(url)}`;
+  }
+  if (!clave) return;
+  const { error } = await admin.from('testimonial_vetos').upsert(
+    { clave, motivo, lado, verification_id: verificationId }, { onConflict: 'clave', ignoreDuplicates: true });
+  if (error) console.error('[testimonial-verify] Veto sin guardar:', clave, error.message);
 }
 
 async function transcribeBoth(audio: Buffer, c: VerifyConfig) {
@@ -406,7 +641,7 @@ const medidasTexto = (m: ClipMeasures | null) => m
 async function askJudge(admin: SupabaseClient, args: {
   cand: Row; sides: { antes: SideResult; despues: SideResult }; ca: CutResult; cb: CutResult;
   refFrame: Buffer | null; semanas: number; names: { student: string[]; teacher: string[] };
-}): Promise<{ ok: true; data: VisionVerdict } | { ok: false; error: string }> {
+}): Promise<({ ok: true; data: VisionVerdict } | { ok: false; error: string }) & { usage: AiResult<unknown>['usage'] }> {
   const { sides, ca, cb, refFrame, names } = args;
   const img = (label: string, b: Buffer) => ({ label, mediaType: 'image/jpeg' as const, base64: b.toString('base64') });
   const momentos = ['inicio', 'mitad', 'final'];
@@ -428,7 +663,7 @@ async function askJudge(admin: SupabaseClient, args: {
     timeoutMs: 90_000, maxRetries: 1, label: 'testimonial-verify',
     skipCleanKeys: ['camara_alumno', 'quien_habla_por_cara', 'nombre_que_habla'],
   });
-  return r.status === 'ready' && r.data ? { ok: true, data: r.data } : { ok: false, error: r.error ?? 'sin respuesta' };
+  return r.status === 'ready' && r.data ? { ok: true, data: r.data, usage: r.usage } : { ok: false, error: r.error ?? 'sin respuesta', usage: r.usage };
 }
 
 // ── Revisión del admin ───────────────────────────────────────────────────────
@@ -562,8 +797,10 @@ const enlaceFalso = (url: string | null | undefined) => {
 
 function batchSummary(rows: Row[]) {
   const porMotivo: Record<string, number> = {};
-  let aprobados = 0, errores = 0, fuenteError = 0, enlacesProbados = 0, sirven = 0, revisadas = 0;
+  let aprobados = 0, errores = 0, fuenteError = 0, enlacesProbados = 0, sirven = 0, revisadas = 0, costeDeepgram = 0, costeClaude = 0;
   for (const r of rows) {
+    costeDeepgram += Number(r.coste_deepgram_usd ?? 0);
+    costeClaude += Number(r.coste_claude_usd ?? 0);
     if (r.status === 'aprobado') aprobados++;
     if (r.status === 'error') errores++;
     if (r.status === 'descartado' && r.motivo) porMotivo[r.motivo] = (porMotivo[r.motivo] ?? 0) + 1;
@@ -572,7 +809,8 @@ function batchSummary(rows: Row[]) {
     if (r.review) { revisadas++; if (r.review === 'sirve') sirven++; }
   }
   const revisados = rows.filter(r => r.status !== 'verificando').length;
-  return { revisados, aprobados, errores, porMotivo, fuenteError, enlacesProbados, sirven, revisadas };
+  const r2 = (x: number) => Math.round(x * 100) / 100;
+  return { revisados, aprobados, errores, porMotivo, fuenteError, enlacesProbados, sirven, revisadas, costeDeepgram: r2(costeDeepgram), costeClaude: r2(costeClaude) };
 }
 
 export async function loadState(admin: SupabaseClient) {
@@ -586,7 +824,7 @@ export async function loadState(admin: SupabaseClient) {
     admin.from('testimonial_verifications').select(LIGHT).eq('review', 'sirve').order('reviewed_at', { ascending: false }).limit(100),
     admin.from('testimonial_verifications').select(LIGHT).eq('kind', 'busqueda').eq('status', 'descartado')
       .order('updated_at', { ascending: false }).limit(60),
-    admin.from('testimonial_verify_batches').select('*').eq('kind', 'busqueda').order('started_at', { ascending: false }).limit(8),
+    admin.from('testimonial_verify_batches').select('id, started_at, finished_at, cancelled, planned, alumnos').eq('kind', 'busqueda').order('started_at', { ascending: false }).limit(8),
     admin.from('testimonial_verifications').select('review, review_motivo, reviewed_at').not('reviewed_at', 'is', null)
       .order('reviewed_at', { ascending: false }).limit(config.endurecer_ventana),
     admin.from('testimonial_config_changes').select('*').order('created_at', { ascending: false }).limit(10),
@@ -598,10 +836,10 @@ export async function loadState(admin: SupabaseClient) {
 
   const batchIds = ((batches.data ?? []) as Row[]).map(b => String(b.id));
   const { data: inBatches } = batchIds.length
-    ? await admin.from('testimonial_verifications').select('batch_id, status, motivo, fathom_causa, antes, review').in('batch_id', batchIds)
+    ? await admin.from('testimonial_verifications').select('batch_id, status, motivo, fathom_causa, antes, review, coste_deepgram_usd, coste_claude_usd').in('batch_id', batchIds)
     : { data: [] as Row[] };
   const tandas = ((batches.data ?? []) as Row[]).map(b => ({
-    id: b.id, startedAt: b.started_at, finishedAt: b.finished_at, cancelled: b.cancelled, planned: b.planned,
+    id: b.id, startedAt: b.started_at, finishedAt: b.finished_at, cancelled: b.cancelled, planned: b.planned, alumnos: b.alumnos ?? null,
     ...batchSummary(((inBatches ?? []) as Row[]).filter(r => r.batch_id === b.id)),
   }));
   const ultima = tandas.find(t => t.revisados > 0) ?? null;

@@ -41,6 +41,8 @@ export interface AiResult<T> {
   data: T | null;
   status: AiStatus;
   error?: string;
+  /** Tokens que cobró la API (para estimar el gasto). Sin respuesta, no hay. */
+  usage?: { input: number; output: number; cacheRead: number; cacheWrite: number };
 }
 
 export interface AskClaudeJsonOptions {
@@ -209,6 +211,14 @@ export function buildClaudeRequest(opts: AskClaudeJsonOptions): Anthropic.Messag
  * Compartida por la llamada inmediata y por los resultados de la Batch API.
  */
 export function readClaudeJson<T>(message: Anthropic.Message, opts: AskClaudeJsonOptions): AiResult<T> {
+  const u = message.usage;
+  return {
+    ...parseClaudeJson<T>(message, opts),
+    usage: { input: u?.input_tokens ?? 0, output: u?.output_tokens ?? 0, cacheRead: u?.cache_read_input_tokens ?? 0, cacheWrite: u?.cache_creation_input_tokens ?? 0 },
+  };
+}
+
+function parseClaudeJson<T>(message: Anthropic.Message, opts: AskClaudeJsonOptions): AiResult<T> {
   // Monitoreo de caché y de tokens (común a todos los endpoints de IA; `label`
   // identifica cuál llamó). cache_read alto en llamadas repetidas = está andando.
   // Si cache_read queda en 0 entre llamadas con el mismo system, algo invalida el

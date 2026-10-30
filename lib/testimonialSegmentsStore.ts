@@ -69,7 +69,7 @@ const segmentRow = (s: Segment): Row => ({
   teacher_before: s.teacherBefore, fathom_url: s.fathomUrl,
 });
 
-const toSegment = (r: Row): Segment => ({
+export const toSegment = (r: Row): Segment => ({
   id: String(r.id), kind: r.kind as Segment['kind'], analysisId: String(r.analysis_id),
   studentGroup: String(r.student_group), teacherId: (r.teacher_id as string | null) ?? null,
   classDay: String(r.class_day ?? ''), studentLabel: String(r.student_label ?? ''),
@@ -185,7 +185,7 @@ function toClip(s: Segment, why: string): TestimonialClip {
   };
 }
 
-function pairColumns(p: ScoredPair, studentName: string | null, avgWpm: number | null): Row {
+export function pairColumns(p: ScoredPair, studentName: string | null, avgWpm: number | null): Row {
   const whyA = explain(p.a, p.aScore, avgWpm), whyB = explain(p.b, p.bScore, avgWpm);
   const clips: TestimonialClips = { malos: [toClip(p.a, whyA)], buenos: [toClip(p.b, whyB)] };
   const side = (pre: 'before' | 'after', s: Segment, score: number) => ({

@@ -10,9 +10,11 @@
 //
 // POST { accion, ... } — la pestaña Testimoniales (lib/testimonialVerifier):
 //   · 'estado'          tarjetas, tandas, alarma, umbrales, prueba (y limpia Storage)
-//   · 'iniciar'         { tipo: 'busqueda' | 'prueba' } → { batchId, ids }
-//   · 'verificar'       { batchId, id, tipo } → UNA pareja (el navegador las encadena)
-//   · 'cerrar'          { batchId, cancelado }
+//   · 'iniciar'         { tipo: 'busqueda' | 'prueba' } → { batchId, ids, parejas, alumnos }
+//   · 'verificar-siguiente' { batchId } → búsqueda: la SIGUIENTE pareja del plan
+//                       (varias por alumno); el navegador llama hasta que diga fin
+//   · 'verificar'       { batchId, id, tipo } → prueba: UNA pareja (el navegador las encadena)
+//   · 'cerrar'          { batchId, cancelado } → resumen de la tanda (con el gasto estimado)
 //   · 'revisar'         { id, review: 'sirve' | 'no_sirve', motivo?, texto? }
 //   · 'consentimiento'  { id, valor: 'sin_pedir' | 'pedido' | 'dado' }
 //   · 'deshacer-umbral' { changeId }
@@ -28,7 +30,7 @@ import { readFathomShare, cutClip, FathomCutError, type FathomSource } from '@/l
 import { transcribeAudio, DeepgramError, type DeepgramParams, type DeepgramTranscript } from '@/lib/deepgram';
 import type { TestimonialClip, TestimonialClips } from '@/lib/testimonials';
 import {
-  startBatch, verifyCandidate, closeBatch, loadState, reviewVerification, setConsent, undoConfigChange,
+  startBatch, verifyCandidate, verifyNext, closeBatch, loadState, reviewVerification, setConsent, undoConfigChange,
   signPaths, mediaPaths, type BatchKind,
 } from '@/lib/testimonialVerifier';
 
@@ -176,10 +178,15 @@ export async function POST(request: Request): Promise<Response> {
         if (!id || !batchId) return Response.json({ error: 'Faltan id o batchId.' }, { status: 400, headers: NO_STORE });
         return Response.json(await verifyCandidate(admin, id, batchId, tipo), { headers: NO_STORE });
       }
+      case 'verificar-siguiente': {
+        const batchId = str('batchId');
+        if (!batchId) return Response.json({ error: 'Falta batchId.' }, { status: 400, headers: NO_STORE });
+        return Response.json(await verifyNext(admin, batchId), { headers: NO_STORE });
+      }
       case 'cerrar': {
         const batchId = str('batchId');
-        if (batchId) await closeBatch(admin, batchId, body.cancelado === true);
-        return Response.json({ ok: true }, { headers: NO_STORE });
+        if (!batchId) return Response.json({ ok: true }, { headers: NO_STORE });
+        return Response.json({ ok: true, resumen: await closeBatch(admin, batchId, body.cancelado === true) }, { headers: NO_STORE });
       }
       case 'revisar': {
         const id = str('id'), review = str('review');
@@ -212,6 +219,10 @@ export async function POST(request: Request): Promise<Response> {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[testimonial-verify]', body.accion, msg);
     const sinSql = /testimonial_(config|verif|examples)|bucket/i.test(msg) && /exist|schema cache|not found/i.test(msg);
-    return Response.json({ error: sinSql ? 'Falta correr supabase-testimoniales-verificador.sql en Supabase.' : msg }, { status: 500, headers: NO_STORE });
+    // Columnas o tabla de la tanda de varias parejas.
+    const sinSqlVarias = /testimonial_vetos|plan|cursor|alumnos|coste_(deepgram|claude)_usd/i.test(msg) && /exist|schema cache|not found|could not find/i.test(msg);
+    const error = sinSqlVarias ? 'Falta correr supabase-testimoniales-varias-parejas.sql en Supabase.'
+      : sinSql ? 'Falta correr supabase-testimoniales-verificador.sql en Supabase.' : msg;
+    return Response.json({ error }, { status: 500, headers: NO_STORE });
   }
 }

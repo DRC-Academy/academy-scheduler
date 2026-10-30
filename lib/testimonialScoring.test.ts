@@ -24,7 +24,8 @@ describe('textFeatures', () => {
     const f = textFeatures("I'm a little, I don't know how to say, rencoroso, como...");
     expect(f.searches).toBe(1);
     expect(f.spanishWords).toBe(2);
-    expect(linguisticBlock(f)).toBe(4);
+    // Solo la búsqueda (2): el español no cuenta como bloqueo desde el 30/10/2026.
+    expect(linguisticBlock(f)).toBe(2);
   });
 });
 

@@ -2,9 +2,11 @@
 
 // Pestaña admin "Testimoniales" con VERIFICADOR (rama testimoniales-verificador).
 //
-// El buscador (V6) ya no enseña sus parejas: "Buscar y verificar" las pasa una a
-// una por el verificador (lib/testimonialVerifier, una llamada al servidor por
-// pareja) hasta reunir `parejas_por_tanda` aprobadas. Solo se enseñan esas, con
+// El buscador (V6) ya no enseña sus parejas: "Buscar y verificar" abre una tanda
+// con VARIAS parejas por alumno (lib/testimonialPairPlan) y las pasa una a una por
+// el verificador (lib/testimonialVerifier.verifyNext, una llamada al servidor por
+// pareja) hasta reunir `parejas_por_tanda` aprobadas o llegar al tope de
+// verificaciones. Al acabar enseña el gasto estimado en Deepgram y Claude. Solo se enseñan esas, con
 // la nota del juez, fotogramas, audio recortado y medidas. "No sirve" pide motivo:
 // alimenta el banco de ejemplos y puede endurecer un umbral (que se puede deshacer).
 //
@@ -32,7 +34,7 @@ interface Verif {
 interface Tanda {
   id: string; startedAt: string; finishedAt: string | null; cancelled: boolean; planned: number; revisados: number;
   aprobados: number; errores: number; porMotivo: Record<string, number>; fuenteError: number; enlacesProbados: number;
-  sirven: number; revisadas: number;
+  sirven: number; revisadas: number; alumnos: number | null; costeDeepgram: number; costeClaude: number;
 }
 interface ResumenPrueba { total: number; descartados: number; aprobados: number; errores: number; porMotivo: Record<string, number> }
 interface Estado {
@@ -43,7 +45,9 @@ interface Estado {
   umbrales: Array<{ key: string; value: number; description: string; motivo: string | null }>;
   prueba: { objetivo: number; todas: ResumenPrueba; sinEnlaceFalso: ResumenPrueba; conEnlaceFalso: number };
 }
-interface Progreso { kind: Kind; hechas: number; total: number; aprobadas: number; errores: number }
+interface Progreso { kind: Kind; hechas: number; total: number; aprobadas: number; errores: number; alumnos?: number }
+interface Siguiente { fin: boolean; motivoFin: 'objetivo' | 'tope' | 'sin_parejas' | null; hechas: number; aprobadas: number; resultado: { status: string } | null }
+interface ResumenTanda { revisados: number; aprobados: number; costeDeepgram: number; costeClaude: number }
 
 const API = '/api/admin/testimonial-verify';
 const MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
@@ -54,6 +58,10 @@ const fecha = (iso: string | null | undefined) => {
 };
 const pct = (a: number, b: number) => (b ? `${Math.round((a / b) * 100)} %` : '—');
 const CONSENT_LABEL = { sin_pedir: 'Sin pedir', pedido: 'Pedido', dado: 'Dado' } as const;
+const usd = (x: number) => `${x.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} $`;
+const gasto = (t: { costeDeepgram: number; costeClaude: number }) =>
+  `${usd(t.costeDeepgram + t.costeClaude)} (Deepgram ${usd(t.costeDeepgram)} + Claude ${usd(t.costeClaude)})`;
+const FIN_LABEL = { objetivo: 'reunidas las aprobadas', tope: 'llegó al tope de verificaciones', sin_parejas: 'no quedan parejas por probar' } as const;
 
 export default function TestimonialsVerifierTab() {
   const { user } = useAuth();
@@ -91,14 +99,58 @@ export default function TestimonialsVerifierTab() {
   }, [cargar]);
 
   const objetivo = estado?.umbrales.find(u => u.key === 'parejas_por_tanda')?.value ?? 5;
+  const tope = estado?.umbrales.find(u => u.key === 'tanda_max_verificaciones')?.value ?? 150;
 
-  /** Una tanda: una llamada por pareja. La búsqueda va de una en una y para al reunir `objetivo`. */
-  const lanzar = useCallback(async (kind: Kind) => {
+  /** Búsqueda: el servidor elige cada vez la siguiente pareja del plan (varias por alumno). */
+  const buscar = useCallback(async () => {
+    cancelar.current = false;
+    setError(null); setAviso(null);
+    let batchId: string | null = null;
+    let motivoFin: Siguiente['motivoFin'] = null;
+    try {
+      const inicio = await post<{ batchId: string; parejas: number; alumnos: number }>('iniciar', { tipo: 'busqueda' });
+      batchId = inicio.batchId;
+      const p: Progreso = { kind: 'busqueda', hechas: 0, total: Math.min(tope, inicio.parejas), aprobadas: 0, errores: 0, alumnos: inicio.alumnos };
+      setProgreso({ ...p });
+      if (inicio.parejas === 0) motivoFin = 'sin_parejas';
+      let seguidos = 0;
+      while (!motivoFin && !cancelar.current && vivo.current) {
+        try {
+          const r = await post<Siguiente>('verificar-siguiente', { batchId });
+          p.hechas = r.hechas; p.aprobadas = r.aprobadas;
+          if (r.resultado?.status === 'error') p.errores++;
+          seguidos = 0;
+          if (r.fin) motivoFin = r.motivoFin;
+        } catch (e) {
+          p.errores++;
+          if (++seguidos >= 3) { cancelar.current = true; setError(`Se paró tras 3 fallos seguidos: ${e instanceof Error ? e.message : e}`); }
+        }
+        if (vivo.current) setProgreso({ ...p });
+      }
+    } catch (e) {
+      if (vivo.current) setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      const resumen = batchId
+        ? (await post<{ resumen: ResumenTanda }>('cerrar', { batchId, cancelado: cancelar.current }).catch(() => null))?.resumen ?? null
+        : null;
+      if (vivo.current && resumen) {
+        const porque = cancelar.current ? 'cancelada' : motivoFin ? FIN_LABEL[motivoFin] : 'terminada';
+        setAviso(resumen.revisados === 0 && motivoFin === 'sin_parejas'
+          ? 'No quedan parejas por verificar: todos los momentos posibles ya se probaron o están vetados.'
+          : `Tanda ${cancelar.current ? 'cancelada' : 'terminada'} (${porque}): ${resumen.aprobados} aprobadas de ${resumen.revisados} verificadas. Gasto estimado: ${gasto(resumen)}.`);
+      }
+      if (vivo.current) { setProgreso(null); await cargar(); }
+    }
+  }, [post, cargar, tope]);
+
+  /** Tanda de PRUEBA (los "No sirve" del admin): una llamada por pareja, 3 a la vez. */
+  const probar = useCallback(async () => {
+    const kind: Kind = 'prueba';
     cancelar.current = false;
     setError(null); setAviso(null);
     let batchId: string | null = null;
     try {
-      const inicio = await post<{ batchId: string; ids: string[]; resincronizados: number }>('iniciar', { tipo: kind });
+      const inicio = await post<{ batchId: string; ids: string[] }>('iniciar', { tipo: kind });
       batchId = inicio.batchId;
       const cola = [...inicio.ids];
       const p: Progreso = { kind, hechas: 0, total: cola.length, aprobadas: 0, errores: 0 };
@@ -107,7 +159,6 @@ export default function TestimonialsVerifierTab() {
       const trabajador = async () => {
         for (let id = cola.shift(); id; id = cola.shift()) {
           if (cancelar.current || !vivo.current) return;
-          if (kind === 'busqueda' && p.aprobadas >= objetivo) return;
           try {
             const r = await post<{ status: string }>('verificar', { id, batchId, tipo: kind });
             if (r.status === 'aprobado') p.aprobadas++;
@@ -121,18 +172,14 @@ export default function TestimonialsVerifierTab() {
           if (vivo.current) setProgreso({ ...p });
         }
       };
-      await Promise.all(Array.from({ length: kind === 'prueba' ? 3 : 1 }, trabajador));
-      if (kind === 'busqueda' && vivo.current) {
-        setAviso(p.total === 0 ? 'No hay parejas nuevas que verificar: el buscador aún no ha propuesto más.'
-          : `Tanda terminada: ${p.aprobadas} aprobadas de ${p.hechas} verificadas.`);
-      }
+      await Promise.all(Array.from({ length: 3 }, trabajador));
     } catch (e) {
       if (vivo.current) setError(e instanceof Error ? e.message : String(e));
     } finally {
       if (batchId) await post('cerrar', { batchId, cancelado: cancelar.current }).catch(() => {});
       if (vivo.current) { setProgreso(null); await cargar(); }
     }
-  }, [post, cargar, objetivo]);
+  }, [post, cargar]);
 
   const revisar = useCallback(async (id: string, review: 'sirve' | 'no_sirve', motivo?: Motivo, texto?: string) => {
     try {
@@ -162,13 +209,16 @@ export default function TestimonialsVerifierTab() {
           {progreso?.kind === 'busqueda' ? (
             <>
               <div className="tv-prog" role="status">
-                <span>Verificando {Math.min(progreso.hechas + 1, progreso.total)} de {progreso.total}… · {progreso.aprobadas} de {objetivo} aprobadas</span>
+                <span>
+                  Verificando la pareja {Math.min(progreso.hechas + 1, progreso.total)} (máximo {progreso.total})… · {progreso.aprobadas} de {objetivo} aprobadas
+                  {progreso.alumnos != null && <> · {progreso.alumnos} alumnos con parejas</>}
+                </span>
                 <div className="tv-prog-bar"><div style={{ width: `${progreso.total ? (progreso.hechas / progreso.total) * 100 : 0}%` }} /></div>
               </div>
               <button type="button" className="tv-btn tv-sec" onClick={() => { cancelar.current = true; }}>Cancelar</button>
             </>
           ) : (
-            <button type="button" className="tv-btn tv-pri" disabled={!!progreso || !estado} onClick={() => lanzar('busqueda')}>
+            <button type="button" className="tv-btn tv-pri" disabled={!!progreso || !estado} onClick={buscar}>
               Buscar y verificar
             </button>
           )}
@@ -178,7 +228,8 @@ export default function TestimonialsVerifierTab() {
           <p className="tv-line">
             <b>Última tanda</b> ({fecha(ultima.startedAt)}{ultima.cancelled ? ', cancelada' : ''}): {ultima.revisados} revisados,
             {' '}{ultima.aprobados} aprobados{ultima.errores ? `, ${ultima.errores} con error` : ''}
-            {Object.keys(ultima.porMotivo).length > 0 && <> · descartados: {motivosFrase(ultima.porMotivo)}</>}.
+            {Object.keys(ultima.porMotivo).length > 0 && <> · descartados: {motivosFrase(ultima.porMotivo)}</>}
+            {ultima.costeDeepgram + ultima.costeClaude > 0 && <> · gasto estimado: {gasto(ultima)}</>}.
           </p>
         )}
         {estado && estado.tandas.some(t => t.revisados > 0) && (
@@ -225,7 +276,7 @@ export default function TestimonialsVerifierTab() {
           <Descartados lista={estado.descartados} post={post} onVer={setGrande} />
           <Umbrales estado={estado} onDeshacer={deshacer} />
           <Prueba estado={estado} progreso={progreso?.kind === 'prueba' ? progreso : null} ocupado={!!progreso}
-            onLanzar={() => lanzar('prueba')} onCancelar={() => { cancelar.current = true; }} />
+            onLanzar={probar} onCancelar={() => { cancelar.current = true; }} />
         </>
       )}
 
