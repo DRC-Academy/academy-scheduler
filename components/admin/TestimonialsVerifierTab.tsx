@@ -1,14 +1,18 @@
 'use client';
 
-// Pestaña admin "Testimoniales" con VERIFICADOR (rama testimoniales-verificador).
+// Pestaña admin "Testimoniales": PANEL DE ANÁLISIS + VERIFICADOR.
 //
-// El buscador (V6) ya no enseña sus parejas: "Buscar y verificar" abre una tanda
-// con VARIAS parejas por alumno (lib/testimonialPairPlan) y las pasa una a una por
-// el verificador (lib/testimonialVerifier.verifyNext, una llamada al servidor por
-// pareja) hasta reunir `parejas_por_tanda` aprobadas o llegar al tope de
-// verificaciones. Al acabar enseña el gasto estimado en Deepgram y Claude. Solo se enseñan esas, con
-// la nota del juez, fotogramas, audio recortado y medidas. "No sirve" pide motivo:
-// alimenta el banco de ejemplos y puede endurecer un umbral (que se puede deshacer).
+// El admin elige qué se analiza (fechas, alumno, profe, cuántas parejas, cuántas
+// por alumno, fuente, solo lo nunca analizado) y ve ANTES de gastar cuántas
+// clases, alumnos y parejas salen y cuánto costaría (lib/testimonialAnalysis).
+// "Analizar" abre una tanda guardada en Supabase: si es con la escucha, primero
+// escucha las clases que falten; después verifica las parejas, 3 alumnos a la vez
+// y una llamada al servidor por pareja. "Pausar" para y la tanda queda guardada;
+// "Reanudar" (también tras cerrar la pestaña) sigue donde quedó sin repetir nada.
+//
+// Las aprobadas salen todas, de mejor a peor nota, con fotogramas, audio recortado
+// y medidas. "No sirve" pide motivo: alimenta el banco de ejemplos y puede
+// endurecer un umbral (que se puede deshacer).
 //
 // Todo pasa por /api/admin/testimonial-verify con la sesión de admin (adminFetch).
 
@@ -17,8 +21,6 @@ import { useAuth } from '@/lib/AuthContext';
 import { adminFetch } from '@/lib/adminSessionClient';
 import { formatSeconds } from '@/lib/fluency';
 import { MOTIVOS_ADMIN, MOTIVO_LABEL, motivosFrase, type ClipMeasures, type Motivo } from '@/lib/testimonialMeasures';
-
-type Kind = 'busqueda' | 'prueba';
 
 interface Side {
   fecha: string; inicio: number; dur: number; fathom: string | null; audio: string | null; frames: string[];
@@ -29,7 +31,7 @@ interface Verif {
   motivo: Motivo | null; motivo_detalle: string | null; fathom_causa: string | null; antes: Side | null; despues: Side | null;
   semanas: number | null; juez_nota: number | null; juez_explicacion: string | null;
   consentimiento: 'sin_pedir' | 'pedido' | 'dado'; review: string | null; review_motivo: string | null;
-  created_at: string; updated_at: string; files_deleted_at: string | null;
+  created_at: string; updated_at: string; files_deleted_at: string | null; ajustes: Record<string, string> | null;
 }
 interface Tanda {
   id: string; startedAt: string; finishedAt: string | null; cancelled: boolean; planned: number; revisados: number;
@@ -37,6 +39,13 @@ interface Tanda {
   sirven: number; revisadas: number; alumnos: number | null; costeDeepgram: number; costeClaude: number;
 }
 interface ResumenPrueba { total: number; descartados: number; aprobados: number; errores: number; porMotivo: Record<string, number> }
+type Fuente = 'escucha' | 'texto';
+interface TandaEstado {
+  batchId: string; fuente: Fuente; fase: 'escuchar' | 'verificar'; objetivo: number | null; porAlumno: number; pausada: boolean;
+  escuchar: { total: number; hechas: number; pendientes: number[] };
+  parejas: { total: number; hechas: number; aprobadas: number; saltadas: number; errores: number; pendientes: Array<{ g: string; idx: number[] }> };
+  resumen: ResumenTanda;
+}
 interface Estado {
   tarjetas: Verif[]; media: Record<string, string>; aprobadasPendientes: number; sirven: Verif[]; descartados: Verif[];
   tandas: Tanda[]; alarma: { fallos: number; probados: number } | null; motivosRechazo: Record<string, number>;
@@ -44,10 +53,21 @@ interface Estado {
   cambios: Array<{ id: number; key: string; antes: number; despues: number; motivo: string; detalle: string | null; created_at: string; reverted_at: string | null }>;
   umbrales: Array<{ key: string; value: number; description: string; motivo: string | null }>;
   prueba: { objetivo: number; todas: ResumenPrueba; sinEnlaceFalso: ResumenPrueba; conEnlaceFalso: number };
+  gasto: { minutos: { escucha: number; verificador: number }; usd: number; credito: number; queda: number } | null;
+  abierta: TandaEstado | null;
 }
-interface Progreso { kind: Kind; hechas: number; total: number; aprobadas: number; errores: number; alumnos?: number }
-interface Siguiente { fin: boolean; motivoFin: 'objetivo' | 'tope' | 'sin_parejas' | null; hechas: number; aprobadas: number; resultado: { status: string } | null }
-interface ResumenTanda { revisados: number; aprobados: number; costeDeepgram: number; costeClaude: number }
+interface Progreso { kind: 'prueba'; hechas: number; total: number; aprobadas: number; errores: number }
+interface Analisis {
+  batchId: string; fase: 'escuchar' | 'verificar'; escHechas: number; escTotal: number;
+  hechas: number; total: number; aprobadas: number; saltadas: number; errores: number; pausando: boolean;
+}
+interface ResumenTanda { revisados: number; aprobados: number; porMotivo: Record<string, number>; costeDeepgram: number; costeClaude: number }
+interface Recuento {
+  clases: number; porEscuchar: number; alumnos: number; parejas: number; parejasMinimo: boolean; aVerificar: number;
+  coste: { escucha: number; verificacion: number; total: number; porPareja: number };
+}
+interface ItemResultado { status: 'hecha' | 'saltada' | 'error'; motivo: string | null; resultado: { status: string } | null; fin: boolean }
+interface Opcion { id: string; name: string }
 
 const API = '/api/admin/testimonial-verify';
 const MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
@@ -59,9 +79,13 @@ const fecha = (iso: string | null | undefined) => {
 const pct = (a: number, b: number) => (b ? `${Math.round((a / b) * 100)} %` : '—');
 const CONSENT_LABEL = { sin_pedir: 'Sin pedir', pedido: 'Pedido', dado: 'Dado' } as const;
 const usd = (x: number) => `${x.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} $`;
+const n = (x: number) => x.toLocaleString('es-ES');
 const gasto = (t: { costeDeepgram: number; costeClaude: number }) =>
   `${usd(t.costeDeepgram + t.costeClaude)} (Deepgram ${usd(t.costeDeepgram)} + Claude ${usd(t.costeClaude)})`;
-const FIN_LABEL = { objetivo: 'reunidas las aprobadas', tope: 'llegó al tope de verificaciones', sin_parejas: 'no quedan parejas por probar' } as const;
+const CANTIDADES = ['50', '200', '500', '1000', 'todas'] as const;
+const POR_ALUMNO = [1, 5, 10, 20] as const;
+const TARJETAS_PAGINA = 20;
+const AJUSTE_LADO = { antes: 'Antes', despues: 'Después' } as const;
 
 export default function TestimonialsVerifierTab() {
   const { user } = useAuth();
@@ -70,8 +94,10 @@ export default function TestimonialsVerifierTab() {
   const [error, setError] = useState<string | null>(null);
   const [aviso, setAviso] = useState<string | null>(null);
   const [progreso, setProgreso] = useState<Progreso | null>(null);
+  const [analisis, setAnalisis] = useState<Analisis | null>(null);
   const [grande, setGrande] = useState<string | null>(null);
   const cancelar = useRef(false);
+  const pausar = useRef(false);
   const vivo = useRef(true);
 
   const post = useCallback(async <T,>(accion: string, extra: Record<string, unknown> = {}): Promise<T> => {
@@ -95,72 +121,133 @@ export default function TestimonialsVerifierTab() {
   useEffect(() => {
     vivo.current = true;
     (async () => { await cargar(); })();
-    return () => { vivo.current = false; cancelar.current = true; };
+    return () => { vivo.current = false; cancelar.current = true; pausar.current = true; };
   }, [cargar]);
 
-  const objetivo = estado?.umbrales.find(u => u.key === 'parejas_por_tanda')?.value ?? 5;
-  const tope = estado?.umbrales.find(u => u.key === 'tanda_max_verificaciones')?.value ?? 150;
+  const paralelo = Math.max(1, estado?.umbrales.find(u => u.key === 'analisis_en_paralelo')?.value ?? 3);
 
-  /** Búsqueda: el servidor elige cada vez la siguiente pareja del plan (varias por alumno). */
-  const buscar = useCallback(async () => {
-    cancelar.current = false;
+  /**
+   * Lleva una tanda del panel hasta el final o hasta "Pausar": primero las clases
+   * por escuchar (si las hay) y luego las parejas, alumno a alumno.
+   */
+  const correr = useCallback(async (batchId: string) => {
+    pausar.current = false;
     setError(null); setAviso(null);
-    let batchId: string | null = null;
-    let motivoFin: Siguiente['motivoFin'] = null;
+    let seguidos = 0, parado = false;
+    const fallo = (e: unknown) => {
+      if (++seguidos >= 3) { parado = true; pausar.current = true; setError(`Se paró tras 3 fallos seguidos: ${e instanceof Error ? e.message : e}`); }
+    };
     try {
-      const inicio = await post<{ batchId: string; parejas: number; alumnos: number }>('iniciar', { tipo: 'busqueda' });
-      batchId = inicio.batchId;
-      const p: Progreso = { kind: 'busqueda', hechas: 0, total: Math.min(tope, inicio.parejas), aprobadas: 0, errores: 0, alumnos: inicio.alumnos };
-      setProgreso({ ...p });
-      if (inicio.parejas === 0) motivoFin = 'sin_parejas';
-      let seguidos = 0;
-      while (!motivoFin && !cancelar.current && vivo.current) {
-        try {
-          const r = await post<Siguiente>('verificar-siguiente', { batchId });
-          p.hechas = r.hechas; p.aprobadas = r.aprobadas;
-          if (r.resultado?.status === 'error') p.errores++;
-          seguidos = 0;
-          if (r.fin) motivoFin = r.motivoFin;
-        } catch (e) {
-          p.errores++;
-          if (++seguidos >= 3) { cancelar.current = true; setError(`Se paró tras 3 fallos seguidos: ${e instanceof Error ? e.message : e}`); }
+      let t = await post<TandaEstado>('analisis-estado', { batchId });
+      if (t.pausada) await post('analisis-pausar', { batchId, pausada: false });
+      const p: Analisis = {
+        batchId, fase: t.fase, escHechas: t.escuchar.hechas, escTotal: t.escuchar.total,
+        hechas: t.parejas.hechas, total: t.objetivo ?? t.parejas.total, aprobadas: t.parejas.aprobadas,
+        saltadas: t.parejas.saltadas, errores: t.parejas.errores, pausando: false,
+      };
+      const pintar = () => { if (vivo.current) setAnalisis({ ...p }); };
+      pintar();
+
+      if (t.fase === 'escuchar') {
+        const cola = [...t.escuchar.pendientes];
+        let cortado = false;
+        const trabajador = async () => {
+          for (let i = cola.shift(); i != null; i = cola.shift()) {
+            if (pausar.current || !vivo.current) { cortado = true; return; }
+            try { await post('analisis-escuchar', { batchId, idx: i }); seguidos = 0; } catch (e) { p.errores++; fallo(e); }
+            p.escHechas++;
+            pintar();
+          }
+        };
+        await Promise.all(Array.from({ length: paralelo }, trabajador));
+        if (cortado) throw new Pausa();
+        t = await post<TandaEstado>('analisis-planificar', { batchId });
+        Object.assign(p, { fase: 'verificar', total: t.objetivo ?? t.parejas.total });
+        pintar();
+      }
+
+      // Parejas: cada trabajador coge un alumno y prueba sus parejas en orden hasta aprobar una.
+      const alumnos = [...t.parejas.pendientes];
+      let enCurso = 0, fin = false, cortado = false;
+      const trabajador = async () => {
+        for (let al = alumnos.shift(); al; al = alumnos.shift()) {
+          for (const i of al.idx) {
+            if (fin) return;
+            if (pausar.current || !vivo.current) { cortado = true; return; }
+            if (t.objetivo != null && p.hechas + enCurso >= t.objetivo) { fin = true; return; }
+            enCurso++;
+            let otroAlumno = false;
+            try {
+              const r = await post<ItemResultado>('analisis-verificar', { batchId, idx: i });
+              if (r.status === 'hecha') p.hechas++;
+              if (r.status === 'saltada') p.saltadas++;
+              if (r.status === 'error') p.errores++;
+              if (r.resultado?.status === 'aprobado') p.aprobadas++;
+              // Con una aprobada, el alumno ya está: sus otras parejas no se prueban.
+              otroAlumno = r.resultado?.status === 'aprobado' || r.motivo === 'alumno_aprobado';
+              if (r.fin) fin = true;
+              seguidos = 0;
+            } catch (e) { p.errores++; fallo(e); }
+            enCurso--;
+            pintar();
+            if (otroAlumno) break;
+          }
         }
-        if (vivo.current) setProgreso({ ...p });
+      };
+      await Promise.all(Array.from({ length: paralelo }, trabajador));
+      if (cortado && !fin) throw new Pausa();
+
+      const r = await post<{ resumen: ResumenTanda }>('cerrar', { batchId, cancelado: false });
+      if (vivo.current) {
+        const res = r.resumen;
+        setAviso(res.revisados === 0
+          ? 'No había parejas que verificar con esos filtros (todo lo posible ya se probó o está vetado).'
+          : `Tanda terminada: ${res.aprobados} aprobadas de ${res.revisados} verificadas`
+            + `${Object.keys(res.porMotivo).length ? ` · descartes: ${motivosFrase(res.porMotivo)}` : ''}. Gasto estimado: ${gasto(res)}.`);
       }
     } catch (e) {
-      if (vivo.current) setError(e instanceof Error ? e.message : String(e));
+      if (e instanceof Pausa) {
+        await post('analisis-pausar', { batchId, pausada: true }).catch(() => {});
+        if (vivo.current && !parado) setAviso('Tanda en pausa. Está guardada: pulsa “Reanudar” cuando quieras (también otro día).');
+      } else if (vivo.current) setError(e instanceof Error ? e.message : String(e));
     } finally {
-      const resumen = batchId
-        ? (await post<{ resumen: ResumenTanda }>('cerrar', { batchId, cancelado: cancelar.current }).catch(() => null))?.resumen ?? null
-        : null;
-      if (vivo.current && resumen) {
-        const porque = cancelar.current ? 'cancelada' : motivoFin ? FIN_LABEL[motivoFin] : 'terminada';
-        setAviso(resumen.revisados === 0 && motivoFin === 'sin_parejas'
-          ? 'No quedan parejas por verificar: todos los momentos posibles ya se probaron o están vetados.'
-          : `Tanda ${cancelar.current ? 'cancelada' : 'terminada'} (${porque}): ${resumen.aprobados} aprobadas de ${resumen.revisados} verificadas. Gasto estimado: ${gasto(resumen)}.`);
-      }
-      if (vivo.current) { setProgreso(null); await cargar(); }
+      if (vivo.current) { setAnalisis(null); await cargar(); }
     }
-  }, [post, cargar, tope]);
+  }, [post, cargar, paralelo]);
+
+  const analizar = useCallback(async (opciones: Record<string, unknown>) => {
+    setError(null); setAviso(null);
+    try {
+      const t = await post<TandaEstado>('analisis-iniciar', { opciones });
+      await correr(t.batchId);
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+  }, [post, correr]);
+
+  const terminar = useCallback(async (batchId: string) => {
+    try {
+      const r = await post<{ resumen: ResumenTanda }>('cerrar', { batchId, cancelado: true });
+      setAviso(`Tanda terminada a mano: ${r.resumen.aprobados} aprobadas de ${r.resumen.revisados} verificadas. Gasto estimado: ${gasto(r.resumen)}.`);
+      await cargar();
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+  }, [post, cargar]);
 
   /** Tanda de PRUEBA (los "No sirve" del admin): una llamada por pareja, 3 a la vez. */
   const probar = useCallback(async () => {
-    const kind: Kind = 'prueba';
     cancelar.current = false;
     setError(null); setAviso(null);
     let batchId: string | null = null;
     try {
-      const inicio = await post<{ batchId: string; ids: string[] }>('iniciar', { tipo: kind });
+      const inicio = await post<{ batchId: string; ids: string[] }>('iniciar', { tipo: 'prueba' });
       batchId = inicio.batchId;
       const cola = [...inicio.ids];
-      const p: Progreso = { kind, hechas: 0, total: cola.length, aprobadas: 0, errores: 0 };
+      const p: Progreso = { kind: 'prueba', hechas: 0, total: cola.length, aprobadas: 0, errores: 0 };
       setProgreso({ ...p });
       let seguidos = 0;
       const trabajador = async () => {
         for (let id = cola.shift(); id; id = cola.shift()) {
           if (cancelar.current || !vivo.current) return;
           try {
-            const r = await post<{ status: string }>('verificar', { id, batchId, tipo: kind });
+            const r = await post<{ status: string }>('verificar', { id, batchId, tipo: 'prueba' });
             if (r.status === 'aprobado') p.aprobadas++;
             if (r.status === 'error') p.errores++;
             seguidos = 0;
@@ -198,37 +285,24 @@ export default function TestimonialsVerifierTab() {
   }, [post, cargar]);
 
   const ultima = estado?.tandas.find(t => t.revisados > 0);
+  const ocupado = !!progreso || !!analisis;
 
   return (
     <div className="tv">
       <h2 className="tv-title">Testimoniales</h2>
 
-      {/* ── Barra superior ── */}
       <section className="tv-bar">
-        <div className="tv-bar-acc">
-          {progreso?.kind === 'busqueda' ? (
-            <>
-              <div className="tv-prog" role="status">
-                <span>
-                  Verificando la pareja {Math.min(progreso.hechas + 1, progreso.total)} (máximo {progreso.total})… · {progreso.aprobadas} de {objetivo} aprobadas
-                  {progreso.alumnos != null && <> · {progreso.alumnos} alumnos con parejas</>}
-                </span>
-                <div className="tv-prog-bar"><div style={{ width: `${progreso.total ? (progreso.hechas / progreso.total) * 100 : 0}%` }} /></div>
-              </div>
-              <button type="button" className="tv-btn tv-sec" onClick={() => { cancelar.current = true; }}>Cancelar</button>
-            </>
-          ) : (
-            <button type="button" className="tv-btn tv-pri" disabled={!!progreso || !estado} onClick={buscar}>
-              Buscar y verificar
-            </button>
-          )}
-        </div>
+        {estado && (
+          <PanelAnalisis post={post} analisis={analisis} abierta={analisis ? null : estado.abierta} ocupado={ocupado}
+            onAnalizar={analizar} onReanudar={correr} onTerminar={terminar}
+            onPausar={() => { pausar.current = true; setAnalisis(a => (a ? { ...a, pausando: true } : a)); }} />
+        )}
 
         {ultima && (
           <p className="tv-line">
-            <b>Última tanda</b> ({fecha(ultima.startedAt)}{ultima.cancelled ? ', cancelada' : ''}): {ultima.revisados} revisados,
-            {' '}{ultima.aprobados} aprobados{ultima.errores ? `, ${ultima.errores} con error` : ''}
-            {Object.keys(ultima.porMotivo).length > 0 && <> · descartados: {motivosFrase(ultima.porMotivo)}</>}
+            <b>Última tanda</b> ({fecha(ultima.startedAt)}{ultima.cancelled ? ', terminada a mano' : ''}{!ultima.finishedAt ? ', en pausa' : ''}): {n(ultima.revisados)} verificadas,
+            {' '}{ultima.aprobados} aprobadas{ultima.errores ? `, ${ultima.errores} con error` : ''}
+            {Object.keys(ultima.porMotivo).length > 0 && <> · descartes: {motivosFrase(ultima.porMotivo)}</>}
             {ultima.costeDeepgram + ultima.costeClaude > 0 && <> · gasto estimado: {gasto(ultima)}</>}.
           </p>
         )}
@@ -243,6 +317,12 @@ export default function TestimonialsVerifierTab() {
         {estado && Object.keys(estado.motivosRechazo).length > 0 && (
           <p className="tv-line"><b>Tus motivos de “No sirve”</b> (últimas {estado.revisionesMiradas} revisiones): {motivosFrase(estado.motivosRechazo)}.</p>
         )}
+        {estado?.gasto && (
+          <p className="tv-line">
+            <b>Deepgram:</b> {usd(estado.gasto.usd)} gastados (estimado: escucha {n(estado.gasto.minutos.escucha)} min, verificador {n(estado.gasto.minutos.verificador)} min)
+            {' '}· quedan ≈ <b>{usd(estado.gasto.queda)}</b> de {usd(estado.gasto.credito)}.
+          </p>
+        )}
       </section>
 
       {estado?.alarma && (
@@ -254,20 +334,12 @@ export default function TestimonialsVerifierTab() {
       {error && <p className="tv-error">{error}</p>}
       {aviso && <p className="tv-aviso">{aviso} <button type="button" className="tv-link" onClick={() => setAviso(null)}>Cerrar</button></p>}
 
-      {/* ── Tarjetas ── */}
       {!estado ? (
         !error && <p className="tv-vacio">Cargando…</p>
       ) : estado.tarjetas.length === 0 ? (
-        <p className="tv-vacio">No hay parejas aprobadas por revisar. Pulsa “Buscar y verificar”.</p>
+        <p className="tv-vacio">No hay parejas aprobadas por revisar. Elige los filtros y pulsa “Analizar”.</p>
       ) : (
-        <div className="tv-lista">
-          {estado.aprobadasPendientes > estado.tarjetas.length && (
-            <p className="tv-line">Mostrando las {estado.tarjetas.length} con mejor nota de {estado.aprobadasPendientes} aprobadas por revisar.</p>
-          )}
-          {estado.tarjetas.map(v => (
-            <Tarjeta key={v.id} v={v} media={estado.media} onVer={setGrande} onRevisar={revisar} onConsentimiento={consentimiento} />
-          ))}
-        </div>
+        <Aprobadas estado={estado} post={post} onVer={setGrande} onRevisar={revisar} onConsentimiento={consentimiento} />
       )}
 
       {estado && (
@@ -275,7 +347,7 @@ export default function TestimonialsVerifierTab() {
           <Sirven lista={estado.sirven} onConsentimiento={consentimiento} />
           <Descartados lista={estado.descartados} post={post} onVer={setGrande} />
           <Umbrales estado={estado} onDeshacer={deshacer} />
-          <Prueba estado={estado} progreso={progreso?.kind === 'prueba' ? progreso : null} ocupado={!!progreso}
+          <Prueba estado={estado} progreso={progreso} ocupado={ocupado}
             onLanzar={probar} onCancelar={() => { cancelar.current = true; }} />
         </>
       )}
@@ -288,6 +360,197 @@ export default function TestimonialsVerifierTab() {
       )}
       <style>{ESTILOS}</style>
     </div>
+  );
+}
+
+/** Corte de la tanda por "Pausar" (o por cerrar la pestaña): se guarda como pausada. */
+class Pausa extends Error {}
+
+// ── Panel de análisis ────────────────────────────────────────────────────────
+
+function PanelAnalisis({ post, analisis, abierta, ocupado, onAnalizar, onReanudar, onTerminar, onPausar }: {
+  post: <T>(a: string, e?: Record<string, unknown>) => Promise<T>;
+  analisis: Analisis | null; abierta: TandaEstado | null; ocupado: boolean;
+  onAnalizar: (opciones: Record<string, unknown>) => void; onReanudar: (batchId: string) => void;
+  onTerminar: (batchId: string) => void; onPausar: () => void;
+}) {
+  const [desde, setDesde] = useState('');
+  const [hasta, setHasta] = useState('');
+  const [alumnoTxt, setAlumnoTxt] = useState('');
+  const [profeTxt, setProfeTxt] = useState('');
+  const [cantidad, setCantidad] = useState<typeof CANTIDADES[number]>('200');
+  const [porAlumno, setPorAlumno] = useState<number>(10);
+  const [fuente, setFuente] = useState<Fuente>('escucha');
+  const [soloNuevas, setSoloNuevas] = useState(true);
+  const [opciones, setOpciones] = useState<{ alumnos: Opcion[]; profes: Opcion[] } | null>(null);
+  const [cuenta, setCuenta] = useState<Recuento | null>(null);
+  const [contando, setContando] = useState(false);
+  const [errCuenta, setErrCuenta] = useState<string | null>(null);
+
+  useEffect(() => {
+    let ok = true;
+    post<{ alumnos: Opcion[]; profes: Opcion[] }>('analisis-opciones').then(o => { if (ok) setOpciones(o); }).catch(() => { if (ok) setOpciones({ alumnos: [], profes: [] }); });
+    return () => { ok = false; };
+  }, [post]);
+
+  // El texto escrito se convierte en id solo si coincide con un nombre de la lista.
+  const porNombre = (lista: Opcion[] | undefined, txt: string) => lista?.find(o => o.name.toLowerCase() === txt.trim().toLowerCase())?.id ?? null;
+  const alumno = porNombre(opciones?.alumnos, alumnoTxt), profe = porNombre(opciones?.profes, profeTxt);
+  const alumnoMal = !!alumnoTxt.trim() && !alumno, profeMal = !!profeTxt.trim() && !profe;
+  const elegidas = useMemo(() => ({
+    filtros: { desde: desde || null, hasta: hasta || null, alumno, profe },
+    cantidad: cantidad === 'todas' ? null : Number(cantidad), porAlumno, fuente, soloNuevas,
+  }), [desde, hasta, alumno, profe, cantidad, porAlumno, fuente, soloNuevas]);
+
+  // Contador en vivo: se recalcula al cambiar los filtros (con una pequeña espera).
+  useEffect(() => {
+    if (alumnoMal || profeMal) return;
+    let ok = true;
+    const t = setTimeout(async () => {
+      setContando(true); setErrCuenta(null);
+      try {
+        const r = await post<Recuento>('analisis-contar', { opciones: elegidas });
+        if (ok) setCuenta(r);
+      } catch (e) { if (ok) setErrCuenta(e instanceof Error ? e.message : String(e)); }
+      finally { if (ok) setContando(false); }
+    }, 700);
+    return () => { ok = false; clearTimeout(t); };
+  }, [post, elegidas, alumnoMal, profeMal]);
+
+  const a = analisis;
+  return (
+    <div className="tv-panel">
+      <div className="tv-filtros">
+        <label className="tv-campo">Desde<input type="date" value={desde} onChange={e => setDesde(e.target.value)} disabled={ocupado} /></label>
+        <label className="tv-campo">Hasta<input type="date" value={hasta} onChange={e => setHasta(e.target.value)} disabled={ocupado} /></label>
+        <label className={`tv-campo is-ancho${alumnoMal ? ' is-mal' : ''}`}>Alumno
+          <input type="search" list="tv-alumnos" placeholder="Todos" value={alumnoTxt} onChange={e => setAlumnoTxt(e.target.value)} disabled={ocupado} />
+        </label>
+        <label className={`tv-campo is-ancho${profeMal ? ' is-mal' : ''}`}>Profe
+          <input type="search" list="tv-profes" placeholder="Todos" value={profeTxt} onChange={e => setProfeTxt(e.target.value)} disabled={ocupado} />
+        </label>
+        <datalist id="tv-alumnos">{opciones?.alumnos.map(o => <option key={o.id} value={o.name} />)}</datalist>
+        <datalist id="tv-profes">{opciones?.profes.map(o => <option key={o.id} value={o.name} />)}</datalist>
+        <label className="tv-campo">Parejas en esta tanda
+          <select value={cantidad} onChange={e => setCantidad(e.target.value as typeof CANTIDADES[number])} disabled={ocupado}>
+            {CANTIDADES.map(c => <option key={c} value={c}>{c === 'todas' ? 'Todas las que cumplan los filtros' : n(Number(c))}</option>)}
+          </select>
+        </label>
+        <label className="tv-campo">Parejas por alumno
+          <select value={porAlumno} onChange={e => setPorAlumno(Number(e.target.value))} disabled={ocupado}>
+            {POR_ALUMNO.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </label>
+        <label className="tv-campo">Fuente
+          <select value={fuente} onChange={e => setFuente(e.target.value as Fuente)} disabled={ocupado}>
+            <option value="escucha">Escucha (audio)</option>
+            <option value="texto">Texto de Fathom (antiguo)</option>
+          </select>
+        </label>
+        <label className="tv-check">
+          <input type="checkbox" checked={soloNuevas} onChange={e => setSoloNuevas(e.target.checked)} disabled={ocupado} /> Solo lo que nunca se analizó
+        </label>
+      </div>
+
+      <p className="tv-cuenta" aria-live="polite">
+        {alumnoMal || profeMal ? `Elige ${alumnoMal ? 'el alumno' : 'el profe'} de la lista.`
+          : errCuenta ? <span className="tv-error">{errCuenta}</span>
+          : !cuenta ? 'Calculando…'
+          : <>
+              <b>Con estos filtros:</b> {n(cuenta.clases)} clases{cuenta.porEscuchar ? ` (${n(cuenta.porEscuchar)} por escuchar)` : ''} · {n(cuenta.alumnos)} alumnos
+              {' '}· {cuenta.parejasMinimo ? 'al menos ' : ''}{n(cuenta.parejas)} parejas posibles{cuenta.parejasMinimo ? ' (salen más al escuchar)' : ''}
+              {' '}· coste estimado <b>{usd(cuenta.coste.total)}</b>
+              <span className="tv-detalle"> ({cuenta.coste.escucha > 0 ? `escuchar ${usd(cuenta.coste.escucha)} + ` : ''}verificar {n(cuenta.aVerificar)} parejas × {usd(cuenta.coste.porPareja)})</span>
+              {contando && <span className="tv-detalle"> · recalculando…</span>}
+            </>}
+      </p>
+
+      <div className="tv-bar-acc">
+        {a ? (
+          <>
+            <div className="tv-prog" role="status">
+              <span>
+                {a.fase === 'escuchar'
+                  ? `Escuchando clases: ${n(a.escHechas)} de ${n(a.escTotal)}…`
+                  : `Verificando: ${n(a.hechas)} de ${n(a.total)} parejas · ${n(a.aprobadas)} aprobadas`
+                    + `${a.saltadas ? ` · ${n(a.saltadas)} saltadas` : ''}${a.errores ? ` · ${n(a.errores)} con error` : ''}`}
+                {a.pausando && ' · pausando (acaban las que están en curso)…'}
+              </span>
+              <div className="tv-prog-bar">
+                <div style={{ width: `${a.fase === 'escuchar' ? (a.escTotal ? (a.escHechas / a.escTotal) * 100 : 0) : (a.total ? Math.min(100, (a.hechas / a.total) * 100) : 0)}%` }} />
+              </div>
+            </div>
+            <button type="button" className="tv-btn tv-sec" disabled={a.pausando} onClick={onPausar}>Pausar</button>
+          </>
+        ) : (
+          <button type="button" className="tv-btn tv-pri" disabled={ocupado || !cuenta || alumnoMal || profeMal || !!abierta}
+            onClick={() => onAnalizar(elegidas)}>
+            Analizar
+          </button>
+        )}
+      </div>
+
+      {abierta && !a && (
+        <div className="tv-abierta">
+          <span>
+            <b>Tanda en pausa</b> ({abierta.fuente === 'escucha' ? 'escucha' : 'texto de Fathom'}):{' '}
+            {abierta.fase === 'escuchar'
+              ? `${n(abierta.escuchar.hechas)} de ${n(abierta.escuchar.total)} clases escuchadas`
+              : `${n(abierta.parejas.hechas)} de ${n(abierta.objetivo ?? abierta.parejas.total)} parejas verificadas, ${n(abierta.parejas.aprobadas)} aprobadas`}
+            {' '}· gastado {gasto(abierta.resumen)}.
+          </span>
+          <button type="button" className="tv-btn tv-pri" disabled={ocupado} onClick={() => onReanudar(abierta.batchId)}>Reanudar</button>
+          <button type="button" className="tv-btn tv-sec" disabled={ocupado} onClick={() => onTerminar(abierta.batchId)}>Terminarla</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Aprobadas (todas, de mejor a peor nota) ──────────────────────────────────
+
+function Aprobadas({ estado, post, onVer, onRevisar, onConsentimiento }: {
+  estado: Estado; post: <T>(a: string, e?: Record<string, unknown>) => Promise<T>; onVer: (u: string) => void;
+  onRevisar: (id: string, r: 'sirve' | 'no_sirve', m?: Motivo, t?: string) => Promise<void>;
+  onConsentimiento: (id: string, valor: string) => void;
+}) {
+  const [vistas, setVistas] = useState(TARJETAS_PAGINA);
+  const [extra, setExtra] = useState<Record<string, string>>({});
+  const [cargando, setCargando] = useState(false);
+  const media = useMemo(() => ({ ...estado.media, ...extra }), [estado.media, extra]);
+  const lista = estado.tarjetas.slice(0, vistas);
+  const verMas = async () => {
+    const siguientes = estado.tarjetas.slice(vistas, vistas + TARJETAS_PAGINA);
+    setCargando(true);
+    try {
+      const r = await post<{ media: Record<string, string> }>('medios', { ids: siguientes.map(v => v.id) });
+      setExtra(e => ({ ...e, ...r.media }));
+    } catch { /* sin medios: se ven igual, sin fotogramas */ }
+    setCargando(false);
+    setVistas(v => v + TARJETAS_PAGINA);
+  };
+  return (
+    <div className="tv-lista">
+      <p className="tv-line"><b>{n(estado.aprobadasPendientes)} aprobadas por revisar</b>, de mejor a peor nota del juez.</p>
+      {lista.map(v => (
+        <Tarjeta key={v.id} v={v} media={media} onVer={onVer} onRevisar={onRevisar} onConsentimiento={onConsentimiento} />
+      ))}
+      {estado.tarjetas.length > vistas && (
+        <button type="button" className="tv-btn tv-sec" disabled={cargando} onClick={verMas}>
+          {cargando ? 'Cargando…' : `Ver ${Math.min(TARJETAS_PAGINA, estado.tarjetas.length - vistas)} más`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** "Antes: recortado a 11 s… · Después: voz partida…" */
+function Ajustes({ a }: { a: Record<string, string> | null }) {
+  if (!a || !Object.keys(a).length) return null;
+  return (
+    <p className="tv-detalle">
+      {Object.entries(a).map(([k, t]) => `${AJUSTE_LADO[k as keyof typeof AJUSTE_LADO] ?? k}: ${t}`).join(' · ')}
+    </p>
   );
 }
 
@@ -322,6 +585,7 @@ function Tarjeta({ v, media, onVer, onRevisar, onConsentimiento }: {
           <span>{v.semanas ?? '?'} semanas entre clases</span>
         </div>
         <p className="tv-juez"><span className="tv-nota">{v.juez_nota ?? '—'}</span> {v.juez_explicacion}</p>
+        <Ajustes a={v.ajustes} />
         <label className="tv-consent">
           Consentimiento del alumno:
           <select value={v.consentimiento} onChange={e => onConsentimiento(v.id, e.target.value)}>
@@ -438,6 +702,7 @@ function Descartados({ lista, post, onVer }: {
                 <b>{v.student_name}</b> · {v.teacher_name ?? '—'} · <span className="tv-motivo">{v.motivo ? MOTIVO_LABEL[v.motivo] : '—'}</span>
                 {v.fathom_causa && <> ({v.fathom_causa})</>}
                 <div className="tv-detalle">{v.motivo_detalle}</div>
+                <Ajustes a={v.ajustes} />
               </div>
               <div className="tv-mini-frames">
                 {[...(v.antes?.frames ?? []), ...(v.despues?.frames ?? [])].map(p => media?.[p] ? (
@@ -528,6 +793,17 @@ const ESTILOS = `
 .tv-bar { margin: 0 0 14px; padding: 14px 16px; border-radius: 14px; background: var(--fondo); display: flex; flex-direction: column; gap: 8px; }
 .tv-bar-acc { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .tv-line { margin: 0; font-size: 13.5px; line-height: 1.5; color: #4A4A4A; font-variant-numeric: tabular-nums; }
+.tv-panel { display: flex; flex-direction: column; gap: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--linea); }
+.tv-filtros { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px 12px; align-items: end; }
+.tv-campo { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; font-weight: 700; color: #4A4A4A; min-width: 0; }
+.tv-campo.is-ancho { grid-column: span 2; }
+.tv-campo input, .tv-campo select { font-family: inherit; font-size: 14px; font-weight: 500; padding: 0 10px; min-height: 40px; border-radius: 8px; border: 1px solid var(--linea); background: #fff; color: var(--tinta); min-width: 0; width: 100%; box-sizing: border-box; }
+.tv-campo.is-mal input { border-color: var(--rojo); }
+.tv-check { display: flex; align-items: center; gap: 8px; font-size: 14px; min-height: 40px; cursor: pointer; }
+.tv-cuenta { margin: 0; font-size: 14px; line-height: 1.5; font-variant-numeric: tabular-nums; }
+.tv-abierta { display: flex; align-items: center; gap: 10px 12px; flex-wrap: wrap; padding: 10px 12px; border-radius: 10px; background: rgba(255,196,0,0.14); font-size: 13.5px; }
+.tv-abierta > span { flex: 1; min-width: 220px; }
+@media (max-width: 600px) { .tv-campo.is-ancho { grid-column: auto; } }
 .tv-prog { flex: 1; min-width: 240px; display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-weight: 600; }
 .tv-prog-bar { height: 8px; border-radius: 999px; background: #E3E4DE; overflow: hidden; }
 .tv-prog-bar > div { height: 100%; background: var(--verde); transition: width .3s; }

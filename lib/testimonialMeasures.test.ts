@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CONFIG_POR_DEFECTO as C, measureClip, checkAudio, checkAntes, checkDespues, checkContraste, checkVision,
   cutWindow, weeksBetween, isFiller, motivosFrase, shouldHarden, hardenedValue, mainSpeakerText,
+  longestStudentRun, subTranscript, mergeSpeakers,
   type ClipMeasures, type VisionSide,
 } from '@/lib/testimonialMeasures';
 import type { DeepgramTranscript, DeepgramWord } from '@/lib/deepgram';
@@ -66,13 +67,20 @@ describe('measureClip', () => {
 
   it('otra voz: mide solo al principal y cuenta las palabras ajenas; el hueco con otra voz no es pausa', () => {
     const alumno1 = words('So I think that', { t0: 0 });
-    const profe = words('yes right exactly', { t0: 1.4, speaker: 1 });
+    const profe = words('what about Monday', { t0: 1.4, speaker: 1 });
     const alumno2 = words('it is very important for me', { t0: 3 });
     const m = measureClip(T([...alumno1, ...profe, ...alumno2]), null, C)!;
     expect(m.palabras).toBe(10);
     expect(m.otra_voz_palabras).toBe(3);
+    expect(m.otra_voz_interjecciones).toBe(0);
     expect(m.voces).toBe(2);
     expect(m.pausas).toBe(0);
+  });
+
+  it('las interjecciones de la otra voz ("yes right exactly") se cuentan aparte', () => {
+    const m = measureClip(T([...words('So I think that'), ...words('yes right exactly', { t0: 1.4, speaker: 1 }), ...words('it is very important for me', { t0: 3 })]), null, C)!;
+    expect(m.otra_voz_palabras).toBe(0);
+    expect(m.otra_voz_interjecciones).toBe(3);
   });
 
   it('español por palabra (multi) e idioma del clip (detect)', () => {
@@ -117,6 +125,40 @@ describe('reglas de audio', () => {
   it('otra voz por encima de lo tolerado → habla_profe', () => {
     expect(checkAudio(M({ otra_voz_palabras: 3 }), 'DESPUÉS', C).ok).toBe(true);
     expect(checkAudio(M({ otra_voz_palabras: 4 }), 'DESPUÉS', C)).toMatchObject({ ok: false, motivo: 'habla_profe' });
+  });
+  it('hasta 4 interjecciones de la otra voz no descartan; 5 sí', () => {
+    expect(checkAudio(M({ otra_voz_interjecciones: 4 }), 'ANTES', C).ok).toBe(true);
+    expect(checkAudio(M({ otra_voz_interjecciones: 5 }), 'ANTES', C)).toMatchObject({ ok: false, motivo: 'habla_profe' });
+  });
+});
+
+describe('recortar en vez de descartar', () => {
+  it('el trozo más largo del alumno solo en inglés: lo cortan la otra voz y su español, no las interjecciones', () => {
+    const ws = [
+      ...words('I went to the', { t0: 0 }),                                   // 0 – 1,4 s
+      ...words('what did you do there', { t0: 1.6, speaker: 1 }),           // el profe: corta
+      ...words('We visited the old town and', { t0: 3.5 }),                // 3,5 – 5,6 s
+      ...words('yeah', { t0: 5.7, speaker: 1 }),                             // interjección: no corta
+      ...words('the museum was really big', { t0: 6.1 }),                  // … – 7,8 s
+      ...words('o sea', { t0: 8, lang: 'es' }),                          // español suyo: corta
+      ...words('ok', { t0: 8.8 }),
+    ];
+    const r = longestStudentRun(T(ws))!;
+    expect(r.start).toBeCloseTo(3.5);
+    expect(r.end).toBeCloseTo(7.8, 1);
+  });
+  it('subTranscript deja solo las palabras del trozo y olvida el idioma del clip entero', () => {
+    const t = T(words('one two three four five six'), { detectedLanguage: 'es', languageConfidence: 0.95 });
+    const sub = subTranscript(t, 0.7, 1.4);
+    expect(sub.words.map(w => w.word)).toEqual(['three', 'four']);
+    expect(sub.detectedLanguage).toBeNull();
+  });
+  it('voz partida: mergeSpeakers deja una sola voz', () => {
+    const t = T([...words('I think that this is'), ...words('a very good idea for us', { t0: 2, speaker: 1 })]);
+    expect(measureClip(t, null, C)!.otra_voz_palabras).toBeGreaterThan(3);
+    const m = measureClip(mergeSpeakers(t), null, C)!;
+    expect(m.otra_voz_palabras).toBe(0);
+    expect(m.voces).toBe(1);
   });
   it('ejercicio de repetición: varias palabras repetidas o lista con pocas distintas', () => {
     expect(checkAudio(M({ repetidas_distintas: 3 }), 'ANTES', C)).toMatchObject({ ok: false, motivo: 'ejercicio_repeticion' });

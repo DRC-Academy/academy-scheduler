@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { Segment } from '@/lib/testimonialScoring';
 import {
-  planStudentPairs, nextPlanItem, spanishShare, recordingKey, momentKey, momentKeyFromId, toPlanItem,
-  type PlanOptions, type PlanItem,
+  planStudentPairs, pickDiverse, passesFilters, cleanFilters, spanishShare, recordingKey, momentKey, momentKeyFromId, toPlanItem,
+  type PlanOptions,
 } from '@/lib/testimonialPairPlan';
 
 const O: PlanOptions = { max: 10, perMoment: 2, spanishMax: 0.15, minWeeks: 4 };
@@ -85,24 +85,33 @@ describe('planStudentPairs', () => {
   });
 });
 
-describe('nextPlanItem', () => {
-  const it_ = (g: string, i: number, ra = `g${i}`, rb = `h${i}`): PlanItem => ({ g, a: `a${i}`, b: `b${i}`, ma: `${ra}#1`, mb: `${rb}#1`, ra, rb });
-  const plan: PlanItem[] = [it_('x', 1, 'r1'), it_('x', 2, 'r1', 'r3'), it_('y', 3, 'r4', 'r5'), it_('y', 4, 'r6', 'r5')];
-  const sin = { momentos: new Set<string>(), grabaciones: new Set<string>() };
-  it('va en orden desde el cursor', () => {
-    expect(nextPlanItem(plan, 0, new Set(), sin)?.index).toBe(0);
-    expect(nextPlanItem(plan, 2, new Set(), sin)?.index).toBe(2);
-  });
-  it('con una aprobada, salta al siguiente alumno', () => {
-    expect(nextPlanItem(plan, 1, new Set(['x']), sin)?.item.g).toBe('y');
-  });
-  it('salta momentos y grabaciones vetados', () => {
-    expect(nextPlanItem(plan, 0, new Set(), { momentos: new Set(['r1#1']), grabaciones: new Set() })?.index).toBe(2);
-    expect(nextPlanItem(plan, 2, new Set(), { momentos: new Set(), grabaciones: new Set(['r5']) })).toBeNull();
-  });
+describe('plan de la tanda y filtros', () => {
   it('toPlanItem guarda momentos y grabaciones', () => {
     const p = toPlanItem('s1', { a: A('2026-07-01'), b: B('2026-09-01') });
     expect(p.ra).toBe(recordingKey(url('2026-07-01')));
     expect(p.mb.startsWith(recordingKey(url('2026-09-01')))).toBe(true);
+  });
+});
+
+describe('pickDiverse, filtros y momentos de la escucha', () => {
+  it('pickDiverse: tope, sin repetir combinación y un momento como mucho N veces', () => {
+    const L = [['a', 'b'], ['a', 'b'], ['a', 'c'], ['a', 'd'], ['e', 'b']];
+    expect(pickDiverse(L, p => p[0], p => p[1], 10, 2)).toEqual([['a', 'b'], ['a', 'c'], ['e', 'b']]);
+    expect(pickDiverse(L, p => p[0], p => p[1], 1, 2)).toEqual([['a', 'b']]);
+  });
+  it('passesFilters: fechas incluidas y profe', () => {
+    const f = { desde: '2026-07-01', hasta: '2026-07-31', alumno: null, profe: 't1' };
+    expect(passesFilters('2026-07-01', 't1', f)).toBe(true);
+    expect(passesFilters('2026-07-31', 't1', f)).toBe(true);
+    expect(passesFilters('2026-08-01', 't1', f)).toBe(false);
+    expect(passesFilters('2026-07-10', 't2', f)).toBe(false);
+  });
+  it('cleanFilters: lo mal escrito es "sin filtro"', () => {
+    expect(cleanFilters({ desde: '01/07/2026', hasta: '2026-07-31', alumno: ' ', profe: 't1' }))
+      .toEqual({ desde: null, hasta: '2026-07-31', alumno: null, profe: 't1' });
+  });
+  it('momentKeyFromId entiende los tramos escuchados (misma intervención que el texto)', () => {
+    const u = 'https://fathom.video/share/ABC?timestamp=10';
+    expect(momentKeyFromId('escucha:ca_1:7', u)).toBe(momentKeyFromId('ca_1:7:A:0', u));
   });
 });

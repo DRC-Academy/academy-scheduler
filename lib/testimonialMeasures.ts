@@ -44,15 +44,26 @@ export interface VerifyConfig {
   repeticion_distintas_min: number; repeticion_unicas_max: number;
   contraste_ppm_factor: number; contraste_pausas_factor: number; semanas_min: number;
   vision_camara_conf: number; vision_leyendo_conf: number;
-  juez_nota_min: number; parejas_por_tanda: number;
+  juez_nota_min: number;
   endurecer_ventana: number; endurecer_veces: number; alarma_fuente_pct: number; retencion_dias: number;
   /** Varias parejas por alumno (supabase-testimoniales-varias-parejas.sql). */
-  parejas_por_alumno: number; momento_max_parejas: number; momento_espanol_max: number; tanda_max_verificaciones: number;
+  parejas_por_alumno: number; momento_max_parejas: number; momento_espanol_max: number;
   /** Precios para el gasto estimado de cada tanda. */
   deepgram_usd_min_multi: number; deepgram_usd_min_detect: number; claude_usd_mtok_entrada: number; claude_usd_mtok_salida: number;
+  // Escucha dirigida (supabase-testimoniales-escucha.sql)
+  buscador_v6_activo: number;
+  escucha_tramos_por_clase: number; escucha_tope_s: number; escucha_min_turno_s: number; escucha_margen_s: number;
+  escucha_clases_lado: number;
+  escucha_min_palabras: number; escucha_clip_max_s: number;
+  deepgram_credito_usd: number;
+  // Panel de análisis y recorte en vez de descarte (supabase-testimoniales-v3.sql)
+  voces_interjecciones_max: number;
+  recorte_alumno_min_antes_s: number; recorte_alumno_min_despues_s: number;
+  analisis_en_paralelo: number;
+  coste_pareja_estimado_usd: number; escucha_seg_por_clase_estimado: number;
 }
 
-/** Valores de supabase-testimoniales-verificador.sql (y -varias-parejas): solo para lo que falte en la tabla. */
+/** Valores de supabase-testimoniales-verificador.sql y -v3.sql: solo para lo que falte en la tabla. */
 export const CONFIG_POR_DEFECTO: VerifyConfig = {
   recorte_margen_s: 2, recorte_min_s: 8, recorte_max_s: 35,
   deepgram_ambas: 1,
@@ -63,10 +74,20 @@ export const CONFIG_POR_DEFECTO: VerifyConfig = {
   repeticion_distintas_min: 3, repeticion_unicas_max: 0.5,
   contraste_ppm_factor: 1.4, contraste_pausas_factor: 0.5, semanas_min: 4,
   vision_camara_conf: 0.6, vision_leyendo_conf: 0.6,
-  juez_nota_min: 60, parejas_por_tanda: 5,
+  juez_nota_min: 60,
   endurecer_ventana: 20, endurecer_veces: 3, alarma_fuente_pct: 0.5, retencion_dias: 30,
-  parejas_por_alumno: 10, momento_max_parejas: 2, momento_espanol_max: 0.15, tanda_max_verificaciones: 150,
+  parejas_por_alumno: 10, momento_max_parejas: 2, momento_espanol_max: 0.15,
   deepgram_usd_min_multi: 0.0052, deepgram_usd_min_detect: 0.0043, claude_usd_mtok_entrada: 2, claude_usd_mtok_salida: 10,
+  // Sin la fila (SQL de la escucha sin correr), el buscador viejo sigue encendido.
+  buscador_v6_activo: 1,
+  escucha_tramos_por_clase: 5, escucha_tope_s: 45, escucha_min_turno_s: 15, escucha_margen_s: 2,
+  escucha_clases_lado: 3,
+  escucha_min_palabras: 8, escucha_clip_max_s: 30,
+  deepgram_credito_usd: 200,
+  voces_interjecciones_max: 4,
+  recorte_alumno_min_antes_s: 8, recorte_alumno_min_despues_s: 12,
+  analisis_en_paralelo: 3,
+  coste_pareja_estimado_usd: 0.05, escucha_seg_por_clase_estimado: 216,
 };
 
 // ── Tramo que se recorta ─────────────────────────────────────────────────────
@@ -83,6 +104,18 @@ export function cutWindow(start: number, end: number, c: VerifyConfig): { start:
 const FILLER = /^(u+m+|u+h+|m+|h+m+|e+r+m*|a+h+|e+h+|e+m+|m+h+m+|uh-huh|mm-hmm|mhm)$/i;
 const norm = (w: string) => w.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\p{L}\p{N}']/gu, '');
 export const isFiller = (w: string): boolean => FILLER.test(norm(w));
+
+/**
+ * Lo que dice el profe para acompañar sin quitar la palabra ("yeah", "ok",
+ * "right", "really?", "and then?", "I see"…). Hasta `voces_interjecciones_max`
+ * palabras así de la otra voz no descartan el clip (decisión de Facundo, 30/10/2026).
+ */
+const INTERJECCIONES = new Set([
+  'yeah', 'yes', 'yep', 'yup', 'ok', 'okay', 'mhm', 'mm', 'mmm', 'hmm', 'uhhuh', 'uh-huh', 'mmhmm', 'mm-hmm',
+  'right', 'really', 'and', 'then', 'sure', 'cool', 'nice', 'great', 'wow', 'good', 'oh', 'ah', 'aha',
+  'i', 'see', 'exactly', 'alright', 'perfect', 'fine', 'wonderful', 'excellent', 'interesting',
+]);
+export const isInterjection = (w: string): boolean => INTERJECCIONES.has(norm(w));
 
 export interface ClipMeasures {
   /** Palabras del hablante principal sin contar muletillas. */
@@ -102,8 +135,10 @@ export interface ClipMeasures {
   tercios_con_traba: number;
   /** Palabras por minuto del tercio más rápido. */
   tercio_ppm_max: number;
-  /** Palabras de otras voces (sin muletillas). */
+  /** Palabras de otras voces (sin muletillas ni interjecciones). */
   otra_voz_palabras: number;
+  /** Interjecciones de otras voces ("yeah", "ok", "right"…). Falta en medidas viejas. */
+  otra_voz_interjecciones?: number;
   voces: number;
   /** Fracción de palabras en español (modo multi). null si Deepgram no da idioma por palabra. */
   espanol_pct: number | null;
@@ -114,14 +149,18 @@ export interface ClipMeasures {
 
 const round = (x: number, d = 1) => Math.round(x * 10 ** d) / 10 ** d;
 
-/** Voz con más palabras y cuántas palabras dicen las demás. */
-function dominant(words: DeepgramWord[]): { speaker: number | undefined; others: number; voices: number } {
+/**
+ * Voz con más palabras y lo que dicen las demás: palabras de verdad (`others`) e
+ * interjecciones aparte (`interj`).
+ */
+function dominant(words: DeepgramWord[]): { speaker: number | undefined; others: number; interj: number; voices: number } {
   const count = new Map<number | undefined, number>();
   for (const w of words) if (!isFiller(w.word)) count.set(w.speaker, (count.get(w.speaker) ?? 0) + 1);
   let speaker: number | undefined, best = -1;
   for (const [s, n] of count) if (n > best) { speaker = s; best = n; }
-  const total = [...count.values()].reduce((a, b) => a + b, 0);
-  return { speaker, others: total - Math.max(best, 0), voices: count.size };
+  const ajenas = words.filter(w => w.speaker !== speaker && !isFiller(w.word));
+  const interj = ajenas.filter(w => isInterjection(w.word)).length;
+  return { speaker, others: ajenas.length - interj, interj, voices: count.size };
 }
 
 /**
@@ -183,6 +222,7 @@ export function measureClip(multi: DeepgramTranscript, detect: DeepgramTranscrip
     tercios_con_traba: thirds.filter(t => t.traba).length,
     tercio_ppm_max: round(Math.max(...thirds.map(t => t.ppm))),
     otra_voz_palabras: Math.max(dom.others, dDom?.others ?? 0),
+    otra_voz_interjecciones: Math.max(dom.interj, dDom?.interj ?? 0),
     voces: Math.max(dom.voices, dDom?.voices ?? 0),
     espanol_pct: langWords.length ? round(langWords.filter(w => w.language === 'es').length / langWords.length, 2) : null,
     idioma: detect?.detectedLanguage ?? null,
@@ -190,10 +230,56 @@ export function measureClip(multi: DeepgramTranscript, detect: DeepgramTranscrip
   };
 }
 
+/** Segundos (dentro del audio) donde empieza y acaba de hablar el hablante principal. null = sin voz. */
+export function mainSpeakerSpan(t: DeepgramTranscript): { start: number; end: number } | null {
+  const dom = dominant(t.words);
+  const ws = t.words.filter(w => w.speaker === dom.speaker && !isFiller(w.word));
+  return ws.length ? { start: ws[0].start, end: ws[ws.length - 1].end } : null;
+}
+
 /** Texto del hablante principal (con puntuación), el que se enseña y lee el juez. */
 export function mainSpeakerText(t: DeepgramTranscript): string {
   const dom = dominant(t.words);
   return t.words.filter(w => w.speaker === dom.speaker).map(w => w.punctuated_word ?? w.word).join(' ');
+}
+
+// ── Recortar en vez de descartar (decisiones de Facundo, 30/10/2026) ─────────
+
+/**
+ * El trozo continuo más largo en que habla SOLO el hablante principal en inglés
+ * (segundos dentro del audio). Lo corta una palabra de verdad de otra voz o una
+ * palabra en español suya; las muletillas y las interjecciones de la otra voz no
+ * lo cortan (se cuentan después con sus reglas). null = no habla nadie.
+ */
+export function longestStudentRun(t: DeepgramTranscript): { start: number; end: number } | null {
+  const dom = dominant(t.words).speaker;
+  const words = [...t.words].sort((a, b) => a.start - b.start);
+  const runs: Array<{ start: number; end: number }> = [];
+  let open = false;
+  for (const w of words) {
+    const filler = isFiller(w.word);
+    const corta = w.speaker !== dom ? !filler && !isInterjection(w.word) : w.language === 'es' && !filler;
+    if (corta) { open = false; continue; }
+    if (w.speaker !== dom || filler) continue;
+    if (open) runs[runs.length - 1].end = w.end;
+    else { runs.push({ start: w.start, end: w.end }); open = true; }
+  }
+  return runs.reduce<{ start: number; end: number } | null>((b, r) => (!b || r.end - r.start > b.end - b.start ? r : b), null);
+}
+
+/** La transcripción de solo un trozo (los tiempos no cambian; el idioma del clip entero ya no vale). */
+export function subTranscript(t: DeepgramTranscript, start: number, end: number): DeepgramTranscript {
+  const words = t.words.filter(w => w.start >= start - 0.01 && w.end <= end + 0.01);
+  return {
+    ...t, words, transcript: words.map(w => w.punctuated_word ?? w.word).join(' '),
+    durationS: Math.round((end - start) * 100) / 100, detectedLanguage: null, languageConfidence: null, languages: null,
+  };
+}
+
+/** Voz partida: Deepgram separó en dos a la misma persona. Todo pasa a la voz principal. */
+export function mergeSpeakers(t: DeepgramTranscript): DeepgramTranscript {
+  const dom = dominant(t.words).speaker;
+  return { ...t, words: t.words.map(w => ({ ...w, speaker: dom })) };
 }
 
 // ── Reglas ───────────────────────────────────────────────────────────────────
@@ -213,6 +299,9 @@ export function checkAudio(m: ClipMeasures, lado: 'ANTES' | 'DESPUÉS', c: Verif
   }
   if (m.otra_voz_palabras > c.voces_otra_max_palabras) {
     return no('habla_profe', `${lado}: hay otra voz que dice ${m.otra_voz_palabras} palabras.`);
+  }
+  if ((m.otra_voz_interjecciones ?? 0) > c.voces_interjecciones_max) {
+    return no('habla_profe', `${lado}: la otra voz mete ${m.otra_voz_interjecciones} interjecciones (máximo ${c.voces_interjecciones_max}).`);
   }
   if (m.repetidas_distintas >= c.repeticion_distintas_min || (m.palabras >= 10 && m.unicas < c.repeticion_unicas_max)) {
     return no('ejercicio_repeticion', `${lado}: ${m.repetidas_distintas} palabras distintas repetidas seguidas, ${pct(m.unicas)} de palabras distintas.`);

@@ -10,8 +10,8 @@
 //     de Fathom) no se usa; con algo de español, sus parejas van al final;
 //   · un mismo momento sale como mucho `momento_max_parejas` veces en la lista,
 //     para que un mal ANTES no se lleve por delante todas las parejas del alumno.
-// La tanda (lib/testimonialVerifier) las prueba en orden y salta de alumno al
-// aprobar una.
+// El panel de análisis (lib/testimonialAnalysis) las prueba en orden y salta de
+// alumno al aprobar una.
 //
 // UN MOMENTO = una intervención del alumno en una GRABACIÓN de Fathom (momentKey),
 // no un id de testimonial_segments: hay transcripts duplicados (la misma
@@ -28,11 +28,16 @@ export const recordingKey = (url: string | null | undefined): string =>
 /** Una intervención del alumno en una grabación (ventanas solapadas y copias incluidas). */
 export const momentKey = (s: Pick<Segment, 'fathomUrl' | 'turnIndex'>): string => `${recordingKey(s.fathomUrl)}#${s.turnIndex}`;
 
-/** momentKey desde el id del recorte (`${analysisId}:${turnIndex}:${kind}:${n}`) y la URL de su clip. */
+/**
+ * momentKey desde el id del momento y la URL de su clip. Ids: recorte del texto
+ * (`${analysisId}:${turnIndex}:${kind}:${n}`) o tramo escuchado
+ * (`escucha:${analysisId}:${turnIndex}`); la intervención es la misma en los dos.
+ */
 export function momentKeyFromId(id: string | null | undefined, url: string | null | undefined): string | null {
   const parts = (id ?? '').split(':');
-  const turn = Number(parts[parts.length - 3]);
-  return parts.length >= 4 && Number.isInteger(turn) && url ? `${recordingKey(url)}#${turn}` : null;
+  const escucha = parts[0] === 'escucha';
+  const turn = Number(escucha ? parts[parts.length - 1] : parts[parts.length - 3]);
+  return parts.length >= (escucha ? 3 : 4) && Number.isInteger(turn) && url ? `${recordingKey(url)}#${turn}` : null;
 }
 
 export interface PlanOptions {
@@ -91,22 +96,57 @@ export function planStudentPairs(segments: Segment[], avgWpm: number | null, o: 
     }
   }
   all.sort((x, y) => comparePlanned(y, x));
+  return pickDiverse(all, p => momentKey(p.a), p => momentKey(p.b), o.max, o.perMoment);
+}
 
+/**
+ * De una lista YA ORDENADA de mejor a peor, las primeras `max` sin repetir la
+ * misma combinación de momentos y sin usar un momento más de `perMoment` veces.
+ * La comparten el plan por texto de Fathom y el de la escucha.
+ */
+export function pickDiverse<T>(sorted: T[], keyA: (p: T) => string, keyB: (p: T) => string, max: number, perMoment: number): T[] {
   const uses = new Map<string, number>(), seen = new Set<string>();
-  const out: PlannedPair[] = [];
-  for (const p of all) {
-    if (out.length >= o.max) break;
-    const ka = momentKey(p.a), kb = momentKey(p.b);
+  const out: T[] = [];
+  for (const p of sorted) {
+    if (out.length >= max) break;
+    const ka = keyA(p), kb = keyB(p);
     // La misma combinación de momentos con otros ids (copias o ventanas solapadas): una vez.
     const par = `${ka}|${kb}`;
     if (seen.has(par)) continue;
-    if ((uses.get(ka) ?? 0) >= o.perMoment || (uses.get(kb) ?? 0) >= o.perMoment) continue;
+    if ((uses.get(ka) ?? 0) >= perMoment || (uses.get(kb) ?? 0) >= perMoment) continue;
     seen.add(par);
     uses.set(ka, (uses.get(ka) ?? 0) + 1);
     uses.set(kb, (uses.get(kb) ?? 0) + 1);
     out.push(p);
   }
   return out;
+}
+
+// ── Filtros del panel de análisis ────────────────────────────────────────────
+
+/** Lo que elige el admin en el panel. Fechas 'YYYY-MM-DD' (incluidas); null = sin filtro. */
+export interface PlanFiltros {
+  desde: string | null;
+  hasta: string | null;
+  /** student_group */
+  alumno: string | null;
+  /** teachers.id */
+  profe: string | null;
+}
+
+export const SIN_FILTROS: PlanFiltros = { desde: null, hasta: null, alumno: null, profe: null };
+
+/** ¿La clase de ese día y ese profe entra en los filtros? */
+export const passesFilters = (classDay: string, teacherId: string | null, f: PlanFiltros): boolean =>
+  (!f.desde || classDay.slice(0, 10) >= f.desde) && (!f.hasta || classDay.slice(0, 10) <= f.hasta)
+  && (!f.profe || teacherId === f.profe);
+
+/** Limpia lo que llega del navegador (fechas mal escritas = sin filtro). */
+export function cleanFilters(raw: unknown): PlanFiltros {
+  const o = (raw ?? {}) as Record<string, unknown>;
+  const day = (v: unknown) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
+  const id = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+  return { desde: day(o.desde), hasta: day(o.hasta), alumno: id(o.alumno), profe: id(o.profe) };
 }
 
 // ── El plan de una tanda ─────────────────────────────────────────────────────
@@ -134,21 +174,6 @@ export interface Vetos { momentos: ReadonlySet<string>; grabaciones: ReadonlySet
 /** ¿El recorte cae en un momento o una grabación vetados? */
 export const isVetoed = (s: Pick<Segment, 'fathomUrl' | 'turnIndex'>, v: Vetos): boolean =>
   v.momentos.has(momentKey(s)) || v.grabaciones.has(recordingKey(s.fathomUrl));
-
-/**
- * La siguiente pareja a verificar desde `cursor`: se salta las de alumnos que ya
- * tienen una aprobada en la tanda y las que usan un momento o una grabación vetados.
- * null = no queda ninguna.
- */
-export function nextPlanItem(plan: PlanItem[], cursor: number, aprobados: ReadonlySet<string>, vetos: Vetos): { item: PlanItem; index: number } | null {
-  for (let i = Math.max(0, cursor); i < plan.length; i++) {
-    const p = plan[i];
-    if (aprobados.has(p.g)) continue;
-    if (vetos.momentos.has(p.ma) || vetos.momentos.has(p.mb) || vetos.grabaciones.has(p.ra) || vetos.grabaciones.has(p.rb)) continue;
-    return { item: p, index: i };
-  }
-  return null;
-}
 
 /** Motivos del verificador que inutilizan el MOMENTO (no la pareja) para siempre. */
 export const MOTIVOS_QUE_VETAN = ['espanol', 'habla_profe', 'leyendo', 'camara_apagada'] as const;

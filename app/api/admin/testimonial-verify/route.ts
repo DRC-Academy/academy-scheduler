@@ -1,4 +1,4 @@
-// Verificador de testimoniales (Fase 1, rama testimoniales-verificador).
+/// Verificador de testimoniales y panel de análisis.
 //
 // GET ?accion=probar-deepgram[&id=<testimonial_candidates.id>]
 //   Prueba de conexión con UN clip, SOLO LECTURA (no escribe nada en la base):
@@ -8,12 +8,21 @@
 //     · detect: detect_language=en,es (un idioma para todo el clip, con confianza).
 //   Sin id, toma la primera pareja por revisar cuyo enlace abra (sin cuentas de prueba).
 //
-// POST { accion, ... } — la pestaña Testimoniales (lib/testimonialVerifier):
-//   · 'estado'          tarjetas, tandas, alarma, umbrales, prueba (y limpia Storage)
-//   · 'iniciar'         { tipo: 'busqueda' | 'prueba' } → { batchId, ids, parejas, alumnos }
-//   · 'verificar-siguiente' { batchId } → búsqueda: la SIGUIENTE pareja del plan
-//                       (varias por alumno); el navegador llama hasta que diga fin
-//   · 'verificar'       { batchId, id, tipo } → prueba: UNA pareja (el navegador las encadena)
+// POST { accion, ... } — la pestaña Testimoniales:
+//   · 'estado'          tarjetas, tandas, tanda abierta, alarma, umbrales, prueba (y limpia Storage)
+//   Panel de análisis (lib/testimonialAnalysis), una llamada por paso:
+//   · 'analisis-opciones'               alumnos y profes para el buscador
+//   · 'analisis-contar'     { opciones } clases, alumnos, parejas y coste con esos filtros
+//   · 'analisis-iniciar'    { opciones } abre la tanda y guarda sus filas
+//   · 'analisis-estado'     { batchId } lo que falta (para seguir o reanudar)
+//   · 'analisis-escuchar'   { batchId, idx } escucha UNA clase de la tanda
+//   · 'analisis-planificar' { batchId } escucha terminada → parejas de la tanda
+//   · 'analisis-verificar'  { batchId, idx } verifica UNA pareja de la tanda
+//   · 'analisis-pausar'     { batchId, pausada }
+//   Prueba con los "No sirve" (lib/testimonialVerifier):
+//   · 'iniciar'         { tipo: 'prueba' } → { batchId, ids }
+//   · 'verificar'       { batchId, id, tipo } → UNA pareja (el navegador las encadena)
+//   Comunes:
 //   · 'cerrar'          { batchId, cancelado } → resumen de la tanda (con el gasto estimado)
 //   · 'revisar'         { id, review: 'sirve' | 'no_sirve', motivo?, texto? }
 //   · 'consentimiento'  { id, valor: 'sin_pedir' | 'pedido' | 'dado' }
@@ -30,14 +39,19 @@ import { readFathomShare, cutClip, FathomCutError, type FathomSource } from '@/l
 import { transcribeAudio, DeepgramError, type DeepgramParams, type DeepgramTranscript } from '@/lib/deepgram';
 import type { TestimonialClip, TestimonialClips } from '@/lib/testimonials';
 import {
-  startBatch, verifyCandidate, verifyNext, closeBatch, loadState, reviewVerification, setConsent, undoConfigChange,
-  signPaths, mediaPaths, type BatchKind,
+  startBatch, verifyCandidate, closeBatch, loadState, reviewVerification, setConsent, undoConfigChange,
+  signPaths, mediaPaths,
 } from '@/lib/testimonialVerifier';
+import {
+  cleanOpciones, contarAnalisis, opcionesAnalisis, iniciarAnalisis, estadoTanda, escucharItem, planificarTanda,
+  verificarItem, pausarTanda, tandaAbierta,
+} from '@/lib/testimonialAnalysis';
+import { cleanFilters } from '@/lib/testimonialPairPlan';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-// Una pareja tarda ~20-30 s (dos recortes, Deepgram y Claude); 'iniciar' puede
-// rehacer parejas del buscador. Hobby con Fluid Compute admite 300 s.
+// Una pareja tarda ~20-40 s (dos recortes, Deepgram, Claude y a veces un recorte
+// más); contar o abrir una tanda lee toda la base. Hobby con Fluid Compute admite 300 s.
 export const maxDuration = 300;
 
 const NO_STORE = { 'Cache-Control': 'no-store' };
@@ -166,62 +180,95 @@ export async function POST(request: Request): Promise<Response> {
 
   const body = await request.json().catch(() => ({})) as Record<string, unknown>;
   const str = (k: string) => (typeof body[k] === 'string' ? (body[k] as string) : null);
-  const tipo: BatchKind = str('tipo') === 'prueba' ? 'prueba' : 'busqueda';
+  const ok = (data: unknown) => Response.json(data, { headers: NO_STORE });
+  const falta = (msg: string) => Response.json({ error: msg }, { status: 400, headers: NO_STORE });
+  const opciones = () => {
+    const raw = (body.opciones ?? {}) as Record<string, unknown>;
+    return cleanOpciones(raw, cleanFilters(raw.filtros));
+  };
+  const tanda = () => str('batchId');
+  const idx = () => (Number.isInteger(body.idx) ? Number(body.idx) : null);
   try {
     switch (body.accion) {
-      case 'estado':
-        return Response.json(await loadState(admin), { headers: NO_STORE });
+      case 'estado': {
+        const [v, abierta] = await Promise.all([loadState(admin), tandaAbierta(admin).catch(() => null)]);
+        return ok({ ...v, abierta });
+      }
+      case 'analisis-opciones':
+        return ok(await opcionesAnalisis(admin));
+      case 'analisis-contar':
+        return ok(await contarAnalisis(admin, opciones()));
+      case 'analisis-iniciar':
+        return ok(await iniciarAnalisis(admin, opciones()));
+      case 'analisis-estado': {
+        const batchId = tanda();
+        return batchId ? ok(await estadoTanda(admin, batchId)) : falta('Falta batchId.');
+      }
+      case 'analisis-escuchar': {
+        const batchId = tanda(), i = idx();
+        return batchId && i != null ? ok(await escucharItem(admin, batchId, i)) : falta('Faltan batchId o idx.');
+      }
+      case 'analisis-planificar': {
+        const batchId = tanda();
+        return batchId ? ok(await planificarTanda(admin, batchId)) : falta('Falta batchId.');
+      }
+      case 'analisis-verificar': {
+        const batchId = tanda(), i = idx();
+        return batchId && i != null ? ok(await verificarItem(admin, batchId, i)) : falta('Faltan batchId o idx.');
+      }
+      case 'analisis-pausar': {
+        const batchId = tanda();
+        if (!batchId) return falta('Falta batchId.');
+        await pausarTanda(admin, batchId, body.pausada !== false);
+        return ok({ ok: true });
+      }
       case 'iniciar':
-        return Response.json(await startBatch(admin, tipo), { headers: NO_STORE });
+        return ok(await startBatch(admin, 'prueba'));
       case 'verificar': {
         const id = str('id'), batchId = str('batchId');
-        if (!id || !batchId) return Response.json({ error: 'Faltan id o batchId.' }, { status: 400, headers: NO_STORE });
-        return Response.json(await verifyCandidate(admin, id, batchId, tipo), { headers: NO_STORE });
-      }
-      case 'verificar-siguiente': {
-        const batchId = str('batchId');
-        if (!batchId) return Response.json({ error: 'Falta batchId.' }, { status: 400, headers: NO_STORE });
-        return Response.json(await verifyNext(admin, batchId), { headers: NO_STORE });
+        if (!id || !batchId) return falta('Faltan id o batchId.');
+        return ok(await verifyCandidate(admin, id, batchId, 'prueba'));
       }
       case 'cerrar': {
-        const batchId = str('batchId');
-        if (!batchId) return Response.json({ ok: true }, { headers: NO_STORE });
-        return Response.json({ ok: true, resumen: await closeBatch(admin, batchId, body.cancelado === true) }, { headers: NO_STORE });
+        const batchId = tanda();
+        if (!batchId) return ok({ ok: true });
+        return ok({ ok: true, resumen: await closeBatch(admin, batchId, body.cancelado === true) });
       }
       case 'revisar': {
         const id = str('id'), review = str('review');
-        if (!id || (review !== 'sirve' && review !== 'no_sirve')) return Response.json({ error: 'Revisión no válida.' }, { status: 400, headers: NO_STORE });
-        return Response.json(await reviewVerification(admin, id, review, str('motivo'), str('texto')), { headers: NO_STORE });
+        if (!id || (review !== 'sirve' && review !== 'no_sirve')) return falta('Revisión no válida.');
+        return ok(await reviewVerification(admin, id, review, str('motivo'), str('texto')));
       }
       case 'consentimiento': {
         const id = str('id'), valor = str('valor');
-        if (!id || !valor) return Response.json({ error: 'Faltan datos.' }, { status: 400, headers: NO_STORE });
+        if (!id || !valor) return falta('Faltan datos.');
         await setConsent(admin, id, valor);
-        return Response.json({ ok: true }, { headers: NO_STORE });
+        return ok({ ok: true });
       }
       case 'deshacer-umbral': {
         const changeId = Number(body.changeId);
-        if (!Number.isFinite(changeId)) return Response.json({ error: 'Falta changeId.' }, { status: 400, headers: NO_STORE });
+        if (!Number.isFinite(changeId)) return falta('Falta changeId.');
         await undoConfigChange(admin, changeId);
-        return Response.json({ ok: true }, { headers: NO_STORE });
+        return ok({ ok: true });
       }
       case 'medios': {
         const ids = Array.isArray(body.ids) ? (body.ids as unknown[]).filter((x): x is string => typeof x === 'string').slice(0, 60) : [];
-        if (!ids.length) return Response.json({ media: {} }, { headers: NO_STORE });
+        if (!ids.length) return ok({ media: {} });
         const { data, error: e } = await admin.from('testimonial_verifications').select('id, antes, despues').in('id', ids);
         if (e) throw new Error(e.message);
-        return Response.json({ media: await signPaths(admin, (data ?? []).flatMap(mediaPaths)) }, { headers: NO_STORE });
+        return ok({ media: await signPaths(admin, (data ?? []).flatMap(mediaPaths)) });
       }
       default:
-        return Response.json({ error: 'Acción desconocida.' }, { status: 400, headers: NO_STORE });
+        return falta('Acción desconocida.');
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[testimonial-verify]', body.accion, msg);
     const sinSql = /testimonial_(config|verif|examples)|bucket/i.test(msg) && /exist|schema cache|not found/i.test(msg);
-    // Columnas o tabla de la tanda de varias parejas.
-    const sinSqlVarias = /testimonial_vetos|plan|cursor|alumnos|coste_(deepgram|claude)_usd/i.test(msg) && /exist|schema cache|not found|could not find/i.test(msg);
-    const error = sinSqlVarias ? 'Falta correr supabase-testimoniales-varias-parejas.sql en Supabase.'
+    // Tablas y columnas de la v3 (escucha, panel, vetos, gasto).
+    const sinSqlV3 = /testimonial_(batch_items|vetos|listen|deepgram)|fuente|filtros|objetivo|por_alumno|solo_nuevas|fase|paused_at|ajustes|source|plan|cursor|alumnos|coste_(deepgram|claude)_usd/i.test(msg)
+      && /exist|schema cache|not found|could not find/i.test(msg);
+    const error = sinSqlV3 ? 'Falta correr supabase-testimoniales-v3.sql en Supabase.'
       : sinSql ? 'Falta correr supabase-testimoniales-verificador.sql en Supabase.' : msg;
     return Response.json({ error }, { status: 500, headers: NO_STORE });
   }

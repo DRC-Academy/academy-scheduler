@@ -2,7 +2,7 @@
 // con el video y el audio reales antes de enseñarse. SOLO SERVIDOR.
 //
 // UNA llamada al servidor = UNA pareja (límite de Vercel). El navegador del admin
-// las encadena ("Buscar y verificar") y para al reunir `parejas_por_tanda`.
+// las encadena desde el panel de análisis (lib/testimonialAnalysis).
 //
 // FILTROS, de más barato a más caro (el primero que falla decide el motivo):
 //   0. Gratis: 4+ semanas entre clases, mismo profe, orden normal → sin_contraste.
@@ -10,6 +10,11 @@
 //      fallo técnico ('error') NO descarta: queda 'error' y cuenta para la alarma.
 //   2. RECORTE: solo el tramo de cada clip (audio + 3 fotogramas), a Storage.
 //   3. AUDIO (Deepgram): espanol, habla_profe (otra voz), ejercicio_repeticion.
+//      Hasta `voces_interjecciones_max` "yeah / ok / right…" de la otra voz no
+//      cuentan. Con otra voz o español, antes de descartar: VOZ PARTIDA (los
+//      fotogramas enseñan al alumno hablando todo el clip → una sola voz) y
+//      RECORTE (el trozo más largo en que habla solo el alumno en inglés, si
+//      llega al mínimo de cada lado). Ver resolveAudio.
 //   4. FLUIDEZ MEDIDA: ANTES trabado de forma sostenida (si no, falso_bloqueo);
 //      DESPUÉS fluido y CONTRASTE entre los dos (si no, sin_contraste).
 //   5. IMAGEN + JUEZ (Claude con los 6 fotogramas y la foto del profe, una sola
@@ -17,15 +22,6 @@
 //      leyendo; y la nota 0-100 (por debajo del mínimo, nota_baja).
 // Las medidas (4) van antes que la imagen (5) porque son gratis una vez se tiene
 // el audio. Todos los umbrales salen de testimonial_config.
-//
-// VARIAS PAREJAS POR ALUMNO (rama testimoniales-varias-parejas, 30/10/2026):
-// "Buscar y verificar" ya no mira solo la pareja del buscador. Al abrir la tanda
-// calcula, por alumno, hasta `parejas_por_alumno` parejas ordenadas de mejor a
-// peor (lib/testimonialPairPlan) y las guarda en la tanda (plan). Cada llamada
-// coge la siguiente que valga (verifyNext), crea la pareja en
-// testimonial_candidates y la verifica. Al aprobar una de un alumno salta al
-// siguiente. Para al reunir `parejas_por_tanda` aprobadas o al hacer
-// `tanda_max_verificaciones`.
 //
 // VETOS (testimonial_vetos): un momento descartado por español, habla el profe,
 // leyendo o cámara apagada no vuelve a usarse en ninguna pareja; un enlace
@@ -42,40 +38,24 @@ import { transcribeAudio, DeepgramError, type DeepgramTranscript } from '@/lib/d
 import { readFathomShare, cutClip, cutFrame, classifyShareUrl, FathomCutError, type FathomSource, type CutResult } from '@/lib/fathomVideo';
 import { parseTurns, toSeconds, withFathomTimestamp } from '@/lib/fluency';
 import { nameMatchesStrict } from '@/lib/testimonialSpeaker';
-import { toSegment, pairColumns } from '@/lib/testimonialSegmentsStore';
-import { averageWpm, blockingScore, fluencyScore, daysBetween, type ExtractStats } from '@/lib/testimonialScoring';
-import {
-  planStudentPairs, nextPlanItem, comparePlanned, toPlanItem, isVetoed, momentKey, momentKeyFromId, recordingKey, MOTIVOS_QUE_VETAN,
-  type PlanItem, type PlannedPair, type Vetos,
-} from '@/lib/testimonialPairPlan';
+import { loadConfig, logDeepgramUsage, deepgramSpend } from '@/lib/testimonialConfigStore';
+import { momentKeyFromId, recordingKey, MOTIVOS_QUE_VETAN } from '@/lib/testimonialPairPlan';
 import type { TestimonialClip, TestimonialClips } from '@/lib/testimonials';
 import {
-  CONFIG_POR_DEFECTO, MOTIVOS_ADMIN, cutWindow, measureClip, mainSpeakerText, checkAudio, checkAntes, checkDespues,
+  MOTIVOS_ADMIN, cutWindow, measureClip, mainSpeakerText, checkAudio, checkAntes, checkDespues,
   checkContraste, checkVision, weeksBetween, shouldHarden, hardenedValue,
+  longestStudentRun, subTranscript, mergeSpeakers,
   type VerifyConfig, type ClipMeasures, type Motivo, type VisionVerdict, type RuleResult,
 } from '@/lib/testimonialMeasures';
 
 type Row = Record<string, any>;   // eslint-disable-line @typescript-eslint/no-explicit-any
 export type BatchKind = 'busqueda' | 'prueba';
 
+export { loadConfig } from '@/lib/testimonialConfigStore';
 export const BUCKET = 'testimonios';
 const SIRVEN = ['listo', 'revisado', 'permiso_alumno'];
 
 // ── Configuración ────────────────────────────────────────────────────────────
-
-export interface ConfigRow { key: string; value: number; description: string; motivo: string | null; paso: number | null; limite: number | null }
-
-export async function loadConfig(admin: SupabaseClient): Promise<{ config: VerifyConfig; rows: ConfigRow[] }> {
-  const { data, error } = await admin.from('testimonial_config').select('key, value, description, motivo, paso, limite').order('key');
-  if (error) throw new Error(`testimonial_config: ${error.message}`);
-  const rows = ((data ?? []) as Row[]).map(r => ({
-    key: String(r.key), value: Number(r.value), description: String(r.description ?? ''),
-    motivo: r.motivo ?? null, paso: r.paso == null ? null : Number(r.paso), limite: r.limite == null ? null : Number(r.limite),
-  }));
-  const config = { ...CONFIG_POR_DEFECTO };
-  for (const r of rows) if (r.key in config && Number.isFinite(r.value)) (config as unknown as Record<string, number>)[r.key] = r.value;
-  return { config, rows };
-}
 
 async function testAccounts(admin: SupabaseClient): Promise<{ teachers: Set<string>; students: Set<string> }> {
   const [{ data: t }, { data: s }] = await Promise.all([
@@ -98,35 +78,22 @@ const weeksOf = (c: Row) => {
   return malo && bueno ? weeksBetween(malo.classDate, bueno.classDate) : -1;
 };
 
-// ── Tandas ───────────────────────────────────────────────────────────────────
+/// ── Tandas ───────────────────────────────────────────────────────────────────
+// Las tandas de búsqueda (panel de análisis con filtros) viven en
+// lib/testimonialAnalysis. Aquí queda la de PRUEBA y el cierre común.
 
 export interface StartedBatch {
   batchId: string;
-  /** prueba: las parejas a verificar, en orden. busqueda: vacío (las elige verifyNext). */
+  /** Las parejas a verificar, en orden. */
   ids: string[];
-  /** busqueda: parejas del plan y alumnos que cubren. */
   parejas: number;
-  alumnos: number;
 }
 
-/**
- * Abre una tanda.
- *   · busqueda: calcula el plan de parejas (varias por alumno) y lo guarda en la
- *     tanda; el navegador llama a verifyNext hasta que diga `fin`;
- *   · prueba: las "No sirve" del admin aún no pasadas por el verificador.
- */
+/** Abre una tanda de PRUEBA: las "No sirve" del admin aún no pasadas por el verificador. */
 export async function startBatch(admin: SupabaseClient, kind: BatchKind): Promise<StartedBatch> {
+  if (kind !== 'prueba') throw new Error('Las tandas de búsqueda se abren desde el panel de análisis.');
   const test = await testAccounts(admin);
   const batchId = `tb_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-
-  if (kind === 'busqueda') {
-    const { config } = await loadConfig(admin);
-    const { plan, alumnos } = await buildPlan(admin, config, test);
-    const { error: bErr } = await admin.from('testimonial_verify_batches').insert({ id: batchId, kind, planned: plan.length, plan, cursor: 0, alumnos });
-    if (bErr) throw new Error(`testimonial_verify_batches: ${bErr.message}`);
-    return { batchId, ids: [], parejas: plan.length, alumnos };
-  }
-
   const { data: cands, error } = await admin.from('testimonial_candidates')
     .select('id, student_id, pair_teacher_id, before_teacher_id, before_moment_id, after_moment_id, clips, improvement')
     .not('clips', 'is', null).limit(2000)
@@ -151,181 +118,20 @@ export async function startBatch(admin: SupabaseClient, kind: BatchKind): Promis
 
   const { error: bErr } = await admin.from('testimonial_verify_batches').insert({ id: batchId, kind, planned: ids.length });
   if (bErr) throw new Error(`testimonial_verify_batches: ${bErr.message}`);
-  return { batchId, ids, parejas: ids.length, alumnos: 0 };
+  return { batchId, ids, parejas: ids.length };
 }
 
 /** Cierra la tanda y devuelve su resumen (con el gasto estimado). */
 export async function closeBatch(admin: SupabaseClient, batchId: string, cancelled: boolean) {
   await admin.from('testimonial_verify_batches').update({ finished_at: new Date().toISOString(), cancelled }).eq('id', batchId);
+  return batchResumen(admin, batchId);
+}
+
+/** Resumen de una tanda (aprobadas, motivos, gasto) sin cerrarla. */
+export async function batchResumen(admin: SupabaseClient, batchId: string) {
   const { data } = await admin.from('testimonial_verifications')
     .select('status, motivo, fathom_causa, antes, review, coste_deepgram_usd, coste_claude_usd').eq('batch_id', batchId);
   return batchSummary((data ?? []) as Row[]);
-}
-
-// ── Plan de parejas (varias por alumno) ──────────────────────────────────────
-
-const SEG_COLS = 'id, analysis_id, student_group, teacher_id, class_day, student_label, kind, turn_index, start_s, end_s, text, words, fillers, repeats, searches, spanish_words, turn_wpm, teacher_before, fathom_url';
-
-async function paged(admin: SupabaseClient, table: string, cols: string, order: string, apply?: (q: any) => any): Promise<Row[]> {   // eslint-disable-line @typescript-eslint/no-explicit-any
-  const out: Row[] = [];
-  for (let from = 0; ; from += 1000) {
-    let q = admin.from(table).select(cols);
-    if (apply) q = apply(q);
-    const { data, error } = await q.order(order).range(from, from + 999);
-    if (error) throw new Error(`${table}: ${error.message}`);
-    out.push(...((data ?? []) as Row[]));
-    if ((data ?? []).length < 1000) break;
-  }
-  return out;
-}
-
-async function loadVetos(admin: SupabaseClient): Promise<Vetos> {
-  const rows = await paged(admin, 'testimonial_vetos', 'clave', 'clave');
-  const momentos = new Set<string>(), grabaciones = new Set<string>();
-  for (const r of rows) {
-    const k = String(r.clave);
-    if (k.startsWith('m:')) momentos.add(k.slice(2));
-    else if (k.startsWith('g:')) grabaciones.add(k.slice(2));
-  }
-  return { momentos, grabaciones };
-}
-
-/** Promedio de palabras por minuto del alumno (como el buscador) y su nombre. */
-function studentContext(txs: Row[]): { valid: boolean; avg: number | null; name: string | null } {
-  const valid = txs.filter(t => t.segments_at && t.status === 'ready');
-  return {
-    valid: valid.length > 0,
-    avg: valid.length ? averageWpm(valid.map(t => (t.segment_stats ?? { palabras: 0, segundos: 0 }) as ExtractStats)) : null,
-    name: (txs.find(t => t.student_name)?.student_name as string | undefined) ?? null,
-  };
-}
-
-/**
- * Las parejas de todos los alumnos, en el orden en que se prueban: alumno a
- * alumno (el de mejor primera pareja primero) y, dentro, de mejor a peor.
- * Fuera: cuentas de prueba, alumnos con una "Sirve" o con una aprobada por
- * revisar, momentos de un "No sirve" del admin, vetados o con enlace falso, y
- * combinaciones ya verificadas.
- */
-async function buildPlan(admin: SupabaseClient, c: VerifyConfig, test: { teachers: Set<string>; students: Set<string> }): Promise<{ plan: PlanItem[]; alumnos: number }> {
-  const [segRows, txRows, candRows, verRows, vetos] = await Promise.all([
-    paged(admin, 'testimonial_segments', SEG_COLS, 'id'),
-    paged(admin, 'testimonial_transcripts', 'analysis_id, student_group, student_name, status, segments_at, segment_stats', 'analysis_id'),
-    paged(admin, 'testimonial_candidates', 'id, student_group, status, discarded_by, clips', 'id'),
-    paged(admin, 'testimonial_verifications', 'id, student_group, status, review, before_moment_id, after_moment_id, candidate_snapshot->clips', 'id', q => q.eq('kind', 'busqueda')),
-    loadVetos(admin),
-  ]);
-  const bucket = (rows: Row[]) => {
-    const m = new Map<string, Row[]>();
-    for (const r of rows) { const g = String(r.student_group); m.set(g, [...(m.get(g) ?? []), r]); }
-    return m;
-  };
-  const segsBy = bucket(segRows), txBy = bucket(txRows), candBy = bucket(candRows);
-  // Combinaciones ya verificadas, por momento (las copias de un transcript cuentan como la misma).
-  const verificadas = new Set(verRows.filter(v => v.status === 'aprobado' || v.status === 'descartado').map(v => {
-    const k = v.clips as TestimonialClips | null;
-    return `${momentKeyFromId(v.before_moment_id, k?.malos?.[0]?.fathomUrl)}|${momentKeyFromId(v.after_moment_id, k?.buenos?.[0]?.fathomUrl)}`;
-  }));
-  const porRevisar = new Set(verRows.filter(v => v.status === 'aprobado' && !v.review).map(v => String(v.student_group)));
-  const linkOk = new Map<string, boolean>();
-  const enlaceBueno = (u: string) => { if (!linkOk.has(u)) linkOk.set(u, !enlaceFalso(u)); return linkOk.get(u)!; };
-
-  const porAlumno: Array<{ g: string; pares: PlannedPair[] }> = [];
-  for (const [g, rows] of segsBy) {
-    if (test.students.has(g) || porRevisar.has(g)) continue;
-    const cands = candBy.get(g) ?? [];
-    if (cands.some(x => SIRVEN.includes(String(x.status)))) continue;
-    const { valid, avg } = studentContext(txBy.get(g) ?? []);
-    if (!valid) continue;
-    // "No sirve" del admin: fuera esos momentos (los que se pisan con sus clips en
-    // la misma grabación, también en las copias del transcript).
-    const noSirve = cands.filter(x => x.status === 'descartado' && x.discarded_by !== 'ia').flatMap(x => {
-      const k = x.clips as TestimonialClips | null;
-      return k && Array.isArray(k.malos) && Array.isArray(k.buenos) ? [...k.malos, ...k.buenos] : [];
-    }).map(b => ({ rec: recordingKey(b.fathomUrl), start: b.start, end: b.end }));
-    const pares = planStudentPairs(rows.map(toSegment), avg, {
-      max: c.parejas_por_alumno, perMoment: c.momento_max_parejas, spanishMax: c.momento_espanol_max, minWeeks: c.semanas_min,
-      blocked: s => !s.fathomUrl || !enlaceBueno(s.fathomUrl) || test.teachers.has(String(s.teacherId))
-        || isVetoed(s, vetos)
-        || noSirve.some(b => b.rec === recordingKey(s.fathomUrl) && s.start < b.end && b.start < s.end),
-      skipPair: (a, b) => verificadas.has(`${momentKey(a)}|${momentKey(b)}`),
-    });
-    if (pares.length) porAlumno.push({ g, pares });
-  }
-  porAlumno.sort((x, y) => comparePlanned(y.pares[0], x.pares[0]));
-  const plan = porAlumno.flatMap(({ g, pares }) => pares.map(p => toPlanItem(g, p)));
-  return { plan, alumnos: porAlumno.length };
-}
-
-/** Crea en testimonial_candidates la pareja del plan que toca verificar. */
-async function materializePair(admin: SupabaseClient, item: PlanItem): Promise<string> {
-  const [{ data: segs, error }, { data: txs }] = await Promise.all([
-    admin.from('testimonial_segments').select(SEG_COLS).in('id', [item.a, item.b]),
-    admin.from('testimonial_transcripts').select('student_name, status, segments_at, segment_stats').eq('student_group', item.g),
-  ]);
-  if (error) throw new Error(`testimonial_segments: ${error.message}`);
-  const ra = ((segs ?? []) as Row[]).find(x => x.id === item.a), rb = ((segs ?? []) as Row[]).find(x => x.id === item.b);
-  if (!ra || !rb) throw new Error('Los momentos de esta pareja ya no existen (se reprocesó el transcript). Pasa a la siguiente.');
-  const a = toSegment(ra), b = toSegment(rb);
-  const { avg, name } = studentContext((txs ?? []) as Row[]);
-  const cols = pairColumns({ a, b, aScore: blockingScore(a, avg), bScore: fluencyScore(b, avg), gapDays: daysBetween(a.classDay, b.classDay) }, name, avg);
-
-  // Solo una pareja abierta por alumno y profe (índice único): la que dejó el
-  // buscador sin verificar deja sitio. Una aprobada por revisar, nunca.
-  const { data: abiertas } = await admin.from('testimonial_candidates').select('id')
-    .eq('student_group', item.g).eq('pair_teacher_id', a.teacherId).neq('status', 'descartado');
-  const ids = ((abiertas ?? []) as Row[]).map(x => String(x.id));
-  if (ids.length) {
-    const { data: aprobadas } = await admin.from('testimonial_verifications').select('id')
-      .in('candidate_id', ids).eq('status', 'aprobado').is('review', null).limit(1);
-    if ((aprobadas ?? []).length) throw new Error('Este alumno ya tiene una pareja aprobada por revisar. Pasa a la siguiente.');
-    const { error: dErr } = await admin.from('testimonial_candidates').delete().in('id', ids).eq('status', 'detectado');
-    if (dErr) throw new Error(`Dejando sitio a la pareja: ${dErr.message}`);
-  }
-  const id = `tc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const now = new Date().toISOString();
-  const { error: iErr } = await admin.from('testimonial_candidates').insert({
-    id, ...cols, ai_reason: `${cols.ai_reason} Pareja del plan de la tanda (varias por alumno).`,
-    status: 'detectado', status_changed_at: now, updated_at: now,
-  });
-  if (iErr) throw new Error(`Creando la pareja: ${iErr.message}`);
-  return id;
-}
-
-export interface NextResult {
-  /** La tanda ha terminado (no hace falta volver a llamar). */
-  fin: boolean;
-  motivoFin: 'objetivo' | 'tope' | 'sin_parejas' | null;
-  hechas: number;
-  aprobadas: number;
-  resultado: VerifyOutcome | null;
-}
-
-/** Verifica la siguiente pareja del plan de una tanda de búsqueda. */
-export async function verifyNext(admin: SupabaseClient, batchId: string): Promise<NextResult> {
-  const [{ config: c }, { data: batch, error }, { data: hechasRows, error: hErr }] = await Promise.all([
-    loadConfig(admin),
-    admin.from('testimonial_verify_batches').select('id, kind, plan, cursor').eq('id', batchId).maybeSingle(),
-    admin.from('testimonial_verifications').select('student_group, status').eq('batch_id', batchId).in('status', ['aprobado', 'descartado', 'error']),
-  ]);
-  if (error || hErr) throw new Error(`testimonial_verify_batches: ${(error ?? hErr)!.message}`);
-  if (!batch || batch.kind !== 'busqueda') throw new Error('No existe esa tanda de búsqueda.');
-  const hechas = (hechasRows ?? []).length;
-  const aprobados = new Set(((hechasRows ?? []) as Row[]).filter(r => r.status === 'aprobado').map(r => String(r.student_group)));
-  const fin = (h: number, ap: number): NextResult['motivoFin'] =>
-    ap >= c.parejas_por_tanda ? 'objetivo' : h >= c.tanda_max_verificaciones ? 'tope' : null;
-  const yaFin = fin(hechas, aprobados.size);
-  if (yaFin) return { fin: true, motivoFin: yaFin, hechas, aprobadas: aprobados.size, resultado: null };
-
-  const next = nextPlanItem((batch.plan ?? []) as PlanItem[], Number(batch.cursor ?? 0), aprobados, await loadVetos(admin));
-  if (!next) return { fin: true, motivoFin: 'sin_parejas', hechas, aprobadas: aprobados.size, resultado: null };
-  // El cursor avanza ANTES de verificar: si esta pareja falla, la siguiente llamada sigue.
-  await admin.from('testimonial_verify_batches').update({ cursor: next.index + 1 }).eq('id', batchId);
-  const candId = await materializePair(admin, next.item);
-  const resultado = await verifyCandidate(admin, candId, batchId, 'busqueda');
-  const h = hechas + 1, ap = aprobados.size + (resultado.status === 'aprobado' ? 1 : 0);
-  const motivoFin = fin(h, ap);
-  return { fin: !!motivoFin, motivoFin, hechas: h, aprobadas: ap, resultado };
 }
 
 /** Id estable de la verificación de una pareja: la misma pareja no se verifica dos veces. */
@@ -447,42 +253,152 @@ export async function verifyCandidate(admin: SupabaseClient, candidateId: string
   sides.despues = side(bueno, rb.source, cb, mediaB);
 
   // 3-4. Audio y medidas
-  let ta: { multi: DeepgramTranscript; detect: DeepgramTranscript | null }, tb: typeof ta;
+  let ta: Audio, tb: Audio;
   try {
-    [ta, tb] = await Promise.all([transcribeBoth(ca.audio, c), transcribeBoth(cb.audio, c)]);
+    [ta, tb] = await Promise.all([transcribeBoth(admin, ca.audio, ca.durS, c), transcribeBoth(admin, cb.audio, cb.durS, c)]);
     coste.deepgram = deepgramUsd(ta, ca.durS, c) + deepgramUsd(tb, cb.durS, c);
   } catch (err) {
     const e = err instanceof DeepgramError ? err : new DeepgramError(String(err), null);
     return finish('error', null, `Deepgram: ${e.message}${e.body ? ` ${e.body.slice(0, 200)}` : ''}`);
   }
-  const ma = measureClip(ta.multi, ta.detect, c), mb = measureClip(tb.multi, tb.detect, c);
-  sides.antes.texto = mainSpeakerText(ta.multi); sides.antes.medidas = ma;
-  sides.despues.texto = mainSpeakerText(tb.multi); sides.despues.medidas = mb;
-  if (!ma) return finish('descartado', 'sin_voz', 'ANTES: Deepgram no oye a nadie en el tramo.');
-  if (!mb) return finish('descartado', 'sin_voz', 'DESPUÉS: Deepgram no oye a nadie en el tramo.');
-  const reglasAudio: Array<[RuleResult, Lado | null]> = [
-    [checkAudio(ma, 'ANTES', c), 'ANTES'], [checkAudio(mb, 'DESPUÉS', c), 'DESPUÉS'],
-    [checkAntes(ma, c), 'ANTES'], [checkDespues(mb, c), 'DESPUÉS'], [checkContraste(ma, mb, c), null],
-  ];
-  for (const [r, lado] of reglasAudio) if (!r.ok) return discard(r, {}, lado);
-
-  // 5. Imagen + juez
   const names = await pairNames(admin, cand, malo, teacherId);
-  const refFrame = await ref;
-  const verdict = await askJudge(admin, { cand, sides: { antes: sides.antes, despues: sides.despues }, ca, cb, refFrame, semanas: semanas ?? 0, names });
-  coste.claude = claudeUsd(verdict.usage, c);
-  if (!verdict.ok) return finish('error', null, `Claude: ${verdict.error}`);
-  const v = verdict.data;
-  sides.antes.vision = v.antes; sides.despues.vision = v.despues;
   const isStudent = (n: string) => names.student.some(s => nameMatchesStrict(n, s) || nameMatchesStrict(s, n));
   const isTeacher = (n: string) => names.teacher.some(s => nameMatchesStrict(n, s) || nameMatchesStrict(s, n));
-  const juez = { juez_nota: Math.round(v.nota), juez_explicacion: v.explicacion };
+
+  // Otra voz o español: antes de descartar, voz partida y recorte (resolveAudio).
+  const ajustes: Record<string, string> = {};
+  const resolver = async (lado: Lado, t: Audio, cut: CutResult, src: FathomSource, key: 'antes' | 'despues') => {
+    const r = await resolveAudio({ lado, t, cut, src, c, names, isStudent, isTeacher });
+    coste.claude += r.claudeUsd;
+    if (r.ajuste) ajustes[key] = r.ajuste;
+    if (r.ok && r.cut !== cut) {
+      const media = await uploadMedia(admin, id, key, r.cut);
+      const s = sides[key]!;
+      Object.assign(s, { inicio: r.cut.startS, dur: r.cut.durS, fathom: withFathomTimestamp(src.shareUrl, r.cut.startS), audio: media.audio, frames: media.frames });
+    }
+    return r;
+  };
+  const xa = await resolver('ANTES', ta, ca, ra.source, 'antes');
+  const xb = await resolver('DESPUÉS', tb, cb, rb.source, 'despues');
+  const extraAjustes = Object.keys(ajustes).length ? { ajustes } : {};
+  sides.antes.texto = mainSpeakerText((xa.ok ? xa.t : ta).multi); sides.antes.medidas = xa.m;
+  sides.despues.texto = mainSpeakerText((xb.ok ? xb.t : tb).multi); sides.despues.medidas = xb.m;
+  if (!xa.m) return finish('descartado', 'sin_voz', 'ANTES: Deepgram no oye a nadie en el tramo.', extraAjustes);
+  if (!xb.m) return finish('descartado', 'sin_voz', 'DESPUÉS: Deepgram no oye a nadie en el tramo.', extraAjustes);
+  if (!xa.ok) return discard(xa.r, extraAjustes, 'ANTES');
+  if (!xb.ok) return discard(xb.r, extraAjustes, 'DESPUÉS');
+  ca = xa.cut; cb = xb.cut;
+  const ma = xa.m, mb = xb.m;
+  const reglasAudio: Array<[RuleResult, Lado | null]> = [
+    [checkAntes(ma, c), 'ANTES'], [checkDespues(mb, c), 'DESPUÉS'], [checkContraste(ma, mb, c), null],
+  ];
+  for (const [r, lado] of reglasAudio) if (!r.ok) return discard(r, extraAjustes, lado);
+
+  // 5. Imagen + juez
+  const refFrame = await ref;
+  const verdict = await askJudge(admin, { cand, sides: { antes: sides.antes, despues: sides.despues }, ca, cb, refFrame, semanas: semanas ?? 0, names });
+  coste.claude += claudeUsd(verdict.usage, c);
+  if (!verdict.ok) return finish('error', null, `Claude: ${verdict.error}`, extraAjustes);
+  const v = verdict.data;
+  sides.antes.vision = v.antes; sides.despues.vision = v.despues;
+  const juez = { juez_nota: Math.round(v.nota), juez_explicacion: v.explicacion, ...extraAjustes };
   const reglasImagen: Array<[RuleResult, Lado]> = [
     [checkVision(v.antes, 'ANTES', c, isStudent, isTeacher), 'ANTES'], [checkVision(v.despues, 'DESPUÉS', c, isStudent, isTeacher), 'DESPUÉS'],
   ];
   for (const [r, lado] of reglasImagen) if (!r.ok) return discard(r, juez, lado);
   if (v.nota < c.juez_nota_min) return finish('descartado', 'nota_baja', `Nota ${Math.round(v.nota)} (mínimo ${c.juez_nota_min}): ${v.explicacion}`, juez);
   return finish('aprobado', null, null, juez);
+}
+
+type Audio = { multi: DeepgramTranscript; detect: DeepgramTranscript | null };
+
+type AudioResuelto =
+  | { ok: true; m: ClipMeasures; t: Audio; cut: CutResult; ajuste: string | null; claudeUsd: number }
+  | { ok: false; m: ClipMeasures | null; r: Extract<RuleResult, { ok: false }>; ajuste: string | null; claudeUsd: number };
+
+/**
+ * Reglas del audio de UN lado, sin descartar a la primera (decisiones de Facundo,
+ * 30/10/2026). Si salta "otra voz" o "español":
+ *   1. VOZ PARTIDA (solo con "otra voz"): si en los 3 fotogramas el recuadro que
+ *      habla es el del alumno, Deepgram partió en dos a la misma persona → una voz.
+ *   2. RECORTE: el trozo continuo más largo en que habla solo el alumno en inglés;
+ *      si dura `recorte_alumno_min_antes_s` / `_despues_s`, se vuelve a recortar de
+ *      Fathom (audio y fotogramas nuevos) y se sigue con ese trozo. Deepgram no se
+ *      vuelve a pagar: se miden sus palabras de ese trozo.
+ * Si nada lo salva, el motivo de siempre (y el momento queda vetado).
+ */
+async function resolveAudio(x: {
+  lado: 'ANTES' | 'DESPUÉS'; t: Audio; cut: CutResult; src: FathomSource; c: VerifyConfig;
+  names: { student: string[]; teacher: string[] }; isStudent: (n: string) => boolean; isTeacher: (n: string) => boolean;
+}): Promise<AudioResuelto> {
+  const { lado, cut, src, c } = x;
+  let t = x.t;
+  let ajuste: string | null = null, gasto = 0;
+  let m = measureClip(t.multi, t.detect, c);
+  const sinVoz: Extract<RuleResult, { ok: false }> = { ok: false, motivo: 'sin_voz', detalle: `${lado}: Deepgram no oye a nadie en el tramo.` };
+  if (!m) return { ok: false, m: null, r: sinVoz, ajuste, claudeUsd: gasto };
+  let r = checkAudio(m, lado, c);
+  if (r.ok) return { ok: true, m, t, cut, ajuste, claudeUsd: gasto };
+
+  if (r.motivo === 'habla_profe' && cut.frames.length) {
+    const quien = await framesSpeaker(cut.frames, x.names);
+    gasto += claudeUsd(quien.usage, c);
+    const nombres = quien.nombres.map(n => n.trim());
+    if (nombres.length === cut.frames.length && nombres.every(n => n && x.isStudent(n) && !x.isTeacher(n))) {
+      const unida: Audio = { multi: mergeSpeakers(t.multi), detect: t.detect ? mergeSpeakers(t.detect) : null };
+      const m2 = measureClip(unida.multi, unida.detect, c);
+      if (m2) {
+        ajuste = `Voz partida: en los ${nombres.length} fotogramas habla "${nombres[0]}" (una sola voz).`;
+        t = unida; m = m2; r = checkAudio(m2, lado, c);
+        if (r.ok) return { ok: true, m, t, cut, ajuste, claudeUsd: gasto };
+      }
+    }
+  }
+
+  if (r.motivo === 'habla_profe' || r.motivo === 'espanol') {
+    const run = longestStudentRun(t.multi);
+    const min = lado === 'ANTES' ? c.recorte_alumno_min_antes_s : c.recorte_alumno_min_despues_s;
+    const largo = run ? Math.round((run.end - run.start) * 10) / 10 : 0;
+    if (run && largo >= min) {
+      const sub: Audio = { multi: subTranscript(t.multi, run.start, run.end), detect: t.detect ? subTranscript(t.detect, run.start, run.end) : null };
+      const m3 = measureClip(sub.multi, sub.detect, c);
+      const r3 = m3 ? checkAudio(m3, lado, c) : r;
+      if (m3 && r3.ok) {
+        const pad = 0.3;
+        const start = Math.round((cut.startS + Math.max(0, run.start - pad)) * 10) / 10;
+        const dur = Math.round((largo + 2 * pad) * 10) / 10;
+        const nuevo = await cutClip(src, start, dur).catch(() => null);
+        const quitado = r.detalle.replace(/^(ANTES|DESPUÉS): /, '');
+        ajuste = `${ajuste ? `${ajuste} ` : ''}Recortado a ${largo} s donde habla solo el alumno en inglés (${quitado}).`;
+        // Sin el recorte nuevo se sigue con los fotogramas del clip entero.
+        return { ok: true, m: m3, t: sub, cut: nuevo ?? cut, ajuste, claudeUsd: gasto };
+      }
+    }
+    r = { ...r, detalle: `${r.detalle} El trozo más largo del alumno solo en inglés dura ${largo} s (mínimo ${min} s).` };
+  }
+  return { ok: false, m, r, ajuste, claudeUsd: gasto };
+}
+
+const FRAMES_SCHEMA = {
+  type: 'object', additionalProperties: false, required: ['nombres'],
+  properties: {
+    nombres: {
+      type: 'array', items: { type: 'string' },
+      description: 'Un nombre por fotograma, en orden: el del recuadro con el indicador de voz activo, copiado tal cual. Cadena vacía si no hay indicador o no se lee.',
+    },
+  },
+};
+
+/** Quién habla en cada fotograma (para la voz partida). Llamada corta: solo las imágenes. */
+async function framesSpeaker(frames: Buffer[], names: { student: string[]; teacher: string[] }) {
+  const r = await askClaudeJson<{ nombres: string[] }>({
+    system: 'Lees fotogramas de grabaciones de Google Meet. Cada recuadro lleva el nombre de la persona abajo a la izquierda; quien habla tiene un icono de ondas arriba a la derecha y el borde resaltado. "X\'s Fathom Notetaker" es el grabador, nunca quien habla.',
+    prompt: `Alumno: ${names.student.join(' / ') || 'sin nombre'}. Profe: ${names.teacher.join(' / ') || 'sin nombre'}.\nPara cada uno de los ${frames.length} fotogramas, el nombre del recuadro que está hablando.`,
+    images: frames.map((f, i) => ({ label: `Fotograma ${i + 1}:`, mediaType: 'image/jpeg' as const, base64: f.toString('base64') })),
+    schema: FRAMES_SCHEMA, maxTokens: 300, model: ECONOMY_MODEL, thinking: 'off',
+    timeoutMs: 60_000, maxRetries: 1, label: 'testimonial-verify-voces', skipCleanKeys: ['nombres'],
+  });
+  return { nombres: r.status === 'ready' && Array.isArray(r.data?.nombres) ? r.data.nombres.map(String) : [], usage: r.usage };
 }
 
 /** Gasto estimado de Deepgram de un clip: segundos cobrados × precio de cada modo. */
@@ -523,11 +439,15 @@ async function saveVeto(admin: SupabaseClient, verificationId: string, motivo: M
   if (error) console.error('[testimonial-verify] Veto sin guardar:', clave, error.message);
 }
 
-async function transcribeBoth(audio: Buffer, c: VerifyConfig) {
+async function transcribeBoth(admin: SupabaseClient, audio: Buffer, seconds: number, c: VerifyConfig): Promise<Audio> {
   const common = { model: 'nova-3', diarize_model: 'latest', filler_words: true, punctuate: true };
   const [multi, detect] = await Promise.all([
     transcribeAudio(audio, { ...common, language: 'multi' }),
     c.deepgram_ambas ? transcribeAudio(audio, { ...common, detect_language: ['en', 'es'] }) : Promise.resolve(null),
+  ]);
+  await Promise.all([
+    logDeepgramUsage(admin, 'verificador', 'multi', multi, seconds),
+    logDeepgramUsage(admin, 'verificador', 'detect', detect, seconds),
   ]);
   return { multi, detect };
 }
@@ -790,6 +710,10 @@ export async function cleanupStorage(admin: SupabaseClient, c: VerifyConfig): Pr
 
 // ── Lo que enseña la pestaña ─────────────────────────────────────────────────
 
+/** Aprobadas por revisar que se enseñan (las demás, con "Ver más") y cuántas con sus medios ya firmados. */
+const TARJETAS_MAX = 300;
+export const TARJETAS_CON_MEDIOS = 20;
+
 const enlaceFalso = (url: string | null | undefined) => {
   const c = classifyShareUrl(url);
   return 'cause' in c || (c.shareUrl.split('/').pop() ?? '').length !== 32;
@@ -816,11 +740,11 @@ function batchSummary(rows: Row[]) {
 export async function loadState(admin: SupabaseClient) {
   const { config, rows: configRows } = await loadConfig(admin);
   const limpiados = await cleanupStorage(admin, config).catch(() => 0);
-  const LIGHT = 'id, batch_id, kind, candidate_id, student_name, teacher_id, status, motivo, motivo_detalle, fathom_causa, antes, despues, semanas, juez_nota, juez_explicacion, consentimiento, review, review_motivo, review_texto, reviewed_at, created_at, updated_at, files_deleted_at';
+  const LIGHT = 'id, batch_id, kind, candidate_id, student_name, teacher_id, status, motivo, motivo_detalle, fathom_causa, antes, despues, semanas, juez_nota, juez_explicacion, consentimiento, review, review_motivo, review_texto, reviewed_at, created_at, updated_at, files_deleted_at, ajustes';
 
-  const [aprob, sirv, desc, batches, revs, cambios, prueba, teachers] = await Promise.all([
+  const [aprob, sirv, desc, batches, revs, cambios, prueba, teachers, gasto] = await Promise.all([
     admin.from('testimonial_verifications').select(LIGHT).eq('kind', 'busqueda').eq('status', 'aprobado').is('review', null)
-      .order('juez_nota', { ascending: false }).limit(50),
+      .order('juez_nota', { ascending: false }).limit(TARJETAS_MAX),
     admin.from('testimonial_verifications').select(LIGHT).eq('review', 'sirve').order('reviewed_at', { ascending: false }).limit(100),
     admin.from('testimonial_verifications').select(LIGHT).eq('kind', 'busqueda').eq('status', 'descartado')
       .order('updated_at', { ascending: false }).limit(60),
@@ -830,6 +754,7 @@ export async function loadState(admin: SupabaseClient) {
     admin.from('testimonial_config_changes').select('*').order('created_at', { ascending: false }).limit(10),
     admin.from('testimonial_verifications').select('id, status, motivo, fathom_causa, candidate_snapshot->clips').eq('kind', 'prueba').limit(2000),
     admin.from('teachers').select('id, name'),
+    deepgramSpend(admin, config).catch(() => null),
   ]);
   const err = [aprob, sirv, desc, batches, revs, cambios, prueba].find(r => r.error)?.error;
   if (err) throw new Error(err.message);
@@ -867,8 +792,9 @@ export async function loadState(admin: SupabaseClient) {
     .eq('status', 'descartado').eq('discarded_by', 'admin');
 
   const nombreProfe = new Map(((teachers.data ?? []) as Row[]).map(t => [String(t.id), String(t.name)]));
-  const tarjetas = ((aprob.data ?? []) as Row[]).slice(0, config.parejas_por_tanda);
-  const media = await signPaths(admin, tarjetas.flatMap(mediaPaths));
+  // Todas las aprobadas por revisar, de mejor a peor nota; los medios, de las primeras.
+  const tarjetas = (aprob.data ?? []) as Row[];
+  const media = await signPaths(admin, tarjetas.slice(0, TARJETAS_CON_MEDIOS).flatMap(mediaPaths));
   const conProfe = (r: Row) => ({ ...r, teacher_name: nombreProfe.get(String(r.teacher_id)) ?? null });
 
   return {
@@ -885,6 +811,7 @@ export async function loadState(admin: SupabaseClient) {
       conEnlaceFalso: pr.filter(conFalso).length,
     },
     limpiados,
+    gasto,
     sirvenEstados: SIRVEN,
   };
 }
