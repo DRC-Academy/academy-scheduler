@@ -171,6 +171,20 @@ export function isCompanyProduct(productName?: string | null): boolean {
   return COMPANY_RE.test(normalizeText(productName ?? ''));
 }
 
+/**
+ * Horas semanales COMPRADAS según el nombre del producto (planes antiguos, fuera
+ * del catálogo): "Curso de inglés general - 3h semanales, A1 — …" → 3.
+ *
+ * Solo el nombre BASE (antes de "—"): la variación trae horarios ("20.00 hrs
+ * Alemania") que no son horas del plan. Los de empresa quedan fuera: su detalle
+ * va por otro lado y Facundo los revisa a mano. null si no se puede leer.
+ */
+export function purchasedWeeklyHours(productName?: string | null): number | null {
+  const base = baseProductName(productName);
+  if (!base || isCompanyProduct(base)) return null;
+  return parseHoursFromText(base);
+}
+
 /** "Empresas Ingles General — B1 · 6 Meses" → "Empresas Ingles General". */
 export function baseProductName(fullName?: string | null): string {
   const raw = (fullName ?? '').trim();

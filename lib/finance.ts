@@ -37,7 +37,7 @@
 import { Assignment, ClassJoinLog, ClassRecord, FinanceRate, ScoringEvent, FinancePayment, Student, ClassRecordType, FinanceManualApproval, TeacherBonus } from '@/types';
 import { bonusesForMonth, sumBonusEuros } from '@/lib/bonuses';
 import { eventMonthOf } from '@/lib/teacherPenalties';
-import { classifyPlan, classifyFor, planBadgeStyle, type PlanClassification } from '@/lib/productUtils';
+import { classifyPlan, classifyFor, planBadgeStyle, purchasedWeeklyHours, type PlanClassification } from '@/lib/productUtils';
 import { contiguousRunLength, hourNum, hourText, nkName, runStartHour, sessionRangeLabel } from '@/lib/sessions';
 // Qué estado de suscripción da acceso (y cómo se llama) es UNA sola decisión,
 // compartida con el badge de los alumnos y con el popup de ingreso.
@@ -1040,13 +1040,23 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
   // OFERTA NUEVA (oct/2026): si el alumno tiene un producto del catálogo, el cupo
   // sale de las horas semanales de SU PLAN, no de las casillas del calendario
   // (quotaWeeklyHours). Cualquier otro alumno, exactamente como antes.
+  //
+  // PLAN ANTIGUO (02/11/2026): el cupo NUNCA es menor que las horas del plan
+  // comprado (las del nombre del producto). Las horas de la asignación se
+  // recalculan desde las casillas cada vez que se guarda el calendario, y al
+  // quitarle casillas a un alumno de a una quedaban en 1h: Lourdes Barzola (plan
+  // de 3h) e Isabel Vallina (4h) pasaron a cupo 5 y se les retuvieron clases que
+  // habían pagado. Con más casillas que horas compradas se queda como estaba:
+  // esta regla solo sube, nunca recorta.
   const limitByStudent = new Map<string, number>();
-  const wooProductOf = new Map((input.students ?? []).map(s => [s.id, s.wooProductId] as const));
+  const studentOfId = new Map((input.students ?? []).map(s => [s.id, s] as const));
   for (const a of myAssignments) {
+    const stu = studentOfId.get(a.studentId);
+    const wooId = stu?.wooProductId;
+    const horas = Math.max(a.weeklyHours ?? 0, purchasedWeeklyHours(stu?.productName) ?? 0);
     // Cupo FIJO del producto (FIXED_MONTHLY_QUOTA, p. ej. intensivo 5h → 25) si lo
-    // tiene; si no, la fórmula de horas de siempre.
-    const wooId = wooProductOf.get(a.studentId);
-    limitByStudent.set(nkey(a.studentName), fixedMonthlyQuota(wooId) ?? monthlyLimit(quotaWeeklyHours(a.weeklyHours ?? 0, wooId)));
+    // tiene; si no, las horas del plan del catálogo o, fuera de él, las de arriba.
+    limitByStudent.set(nkey(a.studentName), fixedMonthlyQuota(wooId) ?? monthlyLimit(quotaWeeklyHours(horas, wooId)));
   }
 
   // REGLA ÚNICA DEL CUPO (02/11/2026, manda sobre todas las anteriores):

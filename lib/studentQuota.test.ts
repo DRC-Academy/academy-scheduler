@@ -250,6 +250,23 @@ describe('cupo de la oferta nueva', () => {
     expect(studentQuotaOf(uno, 'Judith')!.limit).toBe(25);
   });
 
+  it('plan antiguo con casillas perdidas (Lourdes: 3h comprado, asignación de 1h) → 14', () => {
+    const fin = calculateTeacherFinance({ ...base, assignments: [{ ...a, weeklyHours: 1 }],
+      students: [{ ...student('Judith'), productName: 'Curso de inglés general - 3h semanales, A1 — 3h semanales · 20.00 hrs Alemania' }] });
+    expect(studentQuotaOf(fin, 'Judith')!.limit).toBe(14);
+  });
+
+  it('plan antiguo con MÁS casillas que horas compradas: no recorta (4 casillas, plan 1h → 18)', () => {
+    const fin = calculateTeacherFinance({ ...base, students: [{ ...student('Judith'), productName: 'Curso de inglés general - 1h semanal' }] });
+    expect(studentQuotaOf(fin, 'Judith')!.limit).toBe(18);
+  });
+
+  it('plan de empresa: las horas del nombre no cuentan acá', () => {
+    const fin = calculateTeacherFinance({ ...base, assignments: [{ ...a, weeklyHours: 1 }],
+      students: [{ ...student('Judith'), productName: 'Empresas Intensivos — 5h semanales · B1 · 6 Meses' }] });
+    expect(studentQuotaOf(fin, 'Judith')!.limit).toBe(5);
+  });
+
   it('pago único antiguo (Anual 9 meses, 34660): por las horas del plan, 2 h → 9', () => {
     const fin = calculateTeacherFinance({ ...base, students: [{ ...student('Judith'), wooProductId: 34660 }] });
     expect(studentQuotaOf(fin, 'Judith')!.limit).toBe(9);
