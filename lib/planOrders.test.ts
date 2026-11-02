@@ -139,10 +139,16 @@ describe('suscripciones', () => {
 });
 
 describe('buildPlanEvents', () => {
-  it('los alumnos excluidos (Morilla, Cabrera, Capela) no generan nada', () => {
-    const o = order({ id: 35310, productId: 34661, datePaid: '2026-09-16' });
-    const morilla = { ...o, email: 'mesimm742@gmail.com' };
-    expect(buildPlanEvents({ orders: [morilla], subscriptions: [], studentsByEmail: new Map([['mesimm742@gmail.com', stu({ email: 'mesimm742@gmail.com' })]]), existing: new Map(), today: HOY })).toEqual([]);
+  it('los alumnos excluidos (Cabrera, Capela) no generan nada', () => {
+    const o = { ...order({ id: 1, productId: 34660, datePaid: '2026-09-16' }), email: 'mjgc954@gmail.com' };
+    expect(buildPlanEvents({ orders: [o], subscriptions: [], studentsByEmail: new Map([['mjgc954@gmail.com', stu({ email: 'mjgc954@gmail.com' })]]), existing: new Map(), today: HOY })).toEqual([]);
+  });
+
+  it('Anual 9 Meses - Niños (34661, Meseret Mané Morilla): pago único 9 meses desde el pago', () => {
+    const o = { ...order({ id: 35310, productId: 34661, datePaid: '2026-09-16' }), email: 'mesimm742@gmail.com' };
+    const [e] = buildPlanEvents({ orders: [o], subscriptions: [], studentsByEmail: new Map([['mesimm742@gmail.com', stu({ email: 'mesimm742@gmail.com' })]]), existing: new Map(), today: HOY });
+    expect(e).toMatchObject({ result: 'activado', finalUntil: '2027-06-16' });
+    expect(e.studentWrite).toMatchObject({ product_type: 'one_time', woo_product_id: 34661, manual_active_until: '2027-06-16' });
   });
   it('Anual 9 meses (34660, oferta anterior): pago único 9 meses desde el pago', () => {
     const [e] = buildPlanEvents({ orders: [order({ id: 35402, productId: 34660, datePaid: '2026-09-18' })], subscriptions: [],

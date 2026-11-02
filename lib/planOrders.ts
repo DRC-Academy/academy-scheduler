@@ -164,11 +164,12 @@ function link(e: PlanEvent, student: StudentLite, productId: number, note?: stri
  * Alumnos que la activación automática NO toca (decisión de Facundo, 02/11/2026):
  * Facundo los revisa a mano. Vale para el webhook, el barrido del cron y la
  * puesta al día, porque los tres pasan por buildPlanEvents.
+ *
+ * Meseret y Africa Mané Morilla estuvieron acá y salieron el mismo 02/11/2026,
+ * a pedido de Facundo: su "Anual 9 Meses - Niños" (34661) se activa como
+ * cualquier pago único.
  */
 export const PLAN_ACTIVATION_EXCLUDED_EMAILS: ReadonlySet<string> = new Set([
-  'mesimm742@gmail.com',      // Meseret Mané Morilla
-  'afrimiaxd67@hotmail.com',  // Africa Mané Morilla
-  'wowy91002@hotmail.com',    // Africa Mané Morilla (pedido fallido)
   'mjgc954@gmail.com',        // María José Cabrera
   'victorcap@gmail.com',      // Victor Capela
 ]);
