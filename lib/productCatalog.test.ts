@@ -4,7 +4,7 @@
 // las casillas del calendario.
 import { describe, it, expect } from 'vitest';
 import {
-  catalogProduct, isUnknownNewProduct, productTypeFor, quotaWeeklyHours, planTypeLabel,
+  catalogProduct, isUnknownNewProduct, productTypeFor, quotaWeeklyHours, planTypeLabel, fixedMonthlyQuota,
 } from './productCatalog';
 import { isCompanyProduct, baseProductName } from './productUtils';
 
@@ -44,8 +44,26 @@ describe('productTypeFor', () => {
   });
   it('fuera del catálogo (o sin datos) decide el nombre, como siempre', () => {
     expect(productTypeFor(8247, 8248, byNameSub)).toBe('subscription');
-    expect(productTypeFor(26744, 0, byNameOne)).toBe('one_time');     // intensivo OFERTA
     expect(productTypeFor(35905, 0, byNameSub)).toBe('subscription'); // upsell sin datos
+  });
+});
+
+describe('oferta anterior con regla por ID (02/11/2026)', () => {
+  it('26744 (intensivo OFERTA) es suscripción aunque el nombre diga pago único', () => {
+    expect(productTypeFor(26744, 26756, byNameOne)).toBe('subscription');
+    expect(catalogProduct(26744)).toMatchObject({ kind: 'mensual', weeklyHours: 5 });
+    expect(fixedMonthlyQuota(26744)).toBe(25);
+  });
+  it('pagos únicos con sus meses y horas', () => {
+    for (const id of [34660, 34661, 35111]) expect(catalogProduct(id)).toMatchObject({ kind: 'pago_unico', months: 9, weeklyHours: 2 });
+    for (const id of [34659, 34878]) expect(catalogProduct(id)).toMatchObject({ kind: 'pago_unico', months: 6, weeklyHours: 3 });
+    for (const id of [30779, 30781, 30782, 30783]) expect(catalogProduct(id)).toMatchObject({ kind: 'pago_unico', months: 3, weeklyHours: 4 });
+    expect(productTypeFor(34660, 35141, byNameSub)).toBe('one_time');
+    expect(catalogProduct(30780)).toBeNull();
+  });
+  it('el cupo fijo solo existe para el producto del mapa', () => {
+    expect(fixedMonthlyQuota(35660)).toBeNull();
+    expect(fixedMonthlyQuota(null)).toBeNull();
   });
 });
 

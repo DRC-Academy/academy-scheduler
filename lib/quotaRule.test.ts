@@ -1,7 +1,7 @@
 // Regla del cupo del 02/11/2026: consume cupo toda clase PAGABLE y solo esas, y
 // el texto verde de la recuperación dice qué clase repone (ya no habla del cupo).
 import { describe, expect, it } from 'vitest';
-import { consumesQuota, quotaUnitsOf, quotaWouldExceed, recoveryCreditLabel } from './finance';
+import { consumesQuota, quotaUnitsOf, quotaWouldExceed, recoveryCreditLabel, effectiveSubStatus } from './finance';
 
 describe('consumesQuota / quotaUnitsOf', () => {
   it('solo la fila pagable consume, con todas sus horas', () => {
@@ -45,5 +45,20 @@ describe('quotaWouldExceed (aviso al ingresar)', () => {
   it('sin cupo (ex-alumno) o sin datos, nunca avisa', () => {
     expect(quotaWouldExceed({ used: 40, limit: null })).toBe(false);
     expect(quotaWouldExceed(null)).toBe(false);
+  });
+});
+
+describe('effectiveSubStatus (estado de la clase que se muestra)', () => {
+  it('pago único con ventana que cubre la clase → manual_active aunque el ingreso dijera "No encontrada"', () => {
+    expect(effectiveSubStatus('not_found', { productType: 'subscription', wooProductId: 34660, manualActiveUntil: '2027-06-18', companyPlanStart: '2026-09-18' }, '2026-10-10')).toBe('manual_active');
+  });
+  it('antes de la compra no se inventa acceso', () => {
+    expect(effectiveSubStatus('not_found', { productType: 'one_time', manualActiveUntil: '2027-06-18', companyPlanStart: '2026-09-18' }, '2026-09-01')).toBe('not_found');
+  });
+  it('"pago único sin activar" de un alumno cuya plan es una suscripción del catálogo → desconocido', () => {
+    expect(effectiveSubStatus('one_time_no_access', { productType: 'one_time', wooProductId: 26744 }, '2026-10-10')).toBeUndefined();
+  });
+  it('un estado con acceso no se toca', () => {
+    expect(effectiveSubStatus('active', { productType: 'one_time' }, '2026-10-10')).toBe('active');
   });
 });

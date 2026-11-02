@@ -46,6 +46,8 @@ export interface SubscriptionInfo {
   subscriptionStartDate: string | null;
   /** Fin del programa fraccionado de la oferta nueva ('YYYY-MM-DD'). null en cualquier otro plan. */
   programEndDate: string | null;
+  /** Suscripción cancelada o vencida: último día del periodo pagado (YYYY-MM-DD). */
+  subscriptionEndedAt?: string | null;
   fetchedAt: number;
 }
 
@@ -99,6 +101,7 @@ export async function checkSubscription(email?: string | null, force = false): P
       companyPlanStart:  data.companyPlanStart ?? null,
       subscriptionStartDate: data.subscriptionStartDate ?? null,
       programEndDate:    data.programEndDate ?? null,
+      subscriptionEndedAt: data.subscriptionEndedAt ?? null,
       fetchedAt:         Date.now(),
     };
     subscriptionCache.set(e, info);

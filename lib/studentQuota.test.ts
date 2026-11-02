@@ -242,4 +242,16 @@ describe('cupo de la oferta nueva', () => {
     const fin = calculateTeacherFinance({ ...base, students: [{ ...student('Judith'), wooProductId: 35986 }] });
     expect(studentQuotaOf(fin, 'Judith')!.limit).toBe(18);
   });
+
+  it('intensivo 5h (26744): cupo FIJO 25 aunque tenga 4 casillas (o una de 1h)', () => {
+    const fin = calculateTeacherFinance({ ...base, students: [{ ...student('Judith'), wooProductId: 26744 }] });
+    expect(studentQuotaOf(fin, 'Judith')!.limit).toBe(25);
+    const uno = calculateTeacherFinance({ ...base, assignments: [{ ...a, weeklyHours: 1 }], students: [{ ...student('Judith'), wooProductId: 26744 }] });
+    expect(studentQuotaOf(uno, 'Judith')!.limit).toBe(25);
+  });
+
+  it('pago único antiguo (Anual 9 meses, 34660): por las horas del plan, 2 h → 9', () => {
+    const fin = calculateTeacherFinance({ ...base, students: [{ ...student('Judith'), wooProductId: 34660 }] });
+    expect(studentQuotaOf(fin, 'Judith')!.limit).toBe(9);
+  });
 });

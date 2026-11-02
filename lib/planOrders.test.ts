@@ -112,8 +112,24 @@ describe('suscripciones', () => {
     expect(e.studentWrite).toEqual({ woo_product_id: 35654 });
   });
 
-  it('cancelada: nada', () => {
-    expect(planSubscriptionEvents({ ...sub, status: 'cancelled' }, stu(), none)).toEqual([]);
+  it('cancelada sin plan apuntado: apunta el plan para el cupo de los meses que la tuvo (02/11/2026)', () => {
+    const [e] = planSubscriptionEvents({ ...sub, status: 'cancelled' }, stu(), none);
+    expect(e.result).toBe('vinculado');
+    expect(e.studentWrite).toEqual({ woo_product_id: 35654 });
+  });
+
+  it('cancelada con OTRO plan ya apuntado: no lo pisa', () => {
+    expect(planSubscriptionEvents({ ...sub, status: 'cancelled' }, stu({ woo_product_id: 35660 }), none)).toEqual([]);
+  });
+
+  it('pendiente de pago (checkout sin cobrar): nada', () => {
+    expect(planSubscriptionEvents({ ...sub, status: 'pending' }, stu(), none)).toEqual([]);
+  });
+
+  it('intensivo 5h (26744) guardado como one_time: apunta el plan y corrige el tipo', () => {
+    const [e] = planSubscriptionEvents({ ...sub, lineItems: [{ productId: 26744, variationId: 26756, name: 'Curso intensivo de ingles - OFERTA - 5h semanales' }] },
+      stu({ product_type: 'one_time' }), none);
+    expect(e.studentWrite).toEqual({ woo_product_id: 26744, product_type: 'subscription' });
   });
 
   it('programada sin alumno (Valeria, 35775) → aviso', () => {
@@ -123,6 +139,18 @@ describe('suscripciones', () => {
 });
 
 describe('buildPlanEvents', () => {
+  it('los alumnos excluidos (Morilla, Cabrera, Capela) no generan nada', () => {
+    const o = order({ id: 35310, productId: 34661, datePaid: '2026-09-16' });
+    const morilla = { ...o, email: 'mesimm742@gmail.com' };
+    expect(buildPlanEvents({ orders: [morilla], subscriptions: [], studentsByEmail: new Map([['mesimm742@gmail.com', stu({ email: 'mesimm742@gmail.com' })]]), existing: new Map(), today: HOY })).toEqual([]);
+  });
+  it('Anual 9 meses (34660, oferta anterior): pago único 9 meses desde el pago', () => {
+    const [e] = buildPlanEvents({ orders: [order({ id: 35402, productId: 34660, datePaid: '2026-09-18' })], subscriptions: [],
+      studentsByEmail: new Map([['a@x.com', stu()]]), existing: new Map(), today: HOY });
+    expect(e).toMatchObject({ result: 'activado', start: '2026-09-18', finalUntil: '2027-06-18' });
+    expect(e.studentWrite).toMatchObject({ product_type: 'one_time', woo_product_id: 34660, manual_active_until: '2027-06-18' });
+  });
+
   it('autoOnly deja fuera lo anterior a AUTO_SINCE salvo que ya tenga fila', () => {
     const viejo = order({ id: 35750, productId: 35652, datePaid: '2026-10-12' });
     expect(buildPlanEvents({ orders: [viejo], subscriptions: [], studentsByEmail: new Map([['a@x.com', stu()]]), existing: new Map(), today: HOY, autoOnly: true })).toEqual([]);
@@ -230,5 +258,15 @@ describe('asignación de un programa de pago único (modal del setter)', () => {
     const d = dec({ currentUntil: '2027-12-31' })!;
     const e = assignmentProgramEvent({ product: platino!, decision: d, start: '2026-11-02', student: stu({ manual_active_until: '2027-12-31' }), order: null });
     expect(e.studentWrite).not.toHaveProperty('manual_active_until');
+  });
+});
+
+describe('suscripción cancelada con otra viva', () => {
+  it('no apunta el plan viejo si el alumno ya tiene otra suscripción viva en la tanda', () => {
+    const base: WooSubscriptionLite = { id: 1, status: 'cancelled', parentId: null, email: 'a@x.com', billingName: 'A', endDate: null, startDate: '2026-05-11',
+      lineItems: [{ productId: 26744, variationId: 26756, name: 'Curso intensivo de ingles - OFERTA - 5h semanales' }] };
+    const viva: WooSubscriptionLite = { ...base, id: 2, status: 'active', startDate: '2026-09-07', lineItems: [{ productId: 35660, variationId: 0, name: 'Mensual 2h' }] };
+    const evs = buildPlanEvents({ orders: [], subscriptions: [base, viva], studentsByEmail: new Map([['a@x.com', stu()]]), existing: new Map(), today: HOY });
+    expect(evs.map(e => e.productId)).toEqual([35660]);
   });
 });

@@ -55,6 +55,8 @@ export interface StudentLite {
   manual_active_until: string | null;
   product_name: string | null;
   woo_product_id: number | null;
+  /** 'one_time' | 'subscription' | null. Opcional: los llamadores viejos no lo traen. */
+  product_type?: string | null;
 }
 
 /** Lo que ya está en `woo_plan_events` para ese pedido/suscripción y producto. */
@@ -138,15 +140,41 @@ function sinAlumno(e: PlanEvent, what: string): PlanEvent {
   };
 }
 
-/** Solo el producto del alumno, para el cupo. Nunca toca el acceso. */
-function link(e: PlanEvent, student: StudentLite, productId: number): PlanEvent {
+/**
+ * Solo el producto del alumno, para el cupo. Nunca toca el acceso.
+ *
+ * Corrige además el TIPO guardado: el intensivo 5h (26744) es suscripción pero
+ * se guardaba 'one_time' por su nombre, y con ese tipo check-subscription no
+ * miraba nunca la suscripción (02/11/2026).
+ */
+function link(e: PlanEvent, student: StudentLite, productId: number, note?: string): PlanEvent {
   const same = Number(student.woo_product_id ?? 0) === productId;
+  const typeOk = student.product_type === undefined || student.product_type === 'subscription';
+  const write: Record<string, unknown> = {};
+  if (!same) write.woo_product_id = productId;
+  if (!typeOk) write.product_type = 'subscription';
   return {
     ...e, result: 'vinculado', applies: true,
-    note: same ? 'ya tenía este plan apuntado' : 'cupo según las horas del plan',
-    studentWrite: same ? null : { woo_product_id: productId },
+    note: note ?? (same && typeOk ? 'ya tenía este plan apuntado' : 'cupo según las horas del plan'),
+    studentWrite: Object.keys(write).length ? write : null,
   };
 }
+
+/**
+ * Alumnos que la activación automática NO toca (decisión de Facundo, 02/11/2026):
+ * Facundo los revisa a mano. Vale para el webhook, el barrido del cron y la
+ * puesta al día, porque los tres pasan por buildPlanEvents.
+ */
+export const PLAN_ACTIVATION_EXCLUDED_EMAILS: ReadonlySet<string> = new Set([
+  'mesimm742@gmail.com',      // Meseret Mané Morilla
+  'afrimiaxd67@hotmail.com',  // Africa Mané Morilla
+  'wowy91002@hotmail.com',    // Africa Mané Morilla (pedido fallido)
+  'mjgc954@gmail.com',        // María José Cabrera
+  'victorcap@gmail.com',      // Victor Capela
+]);
+
+/** Suscripciones terminadas: ya no dan acceso, pero el plan que tuvo vale para el cupo de esos meses. */
+const ENDED_SUB = new Set(['cancelled', 'expired']);
 
 /**
  * Eventos de un PEDIDO. Uno por línea relevante (del catálogo o producto nuevo
@@ -229,8 +257,12 @@ export function planSubscriptionEvents(
   sub: WooSubscriptionLite,
   student: StudentLite | null,
   existing: (productId: number) => ExistingEvent | null,
+  /** ¿El alumno tiene OTRA suscripción viva? Entonces la terminada no apunta nada. */
+  opts?: { otherLive?: boolean },
 ): PlanEvent[] {
-  if (!LIVE_SUB.has(sub.status)) return [];
+  const ended = ENDED_SUB.has(sub.status);
+  if (ended && opts?.otherLive) return [];
+  if (!LIVE_SUB.has(sub.status) && !ended) return [];
   const out: PlanEvent[] = [];
   for (const li of sub.lineItems) {
     const c = catalogProduct(li.productId, li.variationId);
@@ -242,6 +274,15 @@ export function planSubscriptionEvents(
     if (prev?.applied_at) { out.push({ ...e, result: 'ya_procesado', note: 'ya se procesó esta suscripción' }); continue; }
     if (!c || c.kind === 'sin_datos') { out.push(sinRegla(e)); continue; }
     if (c.kind === 'pago_unico') continue;                    // no debería existir como suscripción
+    if (ended) {
+      // CANCELADA o VENCIDA: el cupo de cada mes sale del plan que tenía ESE mes
+      // (Facundo, 02/11/2026). Se apunta el plan solo si el alumno no tiene
+      // ninguno apuntado: nunca pisa uno más nuevo. Sin alumno no se avisa: una
+      // suscripción vieja sin alumno no es algo que haya que resolver.
+      if (!student || student.woo_product_id != null) continue;
+      out.push(link(e, student, c.id, `suscripción ${sub.status === 'expired' ? 'vencida' : 'cancelada'}: se apunta el plan para el cupo de los meses que la tuvo`));
+      continue;
+    }
     if (!student) { out.push(sinAlumno(e, `Suscripción ${sub.id}`)); continue; }
     out.push(link(e, student, c.id));
   }
@@ -383,6 +424,7 @@ export function buildPlanEvents(args: {
   // propia suscripción (mismo producto, mismo alumno). Sin esto, un producto sin
   // regla vendido como suscripción avisaba dos veces.
   const parentsOfSubs = new Set(args.subscriptions.map(s => s.parentId).filter((x): x is number => x != null));
+  const liveEmails = new Set(args.subscriptions.filter(s => LIVE_SUB.has(s.status)).map(s => s.email.trim().toLowerCase()));
   const src = [
     ...args.orders.filter(o => !parentsOfSubs.has(o.id))
       .map(o => ({ t: 'order' as const, date: dateOnly(o.datePaid) ?? dateOnly(o.dateCreated) ?? '', o })),
@@ -394,9 +436,11 @@ export function buildPlanEvents(args: {
     const id = x.t === 'order' ? x.o.id : x.s.id;
     if (args.autoOnly && x.date < AUTO_SINCE && !hasRow(x.t, id)) continue;
     const email = (x.t === 'order' ? x.o.email : x.s.email).trim().toLowerCase();
+    if (PLAN_ACTIVATION_EXCLUDED_EMAILS.has(email)) continue;
     const student = studentsByEmail.get(email) ?? null;
     const ex = (pid: number) => existing.get(eventKey(x.t, id, pid)) ?? null;
-    const evs = x.t === 'order' ? planOrderEvents(x.o, student, ex, today) : planSubscriptionEvents(x.s, student, ex);
+    const evs = x.t === 'order' ? planOrderEvents(x.o, student, ex, today)
+      : planSubscriptionEvents(x.s, student, ex, { otherLive: liveEmails.has(email) && !LIVE_SUB.has(x.s.status) });
     for (const e of evs) {
       out.push(e);
       const cur = studentsByEmail.get(email);
@@ -407,6 +451,7 @@ export function buildPlanEvents(args: {
           manual_active_until: (w.manual_active_until as string | undefined) ?? cur.manual_active_until,
           product_name: (w.product_name as string | undefined) ?? cur.product_name,
           woo_product_id: (w.woo_product_id as number | undefined) ?? cur.woo_product_id,
+          product_type: (w.product_type as string | undefined) ?? cur.product_type,
         });
       }
     }

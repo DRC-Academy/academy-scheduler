@@ -54,7 +54,7 @@ import {
   type ClassTranscriptRef, type TranscriptState, type TranscriptStatusResult,
 } from '@/lib/transcriptDeadline';
 import { isStudentAbsence, isStudentLostClass } from '@/lib/classTypes';
-import { quotaWeeklyHours } from '@/lib/productCatalog';
+import { quotaWeeklyHours, fixedMonthlyQuota, catalogProduct } from '@/lib/productCatalog';
 
 export {
   transcriptStateOf, transcriptNeedsTeacher, transcriptStateBadge,
@@ -421,6 +421,37 @@ export function quotaUnitsOf(row: Pick<ClassFinanceRow, 'status' | 'billingUnits
 export function quotaWouldExceed(quota: Pick<StudentQuota, 'used' | 'limit'> | null | undefined, units = 1): boolean {
   return !!quota && quota.limit != null && quota.used + Math.max(1, units) > quota.limit;
 }
+
+/**
+ * Estado de suscripción de una clase tal como se MUESTRA (nunca decide el pago).
+ *
+ * El ingreso guarda lo que respondió la verificación en ese momento, y hasta el
+ * 02/11/2026 esa respuesta salía mal para dos grupos por clasificarse por
+ * nombre: los pagos únicos de la oferta anterior ("No encontrada") y el
+ * intensivo 5h, que es suscripción ("Pago único sin activar"). Se corrige al
+ * leer, sin reescribir el histórico:
+ *   · pago único cuya ventana (compra → manual_active_until) cubre la fecha de
+ *     la clase → 'manual_active' (tenía acceso, aunque el ingreso dijera otra cosa);
+ *   · 'one_time_no_access' de un alumno cuyo plan es una SUSCRIPCIÓN del
+ *     catálogo → desconocido: ese estado no puede ser cierto para él.
+ */
+export function effectiveSubStatus(
+  recorded: string | undefined,
+  stu: Pick<Student, 'productType' | 'manualActiveUntil' | 'companyPlanStart' | 'wooProductId'> | undefined,
+  date: string,
+): string | undefined {
+  if (!stu || isAccessStatusLocal(recorded)) return recorded;
+  const cat = catalogProduct(stu.wooProductId);
+  const oneTime = stu.productType === 'one_time' || cat?.kind === 'pago_unico';
+  const until = (stu.manualActiveUntil ?? '').slice(0, 10);
+  const start = (stu.companyPlanStart ?? '').slice(0, 10);
+  if (oneTime && until && date <= until && (!start || date >= start)) return 'manual_active';
+  if (recorded === 'one_time_no_access' && (cat?.kind === 'mensual' || cat?.kind === 'fraccionado')) return undefined;
+  return recorded;
+}
+
+const isAccessStatusLocal = (s: string | undefined) =>
+  isActiveWooStatus(s) || s === 'oritalk' || s === 'manual_override' || s === 'manual_active';
 
 function isoDate(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -957,7 +988,7 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     // Estado de suscripción: prioriza el del join log (momento real de la clase).
     const subAtJoin = log?.subscriptionStatus;
     const subAtRecord = record?.subscriptionStatus;
-    const subscriptionStatus = subAtJoin ?? subAtRecord;
+    const subscriptionStatus = effectiveSubStatus(subAtJoin ?? subAtRecord, stu, c.date);
 
     const approved = isApproved(c.studentName, c.date);
 
@@ -1012,7 +1043,10 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
   const limitByStudent = new Map<string, number>();
   const wooProductOf = new Map((input.students ?? []).map(s => [s.id, s.wooProductId] as const));
   for (const a of myAssignments) {
-    limitByStudent.set(nkey(a.studentName), monthlyLimit(quotaWeeklyHours(a.weeklyHours ?? 0, wooProductOf.get(a.studentId))));
+    // Cupo FIJO del producto (FIXED_MONTHLY_QUOTA, p. ej. intensivo 5h → 25) si lo
+    // tiene; si no, la fórmula de horas de siempre.
+    const wooId = wooProductOf.get(a.studentId);
+    limitByStudent.set(nkey(a.studentName), fixedMonthlyQuota(wooId) ?? monthlyLimit(quotaWeeklyHours(a.weeklyHours ?? 0, wooId)));
   }
 
   // REGLA ÚNICA DEL CUPO (02/11/2026, manda sobre todas las anteriores):

@@ -66,6 +66,12 @@ interface SubResult {
   /** Número del último pedido y su fecha de PAGO (o de creación), como la activación por pedido. */
   orderId: number | null;
   orderPaidDate: string | null;
+  /**
+   * Suscripción CANCELADA o VENCIDA: día en que terminó de verdad ('YYYY-MM-DD',
+   * end_date_gmt; si falta, cancelled_date_gmt). null en cualquier otro estado.
+   * Es la fecha a partir de la cual una clase se dio sin plan vigente.
+   */
+  subscriptionEndedAt?: string | null;
 }
 
 interface RichProduct {
@@ -119,7 +125,7 @@ function billingNameFrom(billing: any): string | null {
 // Cache en memoria (por instancia serverless): 5 min por email.
 const TTL_MS = 5 * 60 * 1000;
 const productCache = new Map<string, { product: RichProduct; ts: number }>();
-const subCache     = new Map<string, { result: { active: boolean; status: string; endDate: string | null; daysRemaining: number | null; phone: string | null; planName: string | null; startDate: string | null; programEndDate: string | null; nextPaymentDate: string | null }; ts: number }>();
+const subCache     = new Map<string, { result: { active: boolean; status: string; endDate: string | null; daysRemaining: number | null; phone: string | null; planName: string | null; startDate: string | null; programEndDate: string | null; nextPaymentDate: string | null; endedAt: string | null }; ts: number }>();
 
 const MAX_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 500;
@@ -222,7 +228,7 @@ async function fetchSubStatus(c: { base: string; ck: string; cs: string }, email
     `&consumer_key=${encodeURIComponent(c.ck)}&consumer_secret=${encodeURIComponent(c.cs)}`;
   const subs = await fetchWoo(url, email, 'subscriptions');
   if (subs.length === 0) {
-    return { active: false, status: 'not_found', endDate: null, daysRemaining: null, phone: null, planName: null, startDate: null, programEndDate: null, nextPaymentDate: null };
+    return { active: false, status: 'not_found', endDate: null, daysRemaining: null, phone: null, planName: null, startDate: null, programEndDate: null, nextPaymentDate: null, endedAt: null };
   }
   // Más reciente por start_date; se prioriza una que dé acceso si existe.
   const byRecent = [...subs].sort((a, b) => {
@@ -250,6 +256,12 @@ async function fetchSubStatus(c: { base: string; ck: string; cs: string }, email
     : null;
   const nextPaymentDate = typeof chosen?.next_payment_date_gmt === 'string' && /^\d{4}-\d{2}-\d{2}/.test(chosen.next_payment_date_gmt)
     ? chosen.next_payment_date_gmt.slice(0, 10) : null;
+  // Fin REAL de una suscripción terminada: end_date_gmt es el último día del
+  // periodo pagado; cancelled_date_gmt, el día en que pidió cancelar (puede ser
+  // semanas antes). Se prefiere el primero.
+  const gmtDay = (v: unknown) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v) ? v.slice(0, 10) : null);
+  const endedAt = (status === 'cancelled' || status === 'expired')
+    ? (gmtDay(chosen?.end_date_gmt) ?? gmtDay(chosen?.cancelled_date_gmt)) : null;
   return {
     // 'active' y 'pending-cancel' dan acceso; 'paused', 'on-hold', 'cancelled' y
     // 'expired' no. El criterio vive en lib/subscriptionAccess y lo comparten el
@@ -258,7 +270,7 @@ async function fetchSubStatus(c: { base: string; ck: string; cs: string }, email
     status,
     endDate: endDate ? endDate.toISOString() : null,
     daysRemaining: endDate ? daysFromNow(endDate) : null,
-    phone, planName, startDate, programEndDate, nextPaymentDate,
+    phone, planName, startDate, programEndDate, nextPaymentDate, endedAt,
   };
 }
 
@@ -318,7 +330,7 @@ async function check(request: Request): Promise<Response> {
 
   // 1) Alumno en Supabase: overrides de acceso + producto persistido + plan local.
   let student: {
-    id?: string; manual_active_until?: string | null;
+    id?: string; manual_active_until?: string | null; woo_product_id?: number | null;
     is_oritalk?: boolean | null; oritalk_until?: string | null;
     product_type?: string | null; product_name?: string | null; plan?: string | null;
     company_plan_months?: number | null; company_plan_start?: string | null;
@@ -385,6 +397,14 @@ async function check(request: Request): Promise<Response> {
   //    o si no hay tipo persistido. Lo detectado se persiste (incl. plan).
   let productName = student?.product_name ?? null;
   let productType = (student?.product_type as ProductType) ?? null;
+  // El PRODUCTO guardado (por ID, lib/productCatalog) manda sobre el TIPO
+  // guardado: el tipo se decidió en su día por el nombre y estaba mal para el
+  // intensivo 5h (suscripción guardada como pago único) y para los pagos únicos
+  // de la oferta anterior (guardados como suscripción). 02/11/2026.
+  {
+    const cat = catalogProduct(student?.woo_product_id);
+    if (cat && cat.kind !== 'sin_datos') productType = cat.kind === 'pago_unico' ? 'one_time' : 'subscription';
+  }
   let rich: RichProduct | null = null;
 
   // Woo no contestó y no hay producto persistido. Un override vigente vale igual:
@@ -583,5 +603,6 @@ async function check(request: Request): Promise<Response> {
     subscriptionStartDate: sub.startDate ?? orderDate,
     programEndDate: sub.programEndDate ?? null,
     nextPaymentDate: sub.nextPaymentDate ?? null,
+    subscriptionEndedAt: sub.endedAt ?? null,
   }));
 }

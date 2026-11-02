@@ -10,10 +10,23 @@
 //
 // REGLA DE ORO: un producto que NO está acá se comporta EXACTAMENTE como antes
 // de que existiera este archivo. Los planes de la oferta anterior (Curso de
-// inglés general, niños, exámenes, intensivos, empresas) no tienen entrada a
-// propósito: su acceso, sus fechas y su cupo siguen saliendo de donde salían.
+// inglés general, niños, exámenes, empresas) no tienen entrada a propósito: su
+// acceso, sus fechas y su cupo siguen saliendo de donde salían.
 //
-// Datos de Facundo, 28/10/2026.
+// EXCEPCIÓN (02/11/2026, decisión de Facundo): siete productos de la oferta
+// anterior SÍ entran, porque la clasificación por nombre los trataba mal:
+//   · 26744 "Curso intensivo de ingles - OFERTA" es una SUSCRIPCIÓN mensual,
+//     pero 'curso intensivo de ingles' está en ONE_TIME_PRODUCTS y salía como
+//     pago único → check-subscription no miraba nunca su suscripción y los
+//     alumnos que pagaban salían "sin acceso".
+//   · Los "Anual 9 Meses" e "Intensivo de 6 meses" son PAGO ÚNICO, pero no
+//     estaban en esa lista → se buscaba una suscripción que no existe y salían
+//     "No encontrada".
+//   · Los Intensivos de 540 € (general/PET/FCE/CAE): pago único de 3 meses.
+// El ID manda sobre el nombre (productTypeFor), así que esto lo corrige sin
+// tocar la lista por nombre.
+//
+// Datos de Facundo, 28/10/2026 y 02/11/2026.
 
 export type CatalogKind =
   /** Pago único: el pedido pagado activa al alumno hasta inicio + meses. */
@@ -65,7 +78,38 @@ export const PRODUCT_CATALOG: Readonly<Record<number, CatalogProduct>> = {
   35905: P(35905, 'Programa Platino Alumno (upsell)', 'sin_datos', null, null),
   36027: P(36027, 'Programa Fluidez 1h/sem (upsell)', 'sin_datos', null, null),
   35986: P(35986, 'Plan Maria Ahumada', 'sin_datos', null, null),
+
+  // ── Oferta anterior con regla por ID (02/11/2026) ──
+  // Suscripción mensual: el acceso lo decide la suscripción, como siempre. Su
+  // cupo es FIJO (25, ver FIXED_MONTHLY_QUOTA), no el de la fórmula de horas.
+  26744: P(26744, 'Curso intensivo de ingles - OFERTA - 5h semanales', 'mensual', null, 5),
+  // Pago único: activo desde la compra hasta compra + meses (nunca recorta).
+  // La duración va en el NOMBRE del producto; las horas, en pa_horas.
+  34660: P(34660, 'Anual 9 Meses - 2h semanales - Adultos',            'pago_unico', 9, 2),
+  34661: P(34661, 'Anual 9 Meses - 2h semanales - Niños',              'pago_unico', 9, 2),
+  35111: P(35111, 'Anual 9 meses exámenes - 2h semanales',             'pago_unico', 9, 2),
+  34659: P(34659, 'Intensivo de 6 meses 3 clases semanales',           'pago_unico', 6, 3),
+  34878: P(34878, 'Intensivo de 6 meses examenes 3 clases semanales',  'pago_unico', 6, 3),
+  // Intensivos de 540 €: 3 meses, 4h semanales. (30780 no existe en Woo.)
+  30779: P(30779, 'Intensivo general', 'pago_unico', 3, 4),
+  30781: P(30781, 'intensivo PET',     'pago_unico', 3, 4),
+  30782: P(30782, 'Intensivo FCE',     'pago_unico', 3, 4),
+  30783: P(30783, 'Intensivo CAE',     'pago_unico', 3, 4),
 };
+
+/**
+ * CUPO MENSUAL FIJO por producto: manda sobre la fórmula de horas × semanas
+ * (lib/finance monthlyLimit). Un solo mapa para poder sumar productos después.
+ */
+export const FIXED_MONTHLY_QUOTA: Readonly<Record<number, number>> = {
+  26744: 25,   // Curso intensivo de ingles - OFERTA - 5h semanales
+};
+
+/** Cupo mensual fijo del producto del alumno, o null si se calcula por horas. */
+export function fixedMonthlyQuota(wooProductId: unknown): number | null {
+  const c = catalogProduct(wooProductId);
+  return c ? FIXED_MONTHLY_QUOTA[c.id] ?? null : null;
+}
 
 /**
  * Los productos de la oferta nueva empiezan en este ID (35522 es el primero).

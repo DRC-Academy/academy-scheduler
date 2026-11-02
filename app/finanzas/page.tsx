@@ -30,7 +30,11 @@ import { getSpainParts } from '@/components/VisualCalendar';
 import { useAuth } from '@/lib/AuthContext';
 import { useTeachers } from '@/lib/TeachersContext';
 import { calculateTeacherFinance, estimateClassAmount, TeacherFinanceResult, ClassFinanceRow, classTypeBadge, durationSourceBadge, subscriptionBadge, rowHoursLabel, financeStatusBadge, transcriptStateBadge, lostClassBreakdownLabel, isStudentAbsence, recoveryCreditLabel, studentQuotaOf } from '@/lib/finance';
-import { isActiveWooStatus } from '@/lib/subscriptionAccess';
+import { isActiveWooStatus, madridToday } from '@/lib/subscriptionAccess';
+import { checkSubscription, type SubscriptionInfo } from '@/lib/useSubscriptionStatus';
+import { planStateOf, isClassWithoutPlan, PLAN_TONE_STYLE, dmy } from '@/lib/planState';
+import { catalogProduct } from '@/lib/productCatalog';
+import { baseProductName } from '@/lib/productUtils';
 import { gridOccupancyOfTeacher } from '@/lib/teacherClasses';
 import { useHistorialHorarios } from '@/lib/HistorialHorariosContext';
 import { asignacionesConHistorial } from '@/lib/slotHistory';
@@ -415,8 +419,10 @@ function EmbudoCompacto({ funnel, claimAmount }: { funnel: ClassFunnel; claimAmo
   );
 }
 
-function FilaClase({ r, result, approvals, onApproveReview, onApproveExceed, onRevertAbsence, onReopenDeadline }: {
+function FilaClase({ r, result, approvals, sinPlan = false, onApproveReview, onApproveExceed, onRevertAbsence, onReopenDeadline }: {
   r: ClassFinanceRow; result: TeacherFinanceResult; approvals: FinanceManualApproval[];
+  /** Clase dada después del fin de la suscripción del alumno (lib/planState). */
+  sinPlan?: boolean;
   onApproveReview: (date: string) => void; onApproveExceed: (row: ClassFinanceRow) => void; onRevertAbsence: (row: ClassFinanceRow) => void;
   onReopenDeadline: (row: ClassFinanceRow) => void;
 }) {
@@ -466,6 +472,9 @@ function FilaClase({ r, result, approvals, onApproveReview, onApproveExceed, onR
           <button type="button" className="adm-btn adm-btn-ghost fz-btn-sm" onClick={() => onApproveExceed(r)}>Pagar igualmente</button>
         )}
       </span>
+      {sinPlan && (
+        <span className="nota" style={{ color: '#C81E1E', fontWeight: 700 }} title="La suscripción del alumno ya había terminado ese día. Administración decide si se paga.">Clase dada sin plan vigente</span>
+      )}
       {notas.length > 0 && (
         <span className="nota" title={r.manuallyApproved ? approvalTrace(approvals, result.teacherId, r.studentName, r.date) : undefined}>{notas.join(' · ')}</span>
       )}
@@ -496,8 +505,33 @@ function AlumnoFila({ result, name, rows, assignments, approvals, abierto, onTog
   const horasLlevadas = (quota?.used ?? 0) + units(excede);
   const avisoCupo = quota?.limit != null && (quota.used > quota.limit || excede.length > 0);
   const ultimaSub = [...rows].reverse().find(r => r.subscriptionStatus);
-  const subOk = isActiveWooStatus(ultimaSub?.subscriptionStatus);
   const plan = planContratado(rows[0]);
+  // ESTADO DE HOY (lib/planState), no el que quedó grabado en el último ingreso:
+  // al abrir la ficha se verifica al alumno (/api/check-subscription, con su
+  // caché de 5 min). Mientras llega, lo que dice la base y, si no, el ingreso.
+  const { students } = useTeachers();
+  const stu = (asgn?.studentId ? students.find(s => s.id === asgn.studentId) : undefined)
+    ?? students.find(s => nkStudent(s.name) === nkStudent(name));
+  const [live, setLive] = useState<SubscriptionInfo | null>(null);
+  useEffect(() => {
+    const email = stu?.email?.trim();
+    if (!abierto || !email) return;
+    let cancel = false;
+    checkSubscription(email).then(i => { if (!cancel) setLive(i); }).catch(() => { /* se queda con lo que hay */ });
+    return () => { cancel = true; };
+  }, [abierto, stu?.email]);
+  const cat = catalogProduct(stu?.wooProductId);
+  const estado = planStateOf({
+    today: madridToday(), monthYear: result.monthYear, student: stu,
+    live: live ? { status: live.status, productType: live.productType, manualActiveUntil: live.manualActiveUntil, subscriptionEndedAt: live.subscriptionEndedAt } : null,
+    lastSeen: ultimaSub ? { status: ultimaSub.subscriptionStatus, date: ultimaSub.date } : null,
+    planName: (stu?.productName ? baseProductName(stu.productName) : '') || cat?.name || plan?.producto || null,
+    planHours: cat?.weeklyHours ?? asgn?.weeklyHours ?? null,
+    quotaLimit: quota?.limit ?? null,
+  });
+  const sinPlanDe = (r: ClassFinanceRow) => isClassWithoutPlan(r.date, estado, stu?.manualActiveUntil);
+  const nSinPlan = rows.filter(sinPlanDe).reduce((s, r) => s + r.billingUnits, 0);
+  const tono = PLAN_TONE_STYLE[estado.tone];
   const problemas: Array<{ n: number; amount: number; txt: string; det: string }> = [];
   if (revisar.length > 0) problemas.push({ n: units(revisar), amount: euros(revisar), txt: 'sin transcript', det: 'Las dio y todavía no subió el texto. Pasan a pagables solas en cuanto lo suba, o se pagan a mano desde la fila.' });
   if (vencidas.length > 0) problemas.push({ n: units(vencidas), amount: euros(vencidas), txt: 'con el plazo vencido', det: 'Pasaron 24 h desde el final de la clase sin transcript: no se validan ni se pagan. Desde la fila se puede reabrir el plazo (24 h más, con motivo) o pagarla sin transcript.' });
@@ -526,12 +560,20 @@ function AlumnoFila({ result, name, rows, assignments, approvals, abierto, onTog
           <div className="fz-ctx">
             <span><b>{rows[0]?.planLabel ?? '—'}</b> · {asgn?.startDate ? `desde el ${finDateShort(asgn.startDate)}` : 'sin asignación activa'}</span>
             {plan && <span>Plan contratado: <b>{plan.producto}</b>{plan.variante ? ` · ${plan.variante}` : ''}</span>}
-            {ultimaSub && (
-              <span className="fz-ctx-sub" title="Estado de WooCommerce registrado en su última clase. No es una comprobación de hoy.">
-                Suscripción: <b style={{ color: subOk ? '#167A2D' : '#C81E1E' }}>{plainPill(subscriptionBadge(ultimaSub.subscriptionStatus).label)}</b> · visto el {finDateShort(ultimaSub.date)}
-              </span>
-            )}
+            <span className="fz-ctx-sub" title={estado.source === 'ingreso' ? 'Estado registrado en su última clase: todavía no llegó la verificación de hoy.' : 'Estado de hoy.'}>
+              Suscripción: <b style={{ color: tono.color, background: tono.bg, padding: '1px 8px', borderRadius: 20 }}>{estado.label}</b>
+            </span>
           </div>
+          {(estado.detail || nSinPlan > 0) && (
+            <div style={{ fontSize: 12, color: '#6E6E66', margin: '-4px 0 8px', lineHeight: 1.45 }}>
+              {estado.detail}
+              {nSinPlan > 0 && estado.endedAt && (
+                <span style={{ display: 'block', color: '#C81E1E', fontWeight: 600 }}>
+                  {nSinPlan} {nSinPlan === 1 ? 'clase dada' : 'clases dadas'} después del {dmy(estado.endedAt)}, sin plan vigente: marcadas en rojo. Administración decide si se pagan.
+                </span>
+              )}
+            </div>
+          )}
           <div className="fz-cupo">
             <span>Cupo del mes</span>
             {quota?.limit == null ? <span style={{ color: '#6E6E66' }}>Sin cupo: ya no tiene plan con este profesor</span> : (
@@ -555,7 +597,7 @@ function AlumnoFila({ result, name, rows, assignments, approvals, abierto, onTog
           <div className="fz-tabla">
             <div className="fz-cls head" aria-hidden><span>Fecha</span><span>Hora</span><span>Estado</span><span>Tipo y notas</span><span style={{ textAlign: 'right' }}>Importe</span><span /></div>
             {rows.map((r, i) => (
-              <FilaClase key={i} r={r} result={result} approvals={approvals}
+              <FilaClase key={i} r={r} result={result} approvals={approvals} sinPlan={sinPlanDe(r)}
                 onApproveReview={date => onApproveReview(name, date)} onApproveExceed={onApproveExceed} onRevertAbsence={onRevertAbsence}
                 onReopenDeadline={onReopenDeadline} />
             ))}

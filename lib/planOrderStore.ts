@@ -120,7 +120,7 @@ const isMissing = (e: { code?: string; message?: string } | null) =>
 
 /** Alumnos por email (minúsculas). Tolera que falte la columna woo_product_id. */
 export async function loadStudentsByEmail(admin: SupabaseClient): Promise<Map<string, StudentLite>> {
-  const cols = 'id,name,email,manual_active_until,product_name,woo_product_id';
+  const cols = 'id,name,email,manual_active_until,product_name,woo_product_id,product_type';
   let { data, error } = await admin.from('students').select(cols).order('created_at');
   if (isMissing(error)) ({ data, error } = await admin.from('students').select('id,name,email,manual_active_until,product_name').order('created_at') as unknown as { data: typeof data; error: typeof error });
   if (error) throw new PlanSyncError(`No se pudieron leer los alumnos: ${error.message}`);
@@ -134,6 +134,7 @@ export async function loadStudentsByEmail(admin: SupabaseClient): Promise<Map<st
       manual_active_until: str(r.manual_active_until) || null,
       product_name: str(r.product_name) || null,
       woo_product_id: r.woo_product_id != null ? Number(r.woo_product_id) : null,
+      product_type: r.product_type != null ? str(r.product_type) : undefined,
     });
   }
   return map;
