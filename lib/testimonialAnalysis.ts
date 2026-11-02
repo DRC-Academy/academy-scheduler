@@ -35,7 +35,8 @@ import {
   planStudentPairs, comparePlanned, toPlanItem, isVetoed, momentKey, momentKeyFromId, recordingKey, pickDiverse, passesFilters,
   type PlanFiltros, type PlanItem, type PlannedPair, type Vetos,
 } from '@/lib/testimonialPairPlan';
-import { selectListenClasses, listenPairs, compareListenPairs, contrastScore, type ListenClass, type ListenPlanSegment, type ListenPlannedPair } from '@/lib/testimonialListenRank';
+import { selectListenClasses, listenPairs, compareListenPairs, contrastScore, candidatoDespues, type ListenClass, type ListenPlanSegment, type ListenPlannedPair } from '@/lib/testimonialListenRank';
+import { clasificarYGuardar, type Lectura } from '@/lib/testimonialReading';
 import { listenClass, listenColumns, toListenSegment, LISTEN_DONE, type ListenResult } from '@/lib/testimonialListen';
 import { verifyCandidate, batchResumen, closeBatch, type VerifyOutcome } from '@/lib/testimonialVerifier';
 import { weeksBetween, CONFIG_POR_DEFECTO, type VerifyConfig } from '@/lib/testimonialMeasures';
@@ -246,7 +247,29 @@ async function planTexto(admin: SupabaseClient, c: VerifyConfig, o: AnalisisOpci
 
 // ── Plan: escucha ────────────────────────────────────────────────────────────
 
-async function planEscucha(admin: SupabaseClient, c: VerifyConfig, o: AnalisisOpciones, ctx: Contexto, fresco: boolean): Promise<Plan> {
+const SEG_LISTEN_COLS = 'id, analysis_id, student_group, teacher_id, class_day, turn_index, start_s, dur_s, habla_start_s, habla_end_s, medidas, texto';
+/** ¿Existe ya la columna lectura (supabase-testimoniales-lectura.sql)? null = sin comprobar. */
+let hayLectura: boolean | null = null;
+const faltaColumna = (e: unknown) => /lectura/i.test(e instanceof Error ? e.message : String(e));
+
+/** Tramos escuchados de esos alumnos; con su clasificación de lectura si ya existe la columna. */
+async function listenSegmentRows(admin: SupabaseClient, groups: string[]): Promise<Row[]> {
+  const leer = (cols: string) => inChunks(groups, ch => paged(admin, 'testimonial_listen_segments', cols, 'id', q => q.in('student_group', ch)));
+  if (hayLectura !== false) {
+    try {
+      const rows = await leer(`${SEG_LISTEN_COLS}, lectura`);
+      hayLectura = true;
+      return rows;
+    } catch (e) {
+      if (!faltaColumna(e)) throw e;
+      hayLectura = false;
+    }
+  }
+  return leer(SEG_LISTEN_COLS);
+}
+
+async function planEscucha(admin: SupabaseClient, c: VerifyConfig, o: AnalisisOpciones, ctx: Contexto, fresco: boolean,
+  lecturas?: Map<string, Lectura>): Promise<Plan> {
   const f = o.filtros;
   const [students, tts] = await Promise.all([
     cachedPaged(fresco, f.alumno ?? '', admin, 'students', 'id, name, is_test', 'id', q => (f.alumno ? q.eq('id', f.alumno) : q)),
@@ -269,7 +292,7 @@ async function planEscucha(admin: SupabaseClient, c: VerifyConfig, o: AnalisisOp
   const groups = [...byStudent.keys()];
   const [listened, segRows] = await Promise.all([
     inChunks(groups, ch => paged(admin, 'testimonial_listen_classes', 'analysis_id, status', 'analysis_id', q => q.in('student_group', ch))),
-    inChunks(groups, ch => paged(admin, 'testimonial_listen_segments', 'id, analysis_id, student_group, teacher_id, class_day, turn_index, start_s, dur_s, habla_start_s, habla_end_s, medidas, texto', 'id', q => q.in('student_group', ch))),
+    listenSegmentRows(admin, groups),
   ]);
   const hecha = new Set(listened.filter(r => LISTEN_DONE.includes(String(r.status))).map(r => String(r.analysis_id)));
   const segsBy = new Map<string, Row[]>();
@@ -290,7 +313,7 @@ async function planEscucha(admin: SupabaseClient, c: VerifyConfig, o: AnalisisOp
     const segs: ListenPlanSegment[] = (segsBy.get(g) ?? []).filter(r => urls.has(String(r.analysis_id))).map(r => {
       const s = toListenSegment(r);
       const rec = recordingKey(urls.get(s.analysisId));
-      return { ...s, moment: `${rec}#${Number(r.turn_index)}`, recording: rec };
+      return { ...s, lectura: lecturas?.get(s.id) ?? s.lectura, moment: `${rec}#${Number(r.turn_index)}`, recording: rec };
     });
     const todas = listenPairs(segs, c, {
       blocked: s => ctx.vetos.momentos.has(s.moment) || tocaNoSirve(ctx, g, s.recording, s.hablaStart, s.hablaEnd),
@@ -308,6 +331,41 @@ async function planEscucha(admin: SupabaseClient, c: VerifyConfig, o: AnalisisOp
     items, alumnos: new Set([...conPareja, ...alumnosPend]).size, clases: clases.size,
     porEscuchar, alumnosPorEscuchar: alumnosPend.size,
   };
+}
+
+/**
+ * Para scripts de simulación (sin gastar): el plan de la escucha con OTRA config
+ * y, si hace falta, clasificaciones de lectura que aún no están guardadas.
+ */
+export async function simularPlanEscucha(admin: SupabaseClient, c: VerifyConfig, opciones: AnalisisOpciones, lecturas?: Map<string, Lectura>) {
+  const plan = await planEscucha(admin, c, conTopeConfig(opciones, c), await contexto(admin), true, lecturas);
+  return { items: plan.items, alumnos: new Set(plan.items.map(i => i.g)).size };
+}
+
+/**
+ * Antes de armar testimonios: los tramos que por sus medidas podrían ser un
+ * DESPUÉS y aún no se clasificaron se pasan por Haiku (¿lectura o habla
+ * espontánea?). Cada tramo se paga una vez. Sin la columna o sin clave, se sigue
+ * sin clasificar (el juez sigue mirando "leyendo").
+ */
+async function clasificarLecturasPendientes(admin: SupabaseClient, c: VerifyConfig): Promise<void> {
+  if (hayLectura === false) return;
+  let rows: Row[];
+  try {
+    rows = await paged(admin, 'testimonial_listen_segments', 'id, analysis_id, turn_index, habla_start_s, habla_end_s, start_s, dur_s, class_day, teacher_id, medidas, texto, lectura', 'id', q => q.is('lectura', null));
+    hayLectura = true;
+  } catch (e) {
+    if (faltaColumna(e)) { hayLectura = false; console.warn('[testimoniales] Falta supabase-testimoniales-lectura.sql: el DESPUÉS no se filtra por lectura.'); return; }
+    throw e;
+  }
+  const pend = rows.filter(r => candidatoDespues(toListenSegment(r), c));
+  if (!pend.length) return;
+  try {
+    const r = await clasificarYGuardar(admin, pend.map(x => ({ id: String(x.id), analysisId: String(x.analysis_id), turnIndex: Number(x.turn_index), texto: String(x.texto ?? '') })));
+    console.log(`[testimoniales] Lectura: ${r.guardados} de ${pend.length} tramos clasificados (${r.usd.toFixed(3)} $, ${r.errores} lotes fallidos).`);
+  } catch (e) {
+    console.warn(`[testimoniales] Clasificando lecturas: ${e instanceof Error ? e.message : e}`);
+  }
 }
 
 /** El plan con esas opciones. `fresco` = sin la caché (al abrir o planificar una tanda). */
@@ -521,6 +579,7 @@ export async function planificarTanda(admin: SupabaseClient, batchId: string): P
       filtros: (b.filtros ?? {}) as PlanFiltros, cantidad: b.objetivo ?? null, porAlumno: Number(b.por_alumno ?? 10),
       fuente: b.fuente === 'texto' ? 'texto' : 'escucha', soloNuevas: b.solo_nuevas !== false,
     };
+    if (o.fuente === 'escucha') await clasificarLecturasPendientes(admin, c);
     const plan = await planFor(admin, c, o, await contexto(admin), true);
     const { data: last } = await admin.from(ITEMS).select('idx').eq('batch_id', batchId).order('idx', { ascending: false }).limit(1);
     const from = Number(last?.[0]?.idx ?? -1) + 1;
@@ -650,10 +709,9 @@ async function materializeEscucha(admin: SupabaseClient, item: Row): Promise<str
   const { data: tts } = await admin.from('testimonial_transcripts').select('analysis_id, fathom_url, student_label').in('analysis_id', [a.analysisId, b.analysisId]);
   const urls = new Map(((tts ?? []) as Row[]).map(t => [String(t.analysis_id), String(t.fathom_url ?? '')]));
   const labels = new Map(((tts ?? []) as Row[]).map(t => [String(t.analysis_id), String(t.student_label ?? '')]));
-  const { config: c } = await loadConfig(admin);
   const cols = listenColumns({
     group: String(item.student_group), name: String(st?.name ?? ''), a, b, teacherId: a.teacherId,
     semanas: weeksBetween(a.classDay, b.classDay), score: contrastScore(a.medidas, b.medidas),
-  }, urls, labels, c);
+  }, urls, labels);
   return insertCandidate(admin, String(item.student_group), a.teacherId, cols);
 }

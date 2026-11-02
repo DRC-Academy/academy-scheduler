@@ -35,6 +35,7 @@ describe('cutWindow', () => {
     expect(cutWindow(100, 108, C)).toEqual({ start: 98, dur: 12 });
     expect(cutWindow(1, 3, C)).toEqual({ start: 0, dur: 8 });
     expect(cutWindow(100, 160, C)).toEqual({ start: 98, dur: 35 });
+    expect(cutWindow(100, 145, C, true)).toEqual({ start: 98, dur: 49 });
   });
 });
 
@@ -188,6 +189,12 @@ describe('ANTES, DESPUÉS y contraste', () => {
     expect(checkContraste(antes, { ...despues, ppm: 90 }, C)).toMatchObject({ ok: false, motivo: 'sin_contraste' });
     expect(checkContraste(antes, { ...despues, pausas_min: 9 }, C)).toMatchObject({ ok: false, motivo: 'sin_contraste' });
     expect(checkContraste(antes, { ...despues, habla_s: 8 }, C)).toMatchObject({ ok: false, motivo: 'sin_contraste' });
+  });
+  it('contraste: si los dos llegan al tope del clip, el empate vale', () => {
+    const tope = C.escucha_clip_max_s;
+    expect(checkContraste({ ...antes, habla_s: tope }, { ...despues, habla_s: tope }, C).ok).toBe(true);
+    expect(checkContraste({ ...antes, habla_s: tope }, { ...despues, habla_s: tope - 0.6 }, C).ok).toBe(true);
+    expect(checkContraste({ ...antes, habla_s: tope }, { ...despues, habla_s: tope - 5 }, C)).toMatchObject({ ok: false, motivo: 'sin_contraste' });
   });
   it('semanas entre clases', () => {
     expect(weeksBetween('2026-07-30', '2026-09-30')).toBe(8);

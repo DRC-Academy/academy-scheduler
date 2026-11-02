@@ -85,6 +85,11 @@ describe('listenPairs', () => {
     expect(listenPairs([pseg('a', '2026-07-20', TRABADO), b], C, { blocked: s => s.id === 'a' })).toEqual([]);
     expect(listenPairs([pseg('a', '2026-07-20', TRABADO), b], C, { skipPair: () => true })).toEqual([]);
   });
+  it('una lectura en voz alta nunca es DESPUÉS', () => {
+    const a = pseg('a', '2026-07-20', TRABADO);
+    expect(listenPairs([a, { ...pseg('b', '2026-10-05', FLUIDO), lectura: 'lectura' }], C)).toEqual([]);
+    expect(listenPairs([a, { ...pseg('b', '2026-10-05', FLUIDO), lectura: 'espontaneo' }], C)).toHaveLength(1);
+  });
   it('con algo de español (por debajo del máximo), al final', () => {
     const r = listenPairs([
       pseg('a1', '2026-07-20', { ...TRABADO, espanol_pct: 0.05 }), pseg('a2', '2026-07-27', { ...TRABADO, ppm: 90 }),
@@ -96,8 +101,8 @@ describe('listenPairs', () => {
 });
 
 describe('clipBounds y contrastScore', () => {
-  it('el clip es donde habla el alumno, con tope', () => {
-    expect(clipBounds(seg('x', '2026-10-05', FLUIDO), C)).toEqual({ start: 100, end: 130 });
+  it('el clip es exactamente el trozo medido (el tope se aplica al medir)', () => {
+    expect(clipBounds(seg('x', '2026-10-05', FLUIDO))).toEqual({ start: 100, end: 140 });
   });
   it('más contraste, más puntos', () => {
     expect(contrastScore(TRABADO, FLUIDO)).toBeGreaterThan(contrastScore(TRABADO, { ...FLUIDO, ppm: 110 }));

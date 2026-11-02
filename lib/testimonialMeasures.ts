@@ -43,6 +43,8 @@ export interface VerifyConfig {
   despues_pausa_max_s: number; despues_ppm_min: number;
   repeticion_distintas_min: number; repeticion_unicas_max: number;
   contraste_ppm_factor: number; contraste_pausas_factor: number; semanas_min: number;
+  /** Margen para "los dos clips llegan al tope de duración" (empate por tope = válido). */
+  contraste_tope_tolerancia_s: number;
   vision_camara_conf: number; vision_leyendo_conf: number;
   juez_nota_min: number;
   endurecer_ventana: number; endurecer_veces: number; alarma_fuente_pct: number; retencion_dias: number;
@@ -73,6 +75,7 @@ export const CONFIG_POR_DEFECTO: VerifyConfig = {
   despues_pausa_max_s: 1.0, despues_ppm_min: 110,
   repeticion_distintas_min: 3, repeticion_unicas_max: 0.5,
   contraste_ppm_factor: 1.4, contraste_pausas_factor: 0.5, semanas_min: 4,
+  contraste_tope_tolerancia_s: 1,
   vision_camara_conf: 0.6, vision_leyendo_conf: 0.6,
   juez_nota_min: 60,
   endurecer_ventana: 20, endurecer_veces: 3, alarma_fuente_pct: 0.5, retencion_dias: 30,
@@ -92,11 +95,15 @@ export const CONFIG_POR_DEFECTO: VerifyConfig = {
 
 // ── Tramo que se recorta ─────────────────────────────────────────────────────
 
-/** [inicio, duración] del recorte alrededor del clip que estimó el buscador. */
-export function cutWindow(start: number, end: number, c: VerifyConfig): { start: number; dur: number } {
+/**
+ * [inicio, duración] del recorte alrededor del clip que estimó el buscador.
+ * `exacto` (clips de la escucha, ya medidos): el clip entero más los márgenes, sin
+ * el tope `recorte_max_s`, para que el verificador mida el mismo trozo.
+ */
+export function cutWindow(start: number, end: number, c: VerifyConfig, exacto = false): { start: number; dur: number } {
   const s = Math.max(0, start - c.recorte_margen_s);
   const e = Math.max(end + c.recorte_margen_s, s + c.recorte_min_s);
-  return { start: s, dur: Math.round(Math.min(e - s, c.recorte_max_s) * 10) / 10 };
+  return { start: s, dur: Math.round((exacto ? e - s : Math.min(e - s, c.recorte_max_s)) * 10) / 10 };
 }
 
 // ── Medidas ──────────────────────────────────────────────────────────────────
@@ -327,12 +334,18 @@ export function checkDespues(m: ClipMeasures, c: VerifyConfig): RuleResult {
   return fallos.length ? no('sin_contraste', `DESPUÉS poco fluido: ${fallos.join(', ')}.`) : OK;
 }
 
-/** Contraste entre los dos clips. Pausas por minuto: el DESPUÉS dura más. */
+/**
+ * Contraste entre los dos clips. Pausas por minuto. El DESPUÉS dura más, salvo que
+ * los dos lleguen al tope de duración del clip (`escucha_clip_max_s`): ese empate
+ * no dice nada y vale (decisión de Facundo, 02/11/2026).
+ */
 export function checkContraste(a: ClipMeasures, b: ClipMeasures, c: VerifyConfig): RuleResult {
   const fallos: string[] = [];
   if (b.ppm < c.contraste_ppm_factor * a.ppm) fallos.push(`velocidad ×${(b.ppm / Math.max(1, a.ppm)).toFixed(2)} (mínimo ×${c.contraste_ppm_factor})`);
   if (!(b.pausas_min < c.contraste_pausas_factor * a.pausas_min)) fallos.push(`pausas/min ${b.pausas_min} frente a ${a.pausas_min}`);
-  if (!(b.habla_s > a.habla_s)) fallos.push(`el DESPUÉS (${b.habla_s} s) no es más largo que el ANTES (${a.habla_s} s)`);
+  const tope = c.escucha_clip_max_s - c.contraste_tope_tolerancia_s;
+  const empateTope = a.habla_s >= tope && b.habla_s >= tope;
+  if (!(b.habla_s > a.habla_s) && !empateTope) fallos.push(`el DESPUÉS (${b.habla_s} s) no es más largo que el ANTES (${a.habla_s} s)`);
   return fallos.length ? no('sin_contraste', `Contraste: ${fallos.join(', ')}.`) : OK;
 }
 

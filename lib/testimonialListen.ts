@@ -39,21 +39,29 @@ export interface ListenResult { status: 'escuchada' | 'sin_tramos' | 'enlace_rot
 const DG = { model: 'nova-3', language: 'multi', diarize_model: 'latest', filler_words: true, punctuate: true };
 
 /**
- * Medidas de un tramo escuchado. Si suena otra voz o español, las del trozo más
- * largo en que habla solo el alumno en inglés (si llega al mínimo del ANTES); los
- * segundos devueltos son relativos al audio.
+ * Medidas del CLIP que verá el verificador (decisión de Facundo, 02/11/2026: el
+ * buscador mide el mismo trozo que medirá el verificador). Si suena otra voz o
+ * español, el trozo más largo en que habla solo el alumno en inglés (si llega al
+ * mínimo del ANTES); después, como mucho `escucha_clip_max_s` desde que empieza a
+ * hablar. Los segundos devueltos son relativos al audio.
  */
 export function listenMeasures(t: DeepgramTranscript, c: VerifyConfig): { m: ClipMeasures | null; span: { start: number; end: number } | null; texto: string } {
   const m = measureClip(t, null, c);
   const full = { m, span: mainSpeakerSpan(t), texto: mainSpeakerText(t) };
   if (!m) return full;
+  let sub = t, span = full.span;
   const r = checkAudio(m, 'ANTES', c);
-  if (r.ok || (r.motivo !== 'habla_profe' && r.motivo !== 'espanol')) return full;
-  const run = longestStudentRun(t);
-  if (!run || run.end - run.start < c.recorte_alumno_min_antes_s) return full;
-  const sub = subTranscript(t, run.start, run.end);
+  if (!r.ok && (r.motivo === 'habla_profe' || r.motivo === 'espanol')) {
+    const run = longestStudentRun(t);
+    if (run && run.end - run.start >= c.recorte_alumno_min_antes_s) { sub = subTranscript(t, run.start, run.end); span = run; }
+  }
+  if (span && span.end - span.start > c.escucha_clip_max_s) {
+    sub = subTranscript(sub, span.start, span.start + c.escucha_clip_max_s);
+    span = mainSpeakerSpan(sub) ?? span;
+  }
+  if (sub === t) return full;
   const m2 = measureClip(sub, null, c);
-  return m2 ? { m: m2, span: run, texto: mainSpeakerText(sub) } : full;
+  return m2 && span ? { m: m2, span, texto: mainSpeakerText(sub) } : full;
 }
 
 export async function listenClass(admin: SupabaseClient, analysisId: string): Promise<ListenResult> {
@@ -134,6 +142,7 @@ export const toListenSegment = (r: Row): ListenSegment => ({
   id: String(r.id), analysisId: String(r.analysis_id), teacherId: r.teacher_id ?? null, classDay: String(r.class_day ?? '').slice(0, 10),
   hablaStart: Number(r.habla_start_s ?? r.start_s), hablaEnd: Number(r.habla_end_s ?? Number(r.start_s) + Number(r.dur_s)),
   medidas: (r.medidas as ClipMeasures | null) ?? null, texto: String(r.texto ?? ''),
+  lectura: r.lectura === 'lectura' || r.lectura === 'espontaneo' ? r.lectura : null,
 });
 
 export interface ListenPairInput {
@@ -147,10 +156,10 @@ export interface ListenPairInput {
 }
 
 /** Columnas de testimonial_candidates para una pareja de dos tramos escuchados. */
-export function listenColumns(p: ListenPairInput, urls: Map<string, string>, labels: Map<string, string>, c: VerifyConfig): Row {
+export function listenColumns(p: ListenPairInput, urls: Map<string, string>, labels: Map<string, string>): Row {
   const ma = p.a.medidas!, mb = p.b.medidas!;
   const clip = (s: ListenSegment, why: string): TestimonialClip => {
-    const b = clipBounds(s, c);
+    const b = clipBounds(s);
     return {
       analysisId: s.analysisId, classDate: s.classDay, teacherId: s.teacherId, start: b.start, end: b.end,
       excerpt: s.texto.slice(0, 400), why, fathomUrl: withFathomTimestamp(urls.get(s.analysisId), b.start),

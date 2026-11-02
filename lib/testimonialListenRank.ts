@@ -76,11 +76,19 @@ export interface ListenSegment {
   hablaEnd: number;
   medidas: ClipMeasures | null;
   texto: string;
+  /**
+   * Haiku sobre el texto: 'espontaneo' (habla por su cuenta) o 'lectura' (lee en
+   * voz alta). null = sin clasificar todavía. Una lectura nunca es DESPUÉS.
+   */
+  lectura?: 'espontaneo' | 'lectura' | null;
 }
 
 /** Vale como tramo de alguien hablando inglés solo: sin español, sin otra voz, sin ejercicio. */
 const usable = (s: ListenSegment, c: VerifyConfig): s is ListenSegment & { medidas: ClipMeasures } =>
   !!s.medidas && s.medidas.palabras >= c.escucha_min_palabras && checkAudio(s.medidas, 'ANTES', c).ok;
+
+/** Podría ser un DESPUÉS por sus medidas (sin mirar aún si es una lectura): lo que se clasifica. */
+export const candidatoDespues = (s: ListenSegment, c: VerifyConfig): boolean => usable(s, c) && checkDespues(s.medidas, c).ok;
 
 /** Cuánto mejora: velocidad relativa + pausas por minuto que desaparecen + muletillas. */
 export function contrastScore(a: ClipMeasures, b: ClipMeasures): number {
@@ -135,7 +143,7 @@ export function listenPairs(segs: ListenPlanSegment[], c: VerifyConfig,
   o: { blocked?: (s: ListenPlanSegment) => boolean; skipPair?: (a: ListenPlanSegment, b: ListenPlanSegment) => boolean } = {}): ListenPlannedPair[] {
   const ok = segs.filter(s => !o.blocked?.(s) && usable(s, c));
   const as = ok.filter(s => checkAntes(s.medidas!, c).ok);
-  const bs = ok.filter(s => checkDespues(s.medidas!, c).ok);
+  const bs = ok.filter(s => s.lectura !== 'lectura' && checkDespues(s.medidas!, c).ok);
   const out: ListenPlannedPair[] = [];
   for (const a of as) for (const b of bs) {
     if (!a.teacherId || a.teacherId !== b.teacherId || a.recording === b.recording) continue;
@@ -150,8 +158,13 @@ export function listenPairs(segs: ListenPlanSegment[], c: VerifyConfig,
   return out.sort((x, y) => compareListenPairs(y, x));
 }
 
-/** El clip que se propone al verificador: donde habla el alumno, con tope. */
-export function clipBounds(s: ListenSegment, c: VerifyConfig): { start: number; end: number } {
-  const start = Math.max(0, Math.round(s.hablaStart * 10) / 10);
-  return { start, end: Math.round(Math.min(s.hablaEnd, start + c.escucha_clip_max_s) * 10) / 10 };
+/**
+ * El clip que se propone al verificador: EXACTAMENTE el trozo que midió la escucha
+ * (el tope `escucha_clip_max_s` ya se aplicó al medir, lib/testimonialListen), para
+ * que el verificador mida lo mismo y no rechace lo que el buscador dio por bueno.
+ * Los tramos escuchados antes del 02/11/2026 se midieron sin ese tope: su clip
+ * es su trozo entero (hasta ~47 s).
+ */
+export function clipBounds(s: ListenSegment): { start: number; end: number } {
+  return { start: Math.max(0, Math.round(s.hablaStart * 10) / 10), end: Math.round(s.hablaEnd * 10) / 10 };
 }

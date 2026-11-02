@@ -233,7 +233,9 @@ export async function verifyCandidate(admin: SupabaseClient, candidateId: string
   if (!ra.ok || !rb.ok) throw new Error('inalcanzable');
 
   // 2. Recorte (+ foto del profe de respaldo, en paralelo)
-  const wa = cutWindow(malo.start, malo.end, c), wb = cutWindow(bueno.start, bueno.end, c);
+  // Escucha: el clip ya se midió entero; se baja entero (sin el tope) y abajo se mide solo él.
+  const exacto = cand.source === 'escucha';
+  const wa = cutWindow(malo.start, malo.end, c, exacto), wb = cutWindow(bueno.start, bueno.end, c, exacto);
   const ref = teacherReferenceFrame(admin, malo.analysisId, ra.source, malo.start).catch(() => null);
   let ca: CutResult, cb: CutResult;
   try {
@@ -257,6 +259,7 @@ export async function verifyCandidate(admin: SupabaseClient, candidateId: string
   try {
     [ta, tb] = await Promise.all([transcribeBoth(admin, ca.audio, ca.durS, c), transcribeBoth(admin, cb.audio, cb.durS, c)]);
     coste.deepgram = deepgramUsd(ta, ca.durS, c) + deepgramUsd(tb, cb.durS, c);
+    if (exacto) { ta = soloClip(ta, malo, ca); tb = soloClip(tb, bueno, cb); }
   } catch (err) {
     const e = err instanceof DeepgramError ? err : new DeepgramError(String(err), null);
     return finish('error', null, `Deepgram: ${e.message}${e.body ? ` ${e.body.slice(0, 200)}` : ''}`);
@@ -311,6 +314,19 @@ export async function verifyCandidate(admin: SupabaseClient, candidateId: string
 }
 
 type Audio = { multi: DeepgramTranscript; detect: DeepgramTranscript | null };
+
+/**
+ * Solo las palabras del clip que midió la escucha: los márgenes del recorte son
+ * relleno de audio (decisión de Facundo, 02/11/2026: verificador y buscador miden
+ * el mismo trozo). El idioma del clip entero (modo detect) se conserva.
+ */
+function soloClip(t: Audio, k: TestimonialClip, cut: CutResult): Audio {
+  const from = k.start - cut.startS - 0.3, to = k.end - cut.startS + 0.3;
+  return {
+    multi: subTranscript(t.multi, from, to),
+    detect: t.detect ? { ...subTranscript(t.detect, from, to), detectedLanguage: t.detect.detectedLanguage, languageConfidence: t.detect.languageConfidence, languages: t.detect.languages } : null,
+  };
+}
 
 type AudioResuelto =
   | { ok: true; m: ClipMeasures; t: Audio; cut: CutResult; ajuste: string | null; claudeUsd: number }
