@@ -25,6 +25,12 @@
 //   5. Si el alumno está en riesgo de baja, ANTES de abrir el Meet se le enseña
 //      al profesor el protocolo de esa clase (ver `riskFor`).
 //
+// CUPO DEL MES LLENO (`quotaFullFor`): justo después del enlace, si el alumno ya
+// usó todas las clases de su plan, aviso con "Cancelar" / "Entrar igualmente".
+// NO bloquea: solo avisa de que esa clase quedaría retenida. La pantalla lo
+// responde con el MISMO cálculo de cupo que finanzas (lib/finance quotaWouldExceed
+// sobre studentQuota, que sale de consumesQuota).
+//
 // PAGO PENDIENTE (lib/paymentHolds) va POR DELANTE de todo lo anterior: si el
 // alumno tiene la suscripción en on-hold, sale solo ese aviso, no se abre el
 // Meet y no se registra nada. Se detecta en tres puntos, por si uno llega tarde:
@@ -98,6 +104,12 @@ export interface UseClassJoinArgs {
    * que la tarjeta pinta el candado).
    */
   paymentHoldFor?: (c: JoinableClass) => boolean;
+  /**
+   * ¿El alumno ya llenó su cupo del mes (esta clase quedaría retenida)? Lo
+   * responde la pantalla con lib/finance (quotaWouldExceed). No pasarla deja el
+   * flujo exactamente como estaba.
+   */
+  quotaFullFor?: (c: JoinableClass) => boolean;
 }
 
 export interface ClassJoinApi {
@@ -120,7 +132,7 @@ export interface ClassJoinApi {
 export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
   const {
     teacher, students, classRecords,
-    logClassJoin, updateMeetLink, onLinkSaved, onToast, getCachedSub, onSubResolved, riskFor, paymentHoldFor,
+    logClassJoin, updateMeetLink, onLinkSaved, onToast, getCachedSub, onSubResolved, riskFor, paymentHoldFor, quotaFullFor,
   } = args;
 
   const [joinedKeys, setJoined] = useState<Set<string>>(new Set());
@@ -137,6 +149,8 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
   const [saveError, setSaveError] = useState<PendingJoin | null>(null);
   // Pago pendiente: el aviso que sustituye a todos los demás.
   const [holdModal, setHoldModal] = useState<JoinableClass | null>(null);
+  // Cupo del mes lleno: aviso que NO bloquea ("Entrar igualmente").
+  const [quotaModal, setQuotaModal] = useState<JoinableClass | null>(null);
   const [retrying, setRetrying] = useState(false);
 
   const toast = (msg: string, ms?: number) => onToast?.(msg, ms);
@@ -242,6 +256,12 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
     // Pago pendiente: antes que el enlace, el hito o cualquier otra cosa.
     if (paymentHoldFor?.(c)) { setHoldModal(c); return; }
     if (!c.meetLink) { setLinkModal(c.assignment); return; }
+    if (quotaFullFor?.(c)) { setQuotaModal(c); return; }
+    afterQuotaCheck(c);
+  }
+
+  // Lo que sigue al aviso de cupo (o cuando no hace falta): el hito y el ingreso.
+  function afterQuotaCheck(c: JoinableClass) {
     const nextClass = calcRegisteredClassNumber(c.assignment, classRecords) + 1;
     if (isMilestone(nextClass)) {
       setMilestoneModal({ c, classNumber: nextClass });
@@ -317,6 +337,30 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
             <button onClick={() => setHoldModal(null)} autoFocus style={{ width: '100%', padding: '11px', borderRadius: 8, border: 'none', background: '#92400e', color: 'white', cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
               Entendido
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Cupo del mes lleno: avisa, no bloquea. */}
+      {quotaModal && (
+        <div role="alertdialog" aria-labelledby="cupo-lleno-title" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 88, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+          onClick={e => { if (e.target === e.currentTarget) setQuotaModal(null); }}>
+          <div style={{ background: '#FFF7ED', border: '2px solid #EA580C', borderRadius: 14, padding: 24, width: '100%', maxWidth: 420 }}>
+            <div id="cupo-lleno-title" style={{ fontWeight: 700, fontSize: 17, color: '#9a3412', marginBottom: 6 }}>
+              ⚠️ Cupo del mes completo
+            </div>
+            <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 12 }}>{quotaModal.studentName} · {quotaModal.hour}</div>
+            <div style={{ fontSize: 14, color: '#374151', marginBottom: 20, lineHeight: 1.6 }}>
+              {QUOTA_FULL_JOIN_MESSAGE}
+            </div>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button onClick={() => setQuotaModal(null)} autoFocus style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid var(--border)', background: 'white', color: '#6b7280', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
+                Cancelar
+              </button>
+              <button onClick={() => { const c = quotaModal; setQuotaModal(null); afterQuotaCheck(c); }} style={{ flex: 2, padding: '10px', borderRadius: 8, border: 'none', background: '#EA580C', color: 'white', cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'inherit' }}>
+                Entrar igualmente
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -564,6 +608,10 @@ export function useClassJoin(args: UseClassJoinArgs): ClassJoinApi {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/** Texto del aviso de cupo lleno al pulsar "Ingresar a clase". */
+export const QUOTA_FULL_JOIN_MESSAGE =
+  'Este alumno ya usó todas las clases de su plan este mes. Si das esta clase, no se pagará salvo que administración lo autorice. Avisá a administración antes de continuar.';
 
 /** Mensaje que se muestra cuando el ingreso quedó guardado. */
 interface OkToast { msg: string; ms?: number }

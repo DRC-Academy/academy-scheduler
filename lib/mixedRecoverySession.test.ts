@@ -242,8 +242,9 @@ describe('calculateTeacherFinance — sesión 2h normal + recuperación', () => 
     expect(r.totalPagable).toBe(2);
   });
 
-  it('con el cupo del mes al tope, la sesión mixta consume UNA sola clase', () => {
-    // 4 normales (4 unidades) + la mixta (1 unidad de cupo, 2 de pago) = 5 = tope.
+  it('la sesión mixta consume sus 2 horas: si no entran en el cupo, queda retenida', () => {
+    // Regla del 02/11/2026: 4 normales (4) + la mixta (2) = 6 > tope 5. La sesión
+    // no se parte, así que queda retenida entera.
     const normales = ['2026-07-01', '2026-07-02', '2026-07-03', '2026-07-06'];
     const logs = [...normales.map(d => log('Ana', d, '17:00')), log('Ana', DATE, '17:00')];
     const r = calc({
@@ -252,10 +253,10 @@ describe('calculateTeacherFinance — sesión 2h normal + recuperación', () => 
       analyses: logs.map(l => transcript('Ana', l.scheduledDate, l.id)), teacher,
     });
 
-    expect(r.rows.every(x => x.status === 'pagable')).toBe(true);
-    // Al profesor se le pagan 6 horas: 4 + 2.
-    expect(r.totalPagable).toBe(6);
-    expect(r.montoPagable).toBe(60);
+    expect(r.rows.find(x => x.date === DATE)!.status).toBe('excede_limite');
+    expect(r.rows.filter(x => x.status === 'pagable')).toHaveLength(4);
+    expect(r.totalPagable).toBe(4);
+    expect(r.studentQuota[0].used).toBe(4);
   });
 
   it('sin la regla la mixta habría excedido: consume 1 y no 2', () => {
@@ -274,7 +275,7 @@ describe('calculateTeacherFinance — sesión 2h normal + recuperación', () => 
     expect(r.rows.filter(x => x.status === 'pagable')).toHaveLength(5);
   });
 
-  it('una recuperación PURA no consume cupo aunque el mes esté lleno', () => {
+  it('una recuperación PURA con el mes lleno queda retenida (consume cupo)', () => {
     const normales = ['2026-07-01', '2026-07-02', '2026-07-03', '2026-07-06', '2026-07-07'];
     const soloRecuperacion = teacherWith([], [{ studentName: 'Ana', hour: '18:00', recoveryFor: LOST }]);
     const logs = [...normales.map(d => log('Ana', d, '17:00')), log('Ana', DATE, '18:00')];
@@ -291,7 +292,7 @@ describe('calculateTeacherFinance — sesión 2h normal + recuperación', () => 
     const rec = r.rows.find(x => x.date === DATE)!;
     expect(rec.recoveryUnits).toBe(1);
     expect(rec.recoveryForDates).toEqual([LOST]);
-    expect(rec.status).toBe('pagable');            // el mes lleno no la bloquea
+    expect(rec.status).toBe('excede_limite');      // regla del 02/11/2026: consume cupo
   });
 
   it('una clase normal de 1h no cambia en nada', () => {

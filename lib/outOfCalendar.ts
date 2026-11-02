@@ -57,7 +57,7 @@ export const OUT_ORIGINS: Array<{ key: OutOfCalendarOrigin; branchKey: string; l
     key: 'recuperacion',
     branchKey: 'fuera_recuperacion',
     label: 'Recuperaciones',
-    hint: 'Clases que diste para reponer una que se había perdido. Salen de una celda bloqueada del calendario, por eso no aparecen en tu horario habitual. Se cobran, y no consumen cupo del alumno.',
+    hint: 'Clases que diste para reponer una que se había perdido. Salen de una celda bloqueada del calendario, por eso no aparecen en tu horario habitual. Se cobran y consumen cupo del alumno en el mes en que se dan.',
   },
   {
     key: 'falta',

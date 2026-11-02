@@ -121,7 +121,8 @@ interface TeachersContextType {
   markStudentAbsence: (teacherId: string, studentName: string, date: string, time: string | undefined, comment?: string) => Promise<void>;
   revertStudentAbsence: (recordId: string, adminName: string) => Promise<void>;
   approveReviewClass: (teacherId: string, studentName: string, date: string, approvedBy?: string) => Promise<void>;
-  approveExceedLimitClass: (teacherId: string, studentName: string, date: string, approvedBy?: string) => Promise<void>;
+  /** "Pagar igualmente" una clase retenida. `note` = motivo obligatorio del admin. */
+  approveExceedLimitClass: (teacherId: string, studentName: string, date: string, approvedBy?: string, note?: string) => Promise<void>;
   changeStudentTeacher: (params: ChangeTeacherParams) => Promise<TransferenciaResultado>;
   removeAssignment: (assignmentId: string, teacherId: string, studentName: string, slots: AssignedSlot[]) => Promise<void>;
   addRescheduleRecord: (p: { teacherId: string; teacherName: string; studentName: string; originalDate: string; originalTime?: string; newDate: string; newTime?: string; classType: 'reprogramada' | 'cancelacion_hora'; comment: string; lostHours?: number }) => Promise<void>;
@@ -812,8 +813,8 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
 
   // AprobaciÃ³n manual de una clase puntual: persiste en finance_manual_approvals
   // y actualiza el estado local para que el cÃ¡lculo se recompute al instante.
-  async function approveClass(teacherId: string, studentName: string, date: string, reason: string, approvedBy?: string) {
-    const approval = await dbAddManualApproval(teacherId, studentName, date, approvedBy || 'admin', reason);
+  async function approveClass(teacherId: string, studentName: string, date: string, reason: string, approvedBy?: string, note?: string) {
+    const approval = await dbAddManualApproval(teacherId, studentName, date, approvedBy || 'admin', reason, note);
     setManualApprovals(prev => {
       const dup = prev.some(m => m.teacherId === teacherId && m.studentName === studentName && m.classDate === date);
       return dup ? prev : [...prev, approval];
@@ -824,8 +825,8 @@ export function TeachersProvider({ children }: { children: ReactNode }) {
     await approveClass(teacherId, studentName, date, 'a_revisar_aprobado', approvedBy);
   }
 
-  async function approveExceedLimitClass(teacherId: string, studentName: string, date: string, approvedBy?: string) {
-    await approveClass(teacherId, studentName, date, 'excede_limite_aprobado', approvedBy);
+  async function approveExceedLimitClass(teacherId: string, studentName: string, date: string, approvedBy?: string, note?: string) {
+    await approveClass(teacherId, studentName, date, 'excede_limite_aprobado', approvedBy, note);
   }
 
   // Cambio de profesor (punto 1): delega en la BD y refresca todo el estado

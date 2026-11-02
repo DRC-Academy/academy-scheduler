@@ -4567,7 +4567,19 @@ export function findDuplicateTeacherAssignments(assignments: Assignment[]): Dupl
 
 // ── FINANCE: APROBACIONES MANUALES ────────────────────────────────────────────
 
+// Separador del motivo cuando la columna `note` todavía no existe (antes de
+// correr supabase-manual-approval-note.sql): se guarda en `reason` como
+// "excede_limite_aprobado: <motivo>" para no perderlo, y se separa al leer.
+const APPROVAL_NOTE_SEP = ': ';
+
 function mapManualApproval(row: any): import('@/types').FinanceManualApproval {
+  let reason: string | undefined = row.reason ?? undefined;
+  let note: string | undefined = row.note ?? undefined;
+  if (!note && reason && reason.includes(APPROVAL_NOTE_SEP)) {
+    const i = reason.indexOf(APPROVAL_NOTE_SEP);
+    note = reason.slice(i + APPROVAL_NOTE_SEP.length);
+    reason = reason.slice(0, i);
+  }
   return {
     id:          row.id,
     teacherId:   row.teacher_id,
@@ -4575,7 +4587,7 @@ function mapManualApproval(row: any): import('@/types').FinanceManualApproval {
     classDate:   row.class_date,
     approvedBy:  row.approved_by,
     approvedAt:  row.approved_at,
-    reason:      row.reason ?? undefined,
+    reason, note,
   };
 }
 
@@ -4586,21 +4598,32 @@ export async function dbGetManualApprovals(): Promise<import('@/types').FinanceM
 }
 
 // Aprueba manualmente una clase puntual (a_revisar o excede_limite → pagable).
+// `note` = motivo escrito por el admin ("Pagar igualmente" lo exige).
 export async function dbAddManualApproval(
-  teacherId: string, studentName: string, classDate: string, approvedBy: string, reason: string,
+  teacherId: string, studentName: string, classDate: string, approvedBy: string, reason: string, note?: string,
 ): Promise<import('@/types').FinanceManualApproval> {
   const id        = `fma_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   const approvedAt = new Date().toISOString();
-  await supabase.from('finance_manual_approvals').insert({
+  const base = {
     id,
     teacher_id:   teacherId,
     student_name: studentName,
     class_date:   classDate,
     approved_by:  approvedBy,
     approved_at:  approvedAt,
-    reason,
-  });
-  return { id, teacherId, studentName, classDate, approvedBy, approvedAt, reason };
+  };
+  const cleanNote = note?.trim() || undefined;
+  let { error } = await supabase.from('finance_manual_approvals')
+    .insert(cleanNote ? { ...base, reason, note: cleanNote } : { ...base, reason });
+  // Sin la columna `note` (SQL sin correr): el motivo va dentro de `reason`.
+  if (error && cleanNote && /note/i.test(error.message ?? '')) {
+    ({ error } = await supabase.from('finance_manual_approvals')
+      .insert({ ...base, reason: `${reason}${APPROVAL_NOTE_SEP}${cleanNote}` }));
+  }
+  // Antes el error se ignoraba y la pantalla daba la clase por aprobada aunque
+  // la fila no se hubiera guardado: al recargar, la clase volvía a retenerse.
+  if (error) throw new Error(error.message || 'No se pudo guardar la aprobación');
+  return { id, teacherId, studentName, classDate, approvedBy, approvedAt, reason, note: cleanNote };
 }
 
 // Adjunta una captura a una clase puntual (fecha+alumno). Si ya existe un

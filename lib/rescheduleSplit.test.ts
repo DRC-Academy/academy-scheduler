@@ -375,10 +375,10 @@ describe('reprogramar 2 h en dos días — finanzas y cupo salen solos', () => {
     expect(finanzas.montoPagable).toBe(20);
   });
 
-  it('ninguna de las dos gasta cupo del mes (cupoUnits 0)', () => {
+  it('las dos recuperaciones pagables gastan cupo del mes (regla del 02/11/2026)', () => {
     const cupo = finanzas.studentQuota.find(q => q.studentName === ALUMNO);
-    // 9 es el tope de un alumno de 2 h/semana; las dos recuperaciones no lo tocan.
-    expect(cupo?.used).toBe(0);
+    // La original reprogramada no consume; las dos horas que la reponen sí.
+    expect(cupo?.used).toBe(2);
   });
 
   it('la clase original NO genera fila pagable: está reprogramada', () => {
@@ -413,8 +413,8 @@ describe('reprogramar 2 h en dos días — finanzas y cupo salen solos', () => {
     // La clase perdida por el alumno se cobra igual y consume su cupo entero.
     expect(falta?.classType).toBe('falta_sin_aviso');
     const cupo = f.studentQuota.find(q => q.studentName === ALUMNO);
-    expect(cupo?.used).toBe(1);
-    // La primera hora sigue siendo una recuperación pagable que no gasta cupo.
+    expect(cupo?.used).toBe(2);
+    // La primera hora sigue siendo una recuperación pagable (y también consume).
     expect(f.rows.find(x => x.date === '2026-09-17')?.recoveryUnits).toBe(1);
   });
 });

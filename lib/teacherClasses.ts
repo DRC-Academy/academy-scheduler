@@ -338,8 +338,8 @@ export function recoveryHoursOn(
  * del alumno ese día que están en el tramo [startHour, endHour).
  *
  * Es lo que convierte "una sesión de 2h" en "1h normal + 1h de recuperación":
- * `units` es cuántas de las horas cobradas son recuperación (y por tanto NO
- * consumen cupo del mes) y `dates` las clases perdidas que saldan.
+ * `units` es cuántas de las horas cobradas son recuperación y `dates` las
+ * clases perdidas que reponen. (Desde el 02/11/2026 consumen cupo igual.)
  */
 export function recoveryPartOfSession(
   occ: GridOccupancy | undefined, studentName: string, dateIso: string,
@@ -418,9 +418,9 @@ export interface TeacherSession extends TeacherClass {
    * `billingUnits` en una sesión que es toda recuperación, y 1 en el caso mixto
    * (1h normal + 1h de recuperación seguidas).
    *
-   * El profesor cobra las `billingUnits` completas —dio las dos horas—, pero el
-   * cupo mensual del alumno solo consume `billingUnits - recoveryUnits`: la parte
-   * de recuperación salda una clase que ya se había perdido.
+   * Informativo: el profesor cobra las `billingUnits` completas y, desde el
+   * 02/11/2026, el cupo del alumno también las consume todas (lib/finance
+   * consumesQuota). La parte de recuperación solo dice qué clase perdida repone.
    */
   recoveryUnits: number;
   /** Fechas de las clases PERDIDAS que salda esta sesión ('YYYY-MM-DD'). */

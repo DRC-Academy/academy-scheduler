@@ -12,9 +12,9 @@ export interface TimeSlot {
  * Una celda 'bloqueado' ("En recuperación") del calendario, resuelta a la fecha
  * real que le toca (lunes de `weekDate` + día de la key).
  *
- * `recoveryFor` es la fecha de la clase PERDIDA que esta hora salda. Es el dato
- * que hace que la recuperación no consuma cupo del mes del alumno: no gasta una
- * clase nueva, salda una que ya se había perdido.
+ * `recoveryFor` es la fecha de la clase PERDIDA que esta hora repone. Desde el
+ * 02/11/2026 la recuperación consume cupo del mes en que se da, como toda clase
+ * pagable; esta fecha solo sirve para decir qué clase repone.
  */
 export interface RecoveryCell {
   studentName: string;
@@ -544,6 +544,8 @@ export interface FinanceManualApproval {
   approvedBy: string;
   approvedAt: string;
   reason?: string;         // 'a_revisar_aprobado' | 'excede_limite_aprobado'
+  /** Motivo escrito por el admin (obligatorio en "Pagar igualmente"). */
+  note?: string;
 }
 
 // Pago mensual liquidado/pendiente por profesor. Cuando status='paid' el mes

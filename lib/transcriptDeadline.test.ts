@@ -313,7 +313,7 @@ describe('calculateTeacherFinance con el plazo', () => {
     expect(r.totalVencidas).toBe(0);
   });
 
-  it('sin transcript y pasado el plazo → vencida: no suma al total pero sí al cupo', () => {
+  it('sin transcript y pasado el plazo → vencida: no suma al total ni al cupo', () => {
     const r = calc([log({})], [], madrid('2026-09-30', 12));
     expect(r.rows[0].status).toBe('vencida');
     expect(r.rows[0].joinLogId).toBe('j1');
@@ -322,7 +322,8 @@ describe('calculateTeacherFinance con el plazo', () => {
     expect(r.totalVencidas).toBe(1);
     expect(r.montoVencidas).toBe(10);
     expect(r.totalARevisar).toBe(0);
-    expect(r.studentQuota[0].used).toBe(1);
+    // Desde el 02/11/2026 solo consume cupo lo pagable: la vencida no.
+    expect(r.studentQuota[0].used).toBe(0);
   });
 
   it('con transcript validado → pagable aunque se haya subido tarde', () => {

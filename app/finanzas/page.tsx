@@ -86,12 +86,16 @@ function approvalBy(approvals: FinanceManualApproval[], teacherId: string, stude
   const a = findApproval(approvals, teacherId, studentName, date);
   return a?.approvedBy ? ` · ${a.approvedBy}` : '';
 }
+function approvalNote(approvals: FinanceManualApproval[], teacherId: string, studentName: string, date: string): string {
+  const n = findApproval(approvals, teacherId, studentName, date)?.note;
+  return n ? ` · Motivo: ${n}` : '';
+}
 function approvalTrace(approvals: FinanceManualApproval[], teacherId: string, studentName: string, date: string): string {
   const a = findApproval(approvals, teacherId, studentName, date);
   if (!a) return 'Aprobada manualmente por el equipo';
   const cuando = (a.approvedAt ?? '').replace('T', ' ').slice(0, 16);
-  const motivo = a.reason === 'excede_limite_aprobado' ? 'incluida pese a exceder el límite' : 'pagada sin transcript';
-  return `${motivo} — ${a.approvedBy || 'sin registrar'}${cuando ? ` el ${cuando}` : ''}`;
+  const motivo = (a.reason ?? '').startsWith('excede_limite_aprobado') ? 'pagada pese a exceder el cupo' : 'pagada sin transcript';
+  return `${motivo} — ${a.approvedBy || 'sin registrar'}${cuando ? ` el ${cuando}` : ''}${a.note ? ` · Motivo: ${a.note}` : ''}`;
 }
 
 /**
@@ -413,7 +417,7 @@ function EmbudoCompacto({ funnel, claimAmount }: { funnel: ClassFunnel; claimAmo
 
 function FilaClase({ r, result, approvals, onApproveReview, onApproveExceed, onRevertAbsence, onReopenDeadline }: {
   r: ClassFinanceRow; result: TeacherFinanceResult; approvals: FinanceManualApproval[];
-  onApproveReview: (date: string) => void; onApproveExceed: (date: string) => void; onRevertAbsence: (row: ClassFinanceRow) => void;
+  onApproveReview: (date: string) => void; onApproveExceed: (row: ClassFinanceRow) => void; onRevertAbsence: (row: ClassFinanceRow) => void;
   onReopenDeadline: (row: ClassFinanceRow) => void;
 }) {
   const st = financeStatusBadge(r.status);
@@ -426,7 +430,7 @@ function FilaClase({ r, result, approvals, onApproveReview, onApproveExceed, onR
   const acc = accesoDeLaClase(r);
   const tipo = [ct && plainPill(ct.label), txNote, dur?.label].filter(Boolean).join(' · ');
   const notas = [
-    r.manuallyApproved ? `Aprobada por el equipo${approvalBy(approvals, result.teacherId, r.studentName, r.date)}` : null,
+    r.manuallyApproved ? `Aprobada por el equipo${approvalBy(approvals, result.teacherId, r.studentName, r.date)}${approvalNote(approvals, result.teacherId, r.studentName, r.date)}` : null,
     lostClassBreakdownLabel(r), recoveryCreditLabel(r),
     // Plazo del transcript: cuenta regresiva en la pendiente, y constancia de la
     // reapertura cuando la hubo (quién y hasta cuándo).
@@ -459,7 +463,7 @@ function FilaClase({ r, result, approvals, onApproveReview, onApproveExceed, onR
           <button type="button" className="adm-btn adm-btn-ghost fz-btn-sm" onClick={() => onApproveReview(r.date)}>Pagar sin transcript</button>
         )}
         {editable && (r.status === 'excede_limite' || r.status === 'excede_limite_tipo') && (
-          <button type="button" className="adm-btn adm-btn-ghost fz-btn-sm" onClick={() => onApproveExceed(r.date)}>Incluir igual</button>
+          <button type="button" className="adm-btn adm-btn-ghost fz-btn-sm" onClick={() => onApproveExceed(r)}>Pagar igualmente</button>
         )}
       </span>
       {notas.length > 0 && (
@@ -472,7 +476,7 @@ function FilaClase({ r, result, approvals, onApproveReview, onApproveExceed, onR
 function AlumnoFila({ result, name, rows, assignments, approvals, abierto, onToggle, onApproveReview, onApproveExceed, onRevertAbsence, onReopenDeadline }: {
   result: TeacherFinanceResult; name: string; rows: ClassFinanceRow[]; assignments: Assignment[]; approvals: FinanceManualApproval[];
   abierto: boolean; onToggle: () => void;
-  onApproveReview: (studentName: string, date: string) => void; onApproveExceed: (studentName: string, date: string) => void; onRevertAbsence: (row: ClassFinanceRow) => void;
+  onApproveReview: (studentName: string, date: string) => void; onApproveExceed: (row: ClassFinanceRow) => void; onRevertAbsence: (row: ClassFinanceRow) => void;
   onReopenDeadline: (row: ClassFinanceRow) => void;
 }) {
   // Emparejamiento TOLERANTE, como en el resto del código.
@@ -486,14 +490,19 @@ function AlumnoFila({ result, name, rows, assignments, approvals, abierto, onTog
   const excTipo  = rows.filter(r => r.status === 'excede_limite_tipo');
   const quota = studentQuotaOf(result, name);
   const lleno = quota?.limit != null && quota.used >= quota.limit;
+  // Aviso para el equipo (esta pantalla es solo admin): el alumno consumió más
+  // de lo contratado o tiene clases retenidas por exceder el cupo. Las horas que
+  // "lleva" = las pagables (cupo consumido) + las retenidas: las dio todas.
+  const horasLlevadas = (quota?.used ?? 0) + units(excede);
+  const avisoCupo = quota?.limit != null && (quota.used > quota.limit || excede.length > 0);
   const ultimaSub = [...rows].reverse().find(r => r.subscriptionStatus);
   const subOk = isActiveWooStatus(ultimaSub?.subscriptionStatus);
   const plan = planContratado(rows[0]);
   const problemas: Array<{ n: number; amount: number; txt: string; det: string }> = [];
   if (revisar.length > 0) problemas.push({ n: units(revisar), amount: euros(revisar), txt: 'sin transcript', det: 'Las dio y todavía no subió el texto. Pasan a pagables solas en cuanto lo suba, o se pagan a mano desde la fila.' });
   if (vencidas.length > 0) problemas.push({ n: units(vencidas), amount: euros(vencidas), txt: 'con el plazo vencido', det: 'Pasaron 24 h desde el final de la clase sin transcript: no se validan ni se pagan. Desde la fila se puede reabrir el plazo (24 h más, con motivo) o pagarla sin transcript.' });
-  if (excede.length > 0) problemas.push({ n: units(excede), amount: euros(excede), txt: 'fuera del cupo del mes', det: `Superan las ${quota?.limit ?? '—'} que incluye su plan. Cada una se puede incluir igual desde la fila.` });
-  if (excTipo.length > 0) problemas.push({ n: units(excTipo), amount: euros(excTipo), txt: 'faltas o cancelaciones de más', det: 'Superan las 2 cobrables de ese tipo en el mes. Cada una se puede incluir igual desde la fila.' });
+  if (excede.length > 0) problemas.push({ n: units(excede), amount: euros(excede), txt: 'fuera del cupo del mes', det: `Superan las ${quota?.limit ?? '—'} que incluye su plan. Cada una se puede pagar igualmente desde la fila, con motivo.` });
+  if (excTipo.length > 0) problemas.push({ n: units(excTipo), amount: euros(excTipo), txt: 'faltas o cancelaciones de más', det: 'Superan las 2 cobrables de ese tipo en el mes. Cada una se puede pagar igualmente desde la fila, con motivo.' });
 
   return (
     <div className={`fz-al${abierto ? ' open' : ''}`}>
@@ -532,6 +541,11 @@ function AlumnoFila({ result, name, rows, assignments, approvals, abierto, onTog
               </>
             )}
           </div>
+          {avisoCupo && (
+            <div role="note" style={{ margin: '0 0 10px', padding: '9px 13px', borderRadius: 10, background: 'rgba(249,115,22,0.10)', border: '1px solid rgba(234,88,12,0.45)', color: '#9a3412', fontSize: 13.5, fontWeight: 600, lineHeight: 1.45 }}>
+              Este alumno lleva {horasLlevadas} {horasLlevadas === 1 ? 'hora' : 'horas'} de {quota!.limit} contratadas este mes. Revisar con el alumno.
+            </div>
+          )}
           {problemas.map((p, k) => (
             <div className="fz-aviso" key={k}>
               <span className="n">{p.n}</span>
@@ -542,7 +556,7 @@ function AlumnoFila({ result, name, rows, assignments, approvals, abierto, onTog
             <div className="fz-cls head" aria-hidden><span>Fecha</span><span>Hora</span><span>Estado</span><span>Tipo y notas</span><span style={{ textAlign: 'right' }}>Importe</span><span /></div>
             {rows.map((r, i) => (
               <FilaClase key={i} r={r} result={result} approvals={approvals}
-                onApproveReview={date => onApproveReview(name, date)} onApproveExceed={date => onApproveExceed(name, date)} onRevertAbsence={onRevertAbsence}
+                onApproveReview={date => onApproveReview(name, date)} onApproveExceed={onApproveExceed} onRevertAbsence={onRevertAbsence}
                 onReopenDeadline={onReopenDeadline} />
             ))}
           </div>
@@ -557,7 +571,7 @@ function DetalleProfesor({ r, teacher, extras, penalties, funnelData, monthYear,
   funnelData: ReturnType<typeof useFunnelData>; monthYear: string; assignments: Assignment[]; approvals: FinanceManualApproval[];
   reciente: boolean; ocupado: boolean;
   onVolver: () => void; onPagar: () => void; onDeshacer: () => void; onRevertPenalty: (p: ScoringEvent) => void;
-  onApproveReview: (studentName: string, date: string) => void; onApproveExceed: (studentName: string, date: string) => void; onRevertAbsence: (row: ClassFinanceRow) => void;
+  onApproveReview: (studentName: string, date: string) => void; onApproveExceed: (row: ClassFinanceRow) => void; onRevertAbsence: (row: ClassFinanceRow) => void;
   onReopenDeadline: (row: ClassFinanceRow) => void;
 }) {
   const { classJoinLogs, classRecords, classAnalyses, students, financeRates } = useTeachers();
@@ -709,6 +723,10 @@ function FinanceTab({ onHow }: { onHow: () => void }) {
   const [reopenModal, setReopenModal] = useState<{ row: ClassFinanceRow; teacherId: string; teacherName: string } | null>(null);
   const [reopenReason, setReopenReason] = useState('');
   const [reopening, setReopening] = useState(false);
+  // "Pagar igualmente" una clase retenida por exceder el cupo: motivo obligatorio.
+  const [exceedModal, setExceedModal] = useState<{ row: ClassFinanceRow; teacherId: string; teacherName: string } | null>(null);
+  const [exceedReason, setExceedReason] = useState('');
+  const [exceeding, setExceeding] = useState(false);
   // Reversión de una falta sin aviso del ALUMNO (otra cosa que la penalización).
   const [absenceModal, setAbsenceModal] = useState<{ row: ClassFinanceRow; teacherName: string } | null>(null);
   const [absenceError, setAbsenceError] = useState('');
@@ -734,6 +752,19 @@ function FinanceTab({ onHow }: { onHow: () => void }) {
       setAbsenceError((e as Error).message || 'No se pudo revertir la falta.');
     } finally {
       setRevertingAbsence(false);
+    }
+  }
+
+  async function handlePayExceed() {
+    if (!exceedModal || !exceedReason.trim()) return;
+    setExceeding(true);
+    try {
+      await approveExceedLimitClass(exceedModal.teacherId, exceedModal.row.studentName, exceedModal.row.date, approvedBy, exceedReason.trim());
+      setExceedModal(null); setExceedReason('');
+    } catch (e) {
+      setError(`No se pudo pagar la clase: ${(e as Error).message}`);
+    } finally {
+      setExceeding(false);
     }
   }
 
@@ -878,8 +909,8 @@ function FinanceTab({ onHow }: { onHow: () => void }) {
           reciente={!!reciente && reciente.teacherId === actual.teacherId && !reciente.deshecho} ocupado={ocupado !== null}
           onVolver={() => setAbierto(null)} onPagar={() => pagar(actual)} onDeshacer={() => pedirDeshacer(actual)}
           onRevertPenalty={p => { setRevertModal(p); setRevertReason(''); }}
-          onApproveReview={(student, date) => approveReviewClass(actual.teacherId, student, date, approvedBy)}
-          onApproveExceed={(student, date) => approveExceedLimitClass(actual.teacherId, student, date, approvedBy)}
+          onApproveReview={(student, date) => { approveReviewClass(actual.teacherId, student, date, approvedBy).catch(e => setError(`No se pudo aprobar: ${(e as Error).message}`)); }}
+          onApproveExceed={row => { setExceedModal({ row, teacherId: actual.teacherId, teacherName: actual.teacherName }); setExceedReason(''); }}
           onRevertAbsence={row => { setAbsenceModal({ row, teacherName: actual.teacherName }); setAbsenceError(''); }}
           onReopenDeadline={row => { setReopenModal({ row, teacherId: actual.teacherId, teacherName: actual.teacherName }); setReopenReason(''); }}
         />
@@ -985,6 +1016,24 @@ function FinanceTab({ onHow }: { onHow: () => void }) {
           <div className="fz-mod-b">
             <button type="button" className="adm-btn adm-btn-ghost" onClick={() => setAbsenceModal(null)} disabled={revertingAbsence}>Cancelar</button>
             <button type="button" className="adm-btn adm-btn-primary" onClick={handleRevertAbsence} disabled={revertingAbsence}>{revertingAbsence ? 'Revirtiendo…' : 'Confirmar reversión'}</button>
+          </div>
+        </Modal>
+      )}
+
+      {/* "Pagar igualmente": clase retenida por exceder el cupo (o la 3.ª perdida del mes). */}
+      {exceedModal && (
+        <Modal onClose={() => { if (!exceeding) setExceedModal(null); }}>
+          <div className="fz-mod-t">Pagar igualmente</div>
+          <p className="fz-mod-s">
+            La clase de <b>{exceedModal.row.studentName}</b> del {finDateShort(exceedModal.row.date)}{exceedModal.row.hour ? ` a las ${rowHoursLabel(exceedModal.row)}` : ''} ({exceedModal.teacherName})
+            está retenida: {exceedModal.row.status === 'excede_limite_tipo' ? 'supera las 2 clases perdidas cobrables del mes' : 'supera el cupo que incluye el plan del alumno'}.
+            Al pagarla, <b>{exceedModal.teacherName}</b> cobra <b>{eur(exceedModal.row.rate * exceedModal.row.billingUnits)}</b> por ella. Queda registrado quién la aprobó, cuándo y por qué.
+          </p>
+          <label className="fz-mod-l">Motivo (obligatorio)</label>
+          <textarea value={exceedReason} onChange={e => setExceedReason(e.target.value)} rows={3} autoFocus placeholder="Ej: recuperación de una clase que canceló el profesor" className="fz-mod-ta" />
+          <div className="fz-mod-b">
+            <button type="button" className="adm-btn adm-btn-ghost" onClick={() => setExceedModal(null)} disabled={exceeding}>Cancelar</button>
+            <button type="button" className="adm-btn adm-btn-primary" onClick={handlePayExceed} disabled={exceeding || !exceedReason.trim()}>{exceeding ? 'Guardando…' : 'Pagar igualmente'}</button>
           </div>
         </Modal>
       )}

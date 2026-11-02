@@ -54,7 +54,7 @@ Parámetros útiles en todos: `?dry=1` (simula sin escribir ni enviar). En `foll
 
 ### Plazo de 24 h del transcript
 
-Desde el **22/09/2026** (`TRANSCRIPT_DEADLINE_START_DATE` en `lib/transcriptDeadline.ts`) el profesor tiene 24 h desde el **fin** de la clase (hora de España) para subir el transcript. Pasado el plazo la clase queda **vencida**: no se valida ni se paga, pero sí consume cupo del alumno. El estado se calcula al vuelo (no hay cron que lo marque); lo único que se guarda es la reapertura del admin (botón «Reabrir plazo» en Finanzas, con motivo).
+Desde el **22/09/2026** (`TRANSCRIPT_DEADLINE_START_DATE` en `lib/transcriptDeadline.ts`) el profesor tiene 24 h desde el **fin** de la clase (hora de España) para subir el transcript. Pasado el plazo la clase queda **vencida**: no se valida ni se paga, y tampoco consume cupo del alumno (desde el 02/11/2026 solo consume cupo lo pagable). El estado se calcula al vuelo (no hay cron que lo marque); lo único que se guarda es la reapertura del admin (botón «Reabrir plazo» en Finanzas, con motivo).
 
 **Avisos con más frecuencia que una vez al día** — el endpoint `/api/cron/transcripts-vencidos` (GET o POST, mismo secreto) recorre las clases y deja las notificaciones de campanita que falten. Es idempotente (id determinista por clase y tipo), así que se puede llamar cada hora. No está en `vercel.json`; para hacerlo con Zapier:
 

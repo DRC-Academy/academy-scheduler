@@ -31,8 +31,10 @@ import { cellKey, getSpainParts, spainWallClockToEpoch } from '@/components/Visu
 import { calcRegisteredClassNumber, dbDeleteClassRecordsByIds } from '@/lib/db';
 import {
   classCategoryBadge, transcriptStateOf, transcriptNeedsTeacher, LOST_CLASS_MONTHLY_CAP,
+  calculateTeacherFinance, studentQuotaOf, quotaWouldExceed,
   type ClassTranscriptRef,
 } from '@/lib/finance';
+import { useTeachers } from '@/lib/TeachersContext';
 // Plazo de 24 h del transcript: fuente única para esta vista, la ficha,
 // Asistencias y Finanzas. Acá se pinta la cuenta regresiva y la vencida.
 import {
@@ -661,6 +663,32 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
   const viewIso  = addDaysIso(todayIso, dayOffset);
   const isToday  = dayOffset === 0;
 
+  // ¿El alumno ya llenó su cupo del mes? Se calcula al pulsar "Ingresar a clase"
+  // (no en cada render) con las mismas entradas que /mis-clases y /finanzas.
+  const finanzasCtx = useTeachers();
+  function quotaFullForClass(studentName: string, date: string, hours: number): boolean {
+    try {
+      const monthYear = date.slice(0, 7);
+      const fin = calculateTeacherFinance({
+        teacherId: teacher.id, teacherName: teacher.name, monthYear,
+        assignments: myAssignments, joinLogs: classJoinLogs, classRecords, classAnalyses,
+        rates: finanzasCtx.financeRates, scoringEvents: finanzasCtx.scoringEvents, students,
+        manualApprovals: finanzasCtx.manualApprovals, teacherBonuses: finanzasCtx.teacherBonuses,
+        payment: finanzasCtx.financePayments.find(p => p.teacherId === teacher.id && p.monthYear === monthYear) ?? null,
+        gridOccupancy,
+      });
+      // Si ESTA clase ya cuenta (segundo clic sobre una clase ya pagable), ya
+      // está dentro del cupo: no es una clase de más.
+      const k = studentName.trim().toLowerCase();
+      if (fin.rows.some(r => r.date === date && r.status === 'pagable' && r.studentName.trim().toLowerCase() === k)) return false;
+      return quotaWouldExceed(studentQuotaOf(fin, studentName), hours);
+    } catch (err) {
+      // El aviso es informativo: si el cálculo falla, el ingreso sigue como siempre.
+      console.error('[cupo] No se pudo calcular el cupo del alumno:', err);
+      return false;
+    }
+  }
+
   // Flujo "Ingresar a clase" (fuente única, compartida con /clases): enlace de
   // Meet → disclaimer de hito → verificación de suscripción → registro del acceso.
   // Se le pasa el cache de suscripciones que este tab ya precargó para los badges,
@@ -678,6 +706,9 @@ export function MisClasesPanel({ teacher, myAssignments, students, classRecords,
     riskFor: name => briefingFor(riskBriefings, name),
     // Pago pendiente: el mismo dato con el que la tarjeta pinta el candado.
     paymentHoldFor: c => onHoldFor(c, c.date),
+    // Cupo del mes lleno: el MISMO cálculo que Finanzas (consumesQuota →
+    // studentQuota), para el mes de la clase. Solo avisa, no bloquea.
+    quotaFullFor: c => quotaFullForClass(c.studentName, c.date, c.durationHours ?? 1),
   });
   const subEmailForAssignment = join.emailFor;
 

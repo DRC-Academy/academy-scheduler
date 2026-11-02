@@ -556,8 +556,8 @@ export async function acceptStudentProposal(id: string, teacherId: string, index
  * falla, se deshace la celda.
  *
  * La constancia lleva recovery_for_date y la celda recoveryFor: Finanzas la
- * cuenta como recuperación, que se paga si se da pero NO gasta cupo del alumno
- * (lib/finance.ts descuenta billingUnits − recoveryUnits).
+ * cuenta como recuperación: se paga si se da y, como toda clase pagable,
+ * consume cupo del alumno en el mes en que se da (lib/finance.consumesQuota).
  */
 async function confirmSlot(
   rec: RecoveryRow, slot: Slot,
@@ -638,7 +638,7 @@ async function confirmSlot(
     throw new RecoveryError(500, 'error', `No se pudo guardar el calendario: ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  // 3) La constancia de la recuperación (lo que paga; no gasta cupo del alumno).
+  // 3) La constancia de la recuperación (lo que paga; consume cupo cuando se da y es pagable).
   const recordId = nuevoId('cr');
   const { error: recErr } = await supabase.from('class_records').insert({
     id: recordId, teacher_id: rec.teacherId, teacher_name: rec.teacherName, student_name: rec.studentName,

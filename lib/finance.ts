@@ -207,8 +207,9 @@ export const LOST_CLASS_CAP_MESSAGE =
  *                          de `financeStatusBadge`.)
  *   'vencida'            → clic SIN transcript válido y el PLAZO de 24 h ya pasó
  *                          (ver lib/transcriptDeadline). No se valida ni se paga,
- *                          pero SÍ consume cupo del alumno: la clase se dio. Solo
- *                          sale de aquí si el admin reabre el plazo o la aprueba.
+ *                          y por eso tampoco consume cupo del alumno (desde el
+ *                          02/11/2026 solo consume lo pagable). Solo sale de aquí
+ *                          si el admin reabre el plazo o la aprueba.
  *                          Es una fila propia del embudo, separada de 'a_revisar'.
  *   'excede_limite'      → pasa el límite mensual del plan del alumno.
  *   'excede_limite_tipo' → falta/cancelación más allá de las 2 cobrables por tipo.
@@ -254,10 +255,10 @@ export interface ClassFinanceRow {
    * Cuántas de las `billingUnits` son de RECUPERACIÓN (salen de las celdas
    * 'bloqueado' del calendario que caen dentro de la sesión).
    *
-   * El profesor cobra las `billingUnits` completas —dio las horas—, pero el CUPO
-   * MENSUAL del alumno solo consume `billingUnits - recoveryUnits`: la parte de
-   * recuperación salda una clase que ya se había perdido, no gasta una del mes.
-   * Un bloque de 2h "normal + recuperación" paga 2 y consume 1.
+   * Es informativo (texto de la fila, "Fuera de calendario"): ni el pago ni el
+   * cupo lo usan. Desde el 02/11/2026 la recuperación consume cupo como
+   * cualquier clase pagable, así que un bloque de 2h "normal + recuperación"
+   * paga 2 y consume 2.
    */
   recoveryUnits: number;
   /** Fechas de las clases PERDIDAS que salda esta fila ('YYYY-MM-DD'). */
@@ -365,9 +366,11 @@ export interface TeacherFinanceResult {
  * `limit: null` = sin cupo. Es el caso del ex-alumno: ya no tiene assignment de
  * la que sacar las horas semanales, así que sus clases nunca exceden.
  *
- * `used` cuenta en UNIDADES y NO incluye las horas de recuperación (reponen una
- * clase perdida, no gastan una de este mes) ni las que quedaron fuera por
- * exceder. Puede superar a `limit` cuando el equipo aprobó clases a mano.
+ * `used` cuenta en UNIDADES y es exactamente la suma de las clases PAGABLES del
+ * alumno en el mes (recuperaciones incluidas; ver `consumesQuota`). No incluye
+ * las que quedaron retenidas por exceder. Puede superar a `limit` cuando el
+ * equipo aprobó clases a mano o por las clases perdidas cobradas, que nunca se
+ * retienen.
  */
 export interface StudentQuota {
   /** Nombre normalizado (minúsculas, sin espacios sobrantes). Para buscar. */
@@ -389,6 +392,34 @@ export function studentQuotaOf(
 ): StudentQuota | null {
   const k = nkey(studentName);
   return result.studentQuota.find(q => q.studentKey === k) ?? null;
+}
+
+/**
+ * FUENTE ÚNICA: ¿esta clase consume cupo del alumno? Sí si y solo si es
+ * PAGABLE — normal, recuperación, falta cobrada o aprobada a mano. La pendiente
+ * de transcript, la vencida, la retenida y la perdida que no se cobró, no.
+ * Ver la regla en `calculateTeacherFinance`.
+ */
+export function consumesQuota(row: Pick<ClassFinanceRow, 'status'>): boolean {
+  return row.status === 'pagable';
+}
+
+/**
+ * Cuántas clases del cupo consume la fila: todas sus horas cobradas. Una sesión
+ * de 2h consume 2 aunque una sea de recuperación. 0 si no consume.
+ */
+export function quotaUnitsOf(row: Pick<ClassFinanceRow, 'status' | 'billingUnits'>): number {
+  return consumesQuota(row) ? row.billingUnits : 0;
+}
+
+/**
+ * ¿Dar `units` horas más a este alumno lo deja fuera del cupo? Es la pregunta
+ * del aviso de "Ingresar a clase": con el cupo YA consumido (`used`, que sale de
+ * `consumesQuota`) la próxima clase no entra y quedaría retenida. Sin cupo
+ * (ex-alumno, `limit: null`) o sin datos, nunca avisa.
+ */
+export function quotaWouldExceed(quota: Pick<StudentQuota, 'used' | 'limit'> | null | undefined, units = 1): boolean {
+  return !!quota && quota.limit != null && quota.used + Math.max(1, units) > quota.limit;
 }
 
 function isoDate(d: Date): string {
@@ -911,6 +942,17 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     }
     // Nunca más horas de recuperación que horas cobradas.
     recoveryUnits = Math.min(recoveryUnits, durationHours);
+    // La fecha de la clase perdida puede estar en OTRO registro del mismo día:
+    // al pegar el transcript de una recuperación se crea un segundo
+    // class_record 'recuperacion' sin recovery_for_date, y si la fila se ancla a
+    // ese la fecha se perdía ("salda una clase perdida" sin fecha; Patricia
+    // Cebada, 22/10/2026). Solo afecta al texto: ni pago ni cupo usan la fecha.
+    if (recoveryUnits > 0 && recoveryForDates.length === 0) {
+      recoveryForDates = [...new Set(myRecords
+        .filter(r => r.classType === 'recuperacion' && r.classDate === c.date
+          && !!r.recoveryForDate && nkey(r.studentName) === nkey(c.studentName))
+        .map(r => r.recoveryForDate as string))].sort();
+    }
 
     // Estado de suscripción: prioriza el del join log (momento real de la clase).
     const subAtJoin = log?.subscriptionStatus;
@@ -973,57 +1015,41 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     limitByStudent.set(nkey(a.studentName), monthlyLimit(quotaWeeklyHours(a.weeklyHours ?? 0, wooProductOf.get(a.studentId))));
   }
 
-  // El límite mensual del plan lo consumen las clases normales, las de
-  // recuperación y las CLASES QUE EL ALUMNO PERDIÓ — faltas sin aviso y
-  // cancelaciones sobre la hora (ver `isStudentLostClass`): la hora se reservó,
-  // el profesor estuvo, y esa clase no se da ni se recupera, así que gasta una de
-  // las de su mes igual que si la hubiera dado (4 al mes, 1 perdida → le quedan 3).
+  // REGLA ÚNICA DEL CUPO (02/11/2026, manda sobre todas las anteriores):
   //
-  // La cancelación sobre la hora entró acá el 01/09/2026. Antes quedaba fuera del
-  // cupo y solo la limitaba su tope de 2 del historial, así que la barra "Clases
-  // del mes" no la contaba: Adrián Padilla (Victoria) canceló sobre la hora el
-  // 01/09 y su barra seguía diciendo "0 de 9". El alumno terminaba el mes con más
-  // clases de las que incluye su plan, que es justo lo que el cupo evita.
+  //   CONSUME CUPO TODA CLASE PAGABLE, Y SOLO LAS PAGABLES.
   //
-  // La clase VENCIDA (sin transcript en las 24 h) también consume cupo: la clase
-  // se dio, el alumno estuvo. Que el profesor no la cobre es asunto suyo, no del
-  // plan del alumno. Decisión de negocio del 16/09/2026.
+  // Si el profesor ve 8 clases pagables de un alumno, la barra "Cupo del mes"
+  // dice 8. Entran las normales con transcript, las RECUPERACIONES (consumen en
+  // el mes en que se dan, no en el de la clase perdida), las faltas sin aviso y
+  // cancelaciones sobre la hora cobradas y las aprobadas a mano. NO consumen: la
+  // pendiente de transcript (hasta que se valida), la vencida, la clase perdida
+  // que no se cobró (reprogramada, avisada, cancelada por el profesor, la 3.ª
+  // perdida del mes) — así la misma hora no se cuenta dos veces: la original no
+  // cobrada no gasta y su recuperación sí.
+  //
+  // Lo que antes era distinto: la recuperación no gastaba cupo (billingUnits −
+  // recoveryUnits) y la pendiente y la vencida sí. Las dos cosas hacían que la
+  // barra no coincidiera con las clases pagables (Patricia Cebada, oct/2026: la
+  // barra decía 5 de 9 con 7 clases pagables).
+  //
+  // Lo que no entra en el cupo queda RETENIDO ('excede_limite'): no se paga
+  // salvo que el equipo lo incluya a mano. Se recorre en orden de fecha, así que
+  // la clase que se pasa es siempre la última del mes.
   const countable = rows
-    .filter(r => (r.status === 'pagable' || r.status === 'a_revisar' || r.status === 'vencida')
-      && (r.classType === 'normal' || r.classType === 'recuperacion' || isStudentLostClass(r.classType)))
+    .filter(consumesQuota)
     .sort((x, y) => x.date.localeCompare(y.date) || x.studentName.localeCompare(y.studentName));
   // El límite se descuenta en UNIDADES, no en filas: una sesión de 2h consume 2
   // de las 9 del plan de 2h/semana. Las dos magnitudes están en horas
   // (monthlyLimit sale de weeklyHours, que es slots.length), así que la unidad
   // coincide. Una sesión que no entra entera queda 'excede_limite' completa: no
   // se parte en "una hora sí y otra no".
-  //
-  // LA RECUPERACIÓN NO GASTA CUPO DEL MES. Una hora de recuperación repone una
-  // clase que el alumno ya había perdido: salda una deuda vieja, no consume una
-  // de las de este mes. Por eso el cupo se descuenta con `billingUnits -
-  // recoveryUnits`:
-  //   · sesión normal de 1h      → consume 1 (2h → 2), como siempre;
-  //   · sesión mixta de 2h       → PAGA 2 y consume 1 (la hora normal);
-  //   · recuperación pura de 1h  → PAGA 1 y consume 0.
-  // Antes una clase perdida en julio y recuperada en agosto se comía una de las 5
-  // de agosto y la fila caía en 'excede_limite' — o sea, no se pagaba.
   const usedByStudent = new Map<string, number>();
   for (const row of countable) {
     const k = nkey(row.studentName);
     const limit = limitByStudent.has(k) ? limitByStudent.get(k)! : Infinity; // ex-alumnos: sin límite
     const used = usedByStudent.get(k) ?? 0;
-    // REGLA: la clase perdida por el alumno consume su cupo ENTERO, aunque cayera
-    // sobre una hora de recuperación. El descuento de `recoveryUnits` existe
-    // porque una recuperación repone una clase ya perdida y no gasta una del mes
-    // — pero si el alumno tampoco aparece a la recuperación (o la cancela sobre
-    // la hora), la clase se perdió otra vez y el crédito se consumió: no puede
-    // salirle gratis perderla dos veces seguidas.
-    //
-    // El caso: Cristian Díaz (Johny) faltó sin avisar el 17/08 a la recuperación
-    // de su clase del 12, y esa falta no le gastaba ninguna clase del mes.
-    const cupoUnits = isStudentLostClass(row.classType)
-      ? row.billingUnits
-      : Math.max(0, row.billingUnits - row.recoveryUnits);
+    const cupoUnits = quotaUnitsOf(row);
     // La clase perdida por el alumno CONSUME cupo pero nunca es la que se
     // retiene: el profesor estuvo ahí y el alumno no vino (o canceló sobre la
     // hora), así que se le paga igual. Dejarla caer por el tope hacía que la
@@ -1035,18 +1061,6 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
     // ('excede_limite_tipo'), que se aplica antes que esto — 2 al mes por alumno
     // entre faltas y cancelaciones sobre la hora.
     const puedeRetenerse = !row.manuallyApproved && !isStudentLostClass(row.classType);
-    // UNA FILA QUE NO CONSUME CUPO NUNCA LO EXCEDE. `cupoUnits === 0` es la
-    // recuperación pura: repone una clase que el alumno ya había perdido, así que
-    // no gasta ninguna de las de este mes. Sin este corte bastaba con que el
-    // contador YA estuviera por encima del límite para que `used + 0 > limit`
-    // fuese cierto y la recuperación cayera retenida — "excede el plan" dicho de
-    // una clase que no ocupa ningún hueco del plan.
-    //
-    // Solo se podía llegar ahí si el contador se pasaba del límite, cosa que
-    // únicamente hacen las clases perdidas por el alumno (que consumen cupo pero
-    // nunca se retienen). Lo destapó López Nahuel (Maribel): sus 2 cancelaciones
-    // sobre la hora lo dejaron en 7 de 5, y eso tiraba sus recuperaciones del
-    // 20/08 y el 24/08 — 12 € que el profesor sí trabajó.
     if (cupoUnits > 0 && used + cupoUnits > limit && puedeRetenerse) {
       row.status = 'excede_limite';
     } else {
@@ -1058,7 +1072,8 @@ export function calculateTeacherFinance(input: CalcInput): TeacherFinanceResult 
   // bucle de arriba ya usó para decidir qué fila pasaba a 'excede_limite', y se
   // exponen para que una pantalla pueda decir "3 de 9" sin volver a derivar el
   // límite desde weeklyHours por su cuenta (que es cómo dos vistas acaban
-  // discrepando sobre el mismo alumno).
+  // discrepando sobre el mismo alumno). Por construcción `used` es la suma de
+  // `billingUnits` de las filas del alumno que quedaron 'pagable'.
   const quota: StudentQuota[] = [...new Set(rows.map(r => nkey(r.studentName)))].map(k => ({
     studentKey: k,
     studentName: rows.find(r => nkey(r.studentName) === k)!.studentName,
@@ -1258,7 +1273,7 @@ export function sessionBreakdownLabel(row: ClassFinanceRow): string | null {
 //
 // Un bloque de 2 horas seguidas donde una hora es la clase normal del alumno y la
 // otra recupera una clase que había perdido. Se paga entero (2 × tarifa, un solo
-// transcript) pero solo consume UNA clase del cupo del mes. Estas dos funciones
+// transcript) y consume 2 del cupo, como cualquier clase pagable. Estas dos funciones
 // son la fuente única del texto: si el profesor y el admin leyeran frases
 // distintas sobre por qué esa clase paga doble, volveríamos a las consultas de
 // "¿por qué me pagaste 2 horas de una clase de 1?".
@@ -1273,7 +1288,7 @@ export function mixedSessionBadge(
 }
 
 /**
- * Qué clase perdida salda esta fila y qué efecto tiene en el cupo del alumno.
+ * Qué clase perdida repone esta fila (texto verde del desglose).
  * null cuando la fila no recupera nada.
  */
 export function recoveryCreditLabel(
@@ -1291,13 +1306,14 @@ export function recoveryCreditLabel(
     const qué = isStudentAbsence(row.classType) ? 'el alumno tampoco vino' : 'el alumno la canceló sobre la hora';
     return `Era la recuperación de la clase ${cual} y ${qué}: el crédito se consumió y esa clase ya no se repone.`;
   }
-  const qué = fechas.length
-    ? `salda la clase perdida del ${fechas.join(' y ')}`
-    : 'salda una clase perdida';
-  const cupo = rec >= (row.billingUnits ?? 1)
-    ? 'no consume ninguna clase del mes'
-    : `consume ${(row.billingUnits ?? 1) - rec} clase${(row.billingUnits ?? 1) - rec !== 1 ? 's' : ''} del mes en vez de ${row.billingUnits}`;
-  return `${rec}h de recuperación — ${qué}: ${cupo}.`;
+  // Desde el 02/11/2026 la recuperación consume cupo como cualquier clase
+  // pagable, así que el texto ya no habla del cupo: solo dice qué repone.
+  const qué = fechas.length > 1
+    ? `repone las clases perdidas del ${fechas.join(' y del ')}`
+    : fechas.length === 1
+      ? `repone la clase perdida del ${fechas[0]}`
+      : 'repone una clase perdida (sin fecha registrada)';
+  return `${rec}h de recuperación — ${qué}`;
 }
 
 /** 'YYYY-MM-DD' → '12/07/2026'. */

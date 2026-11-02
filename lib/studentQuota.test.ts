@@ -100,7 +100,7 @@ describe('el cupo del alumno que ve el admin', () => {
     expect(fin.rows.filter(r => r.status === 'excede_limite')).toHaveLength(3);
   });
 
-  it('la recuperación NO gasta cupo: repone una clase vieja', () => {
+  it('la recuperación pagable SÍ gasta cupo (regla del 02/11/2026)', () => {
     const fin = armar({
       assignments: [alumno('Ana', [{ day: 'Martes', hour: '10:00' }])],
       joinLogs: [log('Ana', MARTES[0]), log('Ana', MIERCOLES[0])],
@@ -108,7 +108,31 @@ describe('el cupo del alumno que ve el admin', () => {
       analyses: [tx('Ana', MARTES[0]), tx('Ana', MIERCOLES[0])],
     });
     const q = studentQuotaOf(fin, 'Ana')!;
-    expect(q.used).toBe(1);   // la normal; la recuperación no
+    expect(q.used).toBe(2);   // la normal y la recuperación: las dos son pagables
+  });
+
+  it('el cupo usado es SIEMPRE la suma de las clases pagables', () => {
+    const fechas = [...MARTES, ...MIERCOLES].sort();
+    const fin = armar({
+      assignments: [alumno('Ana', [{ day: 'Martes', hour: '10:00' }])],
+      joinLogs: fechas.map(d => log('Ana', d)),
+      classRecords: MIERCOLES.map(d => rec('Ana', d, 'recuperacion')),
+      // un martes sin transcript: pendiente, no consume
+      analyses: fechas.filter(d => d !== MARTES[1]).map(d => tx('Ana', d)),
+    });
+    const pagables = fin.rows.filter(r => r.status === 'pagable').reduce((s, r) => s + r.billingUnits, 0);
+    expect(studentQuotaOf(fin, 'Ana')!.used).toBe(pagables);
+    expect(pagables).toBe(5);   // 7 con transcript, cupo 5 → 2 retenidas
+    expect(fin.rows.filter(r => r.status === 'excede_limite')).toHaveLength(2);
+  });
+
+  it('la pendiente de transcript no consume cupo hasta que se valida', () => {
+    const fin = armar({
+      assignments: [alumno('Ana', [{ day: 'Martes', hour: '10:00' }])],
+      joinLogs: [log('Ana', MARTES[0]), log('Ana', MARTES[1])],
+      analyses: [tx('Ana', MARTES[0])],
+    });
+    expect(studentQuotaOf(fin, 'Ana')!.used).toBe(1);
   });
 
   it('la falta del alumno SÍ gasta cupo: esa clase se perdió', () => {
@@ -170,9 +194,10 @@ describe('el cupo del alumno que ve el admin', () => {
 
 // "No puedo dar esta clase" (class_recoveries): la recuperación de una clase que
 // canceló EL PROFESOR se registra como constancia 'recuperacion' con
-// recovery_for_date. Se paga si se da, pero no gasta nada del cupo del alumno.
+// recovery_for_date. Desde el 02/11/2026 consume cupo como toda clase pagable:
+// si el mes se llena, la última clase queda retenida.
 describe('recuperación de una clase cancelada por el profesor', () => {
-  it('se paga y no consume cupo del alumno', () => {
+  it('consume cupo del alumno y lo que se pasa del cupo queda retenido', () => {
     const recuperaciones = ['2026-08-07', '2026-08-14'];
     const fechas = [...MARTES, ...recuperaciones].sort();
     const fin = armar({
@@ -181,9 +206,10 @@ describe('recuperación de una clase cancelada por el profesor', () => {
       analyses: fechas.map(d => tx('Ana', d)),
       classRecords: recuperaciones.map((d, i) => ({ ...rec('Ana', d, 'recuperacion'), recoveryForDate: MARTES[i] })),
     });
-    // 1 h/semana → 5 al mes. Si las 2 recuperaciones contaran, serían 6 y una excedería.
-    expect(studentQuotaOf(fin, 'Ana')!.used).toBe(4);
-    expect(fin.rows.filter(r => r.status === 'excede_limite')).toHaveLength(0);
+    // 1 h/semana → 5 al mes. 4 martes + 2 recuperaciones = 6: entran 5, la última se retiene.
+    expect(studentQuotaOf(fin, 'Ana')!.used).toBe(5);
+    const retenidas = fin.rows.filter(r => r.status === 'excede_limite');
+    expect(retenidas.map(r => r.date)).toEqual([[...fechas].sort().at(-1)]);
     expect(fin.rows.filter(r => r.classType === 'recuperacion').every(r => r.status === 'pagable')).toBe(true);
   });
 });
