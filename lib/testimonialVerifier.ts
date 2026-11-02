@@ -173,7 +173,7 @@ export async function verifyCandidate(admin: SupabaseClient, candidateId: string
     loadConfig(admin),
     admin.from('testimonial_candidates').select('*').eq('id', candidateId).maybeSingle(),
   ]);
-  if (!cand) throw new Error('La pareja ya no existe (el buscador la rehízo). Pasa a la siguiente.');
+  if (!cand) throw new Error('El testimonio ya no existe (el buscador lo rehízo). Pasa al siguiente.');
   const id = verificationId(kind, cand);
   const { malo, bueno } = clipsOf(cand);
   const semanas = malo && bueno ? weeksBetween(malo.classDate, bueno.classDate) : null;
@@ -216,7 +216,7 @@ export async function verifyCandidate(admin: SupabaseClient, candidateId: string
   const discard = (r: Extract<RuleResult, { ok: false }>, extra: Row = {}, lado: Lado | null = null) => finish('descartado', r.motivo, r.detalle, extra, lado);
 
   // 0. Gratis
-  if (!malo || !bueno) return finish('descartado', 'otro', 'La pareja no tiene los dos clips.');
+  if (!malo || !bueno) return finish('descartado', 'otro', 'El testimonio no tiene los dos clips.');
   if (cand.reverse_order) return finish('descartado', 'sin_contraste', 'El "antes" es de una clase posterior al "después".');
   if ((semanas ?? 0) < c.semanas_min) return finish('descartado', 'sin_contraste', `Solo ${semanas} semanas entre clases (mínimo ${c.semanas_min}).`);
   if (malo.teacherId && bueno.teacherId && malo.teacherId !== bueno.teacherId) return finish('descartado', 'sin_contraste', 'Los dos clips son con profes distintos.');
@@ -599,7 +599,7 @@ async function writeBackCandidate(admin: SupabaseClient, v: Row, status: string,
   q = v.before_moment_id ? q.eq('before_moment_id', v.before_moment_id) : q;
   q = v.after_moment_id ? q.eq('after_moment_id', v.after_moment_id) : q;
   const { data, error } = await q.select('id');
-  if (error) throw new Error(`Guardando la pareja: ${error.message}`);
+  if (error) throw new Error(`Guardando el testimonio: ${error.message}`);
   if ((data ?? []).length) return;
   // El buscador la cambió o la borró después de verificarla: se repone la verificada.
   if (status !== 'descartado') {
@@ -607,7 +607,7 @@ async function writeBackCandidate(admin: SupabaseClient, v: Row, status: string,
       .eq('student_group', snap.student_group).eq('pair_teacher_id', snap.pair_teacher_id).eq('status', 'detectado').neq('id', v.candidate_id);
   }
   const { error: e2 } = await admin.from('testimonial_candidates').upsert({ ...snap, ...patch }, { onConflict: 'id' });
-  if (e2) throw new Error(`Reponiendo la pareja: ${e2.message}`);
+  if (e2) throw new Error(`Reponiendo el testimonio: ${e2.message}`);
 }
 
 const resumenEjemplo = (v: Row) => {

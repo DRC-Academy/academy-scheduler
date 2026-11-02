@@ -2,9 +2,13 @@
 
 // Pestaña admin "Testimoniales": PANEL DE ANÁLISIS + VERIFICADOR.
 //
-// El admin elige qué se analiza (fechas, alumno, profe, cuántas parejas, cuántas
-// por alumno, fuente, solo lo nunca analizado) y ve ANTES de gastar cuántas
-// clases, alumnos y parejas salen y cuánto costaría (lib/testimonialAnalysis).
+// El admin elige qué se analiza (fechas, alumno, profe, cuántos testimonios,
+// fuente, solo lo nunca analizado) y ve ANTES de gastar cuántas clases y alumnos
+// salen y cuánto costaría (lib/testimonialAnalysis). Cuántas combinaciones se
+// prueban por alumno NO se elige aquí: es testimonial_config.parejas_por_alumno.
+//
+// Texto para el admin: "testimonio/testimonios". En el código y la base sigue
+// llamándose "pareja" (testimonial_candidates, tipo 'pareja', etc.).
 // "Analizar" abre una tanda guardada en Supabase: si es con la escucha, primero
 // escucha las clases que falten; después verifica las parejas, 3 alumnos a la vez
 // y una llamada al servidor por pareja. "Pausar" para y la tanda queda guardada;
@@ -83,7 +87,6 @@ const n = (x: number) => x.toLocaleString('es-ES');
 const gasto = (t: { costeDeepgram: number; costeClaude: number }) =>
   `${usd(t.costeDeepgram + t.costeClaude)} (Deepgram ${usd(t.costeDeepgram)} + Claude ${usd(t.costeClaude)})`;
 const CANTIDADES = ['50', '200', '500', '1000', 'todas'] as const;
-const POR_ALUMNO = [1, 5, 10, 20] as const;
 const TARJETAS_PAGINA = 20;
 const AJUSTE_LADO = { antes: 'Antes', despues: 'Después' } as const;
 
@@ -201,8 +204,8 @@ export default function TestimonialsVerifierTab() {
       if (vivo.current) {
         const res = r.resumen;
         setAviso(res.revisados === 0
-          ? 'No había parejas que verificar con esos filtros (todo lo posible ya se probó o está vetado).'
-          : `Tanda terminada: ${res.aprobados} aprobadas de ${res.revisados} verificadas`
+          ? 'No había testimonios que verificar con esos filtros (todo lo posible ya se probó o está vetado).'
+          : `Tanda terminada: ${res.aprobados} testimonios aprobados de ${res.revisados} verificados`
             + `${Object.keys(res.porMotivo).length ? ` · descartes: ${motivosFrase(res.porMotivo)}` : ''}. Gasto estimado: ${gasto(res)}.`);
       }
     } catch (e) {
@@ -226,7 +229,7 @@ export default function TestimonialsVerifierTab() {
   const terminar = useCallback(async (batchId: string) => {
     try {
       const r = await post<{ resumen: ResumenTanda }>('cerrar', { batchId, cancelado: true });
-      setAviso(`Tanda terminada a mano: ${r.resumen.aprobados} aprobadas de ${r.resumen.revisados} verificadas. Gasto estimado: ${gasto(r.resumen)}.`);
+      setAviso(`Tanda terminada a mano: ${r.resumen.aprobados} testimonios aprobados de ${r.resumen.revisados} verificados. Gasto estimado: ${gasto(r.resumen)}.`);
       await cargar();
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   }, [post, cargar]);
@@ -300,8 +303,8 @@ export default function TestimonialsVerifierTab() {
 
         {ultima && (
           <p className="tv-line">
-            <b>Última tanda</b> ({fecha(ultima.startedAt)}{ultima.cancelled ? ', terminada a mano' : ''}{!ultima.finishedAt ? ', en pausa' : ''}): {n(ultima.revisados)} verificadas,
-            {' '}{ultima.aprobados} aprobadas{ultima.errores ? `, ${ultima.errores} con error` : ''}
+            <b>Última tanda</b> ({fecha(ultima.startedAt)}{ultima.cancelled ? ', terminada a mano' : ''}{!ultima.finishedAt ? ', en pausa' : ''}): {n(ultima.revisados)} testimonios verificados,
+            {' '}{ultima.aprobados} aprobados{ultima.errores ? `, ${ultima.errores} con error` : ''}
             {Object.keys(ultima.porMotivo).length > 0 && <> · descartes: {motivosFrase(ultima.porMotivo)}</>}
             {ultima.costeDeepgram + ultima.costeClaude > 0 && <> · gasto estimado: {gasto(ultima)}</>}.
           </p>
@@ -337,7 +340,7 @@ export default function TestimonialsVerifierTab() {
       {!estado ? (
         !error && <p className="tv-vacio">Cargando…</p>
       ) : estado.tarjetas.length === 0 ? (
-        <p className="tv-vacio">No hay parejas aprobadas por revisar. Elige los filtros y pulsa “Analizar”.</p>
+        <p className="tv-vacio">No hay testimonios aprobados por revisar. Elige los filtros y pulsa “Analizar”.</p>
       ) : (
         <Aprobadas estado={estado} post={post} onVer={setGrande} onRevisar={revisar} onConsentimiento={consentimiento} />
       )}
@@ -379,7 +382,6 @@ function PanelAnalisis({ post, analisis, abierta, ocupado, onAnalizar, onReanuda
   const [alumnoTxt, setAlumnoTxt] = useState('');
   const [profeTxt, setProfeTxt] = useState('');
   const [cantidad, setCantidad] = useState<typeof CANTIDADES[number]>('200');
-  const [porAlumno, setPorAlumno] = useState<number>(10);
   const [fuente, setFuente] = useState<Fuente>('escucha');
   const [soloNuevas, setSoloNuevas] = useState(true);
   const [opciones, setOpciones] = useState<{ alumnos: Opcion[]; profes: Opcion[] } | null>(null);
@@ -399,8 +401,8 @@ function PanelAnalisis({ post, analisis, abierta, ocupado, onAnalizar, onReanuda
   const alumnoMal = !!alumnoTxt.trim() && !alumno, profeMal = !!profeTxt.trim() && !profe;
   const elegidas = useMemo(() => ({
     filtros: { desde: desde || null, hasta: hasta || null, alumno, profe },
-    cantidad: cantidad === 'todas' ? null : Number(cantidad), porAlumno, fuente, soloNuevas,
-  }), [desde, hasta, alumno, profe, cantidad, porAlumno, fuente, soloNuevas]);
+    cantidad: cantidad === 'todas' ? null : Number(cantidad), fuente, soloNuevas,
+  }), [desde, hasta, alumno, profe, cantidad, fuente, soloNuevas]);
 
   // Contador en vivo: se recalcula al cambiar los filtros (con una pequeña espera).
   useEffect(() => {
@@ -431,14 +433,9 @@ function PanelAnalisis({ post, analisis, abierta, ocupado, onAnalizar, onReanuda
         </label>
         <datalist id="tv-alumnos">{opciones?.alumnos.map(o => <option key={o.id} value={o.name} />)}</datalist>
         <datalist id="tv-profes">{opciones?.profes.map(o => <option key={o.id} value={o.name} />)}</datalist>
-        <label className="tv-campo">Parejas en esta tanda
+        <label className="tv-campo">Cuántos testimonios analizar
           <select value={cantidad} onChange={e => setCantidad(e.target.value as typeof CANTIDADES[number])} disabled={ocupado}>
             {CANTIDADES.map(c => <option key={c} value={c}>{c === 'todas' ? 'Todas las que cumplan los filtros' : n(Number(c))}</option>)}
-          </select>
-        </label>
-        <label className="tv-campo">Parejas por alumno
-          <select value={porAlumno} onChange={e => setPorAlumno(Number(e.target.value))} disabled={ocupado}>
-            {POR_ALUMNO.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
         </label>
         <label className="tv-campo">Fuente
@@ -457,10 +454,7 @@ function PanelAnalisis({ post, analisis, abierta, ocupado, onAnalizar, onReanuda
           : errCuenta ? <span className="tv-error">{errCuenta}</span>
           : !cuenta ? 'Calculando…'
           : <>
-              <b>Con estos filtros:</b> {n(cuenta.clases)} clases{cuenta.porEscuchar ? ` (${n(cuenta.porEscuchar)} por escuchar)` : ''} · {n(cuenta.alumnos)} alumnos
-              {' '}· {cuenta.parejasMinimo ? 'al menos ' : ''}{n(cuenta.parejas)} parejas posibles{cuenta.parejasMinimo ? ' (salen más al escuchar)' : ''}
-              {' '}· coste estimado <b>{usd(cuenta.coste.total)}</b>
-              <span className="tv-detalle"> ({cuenta.coste.escucha > 0 ? `escuchar ${usd(cuenta.coste.escucha)} + ` : ''}verificar {n(cuenta.aVerificar)} parejas × {usd(cuenta.coste.porPareja)})</span>
+              <b>Con estos filtros:</b> {n(cuenta.clases)} clases · {n(cuenta.alumnos)} alumnos · coste estimado <b>{usd(cuenta.coste.total)}</b>
               {contando && <span className="tv-detalle"> · recalculando…</span>}
             </>}
       </p>
@@ -472,8 +466,8 @@ function PanelAnalisis({ post, analisis, abierta, ocupado, onAnalizar, onReanuda
               <span>
                 {a.fase === 'escuchar'
                   ? `Escuchando clases: ${n(a.escHechas)} de ${n(a.escTotal)}…`
-                  : `Verificando: ${n(a.hechas)} de ${n(a.total)} parejas · ${n(a.aprobadas)} aprobadas`
-                    + `${a.saltadas ? ` · ${n(a.saltadas)} saltadas` : ''}${a.errores ? ` · ${n(a.errores)} con error` : ''}`}
+                  : `Verificando: ${n(a.hechas)} de ${n(a.total)} testimonios · ${n(a.aprobadas)} aprobados`
+                    + `${a.saltadas ? ` · ${n(a.saltadas)} saltados` : ''}${a.errores ? ` · ${n(a.errores)} con error` : ''}`}
                 {a.pausando && ' · pausando (acaban las que están en curso)…'}
               </span>
               <div className="tv-prog-bar">
@@ -496,7 +490,7 @@ function PanelAnalisis({ post, analisis, abierta, ocupado, onAnalizar, onReanuda
             <b>Tanda en pausa</b> ({abierta.fuente === 'escucha' ? 'escucha' : 'texto de Fathom'}):{' '}
             {abierta.fase === 'escuchar'
               ? `${n(abierta.escuchar.hechas)} de ${n(abierta.escuchar.total)} clases escuchadas`
-              : `${n(abierta.parejas.hechas)} de ${n(abierta.objetivo ?? abierta.parejas.total)} parejas verificadas, ${n(abierta.parejas.aprobadas)} aprobadas`}
+              : `${n(abierta.parejas.hechas)} de ${n(abierta.objetivo ?? abierta.parejas.total)} testimonios verificados, ${n(abierta.parejas.aprobadas)} aprobados`}
             {' '}· gastado {gasto(abierta.resumen)}.
           </span>
           <button type="button" className="tv-btn tv-pri" disabled={ocupado} onClick={() => onReanudar(abierta.batchId)}>Reanudar</button>
@@ -531,7 +525,7 @@ function Aprobadas({ estado, post, onVer, onRevisar, onConsentimiento }: {
   };
   return (
     <div className="tv-lista">
-      <p className="tv-line"><b>{n(estado.aprobadasPendientes)} aprobadas por revisar</b>, de mejor a peor nota del juez.</p>
+      <p className="tv-line"><b>{n(estado.aprobadasPendientes)} testimonios aprobados por revisar</b>, de mejor a peor nota del juez.</p>
       {lista.map(v => (
         <Tarjeta key={v.id} v={v} media={media} onVer={onVer} onRevisar={onRevisar} onConsentimiento={onConsentimiento} />
       ))}
@@ -575,8 +569,8 @@ function Tarjeta({ v, media, onVer, onRevisar, onConsentimiento }: {
   return (
     <article className="tv-card">
       <div className="tv-cols">
-        <Columna titulo="Antes" s={v.antes} media={media} onVer={onVer} tono="antes" />
-        <Columna titulo="Después" s={v.despues} media={media} onVer={onVer} tono="despues" />
+        <Columna titulo="ANTES" s={v.antes} media={media} onVer={onVer} tono="antes" />
+        <Columna titulo="DESPUÉS" s={v.despues} media={media} onVer={onVer} tono="despues" />
       </div>
       <div className="tv-pie">
         <div className="tv-datos">
@@ -662,7 +656,7 @@ function Sirven({ lista, onConsentimiento }: { lista: Verif[]; onConsentimiento:
   return (
     <details className="tv-sec-box">
       <summary>Sirven ({lista.length})</summary>
-      {lista.length === 0 ? <p className="tv-line">Todavía ninguna.</p> : (
+      {lista.length === 0 ? <p className="tv-line">Todavía ninguno.</p> : (
         <ul className="tv-rows">
           {lista.map(v => (
             <li key={v.id}>
@@ -753,13 +747,13 @@ function Prueba({ estado, progreso, ocupado, onLanzar, onCancelar }: {
   estado: Estado; progreso: Progreso | null; ocupado: boolean; onLanzar: () => void; onCancelar: () => void;
 }) {
   const p = estado.prueba;
-  const linea = (r: ResumenPrueba) => `${r.descartados} de ${r.total} descartadas (${pct(r.descartados, r.total)})`
-    + `${r.aprobados ? ` · ${r.aprobados} aprobadas` : ''}${r.errores ? ` · ${r.errores} con error` : ''}`;
+  const linea = (r: ResumenPrueba) => `${r.descartados} de ${r.total} descartados (${pct(r.descartados, r.total)})`
+    + `${r.aprobados ? ` · ${r.aprobados} aprobados` : ''}${r.errores ? ` · ${r.errores} con error` : ''}`;
   return (
     <details className="tv-sec-box">
       <summary>Prueba con los “No sirve” ({p.todas.total} de {p.objetivo})</summary>
       <p className="tv-line">
-        Pasa el verificador por las parejas que marcaste “No sirve” (no cambia nada de ellas). Objetivo: descartar al menos el 90 %.
+        Pasa el verificador por los testimonios que marcaste “No sirve” (no cambia nada de ellas). Objetivo: descartar al menos el 90 %.
       </p>
       {progreso ? (
         <div className="tv-bar-acc">

@@ -39,7 +39,7 @@ INSERT INTO testimonial_config (key, value, description, motivo, paso, limite) V
   ('escucha_clip_max_s',            30,     'Escucha: duración máxima del clip que se propone al verificador (dentro del tramo escuchado).', NULL, NULL, NULL),
   ('escucha_seg_por_clase_estimado',216,    'Escucha: segundos de audio por clase para el coste estimado (hasta tener 10 clases escuchadas; luego se usa la media real).', NULL, NULL, NULL),
   -- Varias parejas y vetos (ya existen si se corrió supabase-testimoniales-varias-parejas.sql)
-  ('parejas_por_alumno',            10,     'Parejas candidatas como mucho por alumno (el panel deja elegir 1, 5, 10 o 20).', NULL, NULL, NULL),
+  ('parejas_por_alumno',            10,     'Combinaciones que se prueban como mucho por alumno, en orden, hasta que una se aprueba (no se elige en el panel).', NULL, NULL, NULL),
   ('momento_max_parejas',           2,      'Veces que un mismo momento (ANTES o DESPUÉS) puede salir entre las parejas de un alumno.', NULL, NULL, NULL),
   ('momento_espanol_max',           0.15,   'Momentos del texto de Fathom: con más de esta fracción de palabras en español no se usan; con algo de español van al final.', NULL, NULL, NULL),
   -- Precios (gasto estimado)

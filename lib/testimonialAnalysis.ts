@@ -38,7 +38,7 @@ import {
 import { selectListenClasses, listenPairs, compareListenPairs, contrastScore, type ListenClass, type ListenPlanSegment, type ListenPlannedPair } from '@/lib/testimonialListenRank';
 import { listenClass, listenColumns, toListenSegment, LISTEN_DONE, type ListenResult } from '@/lib/testimonialListen';
 import { verifyCandidate, batchResumen, closeBatch, type VerifyOutcome } from '@/lib/testimonialVerifier';
-import { weeksBetween, type VerifyConfig } from '@/lib/testimonialMeasures';
+import { weeksBetween, CONFIG_POR_DEFECTO, type VerifyConfig } from '@/lib/testimonialMeasures';
 import type { TestimonialClips } from '@/lib/testimonials';
 
 type Row = Record<string, any>;   // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -49,6 +49,7 @@ export interface AnalisisOpciones {
   filtros: PlanFiltros;
   /** Parejas a verificar en la tanda; null = todas las que cumplan los filtros. */
   cantidad: number | null;
+  /** Tope de combinaciones por alumno: sale de testimonial_config (parejas_por_alumno), no del panel. */
   porAlumno: number;
   fuente: Fuente;
   soloNuevas: boolean;
@@ -56,14 +57,21 @@ export interface AnalisisOpciones {
 
 const SIRVEN = ['listo', 'revisado', 'permiso_alumno'];
 const CANTIDADES = [50, 200, 500, 1000];
-const POR_ALUMNO = [1, 5, 10, 20];
 
-/** Lo que llega del navegador, a valores permitidos. */
+/**
+ * Lo que llega del navegador, a valores permitidos. El tope por alumno ya no lo
+ * elige el panel: se pone desde la config en `conTopeConfig` (aquí, el de fábrica).
+ */
 export function cleanOpciones(raw: unknown, filtros: PlanFiltros): AnalisisOpciones {
   const o = (raw ?? {}) as Record<string, unknown>;
   const cantidad = CANTIDADES.includes(Number(o.cantidad)) ? Number(o.cantidad) : null;
-  const porAlumno = POR_ALUMNO.includes(Number(o.porAlumno)) ? Number(o.porAlumno) : 10;
-  return { filtros, cantidad, porAlumno, fuente: o.fuente === 'texto' ? 'texto' : 'escucha', soloNuevas: o.soloNuevas !== false };
+  return { filtros, cantidad, porAlumno: CONFIG_POR_DEFECTO.parejas_por_alumno, fuente: o.fuente === 'texto' ? 'texto' : 'escucha', soloNuevas: o.soloNuevas !== false };
+}
+
+/** Tope de combinaciones por alumno = testimonial_config.parejas_por_alumno. */
+function conTopeConfig(o: AnalisisOpciones, c: VerifyConfig): AnalisisOpciones {
+  const tope = Math.max(1, Math.round(Number(c.parejas_por_alumno) || CONFIG_POR_DEFECTO.parejas_por_alumno));
+  return { ...o, porAlumno: tope };
 }
 
 // ── Lecturas comunes ─────────────────────────────────────────────────────────
@@ -350,8 +358,9 @@ function recuento(plan: Plan, o: AnalisisOpciones, porPareja: number, segClase: 
   };
 }
 
-export async function contarAnalisis(admin: SupabaseClient, o: AnalisisOpciones): Promise<Recuento> {
+export async function contarAnalisis(admin: SupabaseClient, opciones: AnalisisOpciones): Promise<Recuento> {
   const { config: c } = await loadConfig(admin);
+  const o = conTopeConfig(opciones, c);
   const ctx = await contexto(admin);
   const [plan, porPareja, segClase] = await Promise.all([planFor(admin, c, o, ctx, false), costePorPareja(admin, c), segundosPorClase(admin, c)]);
   return recuento(plan, o, porPareja, segClase, c);
@@ -395,8 +404,9 @@ const pairRows = (batchId: string, items: PlanItem[], from: number) => items.map
 }));
 
 /** Abre una tanda con las opciones del panel y deja guardadas todas sus filas. */
-export async function iniciarAnalisis(admin: SupabaseClient, o: AnalisisOpciones): Promise<TandaEstado> {
+export async function iniciarAnalisis(admin: SupabaseClient, opciones: AnalisisOpciones): Promise<TandaEstado> {
   const { config: c } = await loadConfig(admin);
+  const o = conTopeConfig(opciones, c);
   const plan = await planFor(admin, c, o, await contexto(admin), true);
   const batchId = `tb_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   const fase = plan.porEscuchar.length ? 'escuchar' : 'verificar';
@@ -536,7 +546,7 @@ export async function verificarItem(admin: SupabaseClient, batchId: string, idx:
   ]);
   if (!b) throw new Error('No existe esa tanda.');
   if (b.finished_at) return { status: 'saltada', motivo: 'tanda_cerrada', resultado: null, fin: true };
-  if (item.tipo !== 'pareja') throw new Error('Esa fila no es una pareja.');
+  if (item.tipo !== 'pareja') throw new Error('Esa fila no es un testimonio.');
   if (item.status === 'hecha' || item.status === 'saltada' || item.status === 'error') {
     return { status: item.status, motivo: item.motivo ?? null, resultado: null, fin: false };
   }
@@ -601,14 +611,14 @@ async function insertCandidate(admin: SupabaseClient, g: string, teacherId: stri
   if (ids.length) {
     const { data: aprobadas } = await admin.from('testimonial_verifications').select('id')
       .in('candidate_id', ids).eq('status', 'aprobado').is('review', null).limit(1);
-    if ((aprobadas ?? []).length) throw new Error('Este alumno ya tiene una pareja aprobada por revisar.');
+    if ((aprobadas ?? []).length) throw new Error('Este alumno ya tiene un testimonio aprobado por revisar.');
     const { error: dErr } = await admin.from('testimonial_candidates').delete().in('id', ids).eq('status', 'detectado');
-    if (dErr) throw new Error(`Dejando sitio a la pareja: ${dErr.message}`);
+    if (dErr) throw new Error(`Dejando sitio al testimonio: ${dErr.message}`);
   }
   const id = `tc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const now = new Date().toISOString();
   const { error } = await admin.from('testimonial_candidates').insert({ id, ...cols, status: 'detectado', status_changed_at: now, updated_at: now });
-  if (error) throw new Error(`Creando la pareja: ${error.message}`);
+  if (error) throw new Error(`Creando el testimonio: ${error.message}`);
   return id;
 }
 
@@ -619,7 +629,7 @@ async function materializeTexto(admin: SupabaseClient, item: Row): Promise<strin
   ]);
   if (error) throw new Error(`testimonial_segments: ${error.message}`);
   const ra = ((segs ?? []) as Row[]).find(x => x.id === item.a), rb = ((segs ?? []) as Row[]).find(x => x.id === item.b);
-  if (!ra || !rb) throw new Error('Los momentos de esta pareja ya no existen (se reprocesó el transcript).');
+  if (!ra || !rb) throw new Error('Los momentos de este testimonio ya no existen (se reprocesó el transcript).');
   const a = toSegment(ra), b = toSegment(rb);
   const avg = studentWpm((txs ?? []) as Row[]);
   const name = (((txs ?? []) as Row[]).find(t => t.student_name)?.student_name as string | undefined) ?? null;
@@ -634,7 +644,7 @@ async function materializeEscucha(admin: SupabaseClient, item: Row): Promise<str
   ]);
   if (error) throw new Error(`testimonial_listen_segments: ${error.message}`);
   const ra = ((segs ?? []) as Row[]).find(x => x.id === item.a), rb = ((segs ?? []) as Row[]).find(x => x.id === item.b);
-  if (!ra || !rb) throw new Error('Los tramos escuchados de esta pareja ya no existen.');
+  if (!ra || !rb) throw new Error('Los tramos escuchados de este testimonio ya no existen.');
   const a = toListenSegment(ra), b = toListenSegment(rb);
   if (!a.medidas || !b.medidas || !a.teacherId) throw new Error('Tramo escuchado sin medidas.');
   const { data: tts } = await admin.from('testimonial_transcripts').select('analysis_id, fathom_url, student_label').in('analysis_id', [a.analysisId, b.analysisId]);
