@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CONFIG_POR_DEFECTO as C, type ClipMeasures } from '@/lib/testimonialMeasures';
 import {
-  selectListenClasses, listenSides, pickTurns, turnCandidates, listenPairs, clipBounds, contrastScore,
+  listenableClasses, pickTurns, turnCandidates, listenPairs, clipBounds, contrastScore,
   type ListenClass, type ListenSegment, type ListenPlanSegment,
 } from '@/lib/testimonialListenRank';
 import type { Turn } from '@/lib/fluency';
@@ -9,18 +9,16 @@ import type { Turn } from '@/lib/fluency';
 const cls = (day: string, teacher = 't7', id = `ca_${day}`): ListenClass =>
   ({ analysisId: id, studentGroup: 's1', teacherId: teacher, classDay: day, fathomUrl: 'https://fathom.video/share/x' });
 
-describe('selectListenClasses', () => {
-  const dias = ['2026-07-20', '2026-07-27', '2026-08-03', '2026-08-10', '2026-09-14', '2026-09-21', '2026-09-28', '2026-10-05'];
-  it('3 primeras y 3 últimas grabadas', () => {
-    expect(selectListenClasses(dias.map(d => cls(d)), C).map(x => x.classDay))
-      .toEqual(['2026-07-20', '2026-07-27', '2026-08-03', '2026-09-21', '2026-09-28', '2026-10-05']);
+describe('listenableClasses', () => {
+  const rec = (x: ListenClass) => x.analysisId.replace(/_copia$/, '');
+  it('todas las clases del profe con 4+ semanas, una por grabación', () => {
+    const l = [cls('2026-07-20'), cls('2026-07-20', 't7', 'ca_2026-07-20_copia'), cls('2026-08-03'), cls('2026-09-28')];
+    expect(listenableClasses(l, C, rec).map(x => x.analysisId)).toEqual(['ca_2026-07-20', 'ca_2026-08-03', 'ca_2026-09-28']);
   });
-  it('con 5 clases se reparten sin solaparse (2 y 2)', () => {
-    expect(selectListenClasses(dias.slice(0, 5).map(d => cls(d)), C)).toHaveLength(4);
-  });
-  it('nada si entre la primera y la última no hay las semanas mínimas', () => {
-    expect(selectListenClasses(dias.slice(0, 3).map(d => cls(d)), C)).toEqual([]);
-    expect(selectListenClasses([cls('2026-07-20')], C)).toEqual([]);
+  it('nada de un profe con menos de 4 semanas con el alumno (no puede salir pareja)', () => {
+    const l = [cls('2026-07-20'), cls('2026-09-28'), cls('2026-08-03', 't9'), cls('2026-08-10', 't9')];
+    expect(listenableClasses(l, C, rec).map(x => x.teacherId)).toEqual(['t7', 't7']);
+    expect(listenableClasses([cls('2026-07-20')], C, rec)).toEqual([]);
   });
 });
 
@@ -54,14 +52,6 @@ describe('pickTurns', () => {
   });
 });
 
-describe('listenSides', () => {
-  it('separa las primeras clases (ANTES) de las últimas (DESPUÉS)', () => {
-    const dias = ['2026-01-05', '2026-01-12', '2026-01-19', '2026-03-02', '2026-03-09', '2026-03-16', '2026-03-23'];
-    const r = listenSides(dias.map(d => ({ analysisId: d, studentGroup: 'g', teacherId: 't', classDay: d, fathomUrl: '' })), C);
-    expect(r.primeras.map(x => x.classDay)).toEqual(dias.slice(0, 3));
-    expect(r.ultimas.map(x => x.classDay)).toEqual(dias.slice(-3));
-  });
-});
 
 const M = (over: Partial<ClipMeasures>): ClipMeasures => ({
   palabras: 30, habla_s: 15, ppm: 120, pausas: 0, pausas_min: 0, pausa_max_s: 0, muletillas: 0,
@@ -89,7 +79,11 @@ describe('listenPairs', () => {
     expect(listenPairs([pseg('a', '2026-07-20', TRABADO, 'otro'), pseg('b', '2026-10-05', FLUIDO)], C)).toEqual([]);
     expect(listenPairs([pseg('a', '2026-07-20', TRABADO, 't7', 'r'), pseg('b', '2026-10-05', FLUIDO, 't7', 'r')], C)).toEqual([]);
     expect(listenPairs([pseg('a', '2026-09-20', TRABADO), pseg('b', '2026-10-05', FLUIDO)], C)).toEqual([]);
-    expect(listenPairs([pseg('a', '2026-07-20', TRABADO), pseg('b', '2026-10-05', { ...FLUIDO, ppm: 115, habla_s: 10 })], C)).toEqual([]);
+    expect(listenPairs([pseg('a', '2026-07-20', TRABADO), pseg('b', '2026-10-05', { ...FLUIDO, ppm: 95 })], C)).toEqual([]);
+    expect(listenPairs([pseg('a', '2026-07-20', TRABADO), pseg('b', '2026-10-05', { ...FLUIDO, habla_s: 8 })], C)).toEqual([]);
+  });
+  it('un DESPUÉS más corto que el ANTES vale (03/11/2026), si dura al menos 10 s', () => {
+    expect(listenPairs([pseg('a', '2026-07-20', TRABADO), pseg('b', '2026-10-05', { ...FLUIDO, habla_s: 12 })], C)).toHaveLength(1);
   });
   it('fuera los tramos en español, con otra voz, sin voz o bloqueados', () => {
     const b = pseg('b', '2026-10-05', FLUIDO);

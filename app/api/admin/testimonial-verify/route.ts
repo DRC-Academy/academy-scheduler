@@ -19,6 +19,8 @@
 //   · 'analisis-planificar' { batchId } escucha terminada → parejas de la tanda
 //   · 'analisis-verificar'  { batchId, idx } verifica UNA pareja de la tanda
 //   · 'analisis-pausar'     { batchId, pausada }
+//   · 'reanalizar-contar'                clases por escuchar, parejas y coste de "Reanalizar todo"
+//   · 'reanalizar-todo'     { confirmado: true } borra lo del verificador (no lo marcado a mano) y abre una tanda con todo
 //   Prueba con los "No sirve" (lib/testimonialVerifier):
 //   · 'iniciar'         { tipo: 'prueba' } → { batchId, ids }
 //   · 'verificar'       { batchId, id, tipo } → UNA pareja (el navegador las encadena)
@@ -44,7 +46,7 @@ import {
 } from '@/lib/testimonialVerifier';
 import {
   cleanOpciones, contarAnalisis, opcionesAnalisis, iniciarAnalisis, estadoTanda, escucharItem, planificarTanda,
-  verificarItem, pausarTanda, tandaAbierta,
+  verificarItem, pausarTanda, tandaAbierta, contarReanalisis, reanalizarTodo,
 } from '@/lib/testimonialAnalysis';
 import { cleanFilters } from '@/lib/testimonialPairPlan';
 
@@ -216,6 +218,11 @@ export async function POST(request: Request): Promise<Response> {
         const batchId = tanda(), i = idx();
         return batchId && i != null ? ok(await verificarItem(admin, batchId, i)) : falta('Faltan batchId o idx.');
       }
+      case 'reanalizar-contar':
+        return ok(await contarReanalisis(admin));
+      case 'reanalizar-todo':
+        if (body.confirmado !== true) return falta('Falta confirmar.');
+        return ok(await reanalizarTodo(admin));
       case 'analisis-pausar': {
         const batchId = tanda();
         if (!batchId) return falta('Falta batchId.');

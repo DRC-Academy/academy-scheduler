@@ -49,6 +49,7 @@ interface TandaEstado {
   escuchar: { total: number; hechas: number; pendientes: number[] };
   parejas: { total: number; hechas: number; aprobadas: number; saltadas: number; errores: number; pendientes: Array<{ g: string; idx: number[] }> };
   resumen: ResumenTanda;
+  gasto?: { escucha: number; verificacion: number; total: number };
 }
 interface Estado {
   tarjetas: Verif[]; media: Record<string, string>; aprobadasPendientes: number; sirven: Verif[]; descartados: Verif[];
@@ -64,13 +65,15 @@ interface Progreso { kind: 'prueba'; hechas: number; total: number; aprobadas: n
 interface Analisis {
   batchId: string; fase: 'escuchar' | 'verificar'; escHechas: number; escTotal: number;
   hechas: number; total: number; aprobadas: number; saltadas: number; errores: number; pausando: boolean;
+  /** Gasto acumulado de la tanda en $ (escucha + verificación). */
+  gasto: number;
 }
 interface ResumenTanda { revisados: number; aprobados: number; porMotivo: Record<string, number>; costeDeepgram: number; costeClaude: number }
 interface Recuento {
   clases: number; porEscuchar: number; alumnos: number; parejas: number; parejasMinimo: boolean; aVerificar: number;
   coste: { escucha: number; verificacion: number; total: number; porPareja: number };
 }
-interface ItemResultado { status: 'hecha' | 'saltada' | 'error'; motivo: string | null; resultado: { status: string } | null; fin: boolean }
+interface ItemResultado { status: 'hecha' | 'saltada' | 'error'; motivo: string | null; resultado: { status: string; coste?: number } | null; fin: boolean }
 interface Opcion { id: string; name: string }
 
 const API = '/api/admin/testimonial-verify';
@@ -146,7 +149,7 @@ export default function TestimonialsVerifierTab() {
       const p: Analisis = {
         batchId, fase: t.fase, escHechas: t.escuchar.hechas, escTotal: t.escuchar.total,
         hechas: t.parejas.hechas, total: t.objetivo ?? t.parejas.total, aprobadas: t.parejas.aprobadas,
-        saltadas: t.parejas.saltadas, errores: t.parejas.errores, pausando: false,
+        saltadas: t.parejas.saltadas, errores: t.parejas.errores, pausando: false, gasto: t.gasto?.total ?? 0,
       };
       const pintar = () => { if (vivo.current) setAnalisis({ ...p }); };
       pintar();
@@ -157,7 +160,11 @@ export default function TestimonialsVerifierTab() {
         const trabajador = async () => {
           for (let i = cola.shift(); i != null; i = cola.shift()) {
             if (pausar.current || !vivo.current) { cortado = true; return; }
-            try { await post('analisis-escuchar', { batchId, idx: i }); seguidos = 0; } catch (e) { p.errores++; fallo(e); }
+            try {
+              const r = await post<{ result: { usd?: number } | null }>('analisis-escuchar', { batchId, idx: i });
+              p.gasto += r.result?.usd ?? 0;
+              seguidos = 0;
+            } catch (e) { p.errores++; fallo(e); }
             p.escHechas++;
             pintar();
           }
@@ -186,6 +193,7 @@ export default function TestimonialsVerifierTab() {
               if (r.status === 'saltada') p.saltadas++;
               if (r.status === 'error') p.errores++;
               if (r.resultado?.status === 'aprobado') p.aprobadas++;
+              p.gasto += r.resultado?.coste ?? 0;
               // Con una aprobada, el alumno ya está: sus otras parejas no se prueban.
               otroAlumno = r.resultado?.status === 'aprobado' || r.motivo === 'alumno_aprobado';
               if (r.fin) fin = true;
@@ -225,6 +233,33 @@ export default function TestimonialsVerifierTab() {
       await correr(t.batchId);
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   }, [post, correr]);
+
+  /**
+   * "Reanalizar todo": cuenta lo que haría y su coste, pide confirmación y borra
+   * los veredictos del verificador (no lo marcado a mano) antes de abrir la tanda.
+   */
+  const reanalizar = useCallback(async () => {
+    setError(null); setAviso(null);
+    try {
+      const r = await post<Recuento>('reanalizar-contar');
+      const msg = [
+        'REANALIZAR TODO con las reglas actuales.',
+        '',
+        'Se borran los veredictos anteriores del verificador (descartes y aprobados sin revisar).',
+        'Lo que marcaste a mano (Sirve / No sirve) se queda como está.',
+        '',
+        `Clases por escuchar: ${n(r.porEscuchar)} (≈ ${usd(r.coste.escucha)}). Lo ya escuchado no se vuelve a pagar.`,
+        `Testimonios a verificar: ${r.parejasMinimo ? 'al menos ' : ''}${n(r.parejas)} ya posibles (≈ ${usd(r.parejas * r.coste.porPareja)}).`,
+        `Como mucho, si ninguno aprobara: ${n(r.aVerificar)} (≈ ${usd(r.coste.verificacion)}).`,
+        '',
+        '¿Seguir?',
+      ].join('\n');
+      if (!window.confirm(msg)) return;
+      const t = await post<TandaEstado>('reanalizar-todo', { confirmado: true });
+      await cargar();
+      await correr(t.batchId);
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+  }, [post, cargar, correr]);
 
   const terminar = useCallback(async (batchId: string) => {
     try {
@@ -293,11 +328,15 @@ export default function TestimonialsVerifierTab() {
   return (
     <div className="tv">
       <h2 className="tv-title">Testimoniales</h2>
+      <p className="tv-intro">
+        Escucha las clases, busca un momento trabado y uno fluido del mismo alumno con el mismo profe, revisa las
+        imágenes y te muestra los mejores (como mucho uno por alumno). Tú los ves lado a lado y marcas Sirve o No sirve.
+      </p>
 
       <section className="tv-bar">
         {estado && (
           <PanelAnalisis post={post} analisis={analisis} abierta={analisis ? null : estado.abierta} ocupado={ocupado}
-            onAnalizar={analizar} onReanudar={correr} onTerminar={terminar}
+            onAnalizar={analizar} onReanudar={correr} onTerminar={terminar} onReanalizar={reanalizar}
             onPausar={() => { pausar.current = true; setAnalisis(a => (a ? { ...a, pausando: true } : a)); }} />
         )}
 
@@ -371,11 +410,11 @@ class Pausa extends Error {}
 
 // ── Panel de análisis ────────────────────────────────────────────────────────
 
-function PanelAnalisis({ post, analisis, abierta, ocupado, onAnalizar, onReanudar, onTerminar, onPausar }: {
+function PanelAnalisis({ post, analisis, abierta, ocupado, onAnalizar, onReanudar, onTerminar, onPausar, onReanalizar }: {
   post: <T>(a: string, e?: Record<string, unknown>) => Promise<T>;
   analisis: Analisis | null; abierta: TandaEstado | null; ocupado: boolean;
   onAnalizar: (opciones: Record<string, unknown>) => void; onReanudar: (batchId: string) => void;
-  onTerminar: (batchId: string) => void; onPausar: () => void;
+  onTerminar: (batchId: string) => void; onPausar: () => void; onReanalizar: () => void;
 }) {
   const [desde, setDesde] = useState('');
   const [hasta, setHasta] = useState('');
@@ -468,6 +507,7 @@ function PanelAnalisis({ post, analisis, abierta, ocupado, onAnalizar, onReanuda
                   ? `Escuchando clases: ${n(a.escHechas)} de ${n(a.escTotal)}…`
                   : `Verificando: ${n(a.hechas)} de ${n(a.total)} testimonios · ${n(a.aprobadas)} aprobados`
                     + `${a.saltadas ? ` · ${n(a.saltadas)} saltados` : ''}${a.errores ? ` · ${n(a.errores)} con error` : ''}`}
+                {` · gastado ≈ ${usd(a.gasto)}`}
                 {a.pausando && ' · pausando (acaban las que están en curso)…'}
               </span>
               <div className="tv-prog-bar">
@@ -482,6 +522,12 @@ function PanelAnalisis({ post, analisis, abierta, ocupado, onAnalizar, onReanuda
             Analizar
           </button>
         )}
+        {!a && (
+          <button type="button" className="tv-btn tv-sec" disabled={ocupado} onClick={onReanalizar}
+            title="Borra los veredictos del verificador (no lo que marcaste a mano) y vuelve a analizar todo con las reglas actuales">
+            Reanalizar todo
+          </button>
+        )}
       </div>
 
       {abierta && !a && (
@@ -491,7 +537,7 @@ function PanelAnalisis({ post, analisis, abierta, ocupado, onAnalizar, onReanuda
             {abierta.fase === 'escuchar'
               ? `${n(abierta.escuchar.hechas)} de ${n(abierta.escuchar.total)} clases escuchadas`
               : `${n(abierta.parejas.hechas)} de ${n(abierta.objetivo ?? abierta.parejas.total)} testimonios verificados, ${n(abierta.parejas.aprobadas)} aprobados`}
-            {' '}· gastado {gasto(abierta.resumen)}.
+            {' '}· gastado ≈ {abierta.gasto ? usd(abierta.gasto.total) : gasto(abierta.resumen)}.
           </span>
           <button type="button" className="tv-btn tv-pri" disabled={ocupado} onClick={() => onReanudar(abierta.batchId)}>Reanudar</button>
           <button type="button" className="tv-btn tv-sec" disabled={ocupado} onClick={() => onTerminar(abierta.batchId)}>Terminarla</button>
@@ -784,6 +830,7 @@ const ESTILOS = `
 .tv { --verde: #1E9E3A; --amarillo: #FFC400; --fondo: #F7F7F5; --azul: #2563eb; --tinta: #1a1c1a; --gris: #6E6E66; --linea: #E6E7E2; --rojo: #C81E1E;
   font-family: var(--font-app); color: var(--tinta); }
 .tv-title { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; margin: 0 0 12px; }
+.tv-intro { margin: 0 0 14px; max-width: 70ch; font-size: 14px; line-height: 1.5; color: #4A4A4A; }
 .tv-bar { margin: 0 0 14px; padding: 14px 16px; border-radius: 14px; background: var(--fondo); display: flex; flex-direction: column; gap: 8px; }
 .tv-bar-acc { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .tv-line { margin: 0; font-size: 13.5px; line-height: 1.5; color: #4A4A4A; font-variant-numeric: tabular-nums; }

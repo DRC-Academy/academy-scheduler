@@ -5,7 +5,7 @@
 // grabadas (dentro de los filtros del panel), y con esas medidas salen, por
 // alumno, sus parejas ANTES/DESPUÉS con el mismo profe. Entran al verificador.
 //
-//   selectListenClasses: qué clases de un alumno se escuchan.
+//   listenableClasses:   qué clases de un alumno se escuchan (todas, una por grabación).
 //   pickTurns:           qué tramos de una clase (los N más largos de los que Haiku
 //                        ve como habla espontánea en el texto de Fathom).
 //   listenPairs:         las parejas, con las MISMAS reglas que el verificador
@@ -42,8 +42,8 @@ export interface TurnPick {
  * Versión del criterio con que se escuchó una clase (testimonial_listen_classes.criterio).
  *   1: los turnos más largos (casi siempre lecturas: la tanda del 02/11/2026 dio 0).
  *   2: solo turnos que Haiku, sobre el texto de Fathom, ve como habla espontánea.
- * Las ÚLTIMAS clases de cada alumno (las del DESPUÉS) escuchadas con el 1 se
- * vuelven a escuchar con el 2 (lo ya escuchado no se vuelve a pagar).
+ * Solo informativo: una clase ya escuchada no se vuelve a escuchar (decisión de
+ * Facundo, 03/11/2026: se reutilizan sus medidas).
  */
 export const LISTEN_CRITERIO = 2;
 
@@ -123,21 +123,27 @@ export function contrastScore(a: ClipMeasures, b: ClipMeasures): number {
 // ── Panel de análisis: varias parejas por alumno ─────────────────────────────
 
 /**
- * Clases de un alumno que se escuchan dentro de los filtros del panel: las
- * `escucha_clases_lado` primeras y últimas (sin solaparse). Hace falta que entre la
- * primera y la última haya al menos `semanas_min` semanas; si no, ninguna.
+ * Clases de un alumno que se escuchan dentro de los filtros del panel: TODAS
+ * (decisión de Facundo, 03/11/2026), una por grabación (`recKey`: la misma
+ * grabación copiada en dos clases cuenta una vez, la más antigua), y solo con un
+ * profe con el que el alumno tenga al menos `semanas_min` semanas entre su primera
+ * y su última clase: con los demás no puede salir ninguna pareja.
  */
-export function selectListenClasses(classes: ListenClass[], c: Pick<VerifyConfig, 'escucha_clases_lado' | 'semanas_min'>): ListenClass[] {
-  const { primeras, ultimas } = listenSides(classes, c);
-  return [...primeras, ...ultimas];
-}
-
-/** Lo mismo, separando las primeras (del ANTES) de las últimas (del DESPUÉS). */
-export function listenSides(classes: ListenClass[], c: Pick<VerifyConfig, 'escucha_clases_lado' | 'semanas_min'>): { primeras: ListenClass[]; ultimas: ListenClass[] } {
+export function listenableClasses(classes: ListenClass[], c: Pick<VerifyConfig, 'semanas_min'>, recKey: (x: ListenClass) => string): ListenClass[] {
   const sorted = [...classes].sort((a, b) => a.classDay.localeCompare(b.classDay) || a.analysisId.localeCompare(b.analysisId));
-  if (sorted.length < 2 || weeksBetween(sorted[0].classDay, sorted[sorted.length - 1].classDay) < c.semanas_min) return { primeras: [], ultimas: [] };
-  const k = Math.min(c.escucha_clases_lado, Math.floor(sorted.length / 2));
-  return { primeras: sorted.slice(0, k), ultimas: sorted.slice(-k) };
+  const vistas = new Set<string>();
+  const unicas = sorted.filter(x => {
+    const k = recKey(x);
+    if (vistas.has(k)) return false;
+    vistas.add(k);
+    return true;
+  });
+  const porProfe = new Map<string, ListenClass[]>();
+  for (const x of unicas) if (x.teacherId) porProfe.set(x.teacherId, [...(porProfe.get(x.teacherId) ?? []), x]);
+  return unicas.filter(x => {
+    const l = x.teacherId ? porProfe.get(x.teacherId) : undefined;
+    return !!l && l.length >= 2 && weeksBetween(l[0].classDay, l[l.length - 1].classDay) >= c.semanas_min;
+  });
 }
 
 export interface ListenPlanSegment extends ListenSegment {

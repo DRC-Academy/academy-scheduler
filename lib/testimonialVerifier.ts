@@ -164,6 +164,8 @@ export interface VerifyOutcome {
   fathomCausa: string | null;
   nota: number | null;
   ms: number;
+  /** Gasto estimado de esta verificación (Deepgram + Claude), en $. */
+  coste: number;
 }
 
 /** Verifica UNA pareja y guarda el resultado. Nunca deja la fila en 'verificando'. */
@@ -211,7 +213,10 @@ export async function verifyCandidate(admin: SupabaseClient, candidateId: string
       }).eq('id', cand.id).eq('status', 'detectado');
       await saveVeto(admin, id, motivo, lado, (extra.fathom_causa as string | undefined) ?? null, cand, malo, bueno);
     }
-    return { id, status, motivo, detalle, fathomCausa: (extra.fathom_causa as string | undefined) ?? null, nota: (extra.juez_nota as number | undefined) ?? null, ms };
+    return {
+      id, status, motivo, detalle, fathomCausa: (extra.fathom_causa as string | undefined) ?? null,
+      nota: (extra.juez_nota as number | undefined) ?? null, ms, coste: r4(coste.deepgram + coste.claude),
+    };
   };
   const discard = (r: Extract<RuleResult, { ok: false }>, extra: Row = {}, lado: Lado | null = null) => finish('descartado', r.motivo, r.detalle, extra, lado);
 

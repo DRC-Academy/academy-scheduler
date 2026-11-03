@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CONFIG_POR_DEFECTO as C, measureClip, checkAudio, checkAntes, checkDespues, checkContraste, checkVision,
   cutWindow, weeksBetween, isFiller, motivosFrase, shouldHarden, hardenedValue, mainSpeakerText,
-  longestStudentRun, subTranscript, mergeSpeakers,
+  longestStudentRun, subTranscript, mergeSpeakers, frasesRepetidasTexto,
   type ClipMeasures, type VisionSide,
 } from '@/lib/testimonialMeasures';
 import type { DeepgramTranscript, DeepgramWord } from '@/lib/deepgram';
@@ -161,8 +161,9 @@ describe('recortar en vez de descartar', () => {
     expect(m.otra_voz_palabras).toBe(0);
     expect(m.voces).toBe(1);
   });
-  it('ejercicio de repetición: varias palabras repetidas o lista con pocas distintas', () => {
-    expect(checkAudio(M({ repetidas_distintas: 3 }), 'ANTES', C)).toMatchObject({ ok: false, motivo: 'ejercicio_repeticion' });
+  it('ejercicio de repetición: frases enteras repetidas o lista con pocas distintas; "I I" no cuenta', () => {
+    expect(checkAudio(M({ frases_repetidas: 2 }), 'ANTES', C)).toMatchObject({ ok: false, motivo: 'ejercicio_repeticion' });
+    expect(checkAudio(M({ frases_repetidas: 1, repetidas_distintas: 5 }), 'ANTES', C).ok).toBe(true);
     expect(checkAudio(M({ palabras: 12, unicas: 0.4 }), 'ANTES', C)).toMatchObject({ ok: false, motivo: 'ejercicio_repeticion' });
     expect(checkAudio(M({ palabras: 6, unicas: 0.4 }), 'ANTES', C).ok).toBe(true);
   });
@@ -184,17 +185,28 @@ describe('ANTES, DESPUÉS y contraste', () => {
     expect(checkDespues({ ...despues, pausa_max_s: 1.6 }, C)).toMatchObject({ ok: false, motivo: 'sin_contraste' });
     expect(checkDespues({ ...despues, ppm: 90 }, C)).toMatchObject({ ok: false, motivo: 'sin_contraste' });
   });
-  it('contraste: ×1,4 de velocidad, menos de la mitad de pausas por minuto y más largo', () => {
+  it('contraste: ×1,4 de velocidad y menos de la mitad de pausas por minuto; la duración no cuenta', () => {
     expect(checkContraste(antes, despues, C).ok).toBe(true);
     expect(checkContraste(antes, { ...despues, ppm: 90 }, C)).toMatchObject({ ok: false, motivo: 'sin_contraste' });
     expect(checkContraste(antes, { ...despues, pausas_min: 9 }, C)).toMatchObject({ ok: false, motivo: 'sin_contraste' });
-    expect(checkContraste(antes, { ...despues, habla_s: 8 }, C)).toMatchObject({ ok: false, motivo: 'sin_contraste' });
+    expect(checkContraste(antes, { ...despues, habla_s: 8 }, C).ok).toBe(true);
   });
-  it('contraste: si los dos llegan al tope del clip, el empate vale', () => {
+  it('con contraste_despues_mas_largo = 1: el DESPUÉS dura más, salvo empate en el tope del clip', () => {
+    const C1 = { ...C, contraste_despues_mas_largo: 1 };
     const tope = C.escucha_clip_max_s;
-    expect(checkContraste({ ...antes, habla_s: tope }, { ...despues, habla_s: tope }, C).ok).toBe(true);
-    expect(checkContraste({ ...antes, habla_s: tope }, { ...despues, habla_s: tope - 0.6 }, C).ok).toBe(true);
-    expect(checkContraste({ ...antes, habla_s: tope }, { ...despues, habla_s: tope - 5 }, C)).toMatchObject({ ok: false, motivo: 'sin_contraste' });
+    expect(checkContraste(antes, { ...despues, habla_s: 8 }, C1)).toMatchObject({ ok: false, motivo: 'sin_contraste' });
+    expect(checkContraste({ ...antes, habla_s: tope }, { ...despues, habla_s: tope - 0.6 }, C1).ok).toBe(true);
+    expect(checkContraste({ ...antes, habla_s: tope }, { ...despues, habla_s: tope - 5 }, C1)).toMatchObject({ ok: false, motivo: 'sin_contraste' });
+  });
+  it('DESPUÉS de al menos 10 s de habla', () => {
+    expect(checkDespues({ ...despues, habla_s: 9 }, C)).toMatchObject({ ok: false, motivo: 'sin_contraste' });
+    expect(checkDespues({ ...despues, habla_s: 10 }, C).ok).toBe(true);
+  });
+  it('frasesRepetidas: rachas de frases de 3+ palabras repetidas casi seguidas', () => {
+    expect(frasesRepetidasTexto('I I want to but but it is is good')).toBe(0);
+    expect(frasesRepetidasTexto("I'm dealing... Okay. I'm dealing with I'm dealing I'm dealing with tech")).toBe(1);
+    expect(frasesRepetidasTexto('I would like a coffee. I would like a coffee. Can I have the bill? Can I have the bill?')).toBe(2);
+    expect(frasesRepetidasTexto('um I would um like a coffee')).toBe(0);
   });
   it('semanas entre clases', () => {
     expect(weeksBetween('2026-07-30', '2026-09-30')).toBe(8);

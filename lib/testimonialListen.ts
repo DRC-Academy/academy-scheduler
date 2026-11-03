@@ -23,7 +23,7 @@ import { transcribeAudio, DeepgramError, type DeepgramTranscript } from '@/lib/d
 import { parseTurns, withFathomTimestamp, formatSeconds } from '@/lib/fluency';
 import { loadConfig, logDeepgramUsage } from '@/lib/testimonialConfigStore';
 import {
-  measureClip, mainSpeakerText, mainSpeakerSpan, checkAudio, longestStudentRun, subTranscript,
+  measureClip, mainSpeakerText, mainSpeakerSpan, checkAudio, longestStudentRun, subTranscript, frasesRepetidasTexto,
   type ClipMeasures, type VerifyConfig,
 } from '@/lib/testimonialMeasures';
 import { pickTurns, turnCandidates, clipBounds, LISTEN_CRITERIO, type ListenSegment } from '@/lib/testimonialListenRank';
@@ -37,7 +37,11 @@ export const LISTEN_DONE = ['escuchada', 'sin_tramos', 'enlace_roto'];
 
 // ── Una clase ────────────────────────────────────────────────────────────────
 
-export interface ListenResult { status: 'escuchada' | 'sin_tramos' | 'enlace_roto' | 'error'; tramos: number; segundos: number; detalle: string | null; ms: number }
+export interface ListenResult {
+  status: 'escuchada' | 'sin_tramos' | 'enlace_roto' | 'error'; tramos: number; segundos: number; detalle: string | null; ms: number;
+  /** Gasto de ESTA llamada: Deepgram de lo escuchado ahora + Haiku. */
+  usd: number;
+}
 
 const DG = { model: 'nova-3', language: 'multi', diarize_model: 'latest', filler_words: true, punctuate: true };
 
@@ -69,6 +73,7 @@ export function listenMeasures(t: DeepgramTranscript, c: VerifyConfig): { m: Cli
 
 export async function listenClass(admin: SupabaseClient, analysisId: string): Promise<ListenResult> {
   const t0 = Date.now();
+  let usd = 0;
   const [{ config: c }, { data: tt }, { data: ca }, { data: prev }] = await Promise.all([
     loadConfig(admin),
     admin.from('testimonial_transcripts').select('student_group, teacher_id, class_day, fathom_url, student_label').eq('analysis_id', analysisId).maybeSingle(),
@@ -89,7 +94,7 @@ export async function listenClass(admin: SupabaseClient, analysisId: string): Pr
       ({ error } = await admin.from('testimonial_listen_classes').upsert(row, { onConflict: 'analysis_id' }));
     }
     if (error) throw new Error(`testimonial_listen_classes: ${error.message}`);
-    return { status, tramos, segundos, detalle, ms: Date.now() - t0 };
+    return { status, tramos, segundos, detalle, ms: Date.now() - t0, usd: Math.round(usd * 10000) / 10000 };
   };
 
   // Antes de pagar Deepgram: de las intervenciones largas, solo las que Haiku ve
@@ -100,7 +105,8 @@ export async function listenClass(admin: SupabaseClient, analysisId: string): Pr
   if (!cands.length) return mark('sin_tramos', 'Ninguna intervención larga del alumno.', 0, 0);
   let veredictos: Awaited<ReturnType<typeof clasificarTurnosFathom>>['porTurno'];
   try {
-    ({ porTurno: veredictos } = await clasificarTurnosFathom(turns, cands.map(x => x.turnIndex), label));
+    const r = await clasificarTurnosFathom(turns, cands.map(x => x.turnIndex), label);
+    veredictos = r.porTurno; usd += r.usd;
   } catch (err) {
     return mark('error', err instanceof Error ? err.message : String(err), 0, 0);
   }
@@ -137,6 +143,7 @@ export async function listenClass(admin: SupabaseClient, analysisId: string): Pr
       return;
     }
     await logDeepgramUsage(admin, 'escucha', 'multi', t, w.dur);
+    usd += ((t.durationS ?? w.dur) / 60) * c.deepgram_usd_min_multi;
     const { m, span, texto } = listenMeasures(t, c);
     rows.push({
       id: `escucha:${analysisId}:${p.turnIndex}`, analysis_id: analysisId, student_group: tt.student_group,
@@ -159,11 +166,15 @@ export async function listenClass(admin: SupabaseClient, analysisId: string): Pr
 
 // ── Pareja ───────────────────────────────────────────────────────────────────
 
+/** Medidas anteriores al 03/11/2026: les falta frases_repetidas, que sale del texto del mismo trozo. */
+const conFrases = (m: ClipMeasures | null, texto: string): ClipMeasures | null =>
+  (m && m.frases_repetidas == null ? { ...m, frases_repetidas: frasesRepetidasTexto(texto) } : m);
+
 /** Tramo escuchado desde su fila de testimonial_listen_segments. */
 export const toListenSegment = (r: Row): ListenSegment => ({
   id: String(r.id), analysisId: String(r.analysis_id), teacherId: r.teacher_id ?? null, classDay: String(r.class_day ?? '').slice(0, 10),
   hablaStart: Number(r.habla_start_s ?? r.start_s), hablaEnd: Number(r.habla_end_s ?? Number(r.start_s) + Number(r.dur_s)),
-  medidas: (r.medidas as ClipMeasures | null) ?? null, texto: String(r.texto ?? ''),
+  medidas: conFrases(r.medidas as ClipMeasures | null, String(r.texto ?? '')), texto: String(r.texto ?? ''),
   lectura: r.lectura === 'lectura' || r.lectura === 'espontaneo' ? r.lectura : null,
 });
 

@@ -41,8 +41,16 @@ export interface VerifyConfig {
   pausa_min_s: number;
   antes_pausas_min: number; antes_ppm_max: number; antes_tercio_ppm_max: number; antes_tercios_con_traba_min: number;
   despues_pausa_max_s: number; despues_ppm_min: number;
-  repeticion_distintas_min: number; repeticion_unicas_max: number;
+  /** El DESPUÉS dura al menos esto (segundos de habla). */
+  despues_habla_min_s: number;
+  /**
+   * Ejercicio de repetición: rachas de frases de 3+ palabras repetidas casi seguidas
+   * (`frases_repetidas`), o muy poca variedad. "I I" o "but but" no cuentan.
+   */
+  repeticion_frases_min: number; repeticion_unicas_max: number;
   contraste_ppm_factor: number; contraste_pausas_factor: number; semanas_min: number;
+  /** 1 = el DESPUÉS tiene que durar más que el ANTES; 0 = no se mira (decisión de Facundo, 03/11/2026). */
+  contraste_despues_mas_largo: number;
   /** Margen para "los dos clips llegan al tope de duración" (empate por tope = válido). */
   contraste_tope_tolerancia_s: number;
   vision_camara_conf: number; vision_leyendo_conf: number;
@@ -71,10 +79,11 @@ export const CONFIG_POR_DEFECTO: VerifyConfig = {
   deepgram_ambas: 1,
   espanol_confianza_min: 0.9, espanol_pct_max: 0.15, voces_otra_max_palabras: 3,
   pausa_min_s: 0.6,
-  antes_pausas_min: 3, antes_ppm_max: 100, antes_tercio_ppm_max: 140, antes_tercios_con_traba_min: 2,
-  despues_pausa_max_s: 1.5, despues_ppm_min: 100,
-  repeticion_distintas_min: 3, repeticion_unicas_max: 0.5,
+  antes_pausas_min: 2, antes_ppm_max: 100, antes_tercio_ppm_max: 140, antes_tercios_con_traba_min: 2,
+  despues_pausa_max_s: 1.5, despues_ppm_min: 100, despues_habla_min_s: 10,
+  repeticion_frases_min: 2, repeticion_unicas_max: 0.5,
   contraste_ppm_factor: 1.4, contraste_pausas_factor: 0.5, semanas_min: 4,
+  contraste_despues_mas_largo: 0,
   contraste_tope_tolerancia_s: 1,
   vision_camara_conf: 0.6, vision_leyendo_conf: 0.6,
   juez_nota_min: 60,
@@ -134,8 +143,13 @@ export interface ClipMeasures {
   pausas_min: number;
   pausa_max_s: number;
   muletillas: number;
-  /** Palabras distintas dichas dos o más veces seguidas. */
+  /** Palabras distintas dichas dos o más veces seguidas ("I I"): dudas, solo informativo. */
   repetidas_distintas: number;
+  /**
+   * Rachas de frases de 3+ palabras repetidas casi seguidas (frasesRepetidas). Falta
+   * en medidas anteriores al 03/11/2026: se calcula del texto (lib/testimonialListen).
+   */
+  frases_repetidas?: number;
   /** Fracción de palabras distintas (1 = ninguna se repite). */
   unicas: number;
   /** Tercios del clip (de 3) con alguna pausa o muletilla. */
@@ -155,6 +169,33 @@ export interface ClipMeasures {
 }
 
 const round = (x: number, d = 1) => Math.round(x * 10 ** d) / 10 ** d;
+
+/** Cuántas palabras atrás se busca la frase repetida (un ejercicio repite enseguida). */
+const VENTANA_REPETICION = 12;
+
+/**
+ * Ejercicio de repetición: rachas en que una frase de 3+ palabras se repite casi
+ * seguida ("I would like a coffee. I would like a coffee."). Una racha cuenta una
+ * vez. "I I" o "but but" (dudas) no son frases y no cuentan (decisión de Facundo,
+ * 03/11/2026). `seq`: palabras normalizadas, sin muletillas.
+ */
+export function frasesRepetidas(seq: string[]): number {
+  let rachas = 0, enRacha = false;
+  for (let i = 3; i + 3 <= seq.length; i++) {
+    const frase = seq.slice(i, i + 3).join(' ');
+    let repetida = false;
+    for (let j = Math.max(0, i - VENTANA_REPETICION); j + 3 <= i; j++) {
+      if (seq.slice(j, j + 3).join(' ') === frase) { repetida = true; break; }
+    }
+    if (repetida && !enRacha) rachas++;
+    enRacha = repetida;
+  }
+  return rachas;
+}
+
+/** Lo mismo desde el texto guardado (medidas antiguas sin `frases_repetidas`). */
+export const frasesRepetidasTexto = (texto: string): number =>
+  frasesRepetidas(texto.split(/\s+/).filter(w => w && !isFiller(w)).map(norm).filter(Boolean));
 
 /**
  * Voz con más palabras y lo que dicen las demás: palabras de verdad (`others`) e
@@ -225,6 +266,7 @@ export function measureClip(multi: DeepgramTranscript, detect: DeepgramTranscrip
     pausa_max_s: round(gaps.reduce((m, g) => Math.max(m, g.dur), 0), 2),
     muletillas: fillers.length,
     repetidas_distintas: repetidas.size,
+    frases_repetidas: frasesRepetidas(seq),
     unicas: round(new Set(seq).size / Math.max(1, seq.length), 2),
     tercios_con_traba: thirds.filter(t => t.traba).length,
     tercio_ppm_max: round(Math.max(...thirds.map(t => t.ppm))),
@@ -310,8 +352,9 @@ export function checkAudio(m: ClipMeasures, lado: 'ANTES' | 'DESPUÉS', c: Verif
   if ((m.otra_voz_interjecciones ?? 0) > c.voces_interjecciones_max) {
     return no('habla_profe', `${lado}: la otra voz mete ${m.otra_voz_interjecciones} interjecciones (máximo ${c.voces_interjecciones_max}).`);
   }
-  if (m.repetidas_distintas >= c.repeticion_distintas_min || (m.palabras >= 10 && m.unicas < c.repeticion_unicas_max)) {
-    return no('ejercicio_repeticion', `${lado}: ${m.repetidas_distintas} palabras distintas repetidas seguidas, ${pct(m.unicas)} de palabras distintas.`);
+  const frases = m.frases_repetidas ?? 0;
+  if (frases >= c.repeticion_frases_min || (m.palabras >= 10 && m.unicas < c.repeticion_unicas_max)) {
+    return no('ejercicio_repeticion', `${lado}: ${frases} frases repetidas (máximo ${c.repeticion_frases_min - 1}), ${pct(m.unicas)} de palabras distintas.`);
   }
   return OK;
 }
@@ -326,18 +369,20 @@ export function checkAntes(m: ClipMeasures, c: VerifyConfig): RuleResult {
   return fallos.length ? no('falso_bloqueo', `ANTES: ${fallos.join(', ')}.`) : OK;
 }
 
-/** DESPUÉS válido: sin pausas largas y rápido. */
+/** DESPUÉS válido: sin pausas largas, rápido y de al menos `despues_habla_min_s`. */
 export function checkDespues(m: ClipMeasures, c: VerifyConfig): RuleResult {
   const fallos: string[] = [];
+  if (m.habla_s < c.despues_habla_min_s) fallos.push(`${m.habla_s} s de habla (mínimo ${c.despues_habla_min_s})`);
   if (m.pausa_max_s > c.despues_pausa_max_s) fallos.push(`pausa de ${m.pausa_max_s} s (máximo ${c.despues_pausa_max_s})`);
   if (m.ppm < c.despues_ppm_min) fallos.push(`${m.ppm} palabras/min (mínimo ${c.despues_ppm_min})`);
   return fallos.length ? no('sin_contraste', `DESPUÉS poco fluido: ${fallos.join(', ')}.`) : OK;
 }
 
 /**
- * Contraste entre los dos clips. Pausas por minuto. El DESPUÉS dura más, salvo que
- * los dos lleguen al tope de duración del clip (`escucha_clip_max_s`): ese empate
- * no dice nada y vale (decisión de Facundo, 02/11/2026).
+ * Contraste entre los dos clips: velocidad y pausas por minuto. Solo si
+ * `contraste_despues_mas_largo` = 1, además el DESPUÉS dura más, salvo que los dos
+ * lleguen al tope de duración del clip (`escucha_clip_max_s`). Desde el 03/11/2026
+ * está a 0: hablar bien también es decir lo mismo en menos tiempo.
  */
 export function checkContraste(a: ClipMeasures, b: ClipMeasures, c: VerifyConfig): RuleResult {
   const fallos: string[] = [];
@@ -345,7 +390,7 @@ export function checkContraste(a: ClipMeasures, b: ClipMeasures, c: VerifyConfig
   if (!(b.pausas_min < c.contraste_pausas_factor * a.pausas_min)) fallos.push(`pausas/min ${b.pausas_min} frente a ${a.pausas_min}`);
   const tope = c.escucha_clip_max_s - c.contraste_tope_tolerancia_s;
   const empateTope = a.habla_s >= tope && b.habla_s >= tope;
-  if (!(b.habla_s > a.habla_s) && !empateTope) fallos.push(`el DESPUÉS (${b.habla_s} s) no es más largo que el ANTES (${a.habla_s} s)`);
+  if (c.contraste_despues_mas_largo && !(b.habla_s > a.habla_s) && !empateTope) fallos.push(`el DESPUÉS (${b.habla_s} s) no es más largo que el ANTES (${a.habla_s} s)`);
   return fallos.length ? no('sin_contraste', `Contraste: ${fallos.join(', ')}.`) : OK;
 }
 
