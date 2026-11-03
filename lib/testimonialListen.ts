@@ -1,7 +1,9 @@
 // Testimoniales — ESCUCHA DIRIGIDA (servidor). Fuente "Escucha (audio)" del panel
 // de análisis (lib/testimonialAnalysis). SOLO SERVIDOR.
 //
-//   listenClass       UNA clase por llamada: sus tramos largos (sin lecturas) se
+//   listenClass       UNA clase por llamada: de sus intervenciones largas, Haiku
+//                     separa en el texto de Fathom las lecturas del habla
+//                     espontánea; las espontáneas más largas se
 //                     bajan de Fathom, se escuchan con Deepgram (modo multi) y se
 //                     guardan sus medidas en testimonial_listen_segments. Si en un
 //                     tramo habla también el profe o hay español, se guardan las
@@ -24,7 +26,8 @@ import {
   measureClip, mainSpeakerText, mainSpeakerSpan, checkAudio, longestStudentRun, subTranscript,
   type ClipMeasures, type VerifyConfig,
 } from '@/lib/testimonialMeasures';
-import { pickTurns, clipBounds, type ListenSegment } from '@/lib/testimonialListenRank';
+import { pickTurns, turnCandidates, clipBounds, LISTEN_CRITERIO, type ListenSegment } from '@/lib/testimonialListenRank';
+import { clasificarTurnosFathom } from '@/lib/testimonialReading';
 import type { TestimonialClip, TestimonialClips } from '@/lib/testimonials';
 
 type Row = Record<string, any>;   // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -75,17 +78,35 @@ export async function listenClass(admin: SupabaseClient, analysisId: string): Pr
   if (!tt || !ca?.transcript) throw new Error('La clase ya no existe o no tiene transcript.');
 
   const mark = async (status: ListenResult['status'], detalle: string | null, tramos: number, segundos: number): Promise<ListenResult> => {
-    const { error } = await admin.from('testimonial_listen_classes').upsert({
+    const row: Row = {
       analysis_id: analysisId, student_group: tt.student_group, teacher_id: tt.teacher_id ?? null, class_day: tt.class_day ?? null,
-      status, detalle, tramos, segundos: Math.round(segundos * 10) / 10, updated_at: new Date().toISOString(),
-    }, { onConflict: 'analysis_id' });
+      status, detalle, tramos, segundos: Math.round(segundos * 10) / 10, updated_at: new Date().toISOString(), criterio: LISTEN_CRITERIO,
+    };
+    let { error } = await admin.from('testimonial_listen_classes').upsert(row, { onConflict: 'analysis_id' });
+    if (error && /criterio/i.test(error.message)) {
+      console.warn('[testimoniales] Falta supabase-testimoniales-espontaneo.sql: la clase se guarda sin criterio.');
+      delete row.criterio;
+      ({ error } = await admin.from('testimonial_listen_classes').upsert(row, { onConflict: 'analysis_id' }));
+    }
     if (error) throw new Error(`testimonial_listen_classes: ${error.message}`);
     return { status, tramos, segundos, detalle, ms: Date.now() - t0 };
   };
 
+  // Antes de pagar Deepgram: de las intervenciones largas, solo las que Haiku ve
+  // como habla espontánea en el texto de Fathom (las lecturas no son testimonio).
   const turns = parseTurns(String(ca.transcript));
-  const picks = pickTurns(turns, String(tt.student_label ?? ''), c);
-  if (!picks.length) return mark('sin_tramos', 'Ninguna intervención larga del alumno que no sea lectura.', 0, 0);
+  const label = String(tt.student_label ?? '');
+  const cands = turnCandidates(turns, label, c);
+  if (!cands.length) return mark('sin_tramos', 'Ninguna intervención larga del alumno.', 0, 0);
+  let veredictos: Awaited<ReturnType<typeof clasificarTurnosFathom>>['porTurno'];
+  try {
+    ({ porTurno: veredictos } = await clasificarTurnosFathom(turns, cands.map(x => x.turnIndex), label));
+  } catch (err) {
+    return mark('error', err instanceof Error ? err.message : String(err), 0, 0);
+  }
+  const espontaneos = new Set([...veredictos].filter(([, v]) => v.tipo === 'espontaneo').map(([k]) => k));
+  const picks = pickTurns(turns, label, c, espontaneos);
+  if (!picks.length) return mark('sin_tramos', 'Las intervenciones largas del alumno son lecturas.', 0, 0);
 
   // Lo ya escuchado de esta clase (un reintento tras un error) no se vuelve a pagar.
   const ya = new Map(((prev ?? []) as Row[]).map(r => [Number(r.turn_index), Number(r.audio_s ?? 0)]));
@@ -125,6 +146,7 @@ export async function listenClass(admin: SupabaseClient, analysisId: string): Pr
       habla_end_s: span ? Math.round((p.start + span.end) * 10) / 10 : null,
       medidas: m, ppm: m?.ppm ?? null, pausas_min: m?.pausas_min ?? null, muletillas: m?.muletillas ?? null,
       espanol_pct: m?.espanol_pct ?? null, texto: texto.slice(0, 2000), request_id: t.requestId,
+      lectura: 'espontaneo', lectura_motivo: `Fathom: ${veredictos.get(p.turnIndex)?.motivo ?? ''}`.slice(0, 300),
     });
   }));
   if (rows.length) {

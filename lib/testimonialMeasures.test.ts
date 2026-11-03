@@ -181,7 +181,7 @@ describe('ANTES, DESPUÉS y contraste', () => {
   });
   it('DESPUÉS: sin pausas largas y rápido', () => {
     expect(checkDespues(despues, C).ok).toBe(true);
-    expect(checkDespues({ ...despues, pausa_max_s: 1.5 }, C)).toMatchObject({ ok: false, motivo: 'sin_contraste' });
+    expect(checkDespues({ ...despues, pausa_max_s: 1.6 }, C)).toMatchObject({ ok: false, motivo: 'sin_contraste' });
     expect(checkDespues({ ...despues, ppm: 90 }, C)).toMatchObject({ ok: false, motivo: 'sin_contraste' });
   });
   it('contraste: ×1,4 de velocidad, menos de la mitad de pausas por minuto y más largo', () => {

@@ -6,7 +6,8 @@
 // alumno, sus parejas ANTES/DESPUÉS con el mismo profe. Entran al verificador.
 //
 //   selectListenClasses: qué clases de un alumno se escuchan.
-//   pickTurns:           qué tramos de una clase (los N más largos, sin lecturas).
+//   pickTurns:           qué tramos de una clase (los N más largos de los que Haiku
+//                        ve como habla espontánea en el texto de Fathom).
 //   listenPairs:         las parejas, con las MISMAS reglas que el verificador
 //                        (lib/testimonialMeasures), para no proponerle lo que tiraría.
 // Todos los números salen de testimonial_config.
@@ -38,13 +39,24 @@ export interface TurnPick {
 }
 
 /**
- * Los tramos que se escuchan: intervenciones del alumno de más de
- * `escucha_min_turno_s` (según Fathom: hasta que habla otro), sin pista de
- * lectura, las `escucha_tramos_por_clase` más largas, con tope y margen.
+ * Versión del criterio con que se escuchó una clase (testimonial_listen_classes.criterio).
+ *   1: los turnos más largos (casi siempre lecturas: la tanda del 02/11/2026 dio 0).
+ *   2: solo turnos que Haiku, sobre el texto de Fathom, ve como habla espontánea.
+ * Las ÚLTIMAS clases de cada alumno (las del DESPUÉS) escuchadas con el 1 se
+ * vuelven a escuchar con el 2 (lo ya escuchado no se vuelve a pagar).
  */
-export function pickTurns(turns: Turn[], studentLabel: string, c: VerifyConfig): TurnPick[] {
+export const LISTEN_CRITERIO = 2;
+
+export interface TurnCandidate { turnIndex: number; s: number; d: number }
+
+/**
+ * Intervenciones del alumno de más de `escucha_min_turno_s` (según Fathom: hasta
+ * que habla otro) sin pista de lectura en el texto: lo que se clasifica antes de
+ * pagar la escucha.
+ */
+export function turnCandidates(turns: Turn[], studentLabel: string, c: VerifyConfig): TurnCandidate[] {
   const secs = turns.map(t => toSeconds(t.at));
-  const largos: Array<{ k: number; s: number; d: number }> = [];
+  const largos: TurnCandidate[] = [];
   turns.forEach((t, k) => {
     if (t.speaker !== studentLabel) return;
     const s = secs[k];
@@ -52,9 +64,19 @@ export function pickTurns(turns: Turn[], studentLabel: string, c: VerifyConfig):
     if (s == null || next == null) return;
     const d = next - s;
     if (d <= c.escucha_min_turno_s || readingCue(turns, k)) return;
-    largos.push({ k, s, d });
+    largos.push({ turnIndex: k, s, d });
   });
-  return largos
+  return largos;
+}
+
+/**
+ * Los tramos que se escuchan: de los candidatos (solo los `espontaneos`, si se
+ * pasa la lista), los `escucha_tramos_por_clase` más largos, con tope y margen.
+ */
+export function pickTurns(turns: Turn[], studentLabel: string, c: VerifyConfig, espontaneos?: Set<number>): TurnPick[] {
+  return turnCandidates(turns, studentLabel, c)
+    .filter(x => !espontaneos || espontaneos.has(x.turnIndex))
+    .map(({ turnIndex: k, s, d }) => ({ k, s, d }))
     .sort((a, b) => b.d - a.d || a.s - b.s)
     .slice(0, c.escucha_tramos_por_clase)
     .map(({ k, s, d }) => {
@@ -106,10 +128,16 @@ export function contrastScore(a: ClipMeasures, b: ClipMeasures): number {
  * primera y la última haya al menos `semanas_min` semanas; si no, ninguna.
  */
 export function selectListenClasses(classes: ListenClass[], c: Pick<VerifyConfig, 'escucha_clases_lado' | 'semanas_min'>): ListenClass[] {
+  const { primeras, ultimas } = listenSides(classes, c);
+  return [...primeras, ...ultimas];
+}
+
+/** Lo mismo, separando las primeras (del ANTES) de las últimas (del DESPUÉS). */
+export function listenSides(classes: ListenClass[], c: Pick<VerifyConfig, 'escucha_clases_lado' | 'semanas_min'>): { primeras: ListenClass[]; ultimas: ListenClass[] } {
   const sorted = [...classes].sort((a, b) => a.classDay.localeCompare(b.classDay) || a.analysisId.localeCompare(b.analysisId));
-  if (sorted.length < 2 || weeksBetween(sorted[0].classDay, sorted[sorted.length - 1].classDay) < c.semanas_min) return [];
+  if (sorted.length < 2 || weeksBetween(sorted[0].classDay, sorted[sorted.length - 1].classDay) < c.semanas_min) return { primeras: [], ultimas: [] };
   const k = Math.min(c.escucha_clases_lado, Math.floor(sorted.length / 2));
-  return [...sorted.slice(0, k), ...sorted.slice(-k)];
+  return { primeras: sorted.slice(0, k), ultimas: sorted.slice(-k) };
 }
 
 export interface ListenPlanSegment extends ListenSegment {

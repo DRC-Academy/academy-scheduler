@@ -35,7 +35,7 @@ import {
   planStudentPairs, comparePlanned, toPlanItem, isVetoed, momentKey, momentKeyFromId, recordingKey, pickDiverse, passesFilters,
   type PlanFiltros, type PlanItem, type PlannedPair, type Vetos,
 } from '@/lib/testimonialPairPlan';
-import { selectListenClasses, listenPairs, compareListenPairs, contrastScore, candidatoDespues, type ListenClass, type ListenPlanSegment, type ListenPlannedPair } from '@/lib/testimonialListenRank';
+import { listenSides, LISTEN_CRITERIO, listenPairs, compareListenPairs, contrastScore, candidatoDespues, type ListenClass, type ListenPlanSegment, type ListenPlannedPair } from '@/lib/testimonialListenRank';
 import { clasificarYGuardar, type Lectura } from '@/lib/testimonialReading';
 import { listenClass, listenColumns, toListenSegment, LISTEN_DONE, type ListenResult } from '@/lib/testimonialListen';
 import { verifyCandidate, batchResumen, closeBatch, type VerifyOutcome } from '@/lib/testimonialVerifier';
@@ -252,6 +252,40 @@ const SEG_LISTEN_COLS = 'id, analysis_id, student_group, teacher_id, class_day, 
 let hayLectura: boolean | null = null;
 const faltaColumna = (e: unknown) => /lectura/i.test(e instanceof Error ? e.message : String(e));
 
+let hayCriterio: boolean | null = null;
+/** Sin la columna (falta supabase-testimoniales-espontaneo.sql), todo cuenta como criterio actual: como antes. */
+const criterioDe = (r: Row) => (hayCriterio === false ? LISTEN_CRITERIO : Number(r.criterio ?? 1));
+
+/** Clases ya escuchadas de esos alumnos, con el criterio con que se escucharon si ya existe la columna. */
+async function listenClassRows(admin: SupabaseClient, groups: string[]): Promise<Row[]> {
+  const leer = (cols: string) => inChunks(groups, ch => paged(admin, 'testimonial_listen_classes', cols, 'analysis_id', q => q.in('student_group', ch)));
+  if (hayCriterio !== false) {
+    try {
+      const rows = await leer('analysis_id, status, criterio');
+      hayCriterio = true;
+      return rows;
+    } catch (e) {
+      if (!/criterio/i.test(e instanceof Error ? e.message : String(e))) throw e;
+      hayCriterio = false;
+      console.warn('[testimoniales] Falta supabase-testimoniales-espontaneo.sql: no se vuelven a escuchar las últimas clases.');
+    }
+  }
+  return leer('analysis_id, status');
+}
+
+async function listenClassRowsById(admin: SupabaseClient, analysisId: string): Promise<Row[]> {
+  const leer = (cols: string) => admin.from('testimonial_listen_classes').select(cols).eq('analysis_id', analysisId);
+  if (hayCriterio !== false) {
+    const r = await leer('status, criterio');
+    if (!r.error) { hayCriterio = true; return (r.data ?? []) as unknown as Row[]; }
+    if (!/criterio/i.test(r.error.message)) throw new Error(`testimonial_listen_classes: ${r.error.message}`);
+    hayCriterio = false;
+  }
+  const r = await leer('status');
+  if (r.error) throw new Error(`testimonial_listen_classes: ${r.error.message}`);
+  return (r.data ?? []) as unknown as Row[];
+}
+
 /** Tramos escuchados de esos alumnos; con su clasificación de lectura si ya existe la columna. */
 async function listenSegmentRows(admin: SupabaseClient, groups: string[]): Promise<Row[]> {
   const leer = (cols: string) => inChunks(groups, ch => paged(admin, 'testimonial_listen_segments', cols, 'id', q => q.in('student_group', ch)));
@@ -290,11 +324,11 @@ async function planEscucha(admin: SupabaseClient, c: VerifyConfig, o: AnalisisOp
     byStudent.set(g, [...(byStudent.get(g) ?? []), { analysisId: String(t.analysis_id), studentGroup: g, teacherId: t.teacher_id ?? null, classDay: day, fathomUrl: String(t.fathom_url) }]);
   }
   const groups = [...byStudent.keys()];
-  const [listened, segRows] = await Promise.all([
-    inChunks(groups, ch => paged(admin, 'testimonial_listen_classes', 'analysis_id, status', 'analysis_id', q => q.in('student_group', ch))),
-    listenSegmentRows(admin, groups),
-  ]);
+  const [listened, segRows] = await Promise.all([listenClassRows(admin, groups), listenSegmentRows(admin, groups)]);
+  // Hecha = ya escuchada. Las últimas clases (las del DESPUÉS) además con el criterio
+  // actual (turnos espontáneos); si no, se vuelven a escuchar (lo ya oído no se paga).
   const hecha = new Set(listened.filter(r => LISTEN_DONE.includes(String(r.status))).map(r => String(r.analysis_id)));
+  const hechaActual = new Set(listened.filter(r => LISTEN_DONE.includes(String(r.status)) && criterioDe(r) >= LISTEN_CRITERIO).map(r => String(r.analysis_id)));
   const segsBy = new Map<string, Row[]>();
   for (const r of segRows) segsBy.set(String(r.student_group), [...(segsBy.get(String(r.student_group)) ?? []), r]);
 
@@ -303,11 +337,13 @@ async function planEscucha(admin: SupabaseClient, c: VerifyConfig, o: AnalisisOp
   const alumnosPend = new Set<string>();
   const porAlumno: Array<{ g: string; pares: ListenPlannedPair[] }> = [];
   for (const [g, classes] of byStudent) {
-    const elegidas = selectListenClasses(classes, c);
-    if (!elegidas.length) continue;
-    for (const x of elegidas) {
-      clases.add(x.analysisId);
-      if (!hecha.has(x.analysisId)) { porEscuchar.push({ g, analysisId: x.analysisId }); alumnosPend.add(g); }
+    const { primeras, ultimas } = listenSides(classes, c);
+    if (!primeras.length) continue;
+    for (const [lado, hechas] of [[primeras, hecha], [ultimas, hechaActual]] as const) {
+      for (const x of lado) {
+        clases.add(x.analysisId);
+        if (!hechas.has(x.analysisId)) { porEscuchar.push({ g, analysisId: x.analysisId }); alumnosPend.add(g); }
+      }
     }
     // Lo ya escuchado de este alumno dentro de los filtros (también de otras clases).
     const segs: ListenPlanSegment[] = (segsBy.get(g) ?? []).filter(r => urls.has(String(r.analysis_id))).map(r => {
@@ -550,8 +586,10 @@ export async function escucharItem(admin: SupabaseClient, batchId: string, idx: 
   const item = await loadItem(admin, batchId, idx);
   if (item.tipo !== 'escuchar') throw new Error('Esa fila no es una clase por escuchar.');
   if (item.status !== 'pendiente' && item.status !== 'en_curso') return { status: String(item.status), ya: true, result: null };
-  const { data: prev } = await admin.from('testimonial_listen_classes').select('status').eq('analysis_id', item.a).maybeSingle();
-  if (prev && LISTEN_DONE.includes(String(prev.status))) {
+  // Ya escuchada con el criterio actual (otra tanda, un reintento): no se repite. Si
+  // está en la tanda escuchada con el criterio viejo, es una de las últimas: se reescucha.
+  const [prev] = await listenClassRowsById(admin, String(item.a));
+  if (prev && LISTEN_DONE.includes(String(prev.status)) && criterioDe(prev) >= LISTEN_CRITERIO) {
     await setItem(admin, batchId, idx, { status: 'hecha', resultado: prev.status });
     return { status: 'hecha', ya: true, result: null };
   }

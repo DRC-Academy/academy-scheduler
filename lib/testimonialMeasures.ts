@@ -72,7 +72,7 @@ export const CONFIG_POR_DEFECTO: VerifyConfig = {
   espanol_confianza_min: 0.9, espanol_pct_max: 0.15, voces_otra_max_palabras: 3,
   pausa_min_s: 0.6,
   antes_pausas_min: 3, antes_ppm_max: 100, antes_tercio_ppm_max: 140, antes_tercios_con_traba_min: 2,
-  despues_pausa_max_s: 1.0, despues_ppm_min: 110,
+  despues_pausa_max_s: 1.5, despues_ppm_min: 100,
   repeticion_distintas_min: 3, repeticion_unicas_max: 0.5,
   contraste_ppm_factor: 1.4, contraste_pausas_factor: 0.5, semanas_min: 4,
   contraste_tope_tolerancia_s: 1,

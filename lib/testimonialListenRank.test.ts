@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CONFIG_POR_DEFECTO as C, type ClipMeasures } from '@/lib/testimonialMeasures';
 import {
-  selectListenClasses, pickTurns, listenPairs, clipBounds, contrastScore,
+  selectListenClasses, listenSides, pickTurns, turnCandidates, listenPairs, clipBounds, contrastScore,
   type ListenClass, type ListenSegment, type ListenPlanSegment,
 } from '@/lib/testimonialListenRank';
 import type { Turn } from '@/lib/fluency';
@@ -46,6 +46,20 @@ describe('pickTurns', () => {
   });
   it('respeta el número de tramos por clase', () => {
     expect(pickTurns(turns, AL, { ...C, escucha_tramos_por_clase: 1 })).toEqual([{ turnIndex: 7, start: 118, dur: 47 }]);
+  });
+  it('con la lista de espontáneos, solo esos (aunque haya otros más largos)', () => {
+    expect(turnCandidates(turns, AL, C).map(x => x.turnIndex)).toEqual([1, 7]);
+    expect(pickTurns(turns, AL, { ...C, escucha_tramos_por_clase: 1 }, new Set([1]))).toEqual([{ turnIndex: 1, start: 3, dur: 27 }]);
+    expect(pickTurns(turns, AL, C, new Set())).toEqual([]);
+  });
+});
+
+describe('listenSides', () => {
+  it('separa las primeras clases (ANTES) de las últimas (DESPUÉS)', () => {
+    const dias = ['2026-01-05', '2026-01-12', '2026-01-19', '2026-03-02', '2026-03-09', '2026-03-16', '2026-03-23'];
+    const r = listenSides(dias.map(d => ({ analysisId: d, studentGroup: 'g', teacherId: 't', classDay: d, fathomUrl: '' })), C);
+    expect(r.primeras.map(x => x.classDay)).toEqual(dias.slice(0, 3));
+    expect(r.ultimas.map(x => x.classDay)).toEqual(dias.slice(-3));
   });
 });
 

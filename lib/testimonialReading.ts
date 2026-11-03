@@ -108,6 +108,24 @@ export async function readingInputs(admin: SupabaseClient, segs: Array<{ id: str
   });
 }
 
+/** La frase anterior de otra persona (el profe), mirando hasta 4 turnos atrás. */
+function frasePrevia(turns: ReturnType<typeof parseTurns>, k: number, label: string): string {
+  for (let j = k - 1; j >= 0 && j >= k - 4; j--) if (turns[j] && turns[j].speaker !== label) return turns[j].text;
+  return '';
+}
+
+/**
+ * ANTES de pagar la escucha: qué intervenciones del alumno son habla espontánea,
+ * sobre el texto de Fathom (decisión de Facundo, 02/11/2026). Devuelve, por
+ * turno, su veredicto. Si Haiku no contesta nada, lanza (no se paga Deepgram a ciegas).
+ */
+export async function clasificarTurnosFathom(turns: ReturnType<typeof parseTurns>, indices: number[], label: string): Promise<{ porTurno: Map<number, ReadingVerdict>; usd: number }> {
+  if (!indices.length) return { porTurno: new Map(), usd: 0 };
+  const { verdicts, usd } = await classifyReading(indices.map(k => ({ id: String(k), texto: turns[k]?.text ?? '', previa: frasePrevia(turns, k, label) })));
+  if (!verdicts.length) throw new Error('No se pudo clasificar con Haiku si los turnos son lectura o habla espontánea.');
+  return { porTurno: new Map(verdicts.map(v => [Number(v.id), v])), usd };
+}
+
 /** Clasifica y guarda. Devuelve cuántos se guardaron y el gasto. */
 export async function clasificarYGuardar(admin: SupabaseClient, segs: Array<{ id: string; analysisId: string; turnIndex: number; texto: string }>): Promise<{ guardados: number; usd: number; errores: number }> {
   if (!segs.length) return { guardados: 0, usd: 0, errores: 0 };
