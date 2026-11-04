@@ -54,6 +54,12 @@ export interface VerifyConfig {
   /** Margen para "los dos clips llegan al tope de duración" (empate por tope = válido). */
   contraste_tope_tolerancia_s: number;
   vision_camara_conf: number; vision_leyendo_conf: number;
+  /**
+   * 1 = pantalla compartida con los recuadros pequeños se descarta como "leyendo";
+   * 0 = no se descarta: el testimonio sigue y llega con un aviso para revisarlo a
+   * mano (03/11/2026: tiraba 8 de cada 11, algunos con buena nota del juez).
+   */
+  vision_pantalla_descarta: number;
   juez_nota_min: number;
   endurecer_ventana: number; endurecer_veces: number; alarma_fuente_pct: number; retencion_dias: number;
   /** Varias parejas por alumno (supabase-testimoniales-varias-parejas.sql). */
@@ -86,6 +92,7 @@ export const CONFIG_POR_DEFECTO: VerifyConfig = {
   contraste_despues_mas_largo: 0,
   contraste_tope_tolerancia_s: 1,
   vision_camara_conf: 0.6, vision_leyendo_conf: 0.6,
+  vision_pantalla_descarta: 0,
   juez_nota_min: 60,
   endurecer_ventana: 20, endurecer_veces: 3, alarma_fuente_pct: 0.5, retencion_dias: 30,
   parejas_por_alumno: 10, momento_max_parejas: 2, momento_espanol_max: 0.15,
@@ -438,13 +445,24 @@ export function checkVision(v: VisionSide, lado: 'ANTES' | 'DESPUÉS', c: Verify
   if (v.camara_alumno === 'apagada' && v.camara_conf >= c.vision_camara_conf) {
     return no('camara_apagada', `${lado}: la cámara del alumno está apagada.`);
   }
-  if (v.pantalla_compartida && v.recuadros_pequenos) {
+  if (v.pantalla_compartida && v.recuadros_pequenos && c.vision_pantalla_descarta) {
     return no('leyendo', `${lado}: pantalla compartida con los recuadros pequeños.`);
   }
   if (v.leyendo && v.leyendo_conf >= c.vision_leyendo_conf) {
     return no('leyendo', `${lado}: el alumno parece estar leyendo.`);
   }
   return OK;
+}
+
+/**
+ * Lo que no descarta pero hay que mirar a mano: pantalla compartida con los
+ * recuadros pequeños cuando `vision_pantalla_descarta` = 0. null si no hay nada.
+ */
+export function visionAviso(v: VisionSide, lado: 'ANTES' | 'DESPUÉS', c: VerifyConfig): string | null {
+  if (v.pantalla_compartida && v.recuadros_pequenos && !c.vision_pantalla_descarta) {
+    return `${lado} con pantalla compartida: comprobá que no esté leyendo.`;
+  }
+  return null;
 }
 
 // ── Resúmenes ────────────────────────────────────────────────────────────────

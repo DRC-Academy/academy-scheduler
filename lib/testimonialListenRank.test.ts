@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CONFIG_POR_DEFECTO as C, type ClipMeasures } from '@/lib/testimonialMeasures';
 import {
+  listenDone,
   listenableClasses, pickTurns, turnCandidates, listenPairs, clipBounds, contrastScore,
   type ListenClass, type ListenSegment, type ListenPlanSegment,
 } from '@/lib/testimonialListenRank';
@@ -114,5 +115,16 @@ describe('clipBounds y contrastScore', () => {
   });
   it('más contraste, más puntos', () => {
     expect(contrastScore(TRABADO, FLUIDO)).toBeGreaterThan(contrastScore(TRABADO, { ...FLUIDO, ppm: 110 }));
+  });
+});
+
+describe('listenDone', () => {
+  it('las escuchadas con el criterio viejo vuelven a la cola; sin tramos y enlace roto no', () => {
+    expect(listenDone({ status: 'escuchada', criterio: 2 })).toBe(true);
+    expect(listenDone({ status: 'escuchada', criterio: 1 })).toBe(false);
+    expect(listenDone({ status: 'escuchada', criterio: null })).toBe(false);
+    expect(listenDone({ status: 'sin_tramos', criterio: 1 })).toBe(true);
+    expect(listenDone({ status: 'enlace_roto' })).toBe(true);
+    expect(listenDone({ status: 'error', criterio: 2 })).toBe(false);
   });
 });

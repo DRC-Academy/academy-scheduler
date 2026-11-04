@@ -47,6 +47,21 @@ export interface TurnPick {
  */
 export const LISTEN_CRITERIO = 2;
 
+/** Estados de testimonial_listen_classes que cuentan como clase terminada. */
+export const LISTEN_DONE = ['escuchada', 'sin_tramos', 'enlace_roto'];
+
+/**
+ * ¿Esta clase ya está escuchada y no hay que volver a pagarla? Las 'escuchada' con
+ * un criterio anterior (1 = los 5 turnos más largos, casi siempre lecturas) se
+ * vuelven a escuchar con el actual; lo ya oído de ellas no se paga otra vez
+ * (listenClass reutiliza los tramos que coinciden).
+ */
+export function listenDone(r: { status?: unknown; criterio?: unknown }): boolean {
+  const status = String(r.status);
+  if (!LISTEN_DONE.includes(status)) return false;
+  return status !== 'escuchada' || Number(r.criterio ?? 1) >= LISTEN_CRITERIO;
+}
+
 export interface TurnCandidate { turnIndex: number; s: number; d: number }
 
 /**

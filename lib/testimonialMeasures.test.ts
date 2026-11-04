@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  visionAviso,
   CONFIG_POR_DEFECTO as C, measureClip, checkAudio, checkAntes, checkDespues, checkContraste, checkVision,
   cutWindow, weeksBetween, isFiller, motivosFrase, shouldHarden, hardenedValue, mainSpeakerText,
   longestStudentRun, subTranscript, mergeSpeakers, frasesRepetidasTexto,
@@ -234,9 +235,17 @@ describe('reglas de imagen', () => {
   });
   it('cámara apagada y lectura', () => {
     expect(checkVision(v({ camara_alumno: 'apagada', camara_conf: 0.8 }), 'ANTES', C, isStudent, isTeacher)).toMatchObject({ motivo: 'camara_apagada' });
-    expect(checkVision(v({ pantalla_compartida: true, recuadros_pequenos: true }), 'ANTES', C, isStudent, isTeacher)).toMatchObject({ motivo: 'leyendo' });
     expect(checkVision(v({ pantalla_compartida: true, recuadros_pequenos: false }), 'ANTES', C, isStudent, isTeacher).ok).toBe(true);
     expect(checkVision(v({ leyendo: true, leyendo_conf: 0.7 }), 'ANTES', C, isStudent, isTeacher)).toMatchObject({ motivo: 'leyendo' });
+  });
+  it('pantalla compartida con recuadros pequeños: aviso para revisar, o descarte si vision_pantalla_descarta = 1', () => {
+    const pc = v({ pantalla_compartida: true, recuadros_pequenos: true });
+    expect(checkVision(pc, 'ANTES', C, isStudent, isTeacher).ok).toBe(true);
+    expect(visionAviso(pc, 'ANTES', C)).toMatch(/pantalla compartida/);
+    expect(visionAviso(v({}), 'ANTES', C)).toBeNull();
+    const duro = { ...C, vision_pantalla_descarta: 1 };
+    expect(checkVision(pc, 'ANTES', duro, isStudent, isTeacher)).toMatchObject({ motivo: 'leyendo' });
+    expect(visionAviso(pc, 'ANTES', duro)).toBeNull();
   });
 });
 

@@ -37,7 +37,7 @@ import {
 } from '@/lib/testimonialPairPlan';
 import { listenableClasses, listenPairs, compareListenPairs, contrastScore, candidatoDespues, type ListenClass, type ListenPlanSegment, type ListenPlannedPair } from '@/lib/testimonialListenRank';
 import { clasificarYGuardar, type Lectura } from '@/lib/testimonialReading';
-import { listenClass, listenColumns, toListenSegment, LISTEN_DONE, type ListenResult } from '@/lib/testimonialListen';
+import { listenClass, listenColumns, toListenSegment, listenDone, type ListenResult } from '@/lib/testimonialListen';
 import { verifyCandidate, batchResumen, closeBatch, mediaPaths, BUCKET, type VerifyOutcome } from '@/lib/testimonialVerifier';
 import { weeksBetween, CONFIG_POR_DEFECTO, type VerifyConfig } from '@/lib/testimonialMeasures';
 import type { TestimonialClips } from '@/lib/testimonials';
@@ -260,7 +260,7 @@ const faltaColumna = (e: unknown) => /lectura/i.test(e instanceof Error ? e.mess
 
 /** Clases ya escuchadas de esos alumnos (una clase escuchada no se vuelve a pagar). */
 async function listenClassRows(admin: SupabaseClient, groups: string[]): Promise<Row[]> {
-  return inChunks(groups, ch => paged(admin, 'testimonial_listen_classes', 'analysis_id, status', 'analysis_id', q => q.in('student_group', ch)));
+  return inChunks(groups, ch => paged(admin, 'testimonial_listen_classes', 'analysis_id, status, criterio', 'analysis_id', q => q.in('student_group', ch)));
 }
 
 /** Tramos escuchados de esos alumnos; con su clasificación de lectura si ya existe la columna. */
@@ -302,8 +302,9 @@ async function planEscucha(admin: SupabaseClient, c: VerifyConfig, o: AnalisisOp
   }
   const groups = [...byStudent.keys()];
   const [listened, segRows] = await Promise.all([listenClassRows(admin, groups), listenSegmentRows(admin, groups)]);
-  // Ya escuchada (con cualquier criterio): se reutilizan sus medidas, no se paga otra vez.
-  const hecha = new Set(listened.filter(r => LISTEN_DONE.includes(String(r.status))).map(r => String(r.analysis_id)));
+  // Ya escuchada con el criterio actual: no se paga otra vez. Las de un criterio
+  // anterior vuelven a la cola (sus tramos ya oídos se siguen usando).
+  const hecha = new Set(listened.filter(listenDone).map(r => String(r.analysis_id)));
   const segsBy = new Map<string, Row[]>();
   for (const r of segRows) segsBy.set(String(r.student_group), [...(segsBy.get(String(r.student_group)) ?? []), r]);
 
@@ -652,8 +653,8 @@ export async function escucharItem(admin: SupabaseClient, batchId: string, idx: 
   const item = await loadItem(admin, batchId, idx);
   if (item.tipo !== 'escuchar') throw new Error('Esa fila no es una clase por escuchar.');
   if (item.status !== 'pendiente' && item.status !== 'en_curso') return { status: String(item.status), ya: true, result: null };
-  const { data: prev } = await admin.from('testimonial_listen_classes').select('status').eq('analysis_id', item.a).maybeSingle();
-  if (prev && LISTEN_DONE.includes(String(prev.status))) {
+  const { data: prev } = await admin.from('testimonial_listen_classes').select('status, criterio').eq('analysis_id', item.a).maybeSingle();
+  if (prev && listenDone(prev)) {
     await setItem(admin, batchId, idx, { status: 'hecha', resultado: prev.status });
     return { status: 'hecha', ya: true, result: null };
   }

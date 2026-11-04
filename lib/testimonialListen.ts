@@ -33,7 +33,7 @@ import type { TestimonialClip, TestimonialClips } from '@/lib/testimonials';
 type Row = Record<string, any>;   // eslint-disable-line @typescript-eslint/no-explicit-any
 
 /** Estados de testimonial_listen_classes que ya no se vuelven a escuchar. */
-export const LISTEN_DONE = ['escuchada', 'sin_tramos', 'enlace_roto'];
+export { LISTEN_DONE, listenDone } from '@/lib/testimonialListenRank';
 
 // ── Una clase ────────────────────────────────────────────────────────────────
 

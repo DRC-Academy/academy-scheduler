@@ -43,7 +43,7 @@ import { momentKeyFromId, recordingKey, MOTIVOS_QUE_VETAN } from '@/lib/testimon
 import type { TestimonialClip, TestimonialClips } from '@/lib/testimonials';
 import {
   MOTIVOS_ADMIN, cutWindow, measureClip, mainSpeakerText, checkAudio, checkAntes, checkDespues,
-  checkContraste, checkVision, weeksBetween, shouldHarden, hardenedValue,
+  checkContraste, checkVision, visionAviso, weeksBetween, shouldHarden, hardenedValue,
   longestStudentRun, subTranscript, mergeSpeakers,
   type VerifyConfig, type ClipMeasures, type Motivo, type VisionVerdict, type RuleResult,
 } from '@/lib/testimonialMeasures';
@@ -309,11 +309,13 @@ export async function verifyCandidate(admin: SupabaseClient, candidateId: string
   if (!verdict.ok) return finish('error', null, `Claude: ${verdict.error}`, extraAjustes);
   const v = verdict.data;
   sides.antes.vision = v.antes; sides.despues.vision = v.despues;
-  const juez = { juez_nota: Math.round(v.nota), juez_explicacion: v.explicacion, ...extraAjustes };
+  const juez: Row = { juez_nota: Math.round(v.nota), juez_explicacion: v.explicacion, ...extraAjustes };
   const reglasImagen: Array<[RuleResult, Lado]> = [
     [checkVision(v.antes, 'ANTES', c, isStudent, isTeacher), 'ANTES'], [checkVision(v.despues, 'DESPUÉS', c, isStudent, isTeacher), 'DESPUÉS'],
   ];
   for (const [r, lado] of reglasImagen) if (!r.ok) return discard(r, juez, lado);
+  const avisos = [visionAviso(v.antes, 'ANTES', c), visionAviso(v.despues, 'DESPUÉS', c)].filter((x): x is string => !!x);
+  if (avisos.length) juez.ajustes = { ...ajustes, aviso: avisos.join(' ') };
   if (v.nota < c.juez_nota_min) return finish('descartado', 'nota_baja', `Nota ${Math.round(v.nota)} (mínimo ${c.juez_nota_min}): ${v.explicacion}`, juez);
   return finish('aprobado', null, null, juez);
 }

@@ -91,7 +91,7 @@ const gasto = (t: { costeDeepgram: number; costeClaude: number }) =>
   `${usd(t.costeDeepgram + t.costeClaude)} (Deepgram ${usd(t.costeDeepgram)} + Claude ${usd(t.costeClaude)})`;
 const CANTIDADES = ['50', '200', '500', '1000', 'todas'] as const;
 const TARJETAS_PAGINA = 20;
-const AJUSTE_LADO = { antes: 'Antes', despues: 'Después' } as const;
+const AJUSTE_LADO = { antes: 'Antes', despues: 'Después', aviso: 'Revisar' } as const;
 
 export default function TestimonialsVerifierTab() {
   const { user } = useAuth();
