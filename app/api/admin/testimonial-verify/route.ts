@@ -27,6 +27,8 @@
 //   Comunes:
 //   · 'cerrar'          { batchId, cancelado } → resumen de la tanda (con el gasto estimado)
 //   · 'revisar'         { id, review: 'sirve' | 'no_sirve', motivo?, texto? }
+//   · 'descartes'       todos los descartes del verificador y lo revisado por motivo
+//   · 'descarte-revisar' { id, decision: 'injusto' | 'justo' | null, nota? }
 //   · 'consentimiento'  { id, valor: 'sin_pedir' | 'pedido' | 'dado' }
 //   · 'deshacer-umbral' { changeId }
 //   · 'medios'          { ids } → enlaces firmados de sus audios y fotogramas
@@ -41,7 +43,7 @@ import { readFathomShare, cutClip, FathomCutError, type FathomSource } from '@/l
 import { transcribeAudio, DeepgramError, type DeepgramParams, type DeepgramTranscript } from '@/lib/deepgram';
 import type { TestimonialClip, TestimonialClips } from '@/lib/testimonials';
 import {
-  startBatch, verifyCandidate, closeBatch, loadState, reviewVerification, setConsent, undoConfigChange,
+  startBatch, verifyCandidate, closeBatch, loadState, loadDiscards, reviewDiscard, reviewVerification, setConsent, undoConfigChange,
   signPaths, mediaPaths,
 } from '@/lib/testimonialVerifier';
 import {
@@ -246,6 +248,14 @@ export async function POST(request: Request): Promise<Response> {
         if (!id || (review !== 'sirve' && review !== 'no_sirve')) return falta('Revisión no válida.');
         return ok(await reviewVerification(admin, id, review, str('motivo'), str('texto')));
       }
+      case 'descartes':
+        return ok(await loadDiscards(admin));
+      case 'descarte-revisar': {
+        const id = str('id'), decision = body.decision;
+        if (!id || (decision !== 'injusto' && decision !== 'justo' && decision !== null)) return falta('Revisión no válida.');
+        await reviewDiscard(admin, id, decision, str('nota'));
+        return ok({ ok: true });
+      }
       case 'consentimiento': {
         const id = str('id'), valor = str('valor');
         if (!id || !valor) return falta('Faltan datos.');
@@ -275,7 +285,9 @@ export async function POST(request: Request): Promise<Response> {
     // Tablas y columnas de la v3 (escucha, panel, vetos, gasto).
     const sinSqlV3 = /testimonial_(batch_items|vetos|listen|deepgram)|fuente|filtros|objetivo|por_alumno|solo_nuevas|fase|paused_at|ajustes|source|plan|cursor|alumnos|coste_(deepgram|claude)_usd/i.test(msg)
       && /exist|schema cache|not found|could not find/i.test(msg);
-    const error = sinSqlV3 ? 'Falta correr supabase-testimoniales-v3.sql en Supabase.'
+    const sinSqlDescartes = /descarte_(revision|nota|revisado_at)/i.test(msg) && /exist|schema cache|not found|could not find/i.test(msg);
+    const error = sinSqlDescartes ? 'Falta correr supabase-testimoniales-descartes.sql en Supabase.'
+      : sinSqlV3 ? 'Falta correr supabase-testimoniales-v3.sql en Supabase.'
       : sinSql ? 'Falta correr supabase-testimoniales-verificador.sql en Supabase.' : msg;
     return Response.json({ error }, { status: 500, headers: NO_STORE });
   }

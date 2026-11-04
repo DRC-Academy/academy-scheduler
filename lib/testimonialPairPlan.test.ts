@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Segment } from '@/lib/testimonialScoring';
 import {
-  planStudentPairs, pickDiverse, passesFilters, cleanFilters, spanishShare, recordingKey, momentKey, momentKeyFromId, toPlanItem,
+  testimoniosPorAlumno, planStudentPairs, pickDiverse, passesFilters, cleanFilters, spanishShare, recordingKey, momentKey, momentKeyFromId, toPlanItem,
   type PlanOptions,
 } from '@/lib/testimonialPairPlan';
 
@@ -20,6 +20,24 @@ const B = (day: string, over: Partial<Segment> = {}): Segment => ({
   fathomUrl: url(day), turnIndex: n, start: 200, end: 225,
   text: 'Last weekend I went to the mountains with my friends and we cooked dinner together', turnWpm: 140, teacherBefore: true,
   words: 15, fillers: 0, repeats: 0, searches: 0, spanishWords: 0, ...over,
+});
+
+describe('testimoniosPorAlumno', () => {
+  const u = 'https://fathom.video/share/abc';
+  const clips = { malos: [{ fathomUrl: u }], buenos: [{ fathomUrl: `${u}?timestamp=9` }] };
+  const v = (candidate_id: string, status: string, review: string | null, a = 'escucha:ca:1', b = 'escucha:ca:2') =>
+    ({ student_group: 's1', candidate_id, status, review, before_moment_id: a, after_moment_id: b, clips });
+  it('cuentan los aprobados sin "No sirve" y las parejas marcadas "Sirve", con sus momentos', () => {
+    const r = testimoniosPorAlumno(
+      [v('c1', 'aprobado', null), v('c2', 'aprobado', 'sirve', 'escucha:ca:3', 'escucha:ca:4'), v('c3', 'aprobado', 'no_sirve', 'escucha:ca:5', 'escucha:ca:6'), v('c4', 'descartado', null, 'escucha:ca:7', 'escucha:ca:8')],
+      [{ id: 'c2', student_group: 's1', status: 'listo', before_moment_id: 'escucha:ca:3', after_moment_id: 'escucha:ca:4', clips }, { id: 'c9', student_group: 's2', status: 'listo', before_moment_id: 'x:1:A:0', after_moment_id: 'x:2:B:0', clips }, { id: 'c8', student_group: 's3', status: 'detectado' }],
+      ['listo'],
+    );
+    expect(r.get('s1')?.ids).toEqual(new Set(['c1', 'c2']));
+    expect(r.get('s1')?.momentos).toEqual(new Set([1, 2, 3, 4].map(n => `fathom.video/share/abc#${n}`)));
+    expect(r.get('s2')?.ids.size).toBe(1);
+    expect(r.has('s3')).toBe(false);
+  });
 });
 
 describe('momentos por grabación', () => {

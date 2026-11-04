@@ -64,6 +64,10 @@ export interface VerifyConfig {
   endurecer_ventana: number; endurecer_veces: number; alarma_fuente_pct: number; retencion_dias: number;
   /** Varias parejas por alumno (supabase-testimoniales-varias-parejas.sql). */
   parejas_por_alumno: number; momento_max_parejas: number; momento_espanol_max: number;
+  /** Testimonios aprobados como mucho por alumno, siempre con clips distintos (04/11/2026). */
+  testimonios_por_alumno: number;
+  /** Mejora media (últimas clases / primeras) a partir de la que el alumno va primero al revisar. */
+  progreso_medio_min: number;
   /** Precios para el gasto estimado de cada tanda. */
   deepgram_usd_min_multi: number; deepgram_usd_min_detect: number; claude_usd_mtok_entrada: number; claude_usd_mtok_salida: number;
   // Escucha dirigida (supabase-testimoniales-escucha.sql)
@@ -79,23 +83,24 @@ export interface VerifyConfig {
   coste_pareja_estimado_usd: number; escucha_seg_por_clase_estimado: number;
 }
 
-/** Valores de supabase-testimoniales-verificador.sql y -v3.sql: solo para lo que falte en la tabla. */
+/** Valores de los SQL de testimoniales (último: -descartes.sql): solo para lo que falte en la tabla. */
 export const CONFIG_POR_DEFECTO: VerifyConfig = {
   recorte_margen_s: 2, recorte_min_s: 8, recorte_max_s: 35,
   deepgram_ambas: 1,
   espanol_confianza_min: 0.9, espanol_pct_max: 0.15, voces_otra_max_palabras: 3,
   pausa_min_s: 0.6,
   antes_pausas_min: 2, antes_ppm_max: 100, antes_tercio_ppm_max: 140, antes_tercios_con_traba_min: 2,
-  despues_pausa_max_s: 1.5, despues_ppm_min: 100, despues_habla_min_s: 10,
+  despues_pausa_max_s: 2, despues_ppm_min: 100, despues_habla_min_s: 10,
   repeticion_frases_min: 2, repeticion_unicas_max: 0.5,
-  contraste_ppm_factor: 1.4, contraste_pausas_factor: 0.5, semanas_min: 4,
+  contraste_ppm_factor: 1.4, contraste_pausas_factor: 0.75, semanas_min: 4,
   contraste_despues_mas_largo: 0,
   contraste_tope_tolerancia_s: 1,
   vision_camara_conf: 0.6, vision_leyendo_conf: 0.6,
   vision_pantalla_descarta: 0,
-  juez_nota_min: 60,
-  endurecer_ventana: 20, endurecer_veces: 3, alarma_fuente_pct: 0.5, retencion_dias: 30,
+  juez_nota_min: 50,
+  endurecer_ventana: 20, endurecer_veces: 3, alarma_fuente_pct: 0.5, retencion_dias: 90,
   parejas_por_alumno: 10, momento_max_parejas: 2, momento_espanol_max: 0.15,
+  testimonios_por_alumno: 3, progreso_medio_min: 1.15,
   deepgram_usd_min_multi: 0.0052, deepgram_usd_min_detect: 0.0043, claude_usd_mtok_entrada: 2, claude_usd_mtok_salida: 10,
   // Sin la fila (SQL de la escucha sin correr), el buscador viejo sigue encendido.
   buscador_v6_activo: 1,
@@ -474,6 +479,38 @@ export function motivosFrase(cuentas: Partial<Record<string, number>>): string {
     .sort((a, b) => b[1] - a[1])
     .map(([k, n]) => `${n} ${(MOTIVO_LABEL[k as Motivo] ?? k).toLowerCase()}`)
     .join(', ');
+}
+
+/** La regla que se propondría aflojar cuando el admin ve muchos descartes injustos de un motivo. */
+const REGLA_DE_MOTIVO: Partial<Record<Motivo, string>> = {
+  habla_profe: 'la comprobación de quién habla en el clip',
+  leyendo: 'la confianza mínima de "leyendo"',
+  camara_apagada: 'la confianza mínima de "cámara apagada"',
+  espanol: 'el máximo de español en el clip',
+  falso_bloqueo: 'lo que se exige a un ANTES',
+  ejercicio_repeticion: 'la detección de frases repetidas',
+  sin_contraste: 'el contraste exigido entre ANTES y DESPUÉS',
+  nota_baja: 'la nota mínima del juez',
+};
+
+export interface AvisoCalibracion { motivo: Motivo; injustos: number; revisados: number; regla: string | null }
+
+/**
+ * Motivos con 3 o más descartes marcados injustos y al menos 3 de cada 10 revisados.
+ * Solo propone aflojar la regla: nunca la cambia (decisión de Facundo, 04/11/2026).
+ */
+export function avisosCalibracion(rows: Array<{ motivo: string | null; descarte_revision: string | null }>): AvisoCalibracion[] {
+  const por = new Map<string, { injustos: number; revisados: number }>();
+  for (const r of rows) {
+    if (!r.motivo || (r.descarte_revision !== 'injusto' && r.descarte_revision !== 'justo')) continue;
+    const x = por.get(r.motivo) ?? { injustos: 0, revisados: 0 };
+    x.revisados++;
+    if (r.descarte_revision === 'injusto') x.injustos++;
+    por.set(r.motivo, x);
+  }
+  return [...por].filter(([, x]) => x.injustos >= 3 && x.injustos / x.revisados >= 0.3)
+    .map(([motivo, x]) => ({ motivo: motivo as Motivo, ...x, regla: REGLA_DE_MOTIVO[motivo as Motivo] ?? null }))
+    .sort((a, b) => b.injustos - a.injustos);
 }
 
 /**

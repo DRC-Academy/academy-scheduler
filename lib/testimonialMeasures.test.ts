@@ -3,9 +3,23 @@ import {
   visionAviso,
   CONFIG_POR_DEFECTO as C, measureClip, checkAudio, checkAntes, checkDespues, checkContraste, checkVision,
   cutWindow, weeksBetween, isFiller, motivosFrase, shouldHarden, hardenedValue, mainSpeakerText,
-  longestStudentRun, subTranscript, mergeSpeakers, frasesRepetidasTexto,
+  longestStudentRun, subTranscript, mergeSpeakers, frasesRepetidasTexto, avisosCalibracion,
   type ClipMeasures, type VisionSide,
 } from '@/lib/testimonialMeasures';
+
+describe('avisosCalibracion', () => {
+  const f = (motivo: string, descarte_revision: string | null) => ({ motivo, descarte_revision });
+  const lista = (motivo: string, inj: number, jus: number) => [...Array(inj).fill(0).map(() => f(motivo, 'injusto')), ...Array(jus).fill(0).map(() => f(motivo, 'justo'))];
+  it('avisa con 3+ injustos y al menos 3 de cada 10 revisados; solo propone', () => {
+    const r = avisosCalibracion([...lista('leyendo', 3, 7), ...lista('nota_baja', 4, 2), f('nota_baja', null)]);
+    expect(r.map(x => [x.motivo, x.injustos, x.revisados])).toEqual([['nota_baja', 4, 6], ['leyendo', 3, 10]]);
+    expect(r[0].regla).toContain('nota mínima');
+  });
+  it('sin aviso con 2 injustos, ni con menos de 3 de cada 10', () => {
+    expect(avisosCalibracion(lista('leyendo', 2, 0))).toEqual([]);
+    expect(avisosCalibracion(lista('leyendo', 3, 8))).toEqual([]);
+  });
+});
 import type { DeepgramTranscript, DeepgramWord } from '@/lib/deepgram';
 
 /** Palabras seguidas desde `t0`, cada una de `dur` s, con `gap` s entre ellas (o los huecos indicados). */
@@ -183,13 +197,15 @@ describe('ANTES, DESPUÉS y contraste', () => {
   });
   it('DESPUÉS: sin pausas largas y rápido', () => {
     expect(checkDespues(despues, C).ok).toBe(true);
-    expect(checkDespues({ ...despues, pausa_max_s: 1.6 }, C)).toMatchObject({ ok: false, motivo: 'sin_contraste' });
+    expect(checkDespues({ ...despues, pausa_max_s: 1.9 }, C).ok).toBe(true);
+    expect(checkDespues({ ...despues, pausa_max_s: 2.1 }, C)).toMatchObject({ ok: false, motivo: 'sin_contraste' });
     expect(checkDespues({ ...despues, ppm: 90 }, C)).toMatchObject({ ok: false, motivo: 'sin_contraste' });
   });
-  it('contraste: ×1,4 de velocidad y menos de la mitad de pausas por minuto; la duración no cuenta', () => {
+  it('contraste: ×1,4 de velocidad y menos de ×0,75 de pausas por minuto; la duración no cuenta', () => {
     expect(checkContraste(antes, despues, C).ok).toBe(true);
     expect(checkContraste(antes, { ...despues, ppm: 90 }, C)).toMatchObject({ ok: false, motivo: 'sin_contraste' });
-    expect(checkContraste(antes, { ...despues, pausas_min: 9 }, C)).toMatchObject({ ok: false, motivo: 'sin_contraste' });
+    expect(checkContraste(antes, { ...despues, pausas_min: 11 }, C).ok).toBe(true);
+    expect(checkContraste(antes, { ...despues, pausas_min: 12 }, C)).toMatchObject({ ok: false, motivo: 'sin_contraste' });
     expect(checkContraste(antes, { ...despues, habla_s: 8 }, C).ok).toBe(true);
   });
   it('con contraste_despues_mas_largo = 1: el DESPUÉS dura más, salvo empate en el tope del clip', () => {

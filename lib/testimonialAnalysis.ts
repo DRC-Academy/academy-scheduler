@@ -16,13 +16,14 @@
 // pestaña no pierde nada: "Reanudar" pide las pendientes y sigue; lo hecho nunca se
 // repite ni se paga dos veces. El navegador lleva 3 alumnos a la vez y, dentro de
 // cada alumno, sus parejas de una en una (una llamada al servidor por pareja): al
-// aprobar una, pasa al siguiente alumno. No para a las 5 aprobadas: sigue hasta
-// el número elegido.
+// llegar a `testimonios_por_alumno` aprobados, pasa al siguiente alumno. Sigue hasta
+// el número elegido. "Solo verificar" (`soloVerificar`) no escucha clases nuevas.
 //
-// Siempre fuera: cuentas de prueba, alumnos con una "Sirve" o con una aprobada por
-// revisar, momentos de un "No sirve" del admin, enlaces falsos y lo vetado
-// (testimonial_vetos: momentos por español, habla el profe, leyendo o cámara
-// apagada; grabaciones con el enlace privado o borrado).
+// Siempre fuera: cuentas de prueba, alumnos con el tope de testimonios (aprobados
+// por revisar y "Sirve"), clips ya usados en otro testimonio del alumno, momentos de
+// un "No sirve" del admin, enlaces falsos y lo vetado (testimonial_vetos: momentos
+// por español, habla el profe, leyendo o cámara apagada; grabaciones con el enlace
+// privado o borrado).
 
 import 'server-only';
 
@@ -32,8 +33,8 @@ import { loadConfig } from '@/lib/testimonialConfigStore';
 import { toSegment, pairColumns } from '@/lib/testimonialSegmentsStore';
 import { averageWpm, blockingScore, fluencyScore, daysBetween, type ExtractStats, type Segment } from '@/lib/testimonialScoring';
 import {
-  planStudentPairs, comparePlanned, toPlanItem, isVetoed, momentKey, momentKeyFromId, recordingKey, pickDiverse, passesFilters,
-  type PlanFiltros, type PlanItem, type PlannedPair, type Vetos,
+  planStudentPairs, comparePlanned, toPlanItem, isVetoed, momentKey, momentKeyFromId, recordingKey, pickDiverse, passesFilters, testimoniosPorAlumno,
+  type PlanFiltros, type PlanItem, type PlannedPair, type TestimoniosDeAlumno, type Vetos,
 } from '@/lib/testimonialPairPlan';
 import { listenableClasses, listenPairs, compareListenPairs, contrastScore, candidatoDespues, type ListenClass, type ListenPlanSegment, type ListenPlannedPair } from '@/lib/testimonialListenRank';
 import { clasificarYGuardar, type Lectura } from '@/lib/testimonialReading';
@@ -54,6 +55,8 @@ export interface AnalisisOpciones {
   porAlumno: number;
   fuente: Fuente;
   soloNuevas: boolean;
+  /** Solo se verifican las parejas ya posibles: no se escucha ninguna clase nueva. */
+  soloVerificar?: boolean;
 }
 
 const SIRVEN = ['listo', 'revisado', 'permiso_alumno'];
@@ -66,7 +69,10 @@ const CANTIDADES = [50, 200, 500, 1000];
 export function cleanOpciones(raw: unknown, filtros: PlanFiltros): AnalisisOpciones {
   const o = (raw ?? {}) as Record<string, unknown>;
   const cantidad = CANTIDADES.includes(Number(o.cantidad)) ? Number(o.cantidad) : null;
-  return { filtros, cantidad, porAlumno: CONFIG_POR_DEFECTO.parejas_por_alumno, fuente: o.fuente === 'texto' ? 'texto' : 'escucha', soloNuevas: o.soloNuevas !== false };
+  return {
+    filtros, cantidad, porAlumno: CONFIG_POR_DEFECTO.parejas_por_alumno, fuente: o.fuente === 'texto' ? 'texto' : 'escucha',
+    soloNuevas: o.soloNuevas !== false, soloVerificar: o.soloVerificar === true,
+  };
 }
 
 /** Tope de combinaciones por alumno = testimonial_config.parejas_por_alumno. */
@@ -146,34 +152,39 @@ interface Contexto {
   vetos: Vetos;
   /** Combinaciones ya verificadas (momentKey|momentKey). */
   verificadas: Set<string>;
-  /** Alumnos que no entran: con una "Sirve" o con una aprobada por revisar. */
+  /** Alumnos que no entran: ya tienen `testimonios_por_alumno` testimonios. */
   fuera: Set<string>;
+  /** Momentos que ya usa algún testimonio del alumno: ningún clip se repite. */
+  usados: Map<string, Set<string>>;
   /** "No sirve" del admin por alumno: grabación y tramo. */
   noSirve: Map<string, Array<{ rec: string; start: number; end: number }>>;
 }
+
+/** Tope de testimonios por alumno (al menos 1). */
+const topeTestimonios = (c: VerifyConfig) => Math.max(1, Math.round(Number(c.testimonios_por_alumno) || CONFIG_POR_DEFECTO.testimonios_por_alumno));
 
 /**
  * `soloManual`: como quedaría tras "Reanalizar todo" (reanalizarTodo): solo cuenta
  * lo que marcó el admin; los veredictos del verificador y sus vetos de momento, no.
  */
-async function contexto(admin: SupabaseClient, o: { soloManual?: boolean } = {}): Promise<Contexto> {
+async function contexto(admin: SupabaseClient, c: VerifyConfig, o: { soloManual?: boolean } = {}): Promise<Contexto> {
   const [tT, tS, cands, todas, todosVetos] = await Promise.all([
     paged(admin, 'teachers', 'id', 'id', q => q.eq('is_test', true)),
     paged(admin, 'students', 'id', 'id', q => q.eq('is_test', true)),
-    paged(admin, 'testimonial_candidates', 'id, student_group, status, discarded_by, clips', 'id'),
-    paged(admin, 'testimonial_verifications', 'id, student_group, status, review, before_moment_id, after_moment_id, candidate_snapshot->clips', 'id', q => q.eq('kind', 'busqueda')),
+    paged(admin, 'testimonial_candidates', 'id, student_group, status, discarded_by, before_moment_id, after_moment_id, clips', 'id'),
+    paged(admin, 'testimonial_verifications', 'id, candidate_id, student_group, status, review, descarte_revision, before_moment_id, after_moment_id, candidate_snapshot->clips', 'id', q => q.eq('kind', 'busqueda')),
     loadVetos(admin),
   ]);
-  const vers = o.soloManual ? todas.filter(v => v.review) : todas;
+  const vers = o.soloManual ? todas.filter(v => v.review || v.descarte_revision) : todas;
   const vetos: Vetos = o.soloManual ? { momentos: new Set(), grabaciones: todosVetos.grabaciones } : todosVetos;
   const verificadas = new Set(vers.filter(v => v.status === 'aprobado' || v.status === 'descartado').map(v => {
     const k = v.clips as TestimonialClips | null;
     return `${momentKeyFromId(v.before_moment_id, k?.malos?.[0]?.fathomUrl)}|${momentKeyFromId(v.after_moment_id, k?.buenos?.[0]?.fathomUrl)}`;
   }));
-  const fuera = new Set([
-    ...vers.filter(v => v.status === 'aprobado' && !v.review).map(v => String(v.student_group)),
-    ...cands.filter(x => SIRVEN.includes(String(x.status))).map(x => String(x.student_group)),
-  ]);
+  const tiene = testimoniosPorAlumno(vers as Parameters<typeof testimoniosPorAlumno>[0], cands as Parameters<typeof testimoniosPorAlumno>[1], SIRVEN);
+  const tope = topeTestimonios(c);
+  const fuera = new Set([...tiene].filter(([, x]) => x.ids.size >= tope).map(([g]) => g));
+  const usados = new Map([...tiene].map(([g, x]) => [g, x.momentos]));
   const noSirve = new Map<string, Array<{ rec: string; start: number; end: number }>>();
   for (const x of cands) {
     if (x.status !== 'descartado' || x.discarded_by === 'ia') continue;
@@ -184,8 +195,20 @@ async function contexto(admin: SupabaseClient, o: { soloManual?: boolean } = {})
   }
   return {
     testTeachers: new Set(tT.map(r => String(r.id))), testStudents: new Set(tS.map(r => String(r.id))),
-    vetos, verificadas, fuera, noSirve,
+    vetos, verificadas, fuera, usados, noSirve,
   };
+}
+
+/** Testimonios que ya tiene un alumno y sus clips: lo que decide si se sigue probando con él. */
+async function testimoniosDelAlumno(admin: SupabaseClient, g: string): Promise<TestimoniosDeAlumno> {
+  const [vers, cands] = await Promise.all([
+    paged(admin, 'testimonial_verifications', 'id, candidate_id, student_group, status, review, before_moment_id, after_moment_id, candidate_snapshot->clips', 'id',
+      q => q.eq('kind', 'busqueda').eq('student_group', g).eq('status', 'aprobado')),
+    paged(admin, 'testimonial_candidates', 'id, student_group, status, before_moment_id, after_moment_id, clips', 'id',
+      q => q.eq('student_group', g).in('status', SIRVEN)),
+  ]);
+  return testimoniosPorAlumno(vers as Parameters<typeof testimoniosPorAlumno>[0], cands as Parameters<typeof testimoniosPorAlumno>[1], SIRVEN).get(g)
+    ?? { ids: new Set(), momentos: new Set() };
 }
 
 const tocaNoSirve = (ctx: Contexto, g: string, rec: string, start: number, end: number) =>
@@ -239,7 +262,7 @@ async function planTexto(admin: SupabaseClient, c: VerifyConfig, o: AnalisisOpci
     for (const s of segs) if (entra(s)) clases.add(s.analysisId);
     const pares = planStudentPairs(segs, avg, {
       max: o.porAlumno, perMoment: c.momento_max_parejas, spanishMax: c.momento_espanol_max, minWeeks: c.semanas_min,
-      blocked: s => !entra(s) || isVetoed(s, ctx.vetos) || tocaNoSirve(ctx, g, recordingKey(s.fathomUrl), s.start, s.end),
+      blocked: s => !entra(s) || isVetoed(s, ctx.vetos) || !!ctx.usados.get(g)?.has(momentKey(s)) || tocaNoSirve(ctx, g, recordingKey(s.fathomUrl), s.start, s.end),
       skipPair: o.soloNuevas ? (a, b) => ctx.verificadas.has(`${momentKey(a)}|${momentKey(b)}`) : undefined,
     });
     if (pares.length) porAlumno.push({ g, pares });
@@ -335,7 +358,7 @@ async function planEscucha(admin: SupabaseClient, c: VerifyConfig, o: AnalisisOp
       segs.push({ ...s, lectura: lecturas?.get(s.id) ?? s.lectura, moment, recording: rec });
     }
     const todas = listenPairs(segs, c, {
-      blocked: s => ctx.vetos.momentos.has(s.moment) || tocaNoSirve(ctx, g, s.recording, s.hablaStart, s.hablaEnd),
+      blocked: s => ctx.vetos.momentos.has(s.moment) || !!ctx.usados.get(g)?.has(s.moment) || tocaNoSirve(ctx, g, s.recording, s.hablaStart, s.hablaEnd),
       skipPair: o.soloNuevas ? (a, b) => ctx.verificadas.has(`${a.moment}|${b.moment}`) : undefined,
     });
     const pares = pickDiverse(todas, p => p.a.moment, p => p.b.moment, o.porAlumno, c.momento_max_parejas);
@@ -358,7 +381,7 @@ async function planEscucha(admin: SupabaseClient, c: VerifyConfig, o: AnalisisOp
  */
 export async function simularPlanEscucha(admin: SupabaseClient, c: VerifyConfig, opciones: AnalisisOpciones, lecturas?: Map<string, Lectura>,
   o: { soloManual?: boolean } = {}) {
-  const plan = await planEscucha(admin, c, conTopeConfig(opciones, c), await contexto(admin, o), true, lecturas);
+  const plan = await planEscucha(admin, c, conTopeConfig(opciones, c), await contexto(admin, c, o), true, lecturas);
   return { items: plan.items, alumnos: new Set(plan.items.map(i => i.g)).size, porEscuchar: plan.porEscuchar.length, clases: plan.clases };
 }
 
@@ -373,7 +396,7 @@ export async function contarReanalisis(admin: SupabaseClient): Promise<Recuento>
   const { config: c } = await loadConfig(admin);
   const o = OPCIONES_REANALISIS(c);
   const [plan, porPareja, segClase] = await Promise.all([
-    contexto(admin, { soloManual: true }).then(ctx => planEscucha(admin, c, o, ctx, true)),
+    contexto(admin, c, { soloManual: true }).then(ctx => planEscucha(admin, c, o, ctx, true)),
     costePorPareja(admin, c), segundosPorClase(admin, c),
   ]);
   return recuento(plan, o, porPareja, segClase, c);
@@ -383,8 +406,8 @@ export async function contarReanalisis(admin: SupabaseClient): Promise<Recuento>
  * "Reanalizar todo" (decisión de Facundo, 03/11/2026): borra los veredictos del
  * verificador (descartes y aprobados SIN revisar), sus vetos de momento, sus
  * parejas y sus audios y fotogramas, y abre una tanda nueva sin filtros con las
- * reglas actuales. NO toca lo que marcó el admin a mano ("Sirve" / "No sirve"),
- * ni las grabaciones vetadas por estar borradas o privadas en Fathom, ni lo ya
+ * reglas actuales. NO toca lo que marcó el admin a mano ("Sirve" / "No sirve" y los
+ * descartes revisados), ni las grabaciones vetadas por estar borradas o privadas en Fathom, ni lo ya
  * escuchado (sus medidas se reutilizan).
  */
 export async function reanalizarTodo(admin: SupabaseClient): Promise<TandaEstado> {
@@ -398,8 +421,9 @@ export async function reanalizarTodo(admin: SupabaseClient): Promise<TandaEstado
 
   // 2. Veredictos del verificador sin revisar (y lo que cuelga de ellos).
   const borrar = await paged(admin, 'testimonial_verifications', 'id, candidate_id, batch_id, antes, despues', 'id',
-    q => q.eq('kind', 'busqueda').is('review', null));
-  const revisadas = await paged(admin, 'testimonial_verifications', 'candidate_id, batch_id', 'id', q => q.eq('kind', 'busqueda').not('review', 'is', null));
+    q => q.eq('kind', 'busqueda').is('review', null).is('descarte_revision', null));
+  const revisadas = await paged(admin, 'testimonial_verifications', 'candidate_id, batch_id', 'id',
+    q => q.eq('kind', 'busqueda').or('review.not.is.null,descarte_revision.not.is.null'));
   const candRevisados = new Set(revisadas.map(r => String(r.candidate_id)));
   const paths = borrar.flatMap(mediaPaths);
   for (let i = 0; i < paths.length; i += 500) {
@@ -514,7 +538,7 @@ function recuento(plan: Plan, o: AnalisisOpciones, porPareja: number, segClase: 
 export async function contarAnalisis(admin: SupabaseClient, opciones: AnalisisOpciones): Promise<Recuento> {
   const { config: c } = await loadConfig(admin);
   const o = conTopeConfig(opciones, c);
-  const ctx = await contexto(admin);
+  const ctx = await contexto(admin, c);
   const [plan, porPareja, segClase] = await Promise.all([planFor(admin, c, o, ctx, false), costePorPareja(admin, c), segundosPorClase(admin, c)]);
   return recuento(plan, o, porPareja, segClase, c);
 }
@@ -560,9 +584,11 @@ const pairRows = (batchId: string, items: PlanItem[], from: number) => items.map
 export async function iniciarAnalisis(admin: SupabaseClient, opciones: AnalisisOpciones): Promise<TandaEstado> {
   const { config: c } = await loadConfig(admin);
   const o = conTopeConfig(opciones, c);
-  const plan = await planFor(admin, c, o, await contexto(admin), true);
+  // "Solo verificar": sin escucha que lo haga después, las lecturas se clasifican ahora.
+  if (o.soloVerificar && o.fuente === 'escucha') await clasificarLecturasPendientes(admin, c);
+  const plan = await planFor(admin, c, o, await contexto(admin, c), true);
   const batchId = `tb_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-  const fase = plan.porEscuchar.length ? 'escuchar' : 'verificar';
+  const fase = plan.porEscuchar.length && !o.soloVerificar ? 'escuchar' : 'verificar';
   const { error } = await admin.from('testimonial_verify_batches').insert({
     id: batchId, kind: 'busqueda', planned: plan.items.length, alumnos: plan.alumnos,
     fuente: o.fuente, filtros: o.filtros, objetivo: o.cantidad, por_alumno: o.porAlumno, solo_nuevas: o.soloNuevas, fase,
@@ -588,7 +614,7 @@ export interface TandaEstado {
   escuchar: { total: number; hechas: number; pendientes: number[] };
   parejas: {
     total: number; hechas: number; aprobadas: number; saltadas: number; errores: number;
-    /** Por alumno, en orden, las filas que faltan (sin los alumnos que ya tienen una aprobada). */
+    /** Por alumno, en orden, las filas que faltan (sin los que ya llegaron al tope en esta tanda). */
     pendientes: Array<{ g: string; idx: number[] }>;
   };
   resumen: Awaited<ReturnType<typeof batchResumen>>;
@@ -598,19 +624,23 @@ export interface TandaEstado {
 
 /** Dónde va la tanda y qué falta: lo que pide "Reanudar". */
 export async function estadoTanda(admin: SupabaseClient, batchId: string): Promise<TandaEstado> {
-  const [{ data: b, error }, items, resumen] = await Promise.all([
+  const [{ data: b, error }, items, resumen, { config: c }] = await Promise.all([
     admin.from('testimonial_verify_batches').select('id, fuente, fase, objetivo, por_alumno, filtros, paused_at, finished_at').eq('id', batchId).maybeSingle(),
     paged(admin, ITEMS, 'idx, tipo, student_group, status, resultado, b', 'idx', q => q.eq('batch_id', batchId)),
     batchResumen(admin, batchId),
+    loadConfig(admin),
   ]);
   if (error) throw new Error(`testimonial_verify_batches: ${error.message}`);
   if (!b) throw new Error('No existe esa tanda.');
   const esc = items.filter(i => i.tipo === 'escuchar'), par = items.filter(i => i.tipo === 'pareja');
-  const aprobados = new Set(par.filter(i => i.resultado === 'aprobado').map(i => String(i.student_group)));
+  const aprobadas = par.filter(i => i.resultado === 'aprobado');
+  const porAlumno = new Map<string, number>();
+  for (const i of aprobadas) porAlumno.set(String(i.student_group), (porAlumno.get(String(i.student_group)) ?? 0) + 1);
+  const tope = topeTestimonios(c);
   const pend = new Map<string, number[]>();
   for (const i of par) {
-    if ((i.status !== 'pendiente' && i.status !== 'en_curso') || aprobados.has(String(i.student_group))) continue;
     const g = String(i.student_group);
+    if ((i.status !== 'pendiente' && i.status !== 'en_curso') || (porAlumno.get(g) ?? 0) >= tope) continue;
     pend.set(g, [...(pend.get(g) ?? []), Number(i.idx)]);
   }
   return {
@@ -622,7 +652,7 @@ export async function estadoTanda(admin: SupabaseClient, batchId: string): Promi
       pendientes: esc.filter(i => i.status === 'pendiente' || i.status === 'en_curso').map(i => Number(i.idx)),
     },
     parejas: {
-      total: par.length, hechas: par.filter(i => i.status === 'hecha').length, aprobadas: aprobados.size,
+      total: par.length, hechas: par.filter(i => i.status === 'hecha').length, aprobadas: aprobadas.length,
       saltadas: par.filter(i => i.status === 'saltada').length, errores: par.filter(i => i.status === 'error').length,
       pendientes: [...pend].map(([g, idx]) => ({ g, idx })),
     },
@@ -684,7 +714,7 @@ export async function planificarTanda(admin: SupabaseClient, batchId: string): P
       fuente: b.fuente === 'texto' ? 'texto' : 'escucha', soloNuevas: b.solo_nuevas !== false,
     };
     if (o.fuente === 'escucha') await clasificarLecturasPendientes(admin, c);
-    const plan = await planFor(admin, c, o, await contexto(admin), true);
+    const plan = await planFor(admin, c, o, await contexto(admin, c), true);
     const { data: last } = await admin.from(ITEMS).select('idx').eq('batch_id', batchId).order('idx', { ascending: false }).limit(1);
     const from = Number(last?.[0]?.idx ?? -1) + 1;
     await insertItems(admin, pairRows(batchId, plan.items, from));
@@ -703,9 +733,10 @@ export interface ItemResultado {
 
 /** Verifica UNA pareja de la tanda (una llamada al servidor). Nunca la repite. */
 export async function verificarItem(admin: SupabaseClient, batchId: string, idx: number): Promise<ItemResultado> {
-  const [{ data: b }, item] = await Promise.all([
+  const [{ data: b }, item, { config: c }] = await Promise.all([
     admin.from('testimonial_verify_batches').select('fuente, objetivo, finished_at').eq('id', batchId).maybeSingle(),
     loadItem(admin, batchId, idx),
+    loadConfig(admin),
   ]);
   if (!b) throw new Error('No existe esa tanda.');
   if (b.finished_at) return { status: 'saltada', motivo: 'tanda_cerrada', resultado: null, fin: true };
@@ -720,9 +751,10 @@ export async function verificarItem(admin: SupabaseClient, batchId: string, idx:
     await setItem(admin, batchId, idx, { status: 'saltada', motivo });
     return { status: 'saltada', motivo, resultado: null, fin: false };
   };
-  const { count: aprobada } = await admin.from(ITEMS).select('idx', { count: 'exact', head: true })
-    .eq('batch_id', batchId).eq('student_group', item.student_group).eq('resultado', 'aprobado');
-  if (aprobada) return saltar('alumno_aprobado');
+  // Tope de testimonios del alumno y ningún clip repetido.
+  const tiene = await testimoniosDelAlumno(admin, String(item.student_group));
+  if (tiene.ids.size >= topeTestimonios(c)) return saltar('alumno_aprobado');
+  if (tiene.momentos.has(item.ma) || tiene.momentos.has(item.mb)) return saltar('clip_repetido');
   const vetos = await loadVetos(admin);
   if (vetos.momentos.has(item.ma) || vetos.momentos.has(item.mb) || vetos.grabaciones.has(item.ra) || vetos.grabaciones.has(item.rb)) return saltar('vetado');
 
@@ -764,19 +796,22 @@ export async function tandaAbierta(admin: SupabaseClient): Promise<TandaEstado |
 // ── Crear la pareja a verificar ──────────────────────────────────────────────
 
 /**
- * Solo una pareja abierta por alumno y profe (índice único): la que dejó el buscador
- * sin verificar deja sitio. Una aprobada por revisar, nunca.
+ * La pareja que dejó el buscador sin verificar deja sitio; un testimonio aprobado o
+ * ya marcado, nunca: un alumno puede tener varios (índice único por pareja de clips).
  */
 async function insertCandidate(admin: SupabaseClient, g: string, teacherId: string | null, cols: Row): Promise<string> {
   const { data: abiertas } = await admin.from('testimonial_candidates').select('id')
-    .eq('student_group', g).eq('pair_teacher_id', teacherId).neq('status', 'descartado');
+    .eq('student_group', g).eq('pair_teacher_id', teacherId).eq('status', 'detectado');
   const ids = ((abiertas ?? []) as Row[]).map(x => String(x.id));
   if (ids.length) {
-    const { data: aprobadas } = await admin.from('testimonial_verifications').select('id')
-      .in('candidate_id', ids).eq('status', 'aprobado').is('review', null).limit(1);
-    if ((aprobadas ?? []).length) throw new Error('Este alumno ya tiene un testimonio aprobado por revisar.');
-    const { error: dErr } = await admin.from('testimonial_candidates').delete().in('id', ids).eq('status', 'detectado');
-    if (dErr) throw new Error(`Dejando sitio al testimonio: ${dErr.message}`);
+    const { data: aprobadas } = await admin.from('testimonial_verifications').select('candidate_id')
+      .in('candidate_id', ids).eq('status', 'aprobado');
+    const conTestimonio = new Set(((aprobadas ?? []) as Row[]).map(x => String(x.candidate_id)));
+    const sobran = ids.filter(id => !conTestimonio.has(id));
+    if (sobran.length) {
+      const { error: dErr } = await admin.from('testimonial_candidates').delete().in('id', sobran).eq('status', 'detectado');
+      if (dErr) throw new Error(`Dejando sitio al testimonio: ${dErr.message}`);
+    }
   }
   const id = `tc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const now = new Date().toISOString();

@@ -10,8 +10,8 @@
 //     de Fathom) no se usa; con algo de español, sus parejas van al final;
 //   · un mismo momento sale como mucho `momento_max_parejas` veces en la lista,
 //     para que un mal ANTES no se lleve por delante todas las parejas del alumno.
-// El panel de análisis (lib/testimonialAnalysis) las prueba en orden y salta de
-// alumno al aprobar una.
+// El panel de análisis (lib/testimonialAnalysis) las prueba en orden, hasta
+// `testimonios_por_alumno` aprobados por alumno y sin repetir ningún clip.
 //
 // UN MOMENTO = una intervención del alumno en una GRABACIÓN de Fathom (momentKey),
 // no un id de testimonial_segments: hay transcripts duplicados (la misma
@@ -38,6 +38,36 @@ export function momentKeyFromId(id: string | null | undefined, url: string | nul
   const escucha = parts[0] === 'escucha';
   const turn = Number(escucha ? parts[parts.length - 1] : parts[parts.length - 3]);
   return parts.length >= (escucha ? 3 : 4) && Number.isInteger(turn) && url ? `${recordingKey(url)}#${turn}` : null;
+}
+
+type ClipsDeFila = { malos?: Array<{ fathomUrl?: string | null }>; buenos?: Array<{ fathomUrl?: string | null }> } | null;
+
+export interface FilaVerificada {
+  student_group: unknown; candidate_id: unknown; status: unknown; review?: unknown;
+  before_moment_id: unknown; after_moment_id: unknown; clips?: unknown;
+}
+export interface FilaCandidato { id: unknown; student_group: unknown; status: unknown; before_moment_id?: unknown; after_moment_id?: unknown; clips?: unknown }
+
+/** Testimonios que ya tiene un alumno (por pareja) y los momentos que ya usan. */
+export interface TestimoniosDeAlumno { ids: Set<string>; momentos: Set<string> }
+
+/**
+ * Lo que ya cuenta para el tope por alumno: aprobados por el verificador que no
+ * sean "No sirve", y parejas marcadas "Sirve" (`sirven`: sus estados). Sus clips no
+ * se repiten en otro testimonio del mismo alumno.
+ */
+export function testimoniosPorAlumno(vers: FilaVerificada[], cands: FilaCandidato[], sirven: readonly string[]): Map<string, TestimoniosDeAlumno> {
+  const out = new Map<string, TestimoniosDeAlumno>();
+  const anota = (g: unknown, id: unknown, a: unknown, b: unknown, clips: unknown) => {
+    const k = clips as ClipsDeFila;
+    const x = out.get(String(g)) ?? { ids: new Set<string>(), momentos: new Set<string>() };
+    x.ids.add(String(id));
+    for (const m of [momentKeyFromId(a as string | null, k?.malos?.[0]?.fathomUrl), momentKeyFromId(b as string | null, k?.buenos?.[0]?.fathomUrl)]) if (m) x.momentos.add(m);
+    out.set(String(g), x);
+  };
+  for (const v of vers) if (v.status === 'aprobado' && v.review !== 'no_sirve') anota(v.student_group, v.candidate_id, v.before_moment_id, v.after_moment_id, v.clips);
+  for (const c of cands) if (sirven.includes(String(c.status))) anota(c.student_group, c.id, c.before_moment_id, c.after_moment_id, c.clips);
+  return out;
 }
 
 export interface PlanOptions {

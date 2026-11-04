@@ -13,13 +13,19 @@
 // escucha las clases que falten; después verifica las parejas, 3 alumnos a la vez
 // y una llamada al servidor por pareja. "Pausar" para y la tanda queda guardada;
 // "Reanudar" (también tras cerrar la pestaña) sigue donde quedó sin repetir nada.
+// "Solo verificar" hace lo mismo sin escuchar clases nuevas.
 //
-// Las aprobadas salen todas, de mejor a peor nota, con fotogramas, audio recortado
-// y medidas. "No sirve" pide motivo: alimenta el banco de ejemplos y puede
-// endurecer un umbral (que se deshace en "Detalles de la última tanda").
+// Las aprobadas salen primero las de alumnos con progreso medio real y, dentro, de
+// mejor a peor nota, con fotogramas, audio recortado y medidas. "No sirve" pide
+// motivo: alimenta el banco de ejemplos y puede endurecer un umbral (que se deshace
+// en "Detalles de la última tanda").
+//
+// "Revisar descartes": todos los descartes por motivo. "Descarte injusto" los pasa a
+// Por revisar; con muchos injustos en un motivo se propone aflojar su regla (nunca
+// se cambia sola).
 //
 // Orden de la pantalla: panel de filtros, tarjetas por revisar y, plegadas, Sirven,
-// Descartados y Prueba. Los umbrales NO se muestran: viven en testimonial_config.
+// Revisar descartes y Prueba. Los umbrales NO se muestran: viven en testimonial_config.
 // El consentimiento tampoco (todos lo dieron); la columna y la API siguen ahí.
 //
 // Todo pasa por /api/admin/testimonial-verify con la sesión de admin (adminFetch).
@@ -40,7 +46,11 @@ interface Verif {
   semanas: number | null; juez_nota: number | null; juez_explicacion: string | null;
   review: string | null; review_motivo: string | null;
   created_at: string; updated_at: string; files_deleted_at: string | null; ajustes: Record<string, string> | null;
+  descarte_revision: 'injusto' | 'justo' | null; descarte_nota: string | null;
+  /** Solo en "Por revisar": velocidad media de las primeras clases y de las últimas. */
+  progreso?: { antes: number; despues: number; factor: number; clases: number } | null;
 }
+type ConteoDescartes = Record<string, { injustos: number; justos: number }>;
 interface Tanda {
   id: string; startedAt: string; finishedAt: string | null; cancelled: boolean; planned: number; revisados: number;
   aprobados: number; errores: number; porMotivo: Record<string, number>; fuenteError: number; enlacesProbados: number;
@@ -56,7 +66,8 @@ interface TandaEstado {
   gasto?: { escucha: number; verificacion: number; total: number };
 }
 interface Estado {
-  tarjetas: Verif[]; media: Record<string, string>; aprobadasPendientes: number; sirven: Verif[]; descartados: Verif[];
+  tarjetas: Verif[]; media: Record<string, string>; aprobadasPendientes: number; progresoMin: number; sirven: Verif[];
+  descartesTotal: number; avisosDescartes: Array<{ motivo: Motivo; injustos: number; revisados: number; regla: string | null }>;
   tandas: Tanda[]; alarma: { fallos: number; probados: number } | null; motivosRechazo: Record<string, number>;
   revisionesMiradas: number;
   cambios: Array<{ id: number; key: string; antes: number; despues: number; motivo: string; detalle: string | null; created_at: string; reverted_at: string | null }>;
@@ -179,7 +190,7 @@ export default function TestimonialsVerifierTab() {
         pintar();
       }
 
-      // Parejas: cada trabajador coge un alumno y prueba sus parejas en orden hasta aprobar una.
+      // Parejas: cada trabajador coge un alumno y prueba sus parejas en orden hasta su tope de testimonios.
       const alumnos = [...t.parejas.pendientes];
       let enCurso = 0, fin = false, cortado = false;
       const trabajador = async () => {
@@ -197,8 +208,8 @@ export default function TestimonialsVerifierTab() {
               if (r.status === 'error') p.errores++;
               if (r.resultado?.status === 'aprobado') p.aprobadas++;
               p.gasto += r.resultado?.coste ?? 0;
-              // Con una aprobada, el alumno ya está: sus otras parejas no se prueban.
-              otroAlumno = r.resultado?.status === 'aprobado' || r.motivo === 'alumno_aprobado';
+              // Con el tope de testimonios, el alumno ya está: sus otras parejas no se prueban.
+              otroAlumno = r.motivo === 'alumno_aprobado';
               if (r.fin) fin = true;
               seguidos = 0;
             } catch (e) { p.errores++; fallo(e); }
@@ -340,6 +351,12 @@ export default function TestimonialsVerifierTab() {
           No se pudieron leer los videos de Fathom: fallaron {estado.alarma.fallos} de {estado.alarma.probados} enlaces en la última tanda.
         </p>
       )}
+      {estado?.avisosDescartes.map(a => (
+        <p key={a.motivo} className="tv-alarma" role="status">
+          {MOTIVO_LABEL[a.motivo]}: marcaste {a.injustos} descartes injustos de {a.revisados} revisados.
+          {a.regla ? ` Propuesta: aflojar ${a.regla}.` : ''} No se cambia solo.
+        </p>
+      ))}
       {error && <p className="tv-error">{error}</p>}
       {aviso && <p className="tv-aviso">{aviso} <button type="button" className="tv-link" onClick={() => setAviso(null)}>Cerrar</button></p>}
 
@@ -354,7 +371,7 @@ export default function TestimonialsVerifierTab() {
       {estado && (
         <>
           <Sirven lista={estado.sirven} />
-          <Descartados lista={estado.descartados} post={post} onVer={setGrande} />
+          <RevisarDescartes total={estado.descartesTotal} post={post} onVer={setGrande} onCambio={cargar} />
           <Prueba estado={estado} progreso={progreso} ocupado={ocupado}
             onLanzar={probar} onCancelar={() => { cancelar.current = true; }} />
         </>
@@ -490,6 +507,17 @@ function PanelAnalisis({ post, analisis, abierta, ocupado, onAnalizar, onReanuda
                 onClick={() => onAnalizar(elegidas)}>
                 Analizar
               </button>
+              <button type="button" className="tv-btn tv-sec" disabled={ocupado || !cuenta?.parejas || alumnoMal || profeMal || !!abierta}
+                title="Verifica los testimonios ya posibles sin escuchar clases nuevas"
+                onClick={() => {
+                  if (!cuenta) return;
+                  const parejas = Math.min(elegidas.cantidad ?? cuenta.parejas, cuenta.parejas);
+                  if (window.confirm(`SOLO VERIFICAR: ${n(parejas)} testimonios (≈ ${usd(parejas * cuenta.coste.porPareja)}). No se escucha ninguna clase nueva.\n\n¿Seguir?`)) {
+                    onAnalizar({ ...elegidas, soloVerificar: true });
+                  }
+                }}>
+                Solo verificar
+              </button>
               <button type="button" className="tv-btn tv-sec" disabled={ocupado} onClick={onReanalizar}
                 title="Borra los veredictos del verificador (no lo que marcaste a mano) y vuelve a analizar todo con las reglas actuales">
                 Reanalizar todo
@@ -557,7 +585,7 @@ function Detalles({ estado, onDeshacer }: { estado: Estado; onDeshacer: (id: num
           )}
           {endurecidos.map(c => (
             <p key={c.id} className="tv-line">
-              <b>Umbral endurecido</b> ({fecha(c.created_at)}): {c.key} de {c.antes} a {c.despues}.
+              <b>{c.motivo === 'manual' ? 'Umbral cambiado' : 'Umbral endurecido'}</b> ({fecha(c.created_at)}): {c.key} de {c.antes} a {c.despues}.
               <button type="button" className="tv-link" onClick={() => onDeshacer(c.id)}>Deshacer</button>
             </p>
           ))}
@@ -567,7 +595,7 @@ function Detalles({ estado, onDeshacer }: { estado: Estado; onDeshacer: (id: num
   );
 }
 
-// ── Aprobadas (todas, de mejor a peor nota) ──────────────────────────────────
+// ── Aprobadas (primero el progreso medio real; dentro, de mejor a peor nota) ─
 
 function Aprobadas({ estado, post, onVer, onRevisar }: {
   estado: Estado; post: <T>(a: string, e?: Record<string, unknown>) => Promise<T>; onVer: (u: string) => void;
@@ -592,7 +620,7 @@ function Aprobadas({ estado, post, onVer, onRevisar }: {
     <div className="tv-lista">
       <h3 className="tv-lista-h">Por revisar ({n(estado.aprobadasPendientes)})</h3>
       {lista.map(v => (
-        <Tarjeta key={v.id} v={v} media={media} onVer={onVer} onRevisar={onRevisar} />
+        <Tarjeta key={v.id} v={v} media={media} progresoMin={estado.progresoMin} onVer={onVer} onRevisar={onRevisar} />
       ))}
       {estado.tarjetas.length > vistas && (
         <button type="button" className="tv-btn tv-sec" disabled={cargando} onClick={verMas}>
@@ -615,8 +643,22 @@ function Ajustes({ a }: { a: Record<string, string> | null }) {
 
 // ── Tarjeta ──────────────────────────────────────────────────────────────────
 
-function Tarjeta({ v, media, onVer, onRevisar }: {
-  v: Verif; media: Record<string, string>; onVer: (u: string) => void;
+const ppm = (x: number | null | undefined) => (x == null ? '—' : String(Math.round(x)));
+
+/** "Clip: 64 → 138 ppm · Media del alumno: 70 → 95 ppm", con su etiqueta si la media mejora poco. */
+function Progreso({ v, min }: { v: Verif; min: number }) {
+  const p = v.progreso;
+  return (
+    <p className="tv-progreso">
+      <span>Clip: <b>{ppm(v.antes?.medidas?.ppm)} → {ppm(v.despues?.medidas?.ppm)} ppm</b></span>
+      <span>Media del alumno: <b>{p ? `${ppm(p.antes)} → ${ppm(p.despues)} ppm` : 'sin datos'}</b></span>
+      {p && p.factor < min && <span className="tv-etiqueta">progreso medio bajo</span>}
+    </p>
+  );
+}
+
+function Tarjeta({ v, media, progresoMin, onVer, onRevisar }: {
+  v: Verif; media: Record<string, string>; progresoMin: number; onVer: (u: string) => void;
   onRevisar: (id: string, r: 'sirve' | 'no_sirve', m?: Motivo, t?: string) => Promise<void>;
 }) {
   const [abierto, setAbierto] = useState(false);
@@ -636,12 +678,19 @@ function Tarjeta({ v, media, onVer, onRevisar }: {
         <span className="tv-alumno">{v.student_name ?? 'Alumno sin nombre'}</span>
         <span>{v.teacher_name ?? '—'} · {v.semanas ?? '?'} semanas</span>
       </header>
+      <Progreso v={v} min={progresoMin} />
       <div className="tv-cols">
         <Columna titulo="ANTES" s={v.antes} media={media} onVer={onVer} tono="antes" />
         <Columna titulo="DESPUÉS" s={v.despues} media={media} onVer={onVer} tono="despues" />
       </div>
       <div className="tv-pie">
-        <p className="tv-juez"><span className="tv-nota" title="Nota del juez">{v.juez_nota ?? '—'}</span> {v.juez_explicacion}</p>
+        {v.juez_nota != null && <p className="tv-juez"><span className="tv-nota" title="Nota del juez">{v.juez_nota}</span> {v.juez_explicacion}</p>}
+        {v.descarte_revision === 'injusto' && (
+          <p className="tv-detalle">
+            <b>Rescatado de los descartes</b> ({v.motivo ? MOTIVO_LABEL[v.motivo] : '—'}): {v.motivo_detalle}
+            {v.descarte_nota && <> · Tu nota: {v.descarte_nota}</>}
+          </p>
+        )}
         <Ajustes a={v.ajustes} />
       </div>
       {!abierto ? (
@@ -728,44 +777,139 @@ function Sirven({ lista }: { lista: Verif[] }) {
   );
 }
 
-function Descartados({ lista, post, onVer }: {
-  lista: Verif[]; post: <T>(a: string, e?: Record<string, unknown>) => Promise<T>; onVer: (u: string) => void;
-}) {
-  const [media, setMedia] = useState<Record<string, string> | null>(null);
+type Post = <T>(a: string, e?: Record<string, unknown>) => Promise<T>;
+type DecisionDescarte = 'injusto' | 'justo' | null;
+
+const motivoDe = (v: Verif) => v.motivo ?? 'otro';
+
+/** Todos los descartes, por motivo. Se cargan al abrir la sección. */
+function RevisarDescartes({ total, post, onVer, onCambio }: { total: number; post: Post; onVer: (u: string) => void; onCambio: () => Promise<void> }) {
+  const [datos, setDatos] = useState<{ lista: Verif[]; conteo: ConteoDescartes } | null>(null);
+  const [fallo, setFallo] = useState<string | null>(null);
   const abrir = async (open: boolean) => {
-    if (!open || media) return;
-    try {
-      const r = await post<{ media: Record<string, string> }>('medios', { ids: lista.filter(v => !v.files_deleted_at).map(v => v.id) });
-      setMedia(r.media);
-    } catch { setMedia({}); }
+    if (!open || datos) return;
+    try { setDatos(await post<{ lista: Verif[]; conteo: ConteoDescartes }>('descartes')); setFallo(null); }
+    catch (e) { setFallo(e instanceof Error ? e.message : String(e)); }
   };
+  const decidir = async (v: Verif, decision: DecisionDescarte, nota: string) => {
+    await post('descarte-revisar', { id: v.id, decision, nota: nota || null });
+    setDatos(d => {
+      if (!d) return d;
+      const m = motivoDe(v), c = d.conteo[m] ?? { injustos: 0, justos: 0 };
+      if (decision === 'injusto') {
+        return { lista: d.lista.filter(x => x.id !== v.id), conteo: { ...d.conteo, [m]: { ...c, injustos: c.injustos + 1 } } };
+      }
+      return {
+        lista: d.lista.map(x => (x.id === v.id ? { ...x, descarte_revision: decision } : x)),
+        conteo: { ...d.conteo, [m]: { ...c, justos: c.justos + (decision === 'justo' ? 1 : -1) } },
+      };
+    });
+    if (decision === 'injusto') await onCambio();
+  };
+  const grupos = useMemo(() => {
+    const m = new Map<Motivo, Verif[]>();
+    for (const v of datos?.lista ?? []) m.set(motivoDe(v), [...(m.get(motivoDe(v)) ?? []), v]);
+    return [...m].sort((a, b) => b[1].length - a[1].length);
+  }, [datos]);
   return (
     <details className="tv-sec-box" onToggle={e => abrir((e.target as HTMLDetailsElement).open)}>
-      <summary>Descartados por el verificador ({lista.length})</summary>
-      {lista.length === 0 ? <p className="tv-line">Ninguno todavía.</p> : (
-        <ul className="tv-desc">
-          {lista.map(v => (
-            <li key={v.id}>
-              <div>
-                <b>{v.student_name}</b> · {v.teacher_name ?? '—'} · <span className="tv-motivo">{v.motivo ? MOTIVO_LABEL[v.motivo] : '—'}</span>
-                {v.fathom_causa && <> ({v.fathom_causa})</>}
-                <div className="tv-detalle">{v.motivo_detalle}</div>
-                <Ajustes a={v.ajustes} />
-              </div>
-              <div className="tv-mini-frames">
-                {[...(v.antes?.frames ?? []), ...(v.despues?.frames ?? [])].map(p => media?.[p] ? (
-                  <button key={p} type="button" className="tv-frame is-mini" onClick={() => onVer(media[p])} aria-label="Ampliar fotograma">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={media[p]} alt="" loading="lazy" />
-                  </button>
-                ) : null)}
-                {v.files_deleted_at && <span className="tv-detalle">Fotogramas borrados (más de 30 días)</span>}
-              </div>
-            </li>
-          ))}
-        </ul>
+      <summary>Revisar descartes ({n(datos?.lista.length ?? total)})</summary>
+      {fallo && <p className="tv-error">{fallo}</p>}
+      {!datos ? !fallo && <p className="tv-line">Cargando…</p>
+        : grupos.length === 0 ? <p className="tv-line">Ninguno todavía.</p>
+        : grupos.map(([motivo, lista]) => (
+          <GrupoDescartes key={motivo} motivo={motivo} lista={lista} conteo={datos.conteo[motivo]} post={post} onVer={onVer} onDecidir={decidir} />
+        ))}
+    </details>
+  );
+}
+
+function GrupoDescartes({ motivo, lista, conteo, post, onVer, onDecidir }: {
+  motivo: Motivo; lista: Verif[]; conteo?: { injustos: number; justos: number }; post: Post; onVer: (u: string) => void;
+  onDecidir: (v: Verif, d: DecisionDescarte, nota: string) => Promise<void>;
+}) {
+  const [abierto, setAbierto] = useState(false);
+  const [vistas, setVistas] = useState(TARJETAS_PAGINA);
+  const [media, setMedia] = useState<Record<string, string>>({});
+  const pedidos = useRef(new Set<string>());
+  const visibles = lista.slice(0, vistas);
+  // Enlaces firmados de lo que se ve, solo con el grupo abierto y una sola vez.
+  useEffect(() => {
+    if (!abierto) return;
+    const ids = visibles.filter(v => !v.files_deleted_at && !pedidos.current.has(v.id)).map(v => v.id);
+    if (!ids.length) return;
+    ids.forEach(id => pedidos.current.add(id));
+    let ok = true;
+    post<{ media: Record<string, string> }>('medios', { ids })
+      .then(r => { if (ok) setMedia(m => ({ ...m, ...r.media })); })
+      .catch(() => { /* sin medios: se ven las medidas y el motivo */ });
+    return () => { ok = false; };
+  }, [abierto, visibles, post]);
+  const injustos = conteo?.injustos ?? 0, revisados = injustos + (conteo?.justos ?? 0);
+  return (
+    <details className="tv-grupo" onToggle={e => setAbierto((e.target as HTMLDetailsElement).open)}>
+      <summary>
+        {MOTIVO_LABEL[motivo] ?? motivo} ({n(lista.length)})
+        {revisados > 0 && <span className="tv-grupo-rev"> · {n(revisados)} {revisados === 1 ? 'revisado' : 'revisados'}, {n(injustos)} {injustos === 1 ? 'injusto' : 'injustos'}</span>}
+      </summary>
+      {abierto && (
+        <div className="tv-grupo-c">
+          {visibles.map(v => <DescarteCard key={v.id} v={v} media={media} onVer={onVer} onDecidir={onDecidir} />)}
+          {lista.length > vistas && (
+            <button type="button" className="tv-btn tv-sec" onClick={() => setVistas(x => x + TARJETAS_PAGINA)}>
+              Ver {n(Math.min(TARJETAS_PAGINA, lista.length - vistas))} más
+            </button>
+          )}
+        </div>
       )}
     </details>
+  );
+}
+
+function DescarteCard({ v, media, onVer, onDecidir }: {
+  v: Verif; media: Record<string, string>; onVer: (u: string) => void;
+  onDecidir: (v: Verif, d: DecisionDescarte, nota: string) => Promise<void>;
+}) {
+  const [nota, setNota] = useState('');
+  const [enviando, setEnviando] = useState(false);
+  const [fallo, setFallo] = useState<string | null>(null);
+  const decidir = async (d: DecisionDescarte) => {
+    setEnviando(true); setFallo(null);
+    try { await onDecidir(v, d, nota); } catch (e) { setFallo(e instanceof Error ? e.message : String(e)); }
+    setEnviando(false);
+  };
+  return (
+    <article className="tv-card">
+      <header className="tv-datos">
+        <span className="tv-alumno">{v.student_name ?? 'Alumno sin nombre'}</span>
+        <span>{v.teacher_name ?? '—'} · {v.semanas ?? '?'} semanas</span>
+        {v.juez_nota != null && <span>Nota del juez: <b>{v.juez_nota}</b></span>}
+      </header>
+      <p className="tv-motivo-det">
+        <span className="tv-motivo">{MOTIVO_LABEL[motivoDe(v)] ?? motivoDe(v)}{v.fathom_causa ? ` (${v.fathom_causa})` : ''}:</span>{' '}
+        {v.motivo_detalle ?? v.juez_explicacion ?? 'Sin detalle.'}
+      </p>
+      {v.motivo_detalle && v.juez_explicacion && <p className="tv-detalle">{v.juez_explicacion}</p>}
+      <Ajustes a={v.ajustes} />
+      <div className="tv-cols">
+        <Columna titulo="ANTES" s={v.antes} media={media} onVer={onVer} tono="antes" />
+        <Columna titulo="DESPUÉS" s={v.despues} media={media} onVer={onVer} tono="despues" />
+      </div>
+      {v.files_deleted_at && <p className="tv-detalle">Audio y fotogramas borrados (más de 90 días).</p>}
+      {fallo && <p className="tv-error">{fallo}</p>}
+      {v.descarte_revision === 'justo' ? (
+        <p className="tv-line">
+          Marcado como bien descartado.
+          <button type="button" className="tv-link" disabled={enviando} onClick={() => decidir(null)}>Deshacer</button>
+        </p>
+      ) : v.antes && v.despues && (
+        <footer className="tv-acc tv-acc-desc">
+          <input className="tv-input tv-nota-desc" type="text" placeholder="Nota (opcional)" aria-label="Nota sobre el descarte" value={nota} onChange={e => setNota(e.target.value)} disabled={enviando} />
+          <button type="button" className="tv-btn tv-pri" disabled={enviando} onClick={() => decidir('injusto')}>Descarte injusto</button>
+          <button type="button" className="tv-btn tv-sec" disabled={enviando} onClick={() => decidir('justo')}>Bien descartado</button>
+        </footer>
+      )}
+    </article>
   );
 }
 
@@ -893,11 +1037,19 @@ const ESTILOS = `
 .tv-sec-box > * + * { margin-top: 10px; }
 .tv-rows { margin: 0; padding-left: 18px; display: grid; gap: 6px; font-size: 14px; }
 .tv-rows a { color: var(--azul); font-weight: 600; }
-.tv-desc { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
-.tv-desc li { background: #fff; border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; font-size: 14px; }
 .tv-motivo { font-weight: 700; color: var(--rojo); }
-.tv-detalle { font-size: 13.5px; }
-.tv-mini-frames { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.tv-motivo-det { margin: 0; font-size: 14.5px; line-height: 1.5; }
+.tv-detalle { margin: 0; font-size: 13.5px; line-height: 1.5; }
+.tv-progreso { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; font-size: 14.5px; font-variant-numeric: tabular-nums; }
+.tv-etiqueta { padding: 2px 10px; border-radius: 999px; background: rgba(255,196,0,0.22); color: #6b5200; font-size: 13px; font-weight: 700; }
+.tv-grupo { background: #fff; border-radius: 10px; padding: 8px 12px; }
+.tv-grupo > summary { cursor: pointer; font-size: 14.5px; font-weight: 700; min-height: 32px; display: flex; align-items: center; flex-wrap: wrap; gap: 0 6px; font-variant-numeric: tabular-nums; }
+.tv-grupo-rev { font-weight: 500; }
+.tv-grupo-c { display: grid; gap: 12px; padding: 10px 0 6px; }
+.tv-grupo .tv-card { padding: 14px; border-color: var(--borde); }
+.tv-acc-desc { align-items: center; }
+.tv-acc-desc .tv-btn { min-height: 44px; }
+.tv-nota-desc { flex: 1 1 200px; min-width: 0; min-height: 44px; box-sizing: border-box; }
 
 .tv-lightbox { position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; padding: 24px; cursor: zoom-out; }
 .tv-lightbox img { max-width: 100%; max-height: 100%; border-radius: 8px; }

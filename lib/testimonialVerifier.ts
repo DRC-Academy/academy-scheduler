@@ -9,6 +9,11 @@
 //   1. ENLACE: la página pública de Fathom → enlace_roto (privado / borrado). Un
 //      fallo técnico ('error') NO descarta: queda 'error' y cuenta para la alarma.
 //   2. RECORTE: solo el tramo de cada clip (audio + 3 fotogramas), a Storage.
+//   3-4. SOLO CLIPS DEL TEXTO DE FATHOM (fuente 'texto'). Los de la ESCUCHA ya se
+//      midieron con Deepgram y pasaron estas reglas al armar la pareja: se usan esas
+//      medidas y ese texto, sin pagar ni medir otra vez (decisión de Facundo,
+//      04/11/2026: la segunda medición del mismo clip tiraba 59 de 163 parejas por
+//      diferencias de ruido, como una pausa de más).
 //   3. AUDIO (Deepgram): espanol, habla_profe (otra voz), ejercicio_repeticion.
 //      Hasta `voces_interjecciones_max` "yeah / ok / right…" de la otra voz no
 //      cuentan. Con otra voz o español, antes de descartar: VOZ PARTIDA (los
@@ -40,10 +45,13 @@ import { parseTurns, toSeconds, withFathomTimestamp } from '@/lib/fluency';
 import { nameMatchesStrict } from '@/lib/testimonialSpeaker';
 import { loadConfig, logDeepgramUsage, deepgramSpend } from '@/lib/testimonialConfigStore';
 import { momentKeyFromId, recordingKey, MOTIVOS_QUE_VETAN } from '@/lib/testimonialPairPlan';
+import { toListenSegment } from '@/lib/testimonialListen';
+import { ordenarPorProgreso } from '@/lib/testimonialListenRank';
+import { progresoPorAlumno } from '@/lib/testimonialProgress';
 import type { TestimonialClip, TestimonialClips } from '@/lib/testimonials';
 import {
   MOTIVOS_ADMIN, cutWindow, measureClip, mainSpeakerText, checkAudio, checkAntes, checkDespues,
-  checkContraste, checkVision, visionAviso, weeksBetween, shouldHarden, hardenedValue,
+  checkContraste, checkVision, visionAviso, weeksBetween, shouldHarden, hardenedValue, avisosCalibracion,
   longestStudentRun, subTranscript, mergeSpeakers,
   type VerifyConfig, type ClipMeasures, type Motivo, type VisionVerdict, type RuleResult,
 } from '@/lib/testimonialMeasures';
@@ -238,7 +246,7 @@ export async function verifyCandidate(admin: SupabaseClient, candidateId: string
   if (!ra.ok || !rb.ok) throw new Error('inalcanzable');
 
   // 2. Recorte (+ foto del profe de respaldo, en paralelo)
-  // Escucha: el clip ya se midió entero; se baja entero (sin el tope) y abajo se mide solo él.
+  // Escucha: el clip ya se midió entero; se baja entero (sin el tope), para oírlo y para las fotos.
   const exacto = cand.source === 'escucha';
   const wa = cutWindow(malo.start, malo.end, c, exacto), wb = cutWindow(bueno.start, bueno.end, c, exacto);
   const ref = teacherReferenceFrame(admin, malo.analysisId, ra.source, malo.start).catch(() => null);
@@ -259,48 +267,56 @@ export async function verifyCandidate(admin: SupabaseClient, candidateId: string
   sides.antes = side(malo, ra.source, ca, mediaA);
   sides.despues = side(bueno, rb.source, cb, mediaB);
 
-  // 3-4. Audio y medidas
-  let ta: Audio, tb: Audio;
-  try {
-    [ta, tb] = await Promise.all([transcribeBoth(admin, ca.audio, ca.durS, c), transcribeBoth(admin, cb.audio, cb.durS, c)]);
-    coste.deepgram = deepgramUsd(ta, ca.durS, c) + deepgramUsd(tb, cb.durS, c);
-    if (exacto) { ta = soloClip(ta, malo, ca); tb = soloClip(tb, bueno, cb); }
-  } catch (err) {
-    const e = err instanceof DeepgramError ? err : new DeepgramError(String(err), null);
-    return finish('error', null, `Deepgram: ${e.message}${e.body ? ` ${e.body.slice(0, 200)}` : ''}`);
-  }
   const names = await pairNames(admin, cand, malo, teacherId);
   const isStudent = (n: string) => names.student.some(s => nameMatchesStrict(n, s) || nameMatchesStrict(s, n));
   const isTeacher = (n: string) => names.teacher.some(s => nameMatchesStrict(n, s) || nameMatchesStrict(s, n));
-
-  // Otra voz o español: antes de descartar, voz partida y recorte (resolveAudio).
   const ajustes: Record<string, string> = {};
-  const resolver = async (lado: Lado, t: Audio, cut: CutResult, src: FathomSource, key: 'antes' | 'despues') => {
-    const r = await resolveAudio({ lado, t, cut, src, c, names, isStudent, isTeacher });
-    coste.claude += r.claudeUsd;
-    if (r.ajuste) ajustes[key] = r.ajuste;
-    if (r.ok && r.cut !== cut) {
-      const media = await uploadMedia(admin, id, key, r.cut);
-      const s = sides[key]!;
-      Object.assign(s, { inicio: r.cut.startS, dur: r.cut.durS, fathom: withFathomTimestamp(src.shareUrl, r.cut.startS), audio: media.audio, frames: media.frames });
+  let extraAjustes: Row = {};
+
+  if (exacto) {
+    // Escucha: las medidas y el texto de la escucha. Sin segunda medición ni Deepgram.
+    const medidos = await listenedSides(admin, cand.before_moment_id, cand.after_moment_id);
+    if (!medidos) return finish('error', null, 'Los tramos escuchados de este testimonio ya no existen o no tienen medidas.');
+    sides.antes.texto = medidos.antes.texto; sides.antes.medidas = medidos.antes.medidas;
+    sides.despues.texto = medidos.despues.texto; sides.despues.medidas = medidos.despues.medidas;
+  } else {
+    // 3-4. Audio y medidas (clips del texto de Fathom)
+    let ta: Audio, tb: Audio;
+    try {
+      [ta, tb] = await Promise.all([transcribeBoth(admin, ca.audio, ca.durS, c), transcribeBoth(admin, cb.audio, cb.durS, c)]);
+      coste.deepgram = deepgramUsd(ta, ca.durS, c) + deepgramUsd(tb, cb.durS, c);
+    } catch (err) {
+      const e = err instanceof DeepgramError ? err : new DeepgramError(String(err), null);
+      return finish('error', null, `Deepgram: ${e.message}${e.body ? ` ${e.body.slice(0, 200)}` : ''}`);
     }
-    return r;
-  };
-  const xa = await resolver('ANTES', ta, ca, ra.source, 'antes');
-  const xb = await resolver('DESPUÉS', tb, cb, rb.source, 'despues');
-  const extraAjustes = Object.keys(ajustes).length ? { ajustes } : {};
-  sides.antes.texto = mainSpeakerText((xa.ok ? xa.t : ta).multi); sides.antes.medidas = xa.m;
-  sides.despues.texto = mainSpeakerText((xb.ok ? xb.t : tb).multi); sides.despues.medidas = xb.m;
-  if (!xa.m) return finish('descartado', 'sin_voz', 'ANTES: Deepgram no oye a nadie en el tramo.', extraAjustes);
-  if (!xb.m) return finish('descartado', 'sin_voz', 'DESPUÉS: Deepgram no oye a nadie en el tramo.', extraAjustes);
-  if (!xa.ok) return discard(xa.r, extraAjustes, 'ANTES');
-  if (!xb.ok) return discard(xb.r, extraAjustes, 'DESPUÉS');
-  ca = xa.cut; cb = xb.cut;
-  const ma = xa.m, mb = xb.m;
-  const reglasAudio: Array<[RuleResult, Lado | null]> = [
-    [checkAntes(ma, c), 'ANTES'], [checkDespues(mb, c), 'DESPUÉS'], [checkContraste(ma, mb, c), null],
-  ];
-  for (const [r, lado] of reglasAudio) if (!r.ok) return discard(r, extraAjustes, lado);
+
+    // Otra voz o español: antes de descartar, voz partida y recorte (resolveAudio).
+    const resolver = async (lado: Lado, t: Audio, cut: CutResult, src: FathomSource, key: 'antes' | 'despues') => {
+      const r = await resolveAudio({ lado, t, cut, src, c, names, isStudent, isTeacher });
+      coste.claude += r.claudeUsd;
+      if (r.ajuste) ajustes[key] = r.ajuste;
+      if (r.ok && r.cut !== cut) {
+        const media = await uploadMedia(admin, id, key, r.cut);
+        const s = sides[key]!;
+        Object.assign(s, { inicio: r.cut.startS, dur: r.cut.durS, fathom: withFathomTimestamp(src.shareUrl, r.cut.startS), audio: media.audio, frames: media.frames });
+      }
+      return r;
+    };
+    const xa = await resolver('ANTES', ta, ca, ra.source, 'antes');
+    const xb = await resolver('DESPUÉS', tb, cb, rb.source, 'despues');
+    extraAjustes = Object.keys(ajustes).length ? { ajustes } : {};
+    sides.antes.texto = mainSpeakerText((xa.ok ? xa.t : ta).multi); sides.antes.medidas = xa.m;
+    sides.despues.texto = mainSpeakerText((xb.ok ? xb.t : tb).multi); sides.despues.medidas = xb.m;
+    if (!xa.m) return finish('descartado', 'sin_voz', 'ANTES: Deepgram no oye a nadie en el tramo.', extraAjustes);
+    if (!xb.m) return finish('descartado', 'sin_voz', 'DESPUÉS: Deepgram no oye a nadie en el tramo.', extraAjustes);
+    if (!xa.ok) return discard(xa.r, extraAjustes, 'ANTES');
+    if (!xb.ok) return discard(xb.r, extraAjustes, 'DESPUÉS');
+    ca = xa.cut; cb = xb.cut;
+    const reglasAudio: Array<[RuleResult, Lado | null]> = [
+      [checkAntes(xa.m, c), 'ANTES'], [checkDespues(xb.m, c), 'DESPUÉS'], [checkContraste(xa.m, xb.m, c), null],
+    ];
+    for (const [r, lado] of reglasAudio) if (!r.ok) return discard(r, extraAjustes, lado);
+  }
 
   // 5. Imagen + juez
   const refFrame = await ref;
@@ -322,17 +338,19 @@ export async function verifyCandidate(admin: SupabaseClient, candidateId: string
 
 type Audio = { multi: DeepgramTranscript; detect: DeepgramTranscript | null };
 
-/**
- * Solo las palabras del clip que midió la escucha: los márgenes del recorte son
- * relleno de audio (decisión de Facundo, 02/11/2026: verificador y buscador miden
- * el mismo trozo). El idioma del clip entero (modo detect) se conserva.
- */
-function soloClip(t: Audio, k: TestimonialClip, cut: CutResult): Audio {
-  const from = k.start - cut.startS - 0.3, to = k.end - cut.startS + 0.3;
-  return {
-    multi: subTranscript(t.multi, from, to),
-    detect: t.detect ? { ...subTranscript(t.detect, from, to), detectedLanguage: t.detect.detectedLanguage, languageConfidence: t.detect.languageConfidence, languages: t.detect.languages } : null,
+/** Medidas y texto que guardó la escucha para los dos clips. null si falta alguno. */
+async function listenedSides(admin: SupabaseClient, antesId: string | null, despuesId: string | null) {
+  if (!antesId || !despuesId) return null;
+  const { data, error } = await admin.from('testimonial_listen_segments')
+    .select('id, analysis_id, teacher_id, class_day, start_s, dur_s, habla_start_s, habla_end_s, medidas, texto').in('id', [antesId, despuesId]);
+  if (error) throw new Error(`testimonial_listen_segments: ${error.message}`);
+  const lado = (segId: string) => {
+    const r = ((data ?? []) as Row[]).find(x => x.id === segId);
+    const s = r ? toListenSegment(r) : null;
+    return s?.medidas ? { medidas: s.medidas, texto: s.texto } : null;
   };
+  const antes = lado(antesId), despues = lado(despuesId);
+  return antes && despues ? { antes, despues } : null;
 }
 
 type AudioResuelto =
@@ -625,10 +643,6 @@ async function writeBackCandidate(admin: SupabaseClient, v: Row, status: string,
   if (error) throw new Error(`Guardando el testimonio: ${error.message}`);
   if ((data ?? []).length) return;
   // El buscador la cambió o la borró después de verificarla: se repone la verificada.
-  if (status !== 'descartado') {
-    await admin.from('testimonial_candidates').delete()
-      .eq('student_group', snap.student_group).eq('pair_teacher_id', snap.pair_teacher_id).eq('status', 'detectado').neq('id', v.candidate_id);
-  }
   const { error: e2 } = await admin.from('testimonial_candidates').upsert({ ...snap, ...patch }, { onConflict: 'id' });
   if (e2) throw new Error(`Reponiendo el testimonio: ${e2.message}`);
 }
@@ -684,6 +698,30 @@ async function maybeHarden(admin: SupabaseClient, motivo: string): Promise<Revie
   return { key: row.key, antes: row.value, despues: next };
 }
 
+/**
+ * Revisión de un descarte por el admin (decisión de Facundo, 04/11/2026):
+ *   · 'injusto': pasa a "Por revisar" (aprobado, conservando el motivo del descarte
+ *     para calibrar), su veto de momento se levanta y sus medios ya no se borran.
+ *   · 'justo': solo cuenta para calibrar.
+ *   · null: deshace un 'justo'.
+ */
+export async function reviewDiscard(admin: SupabaseClient, id: string, decision: 'injusto' | 'justo' | null, nota: string | null): Promise<void> {
+  const { data: v } = await admin.from('testimonial_verifications').select('*').eq('id', id).maybeSingle();
+  if (!v) throw new Error('No existe esa verificación.');
+  if (v.kind !== 'busqueda' || v.status !== 'descartado') throw new Error('Ese testimonio ya no está descartado.');
+  const now = new Date().toISOString();
+  const patch: Row = { descarte_revision: decision, descarte_nota: decision ? nota?.trim() || null : null, descarte_revisado_at: decision ? now : null, updated_at: now };
+  if (decision === 'injusto') {
+    if (!v.antes || !v.despues) throw new Error('Este descarte no tiene los dos clips: no se puede revisar.');
+    await writeBackCandidate(admin, v, 'detectado', null);
+    patch.status = 'aprobado';
+    const { error: vErr } = await admin.from('testimonial_vetos').delete().eq('verification_id', id).like('clave', 'm:%');
+    if (vErr) throw new Error(`Levantando el veto: ${vErr.message}`);
+  }
+  const { error } = await admin.from('testimonial_verifications').update(patch).eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
 export async function undoConfigChange(admin: SupabaseClient, changeId: number): Promise<void> {
   const { data: ch } = await admin.from('testimonial_config_changes').select('*').eq('id', changeId).maybeSingle();
   if (!ch || ch.reverted_at) return;
@@ -715,12 +753,12 @@ export async function signPaths(admin: SupabaseClient, paths: string[]): Promise
   return out;
 }
 
-/** Borra audios y fotogramas de lo descartado pasados `retencion_dias`. "Sirve" nunca. Best-effort. */
+/** Borra audios y fotogramas de lo descartado pasados `retencion_dias`. "Sirve" y "Descarte injusto" nunca. Best-effort. */
 export async function cleanupStorage(admin: SupabaseClient, c: VerifyConfig): Promise<number> {
   const limite = new Date(Date.now() - c.retencion_dias * 86_400_000).toISOString();
-  const { data } = await admin.from('testimonial_verifications').select('id, antes, despues, review, status')
-    .is('files_deleted_at', null).lt('updated_at', limite).or('status.eq.descartado,status.eq.error,review.eq.no_sirve').limit(25);
-  const rows = ((data ?? []) as Row[]).filter(r => r.review !== 'sirve');
+  const { data } = await admin.from('testimonial_verifications').select('id, antes, despues, review, status, descarte_revision')
+    .is('files_deleted_at', null).lt('updated_at', limite).or('status.eq.descartado,status.eq.error,review.eq.no_sirve').limit(100);
+  const rows = ((data ?? []) as Row[]).filter(r => r.review !== 'sirve' && r.descarte_revision !== 'injusto').slice(0, 25);
   if (!rows.length) return 0;
   const paths = rows.flatMap(mediaPaths);
   if (paths.length) {
@@ -741,6 +779,35 @@ const enlaceFalso = (url: string | null | undefined) => {
   const c = classifyShareUrl(url);
   return 'cause' in c || (c.shareUrl.split('/').pop() ?? '').length !== 32;
 };
+
+const LIGHT = 'id, batch_id, kind, candidate_id, student_group, student_name, teacher_id, status, motivo, motivo_detalle, fathom_causa, antes, despues, semanas, juez_nota, juez_explicacion, consentimiento, review, review_motivo, review_texto, reviewed_at, created_at, updated_at, files_deleted_at, ajustes, descarte_revision, descarte_nota';
+
+/**
+ * "Revisar descartes": TODOS los descartes del verificador y, por motivo, cuántos
+ * hay y cuántos revisó el admin (los injustos ya salieron de la lista, pero cuentan).
+ */
+export async function loadDiscards(admin: SupabaseClient) {
+  const lista: Row[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await admin.from('testimonial_verifications').select(LIGHT).eq('kind', 'busqueda').eq('status', 'descartado')
+      .order('updated_at', { ascending: false }).order('id').range(from, from + 999);
+    if (error) throw new Error(error.message);
+    const page = (data ?? []) as unknown as Row[];
+    lista.push(...page);
+    if (page.length < 1000) break;
+  }
+  const [{ data: rescatados, error: rErr }, { data: teachers }] = await Promise.all([
+    admin.from('testimonial_verifications').select('motivo').eq('kind', 'busqueda').eq('descarte_revision', 'injusto'),
+    admin.from('teachers').select('id, name'),
+  ]);
+  if (rErr) throw new Error(rErr.message);
+  const nombre = new Map(((teachers ?? []) as Row[]).map(t => [String(t.id), String(t.name)]));
+  const conteo: Record<string, { injustos: number; justos: number }> = {};
+  const de = (m: unknown) => (conteo[String(m ?? 'otro')] ??= { injustos: 0, justos: 0 });
+  for (const r of (rescatados ?? []) as Row[]) de(r.motivo).injustos++;
+  for (const r of lista) if (r.descarte_revision === 'justo') de(r.motivo).justos++;
+  return { lista: lista.map(r => ({ ...r, teacher_name: nombre.get(String(r.teacher_id)) ?? null })), conteo };
+}
 
 function batchSummary(rows: Row[]) {
   const porMotivo: Record<string, number> = {};
@@ -763,14 +830,13 @@ function batchSummary(rows: Row[]) {
 export async function loadState(admin: SupabaseClient) {
   const { config, rows: configRows } = await loadConfig(admin);
   const limpiados = await cleanupStorage(admin, config).catch(() => 0);
-  const LIGHT = 'id, batch_id, kind, candidate_id, student_name, teacher_id, status, motivo, motivo_detalle, fathom_causa, antes, despues, semanas, juez_nota, juez_explicacion, consentimiento, review, review_motivo, review_texto, reviewed_at, created_at, updated_at, files_deleted_at, ajustes';
 
-  const [aprob, sirv, desc, batches, revs, cambios, prueba, teachers, gasto] = await Promise.all([
+  const [aprob, sirv, desc, descRevisados, batches, revs, cambios, prueba, teachers, gasto] = await Promise.all([
     admin.from('testimonial_verifications').select(LIGHT).eq('kind', 'busqueda').eq('status', 'aprobado').is('review', null)
-      .order('juez_nota', { ascending: false }).limit(TARJETAS_MAX),
+      .order('juez_nota', { ascending: false, nullsFirst: false }).limit(TARJETAS_MAX),
     admin.from('testimonial_verifications').select(LIGHT).eq('review', 'sirve').order('reviewed_at', { ascending: false }).limit(100),
-    admin.from('testimonial_verifications').select(LIGHT).eq('kind', 'busqueda').eq('status', 'descartado')
-      .order('updated_at', { ascending: false }).limit(60),
+    admin.from('testimonial_verifications').select('id', { count: 'exact', head: true }).eq('kind', 'busqueda').eq('status', 'descartado'),
+    admin.from('testimonial_verifications').select('motivo, descarte_revision').eq('kind', 'busqueda').not('descarte_revision', 'is', null),
     admin.from('testimonial_verify_batches').select('id, started_at, finished_at, cancelled, planned, alumnos').eq('kind', 'busqueda').order('started_at', { ascending: false }).limit(8),
     admin.from('testimonial_verifications').select('review, review_motivo, reviewed_at').not('reviewed_at', 'is', null)
       .order('reviewed_at', { ascending: false }).limit(config.endurecer_ventana),
@@ -779,7 +845,7 @@ export async function loadState(admin: SupabaseClient) {
     admin.from('teachers').select('id, name'),
     deepgramSpend(admin, config).catch(() => null),
   ]);
-  const err = [aprob, sirv, desc, batches, revs, cambios, prueba].find(r => r.error)?.error;
+  const err = [aprob, sirv, desc, descRevisados, batches, revs, cambios, prueba].find(r => r.error)?.error;
   if (err) throw new Error(err.message);
 
   const batchIds = ((batches.data ?? []) as Row[]).map(b => String(b.id));
@@ -815,15 +881,26 @@ export async function loadState(admin: SupabaseClient) {
     .eq('status', 'descartado').eq('discarded_by', 'admin');
 
   const nombreProfe = new Map(((teachers.data ?? []) as Row[]).map(t => [String(t.id), String(t.name)]));
-  // Todas las aprobadas por revisar, de mejor a peor nota; los medios, de las primeras.
-  const tarjetas = (aprob.data ?? []) as Row[];
+  // Por revisar: primero los alumnos con progreso medio real y, dentro, de mejor a
+  // peor nota. Los medios, de las primeras. Sin el progreso, salen igual (por nota).
+  const aprobadas = (aprob.data ?? []) as Row[];
+  const progreso = await progresoPorAlumno(admin, aprobadas.map(r => String(r.student_group)), config).catch(err => {
+    console.error('[testimonial-verify] Progreso medio:', err instanceof Error ? err.message : err);
+    return new Map<string, null>();
+  });
+  const tarjetas = ordenarPorProgreso(
+    aprobadas.map(r => ({ ...r, juez_nota: (r.juez_nota as number | null) ?? null, progreso: progreso.get(String(r.student_group)) ?? null })),
+    config.progreso_medio_min,
+  );
   const media = await signPaths(admin, tarjetas.slice(0, TARJETAS_CON_MEDIOS).flatMap(mediaPaths));
-  const conProfe = (r: Row) => ({ ...r, teacher_name: nombreProfe.get(String(r.teacher_id)) ?? null });
+  const conProfe = <T extends Row>(r: T) => ({ ...r, teacher_name: nombreProfe.get(String(r.teacher_id)) ?? null });
 
   return {
-    tarjetas: tarjetas.map(conProfe), media, aprobadasPendientes: (aprob.data ?? []).length,
+    tarjetas: tarjetas.map(conProfe), media, aprobadasPendientes: aprobadas.length,
+    progresoMin: config.progreso_medio_min,
     sirven: ((sirv.data ?? []) as Row[]).map(conProfe),
-    descartados: ((desc.data ?? []) as Row[]).map(conProfe),
+    descartesTotal: desc.count ?? 0,
+    avisosDescartes: avisosCalibracion((descRevisados.data ?? []) as Array<{ motivo: string | null; descarte_revision: string | null }>),
     tandas, alarma, motivosRechazo, revisionesMiradas: (revs.data ?? []).length,
     cambios: cambios.data ?? [],
     umbrales: configRows,

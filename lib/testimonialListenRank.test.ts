@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { CONFIG_POR_DEFECTO as C, type ClipMeasures } from '@/lib/testimonialMeasures';
 import {
   listenDone,
-  listenableClasses, pickTurns, turnCandidates, listenPairs, clipBounds, contrastScore,
+  listenableClasses, pickTurns, turnCandidates, listenPairs, clipBounds, contrastScore, progresoMedio, ordenarPorProgreso,
   type ListenClass, type ListenSegment, type ListenPlanSegment,
 } from '@/lib/testimonialListenRank';
 import type { Turn } from '@/lib/fluency';
@@ -66,6 +66,54 @@ const seg = (id: string, day: string, medidas: ClipMeasures | null, teacher = 't
 
 const pseg = (id: string, day: string, medidas: ClipMeasures | null, teacher = 't7', rec = `rec_${day}`): ListenPlanSegment =>
   ({ ...seg(id, day, medidas, teacher), moment: `${rec}#${id}`, recording: rec });
+
+describe('a igual calidad, el DESPUÉS más largo', () => {
+  const a = pseg('a', '2026-07-20', TRABADO);
+  it('dentro de la misma franja de contraste gana el DESPUÉS de más segundos', () => {
+    const r = listenPairs([a, pseg('corto', '2026-10-05', { ...FLUIDO, ppm: 142, habla_s: 12 }), pseg('largo', '2026-10-06', { ...FLUIDO, ppm: 140, habla_s: 27 })], C);
+    expect(r.map(p => p.b.id)).toEqual(['largo', 'corto']);
+  });
+  it('un contraste claramente mejor sigue por delante aunque sea más corto', () => {
+    const r = listenPairs([a, pseg('corto', '2026-10-05', { ...FLUIDO, ppm: 280, habla_s: 12 }), pseg('largo', '2026-10-06', { ...FLUIDO, ppm: 110, habla_s: 27 })], C);
+    expect(r.map(p => p.b.id)).toEqual(['corto', 'largo']);
+  });
+});
+
+describe('progresoMedio', () => {
+  const m = (ppm: number) => M({ palabras: ppm, habla_s: 60, ppm });
+  const s = (rec: string, day: string, ppm: number, teacher = 't7') => ({ recording: rec, classDay: day, teacherId: teacher, medidas: m(ppm) });
+  it('compara las primeras clases con las últimas del profe con más clases, ponderado por palabras', () => {
+    const r = progresoMedio([
+      s('r1', '2026-07-01', 70), s('r2', '2026-07-08', 70), s('r3', '2026-07-15', 70),
+      s('r4', '2026-09-01', 95), s('r5', '2026-09-08', 95), s('r6', '2026-09-15', 95),
+      s('otro', '2026-09-20', 200, 't9'),
+    ], C);
+    expect(r).toEqual({ antes: 70, despues: 95, factor: 1.36, clases: 6 });
+  });
+  it('una copia de la misma grabación cuenta como una clase', () => {
+    expect(progresoMedio([s('r1', '2026-07-01', 70), s('r1', '2026-09-01', 90)], C)).toBeNull();
+  });
+  it('sin 4 semanas entre la primera y la última, null', () => {
+    expect(progresoMedio([s('r1', '2026-09-01', 70), s('r2', '2026-09-10', 90)], C)).toBeNull();
+  });
+  it('fuera lecturas, español y clips sin voz', () => {
+    const r = progresoMedio([
+      s('r1', '2026-07-01', 70), s('r2', '2026-09-01', 90),
+      { ...s('r2', '2026-09-01', 300), lectura: 'lectura' as const },
+      { recording: 'r2', classDay: '2026-09-01', teacherId: 't7', medidas: M({ palabras: 300, habla_s: 60, ppm: 300, espanol_pct: 0.5 }) },
+      { recording: 'r2', classDay: '2026-09-01', teacherId: 't7', medidas: null },
+    ], C);
+    expect(r?.despues).toBe(90);
+  });
+});
+
+describe('ordenarPorProgreso', () => {
+  const t = (id: string, factor: number | null, juez_nota: number | null) => ({ id, juez_nota, progreso: factor == null ? null : { antes: 70, despues: 90, factor, clases: 6 } });
+  it('primero los que mejoran ×1,15 o más; dentro de cada grupo, por nota; sin nota al final', () => {
+    const r = ordenarPorProgreso([t('bajo-alta', 1.01, 90), t('sin', null, 95), t('real-baja', 1.2, 55), t('real-alta', 1.15, 72), t('real-sin', 1.3, null)], 1.15);
+    expect(r.map(x => x.id)).toEqual(['real-alta', 'real-baja', 'real-sin', 'sin', 'bajo-alta']);
+  });
+});
 
 describe('listenPairs', () => {
   it('ANTES trabado y DESPUÉS fluido, el de más contraste primero', () => {

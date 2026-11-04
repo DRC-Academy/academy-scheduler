@@ -64,7 +64,7 @@ if (t.fase === 'escuchar') {
   log(`Escucha terminada: ${t.parejas.total} testimonios posibles para ${t.parejas.pendientes.length} alumnos.`);
 }
 
-// Verificación: cada trabajador coge un alumno y prueba sus combinaciones en orden hasta aprobar una.
+// Verificación: cada trabajador coge un alumno y prueba sus combinaciones en orden hasta su tope de testimonios.
 const objetivo = t.objetivo;
 const alumnos = [...t.parejas.pendientes];
 let hechas = t.parejas.hechas, aprobadas = t.parejas.aprobadas, enCurso = 0, fin = false;
@@ -80,7 +80,7 @@ const trabajador = async () => {
         const r = await verificarItem(admin, batchId!, i);
         if (r.status === 'hecha') hechas++;
         if (r.resultado?.status === 'aprobado') { aprobadas++; log(`✓ APROBADO (${aprobadas}) · alumno ${al.g}`); }
-        otro = r.resultado?.status === 'aprobado' || r.motivo === 'alumno_aprobado';
+        otro = r.motivo === 'alumno_aprobado';
         if (r.fin) fin = true;
         seguidos = 0;
       } catch (e) { fallo(e); }

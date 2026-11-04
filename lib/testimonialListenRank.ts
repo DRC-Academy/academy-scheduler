@@ -177,9 +177,20 @@ export interface ListenPlannedPair {
   conEspanol: boolean;
 }
 
-/** >0 si `x` va antes que `y`: sin español, más contraste, más semanas. */
+/** Dos parejas cuyo contraste cae en la misma franja de esta anchura son "de igual calidad". */
+const FRANJA_CALIDAD = 0.5;
+const franja = (score: number) => Math.floor(score / FRANJA_CALIDAD);
+
+/**
+ * >0 si `x` va antes que `y`: sin español, más contraste y, a igual calidad, el
+ * DESPUÉS más largo (decisión de Facundo, 04/11/2026: en la tanda del 04/11, DESPUÉS
+ * de menos de 15 s = 1 aprobada de 35; de 25 s o más = 6 de 28). Después, el contraste
+ * exacto y las semanas.
+ */
 export function compareListenPairs(x: ListenPlannedPair, y: ListenPlannedPair): number {
-  return (Number(y.conEspanol) - Number(x.conEspanol)) || (x.score - y.score) || (x.semanas - y.semanas)
+  return (Number(y.conEspanol) - Number(x.conEspanol)) || (franja(x.score) - franja(y.score))
+    || ((x.b.medidas?.habla_s ?? 0) - (y.b.medidas?.habla_s ?? 0))
+    || (x.score - y.score) || (x.semanas - y.semanas)
     || (`${y.a.id}|${y.b.id}` < `${x.a.id}|${x.b.id}` ? -1 : 1);
 }
 
@@ -205,6 +216,68 @@ export function listenPairs(segs: ListenPlanSegment[], c: VerifyConfig,
     });
   }
   return out.sort((x, y) => compareListenPairs(y, x));
+}
+
+// ── Progreso medio del alumno ────────────────────────────────────────────────
+
+export interface ProgresoSegment {
+  /** La grabación: una copia de la misma clase cuenta una vez. */
+  recording: string;
+  teacherId: string | null;
+  classDay: string;
+  medidas: ClipMeasures | null;
+  lectura?: 'espontaneo' | 'lectura' | null;
+}
+
+export interface ProgresoMedio {
+  /** Palabras por minuto de media en sus primeras clases y en las últimas. */
+  antes: number;
+  despues: number;
+  /** despues / antes. */
+  factor: number;
+  /** Clases con habla medible del profe con el que más clases tiene. */
+  clases: number;
+}
+
+const CLASES_POR_LADO = 3;
+
+/**
+ * Velocidad media del alumno en sus primeras clases frente a las últimas, con el
+ * profe con el que más clases grabadas tiene: su habla medible (inglés, sin otra
+ * voz, sin lecturas), ponderada por palabras. No es la de un clip elegido: es lo que
+ * el alumno mejora de verdad. null si no hay dos clases separadas `semanas_min`.
+ */
+export function progresoMedio(segs: ProgresoSegment[], c: VerifyConfig): ProgresoMedio | null {
+  type Clase = { dia: string; palabras: number; segundos: number };
+  const porProfe = new Map<string, Map<string, Clase>>();
+  for (const s of segs) {
+    const m = s.medidas;
+    if (!m || !s.teacherId || s.lectura === 'lectura' || m.palabras < c.escucha_min_palabras || !checkAudio(m, 'ANTES', c).ok) continue;
+    const clases = porProfe.get(s.teacherId) ?? new Map<string, Clase>();
+    const x = clases.get(s.recording) ?? { dia: s.classDay, palabras: 0, segundos: 0 };
+    if (s.classDay < x.dia) x.dia = s.classDay;
+    x.palabras += m.palabras; x.segundos += m.habla_s;
+    clases.set(s.recording, x);
+    porProfe.set(s.teacherId, clases);
+  }
+  const elegido = [...porProfe].sort((a, b) => b[1].size - a[1].size || a[0].localeCompare(b[0]))[0]?.[1];
+  if (!elegido || elegido.size < 2) return null;
+  const clases = [...elegido.values()].sort((a, b) => a.dia.localeCompare(b.dia));
+  if (weeksBetween(clases[0].dia, clases[clases.length - 1].dia) < c.semanas_min) return null;
+  const n = Math.min(CLASES_POR_LADO, Math.floor(clases.length / 2));
+  const ppm = (l: Clase[]) => (l.reduce((a, x) => a + x.palabras, 0) / Math.max(1, l.reduce((a, x) => a + x.segundos, 0))) * 60;
+  const antes = ppm(clases.slice(0, n)), despues = ppm(clases.slice(-n));
+  return { antes: Math.round(antes), despues: Math.round(despues), factor: Math.round((despues / Math.max(1, antes)) * 100) / 100, clases: clases.length };
+}
+
+/**
+ * Orden de "Por revisar": primero los alumnos cuya media mejora al menos
+ * `progreso_medio_min` (decisión de Facundo, 04/11/2026); dentro de cada grupo, de
+ * mejor a peor nota (sin nota, al final).
+ */
+export function ordenarPorProgreso<T extends { progreso: ProgresoMedio | null; juez_nota: number | null }>(lista: T[], min: number): T[] {
+  const buena = (x: T) => Number((x.progreso?.factor ?? 0) >= min);
+  return [...lista].sort((a, b) => buena(b) - buena(a) || (b.juez_nota ?? -1) - (a.juez_nota ?? -1));
 }
 
 /**
