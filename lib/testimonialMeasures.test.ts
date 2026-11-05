@@ -282,4 +282,9 @@ describe('aprendizaje y resúmenes', () => {
     expect(hardenedValue(0.03, -0.03, 0.03)).toBeNull();
     expect(hardenedValue(3, 1, 8)).toBe(4);
   });
+  it('"Falso bloqueo" baja la velocidad máxima del ANTES de 5 en 5, hasta 50', () => {
+    expect(hardenedValue(70, -5, 50)).toBe(65);
+    expect(hardenedValue(52, -5, 50)).toBe(50);
+    expect(hardenedValue(50, -5, 50)).toBeNull();
+  });
 });
