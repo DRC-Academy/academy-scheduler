@@ -5,7 +5,7 @@
 //     ingresos, transcripts, posibles ausencias y revisiones);
 //   · runClassStatusCheck: el reloj horario (app/api/cron/estado-clases) avisa
 //     al profesor a las 24 h del final de una clase sin estado (campanita +
-//     email) y al admin a las 48 h (campanita + email);
+//     email) y al admin a las 48 h (solo campanita, sin correo a pagos@);
 //   · listUnmarkedForTeacher: lo que pinta "Mis clases" (todas las terminadas
 //     sin estado, sin esperar a las 24 h);
 //   · declareTeacherAbsence: "Estuve ausente". Es una FALTA del profesor, por
@@ -14,10 +14,10 @@
 //     había cobrado.
 //
 // ANTI-DUPLICADO: el id de la notificación es fijo por clase (estado_<…> y
-// estado_<…>_admin) y se inserta con upsert + ignoreDuplicates. Solo se manda
-// email por las notificaciones que se crearon DE VERDAD en esta vuelta, así que
-// dos vueltas no pueden avisar dos veces de la misma clase. Si el email falla,
-// la campanita queda y no se reintenta el correo.
+// estado_<…>_admin) y se inserta con upsert + ignoreDuplicates. Al profesor solo
+// se le manda email por las notificaciones que se crearon DE VERDAD en esta
+// vuelta, así que dos vueltas no pueden avisar dos veces de la misma clase. Si el
+// email falla, la campanita queda y no se reintenta el correo.
 //
 // La lectura de calendarios replica la de lib/teacherAbsenceStore (las mismas
 // funciones de lib/db para armar los alumnos de cada profesor), con un filtro
@@ -38,7 +38,7 @@ import {
   STATUS_TEACHER_AFTER_HOURS, STATUS_ADMIN_AFTER_HOURS, STATUS_LOOKBACK_DAYS,
   type UnmarkedClass, type StatusRecord, type StatusJoinLog, type StatusAbsence, type StatusReview,
 } from '@/lib/classStatus';
-import { sendClassStatusReminder, sendClassStatusAdminAlert, type TeacherLike } from '@/lib/emailNotifications';
+import { sendClassStatusReminder, type TeacherLike } from '@/lib/emailNotifications';
 import { reclassifyAsTeacherFalta } from '@/lib/classRecoveryStore';
 import type { Assignment, ClassRecordType, Grid, Student } from '@/types';
 
@@ -194,12 +194,11 @@ export interface ClassStatusCheckReport {
   avisosProfesor: Array<{ id: string; profesor: string; alumno: string; fecha: string; hora: string }>;
   avisosAdmin: Array<{ id: string; profesor: string; alumno: string; fecha: string; hora: string }>;
   emailsProfesor: number;
-  emailAdmin: boolean;
   errores: string[];
 }
 
 const lineOf = (c: UnmarkedClass) => ({ id: c.id, profesor: c.teacherName, alumno: c.studentName, fecha: c.date, hora: c.hour });
-const emailLine = (c: UnmarkedClass) => ({ studentName: c.studentName, date: c.date, hour: c.hour, durationHours: c.durationHours, teacherName: c.teacherName });
+const emailLine = (c: UnmarkedClass) => ({ studentName: c.studentName, date: c.date, hour: c.hour, durationHours: c.durationHours });
 
 /** Inserta las campanitas que falten y devuelve los ids creados DE VERDAD en esta vuelta. */
 async function insertBells(admin: SupabaseClient, rows: Row[]): Promise<Set<string>> {
@@ -218,7 +217,7 @@ export async function runClassStatusCheck(admin: SupabaseClient, opts: { nowMs?:
   const report: ClassStatusCheckReport = {
     ahoraEspana: `${parts.dateStr} ${String(parts.hour).padStart(2, '0')}:${String(parts.minute).padStart(2, '0')}`,
     fechas: dates, sinEstado24h: 0, sinEstado48h: 0,
-    avisosProfesor: [], avisosAdmin: [], emailsProfesor: 0, emailAdmin: false, errores: [],
+    avisosProfesor: [], avisosAdmin: [], emailsProfesor: 0, errores: [],
   };
   if (dates.length === 0) return report;
 
@@ -264,7 +263,7 @@ export async function runClassStatusCheck(admin: SupabaseClient, opts: { nowMs?:
     else report.errores.push(`Email al profesor ${teacher.name} no enviado.`);
   }
 
-  // 2) Admin: campanita por clase + un email con todas las nuevas.
+  // 2) Admin: solo campanita por clase, sin correo.
   const adminBells = dueAdmin.map(c => ({
     id: `${c.id}_admin`, target_user: null, target_role: 'admin',
     title: `📋 ${c.teacherName}: clase sin estado (48 h)`,
@@ -277,12 +276,7 @@ export async function runClassStatusCheck(admin: SupabaseClient, opts: { nowMs?:
   } catch (err) {
     report.errores.push(err instanceof Error ? err.message : String(err));
   }
-  const paraAdmin = dueAdmin.filter(c => nuevasAdmin.has(`${c.id}_admin`));
-  report.avisosAdmin = paraAdmin.map(lineOf);
-  if (paraAdmin.length > 0) {
-    report.emailAdmin = await sendClassStatusAdminAlert(paraAdmin.map(emailLine));
-    if (!report.emailAdmin) report.errores.push('Email al admin no enviado.');
-  }
+  report.avisosAdmin = dueAdmin.filter(c => nuevasAdmin.has(`${c.id}_admin`)).map(lineOf);
   return report;
 }
 

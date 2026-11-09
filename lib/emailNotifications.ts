@@ -480,9 +480,10 @@ export function sendMeetLinkAdminAlert24h(teacherName: string, studentName: stri
 }
 
 // ═══ Estado de la clase sin marcar ════════════════════════════════════════════
-// Los dispara el reloj horario de app/api/cron/estado-clases (lib/classStatusStore):
-// al profesor a las 24 h del final de la clase y al admin a las 48 h. Un correo
-// por vuelta con TODAS las clases nuevas, no uno por clase.
+// Lo dispara el reloj horario de app/api/cron/estado-clases (lib/classStatusStore):
+// al profesor a las 24 h del final de la clase. Un correo por vuelta con TODAS las
+// clases nuevas, no uno por clase. Al admin no se le manda correo (solo campanita a
+// las 48 h): el aviso iba a pagos@ y se quitó a pedido de Facundo el 06/11/2026.
 
 export interface UnmarkedClassLine {
   studentName: string;
@@ -491,15 +492,13 @@ export interface UnmarkedClassLine {
   /** 'HH:00', hora de inicio (España). */
   hour: string;
   durationHours: number;
-  teacherName?: string;
 }
 
-function unmarkedClassItem(c: UnmarkedClassLine, withTeacher: boolean): string {
+function unmarkedClassItem(c: UnmarkedClassLine): string {
   const [y, m, d] = c.date.split('-');
   const h = parseInt(c.hour, 10);
   const horas = Number.isFinite(h) && c.durationHours > 1 ? `${c.hour}–${String(h + c.durationHours).padStart(2, '0')}:00` : c.hour;
-  const quien = withTeacher && c.teacherName ? `${esc(c.teacherName)} · ` : '';
-  return `<li style="margin-bottom:6px;">${quien}<strong>${esc(c.studentName)}</strong> · ${esc(`${d}/${m}/${y}`)} · ${esc(horas)}</li>`;
+  return `<li style="margin-bottom:6px;"><strong>${esc(c.studentName)}</strong> · ${esc(`${d}/${m}/${y}`)} · ${esc(horas)}</li>`;
 }
 
 export async function sendClassStatusReminder(teacher: TeacherLike, classes: UnmarkedClassLine[]): Promise<boolean> {
@@ -513,26 +512,12 @@ export async function sendClassStatusReminder(teacher: TeacherLike, classes: Unm
     p(una
       ? 'Han pasado más de 24 horas desde esta clase y todavía no has marcado qué pasó en ella:'
       : 'Han pasado más de 24 horas desde estas clases y todavía no has marcado qué pasó en ellas:') +
-    `<ul style="margin:0 0 16px; padding-left:20px;">${classes.map(c => unmarkedClassItem(c, false)).join('')}</ul>` +
+    `<ul style="margin:0 0 16px; padding-left:20px;">${classes.map(unmarkedClassItem).join('')}</ul>` +
     p('Sube el transcript si la diste, o indica qué pasó: si el alumno canceló o no se conectó, o si no pudiste dar la clase. Desde «Mis clases», en el menú ⋯ de la clase, «Marcar estado».') +
     ctaButton('Marcar estado', `${APP_URL}/clases`),
     una ? `Clase con ${classes[0].studentName} sin estado` : `${classes.length} clases sin estado`,
   );
   return send('sendClassStatusReminder', teacher, subject, html);
-}
-
-export async function sendClassStatusAdminAlert(classes: UnmarkedClassLine[]): Promise<boolean> {
-  if (classes.length === 0) return false;
-  const subject = classes.length === 1
-    ? `${classes[0].teacherName ?? 'Un profesor'} no ha marcado el estado de su clase con ${classes[0].studentName} (48 h)`
-    : `${classes.length} clases sin estado después de 48 h`;
-  const html = baseEmailTemplate(
-    p('Estas clases terminaron hace más de 48 horas y el profesor sigue sin marcar qué pasó (ya se le avisó a las 24 h):') +
-    `<ul style="margin:0 0 16px; padding-left:20px;">${classes.map(c => unmarkedClassItem(c, true)).join('')}</ul>` +
-    ctaButton('Ver en DRC Gestión', `${APP_URL}/admin`),
-    `${classes.length} clase${classes.length === 1 ? '' : 's'} sin estado (48 h)`,
-  );
-  return sendToAddress('sendClassStatusAdminAlert', ADMIN_EMAIL, subject, html);
 }
 
 // ═══ F/G/H) Hitos de clase ════════════════════════════════════════════════════

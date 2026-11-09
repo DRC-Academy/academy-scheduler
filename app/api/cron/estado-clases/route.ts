@@ -4,7 +4,7 @@
 // está en vercel.json: el plan de Vercel solo admite crons diarios.
 //
 // A las 24 h del final de una clase sin estado avisa al profesor (campanita +
-// email); a las 48 h, al admin. Qué cuenta como estado: lib/classStatus. La
+// email); a las 48 h, al admin (solo campanita). Qué cuenta como estado: lib/classStatus. La
 // base y los avisos: lib/classStatusStore.
 //
 // Modos:
