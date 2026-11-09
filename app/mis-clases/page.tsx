@@ -1112,6 +1112,25 @@ function MisClasesContent() {
               <LastUpdated />
             </div>
           </header>
+          {/* Aviso fijo (no se puede cerrar): cuándo se paga. Solo texto, no
+              toca ningún cálculo. Solo en la vista del profesor. */}
+          <div
+            role="note"
+            style={{
+              width: '100%', boxSizing: 'border-box', margin: '0 0 14px',
+              padding: '14px 18px', borderRadius: 12,
+              background: '#EFF6FF', borderLeft: '4px solid #2563eb',
+              fontFamily: 'var(--font-app)', color: '#000',
+              overflowWrap: 'anywhere',
+            }}
+          >
+            <div style={{ fontWeight: 700, fontSize: 16, lineHeight: 1.35, marginBottom: 6 }}>
+              📅 ¿Cuándo se pagan las clases?
+            </div>
+            <p style={{ margin: 0, fontSize: 15, lineHeight: 1.55 }}>
+              Los pagos se realizan entre el 5 y el 10 de cada mes. Usamos esos días para revisar las clases dadas y los transcripts subidos, y así evitar errores en el conteo. Si ves algo que no cuadra en tus clases, avísanos antes del día 5.
+            </p>
+          </div>
           {missingPayment && <PaymentDetailsBanner />}
           {teacher
             ? <MyClassesTab teacher={teacher} myAssignments={myAssignments} />
