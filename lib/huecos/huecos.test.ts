@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { calcularBloques, estadoCalendarioWith, huecosLibres, HuecosError, tieneMarcaPuntualVigente, type OpcionesBloques } from '@/lib/huecos/huecos';
+import { calcularAgenda, calcularBloques, estadoCalendarioWith, evaluarBloque, huecosLibres, HuecosError, tieneMarcaPuntualVigente, type OpcionesBloques } from '@/lib/huecos/huecos';
+import { addDaysIso, dayNameFromIso } from '@/lib/teacherClasses';
+import type { Cell } from '@/types';
 import { FakeDb } from '@/lib/transferencia/fakeDb.test-helper';
 import type { Grid } from '@/types';
 
@@ -160,4 +162,135 @@ describe('estadoCalendarioWith / huecosLibres', () => {
     expect(r.map(b => b.fecha)).toEqual(['2026-10-15']);   // el 22 está reservado
     expect(await huecosLibres({ client: ok.client(), teacherId: 'tZ', duracionHoras: 1, modo: 'fijo', ahora: AHORA }).catch(e => e.codigo)).toBe('PROFESOR_NO_EXISTE');
   });
+});
+
+// ── Agenda del profesor ───────────────────────────────────────────────────────
+
+describe('calcularAgenda', () => {
+  const agenda = (grid: Grid, o: Partial<OpcionesBloques> = {}) => calcularAgenda(grid, opts(o));
+  const estadoEn = (grid: Grid, fecha: string, hora: number, o: Partial<OpcionesBloques> = {}) =>
+    agenda(grid, o).franjas.find(f => f.fecha === fecha && f.hora === hora)?.estado ?? 'fuera';
+
+  it('ventana: del lunes de esta semana al último día de los huecos puntuales', () => {
+    const a = agenda({});
+    expect(a.desde).toBe('2026-10-12');
+    expect(a.hasta).toBe('2026-11-23');   // lunes 12/10 10:00 + 42 días
+  });
+
+  it('libre, ocupado y fuera de horario (no_work, sin pintar, fuera de rango, domingo)', () => {
+    const grid: Grid = {
+      'Lunes_09:00': { state: 'libre' },
+      'Martes_15:00': { state: 'ocupado', student: 'Lucía Pérez' },
+      'Martes_16:00': { state: 'no_work' },
+      'Martes_23:00': { state: 'libre' },
+      'Domingo_12:00': { state: 'libre' },
+    };
+    expect(estadoEn(grid, '2026-10-12', 9)).toBe('libre');      // ya pasó: lo deshabilita el LMS
+    expect(estadoEn(grid, '2026-10-13', 15)).toBe('ocupado');
+    expect(estadoEn(grid, '2026-10-13', 16)).toBe('fuera');
+    expect(estadoEn(grid, '2026-10-13', 17)).toBe('fuera');     // sin pintar
+    expect(estadoEn(grid, '2026-10-13', 23)).toBe('fuera');     // fuera de 9..22
+    expect(agenda(grid).franjas.some(f => dayNameFromIso(f.fecha) === 'Domingo')).toBe(false);
+  });
+
+  it('marcas puntuales solo en su semana; reservas solo en su fecha', () => {
+    const grid: Grid = {
+      'Miércoles_10:00': { state: 'bloqueado', student: 'X', weekDate: '2026-10-19', baseState: 'libre' },
+      'Jueves_10:00': { state: 'libre' },
+      'Viernes_10:00': { state: 'reprogramada', student: 'Y', weekDate: '2026-10-26', baseState: 'ocupado', baseStudent: 'Y' },
+    };
+    const reservas = [{ date: '2026-10-15', hour: '10:00' }];
+    expect(estadoEn(grid, '2026-10-14', 10)).toBe('libre');
+    expect(estadoEn(grid, '2026-10-21', 10)).toBe('ocupado');   // la recuperación de esa semana
+    expect(estadoEn(grid, '2026-10-15', 10, { reservas })).toBe('ocupado');
+    expect(estadoEn(grid, '2026-10-22', 10, { reservas })).toBe('libre');
+    expect(estadoEn(grid, '2026-10-30', 10)).toBe('ocupado');   // reprogramada, su semana
+    expect(estadoEn(grid, '2026-10-16', 10)).toBe('ocupado');   // las demás: su base, ocupado
+  });
+
+  it('nunca lleva nombres ni tipo de clase', () => {
+    const grid: Grid = {
+      'Lunes_12:00': { state: 'ocupado', student: 'Lucía Pérez' },
+      'Martes_12:00': { state: 'bloqueado', student: 'Nayara Gil', weekDate: '2026-10-12', baseState: 'ocupado', baseStudent: 'Otra Alumna', recoveryFor: 'r1' },
+    };
+    const json = JSON.stringify(agenda(grid));
+    for (const prohibido of ['Lucía', 'Nayara', 'Otra', 'r1', 'bloqueado', 'reprogramada', 'student']) expect(json).not.toContain(prohibido);
+  });
+});
+
+// La garantía del contrato: lo que se ofrece y lo que se pinta salen del mismo
+// criterio. Sobre calendarios variados (generados con semilla fija):
+//   · bloque ofrecido             → todas sus casillas 'libre' en la agenda;
+//   · SLOT_NO_DISPONIBLE          → alguna casilla NO 'libre' en la agenda;
+//   · todas 'libre' y no ofrecido → solo por una regla de bloque.
+describe('agenda y huecos: el mismo cálculo', () => {
+  function azar(semilla: number) {
+    let x = semilla;
+    return () => { x = (x * 1103515245 + 12345) % 2147483648; return x / 2147483648; };
+  }
+  const DIAS_G = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+  const SEMANAS = ['2026-10-05', '2026-10-12', '2026-10-19', '2026-11-02', '2026-11-16'];
+
+  function calendario(r: () => number): { grid: Grid; reservas: { date: string; hour: string }[] } {
+    const pick = <T,>(xs: readonly T[]): T => xs[Math.floor(r() * xs.length)];
+    const grid: Grid = {};
+    for (const dia of DIAS_G) {
+      for (let h = 8; h <= 23; h++) {
+        const k = `${dia}_${String(h).padStart(2, '0')}:00`;
+        const p = r();
+        let c: Cell | undefined;
+        if (p < 0.40) c = { state: 'libre' };
+        else if (p < 0.60) c = { state: 'ocupado', student: 'Alguien' };
+        else if (p < 0.70) c = { state: 'no_work' };
+        else if (p < 0.80) c = { state: 'bloqueado', student: 'Rec', weekDate: pick(SEMANAS), baseState: pick(['libre', 'ocupado', 'no_work'] as const) };
+        else if (p < 0.87) c = { state: 'reprogramada', student: 'Rep', weekDate: pick(SEMANAS), baseState: 'ocupado', baseStudent: 'Rep' };
+        else if (p < 0.90) c = { state: 'bloqueado', student: 'Viejo' };   // marca sin semana
+        if (c) grid[k] = c;
+      }
+    }
+    const reservas = Array.from({ length: 4 }, () => ({
+      date: addDaysIso('2026-10-12', Math.floor(r() * 42)), hour: `${String(9 + Math.floor(r() * 13)).padStart(2, '0')}:00`,
+    }));
+    return { grid, reservas };
+  }
+
+  it('en 12 calendarios, duraciones de 1 a 3 h, con y sin la clase propia', () => {
+    let ofrecidos = 0; let comprobados = 0;
+    for (let semilla = 1; semilla <= 12; semilla++) {
+      const r = azar(semilla);
+      const { grid, reservas } = calendario(r);
+      const rango = { horaInicio: 9, horaFin: semilla % 3 === 0 ? 20 : 22 };
+      const libre = new Set(calcularAgenda(grid, { ...rango, reservas, ahora: AHORA }).franjas
+        .filter(f => f.estado === 'libre').map(f => `${f.fecha}|${f.hora}`));
+
+      for (const n of [1, 2, 3]) {
+        const o: OpcionesBloques = {
+          modo: 'puntual', duracionHoras: n, ...rango, reservas, ahora: AHORA,
+          sesionPropia: semilla % 2 ? { alumno: 'Alguien', claves: ['Martes_15:00'], fecha: '2026-10-20' } : undefined,
+        };
+        const ofrecidosSet = new Set(calcularBloques(grid, o).map(b => `${b.fecha}|${b.horaInicio}`));
+        for (let fecha = '2026-10-12'; fecha <= '2026-11-23'; fecha = addDaysIso(fecha, 1)) {
+          const dia = dayNameFromIso(fecha);
+          if (!DIAS_G.includes(dia)) continue;
+          for (let h = rango.horaInicio; h <= rango.horaFin; h++) {
+            const ev = evaluarBloque(grid, { dia, hora: h, fecha }, o);
+            const todasLibres = Array.from({ length: n }, (_, i) => `${fecha}|${h + i}`).every(c => libre.has(c));
+            comprobados++;
+            if (ev.ok) {
+              ofrecidos++;
+              expect(todasLibres, `${fecha} ${h} (${n} h) se ofrece y no está libre en la agenda`).toBe(true);
+              expect(ofrecidosSet.has(`${ev.bloque.fecha}|${ev.bloque.horaInicio}`)).toBe(true);
+            } else if (ev.motivo === 'SLOT_NO_DISPONIBLE') {
+              expect(todasLibres, `${fecha} ${h} (${n} h) no disponible pero la agenda lo da libre`).toBe(false);
+            } else if (todasLibres) {
+              expect(['ANTELACION_INSUFICIENTE', 'FUERA_DE_VENTANA', 'MARCA_PUNTUAL_EXISTENTE', 'MISMO_HORARIO', 'DATOS_INVALIDOS']).toContain(ev.motivo);
+            }
+          }
+        }
+      }
+    }
+    // Que el test no pase en vacío.
+    expect(ofrecidos).toBeGreaterThan(100);
+    expect(comprobados).toBeGreaterThan(4_000);
+  }, 30_000);
 });

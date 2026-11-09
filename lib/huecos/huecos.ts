@@ -18,7 +18,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Cell, Grid } from '@/types';
-import { esHuecoLibreParaAlumno, isPuntualState, HORA_INICIO_POR_DEFECTO, HORA_FIN_POR_DEFECTO, type ContextoHuecoAlumno } from '@/lib/cells';
+import { esHuecoLibreParaAlumno, isPuntualState, HORA_INICIO_POR_DEFECTO, HORA_FIN_POR_DEFECTO, type ContextoHuecoAlumno, type MotivoHuecoNoLibre } from '@/lib/cells';
 import { readTeacherGridWith } from '@/lib/calendarStore';
 import { liveReservationsWith } from '@/lib/classRecoveryQueries';
 import { getSpainParts, spainWallClockToEpoch } from '@/lib/spainTime';
@@ -100,6 +100,26 @@ export function tieneMarcaPuntualVigente(cell: Cell | undefined, hoy: string): b
   return cell.weekDate >= mondayIsoOfIso(hoy);
 }
 
+/**
+ * El contexto de esHuecoLibreParaAlumno para UNA fecha concreta (modo puntual).
+ * Lo usan evaluarBloque (los huecos que se ofrecen) y calcularAgenda (lo que se
+ * pinta): así "libre" se decide con el mismo criterio y los mismos datos en los dos.
+ */
+export function contextoPuntual(
+  o: Pick<OpcionesBloques, 'horaInicio' | 'horaFin' | 'reservas'>, fecha: string,
+): ContextoHuecoAlumno {
+  return {
+    horaInicio: o.horaInicio ?? HORA_INICIO_POR_DEFECTO, horaFin: o.horaFin ?? HORA_FIN_POR_DEFECTO,
+    alcance: { tipo: 'puntual', fecha }, reservas: o.reservas,
+  };
+}
+
+/** PUNTUAL: último día (España) de la ventana. El mismo para huecos y agenda. */
+export function ultimoDiaVentana(o: Pick<OpcionesBloques, 'ahora' | 'hasta'>): string {
+  const hasta = o.hasta ?? o.ahora + VENTANA_PUNTUAL_DIAS * 86_400_000;
+  return getSpainParts(new Date(hasta)).dateStr;
+}
+
 /** Claves de un bloque de N horas que empieza en (día, hora). Null si se sale del día. */
 export function clavesDeBloque(dia: string, h: number, n: number): string[] | null {
   if (h + n - 1 > 23) return null;
@@ -161,10 +181,7 @@ export function evaluarBloque(
     const hoy = getSpainParts(new Date(o.ahora)).dateStr;
     const conMarca = claves.filter(k => tieneMarcaPuntualVigente(grid[k], hoy));
     if (conMarca.length) return no('MARCA_PUNTUAL_EXISTENTE', conMarca.join(', '));
-    const malas = noLibres({
-      horaInicio: rangoIni, horaFin: rangoFin,
-      alcance: { tipo: 'puntual', fecha }, reservas: o.reservas,
-    });
+    const malas = noLibres(contextoPuntual(o, fecha));
     return malas.length ? no('SLOT_NO_DISPONIBLE', malas.join(', ')) : { ok: true, bloque: bloque(fecha, inicio) };
   }
 
@@ -197,8 +214,7 @@ export function calcularBloques(grid: Grid, o: OpcionesBloques): BloqueLibre[] {
 
   if (o.modo === 'puntual') {
     const desde = o.desde ?? o.ahora + ANTELACION_MINIMA_MS;
-    const hasta = o.hasta ?? o.ahora + VENTANA_PUNTUAL_DIAS * 86_400_000;
-    const ultimoDia = getSpainParts(new Date(hasta)).dateStr;
+    const ultimoDia = ultimoDiaVentana(o);
     for (let fecha = getSpainParts(new Date(desde)).dateStr; fecha <= ultimoDia; fecha = addDaysIso(fecha, 1)) {
       const dia = dayNameFromIso(fecha);
       if (DIAS.includes(dia)) probar(dia, fecha);
@@ -207,6 +223,63 @@ export function calcularBloques(grid: Grid, o: OpcionesBloques): BloqueLibre[] {
   }
   for (const dia of DIAS) probar(dia);
   return out.sort((a, b) => a.inicio - b.inicio);
+}
+
+// ── Agenda del profesor (lo que el LMS pinta en «Solo esta clase») ────────────
+
+/**
+ * Una hora del calendario del profesor en una fecha. Sin alumno ni tipo de
+ * clase: recurrente, recuperación, reprogramación o reserva salen todas como
+ * 'ocupado'.
+ */
+export interface FranjaAgenda {
+  fecha: string;
+  /** Hora de inicio (0..23); la franja dura una hora. */
+  hora: number;
+  estado: 'libre' | 'ocupado';
+}
+
+export interface Agenda {
+  /** Lunes (España) de la semana de `ahora`: la semana se ve entera, lo pasado incluido. */
+  desde: string;
+  /** Último día de la ventana puntual: el mismo que el de calcularBloques. */
+  hasta: string;
+  franjas: FranjaAgenda[];
+}
+
+/** Lo que es "fuera del horario del profe": no se devuelve, el LMS lo pinta vacío. */
+const FUERA_DE_HORARIO: ReadonlySet<MotivoHuecoNoLibre> = new Set(['clave_invalida', 'fuera_de_rango', 'sin_pintar', 'no_work']);
+
+/**
+ * La agenda del profesor, casilla a casilla, para las fechas de la ventana
+ * puntual. NO HAY CRITERIO PROPIO: cada casilla pasa por esHuecoLibreParaAlumno
+ * con contextoPuntual, exactamente como cada casilla de un bloque en
+ * evaluarBloque. Por eso:
+ *   · toda casilla de un bloque que ofrece calcularBloques sale 'libre' aquí;
+ *   · un bloque con todas sus casillas 'libre' aquí solo deja de ofrecerse por
+ *     una regla de BLOQUE (antelación, ventana, marca puntual, misma clase).
+ * Sin `sesionPropia`, como el modo puntual: la clase del alumno sale 'ocupado'
+ * (el LMS la marca como «Tu clase» con lo que ya sabe). Función PURA.
+ */
+export function calcularAgenda(
+  grid: Grid, o: Pick<OpcionesBloques, 'horaInicio' | 'horaFin' | 'reservas' | 'ahora' | 'hasta'>,
+): Agenda {
+  const desde = mondayIsoOfIso(getSpainParts(new Date(o.ahora)).dateStr);
+  const hasta = ultimoDiaVentana(o);
+  const rangoIni = Math.max(0, o.horaInicio ?? HORA_INICIO_POR_DEFECTO);
+  const rangoFin = Math.min(23, o.horaFin ?? HORA_FIN_POR_DEFECTO);
+  const franjas: FranjaAgenda[] = [];
+  for (let fecha = desde; fecha <= hasta; fecha = addDaysIso(fecha, 1)) {
+    const dia = dayNameFromIso(fecha);
+    if (!DIAS.includes(dia)) continue;
+    const ctx = contextoPuntual(o, fecha);
+    for (let h = rangoIni; h <= rangoFin; h++) {
+      const r = esHuecoLibreParaAlumno(grid, `${dia}_${hourText(h)}`, ctx);
+      if (r.libre) franjas.push({ fecha, hora: h, estado: 'libre' });
+      else if (!FUERA_DE_HORARIO.has(r.motivo)) franjas.push({ fecha, hora: h, estado: 'ocupado' });
+    }
+  }
+  return { desde, hasta, franjas };
 }
 
 /** Próxima fecha (España) con ese día de la semana cuya hora `h` todavía no empezó. */

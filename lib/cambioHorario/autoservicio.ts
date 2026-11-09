@@ -13,7 +13,8 @@ import { readTeacherGridWith } from '@/lib/calendarStore';
 import { liveReservationsWith, openRecoveriesOfStudentWith } from '@/lib/classRecoveryQueries';
 import { getSpainParts, spainWallClockToEpoch } from '@/lib/spainTime';
 import { addDaysIso, dayNameFromIso } from '@/lib/teacherClasses';
-import { VENTANA_PUNTUAL_DIAS, calcularBloques, estadoCalendarioWith, type ModoCambio } from '@/lib/huecos/huecos';
+import { VENTANA_PUNTUAL_DIAS, calcularAgenda, calcularBloques, estadoCalendarioWith, type Agenda, type ModoCambio } from '@/lib/huecos/huecos';
+import { hourText } from '@/lib/sessions';
 import { cargarElegibilidadWith } from '@/lib/cambioHorario/elegibilidad';
 import { sesionesDelAlumno, type Sesion } from '@/lib/cambioHorario/sesiones';
 import { evaluarOrigen, type MomentoEspana } from '@/lib/cambioHorario/origen';
@@ -61,12 +62,36 @@ export interface EstadoDto {
 
 export interface HuecoDto { dia: string; hora: string; duracion: number; fecha: string }
 
+/** Una hora del calendario del profesor. "YYYY-MM-DDTHH:MM" en hora de España, sin desfase. */
+export interface FranjaAgendaDto { inicio: string; fin: string; estado: 'libre' | 'ocupado' }
+
+/**
+ * PUNTUAL: el calendario del profesor en la ventana, para pintarlo. Sin nombres,
+ * ids ni tipo de clase. Las horas no_work, sin pintar o fuera de su rango no
+ * salen. Lo que se puede ELEGIR sigue siendo `huecos`.
+ */
+export interface AgendaDto { desde: string; hasta: string; franjas: FranjaAgendaDto[] }
+
 export interface HuecosDto {
   ok: true;
   modo: ModoCambio;
   sesion: { id: string; dia: string; hora: string; duracion: number };
   fecha_origen: string | null;
   huecos: HuecoDto[];
+  /** Solo en PUNTUAL. Calculada en la misma petición, con el mismo calendario, reservas y reloj que `huecos`. */
+  agenda?: AgendaDto;
+}
+
+/** La agenda en el formato del contrato: solo inicio, fin y estado. */
+export function agendaDto(a: Agenda): AgendaDto {
+  return {
+    desde: a.desde, hasta: a.hasta,
+    franjas: a.franjas.map(f => ({
+      inicio: `${f.fecha}T${hourText(f.hora)}`,
+      fin: f.hora >= 23 ? `${addDaysIso(f.fecha, 1)}T00:00` : `${f.fecha}T${hourText(f.hora + 1)}`,
+      estado: f.estado,
+    })),
+  };
 }
 
 // ── Carga común ───────────────────────────────────────────────────────────────
@@ -213,10 +238,9 @@ export async function huecosAutoservicioWith(
   }
 
   const reservas = await liveReservationsWith(db, ctx.profe.id, ahora);
+  const rango = { horaInicio: ctx.profe.calendar_start_hour, horaFin: ctx.profe.calendar_end_hour };
   const bloques = calcularBloques(ctx.grid, {
-    modo, duracionHoras: s.duracion,
-    horaInicio: ctx.profe.calendar_start_hour, horaFin: ctx.profe.calendar_end_hour,
-    reservas, ahora,
+    modo, duracionHoras: s.duracion, ...rango, reservas, ahora,
     sesionPropia: { alumno: ctx.alumno, claves: s.claves, fecha: fecha ?? undefined },
   });
   return {
@@ -224,5 +248,7 @@ export async function huecosAutoservicioWith(
     sesion: { id: idDeSesion(s), dia: s.dia, hora: s.hora, duracion: s.duracion },
     fecha_origen: fecha,
     huecos: bloques.map(b => ({ dia: b.dia, hora: b.horaInicio, duracion: b.duracionHoras, fecha: b.fecha })),
+    // Mismo grid, reservas, rango y reloj que los bloques: una sola foto.
+    ...(modo === 'puntual' ? { agenda: agendaDto(calcularAgenda(ctx.grid, { ...rango, reservas, ahora })) } : {}),
   };
 }

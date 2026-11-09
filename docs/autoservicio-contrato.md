@@ -285,6 +285,39 @@ después. Por eso hay que volver a consultar el estado.
   error con **el mismo código que daría el POST**.
 - Una lista vacía con `ok: true` significa que no hay huecos libres.
 
+### `agenda` (solo en `puntual`, desde noviembre de 2026)
+
+El calendario del profesor en la ventana, para que el LMS lo pinte entero
+(«Libre», «Ocupado», fuera de horario). **Lo que se puede elegir sigue siendo
+`huecos`**: la agenda solo sirve para pintar. En `fijo` no viene.
+
+```json
+"agenda": {
+  "desde": "2026-10-12",
+  "hasta": "2026-11-23",
+  "franjas": [
+    { "inicio": "2026-10-15T10:00", "fin": "2026-10-15T11:00", "estado": "libre" },
+    { "inicio": "2026-10-19T12:00", "fin": "2026-10-19T13:00", "estado": "ocupado" }
+  ]
+}
+```
+
+- Una franja por hora, de lunes a sábado. `inicio` y `fin` en hora de España
+  peninsular, `"YYYY-MM-DDTHH:MM"`, sin desfase.
+- `desde`: el lunes de la semana actual (la semana se ve entera, lo pasado
+  incluido). `hasta`: el último día de la ventana de los huecos puntuales.
+- `estado`: `libre` u `ocupado`. Clase fija, recuperación, reprogramación o
+  reserva viva salen todas como `ocupado`: **nunca nombres, ids ni tipo de
+  clase**. La clase del propio alumno también sale `ocupado`.
+- Las horas `no_work`, sin pintar o fuera de `calendar_start_hour..
+  calendar_end_hour` **no se devuelven**: son fuera de horario.
+- **Mismo cálculo que `huecos`**: cada casilla pasa por `esHuecoLibreParaAlumno`
+  con el mismo contexto que las casillas de un bloque (`contextoPuntual`), en la
+  misma petición, con el mismo calendario, reservas y reloj. Toda casilla de un
+  hueco ofrecido sale `libre`. Una franja `libre` que no es inicio de ningún hueco
+  lo es por una regla de bloque: antelación, duración, marca puntual existente
+  o la misma clase.
+
 ## 3. Cambiar el horario
 
 `POST /api/lms/autoservicio/cambiar-horario`

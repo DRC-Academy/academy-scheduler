@@ -129,6 +129,31 @@ describe('GET huecos', () => {
     expect(r.huecos.filter(h => h.dia === 'Jueves').map(h => h.fecha)).toEqual(['2026-10-15', '2026-10-22', '2026-10-29', '2026-11-05', '2026-11-12', '2026-11-19']);
   });
 
+  it('PUNTUAL trae la agenda del profesor (sin nombres); FIJO no', async () => {
+    const db = baseDb();
+    const p = await huecosAutoservicioWith(db.client(), 's1', { modo: 'puntual', sesion: 'Martes_15:00', fecha: '2026-10-20' }, AHORA);
+    expect(p.agenda).toBeDefined();
+    expect(p.agenda!.desde).toBe('2026-10-12');
+    expect(p.agenda!.franjas).toContainEqual({ inicio: '2026-10-15T10:00', fin: '2026-10-15T11:00', estado: 'libre' });
+    expect(p.agenda!.franjas).toContainEqual({ inicio: '2026-10-19T12:00', fin: '2026-10-19T13:00', estado: 'ocupado' });
+    // Su propia clase sale como ocupada: el LMS la marca como «Tu clase».
+    expect(p.agenda!.franjas).toContainEqual({ inicio: '2026-10-20T15:00', fin: '2026-10-20T16:00', estado: 'ocupado' });
+    expect(p.agenda!.franjas.every(f => Object.keys(f).join() === 'inicio,fin,estado')).toBe(true);
+    const json = JSON.stringify(p.agenda);
+    expect(json).not.toContain('Lucía');
+    expect(json).not.toContain('Otro');
+    // Cada hueco ofrecido cae entero sobre horas libres de la agenda.
+    const libres = new Set(p.agenda!.franjas.filter(f => f.estado === 'libre').map(f => f.inicio));
+    expect(p.huecos.length).toBeGreaterThan(0);
+    for (const h of p.huecos) {
+      for (let i = 0; i < h.duracion; i++) {
+        expect(libres.has(`${h.fecha}T${String(Number(h.hora.slice(0, 2)) + i).padStart(2, '0')}:00`)).toBe(true);
+      }
+    }
+    const f = await huecosAutoservicioWith(db.client(), 's1', { modo: 'fijo', sesion: 'Martes_15:00' }, AHORA);
+    expect(f.agenda).toBeUndefined();
+  });
+
   it('rechazos con el mismo código que el POST', async () => {
     const c = baseDb().client();
     expect(await codigoDe(huecosAutoservicioWith(c, 's1', { modo: 'otro', sesion: 'Martes_15:00' }, AHORA))).toBe('DATOS_INVALIDOS');
