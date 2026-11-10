@@ -38,7 +38,9 @@
 //   · ?limit=N        → tope de envíos de esta corrida (por defecto 40).
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { after } from 'next/server';
 import { requireCronSecret, requireAdminClient } from '@/lib/cronAuth';
+import { runRenewalJob } from '@/lib/renewalJob';
 import { enviarRecordatorio, PAUSA_MS, sleep } from '@/lib/formReminderSend';
 import {
   buildPendingList, summarize, studentsNeedingToken, stepLabel,
@@ -82,6 +84,26 @@ async function run(request: Request): Promise<Response> {
 
   // ── Modo prueba: los 6 correos a una dirección, sin tocar la base ──────────
   if (testTo) return enviarPrueba(testTo, base);
+
+  // ── Renovación de programas (lib/renewalJob) ───────────────────────────────
+  // Va colgada de este cron para no sumar uno nuevo en vercel.json (plan
+  // Hobby). Arranca YA, en paralelo con los correos de abajo, y `after()`
+  // mantiene viva la función hasta que termina: comparten los 60 s de
+  // maxDuration pero ninguna espera a la otra. Un fallo de las renovaciones
+  // queda en el log y no toca la respuesta ni los correos de este cron.
+  // No se lanza en ?dry=1 (ni en ?test=, que ya salió arriba): esas pruebas no
+  // deben mandar nada a Slack. Para probarla sola: /api/cron/renovaciones?dry=1.
+  if (!dry) {
+    const renovaciones = runRenewalJob(admin).then(
+      r => console.log('[cron followups-nivel] Renovaciones:', JSON.stringify(
+        'sent' in r
+          ? { ok: r.ok, enviados: r.sent.length, fallidos: r.failed.length, sin_webhook: r.sinWebhook }
+          : { ok: r.ok, ...('error' in r ? { error: r.error } : {}) },
+      )),
+      e => console.error('[cron followups-nivel] Renovaciones falló:', e),
+    );
+    after(() => renovaciones);
+  }
 
   // ── Datos ──────────────────────────────────────────────────────────────────
   // `students` con la columna del opt-out; si la migración no está corrida
