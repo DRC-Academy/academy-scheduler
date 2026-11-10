@@ -44,7 +44,7 @@ import { SECCIONES_OCULTAS, isAdminTabId, type AdminContadores, type AdminTabId 
 import { fetchRiskLite, riesgoResumen, type RiskLite } from '@/lib/dashboardExtras';
 import { proximosSinContactar } from '@/lib/dashboardMetrics';
 import { madridToday } from '@/lib/subscriptionAccess';
-import { RETENTION_BONUS_DAYS, RETENTION_UPCOMING_DAYS, retentionDaysLeft, retentionBonusFor } from '@/lib/retention';
+import { RETENTION_BONUS_DAYS, RETENTION_UPCOMING_DAYS, retentionDaysLeft, retentionBonusFor, retentionAppliesFor, retentionStudentLookup, RETENTION_APPLIES_LABEL } from '@/lib/retention';
 import { BONUS_STATE_LABEL } from '@/lib/bonuses';
 import { useAdminRecoveries } from '@/lib/useTeacherRecoveries';
 import { teacherPenaltiesInMonth, spainMonthOfInstant, type PenaltyItem } from '@/lib/teacherPenalties';
@@ -1248,11 +1248,12 @@ function TrackingMiniBar({ pct, color }: { pct: number; color: string }) {
 
 // ─── Class Tracking Tab ───────────────────────────────────────────────────────
 function ClassTrackingTab() {
-  const { assignments, teachers, classRecords, teacherBonuses } = useTeachers();
+  const { assignments, teachers, classRecords, teacherBonuses, students } = useTeachers();
 
   const [search, setSearch]               = useState('');
   const [teacherFilter, setTeacherFilter] = useState('');
   const [statusFilter, setStatusFilter]   = useState<'all' | 'near15' | 'near30' | 'near6m' | 'bonus'>('all');
+  const studentOf = retentionStudentLookup(students);
   const [sortCol, setSortCol]             = useState<'urgency' | 'classNum' | 'seniority' | 'name' | 'teacher'>('urgency');
   const [sortDir, setSortDir]             = useState<'asc' | 'desc'>('asc');
 
@@ -1269,10 +1270,14 @@ function ClassTrackingTab() {
     // (lib/retention.ts sobre teacher_since, y el bono ya cargado del par).
     // Antes esta pestaña tenía su propia cuenta desde start_date y no miraba si
     // el bono ya se había otorgado, así que admin y profesor no coincidían.
+    // Programas nuevos de pago único: no generan bono (retentionBonusApplies). Un
+    // bono ya cargado del par se sigue viendo como siempre.
     const daysLeftBonus   = retentionDaysLeft(a, today);
     const bonusVigente    = retentionBonusFor(teacherBonuses, a) ?? null;
+    const bonusApplies    = bonusVigente ? 'aplica' : retentionAppliesFor(a, studentOf);
+    const bonusNoAplica   = bonusApplies !== 'aplica';
     const daysToBonus     = Math.max(0, daysLeftBonus);
-    const bonusAvailable  = daysLeftBonus <= 0 && !bonusVigente;
+    const bonusAvailable  = daysLeftBonus <= 0 && !bonusVigente && !bonusNoAplica;
     const bonusPct        = Math.min(100, Math.max(0, ((RETENTION_BONUS_DAYS - daysLeftBonus) / RETENTION_BONUS_DAYS) * 100));
     const toClass15       = Math.max(0, 15 - classNum);
     const class15Reached  = classNum >= 15;
@@ -1282,7 +1287,7 @@ function ClassTrackingTab() {
     const class30Pct      = Math.min(100, (classNum / 30) * 100);
     return {
       a, classNum, totalDays, seniorityMonths, seniorityDays,
-      daysToBonus, bonusAvailable, bonusPct, bonusVigente,
+      daysToBonus, bonusAvailable, bonusPct, bonusVigente, bonusApplies, bonusNoAplica,
       toClass15, class15Reached, class15Pct,
       toClass30, class30Reached, class30Pct,
     };
@@ -1303,7 +1308,7 @@ function ClassTrackingTab() {
     if (teacherFilter && d.a.teacherId !== teacherFilter) return false;
     if (statusFilter === 'near15' && (d.class15Reached || d.toClass15 > 3)) return false;
     if (statusFilter === 'near30' && (!d.class15Reached || d.class30Reached || d.toClass30 > 3)) return false;
-    if (statusFilter === 'near6m' && (d.bonusAvailable || d.bonusVigente || d.daysToBonus > RETENTION_UPCOMING_DAYS)) return false;
+    if (statusFilter === 'near6m' && (d.bonusAvailable || d.bonusVigente || d.bonusNoAplica || d.daysToBonus > RETENTION_UPCOMING_DAYS)) return false;
     if (statusFilter === 'bonus'  && !d.bonusAvailable) return false;
     return true;
   });
@@ -1312,7 +1317,7 @@ function ClassTrackingTab() {
     return Math.min(
       !d.class15Reached && d.toClass15 <= 3 ? d.toClass15 : 9999,
       d.class15Reached && !d.class30Reached && d.toClass30 <= 3 ? d.toClass30 : 9999,
-      !d.bonusAvailable && !d.bonusVigente && d.daysToBonus <= RETENTION_UPCOMING_DAYS ? d.daysToBonus : 9999,
+      !d.bonusAvailable && !d.bonusVigente && !d.bonusNoAplica && d.daysToBonus <= RETENTION_UPCOMING_DAYS ? d.daysToBonus : 9999,
     );
   }
 
@@ -1510,6 +1515,10 @@ function ClassTrackingTab() {
                         {d.bonusVigente ? (
                           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 12, background: 'rgba(30,158,58,0.1)', border: '1px solid rgba(30,158,58,0.35)', color: '#1E9E3A', fontSize: 11, fontWeight: 700 }}>
                             {BONUS_STATE_LABEL[d.bonusVigente.status]}
+                          </span>
+                        ) : d.bonusNoAplica ? (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', padding: '4px 10px', borderRadius: 12, background: 'var(--bg-surface-3)', color: 'var(--text-muted)', fontSize: 11, fontWeight: 600 }}>
+                            {RETENTION_APPLIES_LABEL[d.bonusApplies]}
                           </span>
                         ) : d.bonusAvailable ? (
                           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 12, background: 'rgba(255,196,0,0.15)', border: '1px solid #D97706', color: '#92400E', fontSize: 11, fontWeight: 700, boxShadow: '0 0 6px rgba(255,196,0,0.2)' }}>

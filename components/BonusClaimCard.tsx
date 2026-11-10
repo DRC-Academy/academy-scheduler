@@ -31,6 +31,10 @@ export function estadoProfesor(estado: BonusRowState, note?: string | null): str
     case 'disponible':     return 'Disponible';
     case 'proximo':        return 'Próximo';
     case 'en_curso':       return 'En curso';
+    // Programas nuevos de pago único (lib/retention): el profesor no los ve en
+    // sus listas, pero el texto existe por si alguna pantalla los pinta.
+    case 'no_aplica':
+    case 'revisar_sin_fecha': return 'Sin bono · programa de pago único';
   }
 }
 

@@ -17,7 +17,7 @@ export const helpTexts = {
     totalCobrar:       'Lo que cobrás este mes: SOLO las clases pagables (ingreso + transcript), más bonos y menos penalizaciones. Lo pendiente de transcript no está incluido.',
     pagables:          'Clases con ingreso registrado y transcript subido. Son las que se pagan.',
     aRevisar:          'Clases que diste y entraron por tu ingreso, pero que todavía no se pagan porque falta el transcript. Al subirlo pasan solas a pagables.',
-    bonosScoring:      'Bonos de retención (6 meses con el alumno) y upsells aprobados por el equipo, que se suman a la liquidación del mes en que se aprueban.',
+    bonosScoring:      'Bonos de retención (6 meses con el alumno) y upsells aprobados por el equipo, que se suman a la liquidación del mes en que se aprueban. Los alumnos de los programas de pago único no generan bono de retención, salvo que ya lo hubieras ganado antes de que se pasaran a ese programa.',
     tipoClase:         'Tipo de registro: clase normal, recuperación, falta sin aviso o cancelación sobre la hora. Solo normal y recuperación cuentan para el seguimiento de clases.',
     pegarTranscript:   'Abre “Añadir clase” con el alumno y la fecha ya cargados para que solo pegues el transcript y verifiques esa clase.',
   },
@@ -70,7 +70,7 @@ export const helpTexts = {
 
   // ── Scoring / bonos ──────────────────────────────────────────────────────────
   scoring: {
-    bono6meses:  'Bono de retención que se habilita cuando el alumno cumple 6 meses de clases con vos (si cambia de profesor, el contador arranca de cero). Se reclama desde Mi Scoring.',
+    bono6meses:  'Bono de retención que se habilita cuando el alumno cumple 6 meses de clases con vos (si cambia de profesor, el contador arranca de cero). Se reclama desde Mi Scoring. Los alumnos de los programas de pago único no generan bono de retención, salvo que ya lo hubieras ganado antes de que se pasaran a ese programa.',
   },
 } as const;
 

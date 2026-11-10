@@ -11,6 +11,8 @@
 //   reclamado             el profesor lo pidió (fila 'reclamado')
 //   pagado                el admin lo marcó pagado (fila 'pagado'), o histórico
 //                         pagado por email antes de la app (fila 'pagado_externo')
+//   no_aplica /           programa nuevo de pago único sin bono cargado: no genera
+//   revisar_sin_fecha     bono (lib/retention.retentionBonusApplies). Solo admin.
 //
 // El admin tiene UNA acción: "Marcar pagado", solo cuando el bono ya cumplió
 // (disponible o reclamado). Marcarlo lo mete en la liquidación del mes en curso
@@ -32,11 +34,23 @@ import { PROFESORES_DE_PRUEBA } from '@/lib/externalTeachers';
 import {
   RETENTION_BONUS_DAYS, RETENTION_UPCOMING_DAYS, addDaysIso, bonusBlocksPair, isActiveAssignmentLike, normName,
   retentionBonusFor, retentionDaysLeft, retentionDueIso, retentionStartIso, spainTodayIso, toSpainDateIso,
+  retentionAppliesFor, retentionStudentLookup, type RetentionStudentRef,
 } from '@/lib/retention';
 
+/**
+ * Estados de una fila. Además de los de la tabla y los calculados por fecha,
+ * dos que salen de lib/retention.retentionBonusApplies y SOLO ve el admin:
+ *   · no_aplica          programa nuevo de pago único comprado antes de cumplir
+ *   · revisar_sin_fecha  programa nuevo de pago único sin fecha de compra
+ * Ninguno de los dos se puede pagar ni cuenta en las cifras.
+ */
 export type BonusRowState =
   | 'disponible' | 'proximo' | 'en_curso'
-  | 'reclamado' | 'aprobado' | 'pagado' | 'pagado_externo' | 'rechazado';
+  | 'reclamado' | 'aprobado' | 'pagado' | 'pagado_externo' | 'rechazado'
+  | 'no_aplica' | 'revisar_sin_fecha';
+
+/** Alumno tal como lo necesita la lista (subconjunto de `Student`). */
+export type BonusStudentRef = RetentionStudentRef & { id: string; email?: string | null; name: string };
 
 export interface BonusRow {
   /** Clave estable para React: id del bono, o de la asignación si no hay bono. */
@@ -56,6 +70,8 @@ export interface BonusRow {
   /** Días que faltan (negativo si ya cumplió). null si no hay fecha. */
   daysLeft: number | null;
   estado: BonusRowState;
+  /** 'YYYY-MM-DD' de compra del programa de pago único (solo en no_aplica). */
+  planPurchase?: string | null;
 }
 
 /** Importe de cada tipo. Única fuente: EVENT_EUROS (lib/scoringConstants). */
@@ -75,6 +91,8 @@ export const BONUS_STATE_LABEL: Record<BonusRowState, string> = {
   pagado:         'Pagado',
   pagado_externo: 'Pagado',
   rechazado:      'Rechazado',
+  no_aplica:         'No aplica · pago único',
+  revisar_sin_fecha: 'Revisar · sin fecha de compra',
 };
 
 /** ¿Ya cumplió y se puede marcar pagado? */
@@ -82,9 +100,15 @@ export function bonusIsPayable(estado: BonusRowState): boolean {
   return estado === 'disponible' || estado === 'reclamado';
 }
 
+/** ¿Es un par que no genera bono (programa nuevo de pago único)? */
+export function bonusNotApplicable(estado: BonusRowState): boolean {
+  return estado === 'no_aplica' || estado === 'revisar_sin_fecha';
+}
+
 /** Orden por defecto: primero lo que espera al admin, después el historial, al final lo que aún no cumplió. */
 const ORDEN_ESTADO: Record<BonusRowState, number> = {
   reclamado: 0, disponible: 1, aprobado: 2, pagado: 2, pagado_externo: 2, rechazado: 3, proximo: 4, en_curso: 5,
+  revisar_sin_fecha: 6, no_aplica: 7,
 };
 
 /** ¿La asignación cuenta como activa? (`status` ausente = anterior a la migración). */
@@ -94,6 +118,12 @@ export interface BuildBonusRowsInput {
   assignments: Assignment[];
   bonuses: TeacherBonus[];
   teachers: Teacher[];
+  /**
+   * Alumnos: deciden si el par genera bono (lib/retention.retentionBonusApplies).
+   * Obligatorio a propósito: sin ellos un programa nuevo de pago único saldría
+   * como disponible. Un alumno que no se encuentra se trata como siempre.
+   */
+  students: BonusStudentRef[];
   /** Un profesor concreto. Sin él, la lista global (sin cuentas de prueba). */
   teacherId?: string;
   /** Para los tests. Por defecto, hoy en hora de España. */
@@ -113,6 +143,7 @@ export function buildBonusRows(input: BuildBonusRowsInput): BonusRow[] {
   const { assignments, bonuses, teachers, teacherId } = input;
   const now = input.now ?? new Date();
   const teacherById = new Map(teachers.map(t => [t.id, t]));
+  const studentOf = retentionStudentLookup(input.students);
   const nameOf = (id: string, fallback?: string) => teacherById.get(id)?.name ?? fallback ?? id;
 
   const quiereProfe = (id: string) => !teacherId || id === teacherId;
@@ -137,10 +168,19 @@ export function buildBonusRows(input: BuildBonusRowsInput): BonusRow[] {
 
     // 'en_curso' = le falta más de un mes: no es un bono todavía, pero el admin
     // tiene que poder ver (y corregir) desde cuándo está con el profesor.
+    // Un bono ya cargado manda siempre; si no lo hay, un programa nuevo de pago
+    // único no llega nunca a disponible/próximo/en curso.
+    const aplica = vigente ? 'aplica' : retentionAppliesFor(a, studentOf);
     let estado: BonusRowState;
+    let planPurchase: string | null = null;
     if (vigente) {
       estado = vigente.status;
       usados.add(vigente.id);
+    } else if (aplica === 'no_aplica_pago_unico') {
+      estado = 'no_aplica';
+      planPurchase = toSpainDateIso(String(studentOf(a)?.companyPlanStart ?? ''));
+    } else if (aplica === 'revisar_sin_fecha') {
+      estado = 'revisar_sin_fecha';
     } else if (daysLeft <= 0) {
       estado = 'disponible';
     } else if (daysLeft <= RETENTION_UPCOMING_DAYS) {
@@ -156,6 +196,7 @@ export function buildBonusRows(input: BuildBonusRowsInput): BonusRow[] {
       teacherId: a.teacherId, teacherName: nameOf(a.teacherId, a.teacherName),
       bonusType: 'retencion_6m', euros: vigente?.euros ?? bonusEurosFor('retencion_6m'),
       teacherSince, dueDate, daysLeft, estado,
+      ...(planPurchase ? { planPurchase } : {}),
     });
   }
 

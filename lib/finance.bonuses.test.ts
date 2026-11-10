@@ -84,4 +84,18 @@ describe('bonos en la liquidación: bonos son bonos', () => {
     expect(r.bonusFromBonuses).toBe(30);
     expect(r.bonusRows.map(b => b.id)).toEqual(['h1']);
   });
+
+  it('un bono ya pagado de un alumno que HOY es de un programa nuevo de pago único sigue sumando (10/11/2026)', () => {
+    // La regla "pago único = sin bono" solo impide bonos NUEVOS; finanzas no la mira.
+    const r = calculateTeacherFinance({
+      teacherId: T, teacherName: 'Prof', monthYear: MES,
+      assignments: [alumno('Ana')], joinLogs: MARTES.map(d => log('Ana', d)),
+      classRecords: [], classAnalyses: MARTES.map(d => tx('Ana', d)), rates,
+      scoringEvents: [], students: [{ ...student('Ana'), wooProductId: 35655, companyPlanStart: '2026-01-01' }],
+      teacherBonuses: [bono({ id: 'pu', studentName: 'Ana', assignmentId: 'a_Ana', status: 'pagado', paidMonth: MES })],
+      manualApprovals: [], payment: null, gridOccupancy: EMPTY_GRID_OCCUPANCY,
+    });
+    expect(r.bonusFromBonuses).toBe(30);
+    expect(r.bonusRows.map(b => b.id)).toEqual(['pu']);
+  });
 });

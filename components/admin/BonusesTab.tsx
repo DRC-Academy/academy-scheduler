@@ -12,6 +12,11 @@
 // cerró el mes) y el profesor lo ve como pagado. "Pagado" es uno solo: los
 // históricos que se pagaron por email antes de la app se ven igual.
 //
+// Los programas nuevos de pago único no generan bono (lib/retention): sus pares
+// salen en gris, "No aplica · pago único" o "Revisar · sin fecha de compra",
+// sin botón de pagar, en el filtro "No aplica". Los bonos ya cargados se ven
+// como siempre.
+//
 // Además: "con el profe desde" (teacher_since) es editable con el lápiz, porque
 // la semilla asumió que nadie cambió de profesor; y "Cargar upsell" crea filas
 // ya pagadas (el profesor no reclama upsells).
@@ -23,7 +28,7 @@ import { useMemo, useState } from 'react';
 import { useTeachers } from '@/lib/TeachersContext';
 import { useAuth } from '@/lib/AuthContext';
 import {
-  buildBonusRows, bonusCounters, bonusEurosFor, bonusIsPayable, accrualMonthFor, BONUS_STATE_LABEL,
+  buildBonusRows, bonusCounters, bonusEurosFor, bonusIsPayable, bonusNotApplicable, accrualMonthFor, BONUS_STATE_LABEL,
   type BonusRow, type BonusRowState,
 } from '@/lib/bonuses';
 import { normName, spainTodayIso, isActiveAssignmentLike } from '@/lib/retention';
@@ -45,34 +50,41 @@ function mesLargo(monthYear: string): string {
   return `${MESES[(m ?? 1) - 1]} ${y}`;
 }
 
-/** Los filtros. "Todos" es lo que ya es un bono; lo que aún no cumplió va aparte en "En curso". */
-type Filtro = 'todos' | 'disponible' | 'reclamado' | 'pagado' | 'en_curso';
+/**
+ * Los filtros. "Todos" es lo que ya es un bono; lo que aún no cumplió va aparte
+ * en "En curso", y los programas nuevos de pago único (no generan bono, ver
+ * lib/retention.retentionBonusApplies) en "No aplica".
+ */
+type Filtro = 'todos' | 'disponible' | 'reclamado' | 'pagado' | 'en_curso' | 'no_aplica';
 const FILTROS: Array<{ id: Filtro; label: string }> = [
   { id: 'todos', label: 'Todos' },
   { id: 'disponible', label: 'Disponibles' },
   { id: 'reclamado', label: 'Reclamados' },
   { id: 'pagado', label: 'Pagados' },
   { id: 'en_curso', label: 'En curso' },
+  { id: 'no_aplica', label: 'No aplica' },
 ];
 const ES_PAGADO = new Set<BonusRowState>(['pagado', 'pagado_externo', 'aprobado']);
 const ES_EN_CURSO = new Set<BonusRowState>(['en_curso', 'proximo']);
 function pasaFiltro(r: BonusRow, f: Filtro): boolean {
-  if (f === 'todos') return !ES_EN_CURSO.has(r.estado);
+  if (f === 'todos') return !ES_EN_CURSO.has(r.estado) && !bonusNotApplicable(r.estado);
   if (f === 'pagado') return ES_PAGADO.has(r.estado);
   if (f === 'en_curso') return ES_EN_CURSO.has(r.estado);
+  if (f === 'no_aplica') return bonusNotApplicable(r.estado);
   return r.estado === f;
 }
 
 const PILL: Record<BonusRowState, string> = {
   reclamado: 'ambar', disponible: 'verde', proximo: 'gris', en_curso: 'gris',
   aprobado: 'gris', pagado: 'gris', pagado_externo: 'gris', rechazado: 'rojo',
+  no_aplica: 'gris', revisar_sin_fecha: 'gris',
 };
 
 // ─── Componente ──────────────────────────────────────────────────────────────
 
 export default function BonusesTab() {
   const {
-    teachers, assignments, teacherBonuses, financePayments,
+    teachers, assignments, students, teacherBonuses, financePayments,
     markBonusPaid, addUpsellBonuses, updateAssignmentTeacherSince, loadTeacherBonuses,
   } = useTeachers();
   const { user } = useAuth();
@@ -91,12 +103,12 @@ export default function BonusesTab() {
   // Lista global (sin cuentas de prueba): de acá salen las cifras. Con un
   // profesor elegido se pide SU lista, que sí incluye a t1/t2 para poder probar.
   const rowsGlobal = useMemo(
-    () => buildBonusRows({ assignments, bonuses: teacherBonuses, teachers }),
-    [assignments, teacherBonuses, teachers],
+    () => buildBonusRows({ assignments, bonuses: teacherBonuses, teachers, students }),
+    [assignments, teacherBonuses, teachers, students],
   );
   const rows = useMemo(
-    () => (profe ? buildBonusRows({ assignments, bonuses: teacherBonuses, teachers, teacherId: profe }) : rowsGlobal),
-    [assignments, teacherBonuses, teachers, profe, rowsGlobal],
+    () => (profe ? buildBonusRows({ assignments, bonuses: teacherBonuses, teachers, students, teacherId: profe }) : rowsGlobal),
+    [assignments, teacherBonuses, teachers, students, profe, rowsGlobal],
   );
   const cifras = bonusCounters(rowsGlobal);
 
@@ -212,6 +224,7 @@ export default function BonusesTab() {
           const ocupado = busy === r.key;
           const pagable = bonusIsPayable(r.estado);
           const pagado = ES_PAGADO.has(r.estado);
+          const noAplica = bonusNotApplicable(r.estado);
           const editandoSince = editSince?.key === r.key;
           const faltan = r.daysLeft !== null && r.daysLeft > 0 ? r.daysLeft : null;
           return (
@@ -253,7 +266,7 @@ export default function BonusesTab() {
                 {r.dueDate ? (
                   <>
                     {fecha(r.dueDate)}
-                    {faltan !== null && !pagado && <small className="bz-nota">faltan {faltan} día{faltan === 1 ? '' : 's'}</small>}
+                    {faltan !== null && !pagado && !noAplica && <small className="bz-nota">faltan {faltan} día{faltan === 1 ? '' : 's'}</small>}
                   </>
                 ) : <span className="bz-muted">—</span>}
               </span>
@@ -262,10 +275,12 @@ export default function BonusesTab() {
                 <span className={`bz-pill ${PILL[r.estado]}`}>{BONUS_STATE_LABEL[r.estado]}</span>
                 {pagado && r.bonus?.paidMonth && <small className="bz-nota">{mesLargo(r.bonus.paidMonth)}</small>}
                 {r.estado === 'reclamado' && r.bonus?.claimedAt && <small className="bz-nota">reclamado el {fecha(r.bonus.claimedAt)}</small>}
+                {r.estado === 'no_aplica' && <small className="bz-nota">compró el programa el {fecha(r.planPurchase)}, antes de cumplir 6 meses</small>}
+                {r.estado === 'revisar_sin_fecha' && <small className="bz-nota">programa de pago único sin fecha de compra</small>}
               </span>
 
               <span className="bz-act">
-                {!pagado && (
+                {!pagado && !noAplica && (
                   <button
                     type="button" className="adm-btn bz-btn-ok" disabled={!pagable || ocupado}
                     title={pagable ? `Entra en la liquidación de ${mesLargo(mesLiquidacion(r.teacherId))}` : faltan !== null ? `Todavía no cumplió los 6 meses: faltan ${faltan} días` : 'Todavía no se puede pagar'}
@@ -398,6 +413,7 @@ const ESTILOS = `
 .bz-row.head { min-height: 36px; font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #6E6E66; background: #FAFAF8; border-top: 0; }
 .bz-row.is-busy { opacity: 0.6; }
 .bz-row.is-reclamado { background: #FFFBEB; }
+.bz-row.is-no_aplica, .bz-row.is-revisar_sin_fecha { color: #6E6E66; background: #FAFAF8; }
 .bz-meta { display: contents; }
 .bz-nom { min-width: 0; display: flex; flex-direction: column; } .bz-nom b { font-weight: 600; }
 .bz-nota { display: block; font-size: 11.5px; color: #6E6E66; line-height: 1.3; margin-top: 1px; }

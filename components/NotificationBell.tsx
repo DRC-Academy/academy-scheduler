@@ -51,7 +51,7 @@ function notifIcon(type: string): string {
 // el resto de los roles conserve la campana actual con el número.
 export function NotificationBell({ compact = false }: { compact?: boolean } = {}) {
   const { user }        = useAuth();
-  const { assignments } = useTeachers();
+  const { assignments, students } = useTeachers();
   const router          = useRouter();
 
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
@@ -90,11 +90,13 @@ export function NotificationBell({ compact = false }: { compact?: boolean } = {}
   useEffect(() => {
     if (user.role !== 'teacher' || !user.teacherId || alertsDone.current) return;
     const mine = assignments.filter(a => a.teacherId === user.teacherId);
-    if (mine.length === 0) return;
+    // Sin los alumnos no se sabe quién es de un programa nuevo de pago único (que
+    // no genera aviso de bono): se espera a que lleguen, vienen en la misma carga.
+    if (mine.length === 0 || students.length === 0) return;
     alertsDone.current = true;
-    dbUpsertTeacherAlerts(user.teacherId, mine).then(load);
+    dbUpsertTeacherAlerts(user.teacherId, mine, students).then(load);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user.teacherId, assignments.length]);
+  }, [user.teacherId, assignments.length, students.length]);
 
   // ── Supabase Realtime ──────────────────────────────────────────────────────
   useEffect(() => {

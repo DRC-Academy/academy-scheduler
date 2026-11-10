@@ -29,7 +29,7 @@
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { dbGetTeachers, dbGetAssignments, dbGetTeacherBonuses, dbMarkBonusesPaidExternal } from '@/lib/db';
+import { dbGetTeachers, dbGetAssignments, dbGetTeacherBonuses, dbGetStudents, dbMarkBonusesPaidExternal } from '@/lib/db';
 import { EVENT_EUROS } from '@/lib/scoringConstants';
 import { normName, retentionStartIso, isActiveAssignmentLike, retentionBonusFor, addDaysIso } from '@/lib/retention';
 import { buildBonusRows } from '@/lib/bonuses';
@@ -224,8 +224,8 @@ function nota(f: FilaCsv): string | null {
 
 async function main() {
   const filas = leerCsv();
-  const [teachers, assignments, bonuses] = await Promise.all([
-    dbGetTeachers({ includeArchived: true }), dbGetAssignments(), dbGetTeacherBonuses(),
+  const [teachers, assignments, bonuses, students] = await Promise.all([
+    dbGetTeachers({ includeArchived: true }), dbGetAssignments(), dbGetTeacherBonuses(), dbGetStudents(),
   ]);
   const resueltas = resolver(filas, teachers, assignments);
 
@@ -296,8 +296,8 @@ async function main() {
     id: `sim_${i}`, teacherId: r.teacher!.id, assignmentId: r.assignment?.id ?? null, studentName: nombreFinal(r),
     bonusType: r.bonus_type, euros: r.euros, status: 'pagado_externo', paidMonth: r.paid_month, createdAt: new Date().toISOString(),
   }));
-  const hoy = buildBonusRows({ assignments, bonuses, teachers }).filter(x => x.estado === 'disponible');
-  const luego = buildBonusRows({ assignments, bonuses: [...bonuses, ...simulados], teachers }).filter(x => x.estado === 'disponible');
+  const hoy = buildBonusRows({ assignments, bonuses, teachers, students }).filter(x => x.estado === 'disponible');
+  const luego = buildBonusRows({ assignments, bonuses: [...bonuses, ...simulados], teachers, students }).filter(x => x.estado === 'disponible');
   console.log(`\n── 6) Disponibles sin reclamar en la pestaña Bonos: hoy ${hoy.length} → después del import ${luego.length} ──`);
   const porProfeLuego = new Map<string, string[]>();
   for (const x of luego) porProfeLuego.set(x.teacherName, [...(porProfeLuego.get(x.teacherName) ?? []), `${x.studentName} (desde ${x.teacherSince})`]);

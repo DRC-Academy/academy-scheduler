@@ -27,7 +27,7 @@ import { useStudentAutofill, isOneTimeProgram, orderPaidLabel } from '@/lib/useS
 import { linkBtnStyle, MeetLinkBadge, PendingTasksCard, useNivelesSinValidar } from '@/components/teacherPanelUi';
 import { isMeetLinkDefined } from '@/lib/meetLinkStatus';
 import { transcriptsPendientes } from '@/lib/dashboardMetrics';
-import { bonusClaimEnabledFor, RETENTION_BONUS_DAYS, retentionDaysActive, retentionStartIso, retentionBonusFor } from '@/lib/retention';
+import { bonusClaimEnabledFor, RETENTION_BONUS_DAYS, retentionDaysActive, retentionStartIso, retentionBonusFor, retentionAppliesFor, retentionStudentLookup } from '@/lib/retention';
 import { buildBonusRows, bonusesForMonth, sumBonusEuros, type BonusRow } from '@/lib/bonuses';
 import { BonusClaimCard, estadoProfesor, fechaCorta } from '@/components/BonusClaimCard';
 import { Grid, Teacher, Assignment, ScoringEvent, Student, AppNotification, ClassRecord } from '@/types';
@@ -476,7 +476,7 @@ function TeacherScoringTab({ teacher, myAssignments, myEvents, bonusRows }: {
   /** Filas de bonos del profesor (lib/bonuses.buildBonusRows), ya calculadas por el panel. */
   bonusRows: BonusRow[];
 }) {
-  const { teacherBonuses, claimRetentionBonus } = useTeachers();
+  const { teacherBonuses, claimRetentionBonus, students } = useTeachers();
   const today      = new Date();
   const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
 
@@ -497,13 +497,17 @@ function TeacherScoringTab({ teacher, myAssignments, myEvents, bonusRows }: {
   const historial   = bonusRows.filter(r => r.bonus !== null);
 
   // Progreso de retención por alumno: días CON ESTE profesor (teacher_since,
-  // lib/retention.ts) y el bono del par si ya existe.
+  // lib/retention.ts) y el bono del par si ya existe. Un alumno de un programa
+  // nuevo de pago único no genera bono (retentionBonusApplies): su barra no se
+  // muestra, salvo que el par ya tenga un bono cargado (ese se ve como siempre).
+  const studentOf = retentionStudentLookup(students);
   const studentProgress = myAssignments.map(a => {
     const daysActive = retentionDaysActive(a, today);
     const pct        = Math.min(100, Math.max(0, (daysActive / RETENTION_BONUS_DAYS) * 100));
     const bonus      = retentionBonusFor(teacherBonuses, a) ?? null;
-    return { a, daysActive, pct, bonus, startIso: retentionStartIso(a) };
-  }).sort((x, y) => y.daysActive - x.daysActive);
+    const aplica     = bonus !== null || retentionAppliesFor(a, studentOf) === 'aplica';
+    return { a, daysActive, pct, bonus, aplica, startIso: retentionStartIso(a) };
+  }).filter(p => p.aplica).sort((x, y) => y.daysActive - x.daysActive);
 
   // Score calculation
   const manualPoints   = myEvents.reduce((s, e) => s + e.points, 0);
@@ -1749,7 +1753,10 @@ function TeacherContent() {
   // misma lista que ve el admin en su pestaña Bonos. El banner dorado sale de
   // acá (una fila 'disponible' = un banner) y desaparece al reclamar, porque el
   // estado lo da la tabla y no un "visto" guardado en el navegador.
-  const bonusRows = buildBonusRows({ assignments: myAssignments, bonuses: teacherBonuses, teachers, teacherId: teacher.id });
+  // Con los alumnos: un programa nuevo de pago único no sale como disponible ni
+  // próximo (lib/retention.retentionBonusApplies), así que tampoco hay banner,
+  // aviso en la pestaña Avisos ni email para él.
+  const bonusRows = buildBonusRows({ assignments: myAssignments, bonuses: teacherBonuses, teachers, students, teacherId: teacher.id });
   const bonusBanners = bonusClaimEnabledFor(teacher.id) ? bonusRows.filter(r => r.estado === 'disponible' && r.assignment) : [];
 
   // Grid-only students (ocupado cells without a DB assignment)

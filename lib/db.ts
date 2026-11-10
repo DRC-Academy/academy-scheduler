@@ -25,6 +25,7 @@ import { findOffCalendar, slotStatusOf, type OffCalendarRow } from './offCalenda
 import { Teacher, Student, Assignment, AppUser, Grid, TeacherStatus, ScoringEvent, ClassCount, AppNotification, ClassJoinLog, AssignedSlot, EmailPreferences, SalesContactResult, RecoveryCell, TeacherBonus, BonusType, SlotChange } from '@/types';
 import {
   bonusClaimEnabledFor, RETENTION_UPCOMING_DAYS, isActiveAssignmentLike, retentionBonusFor, retentionDaysLeft,
+  retentionAppliesFor, retentionBonusApplies, retentionStudentLookup, type RetentionStudentRef,
 } from './retention';
 
 /** Hoy en hora de España ('YYYY-MM-DD'). Las fechas de negocio se cortan en Madrid, nunca en UTC. */
@@ -3521,6 +3522,8 @@ export async function dbUpsertTeacherAlerts(
   assignments: Array<{
     id: string;
     teacherId: string;
+    studentId?: string;
+    studentEmail?: string;
     studentName: string;
     startDate?: string;
     teacherSince?: string;
@@ -3529,6 +3532,11 @@ export async function dbUpsertTeacherAlerts(
     slots: Array<{ day: string; hour: string }>;
     manualClassAdjustment?: number;
   }>,
+  /**
+   * Alumnos (del contexto): un programa nuevo de pago único no genera bono
+   * (lib/retention.retentionBonusApplies), así que no se le crea aviso 'bono6m'.
+   */
+  students: Array<RetentionStudentRef & { id: string; email?: string | null; name: string }>,
 ): Promise<void> {
   const today = new Date();
   const toInsert: any[] = [];
@@ -3537,6 +3545,7 @@ export async function dbUpsertTeacherAlerts(
   // abierto (bonusClaimEnabledFor); si no, no se genera ningún aviso de bono.
   const reclamoAbierto = bonusClaimEnabledFor(teacherId);
   const bonuses = reclamoAbierto ? await dbGetTeacherBonusesOf(teacherId) : [];
+  const studentOf = retentionStudentLookup(students);
 
   // Conteo por clases registradas (normal/recuperacion) del profesor, en una sola
   // query, para detectar la cercanía a la clase 15 con el número real.
@@ -3574,9 +3583,11 @@ export async function dbUpsertTeacherAlerts(
     }
 
     // Bono de retención (6 meses CON este profesor): misma regla que el panel y
-    // el admin (lib/retention.ts). Solo mientras el reclamo esté habilitado y el
-    // par no tenga ya un bono cargado.
-    if (reclamoAbierto && isActiveAssignmentLike(a) && !retentionBonusFor(bonuses, a)) {
+    // el admin (lib/retention.ts). Solo mientras el reclamo esté habilitado, el
+    // par no tenga ya un bono cargado y el par genere bono (no es un programa
+    // nuevo de pago único).
+    if (reclamoAbierto && isActiveAssignmentLike(a) && !retentionBonusFor(bonuses, a)
+        && retentionAppliesFor(a, studentOf) === 'aplica') {
       const daysLeft = retentionDaysLeft(a, today);
       if (daysLeft <= RETENTION_UPCOMING_DAYS) {
         toInsert.push({
@@ -4818,6 +4829,66 @@ export class BonusAlreadyExistsError extends Error {
   }
 }
 
+/** El par no genera bono de retención: programa nuevo de pago único (lib/retention). */
+export class RetentionBonusNotApplicableError extends Error {
+  constructor(studentName: string, motivo: 'no_aplica_pago_unico' | 'revisar_sin_fecha') {
+    super(motivo === 'revisar_sin_fecha'
+      ? `${studentName} tiene un programa nuevo de pago único sin fecha de compra: no genera bono de retención hasta que se revise.`
+      : `${studentName} compró un programa nuevo de pago único antes de cumplir 6 meses con este profesor: no genera bono de retención.`);
+    this.name = 'RetentionBonusNotApplicableError';
+  }
+}
+
+/** Escapa los comodines de LIKE para buscar un texto literal con ilike. */
+const likeLiteral = (s: string) => s.replace(/[\\%_]/g, m => `\\${m}`);
+
+/**
+ * Comprobación al ESCRIBIR un bono de retención NUEVO: rechaza el de un par que
+ * no lo genera (programa nuevo de pago único, lib/retention.retentionBonusApplies).
+ * Lee de la base la asignación y el alumno (no lo que traiga la pantalla). Las
+ * filas que ya existen no pasan por acá: no se bloquean.
+ *
+ * Sin asignación (o si ya no existe) no hay reloj que mirar y se deja pasar,
+ * como antes: solo pasa con históricos cargados por script.
+ *
+ * TODO(sesión de seguridad): esto corre en el navegador con la clave pública, así
+ * que un cliente manipulado puede saltárselo e insertar en teacher_bonuses. La
+ * protección real va del lado del servidor (ruta con service role, o RLS /
+ * trigger en teacher_bonuses que aplique la misma regla).
+ */
+async function assertRetentionBonusApplies(assignmentId: string | null, studentName: string): Promise<void> {
+  if (!assignmentId) return;
+  const { data: asg, error } = await supabase.from('assignments')
+    .select('id, student_id, student_email, student_name, teacher_since, start_date, created_at')
+    .eq('id', assignmentId).maybeSingle();
+  if (error) throw new Error(`No se pudo comprobar si el bono aplica: ${error.message}`);
+  if (!asg) return;
+
+  // Alumno: por id, después por email y al final por nombre (como el resto de la app).
+  let st: any = null;
+  if (asg.student_id) {
+    const r = await supabase.from('students').select('*').eq('id', asg.student_id).maybeSingle();
+    if (r.error) throw new Error(`No se pudo comprobar si el bono aplica: ${r.error.message}`);
+    st = r.data;
+  }
+  if (!st && asg.student_email) {
+    const r = await supabase.from('students').select('*').ilike('email', likeLiteral(String(asg.student_email).trim())).limit(1);
+    if (r.error) throw new Error(`No se pudo comprobar si el bono aplica: ${r.error.message}`);
+    st = r.data?.[0] ?? null;
+  }
+  if (!st && asg.student_name) {
+    const r = await supabase.from('students').select('*').ilike('name', likeLiteral(String(asg.student_name).trim())).limit(1);
+    if (r.error) throw new Error(`No se pudo comprobar si el bono aplica: ${r.error.message}`);
+    st = r.data?.[0] ?? null;
+  }
+
+  const motivo = retentionBonusApplies(
+    st ? { wooProductId: st.woo_product_id != null ? Number(st.woo_product_id) : null, companyPlanStart: st.company_plan_start ?? null } : null,
+    { id: asg.id, teacherSince: asg.teacher_since ?? null, startDate: asg.start_date ?? null, createdAt: asg.created_at ?? null },
+  );
+  if (motivo !== 'aplica') throw new RetentionBonusNotApplicableError(studentName, motivo);
+}
+
 type TeacherBonusRow = {
   id: string; teacher_id: string; assignment_id: string | null; student_name: string; bonus_type: string;
   euros: number | string | null; status: TeacherBonus['status']; due_date: string | null; claimed_at: string | null;
@@ -4881,11 +4952,13 @@ async function insertBonusOrThrow(row: Record<string, unknown>, studentName: str
 
 /**
  * El profesor reclama el bono de retención de un alumno. Queda 'reclamado' hasta
- * que el admin lo apruebe. Lanza BonusAlreadyExistsError si el par ya tiene bono.
+ * que el admin lo apruebe. Lanza BonusAlreadyExistsError si el par ya tiene bono,
+ * y RetentionBonusNotApplicableError si el par no genera bono (pago único).
  */
 export async function dbClaimRetentionBonus(p: {
   teacherId: string; assignmentId: string; studentName: string; euros: number; dueDate: string;
 }): Promise<TeacherBonus> {
+  await assertRetentionBonusApplies(p.assignmentId, p.studentName);
   return insertBonusOrThrow({
     teacher_id:    p.teacherId,
     assignment_id: p.assignmentId,
@@ -4904,7 +4977,9 @@ export async function dbClaimRetentionBonus(p: {
  * Si el profesor lo había reclamado (`existingId`), se actualiza esa fila; si
  * no, se crea. `paidMonth` es el mes de liquidación en que entra (ver
  * lib/bonuses.accrualMonthFor): desde ese momento suma al total del profesor
- * en Finanzas. Lanza BonusAlreadyExistsError si el par ya tenía bono.
+ * en Finanzas. Lanza BonusAlreadyExistsError si el par ya tenía bono, y
+ * RetentionBonusNotApplicableError si es un bono de retención NUEVO de un par
+ * que no lo genera (pago único). Una fila que ya existe (reclamada) no se frena.
  */
 export async function dbMarkBonusPaid(p: {
   existingId?: string | null;
@@ -4912,6 +4987,9 @@ export async function dbMarkBonusPaid(p: {
   bonusType: BonusType; euros: number; dueDate: string | null; paidMonth: string; paidBy: string;
 }): Promise<TeacherBonus> {
   const now = new Date().toISOString();
+  if (!p.existingId && p.bonusType === 'retencion_6m') {
+    await assertRetentionBonusApplies(p.assignmentId, p.studentName);
+  }
   if (p.existingId) {
     const { data, error } = await supabase.from('teacher_bonuses')
       .update({ status: 'pagado', approved_at: now, approved_by: p.paidBy, paid_month: p.paidMonth })
