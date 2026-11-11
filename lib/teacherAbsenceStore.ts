@@ -61,7 +61,7 @@ import { readPaymentHolds } from '@/lib/paymentHoldStore';
 import { isPausedStatus } from '@/lib/subscriptionAccess';
 import { getSpainParts, spainWallClockToEpoch } from '@/lib/spainTime';
 import { hourNum, hourText, nkName } from '@/lib/sessions';
-import { GET as checkSubscriptionRoute } from '@/app/api/check-subscription/route';
+import { verificarSuscripcion } from '@/lib/subscriptionCheck';
 import {
   findDueAbsences, findLateJoins, readDates, windowDates, inAbsenceWindow, buildAbsencePayload,
   normalizePhone, claseAusenciaDe, MAX_AVISO_ATTEMPTS, ABSENCE_AFTER_MINUTES, ABSENCE_WINDOW_END_MINUTES,
@@ -273,27 +273,11 @@ async function cargarDatos(admin: SupabaseClient, fechas: string[], ensayo: bool
 
 // ── Suscripción y teléfono ────────────────────────────────────────────────────
 
-interface Verificacion { active: boolean | null; status: string; phone: string | null }
-
 /**
- * La misma verificación que el botón "Ingresar a clase": la ruta
- * /api/check-subscription (Oritalk y activación manual cuentan como activo), en
- * el mismo proceso. Ante cualquier fallo, `active: null` (= no verificado).
+ * La misma verificación que el botón "Ingresar a clase" (lib/subscriptionCheck).
+ * Ante cualquier fallo, `active: null` (= no verificado).
  */
-async function verificarAlumno(email: string): Promise<Verificacion> {
-  try {
-    const res = await checkSubscriptionRoute(new Request(`http://gestion.local/api/check-subscription?email=${encodeURIComponent(email)}`));
-    const j = (await res.json()) as Row;
-    return {
-      active: typeof j.active === 'boolean' ? j.active : null,
-      status: typeof j.status === 'string' ? j.status : 'error',
-      phone: typeof j.phone === 'string' ? j.phone : null,
-    };
-  } catch (err) {
-    console.error('[ausencias] No se pudo verificar la suscripción:', err);
-    return { active: null, status: 'error', phone: null };
-  }
-}
+const verificarAlumno = (email: string) => verificarSuscripcion(email, 'ausencias');
 
 /**
  * Teléfono de facturación del último pedido de WooCommerce. Solo se usa cuando

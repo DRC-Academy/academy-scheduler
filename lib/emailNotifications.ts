@@ -33,7 +33,7 @@ const ADMIN_EMAIL = process.env.ADMIN_NOTIFICATION_EMAIL?.trim() || PAGOS_EMAIL;
 //
 // La variable de entorno se mantiene para poder redirigir el aviso sin deployar.
 // No está configurada en Vercel, así que hoy manda esta dirección.
-const ENDING_PLANS_EMAIL =
+export const ENDING_PLANS_EMAIL =
   process.env.ENDING_PLANS_NOTIFICATION_EMAIL?.trim() || 'alumnos@drcacademy.com';
 
 // ── Preferencias ──────────────────────────────────────────────────────────────

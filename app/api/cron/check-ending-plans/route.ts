@@ -1,6 +1,10 @@
 // Cron diario: aviso INTERNO al equipo de ventas de los alumnos a los que se les
 // termina el plan dentro de 7 días.
 //
+// Desde nov/2026 también el aviso de "tu plan ha finalizado" (alumno + profe +
+// equipo) a los que vencieron AYER, que antes mandaba el zap "Aviso Intensivos
+// profe + alumno": lib/endedPlanJob, paso 0 más abajo.
+//
 // Qué alumnos: los que tienen `students.manual_active_until` dentro de la
 // ventana. Es el único fin de plan real que existe hoy — WooCommerce no devuelve
 // fechas de fin y los intensivos las llevan cargadas a mano. El porqué está en
@@ -36,6 +40,7 @@ import { sendEndingPlansDigest } from '@/lib/emailNotifications';
 import {
   sendEndingPlansToZapier, buildEndingPlanPayload, samplePlan,
 } from '@/lib/endingPlansWebhook';
+import { runEndedPlanNotices, sendEndedPlanSamples, type EndedPlanReport } from '@/lib/endedPlanJob';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -76,7 +81,28 @@ export async function GET(request: Request): Promise<Response> {
   // exacto que se envió, para poder verificarlo en Zapier sin esperar al cron de
   // las 22:00. No manda el email interno y NO marca a nadie como avisado, así
   // que se puede repetir las veces que haga falta sin gastar el aviso real.
-  const test = new URL(request.url).searchParams.get('test') === '1';
+  const params = new URL(request.url).searchParams;
+  const test = params.get('test') === '1';
+
+  // FIN DE PLAN ("tu plan ha finalizado", lib/endedPlanJob): dos modos manuales.
+  // Ninguno toca el aviso de 7 días ni las tareas de after().
+  //   ?prueba_fin=1&email=tu@correo.com  los 3 emails con datos inventados, todos
+  //                                      a esa dirección. No lee ni escribe la base.
+  //   ?finalizados=dry[&hoy=YYYY-MM-DD]  quién recibiría el aviso hoy (o ese día),
+  //                                      comprobando Woo, SIN enviar ni marcar.
+  if (params.get('prueba_fin') === '1') {
+    const to = (params.get('email') ?? '').trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+      return Response.json({ ok: false, error: 'Falta &email=tu@correo.com' }, { status: 400 });
+    }
+    const resultado = await sendEndedPlanSamples(to);
+    return Response.json({ ok: Object.values(resultado).every(r => r.estado === 'enviado'), modo: 'prueba_fin', to, resultado });
+  }
+  if (params.get('finalizados') === 'dry') {
+    const hoy = params.get('hoy') ?? '';
+    const r = await runEndedPlanNotices(supabase, { dry: true, today: /^\d{4}-\d{2}-\d{2}$/.test(hoy) ? hoy : undefined });
+    return Response.json({ modo: 'finalizados_dry', ...r });
+  }
 
   // Foto diaria del SCORING v2 (teacher_score_snapshots). Va colgada de este
   // cron para no sumar uno nuevo, y corre DESPUÉS de responder (after): no
@@ -105,6 +131,25 @@ export async function GET(request: Request): Promise<Response> {
         console.error('[cron ending-plans] oferta nueva: no se pudo barrer:', err);
       }
     });
+  }
+
+  // 0) FIN DE PLAN: el aviso de "tu plan ha finalizado" a los que vencieron ayer
+  //    (lib/endedPlanJob). Va ANTES del aviso de 7 días porque ese tiene salidas
+  //    anticipadas (nadie en la ventana, email caído). Aislado: un fallo acá no
+  //    toca el aviso de 7 días. Sin el SQL de ended_notice_* no envía nada.
+  let finalizados: EndedPlanReport | { ok: false; error: string } | null = null;
+  if (!test) {
+    try {
+      finalizados = await runEndedPlanNotices(supabase, { today });
+      console.log(
+        `[cron ending-plans] fin de plan: ventana ${finalizados.ventana.desde}..${finalizados.ventana.hasta}, ` +
+        `${finalizados.candidatos} candidato(s), ${finalizados.avisados} avisado(s), ${finalizados.errores.length} error(es)` +
+        `${finalizados.migracionPendiente ? ' — FALTA el SQL de ended_notice_*: no se envió nada' : ''}.`,
+      );
+    } catch (err) {
+      console.error('[cron ending-plans] fin de plan: la vuelta falló:', err);
+      finalizados = { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
   }
 
   // 1) Alumnos con fecha de fin. El filtro grueso lo hace la base (no traer 184
@@ -192,12 +237,13 @@ export async function GET(request: Request): Promise<Response> {
       migracionPendiente: true,
       mensaje: 'Corré supabase-ending-plans.sql: sin las columnas del aviso no hay anti-duplicado y no se envía nada.',
       habrianEntrado: pendientes.map(p => ({ alumno: p.studentName, dias: p.daysLeft })),
+      finalizados,
     });
   }
 
   if (pendientes.length === 0) {
     console.log(`[cron ending-plans] ${today}: ningún alumno nuevo en la ventana de ${ENDING_NOTICE_DAYS} días.`);
-    return Response.json({ ok: true, today, enVentana: plans.length, avisados: 0 });
+    return Response.json({ ok: true, today, enVentana: plans.length, avisados: 0, finalizados });
   }
 
   // 4) UN email con todos. Solo si Resend lo acepta se marca lo enviado.
@@ -205,7 +251,7 @@ export async function GET(request: Request): Promise<Response> {
   if (!enviado) {
     console.error('[cron ending-plans] El email no salió; no se marca nada y se reintentará mañana.');
     return Response.json(
-      { ok: false, error: 'No se pudo enviar el aviso', pendientes: pendientes.length },
+      { ok: false, error: 'No se pudo enviar el aviso', pendientes: pendientes.length, finalizados },
       { status: 502 },
     );
   }
@@ -232,6 +278,7 @@ export async function GET(request: Request): Promise<Response> {
     marcados,
     zapier,
     alumnos: pendientes.map(p => ({ alumno: p.studentName, dias: p.daysLeft, fin: p.endDate })),
+    finalizados,
   });
 }
 
