@@ -37,6 +37,9 @@ interface Absence {
   zapierStatus: 'pendiente' | 'enviado' | 'sin_webhook' | 'error' | 'no_enviado';
   zapierSentAt: string | null;
   zapierError: string | null;
+  /** Aviso directo (desde nov/2026): Slack, WhatsApp al alumno y email al profe. null = fila de la época de Zapier. */
+  aviso: Partial<Record<'slack' | 'whatsapp' | 'email', { estado: string; at?: string; error?: string }>> | null;
+  avisoEnviadoAt: string | null;
   recovery: {
     id: string; status: string;
     options: Array<{ date: string; hour: string }>;
@@ -90,6 +93,14 @@ const ZAPIER: Record<Absence['zapierStatus'], { label: string; tono: string }> =
   error:       { label: 'Error al avisar a Zapier',    tono: 'rojo' },
   pendiente:   { label: 'Enviando…',                   tono: 'ambar' },
   no_enviado:  { label: 'No se avisó a Zapier',        tono: 'gris' },
+};
+
+const CANAL_NOMBRE = { slack: 'Slack', whatsapp: 'WhatsApp', email: 'Email al profe' } as const;
+const CANAL_ESTADO: Record<string, { label: string; tono: string }> = {
+  enviado:    { label: 'enviado',             tono: 'verde' },
+  error:      { label: 'error',               tono: 'rojo' },
+  sin_config: { label: 'sin configurar',      tono: 'ambar' },
+  omitido:    { label: 'sin destinatario',    tono: 'gris' },
 };
 
 const hora = (iso: string | null) => (iso
@@ -231,11 +242,28 @@ function Fila({ r, by, onChanged }: { r: Absence; by: string; onChanged: () => P
           {fechaLarga(r.classDate)} · {r.classHour}{r.durationHours > 1 ? ` · ${r.durationHours} h` : ''}{r.isRecovery ? ' · recuperación' : ''}
         </div>
         <div><span className="rt-k">Detectada</span>{hora(r.detectedAt)}</div>
-        <div><span className="rt-k">Aviso</span>
-          <span className={`rt-tx is-${zap.tono}`}>{zap.label}</span>
-          {r.zapierStatus === 'enviado' && r.zapierSentAt ? ` · ${hora(r.zapierSentAt)}` : ''}
-          {r.zapierError && <span className="rt-nota">{r.zapierError}</span>}
-        </div>
+        {r.aviso ? (
+          <div><span className="rt-k">Aviso</span>
+            {(['slack', 'whatsapp', 'email'] as const).filter(c => r.aviso?.[c]).map((c, i) => {
+              const res = r.aviso![c]!;
+              const e = CANAL_ESTADO[res.estado] ?? { label: res.estado, tono: 'gris' };
+              return (
+                <span key={c}>
+                  {i > 0 ? ' · ' : ''}{CANAL_NOMBRE[c]}: <span className={`rt-tx is-${e.tono}`}>{e.label}</span>
+                  {res.estado === 'enviado' && res.at ? ` ${hora(res.at)}` : ''}
+                </span>
+              );
+            })}
+            {(['slack', 'whatsapp', 'email'] as const).map(c => r.aviso?.[c]?.error && r.aviso[c]!.estado !== 'enviado'
+              ? <span key={c} className="rt-nota">{CANAL_NOMBRE[c]}: {r.aviso[c]!.error}</span> : null)}
+          </div>
+        ) : (
+          <div><span className="rt-k">Aviso</span>
+            <span className={`rt-tx is-${zap.tono}`}>{zap.label}</span>
+            {r.zapierStatus === 'enviado' && r.zapierSentAt ? ` · ${hora(r.zapierSentAt)}` : ''}
+            {r.zapierError && <span className="rt-nota">{r.zapierError}</span>}
+          </div>
+        )}
         {r.recovery && <div><span className="rt-k">Recuperación</span>{recuperacionTexto(r.recovery)}</div>}
         {r.statusReason && <div><span className="rt-k">Motivo</span>{r.statusReason}</div>}
         {multa && (

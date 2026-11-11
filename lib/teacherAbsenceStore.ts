@@ -11,8 +11,12 @@
 //   3. Solo para esas pocas: pausa / suscripción inactiva / teléfono, con la
 //      MISMA verificación que el botón "Ingresar a clase" (la ruta
 //      /api/check-subscription, llamada en el mismo proceso, sin otra invocación).
-//   4. Reserva la fila (id fijo por clase) y DESPUÉS avisa a Zapier: si dos
-//      vueltas se pisan, la segunda choca con la clave primaria y no envía nada.
+//   4. Reserva la fila (id fijo por clase) y DESPUÉS avisa (Slack + WhatsApp al
+//      alumno + email al profe, lib/notificaciones/ausencia): si dos vueltas se
+//      pisan, la segunda choca con la clave primaria y no envía nada. Cada canal
+//      deja su resultado en aviso_canales; aviso_ausencia_enviado_at = primer
+//      canal que salió bien. Solo se reintenta (3 veces como mucho, dentro de la
+//      ventana) el canal que FALLÓ; lo enviado nunca se repite.
 //   5. Marca "llegó tarde" las posibles ausencias cuyo profesor ya ingresó.
 //
 // FALTA (−10 €, sistema único de penalizaciones, lib/teacherPenalties): en el
@@ -26,9 +30,9 @@
 //   · el admin puede anularla con motivo (annulAbsence) y se revierte.
 //
 // RECUPERACIÓN AUTOMÁTICA (ABSENCE_RECOVERY_BETA_TEACHERS, hoy todos): en el paso 4,
-// entre reservar la fila y avisar a Zapier, se crea la recuperación
-// (lib/classRecoveryStore, createAbsenceRecovery) y su enlace viaja en
-// `enlace_recuperacion`. Si el profesor ingresa después:
+// entre reservar la fila y avisar, se crea la recuperación
+// (lib/classRecoveryStore, createAbsenceRecovery); el enlace le llega al alumno
+// por email y queda en `payload.enlace_recuperacion`. Si el profesor ingresa después:
 //   · antes de la MITAD de la clase → se anula la recuperación (la clase se dio);
 //   · después → la recuperación sigue viva y la fila queda "para revisar" en el
 //     admin: la clase original tiene ingreso y, con transcript, Finanzas la
@@ -40,7 +44,10 @@
 // ALUMNO por WhatsApp. Se corta la vuelta entera y la siguiente lo reintenta.
 //
 // Si WooCommerce no responde, la clase queda "no verificado" en el admin y NO se
-// avisa a Zapier (decisión del 15/10/2026).
+// avisa (decisión del 15/10/2026).
+//
+// HASTA NOV/2026 el aviso iba a un zap de Zapier (ZAPIER_AUSENCIAS_WEBHOOK_URL);
+// las columnas zapier_* quedan solo como historial de esas filas.
 //
 // Todo con el cliente ADMIN (service role): la tabla teacher_absence_alerts
 // tiene RLS activado porque guarda teléfonos.
@@ -57,10 +64,13 @@ import { hourNum, hourText, nkName } from '@/lib/sessions';
 import { GET as checkSubscriptionRoute } from '@/app/api/check-subscription/route';
 import {
   findDueAbsences, findLateJoins, readDates, windowDates, inAbsenceWindow, buildAbsencePayload,
-  normalizePhone, MAX_ZAPIER_ATTEMPTS, ABSENCE_AFTER_MINUTES, ABSENCE_WINDOW_END_MINUTES,
+  normalizePhone, claseAusenciaDe, MAX_AVISO_ATTEMPTS, ABSENCE_AFTER_MINUTES, ABSENCE_WINDOW_END_MINUTES,
   type TeacherScheduleInput, type JoinLogLite, type ClassRecordLite, type AbsenceWebhookPayload, type DueAbsence,
 } from '@/lib/teacherAbsences';
-import { sendAbsenceToZapier, absenceWebhookUrl } from '@/lib/absenceWebhook';
+import {
+  notificarAusencia, canalesAReintentar, mezclarResultados, canalesConfigurados,
+  type ResultadoAusencia, type CanalAusencia,
+} from '@/lib/notificaciones/ausencia';
 import {
   createAbsenceRecovery, absenceRecoveryOptions, annulAbsenceRecovery, absenceRecoveryOfClass, type AbsenceAnnulOutcome,
 } from '@/lib/classRecoveryStore';
@@ -78,6 +88,7 @@ type Row = Record<string, any>;
 export const ABSENCES_TABLE = 'teacher_absence_alerts';
 
 export type AbsenceStatus = 'posible_ausencia' | 'llego_tarde' | 'no_verificado' | 'descartada' | 'anulada';
+/** Historial: estado del envío a Zapier de las filas anteriores a nov/2026. */
 export type ZapierStatus = 'pendiente' | 'enviado' | 'sin_webhook' | 'error' | 'no_enviado';
 /** Estado de la multa de una posible ausencia (teacher_absence_alerts.penalty_state). */
 export type PenaltyState = 'cobrada' | 'revertida' | 'revisar';
@@ -92,9 +103,9 @@ export interface AbsenceReportItem {
   hora: string;
   estado: AbsenceStatus;
   motivo: string | null;
-  zapier: ZapierStatus | 'se_enviaria' | 'no_se_enviaria';
-  zapierError?: string;
-  /** Solo en ensayo: lo que recibiría Zapier. */
+  /** Resultado de cada canal (en ensayo, lo que se mandaría). Sin aviso: no se avisa. */
+  aviso?: ResultadoAusencia;
+  /** Solo en ensayo: los datos de la clase con los que se avisaría. */
   payload?: AbsenceWebhookPayload;
   /**
    * Recuperación automática (ABSENCE_RECOVERY_BETA_TEACHERS). En ensayo, las opciones que
@@ -109,7 +120,8 @@ export interface AbsenceCheckReport {
   ensayo: boolean;
   ahoraEspana: string;
   ventana: string;
-  webhookConfigurado: boolean;
+  /** Qué canales tienen sus variables de entorno (ver lib/notificaciones). */
+  canalesConfigurados: Record<CanalAusencia, boolean>;
   clasesEnVentana: number;
   nuevas: AbsenceReportItem[];
   llegoTarde: Array<{
@@ -124,6 +136,19 @@ export interface AbsenceCheckReport {
 // ── Lecturas ──────────────────────────────────────────────────────────────────
 
 class MissingTableError extends Error {}
+
+/** Columnas del aviso directo (supabase/migraciones/2026-11-11-aviso-ausencia-directo.sql). */
+const AVISO_SQL = 'supabase/migraciones/2026-11-11-aviso-ausencia-directo.sql';
+
+/**
+ * Sin las columnas del aviso no hay anti-duplicado por canal: cada vuelta
+ * volvería a mandar el WhatsApp. Se corta la vuelta entera (no se avisa nada)
+ * hasta correr el SQL.
+ */
+async function comprobarColumnasAviso(admin: SupabaseClient): Promise<void> {
+  const { error } = await admin.from(ABSENCES_TABLE).select('aviso_ausencia_enviado_at, aviso_canales, aviso_intentos').limit(1);
+  if (error) throw new MissingTableError(`Falta correr ${AVISO_SQL} en Supabase (${error.message}).`);
+}
 
 function isMissingTable(e: { code?: string; message?: string } | null | undefined): boolean {
   return !!e && (e.code === '42P01' || e.code === 'PGRST205' || /does not exist|could not find the table/i.test(e.message ?? ''));
@@ -166,7 +191,7 @@ interface Datos {
   joinLogs: JoinLogLite[];
   records: ClassRecordLite[];
   alerts: Row[];
-  /** profe_email de Zapier por id de profesor (destinationFor: notification_email → email). */
+  /** Email del aviso al profe por id de profesor (destinationFor: notification_email → email). */
   teacherEmails: Map<string, string>;
   /** Profesores de prueba (teachers.is_test): nunca se les cobra la falta. */
   testTeacherIds: Set<string>;
@@ -324,7 +349,7 @@ async function clasificar(d: DueAbsence, students: Student[]): Promise<{
     return { estado: 'descartada', motivo: `Suscripción inactiva (${v.status}).`, subStatus: v.status, email, phone: '', studentId };
   }
   if (v.active === null) {
-    return { estado: 'no_verificado', motivo: 'WooCommerce no respondió: no se avisó a Zapier.', subStatus: v.status, email, phone: normalizePhone(st?.phone), studentId };
+    return { estado: 'no_verificado', motivo: 'WooCommerce no respondió: no se avisó a nadie.', subStatus: v.status, email, phone: normalizePhone(st?.phone), studentId };
   }
   const phone = normalizePhone(st?.phone) || normalizePhone(v.phone) || normalizePhone(await telefonoDeFacturacion(email));
   return { estado: 'posible_ausencia', motivo: null, subStatus: v.status, email, phone, studentId };
@@ -340,10 +365,11 @@ export async function runAbsenceCheck(admin: SupabaseClient, opts: { nowMs?: num
     ensayo: dry,
     ahoraEspana: `${p.dateStr} ${String(p.hour).padStart(2, '0')}:${String(p.minute).padStart(2, '0')}`,
     ventana: `clases que empezaron hace entre ${ABSENCE_AFTER_MINUTES} y ${ABSENCE_WINDOW_END_MINUTES} minutos (${windowDates(nowMs).join(' / ')})`,
-    webhookConfigurado: !!absenceWebhookUrl(),
+    canalesConfigurados: canalesConfigurados(),
     clasesEnVentana: 0, nuevas: [], llegoTarde: [], reintentos: [], errores: [],
   };
 
+  if (!dry) await comprobarColumnasAviso(admin);
   const datos = await cargarDatos(admin, readDates(nowMs), dry);
   const nowIso = new Date(nowMs).toISOString();
 
@@ -370,20 +396,39 @@ export async function runAbsenceCheck(admin: SupabaseClient, opts: { nowMs?: num
   }
   const yaTarde = new Set(tarde.map(t => t.id));
 
-  // 2) Reintentos: Zapier falló (o la vuelta murió entre reservar y enviar) y la
-  //    clase sigue dentro de la ventana. Nunca se reenvía lo que ya salió bien.
+  // 2) Reintentos: un canal falló (o la vuelta murió entre reservar y avisar) y
+  //    la clase sigue dentro de la ventana. Solo los canales que fallaron; lo
+  //    que ya salió bien nunca se reenvía.
   for (const a of datos.alerts) {
-    if (a.status !== 'posible_ausencia' || yaTarde.has(str(a.id))) continue;
-    const pendienteVieja = a.zapier_status === 'pendiente' && nowMs - Date.parse(str(a.detected_at)) > 2 * 60_000;
-    if (a.zapier_status !== 'error' && !pendienteVieja) continue;
-    if ((Number(a.zapier_attempts) || 0) >= MAX_ZAPIER_ATTEMPTS) continue;
+    if (a.status !== 'posible_ausencia' || yaTarde.has(str(a.id)) || !a.payload) continue;
+    if (a.zapier_status === 'enviado') continue;   // fila de la época de Zapier: ya avisada
+    const intentos = Number(a.aviso_intentos) || 0;
+    if (intentos >= MAX_AVISO_ATTEMPTS) continue;
+    const prev = (a.aviso_canales ?? null) as ResultadoAusencia | null;
+    // Sin resultado todavía: o la vuelta que la reservó sigue enviando (se deja
+    // en paz 2 minutos), o murió a mitad.
+    if (!prev && intentos > 0 && nowMs - Date.parse(str(a.detected_at)) <= 2 * 60_000) continue;
+    const canales = canalesAReintentar(prev);
+    if (!canales.length) continue;
     const h = hourNum(str(a.class_hour));
     if (!inAbsenceWindow(spainWallClockToEpoch(str(a.class_date), h), nowMs)) continue;
     const item: AbsenceReportItem = {
       id: str(a.id), profesor: str(a.teacher_name), alumno: str(a.student_name), fecha: str(a.class_date),
-      hora: str(a.class_hour), estado: 'posible_ausencia', motivo: 'reintento', zapier: 'se_enviaria',
+      hora: str(a.class_hour), estado: 'posible_ausencia', motivo: `reintento: ${canales.join(', ')}`,
     };
-    if (!dry && a.payload) Object.assign(item, await enviar(admin, str(a.id), a.payload as AbsenceWebhookPayload, (Number(a.zapier_attempts) || 0) + 1));
+    if (dry) {
+      item.aviso = await notificarAusencia(claseAusenciaDe(a.payload as AbsenceWebhookPayload), { dryRun: true, canales });
+    } else {
+      // Se "toma" el reintento subiendo el contador: si dos vueltas se pisan, solo una avisa.
+      const { data: tomada, error } = await admin.from(ABSENCES_TABLE)
+        .update({ aviso_intentos: intentos + 1, updated_at: nowIso })
+        .eq('id', str(a.id)).eq('aviso_intentos', intentos).select('id');
+      if (error) { report.errores.push(`reintento ${str(a.id)}: ${error.message}`); continue; }
+      if (!tomada?.length) continue;
+      item.aviso = await avisar(admin, str(a.id), a.payload as AbsenceWebhookPayload, {
+        canales, prev, enviadoAt: strU(a.aviso_ausencia_enviado_at) ?? null, report,
+      });
+    }
     report.reintentos.push(item);
   }
 
@@ -403,23 +448,27 @@ export async function runAbsenceCheck(admin: SupabaseClient, opts: { nowMs?: num
     const item: AbsenceReportItem = {
       id: d.id, profesor: d.teacherName, alumno: d.studentName, fecha: d.date, hora: d.hour,
       estado: c.estado, motivo: c.motivo,
-      zapier: payload ? (report.webhookConfigurado ? 'se_enviaria' : 'sin_webhook') : 'no_se_enviaria',
     };
     if (dry) {
-      if (payload) item.payload = payload;
+      if (payload) {
+        item.payload = payload;
+        item.aviso = await notificarAusencia(claseAusenciaDe(payload), { dryRun: true });
+      }
       if (payload && isAbsenceRecoveryTeacher(d.teacherId)) item.recuperacion = await opcionesDeEnsayo(d, nowMs);
       if (c.estado === 'posible_ausencia') item.multa = await multaAlDetectar(admin, d, datos.testTeacherIds, true, report);
       report.nuevas.push(item);
       continue;
     }
 
-    // Reservar ANTES de enviar: la clave primaria es el anti-duplicado.
+    // Reservar ANTES de avisar: la clave primaria es el anti-duplicado. La fila
+    // nace con aviso_intentos = 1 (este primer envío) si hay que avisar.
     const { error } = await admin.from(ABSENCES_TABLE).insert({
       id: d.id, teacher_id: d.teacherId, teacher_name: d.teacherName,
       student_id: c.studentId, student_name: d.studentName, student_email: c.email || null, student_phone: c.phone || null,
       class_date: d.date, class_hour: d.hour, duration_hours: d.durationHours, is_recovery: d.isRecovery,
       status: c.estado, status_reason: c.motivo, subscription_status: c.subStatus,
-      detected_at: nowIso, zapier_status: payload ? 'pendiente' : 'no_enviado', zapier_attempts: 0,
+      detected_at: nowIso, zapier_status: 'no_enviado', zapier_attempts: 0,
+      aviso_intentos: payload ? 1 : 0, aviso_canales: null, aviso_ausencia_enviado_at: null,
       payload, created_at: nowIso, updated_at: nowIso,
     });
     if (error) {
@@ -432,8 +481,7 @@ export async function runAbsenceCheck(admin: SupabaseClient, opts: { nowMs?: num
       item.recuperacion = r.info;
       if (r.link) aEnviar = { ...payload, enlace_recuperacion: r.link };
     }
-    if (aEnviar) Object.assign(item, await enviar(admin, d.id, aEnviar, 1));
-    else item.zapier = 'no_enviado';
+    if (aEnviar) item.aviso = await avisar(admin, d.id, aEnviar, { canales: undefined, prev: null, enviadoAt: null, report });
     // La falta, DESPUÉS del aviso: un fallo aquí no retrasa ni corta el WhatsApp.
     if (c.estado === 'posible_ausencia') item.multa = await multaAlDetectar(admin, d, datos.testTeacherIds, false, report);
     report.nuevas.push(item);
@@ -514,7 +562,7 @@ async function opcionesDeEnsayo(d: DueAbsence, nowMs: number): Promise<NonNullab
 /**
  * Crea la recuperación de una posible ausencia nueva y deja su id y el enlace en
  * la fila (el payload guardado es el que usan los reintentos). Si falla, el aviso
- * a Zapier sale igual, con `enlace_recuperacion` vacío.
+ * sale igual, con `enlace_recuperacion` vacío.
  */
 async function crearRecuperacion(
   admin: SupabaseClient, d: DueAbsence, c: Awaited<ReturnType<typeof clasificar>>, teacherEmail: string,
@@ -590,19 +638,35 @@ async function adminBell(admin: SupabaseClient, id: string, title: string, body:
   }
 }
 
-/** Envía a Zapier y deja anotado el resultado en la fila. */
-async function enviar(admin: SupabaseClient, id: string, payload: AbsenceWebhookPayload, intento: number): Promise<Pick<AbsenceReportItem, 'zapier' | 'zapierError'>> {
-  const r = await sendAbsenceToZapier(payload);
+/**
+ * Avisa por los canales pedidos (todos, si no se dice) y deja anotado el
+ * resultado en la fila. aviso_ausencia_enviado_at = el primer canal que salió bien.
+ */
+async function avisar(
+  admin: SupabaseClient, id: string, payload: AbsenceWebhookPayload,
+  o: { canales: CanalAusencia[] | undefined; prev: ResultadoAusencia | null; enviadoAt: string | null; report: AbsenceCheckReport },
+): Promise<ResultadoAusencia> {
+  const r = await notificarAusencia(claseAusenciaDe(payload), { canales: o.canales });
+  const merged = mezclarResultados(o.prev, r);
   const now = new Date().toISOString();
-  const zapier: ZapierStatus = r.status === 'sent' ? 'enviado' : r.status === 'skipped' ? 'sin_webhook' : 'error';
-  const zapierError = r.status === 'error' ? r.reason : undefined;
-  const { error } = await admin.from(ABSENCES_TABLE).update({
-    zapier_status: zapier, zapier_attempts: intento, zapier_error: zapierError ?? null,
-    zapier_sent_at: r.status === 'sent' ? now : null, updated_at: now,
-  }).eq('id', id);
-  if (error) console.error(`[ausencias] No se pudo anotar el envío de ${id}:`, error.message);
-  if (zapierError) console.error(`[ausencias] Zapier falló para ${id}: ${zapierError}`);
-  return { zapier, zapierError };
+  const algunoEnviado = Object.values(merged).some(x => x?.estado === 'enviado');
+  const cambios = {
+    aviso_canales: merged,
+    aviso_ausencia_enviado_at: o.enviadoAt ?? (algunoEnviado ? now : null),
+    updated_at: now,
+  };
+  // Si esto no queda anotado, un reintento volvería a mandar lo ya enviado:
+  // se intenta una segunda vez antes de rendirse.
+  let { error } = await admin.from(ABSENCES_TABLE).update(cambios).eq('id', id);
+  if (error) ({ error } = await admin.from(ABSENCES_TABLE).update(cambios).eq('id', id));
+  if (error) {
+    o.report.errores.push(`anotar aviso ${id}: ${error.message}`);
+    console.error(`[ausencias] No se pudo anotar el aviso de ${id}:`, error.message);
+  }
+  for (const [canal, res] of Object.entries(r)) {
+    if (res?.estado === 'error') o.report.errores.push(`aviso ${canal} ${id}: ${res.error}`);
+  }
+  return merged;
 }
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
@@ -633,7 +697,9 @@ export interface AdminAbsence {
   zapierStatus: ZapierStatus;
   zapierSentAt: string | null;
   zapierError: string | null;
-  recovery: AdminAbsenceRecovery | null;
+  /** Aviso directo (desde nov/2026): estado de cada canal, sin la vista previa. null en filas de la época de Zapier. */
+  aviso: Partial<Record<CanalAusencia, { estado: string; at?: string; error?: string }>> | null;
+  avisoEnviadoAt: string | null;
   /** El profesor pulsó "Ingresar" pasada la mitad de la clase. */
   lateAfterHalf: boolean;
   /**
@@ -702,6 +768,7 @@ export async function listAbsencesForAdmin(admin: SupabaseClient, days = 30, mon
       status, statusReason: r.status_reason ?? null,
       detectedAt: str(r.detected_at), lateJoinedAt: r.late_joined_at ?? null,
       zapierStatus: r.zapier_status as ZapierStatus, zapierSentAt: r.zapier_sent_at ?? null, zapierError: r.zapier_error ?? null,
+      aviso: (r.aviso_canales ?? null) as AdminAbsence['aviso'], avisoEnviadoAt: r.aviso_ausencia_enviado_at ?? null,
       recovery: rec ? {
         id: str(rec.id), status: str(rec.status),
         options: ((rec.teacher_proposals ?? []) as Slot[]).map(o => ({ date: o.date, hour: o.hour })),

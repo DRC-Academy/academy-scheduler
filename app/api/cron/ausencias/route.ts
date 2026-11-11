@@ -5,15 +5,20 @@
 // vercel.json: el plan de Vercel no admite un cron cada 5 minutos y así cada
 // vuelta fuera de esa franja ni siquiera llega a Vercel.
 //
-// Qué hace y qué no: ver lib/teacherAbsenceStore (la base) y lib/teacherAbsences
-// (las reglas).
+// Qué hace y qué no: ver lib/teacherAbsenceStore (la base), lib/teacherAbsences
+// (las reglas) y lib/notificaciones/ausencia (Slack + WhatsApp + email; hasta
+// nov/2026 esto lo hacía un zap de Zapier).
 //
 // Modos (además del normal):
-//   ?ensayo=1               qué enviaría a Zapier y qué marcaría, SIN enviar ni
-//                           guardar nada. Con &ahora=2026-10-15T18:35 (hora de
-//                           España) o un instante ISO con zona, simula esa hora.
-//   ?prueba=1               manda a Zapier UN ejemplo con datos inventados, para
-//                           configurar el Zap. No lee ni escribe la base.
+//   ?dryRun=1 (o ?ensayo=1) qué avisaría (texto de Slack, plantilla de WhatsApp,
+//                           email) y qué marcaría, SIN enviar ni guardar nada.
+//                           Con &ahora=2026-10-15T18:35 (hora de España) o un
+//                           instante ISO con zona, simula esa hora.
+//   ?prueba=1               UN aviso de ejemplo con datos inventados. No lee ni
+//                           escribe la base. Slack se envía siempre (marcado
+//                           [PRUEBA]); WhatsApp y email SOLO si se pasa a quién:
+//                           &telefono=+34600111222 &email=tu@correo.com. Con
+//                           &dryRun=1, solo muestra lo que mandaría.
 //
 // SEGURIDAD: Authorization: Bearer <CRON_AUSENCIAS_SECRET> (o ?secret=), en
 // tiempo constante (lib/cronAuth). Escribe con el cliente admin.
@@ -21,8 +26,8 @@
 import { requireCronSecret, requireAdminClient } from '@/lib/cronAuth';
 import { runAbsenceCheck, isMissingAbsencesTable } from '@/lib/teacherAbsenceStore';
 import { sweepPaymentHolds } from '@/lib/paymentHoldStore';
-import { sendAbsenceToZapier, absenceWebhookUrl } from '@/lib/absenceWebhook';
-import { sampleAbsencePayload } from '@/lib/teacherAbsences';
+import { notificarAusencia } from '@/lib/notificaciones/ausencia';
+import { sampleAbsencePayload, claseAusenciaDe, normalizePhone } from '@/lib/teacherAbsences';
 import { spainWallClockToEpoch } from '@/lib/spainTime';
 
 export const dynamic = 'force-dynamic';
@@ -49,19 +54,24 @@ async function handle(request: Request): Promise<Response> {
 
   const params = new URL(request.url).searchParams;
 
+  const dry = params.get('dryRun') === '1' || params.get('ensayo') === '1';
+
   if (params.get('prueba') === '1') {
-    if (!absenceWebhookUrl()) {
-      return Response.json({ ok: false, error: 'Falta ZAPIER_AUSENCIAS_WEBHOOK_URL en Vercel.' }, { status: 400, headers: NO_STORE });
-    }
-    const payload = sampleAbsencePayload();
-    const r = await sendAbsenceToZapier(payload);
-    return Response.json({ ok: r.status === 'sent', prueba: true, resultado: r, payload }, { headers: NO_STORE });
+    // Los destinatarios del ejemplo son inventados: sin &telefono / &email no se
+    // manda WhatsApp ni email a nadie.
+    const clase = {
+      ...claseAusenciaDe(sampleAbsencePayload()),
+      alumnoTelefono: normalizePhone(params.get('telefono')),
+      profeEmail: (params.get('email') ?? '').trim(),
+    };
+    const aviso = await notificarAusencia(clase, { dryRun: dry });
+    const ok = Object.values(aviso).every(r => r?.estado !== 'error' && r?.estado !== 'sin_config');
+    return Response.json({ ok, prueba: true, dryRun: dry, clase, aviso }, { headers: NO_STORE });
   }
 
   const { admin, error } = requireAdminClient(LABEL);
   if (error) return error;
 
-  const dry = params.get('ensayo') === '1';
   const ahora = dry ? parseAhora(params.get('ahora')) : null;
   if (Number.isNaN(ahora)) {
     return Response.json({ error: 'ahora no válido. Usá 2026-10-15T18:35 (hora de España).' }, { status: 422, headers: NO_STORE });

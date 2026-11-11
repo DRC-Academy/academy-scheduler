@@ -170,7 +170,7 @@ describe('teléfono', () => {
   });
 });
 
-describe('lo que recibe Zapier', () => {
+describe('los datos del aviso (payload guardado)', () => {
   it('todos los campos, fecha 15/10/2026 y hora 18:00', () => {
     const p = buildAbsencePayload({
       id: 'aus_x', date: '2026-10-15', hour: '18:00', teacherName: 'Laura',

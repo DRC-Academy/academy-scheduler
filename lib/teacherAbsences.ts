@@ -1,15 +1,15 @@
 // ── Posibles ausencias del profesor: las REGLAS, sin red ni base ──────────────
 //
 // A los 30 minutos del inicio de una clase (hora de España), si el profesor no
-// pulsó "Ingresar a clase", Gestión avisa a Zapier (que manda el WhatsApp al
-// alumno y el aviso a Slack) y lo deja anotado en el admin como "posible
-// ausencia". Este módulo decide, sin tocar nada:
+// pulsó "Ingresar a clase", Gestión avisa directamente (Slack, WhatsApp al
+// alumno y email al profe: lib/notificaciones/ausencia) y lo deja anotado en el
+// admin como "posible ausencia". Este módulo decide, sin tocar nada:
 //   · qué clases TOCABAN en la ventana (calendario + recuperaciones confirmadas,
 //     sesión de 2 h como UNA clase, dentro del período del alumno);
 //   · cuáles quedan fuera (canceladas, reprogramadas, faltas del alumno ya
 //     registradas, o con ingreso);
 //   · el id fijo de cada clase (un solo aviso por clase);
-//   · qué se manda a Zapier.
+//   · con qué datos se avisa (AbsenceWebhookPayload, guardado en la fila).
 // Lo que necesita a WooCommerce (pausa, inactivo, teléfono de facturación) y la
 // base lo hace lib/teacherAbsenceStore. Lo prueba lib/teacherAbsences.test.ts.
 //
@@ -28,6 +28,7 @@ import type { StudentPeriod } from '@/lib/studentPeriod';
 import { getSpainParts, spainWallClockToEpoch } from '@/lib/spainTime';
 import { hourNum, hourText, nkName } from '@/lib/sessions';
 import type { Assignment, ClassRecord, Grid } from '@/types';
+import type { ClaseAusencia } from '@/lib/notificaciones/ausencia';
 
 // ── Constantes ────────────────────────────────────────────────────────────────
 
@@ -39,8 +40,8 @@ export const ABSENCE_AFTER_MINUTES = 30;
  * hasta el 90 cubre un reloj que se salte vueltas.
  */
 export const ABSENCE_WINDOW_END_MINUTES = 90;
-/** Intentos de envío a Zapier por clase (solo se reintenta si Zapier falló). */
-export const MAX_ZAPIER_ATTEMPTS = 3;
+/** Intentos de aviso por clase (solo se reintentan los canales que fallaron). */
+export const MAX_AVISO_ATTEMPTS = 3;
 
 // ── Recuperación automática por ausencia ─────────────────────────────────────
 
@@ -48,8 +49,7 @@ export const MAX_ZAPIER_ATTEMPTS = 3;
  * Profesores a los que, al detectar una posible ausencia, se les crea sola la
  * recuperación (el alumno elige la fecha desde el LMS). `['*']` = todos (desde
  * el 19/10/2026; antes fue una beta con ['t1']). Con una lista de ids, el resto
- * sigue como antes: aviso a Zapier sin recuperación y con `enlace_recuperacion`
- * vacío.
+ * sigue como antes: aviso sin recuperación y con `enlace_recuperacion` vacío.
  */
 export const ABSENCE_RECOVERY_BETA_TEACHERS: readonly string[] = ['*'];
 
@@ -63,8 +63,9 @@ export const MAX_ABSENCE_OPTIONS = 4;
 
 /**
  * Cuándo se manda el email al alumno con el enlace de la recuperación.
- * 'siempre' mientras el WhatsApp de Zapier no esté activo; después,
- * 'sin_telefono' (solo a quien no le puede llegar el WhatsApp).
+ * 'siempre': la plantilla de WhatsApp "faltaprofe" no lleva el enlace, así que
+ * el email es el único sitio donde el alumno lo recibe. Pasar a 'sin_telefono'
+ * SOLO si la plantilla llega a incluir el enlace.
  */
 export const ABSENCE_RECOVERY_STUDENT_EMAIL: 'siempre' | 'sin_telefono' = 'siempre';
 
@@ -272,7 +273,7 @@ export function isSwitchedOff(
 /**
  * Las clases que tocaban, empezaron hace 30–90 minutos, siguen en pie y no
  * tienen ingreso. Las que ya tienen fila (`known`) se saltan: de eso se ocupa el
- * repaso de "llegó tarde" y el reintento de Zapier.
+ * repaso de "llegó tarde" y el reintento de los avisos.
  *
  * La pausa y la suscripción inactiva NO se miran acá (hace falta WooCommerce):
  * lo decide lib/teacherAbsenceStore, y solo para estas pocas candidatas.
@@ -364,12 +365,12 @@ export function firstNameOf(name: string): string {
   return (name ?? '').trim().split(/\s+/)[0] ?? '';
 }
 
-// ── Lo que recibe Zapier ──────────────────────────────────────────────────────
+// ── Los datos del aviso ───────────────────────────────────────────────────────
 
 /**
- * Snake_case y nombres FIJOS: Zapier mapea los campos por nombre exacto, y
- * renombrar uno rompe el Zap sin ningún error visible. Para cambiar algo, se
- * AÑADE un campo; no se renombra.
+ * Se guarda tal cual en teacher_absence_alerts.payload y de ahí salen los
+ * reintentos. Nació como el cuerpo del webhook de Zapier (hasta nov/2026): las
+ * filas viejas tienen esta misma forma, así que NO se renombran campos.
  */
 export interface AbsenceWebhookPayload {
   clase_id: string;
@@ -380,8 +381,8 @@ export interface AbsenceWebhookPayload {
   profe_nombre: string;
   /**
    * Donde el profesor recibe los avisos de Gestión: teachers.notification_email
-   * y, si está vacío, teachers.email. Zapier le manda el email de la ausencia
-   * (Gestión ya no lo manda). '' si no hay ninguno.
+   * y, si está vacío, teachers.email. A ella va el email de la ausencia
+   * (lib/notificaciones/ausencia). '' si no hay ninguno.
    */
   profe_email: string;
   alumno_nombre: string;
@@ -389,7 +390,7 @@ export interface AbsenceWebhookPayload {
   alumno_email: string;
   /** '+34600111222', o '' si no lo tenemos. */
   alumno_telefono: string;
-  /** Mensaje listo para Slack. */
+  /** Texto corto de la época de Zapier. Ya no se usa: Slack lo arma lib/notificaciones/ausencia. */
   texto_slack: string;
   /**
    * <LMS_URL>/mis-clases?recuperacion=<id>: donde el alumno elige cuándo
@@ -426,8 +427,22 @@ export function buildAbsencePayload(a: {
   };
 }
 
+/** Los datos de la clase que necesita notificarAusencia, desde el payload guardado. */
+export function claseAusenciaDe(p: AbsenceWebhookPayload): ClaseAusencia {
+  return {
+    claseId: p.clase_id,
+    fecha: p.fecha,
+    hora: p.hora,
+    profeNombre: p.profe_nombre,
+    profeEmail: p.profe_email ?? '',
+    alumnoNombre: p.alumno_nombre,
+    alumnoEmail: p.alumno_email ?? '',
+    alumnoTelefono: p.alumno_telefono ?? '',
+  };
+}
+
 /**
- * Ejemplo con datos inventados para configurar el Zap (?prueba=1). Va marcado
+ * Ejemplo con datos inventados para probar los avisos (?prueba=1). Va marcado
  * como prueba en los nombres para que nadie llame a nadie desde Slack.
  */
 export function sampleAbsencePayload(nowMs = Date.now()): AbsenceWebhookPayload {
