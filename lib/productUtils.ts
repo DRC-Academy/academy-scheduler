@@ -220,6 +220,19 @@ export function parseMonthsFromText(text?: string | null): number | null {
   if (!text) return null;
   const t = normalizeText(String(text));
 
+  // Planes por FASES (11/11/2026): "2 Meses x 5h + 4 Meses x 3h" son 6 meses,
+  // no 2. Antes se leía solo el primer número y a Ionut Radu y Sergio Kotsan
+  // (empresa, 979 €, 6 meses desde el 13/09) les salía fin el 13/11 y el aviso
+  // de "próximos a cancelar" les llegó cuatro meses antes de tiempo. Si la
+  // variación tiene un "+" y más de una duración, la duración es la suma.
+  if (t.includes('+')) {
+    const fases = [...t.matchAll(new RegExp(MONTHS_RE.source, 'g'))].map((x) => parseInt(x[1], 10));
+    if (fases.length > 1) {
+      const total = fases.reduce((a, b) => a + b, 0);
+      if (total >= 1 && total <= MAX_PLAN_MONTHS) return total;
+    }
+  }
+
   const m = MONTHS_RE.exec(t);
   if (m) {
     const n = parseInt(m[1], 10);
