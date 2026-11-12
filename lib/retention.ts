@@ -198,6 +198,7 @@ export const NO_RETENTION_BONUS_PRODUCT_IDS: ReadonlySet<number> = new Set([
   35522,   // Plan 6 meses · 2h semanales · 2 personas
   35523,   // Plan 9 meses · 2h semanales · 2 personas
   35773,   // Plan Personalizado · 3 meses x 3h semanales
+  37392,   // Plan Platino: 2 clases a la semana, 9 meses - Videollamada
 ]);
 
 /** Si el par puede generar bono, y por qué no cuando no. */

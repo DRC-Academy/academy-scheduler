@@ -167,7 +167,7 @@ describe('retentionBonusApplies: los programas nuevos de pago único no dan bono
   const st = (p: Record<string, unknown> & { wooProductId?: number; companyPlanStart?: string }) => ({ id: 's_pu', name: 'Paula', ...p });
 
   it('la lista de IDs son exactamente los programas nuevos de pago único del catálogo', () => {
-    expect([...NO_RETENTION_BONUS_PRODUCT_IDS].sort()).toEqual([35522, 35523, 35652, 35653, 35655, 35658, 35773]);
+    expect([...NO_RETENTION_BONUS_PRODUCT_IDS].sort()).toEqual([35522, 35523, 35652, 35653, 35655, 35658, 35773, 37392]);
     for (const id of NO_RETENTION_BONUS_PRODUCT_IDS) expect(catalogProduct(id)?.kind).toBe('pago_unico');
   });
 

@@ -192,6 +192,13 @@ describe('asignación de un programa de pago único (modal del setter)', () => {
   const dec = (o: Partial<Parameters<typeof assignmentProgramDecision>[0]>) =>
     assignmentProgramDecision({ product: platino, start: '2026-11-02', currentUntil: null, today: HOY, ...o });
 
+  it('Platino videollamada (37392): 9 meses desde la fecha de inicio', () => {
+    const d = dec({ product: catalogProduct(37392), start: '2026-11-16' })!;
+    expect(d.planUntil).toBe('2027-08-16');
+    expect(d.finalUntil).toBe('2027-08-16');
+    expect(d.result).toBe('activado');
+  });
+
   it('Platino, inicio 02/11/2026 → fin 02/08/2027 y activa', () => {
     const d = dec({})!;
     expect(d.planUntil).toBe('2027-08-02');
