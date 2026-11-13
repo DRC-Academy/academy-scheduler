@@ -199,6 +199,12 @@ describe('asignación de un programa de pago único (modal del setter)', () => {
     expect(d.result).toBe('activado');
   });
 
+  it('Platino 1 clase/sem (37036): 9 meses desde la fecha de inicio', () => {
+    const d = dec({ product: catalogProduct(37036), start: '2026-11-05' })!;
+    expect(d.planUntil).toBe('2027-08-05');
+    expect(d.result).toBe('activado');
+  });
+
   it('Platino, inicio 02/11/2026 → fin 02/08/2027 y activa', () => {
     const d = dec({})!;
     expect(d.planUntil).toBe('2027-08-02');

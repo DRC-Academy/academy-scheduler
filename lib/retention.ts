@@ -199,6 +199,11 @@ export const NO_RETENTION_BONUS_PRODUCT_IDS: ReadonlySet<number> = new Set([
   35523,   // Plan 9 meses · 2h semanales · 2 personas
   35773,   // Plan Personalizado · 3 meses x 3h semanales
   37392,   // Plan Platino: 2 clases a la semana, 9 meses - Videollamada
+  37036,   // Plan Platino: 1 clase a la semana, 9 meses (pago único)
+  // Upsells de pago único (13/11/2026). Siguen 'sin_datos' en el catálogo (no
+  // activan ni cambian el cupo), pero tampoco dan bono.
+  35905,   // Programa Platino Alumno (upsell)
+  36027,   // Programa Fluidez 1h/sem (upsell)
 ]);
 
 /** Si el par puede generar bono, y por qué no cuando no. */

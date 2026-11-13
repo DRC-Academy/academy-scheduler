@@ -76,6 +76,8 @@ export const PRODUCT_CATALOG: Readonly<Record<number, CatalogProduct>> = {
   35773: P(35773, 'Plan Personalizado · 3 meses x 3h semanales', 'pago_unico', 3, 3),
   // 12/11/2026: Platino por videollamada (pedido manual). 9 meses desde el inicio.
   37392: P(37392, 'Plan Platino: 2 clases a la semana, 9 meses - Videollamada', 'pago_unico', 9, 2),
+  // 13/11/2026: Platino de 1 clase por semana, pago único (589 €). 9 meses.
+  37036: P(37036, 'Plan Platino: 1 clase a la semana, 9 meses (pago único)', 'pago_unico', 9, 1),
   // Sin datos todavía: aviso en el admin, ni se activan ni cambian el cupo.
   35905: P(35905, 'Programa Platino Alumno (upsell)', 'sin_datos', null, null),
   36027: P(36027, 'Programa Fluidez 1h/sem (upsell)', 'sin_datos', null, null),
